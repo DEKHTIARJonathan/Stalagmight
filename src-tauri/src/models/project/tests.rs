@@ -8772,6 +8772,119 @@ fn realign_noop_without_datums() {
     );
 }
 
+/// A realign with nothing held must not re-georeference the survey against a
+/// datum that anchors nothing.
+///
+/// `zero_datums[0]` here DANGLES - its anchor key no longer resolves, which the
+/// app reaches by deleting the shot or section a datum was anchored to - so the
+/// survey is laid out against `zero_datums[1]`. That is what
+/// [`Project::frame_datum`] names, what `frame_datum_key` gates the
+/// renormalisation on, and the only one of the two the wire hands the frontend.
+/// The absolute fallback here used to read `zero_datums.first()` instead: the
+/// group's own datum then failed the "is this the frame" test, and its target
+/// was recomputed as `gps_to_local(its gps, dangling.gps)` - the whole
+/// inter-datum vector, about 11 km in this fixture, applied to a rigid group
+/// inside an `update_shot` whose undo data carries no offsets at all.
+///
+/// # Why this drives the model and not a command
+///
+/// The realign's only production caller is
+/// `src-tauri/src/core/state/command_shot.rs:251`, which passes
+/// `hold_anchor_at = project.datum_anchor_position(section_id)` - computed at
+/// `:243`, BEFORE the edit - whenever `updates.touches_geometry()`, and does not
+/// call the realign at all otherwise. `datum_anchor_position` and the realign's
+/// own datum lookup use the SAME predicate (first datum in the merge group that
+/// resolves), so a group holding a resolvable datum always arrives with
+/// `hold_anchor_at = Some` and takes the held branch. Through that caller the
+/// absolute fallback is therefore reachable only in the degenerate case where
+/// the datum resolves but its coordinates do not compute - non-finite geometry.
+/// So this pins the model-level no-hold path directly, which is also the path
+/// every neighbouring `realign_after_shot_edit(sec, None)` test exercises.
+///
+/// Non-vacuous: the two datums are about 11 km apart while the tolerance is
+/// [`Project::OFFSET_DUST_M`], and the fixture asserts up front that
+/// `zero_datums[0]` really does fail to resolve.
+#[test]
+fn realign_without_a_hold_ignores_a_dangling_first_datum() {
+    let mut project = Project::new("DanglingFrame".to_string(), None);
+    let dangling_sec = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let framed_sec = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(90.0, 90.0, 7.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    // No merges: the two sections are separate rigid groups, so the realign on
+    // one of them can only be reasoning about that group's own datum.
+
+    // zero_datums[0], anchored on a shot uuid that is not in this project. Pushed
+    // straight onto the vector because no mutator will build one.
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationKey::new(
+            dangling_sec,
+            StationAnchor::AfterShot("no-such-uuid".to_string()),
+        ),
+        gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
+    });
+    assert!(
+        project
+            .resolve_key(&project.zero_datums[0].station_ref)
+            .is_none(),
+        "fixture rot: zero_datums[0] must NOT resolve, or this test proves nothing"
+    );
+
+    // zero_datums[1]: the real one, about 11 km away, and the frame the survey is
+    // actually laid out against.
+    project
+        .set_zero_datum(
+            StationRef::new(framed_sec, 0),
+            GpsCoordinates::new(20.35, -87.4, 0.0).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        project.zero_datums.len(),
+        2,
+        "the real datum must be stored AFTER the dangling one"
+    );
+
+    let before: Vec<(StationRef, Coordinates)> = project
+        .compute_station_coordinates()
+        .into_iter()
+        .map(|s| (s.station_ref, s.coordinates))
+        .collect();
+
+    project.realign_after_shot_edit(framed_sec, None);
+
+    let after: HashMap<StationRef, Coordinates> = project
+        .compute_station_coordinates()
+        .into_iter()
+        .map(|s| (s.station_ref, s.coordinates))
+        .collect();
+    for (station_ref, was) in before {
+        let now = after
+            .get(&station_ref)
+            .expect("realign must not remove a station");
+        assert!(
+            (now.x - was.x).abs() <= Project::OFFSET_DUST_M
+                && (now.y - was.y).abs() <= Project::OFFSET_DUST_M,
+            "{station_ref:?} moved from ({}, {}) to ({}, {}): the no-hold realign \
+             re-georeferenced the group against the dangling zero_datums[0]",
+            was.x,
+            was.y,
+            now.x,
+            now.y
+        );
+    }
+}
+
 #[test]
 fn realign_is_idempotent() {
     // Edit shot, realign twice → same result.

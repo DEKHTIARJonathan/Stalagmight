@@ -284,8 +284,9 @@ reproduces the recorded post-command map.
 not a connectivity question, and it takes `Project::capture_all_section_offsets`
 rather than the merge group its two siblings above take.
 
-Local `(0, 0)` MEANS `zero_datums[0]`'s GPS: `set_zero_datum` lands the first datum
-on the origin and puts every later one at `gps_to_local(its gps, first.gps)`, and
+Local `(0, 0)` MEANS the FRAME datum's GPS - the first entry of `zero_datums` that
+still resolves (`Project::frame_datum`): `set_zero_datum` lands that datum
+on the origin and puts every later one at `gps_to_local(its gps, frame.gps)`, and
 the map, the data table's GPS column, the Ariane export's `START` lat/long and the
 GlobalView pin all read local metres against it. So changing WHICH datum is first
 re-defines every stored coordinate, and `Project::renormalize_frame` answers that

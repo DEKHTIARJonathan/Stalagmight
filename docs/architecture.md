@@ -249,7 +249,9 @@ Offsets are **derived** state that the file merely caches, which is why
 from the merge and datum constraints on every open. A project therefore always opens
 geometrically correct even if an older build persisted drift.
 
-The offsets are read against ONE frame: local (0,0) means `zero_datums[0]`'s GPS.
+The offsets are read against ONE frame: local (0,0) means the FRAME datum's GPS -
+the first entry of `zero_datums` that still resolves (`Project::frame_datum`; a
+dangling datum is dropped from the wire and anchors nothing).
 A command that promotes a different datum to first - or ADDS the survey's first
 datum, which establishes the frame - therefore re-defines every stored coordinate,
 and the answer is always the same: translate every section, free-floating

@@ -262,8 +262,11 @@ Examples:
 ### 4.3 Coordinate System
 
 - **Internal coordinates**: X (East), Y (North), Z (Depth) in meters
-- **Origin**: First zero datum station, or (0,0,0) if no GPS assigned. The origin
-  is `zero_datums[0]` **by position**, so anything that promotes a different datum
+- **Origin**: The frame datum's station, or (0,0,0) if no GPS assigned. The frame
+  datum is the first entry of `zero_datums` that still **resolves**
+  (`Project::frame_datum`; a dangling datum is dropped from the wire and anchors
+  nothing), so it is a **position in that list** rather than a property of any one
+  datum. Anything that promotes a different datum
   to first (removing the primary one, deleting its station or its section) - or
   ADDS the first datum, which establishes the frame - would re-define what every
   stored coordinate means. It does not: the whole survey is translated so that

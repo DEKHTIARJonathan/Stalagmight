@@ -743,16 +743,16 @@ impl Project {
             "Computed raw station coordinates for zero datum"
         );
 
-        // The datum that defines the frame RIGHT NOW, if the survey has one: the
-        // first RESOLVABLE datum, the same one [`Self::frame_datum_key`] and the
-        // wire name. Not `zero_datums.first()`: a dangling datum is dropped before
-        // the frontend ever sees it, so placing a new datum relative to its GPS
-        // would position the group against an origin nothing else in the app reads.
-        let frame_datum = self
-            .zero_datums
-            .iter()
-            .find(|d| self.resolve_key(&d.station_ref).is_some())
-            .map(|d| (d.station_ref.clone(), d.gps));
+        // The datum that defines the frame RIGHT NOW, if the survey has one
+        // ([`Self::frame_datum`]: the first RESOLVABLE one, which is what the wire,
+        // the map's origin and the renormalisation gate all read).
+        //
+        // Read BEFORE the store below, and that ORDER IS LOAD-BEARING: after the
+        // push this datum is itself a resolvable datum, so `frame_datum()` can
+        // never come back `None` again and a "simplification" that re-read it
+        // afterwards would silently stop re-framing anything. What this captures is
+        // "did the survey have a frame when the call began".
+        let frame_datum = self.frame_datum().map(|d| (d.station_ref.clone(), d.gps));
 
         // Where this datum's station has to end up, or `None` when this add
         // ESTABLISHES the frame and the whole survey moves instead (below).
@@ -955,24 +955,38 @@ impl Project {
         }
     }
 
-    /// Get the primary zero datum (first one, or None)
+    /// Get the primary zero datum by POSITION (first one, or None).
+    ///
+    /// Not the frame: [`Self::frame_datum`] is, and anything that reads a datum in
+    /// order to interpret LOCAL coordinates has to use that one. This accessor
+    /// answers a different question - "what is `zero_datums[0]`" - and has no
+    /// callers today.
     pub fn primary_zero_datum(&self) -> Option<&ZeroDatum> {
         self.zero_datums.first()
     }
 
-    /// The station whose local position IS the survey's georeference origin: the
-    /// first zero datum that still resolves.
+    /// THE datum that defines the georeference frame: the first one that still
+    /// RESOLVES.
     ///
     /// "First that resolves" rather than plain `zero_datums.first()` because a
     /// dangling datum is not on the wire at all (`Project::datum_to_wire` drops
     /// it), so the frontend map and the data table take their GPS origin from the
-    /// first RESOLVABLE one. This is the definition the renormalisation is gated
-    /// on, so the gate and the thing the user looks at agree.
-    pub(crate) fn frame_datum_key(&self) -> Option<StationKey> {
+    /// first RESOLVABLE one. Every consumer that reads a datum in order to make
+    /// sense of LOCAL metres routes through here - the renormalisation gate,
+    /// `set_zero_datum`'s placement of a subsequent datum, the shot-edit realign's
+    /// absolute fallback and the Ariane export's `START` lat/long - so the frame
+    /// rule has exactly one definition and the thing the user looks at agrees with
+    /// it.
+    pub(crate) fn frame_datum(&self) -> Option<&ZeroDatum> {
         self.zero_datums
             .iter()
             .find(|d| self.resolve_key(&d.station_ref).is_some())
-            .map(|d| d.station_ref.clone())
+    }
+
+    /// The station whose local position IS the survey's georeference origin:
+    /// [`Self::frame_datum`]'s anchor.
+    pub(crate) fn frame_datum_key(&self) -> Option<StationKey> {
+        self.frame_datum().map(|d| d.station_ref.clone())
     }
 
     /// Translate the WHOLE survey so the frame-defining datum's station sits at
@@ -980,15 +994,15 @@ impl Project {
     ///
     /// # Why this exists
     ///
-    /// Local `(0, 0)` is not a neutral coordinate: it MEANS `zero_datums[0]`'s
-    /// GPS. [`Self::set_zero_datum`] establishes that by landing the first datum
+    /// Local `(0, 0)` is not a neutral coordinate: it MEANS the frame datum's GPS
+    /// ([`Self::frame_datum`], the first datum that RESOLVES).
+    /// [`Self::set_zero_datum`] establishes that by landing the first datum
     /// on the origin - through THIS function, so the survey re-frames as one rigid
-    /// body - and every later one at `gps_to_local(its gps, first.gps)`,
+    /// body - and every later one at `gps_to_local(its gps, frame.gps)`,
     /// and every reader of local metres relies on it - the map's `gpsOrigin`, the
-    /// data table's GPS column, the Ariane export's `START` lat/long, the
-    /// GlobalView pin. So the frame is `zero_datums[0]` BY POSITION, and anything
-    /// that changes WHICH datum is first re-defines what every stored coordinate
-    /// means. [`Self::remove_zero_datum`] is a bare `retain`: it promotes the next
+    /// data table's GPS column, the Ariane export's `START` lat/long. So the frame
+    /// is the first RESOLVABLE datum BY POSITION IN THAT LIST, and anything that
+    /// changes WHICH datum that is re-defines what every stored coordinate means. [`Self::remove_zero_datum`] is a bare `retain`: it promotes the next
     /// datum and moves nothing, and `resolve_offsets` cannot repair that (the
     /// cascade marks datum sections authoritative and never re-derives their
     /// offsets), so the survey stays laid out against the datum that is gone while
@@ -1096,7 +1110,9 @@ impl Project {
     /// may not re-georeference the survey. Those are the same thing for a
     /// project whose datum sits where its GPS implies, and they part company for
     /// one that does not - which the app can reach without any command asking
-    /// for it, because the georeference origin is `zero_datums[0]` BY POSITION.
+    /// for it, because the georeference origin is a POSITION in the datum list
+    /// (the first entry that resolves - [`Self::frame_datum`]) rather than a
+    /// property of any one datum.
     /// Removing the first datum ([`Self::remove_zero_datum`]) promotes the next
     /// one and moves nothing, so every group placed relative to the old origin
     /// is left contradicting its own datum. Re-deriving the ABSOLUTE target on
@@ -1182,19 +1198,21 @@ impl Project {
         // position to restore, only the relative merge constraints Step 2 solves.
         let anchor_section_id = match &datum {
             Some(datum) => {
-                // Determine the datum's target position
-                let is_first = self
-                    .zero_datums
-                    .first()
-                    .map(|d| d.station_ref == datum.station_ref)
-                    .unwrap_or(false);
+                // Determine the datum's target position. Against the FRAME datum
+                // ([`Self::frame_datum`], the first RESOLVABLE one), never against
+                // `zero_datums[0]`: a dangling datum is not on the wire, is not
+                // what the survey is laid out against, and re-deriving an absolute
+                // target from its GPS would translate this group by the whole
+                // inter-datum vector.
+                let frame = self.frame_datum();
+                let is_frame_datum = frame.is_some_and(|d| d.station_ref == datum.station_ref);
 
                 let (target_x, target_y) = if let Some(held) = hold_anchor_at {
                     held
-                } else if is_first {
+                } else if is_frame_datum {
                     (0.0, 0.0)
-                } else if let Some(first) = self.zero_datums.first() {
-                    gps_to_local(&datum.gps, &first.gps)
+                } else if let Some(frame) = frame {
+                    gps_to_local(&datum.gps, &frame.gps)
                 } else {
                     return;
                 };

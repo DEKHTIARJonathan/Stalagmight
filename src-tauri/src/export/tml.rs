@@ -606,16 +606,21 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
     // (one per entrance - see the module docs), but only this one is the graph root:
     // when a primary zero datum exists, rooting here lets its GPS land on a START
     // without remapping.
-    let root_section_id = project
-        .zero_datums
-        .first()
+    //
+    // The FRAME datum, not `zero_datums[0]`: local (0, 0) means the first
+    // RESOLVABLE datum's GPS (`Project::frame_datum`), so stamping the positional
+    // first one onto every START would georeference an export whose geometry is
+    // laid out against a different anchor - every station displaced by the whole
+    // inter-datum vector, silently, in the file the user hands to someone else.
+    let frame_datum = project.frame_datum();
+    let root_section_id = frame_datum
         .map(|d| d.station_ref.section_id)
         .filter(|sid| project.sections.iter().any(|s| s.id == *sid))
         .unwrap_or_else(|| choose_default_root_section_id(project));
 
     // Build rooted parent links from station merges.
     let parent_map = build_parent_map(project, root_section_id);
-    let primary_datum = project.zero_datums.first();
+    let primary_datum = frame_datum;
 
     let mut next_id: i64 = 0;
 
@@ -1475,7 +1480,8 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
         if project.zero_datums.len() > 1 {
             tracing::warn!(
                 datum_count = project.zero_datums.len(),
-                "Ariane export supports only one GPS anchor; using the first zero datum"
+                "Ariane export supports only one GPS anchor; using the frame datum \
+                 (the first one that resolves)"
             );
         }
     }
@@ -2159,7 +2165,7 @@ mod tests {
     use super::*;
     use crate::models::{
         ClosureStrategy, GpsCoordinates, LoopClosure, SectionData, ShotData, ShotKind,
-        StationMerge, ZeroDatum,
+        StationAnchor, StationKey, StationMerge, ZeroDatum,
     };
     use tempfile::NamedTempFile;
 
@@ -3048,6 +3054,112 @@ mod tests {
         let shot_for_station_2 = shots.iter().find(|s| s.id == 2).unwrap();
         assert!(shot_for_station_2.latitude.abs() < f64::EPSILON);
         assert!(shot_for_station_2.longitude.abs() < f64::EPSILON);
+    }
+
+    /// The `START` lat/long has to come from the datum the survey is actually
+    /// laid out against, not from `zero_datums[0]` by position.
+    ///
+    /// When the first datum DANGLES - its anchor key no longer resolves, which
+    /// the app reaches by deleting the shot or section a datum was anchored to -
+    /// every other reader of local metres falls through to the first datum that
+    /// still resolves: that is `Project::frame_datum`, it is what
+    /// `frame_datum_key` gates the renormalisation on, and a dangling datum is
+    /// dropped from the wire entirely so the map and the data table never see it.
+    /// The export used to stamp `zero_datums[0]`'s GPS onto every `START`
+    /// regardless, which georeferences a file against an origin its own geometry
+    /// does not use: every station displaced by the whole inter-datum vector, in
+    /// the artifact the user hands to someone else, with nothing on screen
+    /// saying so.
+    ///
+    /// Non-vacuous three ways: the two datums are about 11 km apart, so a wrong
+    /// pick cannot hide inside a floating-point tolerance; the setup asserts that
+    /// `zero_datums[0]` really does fail to resolve, so the fixture cannot rot
+    /// into a test of nothing; and the galleries are unmerged, so BOTH entrances
+    /// carry the anchor and a wrong pick shows up twice.
+    #[test]
+    fn the_start_gps_comes_from_the_frame_datum_not_a_dangling_first_one() {
+        // Latitude/longitude of the datum that anchors nothing, and of the one
+        // the survey is really framed on. Roughly 11 km apart.
+        const DANGLING: (f64, f64) = (20.25, -87.5);
+        const FRAME: (f64, f64) = (20.35, -87.4);
+
+        let mut project = Project::new("Dangling Frame".to_string(), None);
+        let gallery_a = project
+            .add_section(SectionData {
+                name: Some("Gallery A".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .id;
+        let gallery_b = project
+            .add_section(SectionData {
+                name: Some("Gallery B".to_string()),
+                color: "#00ff00".to_string(),
+                shots: vec![ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .id;
+        // No station_merges: each gallery is its own entrance and gets a START.
+
+        // `zero_datums[0]`, anchored on a shot uuid that is not in this project.
+        // Pushed straight onto the vector because no mutator will build one - and
+        // that is the point: this shape is reached by a delete under a datum, not
+        // by any command that asks for it.
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationKey::new(
+                gallery_a,
+                StationAnchor::AfterShot("no-such-uuid".to_string()),
+            ),
+            gps: GpsCoordinates::new(DANGLING.0, DANGLING.1, 0.0).unwrap(),
+        });
+        assert!(
+            project
+                .resolve_key(&project.zero_datums[0].station_ref)
+                .is_none(),
+            "fixture rot: zero_datums[0] must NOT resolve, or this test proves nothing"
+        );
+
+        // `zero_datums[1]`: the real datum, set through the mutator so the survey
+        // is genuinely laid out against it.
+        project
+            .set_zero_datum(
+                StationRef::new(gallery_b, 0),
+                GpsCoordinates::new(FRAME.0, FRAME.1, 0.0).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            project.zero_datums.len(),
+            2,
+            "the real datum must be stored AFTER the dangling one"
+        );
+
+        let shots = build_export_shots(&project, TmlProfile::User);
+        let starts: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "START").collect();
+        assert_eq!(starts.len(), 2, "each detached gallery is its own entrance");
+        for start in &starts {
+            assert!(
+                (start.latitude - FRAME.0).abs() < f64::EPSILON
+                    && (start.longitude - FRAME.1).abs() < f64::EPSILON,
+                "START in section {:?} exported at {},{} - the frame datum is at \
+                 {},{} and the dangling zero_datums[0] at {},{}",
+                start.section,
+                start.latitude,
+                start.longitude,
+                FRAME.0,
+                FRAME.1,
+                DANGLING.0,
+                DANGLING.1
+            );
+        }
     }
 
     /// #431 bug pin: a datum station 35 m deep must NOT export as 35 m of
