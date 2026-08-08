@@ -1,18 +1,16 @@
-//! Cross-platform application directory resolution via Tauri's `PathResolver`.
+//! Cross-platform application directory registry.
 //!
 //! On desktop, the `directories` crate works fine. On Android it returns `None`
-//! for every path, crashing the app at startup. This module resolves paths
-//! through Tauri's `path` API (which delegates to platform-native APIs) and
-//! stores them in a `OnceLock` so they're available for the lifetime of the
-//! process.
+//! for every path, crashing the app at startup. The app layer resolves paths
+//! through Tauri's `path` API (which delegates to platform-native APIs - see
+//! `commands::event_sink::init_app_dirs`) and stores them here in a `OnceLock`
+//! so they're available for the lifetime of the process.
 //!
-//! Call [`init`] once in `.setup()` before any other code that needs paths.
-//! The getter functions return `None` if called before `init()`.
+//! Call [`init_paths`] once during app setup before any other code that needs
+//! paths. The getter functions return `None` if called before [`init_paths`].
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-
-use tauri::Manager;
 
 /// Resolved application directories.
 #[derive(Debug)]
@@ -25,43 +23,19 @@ struct Dirs {
 
 static DIRS: OnceLock<Dirs> = OnceLock::new();
 
-/// Populate application directories from Tauri's path resolver.
+/// Populate application directories from already-resolved paths.
 ///
-/// Must be called once during `.setup()`, before `AppState::new()` or any
-/// other code that reads paths. Subsequent calls are no-ops.
-pub fn init(handle: &tauri::AppHandle) {
-    DIRS.get_or_init(|| {
-        let resolver = handle.path();
-
-        let data_local = resolver
-            .app_local_data_dir()
-            .unwrap_or_else(|_| PathBuf::from("."));
-        let config = resolver
-            .app_config_dir()
-            .unwrap_or_else(|_| PathBuf::from("."));
-        let cache = resolver
-            .app_cache_dir()
-            .unwrap_or_else(|_| PathBuf::from("."));
-        // Unlike the dirs above, do NOT fall back to ".": a relative documents
-        // path produces broken project save paths (e.g. "./stalagmight/foo.stalx").
-        // Returning None lets callers fall through to their own resolution
-        // (directories crate, $HOME/Documents).
-        let document = resolver.document_dir().ok();
-
-        tracing::debug!(
-            ?data_local,
-            ?config,
-            ?cache,
-            ?document,
-            "Resolved application directories via Tauri path resolver"
-        );
-
-        Dirs {
-            data_local,
-            config,
-            cache,
-            document,
-        }
+/// Must be called once during app setup, before `AppState::new()` or any
+/// other code that reads paths. Subsequent calls are no-ops. The app layer
+/// owns the resolution (and its fallbacks): `data_local`/`config`/`cache`
+/// arrive with the `"."` fallback already applied, while `document` stays
+/// `None` when unresolved so callers fall through to their own resolution.
+pub fn init_paths(data_local: PathBuf, config: PathBuf, cache: PathBuf, document: Option<PathBuf>) {
+    DIRS.get_or_init(|| Dirs {
+        data_local,
+        config,
+        cache,
+        document,
     });
 }
 
@@ -94,7 +68,8 @@ pub fn document_dir() -> Option<&'static Path> {
 /// Only the env-gated live SpeleoDB orchestration tests use this; the standard
 /// `cargo test` run never calls it, so `DIRS` stays `None` for every other test.
 #[cfg(test)]
-pub(crate) fn init_for_test() {
+#[doc(hidden)]
+pub fn init_for_test() {
     DIRS.get_or_init(|| {
         let base = std::env::temp_dir().join("stalagmight-test-dirs");
         Dirs {

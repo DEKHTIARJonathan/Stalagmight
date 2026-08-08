@@ -1771,7 +1771,7 @@ pub fn run() {
             // Resolve platform directories before anything else needs them.
             // On Android, the `directories` crate returns None; Tauri's
             // PathResolver delegates to the platform-native APIs correctly.
-            app_dirs::init(app.handle());
+            commands::event_sink::init_app_dirs(app.handle());
 
             // Initialize app state
             let app_state = core::state::AppState::new()?;
