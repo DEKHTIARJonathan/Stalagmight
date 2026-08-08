@@ -28,7 +28,7 @@ Steps 1-6 are the critical path for data safety. Step 7 persists undo/redo stack
 ### `section_offsets` rows are never all-zero
 
 The `section_offsets` table records sections that are **actually displaced**. A
-value within `Project::OFFSET_DUST_M` (a picometre) of the origin is not a
+value within `Project::OFFSET_DUST_M` (a micrometre) of the origin is not a
 position and is never written - the invariant is stated on
 `Project::write_section_offset` and explained in
 [Undo/Redo](undo-redo.md#a-dust-zero-section_offsets-entry-is-unrepresentable-413-finding-27).

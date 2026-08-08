@@ -138,6 +138,13 @@ impl Project {
     /// `save_project`'s sanitize and the load boundary, not here. `-0.0 == 0.0` in
     /// IEEE, so a negated zero drops too.
     ///
+    /// The decision is a PURE FUNCTION of the value: the same pair always lands on
+    /// the same side, whichever route computed it and whatever the project around
+    /// it looks like. That is not incidental - a scale-aware threshold would let
+    /// two routes to one geometry disagree about a key BY DESIGN, which is the
+    /// failure [`Project::OFFSET_DUST_M`] exists to make impossible and #469
+    /// re-argued the bound over.
+    ///
     /// Takes the map rather than `&mut self` so a caller holding a disjoint field
     /// borrow can still use it.
     pub(crate) fn write_section_offset(
@@ -161,8 +168,11 @@ impl Project {
     /// Both are legacy debris - a key for a section that is not displaced - and
     /// the app is free to drop it: every consumer reads the map through
     /// [`Self::section_offset`] or an inline `.get(..).unwrap_or((0.0, 0.0))`, so
-    /// dropping changes no geometry, no coordinate and no rendered position. What
-    /// it changes is that the two spellings of "not displaced" stop coexisting.
+    /// dropping moves the section by the value it held, which is by definition
+    /// under [`Project::OFFSET_DUST_M`] - a micrometre, four decades under the
+    /// gap the app calls a misalignment and six under anything it displays. What
+    /// it changes that IS observable is that the two spellings of "not displaced"
+    /// stop coexisting.
     pub(crate) fn normalize_section_offsets(&mut self) -> usize {
         let before = self.section_offsets.len();
         self.section_offsets.retain(|_, value| {
@@ -274,10 +284,11 @@ impl Project {
     /// of an earlier group (both of that merge's ends move together) or a group
     /// disjoint from it.
     ///
-    /// The dust bound is `cascade_bfs`'s, for its reason: a femtometre gap is the
-    /// residue of summing a survey chain, not a displacement, and "correcting" it
-    /// would write a `section_offsets` key for a section that is not displaced
-    /// (the invariant on [`Self::write_section_offset`]).
+    /// The dust bound is `cascade_bfs`'s, for its reason: a gap of a few ULPs of
+    /// the coordinates being summed is the residue of summing a survey chain, not
+    /// a displacement, and "correcting" it would write a `section_offsets` key for
+    /// a section that is not displaced (the invariant on
+    /// [`Self::write_section_offset`]).
     pub(crate) fn settle_minted_merges(&mut self, minted: &[MintedMerge]) {
         for merge in minted {
             if merge.movable.is_empty() {

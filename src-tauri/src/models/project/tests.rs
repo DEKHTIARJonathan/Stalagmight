@@ -10600,7 +10600,8 @@ fn an_adjustment_that_lands_on_dust_leaves_no_section_offset_key() {
         project.section_offsets.get(&a)
     );
 
-    // Real geometry is untouched: a millimetre is nine decades above the bound.
+    // Real geometry is untouched: a millimetre is three decades above the bound
+    // (#469 re-measured it up from a picometre - see `Project::OFFSET_DUST_M`).
     project.adjust_section_offset(a, 0.001, 0.0);
     assert_eq!(project.section_offsets.get(&a).copied(), Some((0.001, 0.0)));
 
@@ -10637,6 +10638,193 @@ fn an_adjustment_that_lands_on_dust_leaves_no_section_offset_key() {
         project.section_offsets.get(&a).copied(),
         Some((0.25, -0.5)),
         "a restore of a real displacement must still reproduce it verbatim"
+    );
+}
+
+/// The worst residue #469's re-measurement found, over every fuzz corpus, at
+/// coordinates PAST the largest a georeference can produce: `HORIZON=1` at 3
+/// seeds x 5000 moves with the generator's datums scattered worldwide, 1.8e7 m
+/// from the frame origin, five ULPs of that magnitude. The full table is on
+/// [`Project::OFFSET_DUST_M`].
+const WORST_MEASURED_RESIDUE_M: f64 = 4.66e-9;
+
+#[test]
+fn the_dust_gate_is_decades_clear_of_both_ends() {
+    // `Project::OFFSET_DUST_M` is squeezed from two sides and both are numbers,
+    // so both are asserted rather than described.
+    //
+    // From BELOW: it has to sit clear of the float residue two routes to the
+    // same geometry differ by, or a residue lands on either side of it and one
+    // route writes a `section_offsets` key the other does not (#469, the
+    // `CLOSURE_SHAPES=1` seed 18 failure). Two decades of clearance over the
+    // worst residue ever measured is the floor.
+    assert!(
+        WORST_MEASURED_RESIDUE_M * 100.0 <= Project::OFFSET_DUST_M,
+        "the dust gate ({:e}) must stay at least two decades above the worst measured residue \
+         ({WORST_MEASURED_RESIDUE_M:e}) - closing that gap is what makes two routes disagree \
+         about whether a key exists",
+        Project::OFFSET_DUST_M
+    );
+
+    // From ABOVE: it is a NORMALIZATION that silently discards what it gates, so
+    // it must stay far below the smallest displacement the app treats as real.
+    // `MERGE_ALIGNMENT_INVARIANT_M` is that floor - the gap at which a merge
+    // stops being aligned as far as the code is concerned - and four decades is
+    // the clearance the constant's own doc argues for.
+    assert!(
+        Project::OFFSET_DUST_M * 1e4 <= Project::MERGE_ALIGNMENT_INVARIANT_M,
+        "the dust gate ({:e}) must stay at least four decades below the alignment invariant \
+         ({:e}): everything under the gate is thrown away, so it may never approach a \
+         displacement the app would call real",
+        Project::OFFSET_DUST_M,
+        Project::MERGE_ALIGNMENT_INVARIANT_M
+    );
+
+    // Those two are the bottom of the chain
+    // OFFSET_DUST_M << MERGE_ALIGNMENT_INVARIANT_M <= MERGE_ALIGNMENT_TOLERANCE_M;
+    // its top is pinned by
+    // `the_self_heal_gate_is_never_looser_than_the_alignment_invariant`, which
+    // is where the reason for that half lives (#413 finding 20).
+}
+
+#[test]
+fn the_dust_gate_clears_the_residue_at_the_georeference_ceiling() {
+    // THE measurement `Project::OFFSET_DUST_M` is argued from, re-runnable: how
+    // far apart do two merged stations actually land once the survey sits at the
+    // largest coordinates a georeference can put it at?
+    //
+    // That gap is exactly what `cascade_bfs` compares against the gate, and #469
+    // item 1 is why it is not a metre-scale question any more: the frame
+    // renormalisation translates the whole survey onto whichever datum defines
+    // the frame, so the coordinates carry the INTER-DATUM distance. Built here
+    // the way the app reaches it - two datums, the first one removed, the second
+    // promoted - rather than by injecting a large offset.
+    let mut project = Project::new("Ceiling".to_string(), None);
+
+    // A chain of merged sections, deep enough that the cascade BFS sums a real
+    // chain of adjustments rather than one hop.
+    const CHAIN: usize = 12;
+    let chain: Vec<SectionId> = (0..CHAIN)
+        .map(|i| {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "12 section indices, exact in f64"
+            )]
+            let turn = (i as f64) * 17.0;
+            project
+                .add_section(SectionData {
+                    shots: vec![
+                        shot(turn, turn + 3.0, 13.7, 0.0, 1.1),
+                        shot(turn + 41.0, turn + 44.0, 7.3, 1.1, 2.9),
+                        shot(turn + 122.0, turn + 125.0, 21.9, 2.9, 0.4),
+                    ],
+                    ..Default::default()
+                })
+                .id
+        })
+        .collect();
+    project.ensure_shot_uuids();
+    for pair in chain.windows(2) {
+        project
+            .merge_stations(StationRef::new(pair[0], 3), StationRef::new(pair[1], 0))
+            .expect("a fresh chain link is mergeable");
+    }
+
+    // The far component, carrying the datum that will define the frame after the
+    // first one goes. Nothing merges the two, so the translation below is the
+    // only thing that moves the chain.
+    let far = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 9.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+
+    // Both fixes are valid GPS, so this is a survey the app must hold rather
+    // than a corrupt one - and the pair is chosen to MAXIMISE the projection.
+    // `gps_to_local`'s ENU turns an angular separation `theta` into a horizontal
+    // displacement of `R * sin(theta)`, so a quarter turn of longitude at the
+    // equator is the largest one any pair of fixes on this planet can produce:
+    // 6.378137e6 m east, `WGS84_A` exactly. A more distant fix projects to LESS,
+    // not more, because the separation goes into the discarded up component.
+    project
+        .set_zero_datum(
+            StationRef::new(chain[0], 0),
+            GpsCoordinates::new(0.0, -87.35, 0.0).expect("valid fix"),
+        )
+        .expect("first datum");
+    project
+        .set_zero_datum(
+            StationRef::new(far, 0),
+            GpsCoordinates::new(0.0, 2.65, 0.0).expect("valid fix"),
+        )
+        .expect("second datum");
+    // Dropping the frame-defining datum promotes the far one and renormalises
+    // onto it (#469 item 1), which is what puts the chain at ~1e7 m. The two
+    // calls are what every command that can drop a datum does around the drop
+    // (`AppState::renormalize_frame_if_changed`); the model has no epilogue of
+    // its own.
+    let frame_before = project.frame_datum_key();
+    assert!(project.remove_zero_datum(StationRef::new(chain[0], 0)));
+    assert!(
+        project.renormalize_frame_if_changed(frame_before),
+        "the promotion has to translate the survey - without it this test measures nothing"
+    );
+
+    // A zero-trust re-solve, the route the loader and Repair take.
+    project.resolve_offsets();
+
+    let local = project.section_local_coords();
+    let station_offsets = project.resolved_station_offsets();
+    let reached = chain
+        .iter()
+        .flat_map(|&id| {
+            let (ox, oy) = project.section_offset(id);
+            [ox.abs(), oy.abs()]
+        })
+        .fold(0.0_f64, f64::max);
+    assert!(
+        reached > 6.0e6,
+        "the fixture has to REACH the coordinates it claims to measure at - the georeference \
+         ceiling, ~6.38e6 m - and it only got to {reached:e} m, so a shrunken version of this \
+         test would measure nothing"
+    );
+
+    let worst_gap = project
+        .station_merges
+        .iter()
+        .filter_map(|merge| {
+            project.endpoint_gap(&merge.station_a, &merge.station_b, &local, &station_offsets)
+        })
+        .map(|(_, _, distance)| distance)
+        .fold(0.0_f64, f64::max);
+    assert!(
+        worst_gap * 100.0 < Project::OFFSET_DUST_M,
+        "at {reached:e} m from the frame origin the solved chain left a {worst_gap:e} m gap \
+         across a merge, which is within two decades of the dust gate ({:e}). That is the \
+         straddle #469 fixed coming back: re-measure the residue and re-argue the constant \
+         (its doc carries the table), do not widen an oracle",
+        Project::OFFSET_DUST_M
+    );
+
+    // And the consequence, which is the defect itself rather than the number
+    // behind it: a SECOND cascade over the same geometry, seeded from one
+    // section of the chain instead of from every datum-bearing section, must
+    // leave the map alone. Those two seed sets sum the same chains in different
+    // orders and are entitled to differ in the last bits - what they are not
+    // entitled to do is disagree about whether a section HAS a key, which is
+    // structural, survives into the `.stalx`, and is exactly what #469's
+    // `CLOSURE_SHAPES=1` seed 18 caught the picometre gate doing. Compared as a
+    // whole map, so a key appearing on a section the first route left alone
+    // fails even where the value is dust.
+    let before = project.section_offsets.clone();
+    project.cascade_connection_offsets(&[chain[CHAIN / 2]]);
+    assert_eq!(
+        before, project.section_offsets,
+        "a second cascade over one solved geometry, seeded differently, rewrote the offset map \
+         at {reached:e} m from the frame origin. Two routes to one geometry must agree on which \
+         sections have a key (#469)"
     );
 }
 

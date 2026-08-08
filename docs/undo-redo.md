@@ -185,7 +185,7 @@ twice and restoring one already deserializes it.
 
 `section_offsets` holds a key only for a section that is **actually displaced**,
 and "not displaced" has exactly one spelling: the key is absent. A value within
-`Project::OFFSET_DUST_M` (a picometre) of the origin in both components is not a
+`Project::OFFSET_DUST_M` (a micrometre) of the origin in both components is not a
 position, so it is never stored - in memory or on disk, by any writer, computed or
 restored. The invariant is stated on `Project::write_section_offset`, which is the
 one write point everything routes through, and enforced on maps this app did not
@@ -226,6 +226,30 @@ the same drawn position. The **file-format gate is unaffected** for the same rea
 it always was: the app never writes a dust-zero row, so a save-load-save cycle on a
 file this app wrote is a fixpoint. A legacy file sees a one-time settle - the load
 drops the row, the next save omits it - and is a fixpoint from then on.
+
+##### Why the bound is a micrometre and not a picometre (#469)
+
+The gate is absolute; the residue it swallows is **relative** to the coordinates
+being summed, because it is a few ULPs of them. It was 1e-12 m, chosen against a
+corpus measured when coordinates were metre-scale - and #469's frame
+renormalisation (`Project::renormalize_frame`) legitimately moved them onto the
+inter-datum distance, so the residue moved with them and started landing on both
+sides of the gate. Two cascades over the same geometry, seeded differently, then
+disagreed about whether a section HAS a key, which is structural rather than
+numeric: `CLOSURE_SHAPES=1` seed 18 in `fuzz_undo_tests.rs`.
+
+Re-measured with every gate site instrumented, the residue is one to five ULPs of
+the coordinate magnitude: 1.96e-11 m at the ~8e4 m a real georeference produces,
+and 4.66e-9 m at the 1.8e7 m the horizon corpus reaches with datums scattered
+worldwide. 1e-6 m clears that by two decades and stays four decades below
+`Project::MERGE_ALIGNMENT_INVARIANT_M`, which is the ordering the whole chain
+rests on. The full table is on `Project::OFFSET_DUST_M`;
+`the_dust_gate_clears_the_residue_at_the_georeference_ceiling` and
+`the_dust_gate_is_decades_clear_of_both_ends` (models/project/tests.rs) re-run the
+measurement and pin the clearances. The gate stays a **pure function of the value
+written** - never scale-aware, which would let two routes disagree by design - and
+a residue that ever approaches it means re-measuring the constant, not widening an
+oracle.
 
 #### An inverse still RESTORES the offsets it re-derives
 

@@ -255,13 +255,17 @@ impl Project {
                     if dx.is_finite() && dy.is_finite() {
                         // Decline a correction that is float dust, exactly as the
                         // merge BFS in `reconcile_after_edit` does - one shared
-                        // bound (#413 finding 2's dust half). A femtometre gap
-                        // between two merged stations is the residue of summing a
-                        // survey chain, not a misalignment; "correcting" it wrote
-                        // a `section_offsets` key for a section that is not
-                        // displaced, and the key (unlike the value) is structural:
-                        // it is saved, and it makes this route differ from the
-                        // route that had nothing to correct.
+                        // bound (#413 finding 2's dust half). A gap of a few ULPs
+                        // of the coordinates being summed is the residue of
+                        // summing a survey chain, not a misalignment;
+                        // "correcting" it wrote a `section_offsets` key for a
+                        // section that is not displaced, and the key (unlike the
+                        // value) is structural: it is saved, and it makes this
+                        // route differ from the route that had nothing to
+                        // correct. That "few ULPs" is why the bound is where it
+                        // is rather than as tight as possible - it is measured,
+                        // at the largest coordinates the app can hold, on
+                        // `Project::OFFSET_DUST_M` (#469).
                         if dx.abs() > Self::OFFSET_DUST_M || dy.abs() > Self::OFFSET_DUST_M {
                             self.adjust_section_offset(theirs.section_id, dx, dy);
                         }
