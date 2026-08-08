@@ -5,7 +5,7 @@ use nom::{
     IResult, Parser,
     bytes::complete::{tag, take_till1},
     character::complete::{multispace0, multispace1},
-    error::Error,
+    error::{Error, ErrorKind},
     combinator::opt,
     multi::many0,
 };
@@ -136,9 +136,17 @@ pub(crate) fn parse_survey(input: &str) -> IResult<&str, Survey> {
     let (input, cave_name) = parse_cave_name(input)?;
     let (input, name) = parse_survey_name(input)?;
     let (input, (date, comment)) = parse_survey_date_line(input)?;
-    let date =
+    // `SURVEY DATE:` is three unsigned integers and nothing in the format says
+    // they name a real day, so `2 29 1979` and `13 45 1979` both get this far.
+    // A survey whose date does not exist is a survey this parser cannot
+    // produce, which is a parse failure like any other: `many0` stops and the
+    // caller sees a short file. It is emphatically NOT a panic - the callers
+    // are Tauri commands, and a panic there never reaches the user as an error.
+    let Some(date) =
         NaiveDate::from_ymd_opt(i32::from(date.year), u32::from(date.month), u32::from(date.day))
-            .unwrap();
+    else {
+        return Err(nom::Err::Error(Error::new(input, ErrorKind::Verify)));
+    };
     let (input, team) = parse_survey_team(input)?;
     let (input, parameters) = parse_survey_parameters(input)?;
     let (input, _) = gobble_labels(input)?;

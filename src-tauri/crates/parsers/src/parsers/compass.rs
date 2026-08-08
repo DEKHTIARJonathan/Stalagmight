@@ -2143,6 +2143,46 @@ mod tests {
         )
     }
 
+    /// `SURVEY DATE:` takes three unsigned integers and nothing checks that
+    /// they name a real day, so a hand-edited or truncated `.DAT` can carry
+    /// `2 29 1979`, `13 45 1979` or a field wider than a `u32`.
+    ///
+    /// Every one of those has to come back as a REJECTED survey. The date is
+    /// parsed inside a `#[tauri::command]`, so a panic there does not surface
+    /// as an error dialog - it unwinds out of the command and the caller's
+    /// promise never settles.
+    #[test]
+    fn an_impossible_survey_date_is_rejected_rather_than_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        // Every one of these reaches `NaiveDate::from_ymd_opt(..).unwrap()` or
+        // `digit1.parse::<u32>().unwrap()` in the vendored survey parser.
+        for date in [
+            "2 29 1979",        // February 29th of a common year
+            "0 10 1979",        // month 0
+            "7 0 1979",         // day 0
+            "13 45 1979",       // month 13, day 45
+            "256 10 1979",      // month 256, which truncates to 0 as a u8
+            "7 10 99999999999", // wider than the u32 the field parses into
+        ] {
+            let path = dir.path().join("bad-date.dat");
+            std::fs::write(
+                &path,
+                synthetic_dat("Synthetic Cave")
+                    .replace("SURVEY DATE: 7 10 1979", &format!("SURVEY DATE: {date}")),
+            )
+            .unwrap();
+
+            // `many0` stops at the first survey it cannot parse and returns
+            // what it has, so a lone bad survey yields an empty file rather
+            // than an `Err` - which `parse_compass` then reports as one.
+            let surveys = parse_compass(&path).map(|parsed| parsed.surveys.len());
+            assert!(
+                surveys.is_err() || surveys.as_ref().is_ok_and(|count| *count == 0),
+                "SURVEY DATE: {date} must be rejected, got {surveys:?} survey(s)"
+            );
+        }
+    }
+
     /// Compass files are read one byte per code point, so a "UTF-8 with BOM"
     /// `.DAT` carries three Latin-1 characters into whatever line 1 means -
     /// here the cave name, which becomes the imported project's name.

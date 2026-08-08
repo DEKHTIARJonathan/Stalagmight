@@ -23,5 +23,11 @@ Changes from upstream v0.0.7:
   so real files (e.g. a `0xB0` degree sign in a comment) don't fail to load.
 - **`survey::parser`**: the trailing survey form-feed terminator is now optional,
   so a hand-edited `.DAT` missing the final `0x0C` still parses.
+- **`survey::parser` / `parser_utils`**: an impossible `SURVEY DATE:` is a parse
+  ERROR rather than a panic. Upstream does
+  `NaiveDate::from_ymd_opt(..).unwrap()` and `digit1.parse::<u32>().unwrap()`, so
+  `SURVEY DATE: 2 29 1979` (or a field wider than a `u32`) aborts the thread.
+  Stalagmight calls this from a `#[tauri::command]`, where a panic never reaches
+  the user - the caller's promise simply never settles.
 
 These should be contributed upstream where appropriate.

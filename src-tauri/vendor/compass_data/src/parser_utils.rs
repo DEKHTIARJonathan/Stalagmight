@@ -31,7 +31,16 @@ pub(crate) fn parse_station_name(input: &str) -> IResult<&str, &str> {
 
 pub(crate) fn parse_uint(input: &str) -> IResult<&str, u32> {
     let (input, digits) = ws(digit1).parse(input)?;
-    let num = digits.parse().unwrap();
+    // `digit1` accepts any run of digits, including one far wider than a `u32`
+    // ("99999999999" in a `SURVEY DATE:` field). An overflow is a value this
+    // parser cannot represent, which is a parse failure - not a panic, because
+    // the callers are Tauri commands where a panic never reaches the user.
+    let Ok(num) = digits.parse() else {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            digits,
+            nom::error::ErrorKind::Digit,
+        )));
+    };
     Ok((input, num))
 }
 
