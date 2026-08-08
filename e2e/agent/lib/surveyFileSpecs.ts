@@ -414,7 +414,12 @@ function biasedFloat(rng: Rng, min: number, max: number, decimals: number, extre
  */
 export function randomTmlSpec(rng: Rng, profile: SpecProfile = 'valid'): TmlSpec {
   const malformed = profile === 'malformed';
-  const shotCount = randInt(rng, 1, 12);
+  // At least TWO in the valid profile: shot 0 is the `START`, which is a
+  // station rather than a leg, so a one-shot file is a well-formed document
+  // describing an empty survey - it parses, imports nothing, and spends a whole
+  // fuzz flow on a dialog with no content. `malformed` keeps the one-shot case,
+  // where an empty import IS the thing being tested.
+  const shotCount = malformed ? randInt(rng, 1, 12) : randInt(rng, 2, 12);
   const sectionNames = Array.from({ length: randInt(rng, 1, 3) }, (_unused, index) =>
     biasedName(rng, `Section ${index + 1}`),
   );
@@ -1395,11 +1400,18 @@ export function selfCheckClaim(spec: GeneratedFileSpec): SelfCheckClaim {
       // from the `FromID` graph and a `TmlSection` is a connected run of shots,
       // so one `<Section>` name can become several sections and several names
       // can collapse into one. The only honest claim is "at least one".
+      //
+      // And only when there IS one to make: shot 0 is the `START`, which is a
+      // station rather than a leg, so a one-shot file is a well-formed document
+      // describing an empty survey and `parse_tml` correctly reports zero
+      // sections for it. Claiming 1 there would report writer drift for a file
+      // the writer got exactly right - measured, on the second `.tml` the
+      // seed-1 self-check draws.
       return {
         command: 'parse_tml',
         what: 'section',
         read: (parsed) => readArrayLength(parsed, 'sections'),
-        min: 1,
+        min: spec.tml.shots.some((shot) => shot.type === 'REAL') ? 1 : 0,
         max: null,
       };
     case 'dat': {

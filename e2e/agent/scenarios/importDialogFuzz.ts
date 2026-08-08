@@ -312,6 +312,7 @@ import {
   ADVANCE_MOVE,
   ESCAPE_BUDGET,
   ESCAPE_PATH,
+  IMPORT_GUARDED_SCREENS,
   isEscaped,
   NON_FLOW_SCREENS,
   progressMode,
@@ -363,6 +364,11 @@ const SELF_CHECK_SPECS = 6;
  * toast rather than the modal, and both surfaces prove the completion path ran.
  */
 const RECEIPT_TOAST_KEY = 'import-receipt';
+/**
+ * `TOAST_KEYS.IMPORT_IN_PROGRESS` (`src/utils/toastKeys.ts`). What
+ * `routeOpenedFile` raises when `importFlowOwnsScreen` refuses a second file.
+ */
+const IMPORT_GATE_TOAST_KEY = 'import-in-progress';
 /** Times an `idle` screen is re-observed before a flow is called finished. */
 const IDLE_CONFIRMATIONS = 3;
 /** Grace between those observations. One IPC round trip is tens of ms. */
@@ -1302,6 +1308,21 @@ export const importDialogFuzz: Scenario = {
          * through the path that owes the `importContext` clear.
          */
         let sawReceipt = false;
+        /**
+         * Was the receipt TOAST already on screen when this flow began?
+         *
+         * `TOAST_KEYS.IMPORT_RECEIPT` dwells for seconds, and a flow starts the
+         * moment the previous one reaches `idle` - so the previous flow's
+         * receipt is routinely still up. Counting it would classify the next
+         * flow as `imported`, and F1 would then demand an undo entry from a
+         * flow that did nothing. Measured, on the seed-7 five-format run: a
+         * Walls import's receipt toast outlived its flow and failed the NEXT
+         * one, which had only opened and cancelled the as-new-project dialog.
+         *
+         * When it is already up, this flow's evidence is the receipt MODAL and
+         * the undo depth, both of which are unambiguous.
+         */
+        const receiptToastAtStart = digest.toast.includes(RECEIPT_TOAST_KEY);
         let sawCommit = false;
         let historyTouched = false;
         let leftIdle = false;
@@ -1325,8 +1346,13 @@ export const importDialogFuzz: Scenario = {
             receipt = receiptClaimFrom(digest);
             if (receipt) guarded(() => checkReceipt(receipt as ReceiptClaim));
           }
-          if (digest.receipt !== null || digest.toast.includes(RECEIPT_TOAST_KEY)) sawReceipt = true;
-          if (digest.undo > before.undoDepth) sawCommit = true;
+          if (digest.receipt !== null) sawReceipt = true;
+          if (!receiptToastAtStart && digest.toast.includes(RECEIPT_TOAST_KEY)) sawReceipt = true;
+          // `-1` is the digest's "no project open" sentinel, so a flow that
+          // CREATES a project would otherwise read the new project's empty undo
+          // stack (depth 0) as a commit. An import pushes an entry; creating a
+          // project does not.
+          if (digest.undo > Math.max(0, before.undoDepth)) sawCommit = true;
         };
 
         for (;;) {
@@ -1409,7 +1435,8 @@ export const importDialogFuzz: Scenario = {
             move.testid === 'shot-editor-context-delete-rows' &&
             digest.selRows.length > 0 &&
             digest.selRows.every((row) => digest.frozen.includes(row));
-          const interjectRoute = move.kind === 'openFile' && move.label.startsWith('INTERJECT:') && screenBefore !== 'idle';
+          const interjectRoute =
+            move.kind === 'openFile' && move.label.startsWith('INTERJECT:') && IMPORT_GUARDED_SCREENS.has(screenBefore);
 
           const outcome = await execute(move, true);
           steps += 1;
@@ -1468,10 +1495,20 @@ export const importDialogFuzz: Scenario = {
           }
           if (interjectRoute && outcome.performed) {
             ctx.metric('interjectRouteGuarded');
-            if (digest.screen !== screenBefore) {
+            // The REFUSAL TOAST, not the screen, is the guard's observable
+            // effect - and the screen is not a sound test of it. Measured, on
+            // the seed-7 five-format run: `create-and-continue-button` starts
+            // an async chain (create the project, then open the format's own
+            // dialog) that the settle loop cannot wait for, because
+            // `activeDialog` does not change until it lands. So the screen can
+            // move from `new-project` to `tml-config` three moves later, for a
+            // reason that has nothing to do with the routed file, and a
+            // screen-equality check reports the guard as broken when it worked.
+            if (!digest.toast.includes(IMPORT_GATE_TOAST_KEY)) {
               fail(
                 'IMPORT GATE: a second file was routed into a screen an import already owned',
-                `  screen ${screenBefore} -> ${digest.screen}; routeOpenedFile must refuse (#411)`,
+                `  screen ${screenBefore} -> ${digest.screen}; routeOpenedFile must refuse and SAY so (#411)\n` +
+                  `  toasts: ${JSON.stringify(digest.toast)}`,
               );
             }
           }
@@ -1503,7 +1540,21 @@ export const importDialogFuzz: Scenario = {
         // completion-path defect - was established by reading the code.
         if (digest.ctx !== null) ctx.metric(`residualImportContext:${digest.ctx}`);
         if (sawReceipt) ctx.metric('flowPresentedReceipt');
-        if (receipt) guarded(() => checkAccounting(receipt as ReceiptClaim, before, after));
+        // F3 measures the receipt against the DELTA this flow made, so it needs
+        // both bounds to describe the same project. A flow that started with a
+        // project and ended with a DIFFERENT one - `import-as-new-project`
+        // confirms by closing the current project and re-entering the router -
+        // has bounds taken from two unrelated projects, and the difference
+        // between them is not an accounting error, it is a subtraction with no
+        // meaning. A flow that CREATED the project it ended with is still
+        // measured: `before` is then simply empty.
+        if (receipt) {
+          if (before.projectFile !== null && before.projectFile !== after.projectFile) {
+            ctx.metric('f3Skipped:projectSwapped');
+          } else {
+            guarded(() => checkAccounting(receipt as ReceiptClaim, before, after));
+          }
+        }
 
         // F1 needs a flow whose only history effect was the import itself, and
         // whose project did not change identity underneath it. An undo/redo/save

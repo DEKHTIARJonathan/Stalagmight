@@ -213,8 +213,18 @@ export function checkResidue(digest: ImportScreenDigest, what: string): void {
  */
 export function checkAccounting(claim: ReceiptClaim, before: FlowBounds, after: FlowBounds): void {
   if (claim.sections === null || claim.shots === null) return;
-  const sectionDelta = after.sections - before.sections;
-  const shotDelta = after.shots - before.shots;
+  // `-1` is the digest's "no project open" sentinel, not a count.
+  //
+  // A flow that ENDS with no project has nothing to compare against - the
+  // residue discard deletes the project the import created - so there is no
+  // claim to check. A flow that STARTED with none created one, and a project
+  // that did not exist had zero sections: subtracting the sentinel would make
+  // every count one too many. Measured, on the first five-format run: a `.tml`
+  // imported into a project the flow itself created reported a 3/5 delta
+  // against a receipt that correctly said 2/4.
+  if (after.sections < 0 || after.shots < 0) return;
+  const sectionDelta = after.sections - Math.max(0, before.sections);
+  const shotDelta = after.shots - Math.max(0, before.shots);
   if (sectionDelta !== claim.sections || shotDelta !== claim.shots) {
     fail('F3 ACCOUNTING: the receipt does not describe what landed in the project', [
       `receipt:  ${claim.sections} section(s), ${claim.shots} shot(s)`,

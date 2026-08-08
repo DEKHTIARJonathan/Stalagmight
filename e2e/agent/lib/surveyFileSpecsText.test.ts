@@ -851,9 +851,13 @@ describe('selfCheckClaim', () => {
         }
         if (spec.format === 'dmp') expect(claim.min).toBe(spec.dmp.sections.length);
         // Topology reconstruction means a TML's section count is NOT the spec's
-        // section-name count, so the only honest claim is "at least one".
+        // section-name count, so the only honest claim is "at least one" - and
+        // only when the file has a leg at all. Shot 0 is the `START`, a station
+        // rather than a leg, so a file with no `REAL` shot legitimately parses
+        // to zero sections.
         if (spec.format === 'tml' || spec.format === 'tmlu') {
-          expect([claim.min, claim.max]).toEqual([1, null]);
+          const hasLeg = spec.tml.shots.some((shot) => shot.type === 'REAL');
+          expect([claim.min, claim.max]).toEqual([hasLeg ? 1 : 0, null]);
         }
       }
     }

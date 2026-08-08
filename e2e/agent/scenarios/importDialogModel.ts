@@ -47,6 +47,42 @@ export type { ScreenId };
  */
 export const NON_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>(['export-modal']);
 
+/**
+ * Screens `routeOpenedFile`'s `importFlowOwnsScreen` guard REFUSES a second
+ * file on.
+ *
+ * A transcription of `IMPORT_FLOW_DIALOGS` plus the placement clause
+ * (`src/utils/openOrImport.ts`), mapped from `activeDialog` values onto the
+ * screens this table names. The three import-adjacent dialogs that source
+ * deliberately leaves out - `import-receipt`, `import-blocked` and
+ * `import-as-new-project` - are correspondingly absent here, and their comment
+ * explains why: the first is post-save, and the other two are pre-flow prompts
+ * that `closeDialog()` and re-enter the router themselves.
+ */
+export const IMPORT_GUARDED_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
+  'new-project',
+  'dmp-select',
+  'zero-datum-select',
+  'zero-datum-config',
+  'wiz-init',
+  'wiz-suggest',
+  'wiz-no-suggest',
+  'wiz-manual',
+  'wiz-placing',
+  'wiz-done',
+  'wiz-error',
+  'wiz-blank',
+  'wiz-confirm',
+  'map-placement',
+  'tml-config',
+  'tml-residue',
+  'compass',
+  'walls',
+  'gpx-select',
+  'gpx-place',
+  'orphan-placement',
+]);
+
 /** Screens on which the walk is inside a flow (i.e. a flow is in progress). */
 export const IN_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
   'dmp-select',
