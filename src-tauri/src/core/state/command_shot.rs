@@ -131,6 +131,46 @@ impl AppState {
         shot_id: ShotId,
         updates: ShotUpdates,
     ) -> CommandResult {
+        self.write_shot_values(section_id, shot_id, updates, true)
+    }
+
+    /// [`Self::update_shot`] for an INVERSE: the same write, with the
+    /// frozen-geometry refusal skipped.
+    ///
+    /// **If a forward command was permitted, its inverse must be too** (#413,
+    /// findings 3 and 6; docs/undo-redo.md). The frozen check says what a USER
+    /// may do - do not edit geometry the survey network is solved against - and
+    /// it is a question about the state the edit STARTS from, which for an undo
+    /// is the state the forward command PRODUCED, not the one it was judged
+    /// against. Those differ whenever the edit itself changed what is frozen,
+    /// and one route does it in a single command: a shot edit that pulls a
+    /// snap-to-merge closure's endpoints into coincidence promotes the closure to
+    /// a rigid edge (#469 item 2), which closes an anchored loop and freezes the
+    /// very shot that was just edited. `undo_inner`'s epilogue pushes a refused
+    /// entry back, so that would wedge the history permanently, with every older
+    /// entry sealed off beneath it.
+    ///
+    /// Only the intent guard is skipped. The non-finite and length checks are
+    /// about the VALUES being written, not about permission, and an inverse
+    /// writes values a forward command already wrote - so they can only fire on a
+    /// payload that was invalid when it was recorded, which is a different bug
+    /// and should still be refused.
+    pub(super) fn restore_shot_values(
+        &self,
+        section_id: SectionId,
+        shot_id: ShotId,
+        updates: ShotUpdates,
+    ) -> CommandResult {
+        self.write_shot_values(section_id, shot_id, updates, false)
+    }
+
+    fn write_shot_values(
+        &self,
+        section_id: SectionId,
+        shot_id: ShotId,
+        updates: ShotUpdates,
+        enforce_frozen: bool,
+    ) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
         };
@@ -180,7 +220,10 @@ impl AppState {
                 }
 
                 // Reject geometry edits on frozen shots
-                if updates.touches_geometry() && project.is_shot_frozen_by_id(section_id, shot_id) {
+                if enforce_frozen
+                    && updates.touches_geometry()
+                    && project.is_shot_frozen_by_id(section_id, shot_id)
+                {
                     return CommandResult::failure(
                         "Cannot edit geometry of a frozen shot. This shot is part of an adjusted survey network.".to_string()
                     );
