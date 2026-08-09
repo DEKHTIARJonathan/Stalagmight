@@ -326,6 +326,17 @@ export interface StepOutcome {
    * different facts, and only this one describes what the app was asked to do.
    */
   offAtDispatch: boolean | null;
+  /**
+   * `uiStore.activeDialog` read IMMEDIATELY BEFORE a `key:` chord is dispatched;
+   * null for every other move kind, and for a chord pressed with no dialog up.
+   *
+   * `useKeyboardShortcuts` gates on `useUIStore.getState().activeDialog` inside
+   * the keydown handler, so this is the value the app's own gate consulted. The
+   * digest's `screen` is a round trip older, and an import that completes in
+   * that gap closes its dialog - which is how EXPORT CHORD came to blame the
+   * shortcut dispatcher for a chord it swallowed correctly.
+   */
+  dialogAtDispatch: string | null;
   /** Value read back after a `type`/`select` (what the control actually took). */
   valueAfter: string | null;
   digest: ImportScreenDigest;
@@ -489,6 +500,7 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
     // branch's gate. See StepOutcome.offAtDispatch for why the digest's own
     // reading is not a substitute.
     let offAtDispatch = null;
+    let dialogAtDispatch = null;
     const actionStarted = Date.now();
 
     if (req.kind === 'ui' && req.testid.indexOf('key:') === 0) {
@@ -506,6 +518,10 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
         cancelable: true,
         composed: true,
       };
+      // Read here, not from the digest: this is the value the app's own gate
+      // consults, one statement later, on the same tick.
+      const ui = window.__E2E_TEST__ && window.__E2E_TEST__.uiStore ? window.__E2E_TEST__.uiStore.getState() : null;
+      dialogAtDispatch = ui && ui.activeDialog !== undefined && ui.activeDialog !== null ? ui.activeDialog : null;
       target.dispatchEvent(new KeyboardEvent('keydown', init));
       target.dispatchEvent(new KeyboardEvent('keyup', init));
       performed = true;
@@ -619,6 +635,7 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
       reason: reason,
       valueAfter: valueAfter,
       offAtDispatch: offAtDispatch,
+      dialogAtDispatch: dialogAtDispatch,
       digest: digest,
       timing: { actionMs: actionMs, settleMs: settleMs, digestMs: digestMs },
     };

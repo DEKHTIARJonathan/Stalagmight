@@ -856,6 +856,11 @@ export const importDialogFuzz: Scenario = {
        * or an edit on a live element. See `StepOutcome.offAtDispatch`.
        */
       offAtDispatch: boolean | null;
+      /**
+       * The dialog the KEYBOARD DISPATCHER saw, for a `key:` chord. Null for
+       * every other move, and for a chord pressed at idle.
+       */
+      dialogAtDispatch: string | null;
     }
 
     /** Run one move, record it if it happened, and report the screen after. */
@@ -864,6 +869,7 @@ export const importDialogFuzz: Scenario = {
       let performed = false;
       let skip: string | null = null;
       let offAtDispatch: boolean | null = null;
+      let dialogAtDispatch: string | null = null;
       let digest: ImportScreenDigest;
 
       if (move.kind === 'ui') {
@@ -871,6 +877,7 @@ export const importDialogFuzz: Scenario = {
         performed = outcome.performed;
         skip = outcome.reason;
         offAtDispatch = outcome.offAtDispatch;
+        dialogAtDispatch = outcome.dialogAtDispatch;
         digest = outcome.digest;
         ctx.metric('bridgeActionMs', outcome.timing.actionMs);
         ctx.metric('bridgeSettleMs', outcome.timing.settleMs);
@@ -889,6 +896,7 @@ export const importDialogFuzz: Scenario = {
         performed = outcome.performed;
         skip = outcome.reason;
         offAtDispatch = outcome.offAtDispatch;
+        dialogAtDispatch = outcome.dialogAtDispatch;
         digest = outcome.digest;
         ctx.metric('bridgeActionMs', outcome.timing.actionMs);
         ctx.metric('bridgeSettleMs', outcome.timing.settleMs);
@@ -1014,7 +1022,7 @@ export const importDialogFuzz: Scenario = {
       inFlight = null;
       history.push(`${move.label}${performed ? '' : ` -> SKIPPED (${skip ?? 'unknown'})`} [${digest.screen}]`);
       ctx.metric(performed ? 'movesPerformed' : `skip:${skip ?? 'unknown'}`);
-      return { digest, performed, skip, offAtDispatch };
+      return { digest, performed, skip, offAtDispatch, dialogAtDispatch };
     };
 
     // ---- per-step oracles ------------------------------------------------
@@ -1686,15 +1694,29 @@ export const importDialogFuzz: Scenario = {
           }
           if (exportChord && outcome.performed) {
             ctx.metric(`exportChord:${screenBefore}`);
-            // The app's own gate: both keyboard dispatchers return early for
-            // every non-Escape key while a dialog is open, so Ctrl+E must be
-            // inert on top of an import screen. An export modal that opened
-            // there would sit over a flow that still owns the state under it.
-            if (screenBefore !== 'idle' && digest.screen === 'export-modal') {
+            // The app's own gate: both keyboard dispatchers read
+            // `useUIStore.getState().activeDialog` INSIDE the keydown handler and
+            // return early for every non-Escape key while one is open, so Ctrl+E
+            // must be inert on top of an import screen. An export modal that
+            // opened there would sit over a flow that still owns the state under
+            // it.
+            //
+            // Judged on `dialogAtDispatch` - the value that gate read - and not
+            // on `screenBefore`, which is a round trip older. An import that
+            // completes in that gap closes its dialog, and the chord then lands
+            // at idle and is entitled to open the modal. Measured, on the corpus
+            // campaign's seed-117 retry: `walls import` left the screen on
+            // `walls` with the import still running, the next move was the Ctrl+E
+            // interjection, and the failure blamed the dispatcher for a chord it
+            // had swallowed correctly - the dialog was simply gone by then.
+            if (outcome.dialogAtDispatch !== null && digest.screen === 'export-modal') {
               fail(
-                `EXPORT CHORD: Ctrl+E opened the export modal on top of "${screenBefore}"`,
-                `  a dialog was already up; the shortcut dispatcher must swallow the chord`,
+                `EXPORT CHORD: Ctrl+E opened the export modal on top of "${outcome.dialogAtDispatch}"`,
+                `  screen ${screenBefore} -> ${digest.screen}; that dialog was up when the keydown was ` +
+                  'dispatched, so the shortcut dispatcher must swallow the chord',
               );
+            } else if (screenBefore !== 'idle' && digest.screen === 'export-modal') {
+              ctx.metric('exportChordAfterDialogClosed');
             }
           }
           if (frozenDelete && outcome.performed) {
