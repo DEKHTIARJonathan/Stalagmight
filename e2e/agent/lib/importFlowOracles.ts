@@ -14,9 +14,10 @@
  *   F2 RESIDUE         - no dialog, no placement, no import context, and
  *                        `isImportInProgress` false once the flow is over.
  *   F3 ACCOUNTING      - the section and shot deltas equal what the receipt
- *                        claimed. The receipt is the user's only account of what
- *                        happened, so a receipt that disagrees with the project
- *                        is a bug even when the import itself was correct.
+ *                        claimed, measured WHERE THE RECEIPT WAS MADE. The
+ *                        receipt is the user's only account of what happened, so
+ *                        a receipt that disagrees with the project is a bug even
+ *                        when the import itself was correct.
  *   F4 RECEIPT         - the warnings list is capped and the details toggle
  *                        appears exactly when there is something behind it.
  *   F5 TEMP FILES      - no `.stalx.tmp` / `.download.tmp` / `.vacuum.tmp`
@@ -203,6 +204,12 @@ export function checkResidue(digest: ImportScreenDigest, what: string): void {
   fail(`F2 RESIDUE: ${what} left import state behind`, wrong);
 }
 
+/** The two numbers F3 compares. `FlowBounds` satisfies it. */
+export interface CountedProject {
+  sections: number;
+  shots: number;
+}
+
 /**
  * F3. The receipt is an account of the import; the project is what happened.
  *
@@ -210,21 +217,33 @@ export function checkResidue(digest: ImportScreenDigest, what: string): void {
  * wizard calls `import_sections` up to four times for one logical import and
  * `aggregateImportReceipts` merges the results, so the claim is compared against
  * the WHOLE flow's delta, never against one command's.
+ *
+ * `atReceipt` is the project AS IT WAS WHEN THE RECEIPT WAS PRESENTED, not at
+ * the end of the flow, and that distinction is the oracle. The walk keeps moving
+ * after a receipt appears - the interjection stream plays `undo`, a second file
+ * gets imported, the receipt is dismissed onto another import - so a delta taken
+ * at the end of the flow measures the WALK, not the receipt. Measured, on the
+ * campaign's seed-8 cell: a Walls import whose receipt correctly said "1 section
+ * - 7 shots" was reported as a 0/0 delta, because an `undo` interjection two
+ * moves later had taken the import back. The receipt was right; the oracle was
+ * subtracting numbers from two different moments.
+ *
+ * The caller reads both counts off the receipt's OWN digest, so this costs
+ * nothing extra and cannot drift from the claim it is checking.
  */
-export function checkAccounting(claim: ReceiptClaim, before: FlowBounds, after: FlowBounds): void {
+export function checkAccounting(claim: ReceiptClaim, before: CountedProject, atReceipt: CountedProject): void {
   if (claim.sections === null || claim.shots === null) return;
   // `-1` is the digest's "no project open" sentinel, not a count.
   //
-  // A flow that ENDS with no project has nothing to compare against - the
-  // residue discard deletes the project the import created - so there is no
-  // claim to check. A flow that STARTED with none created one, and a project
-  // that did not exist had zero sections: subtracting the sentinel would make
-  // every count one too many. Measured, on the first five-format run: a `.tml`
-  // imported into a project the flow itself created reported a 3/5 delta
+  // A measurement taken with no project has nothing to compare against, so there
+  // is no claim to check. A flow that STARTED with none created one, and a
+  // project that did not exist had zero sections: subtracting the sentinel would
+  // make every count one too many. Measured, on the first five-format run: a
+  // `.tml` imported into a project the flow itself created reported a 3/5 delta
   // against a receipt that correctly said 2/4.
-  if (after.sections < 0 || after.shots < 0) return;
-  const sectionDelta = after.sections - Math.max(0, before.sections);
-  const shotDelta = after.shots - Math.max(0, before.shots);
+  if (atReceipt.sections < 0 || atReceipt.shots < 0) return;
+  const sectionDelta = atReceipt.sections - Math.max(0, before.sections);
+  const shotDelta = atReceipt.shots - Math.max(0, before.shots);
   if (sectionDelta !== claim.sections || shotDelta !== claim.shots) {
     fail('F3 ACCOUNTING: the receipt does not describe what landed in the project', [
       `receipt:  ${claim.sections} section(s), ${claim.shots} shot(s)`,

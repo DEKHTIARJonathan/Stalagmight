@@ -1,0 +1,342 @@
+/**
+ * The pure half of `import-dialog-fuzz`'s FLOW oracles.
+ *
+ * Every F-check is a decision over two sets of numbers, and the scenario that
+ * feeds them needs a live app, a corpus and twenty minutes - so the branch
+ * structure is pinned here instead: what each oracle fails on, and what it
+ * deliberately lets past.
+ *
+ * The case worth naming is F3's. It compares the receipt against the project AS
+ * IT WAS WHEN THE RECEIPT WAS MADE, not at the end of the flow, because the walk
+ * keeps moving after a receipt appears - an `undo` interjection lands, a second
+ * file is imported - and an accounting oracle measured across those is a test of
+ * the walk rather than of the receipt. Measured, on the campaign's seed-8 cell:
+ * a Walls import whose receipt correctly said "1 section - 7 shots" was reported
+ * as a 0/0 delta because an undo interjection two moves later had taken it back.
+ */
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { describe, expect, it } from 'vitest';
+
+import type { ImportScreenDigest } from './importScreenDigest';
+import {
+  ImportOracleError,
+  MAX_VISIBLE_WARNINGS,
+  checkAccounting,
+  checkIpcContract,
+  checkPushed,
+  checkReceipt,
+  checkResidue,
+  checkRoundtripState,
+  checkTempFiles,
+  ipcArgRejections,
+  leftoverTempNames,
+  parseReceiptSummary,
+  receiptClaimFrom,
+  type FlowBounds,
+  type ReceiptClaim,
+} from './importFlowOracles';
+
+const bounds = (over: Partial<FlowBounds> = {}): FlowBounds => ({
+  snapshot: null,
+  undoDepth: 0,
+  sections: 0,
+  shots: 0,
+  projectDir: null,
+  leftovers: [],
+  ...over,
+});
+
+const claim = (over: Partial<ReceiptClaim> = {}): ReceiptClaim => ({
+  summary: '1 section - 7 shots',
+  sections: 1,
+  shots: 7,
+  shown: 0,
+  more: 0,
+  hasDetails: false,
+  ...over,
+});
+
+const digest = (over: Partial<ImportScreenDigest> = {}): ImportScreenDigest => ({
+  screen: 'idle',
+  dialog: null,
+  placement: false,
+  ctx: null,
+  phase: null,
+  hasProject: true,
+  importInProgress: false,
+  live: {},
+  opts: {},
+  rows: 0,
+  frozen: [],
+  activeRow: null,
+  selRows: [],
+  toast: [],
+  err: null,
+  boundary: false,
+  inv: [],
+  undo: 0,
+  sections: 0,
+  shots: 0,
+  receipt: null,
+  dirty: false,
+  savePath: null,
+  why: '',
+  ...over,
+});
+
+/** Every oracle reports through one error type, so `guarded` can catch them all. */
+const throwsOracleError = (what: () => unknown, matching: RegExp): void => {
+  expect(what).toThrow(ImportOracleError);
+  expect(what).toThrow(matching);
+};
+
+// ---------------------------------------------------------------------------
+// The receipt's own text
+// ---------------------------------------------------------------------------
+
+describe('parseReceiptSummary', () => {
+  it('reads the counts positionally, not by label', () => {
+    expect(parseReceiptSummary('1 section - 7 shots')).toEqual({ sections: 1, shots: 7 });
+    expect(parseReceiptSummary('2 sections - 12 shots - 3 loops')).toEqual({ sections: 2, shots: 12 });
+  });
+
+  it('survives a grouped thousands separator', () => {
+    expect(parseReceiptSummary('1 section - 1,234 shots')).toEqual({ sections: 1, shots: 1234 });
+    expect(parseReceiptSummary("3 sections - 12'000 shots")).toEqual({ sections: 3, shots: 12000 });
+  });
+
+  it('returns nulls rather than a guess when the text is not that shape', () => {
+    expect(parseReceiptSummary('imported')).toEqual({ sections: null, shots: null });
+    expect(parseReceiptSummary('1 section')).toEqual({ sections: 1, shots: null });
+  });
+});
+
+describe('receiptClaimFrom', () => {
+  it('is null with no receipt on screen', () => {
+    expect(receiptClaimFrom(digest())).toBeNull();
+  });
+
+  it('carries the rendering counts alongside the parsed summary', () => {
+    const got = receiptClaimFrom(
+      digest({
+        receipt: { summary: '2 sections - 9 shots', shown: 3, more: 4, hasDetails: true, unitConversion: false },
+      }),
+    );
+    expect(got).toEqual({
+      summary: '2 sections - 9 shots',
+      sections: 2,
+      shots: 9,
+      shown: 3,
+      more: 4,
+      hasDetails: true,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F4 receipt rendering
+// ---------------------------------------------------------------------------
+
+describe('checkReceipt (F4)', () => {
+  it('passes a full visible list with a toggle over the rest', () => {
+    expect(() => checkReceipt(claim({ shown: MAX_VISIBLE_WARNINGS, more: 2, hasDetails: true }))).not.toThrow();
+    expect(() => checkReceipt(claim({ shown: 1, more: 0, hasDetails: false }))).not.toThrow();
+  });
+
+  it('fails an over-full visible list', () => {
+    throwsOracleError(() => checkReceipt(claim({ shown: MAX_VISIBLE_WARNINGS + 1 })), /cap is 3/);
+  });
+
+  it('fails hidden warnings with no toggle to reveal them', () => {
+    throwsOracleError(() => checkReceipt(claim({ shown: 3, more: 1, hasDetails: false })), /no details toggle/);
+  });
+
+  it('fails a toggle offered over a list that is not even full', () => {
+    throwsOracleError(() => checkReceipt(claim({ shown: 1, more: 0, hasDetails: true })), /not even full/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F3 accounting
+// ---------------------------------------------------------------------------
+
+describe('checkAccounting (F3)', () => {
+  it('passes when the delta is what the receipt claimed', () => {
+    expect(() => checkAccounting(claim(), bounds({ sections: 2, shots: 10 }), { sections: 3, shots: 17 })).not.toThrow();
+  });
+
+  it('fails when it is not, and says both numbers', () => {
+    throwsOracleError(
+      () => checkAccounting(claim(), bounds({ sections: 2, shots: 10 }), { sections: 3, shots: 12 }),
+      /receipt:\s+1 section\(s\), 7 shot\(s\)[\s\S]*project:\s+1 section\(s\), 2 shot\(s\)/,
+    );
+  });
+
+  it('measures AT THE RECEIPT, so a later undo cannot make the receipt wrong', () => {
+    // The seed-8 shape: the import landed 1/7 and the receipt said so; an
+    // `undo` interjection two moves later took it back. The end of the flow
+    // reads 0/0, and F3 must not care - that is the walk's doing, not the
+    // receipt's. The caller passes the counts read from the receipt's own
+    // digest, which is what makes this true.
+    const atReceipt = { sections: 1, shots: 7 };
+    expect(() => checkAccounting(claim(), bounds({ sections: 0, shots: 0 }), atReceipt)).not.toThrow();
+  });
+
+  it('still fails a receipt that disagreed with the project the moment it was made', () => {
+    throwsOracleError(
+      () => checkAccounting(claim(), bounds({ sections: 0, shots: 0 }), { sections: 0, shots: 0 }),
+      /F3 ACCOUNTING/,
+    );
+  });
+
+  it('checks nothing when the summary did not parse', () => {
+    expect(() => checkAccounting(claim({ sections: null }), bounds(), { sections: 9, shots: 9 })).not.toThrow();
+    expect(() => checkAccounting(claim({ shots: null }), bounds(), { sections: 9, shots: 9 })).not.toThrow();
+  });
+
+  it('treats the no-project sentinel as no measurement, and as zero before', () => {
+    // -1 is "no project open", not a count. Measured with one, there is nothing
+    // to compare; measured BEFORE, the flow created the project and it started
+    // empty - subtracting the sentinel would make every count one too many.
+    expect(() => checkAccounting(claim(), bounds(), { sections: -1, shots: -1 })).not.toThrow();
+    expect(() => checkAccounting(claim(), bounds({ sections: -1, shots: -1 }), { sections: 1, shots: 7 })).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F2 residue
+// ---------------------------------------------------------------------------
+
+describe('checkResidue (F2)', () => {
+  it('passes a screen with nothing of the flow left on it', () => {
+    expect(() => checkResidue(digest(), 'flow 1')).not.toThrow();
+  });
+
+  it('reports every kind of leftover it names', () => {
+    throwsOracleError(() => checkResidue(digest({ dialog: 'walls-import' }), 'flow 1'), /activeDialog/);
+    throwsOracleError(() => checkResidue(digest({ placement: true }), 'flow 1'), /placementMode/);
+    throwsOracleError(() => checkResidue(digest({ importInProgress: true }), 'flow 1'), /isImportInProgress/);
+    throwsOracleError(() => checkResidue(digest({ phase: 'suggesting' }), 'flow 1'), /dmpImportWizardPhase/);
+  });
+
+  it('does NOT report a retained importContext', () => {
+    // Counted by the scenario, never asserted: the oracle's own header cites the
+    // two source comments that make retention the contract on the cancel path.
+    expect(() => checkResidue(digest({ ctx: 'new-project' }), 'flow 1')).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F1 undo roundtrip
+// ---------------------------------------------------------------------------
+
+describe('checkPushed (F1)', () => {
+  it('returns what the flow pushed', () => {
+    expect(checkPushed('imported', bounds({ undoDepth: 2 }), bounds({ undoDepth: 5 }), 'flow 1')).toBe(3);
+    expect(checkPushed('cancelled', bounds({ undoDepth: 2 }), bounds({ undoDepth: 2 }), 'flow 1')).toBe(0);
+  });
+
+  it('fails an import that landed with no undo entry behind it', () => {
+    throwsOracleError(
+      () => checkPushed('imported', bounds({ undoDepth: 4 }), bounds({ undoDepth: 4, sections: 1 }), 'flow 1'),
+      /imported sections but pushed no undo entry/,
+    );
+  });
+
+  it('fails a stack that SHRANK', () => {
+    throwsOracleError(
+      () => checkPushed('imported', bounds({ undoDepth: 4 }), bounds({ undoDepth: 1 }), 'flow 1'),
+      /SHRANK the undo stack by 3/,
+    );
+  });
+
+  it('fails a cancel that pushed, and a cancel that mutated silently', () => {
+    throwsOracleError(
+      () => checkPushed('cancelled', bounds({ undoDepth: 0 }), bounds({ undoDepth: 1 }), 'flow 1'),
+      /cancelled but pushed 1 undo entr/,
+    );
+    throwsOracleError(
+      () =>
+        checkPushed(
+          'cancelled',
+          bounds({ snapshot: '{"a":1}' }),
+          bounds({ snapshot: '{"a":2}' }),
+          'flow 1',
+        ),
+      /cancelled but changed the project/,
+    );
+  });
+});
+
+describe('checkRoundtripState (F1)', () => {
+  it('passes identical states, and any comparison with nothing to compare', () => {
+    expect(() => checkRoundtripState('pre-flow', '{"a":1}', '{"a":1}', 'flow 1')).not.toThrow();
+    expect(() => checkRoundtripState('pre-flow', null, '{"a":1}', 'flow 1')).not.toThrow();
+    expect(() => checkRoundtripState('pre-flow', '{"a":1}', null, 'flow 1')).not.toThrow();
+  });
+
+  it('fails a walk that did not land back where it started', () => {
+    throwsOracleError(
+      () => checkRoundtripState('pre-flow', '{"a":1}', '{"a":2}', 'undoing flow 1'),
+      /did not restore the pre-flow state/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F5 temp files, and S6
+// ---------------------------------------------------------------------------
+
+describe('checkTempFiles (F5)', () => {
+  it('reports only files the flow itself left', () => {
+    const before = bounds({ projectDir: '/p', leftovers: ['old.stalx.tmp'] });
+    expect(() => checkTempFiles(before, { ...before }, 'flow 1')).not.toThrow();
+    throwsOracleError(
+      () => checkTempFiles(before, bounds({ projectDir: '/p', leftovers: ['old.stalx.tmp', 'new.stalx.tmp'] }), 'flow 1'),
+      /left 1 staging file\(s\)[\s\S]*new\.stalx\.tmp/,
+    );
+  });
+
+  it('checks nothing when the flow ended with no project on disk', () => {
+    expect(() => checkTempFiles(bounds(), bounds({ leftovers: ['x.stalx.tmp'] }), 'flow 1')).not.toThrow();
+  });
+});
+
+describe('leftoverTempNames', () => {
+  it('lists the staging names beside a project, and nothing else', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'import-flow-oracles-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'p.stalx'), '');
+      fs.writeFileSync(path.join(dir, 'p.stalx.tmp'), '');
+      fs.writeFileSync(path.join(dir, 'notes.txt'), '');
+      const got = leftoverTempNames(path.join(dir, 'p.stalx'));
+      expect(got.dir).toBe(dir);
+      expect(got.names).toEqual(['p.stalx.tmp']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is empty for no project, and for a directory that is not there', () => {
+    expect(leftoverTempNames(null)).toEqual({ dir: null, names: [] });
+    expect(leftoverTempNames('/nope/does/not/exist/p.stalx').names).toEqual([]);
+  });
+});
+
+describe('checkIpcContract (S6)', () => {
+  const REJECTION =
+    'ERROR invalid args `payload` for command `import_sections`: invalid type: null, expected a sequence';
+
+  it('finds an argument-deserialization rejection in the log ring', () => {
+    expect(ipcArgRejections(['INFO opened project', REJECTION])).toEqual([REJECTION]);
+    throwsOracleError(() => checkIpcContract([REJECTION], 'walls import'), /S6 IPC CONTRACT/);
+  });
+
+  it('ignores a command that RAN and reported a problem properly', () => {
+    const reported = ['WARN import_sections returned success=false: no valid sections found'];
+    expect(ipcArgRejections(reported)).toEqual([]);
+    expect(() => checkIpcContract(reported, 'walls import')).not.toThrow();
+  });
+});

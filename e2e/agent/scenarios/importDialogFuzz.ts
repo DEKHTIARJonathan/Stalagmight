@@ -344,6 +344,7 @@ import {
   ImportOracleError,
   leftoverTempNames,
   receiptClaimFrom,
+  type CountedProject,
   type FlowBounds,
   type FlowShape,
   type ReceiptClaim,
@@ -1454,6 +1455,25 @@ export const importDialogFuzz: Scenario = {
         const before = await boundsNow(digest);
         let receipt: ReceiptClaim | null = null;
         /**
+         * The project as it was WHEN THE RECEIPT WAS PRESENTED - read off the
+         * receipt's own digest, so it costs no extra IPC and cannot describe a
+         * different moment than the claim it will be compared against.
+         *
+         * F3 needs this rather than the end-of-flow bounds because the walk goes
+         * on after a receipt appears: the interjection stream plays `undo`, the
+         * next file gets imported, the flow ends somewhere else entirely. A
+         * delta measured across those is a measurement of the WALK.
+         */
+        let atReceipt: CountedProject | null = null;
+        /**
+         * Had an undo/redo/save/close already landed when the receipt appeared?
+         *
+         * Then `before` describes a project the interjection has since rewritten,
+         * and the subtraction has no meaning in EITHER direction - so the flow is
+         * counted rather than measured, exactly as F1 does with `historyTouched`.
+         */
+        let historyTouchedBeforeReceipt = false;
+        /**
          * Did the completion path present a receipt, in EITHER of its surfaces?
          * The modal carries a decision; a clean receipt is a toast. Both come
          * from `presentImportReceipt`, so either one proves the flow finished
@@ -1497,7 +1517,11 @@ export const importDialogFuzz: Scenario = {
           if (digest.screen !== 'idle' && !NON_FLOW_SCREENS.has(digest.screen)) leftIdle = true;
           if (digest.receipt && receipt === null) {
             receipt = receiptClaimFrom(digest);
-            if (receipt) guarded(() => checkReceipt(receipt as ReceiptClaim));
+            if (receipt) {
+              atReceipt = { sections: digest.sections, shots: digest.shots };
+              historyTouchedBeforeReceipt = historyTouched;
+              guarded(() => checkReceipt(receipt as ReceiptClaim));
+            }
           }
           if (digest.receipt !== null) sawReceipt = true;
           if (!receiptToastAtStart && digest.toast.includes(RECEIPT_TOAST_KEY)) sawReceipt = true;
@@ -1707,19 +1731,23 @@ export const importDialogFuzz: Scenario = {
         // completion-path defect - was established by reading the code.
         if (digest.ctx !== null) ctx.metric(`residualImportContext:${digest.ctx}`);
         if (sawReceipt) ctx.metric('flowPresentedReceipt');
-        // F3 measures the receipt against the DELTA this flow made, so it needs
-        // both bounds to describe the same project. A flow that started with a
-        // project and ended with a DIFFERENT one - `import-as-new-project`
+        // F3 measures the receipt against the delta the import made, so it needs
+        // both measurements to describe the same project. A flow that started
+        // with a project and ended with a DIFFERENT one - `import-as-new-project`
         // confirms by closing the current project and re-entering the router -
         // has bounds taken from two unrelated projects, and the difference
         // between them is not an accounting error, it is a subtraction with no
         // meaning. A flow that CREATED the project it ended with is still
         // measured: `before` is then simply empty.
-        if (receipt) {
+        //
+        // The measured end is `atReceipt`, not `after` - see `checkAccounting`.
+        if (receipt && atReceipt) {
           if (before.projectFile !== null && before.projectFile !== after.projectFile) {
             ctx.metric('f3Skipped:projectSwapped');
+          } else if (historyTouchedBeforeReceipt) {
+            ctx.metric('f3Skipped:historyTouched');
           } else {
-            guarded(() => checkAccounting(receipt as ReceiptClaim, before, after));
+            guarded(() => checkAccounting(receipt as ReceiptClaim, before, atReceipt as CountedProject));
           }
         }
 
