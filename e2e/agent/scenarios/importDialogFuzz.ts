@@ -28,13 +28,13 @@
  * real files reach the shapes nobody would think to generate. A run with no
  * corpus counts `corpus:absent` and is exactly as valid, just narrower.
  *
- * NOTHING THIS RUN PUBLISHES EVER NAMES A CORPUS FILE. A corpus entry is
+ * NOTHING THIS RUN WRITES EVER NAMES A CORPUS FILE. A corpus entry is
  * identified everywhere by `corpusFileId` - a 5-hex fold of its relative path -
  * because a survey filename can name a cave, a landowner or an unreleased
- * project, and a metric key, a log line and a failure payload are all things
- * that end up attached to an issue. The corpus-relative path appears in ONE
- * place, the `corpusFile` trace step, which is a local artifact by construction
- * (`lib/fixtureCorpus.ts` states the full rule).
+ * project, and a metric key, a log line, a failure payload and a recorded trace
+ * are all things that end up attached to an issue. The real path stays inside
+ * `lib/fixtureCorpus.ts`, which states the full rule; the `corpusFile` trace
+ * step carries the id, and `fuzzTrace.ts` refuses to write anything else.
  *
  * ## The shape of a run
  *
@@ -698,10 +698,10 @@ export const importDialogFuzz: Scenario = {
      * Absolute path of a source's file, or null when it is not on disk.
      *
      * A CORPUS source is the one that can legitimately come back null on a
-     * machine that is not the recorder's: the trace names a corpus-relative
-     * path, and a replayer with no corpus (or a different one) simply does not
-     * have it. That is skipped-and-counted like any other impossible move -
-     * never a failure, because a corpus is optional by design.
+     * machine that is not the recorder's: the trace names the file by id, and a
+     * replayer with no corpus (or a different one) simply does not have it. That
+     * is skipped-and-counted like any other impossible move - never a failure,
+     * because a corpus is optional by design.
      */
     const sourceOnDisk = (source: FileSource): string | null => {
       if (source.origin === 'gen') return materialize(source.spec, source.rel);
@@ -737,8 +737,9 @@ export const importDialogFuzz: Scenario = {
      * Record the step that PUT a file on disk, before the step that opens it.
      *
      * A generated file travels as its spec; a corpus file travels as its
-     * corpus-relative path and nothing else. Both are resolved against a
-     * directory the REPLAYER chooses, which is the rule `fuzzTrace.ts` states.
+     * `corpusFileId` and nothing else - never its name, which is the rule
+     * `lib/fixtureCorpus.ts` states and `fuzzTrace.ts` enforces. Both are
+     * resolved against a directory the REPLAYER chooses.
      */
     const recordFileSource = (source: FileSource, record: boolean): void => {
       if (!record) return;
@@ -754,7 +755,7 @@ export const importDialogFuzz: Scenario = {
       if (source.origin === 'corpus') {
         recorder.record({
           kind: 'corpusFile',
-          corpusRel: source.corpusRel,
+          corpusId: source.id,
           // The DIRECTORY the copy lands in; the `route`/`fileDialog` step that
           // follows names the file inside it.
           rel: source.dirRel,
@@ -1494,11 +1495,13 @@ export const importDialogFuzz: Scenario = {
               continue;
             }
             if (step.kind === 'corpusFile') {
-              // The replayer's OWN corpus, or none. A trace carries no content,
-              // so a machine without the file replays everything else and the
-              // move that would have opened it is skipped and counted. That is
-              // a narrower replay, not a failed one.
-              const entry = corpusEntryFor(step.corpusRel);
+              // The replayer's OWN corpus, or none. A trace carries an id and no
+              // content, so resolving one means scanning the corpus THIS machine
+              // configured for the entry whose id matches; a machine without
+              // that file replays everything else and the move that would have
+              // opened it is skipped and counted. That is a narrower replay, not
+              // a failed one.
+              const entry = corpusEntryFor(step.corpusId);
               if (entry === null) {
                 ctx.metric('corpus:absent');
                 continue;

@@ -707,14 +707,22 @@ real survey files. Generated files reach the parsers' edges; real files reach th
 shapes nobody would think to generate. A run with no corpus counts
 `corpus:absent` and is exactly as valid, just narrower.
 
-**Nothing a corpus run publishes ever names a corpus file.** An entry is
-identified everywhere by `corpusFileId`, a 5-hex fold of its relative path
+**Nothing a corpus run writes ever names a corpus file.** An entry is identified
+everywhere by `corpusFileId`, a 5-hex fold of its relative path
 (`e2e/agent/lib/fixtureCorpus.ts`), because a survey filename can name a cave, a
-landowner or an unreleased project - and a metric key, a log line and a failure
-payload are all things that end up attached to an issue. The corpus-relative path
-appears in exactly one place, the `corpusFile` trace step, which is a local
-artifact. Replaying such a trace without a corpus skips those moves and counts
-them.
+landowner or an unreleased project - and a metric key, a log line, a failure
+payload and a recorded trace are all things that end up attached to an issue.
+
+A trace is the artifact that rule is easiest to lose, so it is enforced rather
+than observed. A `corpusFile` step carries `corpusId` and nothing else;
+`TraceRecorder.record` is the redaction boundary, so a caller that hands over a
+path gets it folded before the step is stored; and `writeTrace` refuses outright
+to emit a corpus step named any other way, whoever assembled it. The corpus ROOT
+is not recorded either - `STALAGMIGHT_FUZZ_CORPUS_DIR` is an absolute path on the
+recorder's disk, so it is excluded from the trace's `env` header and never
+restored on replay. Replay resolves an id by scanning the corpus THIS machine
+configured; an id it does not have is a skipped and counted move, never a
+failure.
 
 Before it fuzzes anything, the run pushes a valid-biased spec of EVERY enabled
 format through the real parse command and checks the count against

@@ -35,11 +35,12 @@
  *
  * ## Nothing here ever names a corpus file
  *
- * A corpus source travels as its corpus-relative path (a trace is a local
- * artifact) and is LABELLED by `corpusFileId`. Labels reach the move history,
- * the failure payload and the metric keys, all of which are things that get
- * attached to an issue - see `lib/fixtureCorpus.ts` for why the real name
- * cannot be one of them.
+ * A corpus source holds its corpus-relative path only IN MEMORY, to materialize
+ * the file with, and is LABELLED by `corpusFileId`. Labels reach the move
+ * history, the failure payload and the metric keys, and the id is also the only
+ * thing a recorded trace carries - all of which are things that get attached to
+ * an issue. See `lib/fixtureCorpus.ts` for why the real name cannot be one of
+ * them.
  */
 import type { ScenarioContext } from './framework';
 import type { ImportScreenDigest } from '../lib/importScreenDigest';
@@ -76,9 +77,10 @@ export type FileSource =
    * `dirRel` and the file to open is `rel` inside it.
    *
    * `corpusRel` is resolved against whatever `STALAGMIGHT_FUZZ_CORPUS_DIR` is
-   * set to at REPLAY time, so a trace carries no content and no absolute path -
-   * and a replayer with no corpus simply skips the move and counts it.
-   * `id` is the publishable stand-in the labels and metrics use.
+   * set to at the time, and never leaves this process: `id` is the publishable
+   * stand-in that the labels, the metrics and the `corpusFile` trace step all
+   * carry. A replayer resolves that id against its own corpus, and one that
+   * does not have it skips the move and counts it.
    */
   | { origin: 'corpus'; corpusRel: string; id: string; dirRel: string; rel: string }
   /**

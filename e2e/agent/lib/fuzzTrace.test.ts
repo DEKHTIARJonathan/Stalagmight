@@ -280,7 +280,7 @@ describe('schema v2 steps', () => {
     accepts({ kind: 'fileDialog', trigger: 'open-btn', dialog: 'open', rel: ['a.dmp', 'b.dmp'], label: 'multi' });
     accepts({ kind: 'fileDialog', trigger: 'save-btn', dialog: 'save', rel: null, label: 'cancelled' });
     accepts(GEN_FILE);
-    accepts({ kind: 'corpusFile', corpusRel: CORPUS_ID, rel: 'in/x.dmp', label: 'corpus dmp' });
+    accepts({ kind: 'corpusFile', corpusId: CORPUS_ID, rel: 'in/x.dmp', label: 'corpus dmp' });
     accepts({ kind: 'route', rel: 'in/a.tml', label: 'route tml' });
     accepts({ kind: 'mapClick', lngLat: [-83.5, 20.25], label: 'pick station' });
     accepts({ kind: 'export', format: 'tml', options: {}, rel: 'out/x.tml', label: 'export tml' });
@@ -297,17 +297,17 @@ describe('schema v2 steps', () => {
       rejects({ kind: 'export', format: 'tml', options: {}, rel, label: 'x' }, /absolute rel/);
       rejects({ kind: 'fileDialog', trigger: 't', dialog: 'open', rel, label: 'x' }, /absolute rel/);
       rejects({ kind: 'fileDialog', trigger: 't', dialog: 'open', rel: [rel], label: 'x' }, /absolute rel/);
-      rejects({ kind: 'corpusFile', corpusRel: CORPUS_ID, rel, label: 'x' }, /absolute rel/);
+      rejects({ kind: 'corpusFile', corpusId: CORPUS_ID, rel, label: 'x' }, /absolute rel/);
       // A corpus step's OTHER field is an id, so the same hostile spellings are
       // refused one layer earlier: an id has no separators to traverse with.
-      rejects({ kind: 'corpusFile', corpusRel: rel, rel: 'in/a.dmp', label: 'x' }, /not a corpus id/);
+      rejects({ kind: 'corpusFile', corpusId: rel, rel: 'in/a.dmp', label: 'x' }, /not a corpus id/);
     }
   });
 
   it('REFUSES a rel that traverses out of the session directory', () => {
     for (const rel of ['../out.dmp', 'a/../../b.dmp', '..', 'a\\..\\..\\b.dmp']) {
       rejects({ ...GEN_FILE, rel }, /escaping the session directory|absolute rel/);
-      rejects({ kind: 'corpusFile', corpusRel: rel, rel: 'in/a.dmp', label: 'x' }, /not a corpus id/);
+      rejects({ kind: 'corpusFile', corpusId: rel, rel: 'in/a.dmp', label: 'x' }, /not a corpus id/);
     }
     // A `..` INSIDE a segment is a filename, not a traversal.
     accepts({ ...GEN_FILE, rel: 'fuzz-files/a..dmp' });
@@ -323,9 +323,9 @@ describe('schema v2 steps', () => {
     rejects({ kind: 'fileDialog', trigger: 'a', dialog: 'open', rel: [], label: 'x' }, /empty path list/);
     // A v2-shaped corpus step: the right kind, the right field, the WRONG kind
     // of value. This is the shape that leaked a survey name into a trace file.
-    rejects({ kind: 'corpusFile', corpusRel: 'device/x.dmp', rel: 'in/x.dmp', label: 'x' }, /not a corpus id/);
-    rejects({ kind: 'corpusFile', corpusRel: 'ABCDE', rel: 'in/x.dmp', label: 'x' }, /not a corpus id/);
-    rejects({ kind: 'corpusFile', corpusRel: CORPUS_ID, rel: 'in/x.dmp' }, /label/);
+    rejects({ kind: 'corpusFile', corpusId: 'device/x.dmp', rel: 'in/x.dmp', label: 'x' }, /not a corpus id/);
+    rejects({ kind: 'corpusFile', corpusId: 'ABCDE', rel: 'in/x.dmp', label: 'x' }, /not a corpus id/);
+    rejects({ kind: 'corpusFile', corpusId: CORPUS_ID, rel: 'in/x.dmp' }, /label/);
     rejects({ kind: 'genFile', rel: 'a.dmp', label: 'x' }, /generator spec/);
     rejects({ kind: 'genFile', spec: null, rel: 'a.dmp', label: 'x' }, /generator spec/);
     rejects({ kind: 'mapClick', lngLat: [1], label: 'x' }, /lngLat/);
@@ -396,7 +396,7 @@ describe('describeSteps', () => {
       { kind: 'fileDialog', trigger: 'open-btn', dialog: 'open', rel: ['a', 'b'], label: 'pick two' },
       { kind: 'fileDialog', trigger: 'save-btn', dialog: 'save', rel: null, label: 'cancel' },
       { kind: 'genFile', spec: {}, rel: 'in/a.dmp', label: 'v5 x2' },
-      { kind: 'corpusFile', corpusRel: corpusFileId('device/x.dmp'), rel: 'in/x.dmp', label: 'corpus dmp' },
+      { kind: 'corpusFile', corpusId: corpusFileId('device/x.dmp'), rel: 'in/x.dmp', label: 'corpus dmp' },
       { kind: 'route', rel: 'in/a.tml', label: 'route' },
       { kind: 'mapClick', lngLat: [-83.5, 20.25], label: 'pick station' },
       { kind: 'export', format: 'tml', options: {}, rel: 'out/x.tml', label: 'roundtrip' },
@@ -424,7 +424,7 @@ describe('describeSteps', () => {
     // hand-built, because the recorder is where the name stops existing - a
     // literal step could only ever hold the id by now.
     const recorder = new TraceRecorder();
-    recorder.record({ kind: 'corpusFile', corpusRel: PRIVATE_CORPUS_REL, rel: 'in/x.dmp', label: 'x' });
+    recorder.record({ kind: 'corpusFile', corpusId: PRIVATE_CORPUS_REL, rel: 'in/x.dmp', label: 'x' });
 
     const line = describeSteps(recorder.snapshot());
     for (const fragment of PRIVATE_FRAGMENTS) expect(line).not.toContain(fragment);
@@ -445,7 +445,7 @@ describe('describeSteps', () => {
  * still carried the real path.
  *
  * Every assertion below is against the WHOLE serialized file. A check that only
- * looked at `corpusRel` would pass while the same name leaked through the step's
+ * looked at `corpusId` would pass while the same name leaked through the step's
  * label, the `env` header or a failure message - which are the ways it would
  * actually happen.
  */
@@ -465,13 +465,21 @@ describe('a written trace never names a corpus file', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  /** What `importDialogFuzz` records for one corpus-sourced import. */
+  /**
+   * The steps `importDialogFuzz` records for one corpus-sourced import - except
+   * that the corpus step is handed the PATH.
+   *
+   * That scenario hands over `source.id`, so this is the hostile caller rather
+   * than the real one, and deliberately: the guarantee has to be a property of
+   * the recorder, not of one caller currently remembering to fold first. Every
+   * assertion below is written against a run that got it wrong.
+   */
   const recordCorpusRun = (): FuzzTrace => {
     const recorder = new TraceRecorder();
     recorder.record({ kind: 'genFile', spec: { format: 'dmp' }, rel: 'fuzz-files/a.dmp', label: 'gen dmp' });
     recorder.record({
       kind: 'corpusFile',
-      corpusRel: PRIVATE_CORPUS_REL,
+      corpusId: PRIVATE_CORPUS_REL,
       rel: 'fuzz-files/corpus-1',
       label: `corpus #${corpusFileId(PRIVATE_CORPUS_REL)}`,
     });
@@ -498,10 +506,22 @@ describe('a written trace never names a corpus file', () => {
     // the id in the field `corpusEntryFor` resolves from.
     expect(readTrace(file).steps[1]).toEqual({
       kind: 'corpusFile',
-      corpusRel: corpusFileId(PRIVATE_CORPUS_REL),
+      corpusId: corpusFileId(PRIVATE_CORPUS_REL),
       rel: 'fuzz-files/corpus-1',
       label: `corpus #${corpusFileId(PRIVATE_CORPUS_REL)}`,
     });
+  });
+
+  it('leaves an id alone, which is what the scenario actually hands it', () => {
+    // The fold is idempotent, so the caller that already did the right thing
+    // does not get a fold of a fold - an id that no metric key in the run
+    // beside it would match.
+    const id = corpusFileId(PRIVATE_CORPUS_REL);
+    const recorder = new TraceRecorder();
+    recorder.record({ kind: 'corpusFile', corpusId: id, rel: 'fuzz-files/corpus-1', label: `corpus #${id}` });
+    expect(recorder.snapshot()).toEqual([
+      { kind: 'corpusFile', corpusId: id, rel: 'fuzz-files/corpus-1', label: `corpus #${id}` },
+    ]);
   });
 
   it('drops the corpus ROOT from the env header, and refuses to restore one', () => {
@@ -522,7 +542,7 @@ describe('a written trace never names a corpus file', () => {
     // that never went through it - a shrink candidate, a hand-edited file being
     // rewritten, a future caller that believed it could carry the path around.
     const trace = recordCorpusRun();
-    trace.steps.push({ kind: 'corpusFile', corpusRel: PRIVATE_CORPUS_REL, rel: 'in/x.dmp', label: 'x' });
+    trace.steps.push({ kind: 'corpusFile', corpusId: PRIVATE_CORPUS_REL, rel: 'in/x.dmp', label: 'x' });
 
     const file = path.join(dir, 'refused.json');
     let thrown = '';
@@ -540,9 +560,11 @@ describe('a written trace never names a corpus file', () => {
   });
 
   it('refuses a v2 recording by VERSION, so no migration carries a name forward', () => {
-    // A v2 trace on disk still contains the real path. Rejecting the file up
+    // Verbatim v2: the old field NAME as well as the real path, which is what a
+    // v2 trace on somebody's disk actually looks like. Rejecting the file up
     // front says "recorded by an older build, re-run the seed" instead of
-    // failing per-step on a field that merely looks wrong.
+    // failing per-step on a field that is missing under one name and unread
+    // under the other.
     const file = path.join(dir, 'v2.json');
     fs.writeFileSync(
       file,

@@ -51,13 +51,14 @@
  *
  * ## Schema v3: a corpus file is named by its id, never by its name
  *
- * v3 changes what a `corpusFile` step carries. In v2 it carried the file's
- * corpus-RELATIVE PATH, on the argument that a trace is a local artifact. It is
- * not: a trace is the one artifact the docs tell an operator to attach to a bug
- * report and hand to a shrinker, and a survey filename can name a cave system, a
- * landowner or an unreleased project - which is why every OTHER surface in this
- * harness already carries `fixtureCorpus.corpusFileId` instead. v3 carries the
- * id there too, so the whole file is publishable rather than nearly so.
+ * v3 changes what a `corpusFile` step carries, and renames the field to say so:
+ * `corpusRel` (the file's corpus-RELATIVE PATH, on the argument that a trace is
+ * a local artifact) became `corpusId`. It is not a local artifact: a trace is
+ * the one thing the docs tell an operator to attach to a bug report and hand to
+ * a shrinker, and a survey filename can name a cave system, a landowner or an
+ * unreleased project - which is why every OTHER surface in this harness already
+ * carries `fixtureCorpus.corpusFileId` instead. v3 carries the id there too, so
+ * the whole file is publishable rather than nearly so.
  *
  * The guarantee is enforced at both ends rather than trusted to the recorder:
  * `writeTrace` refuses to emit a corpus step named any other way, and
@@ -65,11 +66,11 @@
  * an absolute path on the recorder's disk, so it joins `NEVER_RESTORED` and
  * stops being written into the trace header.
  *
- * The FILE version moved rather than the field being read leniently, because a
- * v2 file on disk still CONTAINS such a path. Refusing it by version says
- * "recorded by an older build, re-run the seed" instead of failing per-step on a
- * field that merely looks wrong, and it guarantees nothing migrates a leaked
- * name forward.
+ * The FILE version moved rather than the field being read leniently. A v2 file
+ * on disk still CONTAINS such a path, under a name this build no longer reads,
+ * so refusing it by version says "recorded by an older build, re-run the seed"
+ * instead of failing per-step on a field that is missing or merely looks wrong -
+ * and it guarantees nothing migrates a leaked name forward.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -121,20 +122,18 @@ export type TraceStep =
    * An input file taken from the replayer's OWN private corpus and copied to
    * `rel`.
    *
-   * `corpusRel` carries the entry's PUBLISHABLE ID - `fixtureCorpus.corpusFileId`,
-   * a 5-hex fold of its corpus-relative path - and never the path itself. The
+   * `corpusId` is the entry's PUBLISHABLE ID - `fixtureCorpus.corpusFileId`, a
+   * 5-hex fold of its corpus-relative path - and never the path itself. The
    * replayer resolves that id against its own `STALAGMIGHT_FUZZ_CORPUS_DIR`
    * (`corpusEntryFor` looks up either key), so the trace carries no name, no
    * root and no content, and a replayer whose corpus holds no file with that id
    * skips the step and counts it.
    *
-   * The field is still SPELLED `corpusRel` only because
-   * `scenarios/importDialogFuzz.ts` reads it under that name and is being
-   * changed on another branch; the value is an id everywhere, which is what
-   * `writeTrace`, `readTrace` and `describeStep` all enforce. Renaming it to
-   * `corpusId` is a two-line follow-up in that scenario.
+   * The field is NAMED for what it holds. It was `corpusRel` in v2, when it held
+   * the path, and a `...Rel` field quietly holding a crc id is exactly how the
+   * next reader talks themselves into putting a path back in it.
    */
-  | { kind: 'corpusFile'; corpusRel: string; rel: string; label: string }
+  | { kind: 'corpusFile'; corpusId: string; rel: string; label: string }
   /** A file handed to the app by path rather than through a dialog. */
   | { kind: 'route'; rel: string; label: string }
   | { kind: 'mapClick'; lngLat: [number, number]; label: string }
@@ -307,16 +306,21 @@ function asCorpusId(reference: string): string {
 /**
  * The point a corpus file's real name stops existing.
  *
- * A scenario holds the corpus-relative path (it drew the entry from the
- * inventory and has to materialize it), so it is the recorder - not every
- * caller - that folds the name to an id. Doing it HERE rather than in
- * `writeTrace` means `snapshot()`, `build()` and every shrink candidate carry
- * the id too, so there is no window in which an in-memory step and a written
- * step disagree about what a trace may say.
+ * A scenario holds BOTH halves - it drew the entry from the inventory, so it has
+ * the id and the corpus-relative path it needs to materialize the file - and
+ * `importDialogFuzz` hands over the id. This fold is what makes that a property
+ * of the recorder rather than of one caller remembering: hand it either, and a
+ * recorded step carries the id.
+ *
+ * Folding HERE rather than in `writeTrace` means `snapshot()`, `build()` and
+ * every shrink candidate carry the id too, so there is no window in which an
+ * in-memory step and a written step disagree about what a trace may say. And it
+ * is a fold rather than a throw because the caller is mid-run, usually holding a
+ * failure worth keeping.
  */
 function redactStep(step: TraceStep): TraceStep {
   if (step.kind !== 'corpusFile') return step;
-  return { ...step, corpusRel: asCorpusId(step.corpusRel) };
+  return { ...step, corpusId: asCorpusId(step.corpusId) };
 }
 
 /**
@@ -385,7 +389,7 @@ export class TraceRecorder {
  */
 export function writeTrace(filePath: string, trace: FuzzTrace): string {
   trace.steps.forEach((step, index) => {
-    if (step.kind === 'corpusFile' && !CORPUS_ID.test(step.corpusRel)) {
+    if (step.kind === 'corpusFile' && !CORPUS_ID.test(step.corpusId)) {
       throw new Error(
         `refusing to write ${filePath}: step ${index + 1} names a corpus file by something ` +
           `other than its id, and a trace is an artifact people attach to bug reports`,
@@ -556,7 +560,7 @@ function validateStep(step: unknown, index: number, filePath: string): void {
     // is really for is the v3 rule - a trace that names a corpus file is
     // refused at the door, whoever wrote it. `rel` is a genuine path, joined
     // against the replayer's session dir, and is checked as one.
-    requireCorpusId(candidate.corpusRel, 'corpusRel', where);
+    requireCorpusId(candidate.corpusId, 'corpusId', where);
     requireSessionRelative(candidate.rel, 'rel', where);
     requireText(candidate.label, 'label', where);
   }
@@ -713,7 +717,7 @@ function describeStep(step: TraceStep): string {
       // it again would print a tag that matched no metric key in the run beside
       // it. `asCorpusId` is what guarantees that, on both the record and the
       // read path.
-      return `corpusFile #${step.corpusRel} -> ${step.rel} - ${step.label}`;
+      return `corpusFile #${step.corpusId} -> ${step.rel} - ${step.label}`;
     case 'route':
       return `route ${step.rel} - ${step.label}`;
     case 'mapClick':
