@@ -2482,6 +2482,11 @@
       "genericFailure": "Failed to save project",
       "saveNow": "Save now",
       "dismiss": "Dismiss"
+    },
+    "historyDiscarded": {
+      "lead": "Edit history could not be read and was discarded - undo and redo start empty.",
+      "detail": "Your survey data is unaffected. The next save replaces the unreadable history.",
+      "dismiss": "Dismiss"
     }
   },
   "integrityRepair": {

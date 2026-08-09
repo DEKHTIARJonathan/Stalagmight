@@ -216,7 +216,7 @@ export function useSpeleoActions(): SpeleoActions {
       const result = await invokeIpc<StartEditingResult>('speleodb_start_editing');
       const routed = await routeStartEditingResult(result, true, issuedFor);
       if (!routed.landed) return false;
-      if (routed.treeReplaced && !(await applySpeleoTreeReplacement(issuedFor))) {
+      if (routed.treeReplaced && !(await applySpeleoTreeReplacement(issuedFor, true))) {
         return false;
       }
       return routed.editing;
@@ -246,7 +246,11 @@ export function useSpeleoActions(): SpeleoActions {
           ? await routeStartEditingResult(result, false, issuedFor)
           : null;
         if (routed && !routed.landed) return 'stale';
-        if (!(await applySpeleoTreeReplacement(issuedFor))) return 'stale';
+        // [#473] `result === null` means the lock was released and NOTHING was swapped;
+        // the rest of the reconciliation is harmless there, but re-reading the
+        // discarded-history flag is not - it clears the user's dismissal, so a plain
+        // lock release brought back a banner they had dismissed.
+        if (!(await applySpeleoTreeReplacement(issuedFor, result !== null))) return 'stale';
         if (!result) return 'released';
         return routed?.editing ? 'editing' : 'discarded_without_lock';
       } finally {
@@ -306,7 +310,7 @@ export function useSpeleoActions(): SpeleoActions {
             const loaded = await loadProject(result.local_path);
             if (!loaded.success) break;
           }
-          await applySpeleoTreeReplacement(issuedFor);
+          await applySpeleoTreeReplacement(issuedFor, true);
           break;
         case 'divergence_needed':
           break;
@@ -526,7 +530,7 @@ export function useSpeleoActions(): SpeleoActions {
       // the divergence dialog doesn't close over a project the user left.
       const { success } = await loadProject(localPath);
       if (!success) return false;
-      if (!(await applySpeleoTreeReplacement(issuedFor))) return false;
+      if (!(await applySpeleoTreeReplacement(issuedFor, true))) return false;
       showToast(t('speleodb.editBar.toasts.tookRemote'), TOAST_KEYS.SPELEODB_TOOK_REMOTE, 'success');
       return true;
     } catch (e) {

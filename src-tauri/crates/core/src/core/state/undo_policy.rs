@@ -476,33 +476,138 @@ mod tests {
         });
     }
 
-    /// [#469] Both load paths read the persisted history through the CAPPED loader, and
-    /// resolve the cap before they read.
+    /// [#473] A load that CANNOT read the history sets the flag the banner renders from.
     ///
-    /// Structural because the failure is invisible in behaviour: an uncapped read
+    /// The link the whole feature hangs on, and until this test nothing asserted it: the
+    /// state tests covered create-clears and close-clears, the persistence tests covered
+    /// the loader returning `Err`, and the Playwright specs drive a mock. Nothing joined
+    /// "the loader failed" to "the user is told".
+    ///
+    /// Goes through `open_project` because `do_load_project_full` needs an `AppHandle`
+    /// and has no unit entry point; the structural assertions below are what keep the two
+    /// paths from diverging.
+    #[test]
+    fn a_history_that_cannot_be_read_sets_the_discarded_flag() {
+        with_isolated_config(|| {
+            let temp_dir = TempDir::new().expect("temp dir");
+            let path = temp_dir.path().join("broken-history.stalx");
+            {
+                let mut db = Database::open(&path).expect("open database");
+                db.save_project(&crate::models::Project::new("Broken".to_owned(), None))
+                    .expect("save project");
+            }
+            {
+                // A blob whose gzip trailer claims far more than one row may inflate to.
+                // Refused on the DECLARED size, which the loader reads straight from the
+                // last four bytes - so the decoder is never invoked and the bytes in
+                // between never have to be a valid deflate stream. Hand-assembled rather
+                // than produced with `flate2`, which this crate does not depend on: a
+                // gzip magic pair, filler, and a forged ISIZE is the entire hostile
+                // shape, and writing it out makes that explicit. Written through a bare
+                // connection because it is precisely what `Database`'s own writers will
+                // not produce.
+                let mut liar = vec![0x1f, 0x8b, 0x08, 0x00];
+                liar.extend_from_slice(&[0_u8; 8]);
+                liar.extend_from_slice(&u32::MAX.to_le_bytes());
+                let conn = rusqlite::Connection::open(&path).expect("raw connection");
+                conn.execute(
+                    "INSERT INTO undo_stack (sequence, command_json, undo_data_json, \
+                     executed_at) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![0_i64, liar.clone(), liar, "2026-08-08T00:00:00+00:00"],
+                )
+                .expect("insert hostile row");
+            }
+
+            let state = state();
+            assert!(state.open_project(path).success, "the project still opens");
+            assert!(
+                state.history_discarded(),
+                "an unreadable history must be recorded, or the banner never appears"
+            );
+        });
+    }
+
+    /// ...and a load that CAN read it clears a flag the previous project left set.
+    #[test]
+    fn a_readable_history_clears_the_discarded_flag() {
+        with_isolated_config(|| {
+            let temp_dir = TempDir::new().expect("temp dir");
+            let path = temp_dir.path().join("intact-history.stalx");
+            {
+                let mut db = Database::open(&path).expect("open database");
+                db.save_project(&crate::models::Project::new("Intact".to_owned(), None))
+                    .expect("save project");
+            }
+
+            let state = state();
+            state.set_history_discarded(true);
+            assert!(state.open_project(path).success);
+            assert!(
+                !state.history_discarded(),
+                "every commit writes the flag, so a clean load clears a stale one"
+            );
+        });
+    }
+
+    /// [#469, #473] Both load paths read the persisted history through the row-capped,
+    /// budget-sharing loader, resolve the cap before they read, and share ONE budget
+    /// across the two stacks.
+    ///
+    /// Structural because both failures are invisible in behaviour: an uncapped read
     /// produces the same restored stack as a capped one - the trim afterwards sees to
-    /// that - and differs only in how much of a hostile file it gunzipped into memory
-    /// first. `do_load_project_full` needs an `AppHandle`, so it has no unit-test entry
-    /// point of its own; this is what keeps the two paths from drifting.
+    /// that - and a per-stack budget produces the same stack as a shared one, on every
+    /// file except a hostile one. They differ only in how much of that hostile file
+    /// reaches memory. `do_load_project_full` needs an `AppHandle`, so it has no
+    /// unit-test entry point of its own; this is what keeps the two paths from drifting.
     #[test]
     fn both_load_paths_read_the_history_under_a_cap() {
         let src = include_str!("project_load.rs");
         assert_eq!(
-            src.matches("load_undo_stack_with_timestamps_capped(")
+            src.matches("load_undo_stack_with_timestamps_within(")
                 .count(),
             2,
-            "both load paths read the undo table through the capped loader"
+            "both load paths read the undo table through the capped, budget-sharing loader"
         );
         assert_eq!(
-            src.matches("load_redo_stack_with_timestamps_capped(")
+            src.matches("load_redo_stack_with_timestamps_within(")
                 .count(),
             2,
-            "both load paths read the redo table through the capped loader"
+            "both load paths read the redo table through the capped, budget-sharing loader"
         );
         assert!(
             !src.contains("load_undo_stack_with_timestamps()")
                 && !src.contains("load_redo_stack_with_timestamps()"),
             "an unwindowed history read is exactly what #469 removed from this file"
+        );
+        // [#473] Exactly one budget per load path. Two would mean the undo and redo
+        // stacks each got a full one, bounding an open at 2x the constant while every
+        // comment says 1x - the defect this pins.
+        assert_eq!(
+            src.matches("Database::load_history_budget()").count(),
+            2,
+            "each load path creates ONE budget and hands it to both stacks"
+        );
+
+        // [#473] BOTH project-slot commits in project_create.rs clear the discarded-
+        // history flag. Only `create_project` has a behavioural test - the other,
+        // `do_create_project_full`, needs an `AppHandle` and so has no unit-test entry
+        // point, which is exactly the asymmetry that let the flag be forgotten in the
+        // first place. A stale `true` here puts a data-loss banner over a new project.
+        let create_src = include_str!("project_create.rs");
+        assert_eq!(
+            create_src.matches("set_history_discarded(false)").count(),
+            2,
+            "every project-slot commit in project_create.rs must clear the flag"
+        );
+        // [#473] ...and BOTH load paths write it from what their own load actually did.
+        // `a_history_that_cannot_be_read_sets_the_discarded_flag` covers `open_project`
+        // behaviourally; `do_load_project_full` needs an `AppHandle` and cannot be unit
+        // tested, so this count is what keeps it from silently losing the write.
+        assert_eq!(
+            src.matches("set_history_discarded(history_discarded)")
+                .count(),
+            2,
+            "both load paths must record whether their history survived"
         );
 
         for func in ["fn open_project", "pub fn do_load_project_full"] {
@@ -527,7 +632,7 @@ mod tests {
                 .find("history_load_row_cap(")
                 .unwrap_or_else(|| panic!("{func} resolves a load cap"));
             let read = body
-                .find("load_undo_stack_with_timestamps_capped(")
+                .find("load_undo_stack_with_timestamps_within(")
                 .unwrap_or_else(|| panic!("{func} reads the undo table"));
             assert!(
                 cap < read,

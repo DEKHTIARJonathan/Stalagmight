@@ -165,6 +165,13 @@ impl AppState {
         self.set_edit_enabled(true);
         // #213: a new local project is never force-editing; clear any prior flag.
         self.set_force_editing(false);
+        // [#473] A project created from nothing has no persisted history, so it cannot
+        // have lost any. Cleared for the same reason as the two gates above: the flag is
+        // per-project, the previous project may have set it, and a stale `true` here puts
+        // a banner reading "edit history could not be read and was discarded" over a
+        // brand-new empty project. Create is a project-slot commit like a load, and every
+        // commit must write this.
+        self.set_history_discarded(false);
 
         CommandResult::success()
     }
@@ -519,6 +526,13 @@ impl AppState {
         self.set_edit_enabled(true);
         // #213: a new local project is never force-editing; clear any prior flag.
         self.set_force_editing(false);
+        // [#473] A project created from nothing has no persisted history, so it cannot
+        // have lost any. Cleared for the same reason as the two gates above: the flag is
+        // per-project, the previous project may have set it, and a stale `true` here puts
+        // a banner reading "edit history could not be read and was discarded" over a
+        // brand-new empty project. Create is a project-slot commit like a load, and every
+        // commit must write this.
+        self.set_history_discarded(false);
 
         // Track whether the initial save is still pending: a deferred new project
         // has no file on disk yet, so its first import must durably persist it.

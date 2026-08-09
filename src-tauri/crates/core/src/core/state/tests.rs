@@ -62,6 +62,45 @@ fn poison_mutex<T>(mutex: &Mutex<T>) {
 
 // === Project Operations Tests ===
 
+/// [#473] Creating a project clears the PREVIOUS project's discarded-history flag.
+///
+/// The flag is per-project and drives a banner reading "edit history could not be read
+/// and was discarded". Create is a project-slot commit like a load, and every commit has
+/// to write it - the first version of this fix reset `edit_enabled` and `force_editing`
+/// here and forgot this one, so opening a project with an unreadable history and then
+/// choosing File > New Project put a data-loss banner over a brand-new empty project.
+#[test]
+fn creating_a_project_clears_a_previous_projects_discarded_history_flag() {
+    let state = AppState::new().unwrap();
+    state.set_history_discarded(true);
+
+    let result = state.execute(Command::CreateProject {
+        name: "Fresh Cave".to_string(),
+        location: None,
+    });
+
+    assert!(result.success);
+    assert!(
+        !state.history_discarded(),
+        "a project created from nothing has no persisted history, so it cannot have lost any"
+    );
+}
+
+/// ...and closing one does too, so the banner cannot outlive the project it describes.
+#[test]
+fn closing_a_project_clears_the_discarded_history_flag() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Doomed".to_string(),
+        location: None,
+    });
+    state.set_history_discarded(true);
+
+    state.execute(Command::CloseProject);
+
+    assert!(!state.history_discarded());
+}
+
 #[test]
 fn test_create_project() {
     let state = AppState::new().unwrap();

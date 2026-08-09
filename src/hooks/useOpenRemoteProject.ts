@@ -289,7 +289,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // run the same post-replacement cleanup as fast-forward, discard, and restore.
       if (
         alreadyOpen &&
-        !(await applySpeleoTreeReplacement(speleoProjectSessionIssuedFor(projectId)))
+        !(await applySpeleoTreeReplacement(speleoProjectSessionIssuedFor(projectId), true))
       ) {
         return { status: 'load_failed' };
       }

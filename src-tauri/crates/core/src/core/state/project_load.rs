@@ -172,34 +172,47 @@ impl AppState {
         let history_row_cap = self.history_load_row_cap(speleo_link.as_ref());
 
         // Load undo/redo stacks from database before replacing database reference
-        let undo_entries = match db.load_undo_stack_with_timestamps_capped(history_row_cap) {
-            Ok(loaded) => loaded
-                .into_iter()
-                .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-                .collect::<Vec<_>>(),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "restore edit history",
-                    "Failed to load undo stack from database; starting with empty history"
-                );
-                Vec::new()
-            }
-        };
-        let redo_entries = match db.load_redo_stack_with_timestamps_capped(history_row_cap) {
-            Ok(loaded) => loaded
-                .into_iter()
-                .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-                .collect::<Vec<_>>(),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "restore edit history",
-                    "Failed to load redo stack from database; starting with empty redo history"
-                );
-                Vec::new()
-            }
-        };
+        //
+        // [#473] Either stack failing is RECORDED, not just logged: an empty stack
+        // substituted for the user's real history is a silent state change, and the
+        // banner this flag feeds is what stops it being silent.
+        let mut history_discarded = false;
+        // [#473] ONE inflation budget for this open, spanning BOTH stacks. Letting each
+        // loader default to its own would bound the open at 2x the constant, because the
+        // undo strings are still resident while the redo stack inflates.
+        let history_budget = Database::load_history_budget();
+        let undo_entries =
+            match db.load_undo_stack_with_timestamps_within(history_row_cap, &history_budget) {
+                Ok(loaded) => loaded
+                    .into_iter()
+                    .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                    .collect::<Vec<_>>(),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "restore edit history",
+                        "Failed to load undo stack from database; starting with empty history"
+                    );
+                    history_discarded = true;
+                    Vec::new()
+                }
+            };
+        let redo_entries =
+            match db.load_redo_stack_with_timestamps_within(history_row_cap, &history_budget) {
+                Ok(loaded) => loaded
+                    .into_iter()
+                    .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                    .collect::<Vec<_>>(),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "restore edit history",
+                        "Failed to load redo stack from database; starting with empty redo history"
+                    );
+                    history_discarded = true;
+                    Vec::new()
+                }
+            };
         // [#303] ...and the inherited-history watermark that goes with them. Read from the
         // SAME database handle, before it is swapped, so it describes these entries.
         // `UndoStack::next_stamp` needs it to keep a new entry above the cut the push
@@ -229,6 +242,10 @@ impl AppState {
         // A session boundary (a project committed into the slot), bumped under
         // the guard per the `speleodb_session` rule.
         self.bump_speleodb_session();
+        // [#473] Under the SAME acquisition that commits the project, so the flag can
+        // only ever describe the project in the slot. Unconditional, so a clean load
+        // clears the previous project's verdict.
+        self.set_history_discarded(history_discarded);
 
         // [Track B] (#191) Read-only edit gate: remote ⇒ edit disabled,
         // local-only ⇒ enabled (see do_load_project_full). Off the link read above,
@@ -758,34 +775,45 @@ impl AppState {
         let history_row_cap = self.history_load_row_cap(speleo_link.as_ref());
 
         // Load undo/redo stacks from database BEFORE storing db
-        let undo_entries = match db.load_undo_stack_with_timestamps_capped(history_row_cap) {
-            Ok(loaded) => loaded
-                .into_iter()
-                .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-                .collect::<Vec<_>>(),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "restore edit history",
-                    "Failed to load undo stack from database; starting with empty history"
-                );
-                Vec::new()
-            }
-        };
-        let redo_entries = match db.load_redo_stack_with_timestamps_capped(history_row_cap) {
-            Ok(loaded) => loaded
-                .into_iter()
-                .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-                .collect::<Vec<_>>(),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "restore edit history",
-                    "Failed to load redo stack from database; starting with empty redo history"
-                );
-                Vec::new()
-            }
-        };
+        //
+        // [#473] Recorded as well as logged - see the same block in `open_project`.
+        let mut history_discarded = false;
+        // [#473] ONE inflation budget for this open, spanning BOTH stacks. Letting each
+        // loader default to its own would bound the open at 2x the constant, because the
+        // undo strings are still resident while the redo stack inflates.
+        let history_budget = Database::load_history_budget();
+        let undo_entries =
+            match db.load_undo_stack_with_timestamps_within(history_row_cap, &history_budget) {
+                Ok(loaded) => loaded
+                    .into_iter()
+                    .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                    .collect::<Vec<_>>(),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "restore edit history",
+                        "Failed to load undo stack from database; starting with empty history"
+                    );
+                    history_discarded = true;
+                    Vec::new()
+                }
+            };
+        let redo_entries =
+            match db.load_redo_stack_with_timestamps_within(history_row_cap, &history_budget) {
+                Ok(loaded) => loaded
+                    .into_iter()
+                    .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                    .collect::<Vec<_>>(),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "restore edit history",
+                        "Failed to load redo stack from database; starting with empty redo history"
+                    );
+                    history_discarded = true;
+                    Vec::new()
+                }
+            };
         // [#303] ...and the inherited-history watermark that goes with them. Read from the
         // SAME database handle, before it is swapped, so it describes these entries.
         // `UndoStack::next_stamp` needs it to keep a new entry above the cut the push
@@ -842,6 +870,10 @@ impl AppState {
         // A session boundary (a project committed into the slot), bumped under
         // the guard per the `speleodb_session` rule.
         self.bump_speleodb_session();
+        // [#473] Under the SAME acquisition that commits the project - a cancelled load
+        // never reaches this finalize section, so it cannot leave its verdict on the
+        // project the user actually opened.
+        self.set_history_discarded(history_discarded);
 
         // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one
         // carrying a speleo_link row) opened WITHOUT a write lock is read-only.

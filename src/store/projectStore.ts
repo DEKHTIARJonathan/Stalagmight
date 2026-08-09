@@ -125,6 +125,10 @@ function nextProjectTreeGeneration(): number {
 // check on the same project, where the project-identity guard can't tell them apart).
 let integrityCheckSeq = 0;
 
+// [#473] The same discipline for the discarded-history check, which is fire-and-forget
+// from the same post-load effect and paints the same class of banner.
+let historyDiscardedCheckSeq = 0;
+
 /**
  * Parsed error from Tauri backend.
  */
@@ -378,6 +382,22 @@ export interface ProjectStore extends ProjectConfigActions {
   repairProjectIntegrity: () => Promise<IntegrityRepairResult>;
   /** Dismiss the integrity warning without repairing. */
   dismissIntegrityIssues: () => void;
+  /** [#473] True when the open project's persisted undo/redo history could not be
+   * read and was replaced by an empty stack. The backend already degrades this way
+   * on a corrupt, truncated or crafted history table - opening the project without
+   * its history beats not opening it - but until #473 the only record was a log
+   * line, so the user's entire edit history vanished with nothing on screen. */
+  historyDiscarded: boolean;
+  /** True once the user dismissed the discarded-history banner for the OPEN
+   * project. Frontend-only, exactly like `integrityDismissed`: the backend flag
+   * describes an ongoing condition and keeps answering true, so the dismissal has
+   * to live here or the banner would come back on every re-check. Reset on project
+   * switch so one project's dismissal cannot suppress another's banner. */
+  historyDiscardedDismissed: boolean;
+  /** [#473] Ask the backend whether the open project lost its history on load. */
+  checkHistoryDiscarded: () => Promise<void>;
+  /** Hide the discarded-history banner for the open project. */
+  dismissHistoryDiscarded: () => void;
   refreshWarnings: () => Promise<void>;
   resolveWarning: (sectionId: number, shotId: number, warningCode: string, comment?: string) => Promise<boolean>;
   unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
@@ -627,6 +647,9 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
     integrityDismissed: false,
     integritySaveBlocked: false,
     integrityDialogOpen: false,
+    // [#473] No project, nothing whose history could have been discarded.
+    historyDiscarded: false,
+    historyDiscardedDismissed: false,
   });
   // Losing a project bypasses the setView() cleanup funnel, so drop the gas
   // sub-mode (#38) here too - a stale overlay/panel must not outlive the project.
@@ -881,6 +904,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   integrityDismissed: false,
   integritySaveBlocked: false,
   integrityDialogOpen: false,
+  historyDiscarded: false,
+  historyDiscardedDismissed: false,
   config: null,
   loading: { ...initialLoadingState },
   autosaveFailure: null,
@@ -1071,6 +1096,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           integrityDismissed: false,
           integritySaveBlocked: false,
           integrityDialogOpen: false,
+          // [#473] Same reasoning for the discarded-history banner: the post-load
+          // effect in App.tsx repopulates it for the project that just loaded.
+          historyDiscarded: false,
+          historyDiscardedDismissed: false,
         });
         const tSetDone = performance.now();
         recordPerfTiming('store set(project+stations)', tSetDone - tSetStart);
@@ -1323,6 +1352,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         integrityDismissed: false,
         integritySaveBlocked: false,
         integrityDialogOpen: false,
+        // [#473] A project created here has no persisted history to lose.
+        historyDiscarded: false,
+        historyDiscardedDismissed: false,
       });
 
       // #270: a freshly created project is local by construction - it has no
@@ -1776,6 +1808,50 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // issue set actually changes. Keeping the issues populated also lets the
   // Review & Repair dialog still open them.
   dismissIntegrityIssues: () => set({ integrityDismissed: true }),
+
+  // [#473] Peek, don't take: the backend flag describes an ongoing condition and
+  // keeps answering the same thing for as long as the project is open, so this is
+  // safe to call more than once (React StrictMode runs the effect twice in dev).
+  // A failure here is left as "no banner" deliberately - the condition it reports
+  // is itself a degraded read, and a second failure must not escalate into a
+  // broken project view.
+  checkHistoryDiscarded: async () => {
+    // Correlate the reply with the project that was active when the check STARTED,
+    // exactly as checkProjectIntegrity does and for the same reason. The backend flag is
+    // a live read of whatever project is in the slot, which makes the VALUE honest at
+    // service time but says nothing about DELIVERY: project A discarded -> check in
+    // flight -> user switches to B -> loadProject resets this to false -> A's reply lands
+    // `true` and paints a false data-loss banner over B. clientOpId bumps on every load
+    // (catches a switch); the explicit project===null catches a close, which leaves
+    // file_path null and does not bump clientOpId.
+    const pathAtStart = get().project?.file_path ?? null;
+    const opAtStart = get().loading.clientOpId;
+    const mySeq = ++historyDiscardedCheckSeq;
+    try {
+      const discarded = await invokeIpc<boolean>('history_discarded', undefined, {
+        purpose: 'report a history load that was discarded',
+      });
+      const cur = get();
+      if (
+        mySeq !== historyDiscardedCheckSeq ||
+        cur.project === null ||
+        (cur.project.file_path ?? null) !== pathAtStart ||
+        cur.loading.clientOpId !== opAtStart
+      ) {
+        return;
+      }
+      set((state) => ({
+        historyDiscarded: discarded,
+        // Clear a stale dismissal when the condition clears, so a LATER project
+        // that does lose its history still gets a banner.
+        historyDiscardedDismissed: discarded ? state.historyDiscardedDismissed : false,
+      }));
+    } catch (e) {
+      console.error('Failed to read the discarded-history flag:', e);
+    }
+  },
+
+  dismissHistoryDiscarded: () => set({ historyDiscardedDismissed: true }),
 
   openIntegrityDialog: () => set({ integrityDialogOpen: true }),
   closeIntegrityDialog: () => set({ integrityDialogOpen: false }),

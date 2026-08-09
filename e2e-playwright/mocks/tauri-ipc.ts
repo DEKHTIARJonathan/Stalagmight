@@ -672,6 +672,25 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         mockIntegrityRemaining = Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
       };
 
+      // [#473] Whether the loaded project's undo/redo history was unreadable and
+      // discarded. Default false - every existing spec opens a project whose
+      // history loads fine, and a banner appearing over them would be a false
+      // failure. Seeded by __MOCK_SET_HISTORY_DISCARDED__.
+      let mockHistoryDiscarded = false;
+      // How many times the app has ASKED. A spec asserting the banner is absent needs
+      // this: `toHaveCount(0)` passes on its first poll, so without a positive signal
+      // that the post-load effect has actually run, the assertion is satisfied by the
+      // effect not having happened yet and can never fail.
+      let mockHistoryDiscardedCalls = 0;
+      (window as unknown as Record<string, unknown>).__MOCK_SET_HISTORY_DISCARDED__ = (
+        discarded: boolean
+      ) => {
+        mockHistoryDiscarded = !!discarded;
+        mockHistoryDiscardedCalls = 0;
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_HISTORY_DISCARDED_CALLS__ = () =>
+        mockHistoryDiscardedCalls;
+
       // Expose currentProject setter for E2E tests (allows injecting test fixtures)
       (window as unknown as Record<string, unknown>).__E2E_MOCKS__ = {
         setCurrentProject: (project: typeof currentProject) => {
@@ -4590,6 +4609,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'check_project_integrity':
             return { messages: mockIntegrityIssues, save_blocked: mockIntegritySaveBlocked };
+
+          case 'history_discarded':
+            // #473: whether the open project's edit history was unreadable and
+            // replaced by an empty stack. A peek, not a take - the real command
+            // keeps answering the same thing while the project is open, so the
+            // mock must too or a re-render would clear the banner.
+            mockHistoryDiscardedCalls += 1;
+            return mockHistoryDiscarded;
 
           case 'repair_project_integrity': {
             const total = mockIntegrityIssues.length;

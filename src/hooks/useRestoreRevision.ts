@@ -126,7 +126,10 @@ export function useRestoreRevision() {
       // The backend closed and reopened the project at the swapped tree. Reconcile every
       // per-tree frontend store through the shared replacement seam. A false result means
       // this reply landed after the login or open project changed, so callers must stop.
-      if (!(await applySpeleoTreeReplacement(issuedFor))) return false;
+      // [#473] `true`: a restore/view swaps the tree by definition - it is the flow that
+      // reopens DIFFERENT bytes at the SAME path, which is why the discarded-history
+      // re-read has to happen here and not in App.tsx's effect.
+      if (!(await applySpeleoTreeReplacement(issuedFor, true))) return false;
       if (!quiet) {
         showToast(
           restore

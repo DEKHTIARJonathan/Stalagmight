@@ -51,12 +51,16 @@ pub const ENTRY_OVERHEAD_BYTES: usize = 512;
 /// ancient) file with a million rows in it was read whole during open, with the
 /// in-memory bound armed but applied too late to help.
 ///
-/// **What this bounds is the ROW COUNT, and only that.** The other half of the same
-/// exposure is untouched: one row's gzip blob is decompressed with no output ceiling
-/// (`decompress_json`, persistence/sqlite.rs, reads the decoder into a `String`), so a
-/// single crafted blob still expands as far as it likes. That residual - a per-blob
-/// decompression ceiling - is a separate bound, tracked separately; it is not what
-/// this constant closes and it must not be claimed as closed here.
+/// **What this bounds is the ROW COUNT, and only that.** It takes THREE bounds to close
+/// the exposure, and the reason is that the first two multiply rather than compose. The
+/// other two live next to `decompress_json_under` in persistence/sqlite.rs (#473):
+/// `MAX_DECOMPRESSED_BLOB_BYTES` caps how large one row may inflate, and
+/// `MAX_HISTORY_LOAD_BYTES` caps the total across BOTH stacks of one project open.
+/// Without that third one a file inside BOTH of the first two still OOMs - 100 rows x 2
+/// blobs x 256 MiB is 50 GiB on the default read window, and this constant's own 65536
+/// rows make it 32 TiB nominal - which is not a hypothetical: a measured 14 MB file
+/// allocated 3.1 GB and the load succeeded. None of the three may be claimed as covering
+/// another's half.
 ///
 /// A count window project reads its own window (`undo_history_limit`), which is exact.
 /// Full mode has no count at all - its bound is [`UNDO_BYTE_BUDGET_BYTES`] - so this

@@ -508,6 +508,9 @@ describe('SpeleoQuitDialog - the unwound-push confirmation carries the quit', ()
       refreshProjectState: vi.fn(async () => {}) as never,
       checkProjectIntegrity: vi.fn(async () => []) as never,
     });
+    // [#473] `checkHistoryDiscarded` is deliberately NOT stubbed. This flow returns a
+    // null result (the lock was released, no tree was swapped), so the seam must not
+    // re-read the flag at all - and the exact-IPC assertion below is what proves it.
     useSpeleoStore.setState({ refreshLinkStatus: vi.fn(async () => {}) as never });
     invokeIpcMock.mockResolvedValue(null);
     await reachConfirmation();

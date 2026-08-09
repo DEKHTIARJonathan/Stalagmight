@@ -1297,6 +1297,11 @@ impl AppState {
         // in), which is the bump rule (`speleodb_session`). Covers close, delete
         // and the project switch, which all route through here.
         self.bump_speleodb_session();
+        // [#473] The discarded-history banner describes the OPEN project; with none
+        // open there is nothing for it to describe. Cleared here as well as on every
+        // load commit, so closing a project takes its banner with it rather than
+        // leaving it up over the welcome screen.
+        self.set_history_discarded(false);
         tracing::debug!("close_project: project dropped");
 
         tracing::debug!("close_project: acquiring database lock");
