@@ -795,7 +795,16 @@ export const exportRoundtripFuzz: Scenario = {
     const recorder = new TraceRecorder();
     const history: string[] = [];
 
+    /**
+     * The trace a failure should point at.
+     *
+     * A REPLAY records nothing - every step it runs came out of a file - so
+     * writing one here would drop a zero-step artifact next to a real failure
+     * and offer it as the thing to replay and shrink. The trace that reproduces
+     * a replay's failure is the trace it was given, so that is what is named.
+     */
     const dumpTrace = (failure: { message: string } | null): string | null => {
+      if (replay !== null) return replayPath;
       const target = traceOut || defaultTracePath(sessionDir, SCENARIO, ctx.seed);
       try {
         return writeTrace(
