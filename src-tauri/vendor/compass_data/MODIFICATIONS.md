@@ -36,5 +36,9 @@ Changes from upstream v0.0.7:
   file; upstream throws that remainder away, so a truncated parse is
   indistinguishable from a short file. Stalagmight warns the user about the
   surveys it did not import, which needs the remainder.
+- **`DatFile`**: carries that remainder for a `.DAT` reached through a `.MAK`,
+  exposed as `unread()` / `unread_at()` (the tail, and the byte offset it starts
+  at). `DatFile::load` does its own `parse_dat_file` call, so without this the
+  `.MAK` path truncates just as silently as the direct one.
 
 These should be contributed upstream where appropriate.

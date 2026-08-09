@@ -209,6 +209,15 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
     let mut warnings: Vec<String> = Vec::new();
 
     for (i, dat) in loaded.survey_files.iter().enumerate() {
+        // Each linked `.DAT` is parsed on its own, so each can stop part-way
+        // through and drop the surveys behind the one it stopped on.  A `.MAK`
+        // links many files, so the warning has to say WHICH one lost surveys.
+        warnings.extend(dat_truncation_warning(
+            Some(&dat.file_path.display().to_string()),
+            dat.unread(),
+            dat.unread_at(),
+            dat.surveys().len(),
+        ));
         let raw_state = &dat.file_state;
         // Reduce the vendor crate's FileState to the subset our pipeline
         // actually consults.  This is computed per file so subsequent
@@ -329,8 +338,8 @@ fn only_record_separators(tail: &str) -> bool {
 
 /// The warning for a `.DAT` whose parse gave up part-way through the file.
 ///
-/// `Survey::parse_dat_file` is a `many0`: it stops at the first survey it
-/// cannot read and returns the ones before it, leaving the rest of the file
+/// The survey-file parser is a `many0`: it stops at the first survey it cannot
+/// read and returns the ones before it, leaving the rest of the file
 /// unconsumed.  That comes back as a successful import of a shorter file, so
 /// without this the surveys after the bad one vanish and the user is told
 /// nothing.  #479 is what made the state reachable - an impossible
@@ -339,25 +348,33 @@ fn only_record_separators(tail: &str) -> bool {
 /// Importing the surveys that did read is more useful than refusing the whole
 /// file, so this is a warning rather than an error: the import proceeds, and
 /// the user learns which survey ended it and where.
-fn dat_truncation_warning(contents: &str, remainder: &str, parsed: usize) -> Option<String> {
+///
+/// `file` names the `.DAT` for a `.MAK` project, which can link many of them;
+/// a bare `.DAT` import passes `None`, since the file is the one the user just
+/// picked.  `offset` is where the unread tail starts, in bytes from the top of
+/// that file.
+fn dat_truncation_warning(
+    file: Option<&str>,
+    remainder: &str,
+    offset: usize,
+    parsed: usize,
+) -> Option<String> {
     if only_record_separators(remainder) {
         return None;
     }
-    // `read_latin1` maps one file byte to one `char`, so the chars ahead of
-    // the remainder count the bytes consumed - the offset into the file, past
-    // any byte-order mark (stripped before parsing).
-    let offset = contents.chars().count() - remainder.chars().count();
     let stopped_at = parsed + 1;
+    let of_file = file.map_or_else(String::new, |name| format!(" of '{name}'"));
     let imported = match parsed {
-        0 => "no surveys were imported".to_string(),
-        1 => "only the first survey was imported".to_string(),
-        n => format!("only the first {n} surveys were imported"),
+        0 => "no surveys were imported from it".to_string(),
+        1 => "only the first survey was imported from it".to_string(),
+        n => format!("only the first {n} surveys were imported from it"),
     };
     Some(format!(
-        "Parsing stopped at survey {stopped_at} (byte {offset}) and the rest of the file was \
-         not read; {imported}. Compass surveys are read in order, so the first header this \
-         importer cannot parse (an impossible SURVEY DATE, a malformed FORMAT line) ends the \
-         import there. Fix survey {stopped_at} and import again to get the surveys after it."
+        "Parsing stopped at survey {stopped_at}{of_file} (byte {offset}) and the rest of the \
+         file was not read; {imported}. Compass surveys are read in order, so the first header \
+         this importer cannot parse (an impossible SURVEY DATE, a malformed FORMAT line) ends \
+         the import there. Fix survey {stopped_at}{of_file} and import again to get the surveys \
+         after it."
     ))
 }
 
@@ -365,7 +382,11 @@ fn parse_dat(path: &Path) -> Result<ParsedCompass> {
     let contents = read_latin1(path)?;
     let (raw_surveys, remainder) = Survey::parse_dat_file_with_remainder(&contents)
         .map_err(|e| anyhow!("Failed to parse Compass .DAT file: {e}"))?;
-    let warnings: Vec<String> = dat_truncation_warning(&contents, remainder, raw_surveys.len())
+    // `read_latin1` maps one file byte to one `char`, so the chars ahead of
+    // the remainder count the bytes consumed - the offset into the file, past
+    // any byte-order mark (stripped before parsing).
+    let offset = contents.chars().count() - remainder.chars().count();
+    let warnings: Vec<String> = dat_truncation_warning(None, remainder, offset, raw_surveys.len())
         .into_iter()
         .collect();
     let cave_name = raw_surveys
@@ -2352,6 +2373,78 @@ mod tests {
             parsed.warnings.is_empty(),
             "a whole file read to the end warns about nothing, got {:?}",
             parsed.warnings
+        );
+    }
+
+    /// A `.MAK` links its `.DAT` files and each one is parsed on its own, so
+    /// each can stop part-way through - and the surveys behind the stop are
+    /// dropped from a project import exactly as they are from a direct one.
+    /// This is the path most real projects are opened by, so the warning has
+    /// to reach it too, and has to name WHICH linked file lost surveys.
+    #[test]
+    fn a_mak_names_the_dat_whose_parse_stopped_part_way_through() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("whole.dat"),
+            synthetic_multi_survey_dat(&[
+                synthetic_survey_record("Synthetic Cave", "A", "7 10 1979"),
+                synthetic_survey_record("Synthetic Cave", "B", "8 10 1979"),
+            ]),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("stops.dat"),
+            synthetic_multi_survey_dat(&[
+                synthetic_survey_record("Synthetic Cave", "C", "9 10 1979"),
+                // February 29th of a common year: a parse error since #479.
+                synthetic_survey_record("Synthetic Cave", "D", "2 29 1979"),
+                synthetic_survey_record("Synthetic Cave", "E", "8 11 1981"),
+            ]),
+        )
+        .unwrap();
+
+        // A `#file` entry needs a base location and a datum ahead of it.
+        let mak = "@100.0,200.0,300.0,13,0.5;\r\n\
+                   &North American 1983;\r\n\
+                   #whole.dat;\r\n\
+                   #stops.dat;\r\n";
+        let path = dir.path().join("project.mak");
+        std::fs::write(&path, mak).unwrap();
+
+        let parsed = parse_compass(&path).unwrap();
+
+        // Both surveys of the whole file, then the one ahead of the bad date.
+        // E is behind D, and `many0` never resumes, so it is lost with it.
+        let names: Vec<&str> = parsed
+            .surveys
+            .iter()
+            .map(|s| s.survey.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["A", "B", "C"],
+            "the whole file imports, and the second file only up to its bad date"
+        );
+
+        let truncation: Vec<&String> = parsed
+            .warnings
+            .iter()
+            .filter(|w| w.contains("Parsing stopped"))
+            .collect();
+        assert_eq!(
+            truncation.len(),
+            1,
+            "one truncated file, one warning; got {:?}",
+            parsed.warnings
+        );
+        let warning = truncation.first().expect("one truncation warning");
+        assert!(
+            warning.contains("stops.dat") && warning.contains("Parsing stopped at survey 2"),
+            "the warning names the linked file that lost surveys and where it stopped: {warning}"
+        );
+        assert!(
+            !warning.contains("whole.dat"),
+            "the file that read to the end is not implicated: {warning}"
         );
     }
 
