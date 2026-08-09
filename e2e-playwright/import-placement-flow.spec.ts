@@ -21,7 +21,20 @@ type MockSuggestion = {
   targetImportIndex: number | null;
 };
 
-function buildMockDmpFile() {
+interface MockDmpOptions {
+  /**
+   * Append a zero-length shot to the unanchored section.
+   *
+   * The DMP parser clamps a negative raw length to exactly 0.0, the shot
+   * survives `isImportableDmpShot` (which only drops the length-1 default), and
+   * `missingRequiredCells` marks `length <= 0` missing - so a perfectly valid
+   * file can arrive already holding a row the wizard calls incomplete, with
+   * nothing the user did to cause it (#476).
+   */
+  zeroLengthInUnanchored?: boolean;
+}
+
+function buildMockDmpFile(options: MockDmpOptions = {}) {
   return {
     version: 5,
     sections: [
@@ -79,6 +92,30 @@ function buildMockDmpFile() {
             marker_index: 0,
             comment: null,
           },
+          ...(options.zeroLengthInUnanchored
+            ? [
+                {
+                  shot_type: 'Standard',
+                  heading_in: 125,
+                  heading_out: 125,
+                  length: 0,
+                  depth_in: -3,
+                  depth_out: -3,
+                  pitch_in: 0,
+                  pitch_out: 0,
+                  left: 1,
+                  right: 1,
+                  up: 1,
+                  down: 1,
+                  temperature: 18,
+                  hour: 10,
+                  minute: 6,
+                  second: 0,
+                  marker_index: 0,
+                  comment: null,
+                },
+              ]
+            : []),
         ],
       },
     ],
@@ -114,7 +151,7 @@ async function setImportSuggestions(page: Page, suggestions: MockSuggestion[]): 
   }, suggestions);
 }
 
-async function openDmpWizard(page: Page): Promise<void> {
+async function openDmpWizard(page: Page, dmpFile = buildMockDmpFile()): Promise<void> {
   await page.evaluate((dmpFile) => {
     const e2e = (window as unknown as {
       __E2E_TEST__?: {
@@ -143,10 +180,55 @@ async function openDmpWizard(page: Page): Promise<void> {
       filePath: '/mock/import-placement-flow.dmp',
       selectionConfig,
     });
-  }, buildMockDmpFile());
+  }, dmpFile);
 
   await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
   await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
+}
+
+/**
+ * Where the auto-started handoff has got to, as one word.
+ *
+ * `wizard-hidden` is the failure this exists to name: the wizard MOUNTED with
+ * `activeDialog` still set, under DialogWrapper's `hidden` prop. A `display:none`
+ * PARENT leaves the descendant reporting `display: flex`, `visibility: visible`
+ * and a 0x0 box, so the box is what has to be measured, not the element's own
+ * computed display.
+ *
+ * `working` covers every state that is not yet an answer - the suggestion phase,
+ * a calculating or importing wizard - so a poll cannot pass on the screen the
+ * flow started from.
+ */
+type PlacementFlowStatus =
+  | 'placement-mode'
+  | 'wizard-manual-placing'
+  | 'wizard-hidden'
+  | 'wizard-absent'
+  | 'working';
+
+async function readPlacementFlowStatus(page: Page): Promise<PlacementFlowStatus> {
+  return page.evaluate<PlacementFlowStatus>(() => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__?: { uiStore?: { getState: () => { placementMode: unknown } } };
+    }).__E2E_TEST__;
+    if (!e2e?.uiStore) {
+      throw new Error('E2E UI store unavailable');
+    }
+    if (e2e.uiStore.getState().placementMode) return 'placement-mode';
+
+    const wizard = document.querySelector('[data-testid="dmp-new-import-dialog"]');
+    if (!wizard) return 'wizard-absent';
+    const rect = wizard.getBoundingClientRect();
+    const style = getComputedStyle(wizard);
+    const onScreen =
+      style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    if (!onScreen) return 'wizard-hidden';
+
+    const manual = document.querySelector('[data-testid="wizard-manual-placing"]');
+    if (!manual) return 'working';
+    const manualRect = manual.getBoundingClientRect();
+    return manualRect.width > 0 && manualRect.height > 0 ? 'wizard-manual-placing' : 'working';
+  });
 }
 
 async function openManualPlacing(page: Page): Promise<void> {
@@ -310,6 +392,89 @@ test.describe('Import Placement Flow', () => {
     }
 
     await expect(wizard).toBeHidden({ timeout: 10000 });
+  });
+
+  /**
+   * A zero-length shot the FILE brought with it must not strand the wizard.
+   *
+   * Confirming the only suggestion anchors section 0 and leaves section 1 with
+   * nowhere to attach, so the wizard moves itself to manual placing and
+   * auto-starts the handoff - a window during which the whole dialog is
+   * `display:none`. That handoff used to run the payload guard first, and
+   * `refuseIncompleteShots` walks EVERY selected section, so the zero-length
+   * row in section 1 refused it. The refusal returned before the one line that
+   * closed the hidden window, and nothing in the effect's dependencies changes
+   * on a refusal, so it never retried: an invisible modal, `activeDialog` still
+   * set, the rest of the app `inert`, no mouse affordance and no way back
+   * (#476).
+   *
+   * The guard now lives only where a payload is genuinely at stake, and the
+   * window is owned by the effect that opens it, so any early return ends it.
+   */
+  test('a file-borne zero-length shot does not strand the auto-started handoff @smoke', async ({
+    page,
+  }) => {
+    await openDmpWizard(page, buildMockDmpFile({ zeroLengthInUnanchored: true }));
+
+    await page.getByTestId('confirm-button').click();
+
+    // Either answer is healthy - the handoff took (placement mode, dialog
+    // closed) or it declined and put the wizard back on screen. What must not
+    // happen is the third one.
+    await expect
+      .poll(() => readPlacementFlowStatus(page), { timeout: 20000 })
+      .toMatch(/^(placement-mode|wizard-manual-placing)$/);
+
+    // ... and the user can get back to the wizard from wherever it landed,
+    // which is what "not stranded" means.
+    if ((await readPlacementFlowStatus(page)) === 'placement-mode') {
+      await expect(page.getByTestId('placement-mode-indicator')).toBeVisible({ timeout: 10000 });
+      await page.keyboard.press('Escape');
+    }
+
+    const wizard = page.getByTestId('dmp-new-import-dialog');
+    await expect(wizard).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('wizard-manual-placing')).toBeVisible({ timeout: 10000 });
+    // Spelled out rather than left to toBeVisible: the bug rendered a dialog
+    // whose own computed style said visible and whose box was 0x0.
+    const box = await wizard.boundingBox();
+    expect(box?.width ?? 0).toBeGreaterThan(0);
+    expect(box?.height ?? 0).toBeGreaterThan(0);
+  });
+
+  /**
+   * The other half of the same fix: the guard MOVED, it was not deleted.
+   *
+   * "Place on Map" is a deliberate step toward an import, taken with the dialog
+   * visible, so refusing there names a section the user can go and fix. Taking
+   * the guard off both paths would pass the test above and send the NaN-shaped
+   * row on to the backend instead.
+   */
+  test('the Place on Map button still refuses while a section is incomplete', async ({ page }) => {
+    await openDmpWizard(page, buildMockDmpFile({ zeroLengthInUnanchored: true }));
+    await page.getByTestId('confirm-button').click();
+
+    await expect
+      .poll(() => readPlacementFlowStatus(page), { timeout: 20000 })
+      .toMatch(/^(placement-mode|wizard-manual-placing)$/);
+    if ((await readPlacementFlowStatus(page)) === 'placement-mode') {
+      await expect(page.getByTestId('placement-mode-indicator')).toBeVisible({ timeout: 10000 });
+      await page.keyboard.press('Escape');
+    }
+    await expect(page.getByTestId('wizard-manual-placing')).toBeVisible({ timeout: 10000 });
+
+    await page.getByTestId('segment-mode-manual').click();
+    await page.getByTestId('segment-place-on-map-button').click();
+
+    // By dedup key, not by test ID: the placement hint toast is still on
+    // screen, and the refusal is the one that names the section.
+    const refusal = page.locator('[data-toast-key="dmp-wizard-incomplete"]');
+    await expect(refusal).toContainText('Unanchored Segment', { timeout: 10000 });
+    await expect(refusal).toContainText('missing required values');
+    // Refused, so the wizard is still the screen - not hidden behind a
+    // placement it declined to start.
+    await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible();
+    expect(await readPlacementFlowStatus(page)).toBe('wizard-manual-placing');
   });
 
   test('back requires confirmation and can return to selection dialog', async ({ page }) => {
