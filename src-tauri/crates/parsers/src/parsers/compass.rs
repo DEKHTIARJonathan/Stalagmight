@@ -319,10 +319,55 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
     })
 }
 
+/// What a `.DAT` legitimately leaves behind once every survey has been read:
+/// Compass ends each survey with a form feed (0x0C) and a DOS editor may park
+/// an end-of-file marker (0x1A) after the last one.  Anything else in the tail
+/// is survey text the parser stopped on.
+fn only_record_separators(tail: &str) -> bool {
+    tail.chars().all(|c| c.is_whitespace() || c == '\u{1a}')
+}
+
+/// The warning for a `.DAT` whose parse gave up part-way through the file.
+///
+/// `Survey::parse_dat_file` is a `many0`: it stops at the first survey it
+/// cannot read and returns the ones before it, leaving the rest of the file
+/// unconsumed.  That comes back as a successful import of a shorter file, so
+/// without this the surveys after the bad one vanish and the user is told
+/// nothing.  #479 is what made the state reachable - an impossible
+/// `SURVEY DATE:` used to panic the parser and now rejects the survey.
+///
+/// Importing the surveys that did read is more useful than refusing the whole
+/// file, so this is a warning rather than an error: the import proceeds, and
+/// the user learns which survey ended it and where.
+fn dat_truncation_warning(contents: &str, remainder: &str, parsed: usize) -> Option<String> {
+    if only_record_separators(remainder) {
+        return None;
+    }
+    // `read_latin1` maps one file byte to one `char`, so the chars ahead of
+    // the remainder count the bytes consumed - the offset into the file, past
+    // any byte-order mark (stripped before parsing).
+    let offset = contents.chars().count() - remainder.chars().count();
+    let stopped_at = parsed + 1;
+    let imported = match parsed {
+        0 => "no surveys were imported".to_string(),
+        1 => "only the first survey was imported".to_string(),
+        n => format!("only the first {n} surveys were imported"),
+    };
+    Some(format!(
+        "Parsing stopped at survey {stopped_at} (byte {offset}) and the rest of the file was \
+         not read; {imported}. Compass surveys are read in order, so the first header this \
+         importer cannot parse (an impossible SURVEY DATE, a malformed FORMAT line) ends the \
+         import there. Fix survey {stopped_at} and import again to get the surveys after it."
+    ))
+}
+
 fn parse_dat(path: &Path) -> Result<ParsedCompass> {
     let contents = read_latin1(path)?;
-    let raw_surveys = Survey::parse_dat_file(&contents)
+    let (raw_surveys, remainder) = Survey::parse_dat_file_with_remainder(&contents)
         .map_err(|e| anyhow!("Failed to parse Compass .DAT file: {e}"))?;
+    let warnings: Vec<String> = dat_truncation_warning(&contents, remainder, raw_surveys.len())
+        .into_iter()
+        .collect();
     let cave_name = raw_surveys
         .first()
         .map_or_else(String::new, |s| s.cave_name.clone());
@@ -343,7 +388,7 @@ fn parse_dat(path: &Path) -> Result<ParsedCompass> {
         declination_mode: DeclinationMode::default(),
         fixed_stations: Vec::new(),
         surveys,
-        warnings: Vec::new(),
+        warnings,
     })
 }
 
@@ -2126,21 +2171,38 @@ mod tests {
         );
     }
 
-    /// A `.DAT` whose first line is the cave name, in the smallest shape the
-    /// vendored parser accepts. Synthetic - no fixture data.
-    fn synthetic_dat(cave_name: &str) -> String {
+    /// One survey record - cave name first line - in the smallest shape the
+    /// vendored parser accepts, with its own two stations so records can be
+    /// concatenated into a multi-survey file. Synthetic - no fixture data.
+    fn synthetic_survey_record(cave_name: &str, survey_name: &str, date: &str) -> String {
         format!(
             "{cave_name}\r\n\
-             SURVEY NAME: A\r\n\
-             SURVEY DATE: 7 10 1979\r\n\
+             SURVEY NAME: {survey_name}\r\n\
+             SURVEY DATE: {date}\r\n\
              SURVEY TEAM:\r\n\
              Nobody\r\n\
              DECLINATION: 0.00  FORMAT: DMMDLRUDLADN  CORRECTIONS: 0.00 0.00 0.00\r\n\
              \r\n\
              FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS\r\n\
              \r\n\
-             A1 A2 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n"
+             {survey_name}1 {survey_name}2 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n"
         )
+    }
+
+    /// A one-survey `.DAT`, in the smallest shape the vendored parser accepts.
+    fn synthetic_dat(cave_name: &str) -> String {
+        synthetic_survey_record(cave_name, "A", "7 10 1979")
+    }
+
+    /// Join survey records the way Compass writes a `.DAT`: a form feed
+    /// (0x0C) on its own line ends each record.
+    fn synthetic_multi_survey_dat(records: &[String]) -> String {
+        let mut dat = String::new();
+        for record in records {
+            dat.push_str(record);
+            dat.push_str("\x0c\r\n");
+        }
+        dat
     }
 
     /// `SURVEY DATE:` takes three unsigned integers and nothing checks that
@@ -2174,13 +2236,123 @@ mod tests {
 
             // `many0` stops at the first survey it cannot parse and returns
             // what it has, so a lone bad survey yields an empty file rather
-            // than an `Err` - which `parse_compass` then reports as one.
-            let surveys = parse_compass(&path).map(|parsed| parsed.surveys.len());
-            assert!(
-                surveys.is_err() || surveys.as_ref().is_ok_and(|count| *count == 0),
-                "SURVEY DATE: {date} must be rejected, got {surveys:?} survey(s)"
-            );
+            // than an `Err`. Refusing the file outright is a rejection too;
+            // what is NOT allowed is the survey coming back imported, or the
+            // file coming back empty with nothing said about why.
+            match parse_compass(&path) {
+                Err(_) => {}
+                Ok(parsed) => {
+                    assert!(
+                        parsed.surveys.is_empty(),
+                        "SURVEY DATE: {date} must be rejected, got {} survey(s)",
+                        parsed.surveys.len()
+                    );
+                    assert!(
+                        parsed
+                            .warnings
+                            .iter()
+                            .any(|w| w.contains("Parsing stopped")),
+                        "SURVEY DATE: {date} left the import empty; that has to be said out \
+                         loud, warnings: {:?}",
+                        parsed.warnings
+                    );
+                }
+            }
         }
+    }
+
+    /// `many0` stops at the first survey it cannot read and returns the ones
+    /// before it WITHOUT consuming the rest of the file, so a `.DAT` with an
+    /// unparseable survey in the middle imports as a SHORTER file rather than
+    /// as a failure - a preview that looks perfectly healthy while the tail of
+    /// the cave is missing.
+    ///
+    /// Refusing the whole file would cost the user the surveys that did read,
+    /// so the import stays partial and a warning carries the loss.
+    #[test]
+    fn a_survey_that_stops_the_parse_takes_the_rest_of_the_file_with_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let dat = synthetic_multi_survey_dat(&[
+            synthetic_survey_record("Synthetic Cave", "A", "7 10 1979"),
+            // February 29th of a common year: a parse error since #479.
+            synthetic_survey_record("Synthetic Cave", "B", "2 29 1979"),
+            synthetic_survey_record("Synthetic Cave", "C", "8 11 1981"),
+        ]);
+        let path = dir.path().join("stops-at-two.dat");
+        std::fs::write(&path, &dat).unwrap();
+
+        let parsed = parse_compass(&path).unwrap();
+
+        // A is ahead of the bad date and imports. C is NOT recovered: `many0`
+        // stops at B and never resumes, so C reaches the user only through the
+        // warning. Pinning the exact list is deliberate - if the parser ever
+        // learns to skip a bad survey and carry on, this is the test that says
+        // the warning has to change with it.
+        let names: Vec<&str> = parsed
+            .surveys
+            .iter()
+            .map(|s| s.survey.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["A"],
+            "A imports, B is rejected, and C is behind B so it is lost with it"
+        );
+
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains("Parsing stopped at survey 2")),
+            "the dropped surveys must be warned about, and the warning must name the survey \
+             the parse stopped at, warnings: {:?}",
+            parsed.warnings
+        );
+
+        // And where it stopped, so the user can open the file at that byte.
+        // The file is ASCII, so a byte offset is a string index into it.
+        let warning = parsed
+            .warnings
+            .iter()
+            .find(|w| w.contains("(byte "))
+            .expect("the truncation warning carries a byte offset");
+        let offset: usize = warning
+            .split("(byte ")
+            .nth(1)
+            .and_then(|rest| rest.split(')').next())
+            .and_then(|digits| digits.parse().ok())
+            .expect("the byte offset is a number");
+        let last_shot_of_a = dat.find("A1 A2").unwrap();
+        let header_of_b = dat.find("SURVEY NAME: B").unwrap();
+        assert!(
+            (last_shot_of_a..=header_of_b).contains(&offset),
+            "the offset points at the record the parse stopped on (between {last_shot_of_a} \
+             and {header_of_b}), got {offset}"
+        );
+    }
+
+    /// The counterpart: three good surveys leave only the form feeds behind,
+    /// and a clean import must not be decorated with a truncation warning.
+    #[test]
+    fn a_dat_that_parses_to_the_end_carries_no_truncation_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let dat = synthetic_multi_survey_dat(&[
+            synthetic_survey_record("Synthetic Cave", "A", "7 10 1979"),
+            synthetic_survey_record("Synthetic Cave", "B", "8 10 1979"),
+            synthetic_survey_record("Synthetic Cave", "C", "8 11 1981"),
+        ]);
+        let path = dir.path().join("whole.dat");
+        // Compass-era files often end with a DOS end-of-file marker, which no
+        // survey parser consumes; it is not a truncated tail.
+        std::fs::write(&path, format!("{dat}\x1a")).unwrap();
+
+        let parsed = parse_compass(&path).unwrap();
+        assert_eq!(parsed.surveys.len(), 3);
+        assert!(
+            parsed.warnings.is_empty(),
+            "a whole file read to the end warns about nothing, got {:?}",
+            parsed.warnings
+        );
     }
 
     /// Compass files are read one byte per code point, so a "UTF-8 with BOM"

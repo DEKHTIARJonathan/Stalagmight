@@ -30,4 +30,11 @@ Changes from upstream v0.0.7:
   Stalagmight calls this from a `#[tauri::command]`, where a panic never reaches
   the user - the caller's promise simply never settles.
 
+- **`Survey::parse_dat_file_with_remainder`**: added, and `parse_dat_file` now
+  delegates to it. The file parser is a `many0`, which stops at the first survey
+  it cannot read and returns the earlier ones without consuming the rest of the
+  file; upstream throws that remainder away, so a truncated parse is
+  indistinguishable from a short file. Stalagmight warns the user about the
+  surveys it did not import, which needs the remainder.
+
 These should be contributed upstream where appropriate.
