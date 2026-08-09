@@ -171,7 +171,19 @@ hazards over long runs.
     environment rather than inherited (an exported replay path would otherwise
     make every cell replay one trace and report a green matrix for coverage
     nothing ran). `--release=0` means what it says: the flag takes an optional
-    `1/0`, `true/false`, `yes/no`, `on/off` value.
+    `1/0`, `true/false`, `yes/no`, `on/off` value. `--axis KEY=v1,v2` is the
+    optional third dimension; it accepts `STALAGMIGHT_*` keys only (the children
+    run cargo and launch the app, so a matrix flag does not get to set `PATH` or
+    `LD_PRELOAD`) and REFUSES the six the matrix assigns per cell -
+    `STALAGMIGHT_FUZZ_FIXTURE`, `STALAGMIGHT_AGENT_BASE_PORT`,
+    `STALAGMIGHT_AGENT_DISPLAYS`, `STALAGMIGHT_AGENT_RELEASE`,
+    `STALAGMIGHT_FUZZ_REPLAY`, `STALAGMIGHT_FUZZ_TRACE`. An axis over the
+    fixture would mislabel every row of the results table; one over the port
+    block or the display would put K concurrent sessions on one of each, which
+    is the race the slot assignment exists to remove. The refusal names the flag
+    that owns the key, because silently reordering would ignore what was asked
+    for. Parsing lives in `e2e/agent/lib/fuzzMatrixArgs.ts` so a unit test can
+    assert the refusal list is the same list the per-cell environment writes.
   - `pnpm agent:mcp` - run the server standalone (for an external MCP client).
   - `pnpm agent:bridge <dir>` - file-based access to the same server for plain
     shells and subagents without an MCP client: append JSON tool calls to
@@ -714,15 +726,35 @@ landowner or an unreleased project - and a metric key, a log line, a failure
 payload and a recorded trace are all things that end up attached to an issue.
 
 A trace is the artifact that rule is easiest to lose, so it is enforced rather
-than observed. A `corpusFile` step carries `corpusId` and nothing else;
-`TraceRecorder.record` is the redaction boundary, so a caller that hands over a
-path gets it folded before the step is stored; and `writeTrace` refuses outright
-to emit a corpus step named any other way, whoever assembled it. The corpus ROOT
-is not recorded either - `STALAGMIGHT_FUZZ_CORPUS_DIR` is an absolute path on the
-recorder's disk, so it is excluded from the trace's `env` header and never
-restored on replay. Replay resolves an id by scanning the corpus THIS machine
-configured; an id it does not have is a skipped and counted move, never a
-failure.
+than observed. A `corpusFile` step carries `corpusId` plus `corpusHash`, and
+nothing that could be a name; `TraceRecorder.record` is the redaction boundary,
+so a caller that hands over a path gets it folded before the step is stored; and
+`writeTrace` refuses outright to emit a corpus step named any other way, whoever
+assembled it. The corpus ROOT is not recorded either -
+`STALAGMIGHT_FUZZ_CORPUS_DIR` is an absolute path on the recorder's disk, so it
+is excluded from the trace's `env` header and never restored on replay.
+
+**`corpusId` labels; `corpusHash` resolves.** The 5-hex crc20 is 20 bits, which
+is ample for telling two files apart in one run's output and far too little to
+look one up: discovery permits 20000 entries, and by the birthday bound a corpus
+of a few thousand files probably holds a colliding pair. Taking the first match
+would materialize the wrong private file and then open it under the recorded
+file's name. So `corpusHash` (16 hex of SHA-256 over the same relative path,
+`fixtureCorpus.corpusPathHash`) is what replay resolves by, and it is a lookup
+field only - nothing renders it, so `corpusId` remains the sole identifier in
+every log line, metric key, failure payload and `describeSteps` line. A bare-id
+lookup that matches twice resolves to NOTHING and counts `corpus:ambiguousId`;
+`discoverCorpus` reports the colliding ids (never the paths) and `describeCorpus`
+warns about them on every run that has them. A reference this machine does not
+have is a skipped and counted move, never a failure.
+
+**A corpus entry materializes as its whole directory TREE.** A Compass `.mak`
+names `.dat` files by relative path and a Walls `.wpj` names its surveys with
+`.PATH` directives that DESCEND into subfolders, so the copy is recursive and
+structure-preserving, bounded at 64 MB / 4000 files / 16 levels. Over any bound
+it copies nothing and says which one, because a half-copied project is
+indistinguishable from a corrupt one from inside the app and the fuzzer would
+file the difference against the importer.
 
 Before it fuzzes anything, the run pushes a valid-biased spec of EVERY enabled
 format through the real parse command and checks the count against
@@ -809,6 +841,21 @@ The nine oracles, the two probe results it recorded rather than asserted (the
 `.plnx` x image guard asymmetry, and the inert `ExportSettings` config
 defaults), and the findings it produced are all written up in the scenario
 file's header, each with the `reproduce:` line that still runs.
+
+**A recorded run replays as its whole STRUCTURE.** Per episode the trace carries
+a `reload` step, one `export` step per move, and one `oracle` step per
+structural oracle the rotation selected - each carrying the inputs that oracle
+DREW. A replay walks that list through the same dispatch table the recording
+used, so it runs the same oracles at the same points on the same inputs, and it
+consumes no randomness at all. Both halves of that are load-bearing: with
+`reload` ignored, a multi-episode replay ran episode 2 against whatever episode
+1 left behind; with the inputs re-drawn, X3's option set and X4's container
+extension came off an rng the replay had advanced differently, so an
+option-dependent failure was retested with options that do not provoke it.
+Measured on seed 5 x 3 episodes: before, 11 of 18 oracle metrics differed
+between the recording and its replay (X3 ran 2x then 1x, X4 lost its `.tmlu`
+arm, X7 ran 1x then 2x on a project that had already been mutated); after, all
+18 agree and the replay reports the same 3 episodes and 6 export moves.
 
 Its first run against a fixture other than the default found that a real
 532-shot survey did not round-trip through `.tmlu` (finding 4 in that header):
