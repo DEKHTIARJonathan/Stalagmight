@@ -81,23 +81,43 @@
  *
  * ## Record and replay
  *
- * Every export move is recorded as a v2 `export` trace step carrying the route,
- * the path shape and the option set, so the replayer rebuilds the move rather
- * than re-drawing it. `pnpm agent:scenario export-roundtrip-fuzz --trace FILE`
- * re-executes the recorded step list through the same drivers with the SAME
- * per-move oracles (X1, X2), and then re-runs the two whole-episode oracles
- * that need no draw, and then EVERY whole-episode oracle - X3 through X9 - once.
+ * A RUN IS RECORDED AS ITS WHOLE STRUCTURE, not just its clicks. Per episode
+ * the trace carries a `reload` step, one `export` step per move (route, path
+ * shape, option set), and one `oracle` step per structural oracle the rotation
+ * selected - each carrying whatever that oracle DREW. `pnpm agent:scenario
+ * export-roundtrip-fuzz --trace FILE` walks that list and dispatches it through
+ * the same drivers and the same `runOracle` table the recording used, so the
+ * replay runs the same oracles, at the same points, on the same inputs.
  *
- * The structural oracles are not steps, so a replay cannot re-execute them from
- * the trace; it re-ASKS them instead, and it has to, because most of what this
- * scenario finds is structural. A replay that only re-clicked the recorded moves
- * would come back GREEN on the very trace a failing X5, X6 or X7 dropped, which
- * is the one thing a replay must never do. They draw their own options from
- * `ctx.rng`, which a replay seeds identically. The rotation is not re-derived -
- * a replay runs one episode, so each of them runs exactly once.
+ * BOTH HALVES OF THAT WERE WRONG BEFORE v4, and each on its own could turn a
+ * red trace green:
+ *
+ *   - `reload` steps were IGNORED. The replay loaded the fixture once and then
+ *     ran every episode's moves in a row, so episode 2 exported whatever
+ *     episode 1 had left in the project rather than a fresh copy. A
+ *     multi-episode failure could vanish, or land somewhere else and be
+ *     "reproduced" as a different bug. A reload now ends the previous episode -
+ *     teardown included, which is the part that ASSERTS nothing leaked - and
+ *     opens the next.
+ *   - THE ORACLES RE-DREW. X3 draws an image-option set and X4 draws a
+ *     container extension, both off `ctx.rng`. A replay rebuilds its moves from
+ *     the trace, so it consumed none of the draws the recording's move
+ *     generation had, and every structural oracle then ran ONCE, at the end, on
+ *     options from a differently-advanced rng. An option-dependent X3 or X4
+ *     failure was therefore retested with options that do not provoke it. The
+ *     inputs are now recorded and replayed, which is the same rule this harness
+ *     already applies to moves (`fuzzTrace.ts`, "Why a trace and not just a
+ *     seed"): a replay needs neither the generators nor the PRNG.
+ *
+ * A replay consumes NO randomness at all as a result, so it cannot drift from
+ * the generators - and the generation side is unchanged, because recording is
+ * still observe-only: the same draws happen in the same order, they are simply
+ * made by the caller and handed in rather than made inside the oracle.
  *
  * A trace never carries an absolute path: every `rel` is session-relative, and
- * `readTrace` refuses one that is not.
+ * `readTrace` refuses one that is not. An `oracle` step's name is checked
+ * against this scenario's own list, the way a `ui` step's testid is checked
+ * against the allowlist.
  *
  * ## Knobs (all read at CALL time, so a replay's restored env reaches them)
  *
@@ -1152,11 +1172,17 @@ export const exportRoundtripFuzz: Scenario = {
     // Structural oracles
     // -----------------------------------------------------------------------
 
-    /** X3: the same options through SVG, PNG and PDF. */
-    const runDifferential = async (episodeDir: string): Promise<void> => {
+    /**
+     * X3: the same options through SVG, PNG and PDF.
+     *
+     * `base` is DRAWN by the caller and passed in, not drawn here, because it
+     * is what the trace records: a replay runs this oracle on the option set
+     * the recording used rather than on whatever a differently-consumed rng
+     * hands it. See the "Record and replay" section of the header.
+     */
+    const runDifferential = async (episodeDir: string, base: ImageOptionDraw): Promise<void> => {
       const dir = path.join(episodeDir, 'differential');
       fs.mkdirSync(dir, { recursive: true });
-      const base = drawImageOptions(ctx, 'svg');
       const arms: { format: 'svg' | 'png' | 'pdf'; ok: boolean; error: string | null }[] = [];
       for (const format of ['svg', 'png', 'pdf'] as const) {
         const options: ImageOptionDraw = { ...base, format, dpi: DIFFERENTIAL_DPI };
@@ -1170,13 +1196,21 @@ export const exportRoundtripFuzz: Scenario = {
       rmrf(dir);
     };
 
-    /** X4: three exports of an unmutated project. */
-    const runByteIdentity = async (episodeDir: string, digest: ProjectDigest): Promise<void> => {
+    /**
+     * X4: three exports of an unmutated project.
+     *
+     * `extension` is DRAWN by the caller for the same reason X3's options are:
+     * both container shapes are worth a run (`.tml` is a zip and `.tmlu` is
+     * plain XML, and only one of them can carry a container timestamp), so
+     * which one a failing run used is part of what the trace has to carry.
+     */
+    const runByteIdentity = async (
+      episodeDir: string,
+      digest: ProjectDigest,
+      extension: 'tml' | 'tmlu',
+    ): Promise<void> => {
       const dir = path.join(episodeDir, 'identity');
       fs.mkdirSync(dir, { recursive: true });
-      // Both container shapes are worth a run: `.tml` is a zip and `.tmlu` is
-      // plain XML, and only one of them can carry a container timestamp.
-      const extension = ctx.pick(['tml', 'tmlu'] as const);
       const hashes: string[] = [];
       const sizes: (number | null)[] = [];
       for (const label of ['a', 'b', 'c']) {
@@ -1482,12 +1516,11 @@ export const exportRoundtripFuzz: Scenario = {
         rmrf(dir);
         return;
       }
-      recorder.record({
-        kind: 'mutate',
-        action: 'createHostileSection',
-        args: [],
-        label: 'createSection with every HOSTILE_COMMENTS entry',
-      });
+      // No `mutate` step: since v4 this whole oracle travels as ONE `oracle`
+      // step, recorded by its caller before it runs. A `mutate` step here as
+      // well would replay the oracle twice - once for the step and once for the
+      // dispatch - and a `createSection` recorded from INSIDE an oracle could
+      // only ever be replayed by re-running the oracle from the top anyway.
       note('createSection(hostile comments)');
       await assertIntegrity('seeding hostile comments');
 
@@ -1789,11 +1822,129 @@ export const exportRoundtripFuzz: Scenario = {
     };
 
     // -----------------------------------------------------------------------
-    // Replay
+    // The oracle dispatch - ONE table, used by generation and by replay
     // -----------------------------------------------------------------------
 
-    /** Store actions a REPLAYED trace may drive - the DOM allowlist's twin. */
-    const REPLAYABLE_MUTATIONS: ReadonlySet<string> = new Set(['createHostileSection']);
+    /**
+     * Every structural oracle, by the name a trace step carries.
+     *
+     * The names are the allowlist as well as the vocabulary: a replayed step is
+     * a file's opinion about which function to call, so an unknown name is a
+     * hard refusal rather than a skip. Same rule the testid allowlist in
+     * `exportFuzzActions.ts` states for clicks.
+     */
+    type OracleName =
+      | 'x3-differential'
+      | 'x4-byte-identity'
+      | 'x5x6-roundtrip'
+      | 'x7-hostile-comments'
+      | 'x8-option-independence'
+      | 'x9-mode-invariants'
+      | 'x9b-pre-plan-leak';
+
+    const ORACLE_NAMES: readonly OracleName[] = [
+      'x3-differential',
+      'x4-byte-identity',
+      'x5x6-roundtrip',
+      'x7-hostile-comments',
+      'x8-option-independence',
+      'x9-mode-invariants',
+      'x9b-pre-plan-leak',
+    ];
+
+    /** The resolved draw an oracle needs. `{}` for the ones that draw nothing. */
+    interface OracleInputs {
+      imageOptions?: ImageOptionDraw;
+      extension?: 'tml' | 'tmlu';
+    }
+
+    const readImageOptions = (inputs: OracleInputs, name: string): ImageOptionDraw => {
+      const options = inputs.imageOptions;
+      if (options === undefined || options === null || typeof options !== 'object') {
+        throw new Error(`trace step for oracle ${name} carries no imageOptions`);
+      }
+      return options;
+    };
+
+    const readExtension = (inputs: OracleInputs, name: string): 'tml' | 'tmlu' => {
+      const extension = inputs.extension;
+      if (extension !== 'tml' && extension !== 'tmlu') {
+        throw new Error(
+          `trace step for oracle ${name} names extension ${JSON.stringify(extension)}, ` +
+            `which this build does not export`,
+        );
+      }
+      return extension;
+    };
+
+    /**
+     * Run one oracle by name, on inputs somebody else resolved.
+     *
+     * BOTH sides go through here: the generation loop draws the inputs, records
+     * them as a step and calls this; a replay reads the step and calls this. One
+     * dispatch is what makes "the replay ran what the recording ran" a property
+     * of the code rather than of two lists staying in step.
+     */
+    const runOracle = async (
+      name: OracleName,
+      inputs: OracleInputs,
+      episodeDir: string,
+      digest: ProjectDigest,
+    ): Promise<void> => {
+      switch (name) {
+        case 'x3-differential':
+          await runDifferential(episodeDir, readImageOptions(inputs, name));
+          return;
+        case 'x4-byte-identity':
+          await runByteIdentity(episodeDir, digest, readExtension(inputs, name));
+          return;
+        case 'x5x6-roundtrip':
+          await runRoundtrip(episodeDir);
+          return;
+        case 'x7-hostile-comments':
+          await runNeutralisation(episodeDir);
+          return;
+        case 'x8-option-independence':
+          await runOptionIndependence();
+          return;
+        case 'x9-mode-invariants':
+          await runModeInvariants();
+          return;
+        case 'x9b-pre-plan-leak':
+          await runPrePlanLeak();
+          return;
+      }
+    };
+
+    /** Record the oracle and its resolved inputs, then run it. Generation only. */
+    const stageOracle = async (
+      name: OracleName,
+      inputs: OracleInputs,
+      episodeDir: string,
+      digest: ProjectDigest,
+    ): Promise<void> => {
+      recorder.record({
+        kind: 'oracle',
+        oracle: name,
+        inputs,
+        label: name === 'x4-byte-identity' ? `${name} .${inputs.extension}` : name,
+      });
+      await runOracle(name, inputs, episodeDir, digest);
+    };
+
+    const oracleFromStep = (step: TraceStep & { kind: 'oracle' }): OracleName => {
+      const found = ORACLE_NAMES.find((name) => name === step.oracle);
+      if (found === undefined) {
+        throw new Error(
+          `refusing to replay oracle "${step.oracle}": ${SCENARIO} runs ${ORACLE_NAMES.join(', ')}`,
+        );
+      }
+      return found;
+    };
+
+    // -----------------------------------------------------------------------
+    // Replay
+    // -----------------------------------------------------------------------
 
     const drawFromStep = (step: TraceStep): ExportDraw | null => {
       if (step.kind !== 'export') return null;
@@ -1845,12 +1996,54 @@ export const exportRoundtripFuzz: Scenario = {
 
     if (replay !== null) {
       ctx.log(`replaying ${replay.steps.length} step(s) from ${replayPath}`);
-      const episodeDir = path.join(exportsDir, 'replay');
-      fs.mkdirSync(episodeDir, { recursive: true });
-      await loadFixtureWithoutUndoHistory(ctx, fixture);
-      await disableAutoSave(ctx);
-      let opened = await readProjectDigest(ctx);
+
+      // EPISODE BOUNDARIES ARE HONOURED, because they are what a step list
+      // means. A recording opens a fresh copy of the fixture per episode and
+      // tears the old one down; a replay that loaded once and then ran every
+      // episode's steps in a row drove episode 2 against whatever episode 1 had
+      // left behind - a different project from the one the recording exported,
+      // so a multi-episode failure could vanish or land somewhere else. A
+      // `reload` step ENDS the previous episode (teardown, which asserts) and
+      // starts the next.
+      let episode = -1;
+      let episodeDir = '';
+      let opened: ProjectDigest | null = null;
+      let moves = 0;
+
+      const startEpisode = async (name: string): Promise<ProjectDigest> => {
+        if (episode >= 0) await teardown(episodeDir);
+        episode += 1;
+        episodeDir = path.join(exportsDir, `replay-ep${episode}`);
+        fs.mkdirSync(episodeDir, { recursive: true });
+        await loadFixtureWithoutUndoHistory(ctx, name);
+        if (!(await disableAutoSave(ctx))) ctx.metric('autoSaveStillOn');
+        opened = await readProjectDigest(ctx);
+        ctx.metric('replay:episodes');
+        return opened;
+      };
+
+      /** The open project, opening the header's fixture if nothing is open yet. */
+      const ensureEpisode = async (): Promise<ProjectDigest> =>
+        opened === null ? startEpisode(fixture) : opened;
+
       for (const step of replay.steps) {
+        if (step.kind === 'reload') {
+          if (step.fixture !== replay.fixture) {
+            // The header check refuses a trace recorded on another fixture,
+            // because the recorded moves resolve against THAT project. A reload
+            // step naming a different one would walk around that check from
+            // inside the file.
+            throw new Error(
+              `trace ${replayPath} reloads ${step.fixture} but was recorded on ${replay.fixture}; ` +
+                `its steps resolve against the recorded project`,
+            );
+          }
+          await startEpisode(step.fixture);
+          continue;
+        }
+        // A trace whose first step is not a reload (a shrink candidate can be
+        // exactly that) still needs a project under it.
+        const current = await ensureEpisode();
         if (step.kind === 'export') {
           const draw = drawFromStep(step);
           if (draw === null) continue;
@@ -1858,37 +2051,32 @@ export const exportRoundtripFuzz: Scenario = {
             if (draw.route === 'modal') await openModal(ctx);
             else await setAppMode(ctx, 'export');
           }
-          await performExport(draw, episodeDir, opened.filePath, false);
+          await performExport(draw, episodeDir, current.filePath, false);
+          moves += 1;
           if (draw.route === 'modal' && (await modalIsOpen(ctx))) await closeModal(ctx);
           if (draw.route === 'panel') await setAppMode(ctx, 'survey');
-        } else if (step.kind === 'mutate') {
-          if (!REPLAYABLE_MUTATIONS.has(step.action)) {
-            throw new Error(
-              `refusing to replay mutate "${step.action}": ${SCENARIO} replays ` +
-                `${[...REPLAYABLE_MUTATIONS].join(', ')}`,
-            );
-          }
-          await runNeutralisation(episodeDir);
-          opened = await readProjectDigest(ctx);
+          continue;
         }
+        if (step.kind === 'oracle') {
+          // The RECORDED oracle, on the RECORDED inputs, at the recorded point
+          // in the episode. It used to be "every oracle once, at the end, on
+          // options freshly drawn from an rng the replay had consumed
+          // differently" - so an X3 or X4 failure that depended on the drawn
+          // option set was retested with a set that does not provoke it and
+          // came back green on the very trace that dropped it.
+          await runOracle(oracleFromStep(step), (step.inputs ?? {}) as OracleInputs, episodeDir, current);
+          ctx.metric(`replay:oracle:${step.oracle}`);
+          // An oracle can import, create sections and switch projects, so the
+          // episode's project handle is re-read rather than assumed.
+          opened = await readProjectDigest(ctx);
+          continue;
+        }
+        ctx.metric(`replay:unsupported:${step.kind}`);
       }
-      // Then the WHOLE-EPISODE oracles, all of them.
-      //
-      // They are not steps, so a replay cannot re-execute them from the trace -
-      // but it can re-ASK them, and it must, because most of what this scenario
-      // finds is structural. A replay that only re-clicked the recorded moves
-      // would come back green on the trace that a failing X5, X6 or X7 dropped,
-      // which is the one thing a replay must never do. They draw their own
-      // options from `ctx.rng`, which the replay seeds identically.
-      await runDifferential(episodeDir);
-      await runByteIdentity(episodeDir, await readProjectDigest(ctx));
-      await runNeutralisation(episodeDir);
-      if (roundtripEnabled()) await runRoundtrip(episodeDir);
-      await runOptionIndependence();
-      await runModeInvariants();
-      await runPrePlanLeak();
-      await teardown(episodeDir);
-      ctx.log('replay complete');
+
+      if (episode >= 0) await teardown(episodeDir);
+      ctx.setMetric('replay:moves', moves);
+      ctx.log(`replay complete: ${episode + 1} episode(s), ${moves} export move(s)`);
       return;
     }
 
@@ -1933,19 +2121,27 @@ export const exportRoundtripFuzz: Scenario = {
       // Keyed by the episode index rather than drawn, so a given
       // seed/iterations pair always covers the same oracles - a repro line that
       // sometimes ran X5 and sometimes did not would not be a repro line.
+      //
+      // Every one goes through `stageOracle`, which RECORDS it (with whatever
+      // it drew) before running it. The rotation is therefore in the trace as
+      // an ordered list rather than as a rule a replay would have to re-derive.
       if (episode % 2 === 0) {
-        await runDifferential(episodeDir);
-        await runByteIdentity(episodeDir, digest);
+        // The draws happen HERE rather than inside the oracles, so the values
+        // the trace carries are the values the oracles got. Recording is still
+        // observe-only: these are the same two draws, in the same order, off
+        // the same rng, so a seed's trajectory is exactly what it was.
+        await stageOracle('x3-differential', { imageOptions: drawImageOptions(ctx, 'svg') }, episodeDir, digest);
+        await stageOracle('x4-byte-identity', { extension: ctx.pick(['tml', 'tmlu'] as const) }, episodeDir, digest);
       }
       if (episode % 3 === 0) {
-        await runNeutralisation(episodeDir);
+        await stageOracle('x7-hostile-comments', {}, episodeDir, digest);
       }
       if (episode % 2 === 1 && roundtripEnabled()) {
-        await runRoundtrip(episodeDir);
+        await stageOracle('x5x6-roundtrip', {}, episodeDir, digest);
       }
-      await runOptionIndependence();
-      await runModeInvariants();
-      if (episode % 4 === 0) await runPrePlanLeak();
+      await stageOracle('x8-option-independence', {}, episodeDir, digest);
+      await stageOracle('x9-mode-invariants', {}, episodeDir, digest);
+      if (episode % 4 === 0) await stageOracle('x9b-pre-plan-leak', {}, episodeDir, digest);
 
       await teardown(episodeDir);
       ctx.metric('episodes');
