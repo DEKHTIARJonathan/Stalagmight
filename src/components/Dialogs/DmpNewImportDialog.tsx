@@ -3103,6 +3103,7 @@ export default function DmpNewImportDialog({
    * owned by the effect that opened it - see there.
    */
   const handleStartSegmentPlacement = useCallback(() => {
+    // The payload is still guarded: importPlacedSegmentNow -> buildBatchImport -> assertSendableShots.
     if (!currentSegment || !segmentAnchor) return;
 
     // Reopen data (same as what App.tsx passes)
