@@ -42,6 +42,7 @@ import {
   type ModeSnapshot,
   type OptionSnapshot,
   type PathShape,
+  type ToastSnapshot,
 } from '../lib/exportOracles';
 
 // ---------------------------------------------------------------------------
@@ -401,20 +402,38 @@ const HELPERS = `
   };
 `;
 
-/** Live `data-toast-key`s, plus the store's copy (which keeps leaving toasts). */
-export async function readToastKeys(ctx: ScenarioContext): Promise<string[]> {
-  return ctx.eval<string[]>(
+/**
+ * The toast stack as one move sees it: identified marks, plus the visible keys.
+ *
+ * `marks` is `key#id@revision` per STORE toast. The id and the revision are
+ * what make this a snapshot rather than a key set: `uiStore.showToast` refreshes
+ * a repeat of the same key in place within its dedup window, bumping the
+ * revision, so a second failure produces the same key at a new revision and no
+ * new key at all. `exportOracles.newToastKeys` diffs two of these; its header
+ * states what each half is for and what reading the live key set instead cost.
+ */
+export async function readToastSnapshot(ctx: ScenarioContext): Promise<ToastSnapshot> {
+  return ctx.eval<ToastSnapshot>(
     `
     ${HELPERS}
     const dom = toastKeys();
     const store = ui().toasts || [];
+    const marks = [];
+    const keys = dom.slice();
     for (let i = 0; i < store.length; i++) {
-      const key = store[i].key;
-      if (key && dom.indexOf(key) < 0) dom.push(key);
+      const entry = store[i] || {};
+      const key = entry.key || '(unkeyed)';
+      marks.push(key + '#' + String(entry.id) + '@' + String(entry.revision));
+      if (keys.indexOf(key) < 0) keys.push(key);
     }
-    return dom;
+    return { marks: marks, keys: keys };
   `,
   );
+}
+
+/** Live `data-toast-key`s, plus the store's copy (which keeps leaving toasts). */
+export async function readToastKeys(ctx: ScenarioContext): Promise<string[]> {
+  return [...(await readToastSnapshot(ctx)).keys];
 }
 
 /**

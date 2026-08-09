@@ -31,6 +31,7 @@ import {
   finalizeExportPath,
   multisetDelta,
   naturalExtension,
+  newToastKeys,
   neutralisedForm,
   parseCsvRows,
   PATH_SHAPES,
@@ -374,6 +375,72 @@ const attempt = (over: Partial<ExportAttempt> = {}): ExportAttempt => ({
   toastKeys: [],
   strays: [],
   ...over,
+});
+
+/**
+ * The toast diff X1's classification rests on.
+ *
+ * `export-failed` is an error toast, and ToastStack gives an error toast a
+ * 9000 ms dwell plus a 1500 ms fade - ten and a half seconds, which is several
+ * CSV exports. So "is the key on screen" answers a question about the SESSION,
+ * not about the move, and the move is what X1 judges.
+ */
+describe('newToastKeys', () => {
+  const snap = (marks: string[], keys?: string[]): { marks: string[]; keys: string[] } => ({
+    marks,
+    keys: keys ?? [...new Set(marks.map((mark) => mark.slice(0, mark.indexOf('#'))))],
+  });
+
+  it('reports nothing when nothing changed', () => {
+    const live = snap(['export-failed#7@0']);
+    expect(newToastKeys(live, live)).toEqual([]);
+  });
+
+  it('IGNORES a toast that was already there - the false failure this exists for', () => {
+    // Move N failed and raised the toast; move N+1 succeeded a second later and
+    // used to read that toast as its own result. X1 then reported "an export
+    // reported FAILURE and left a N-byte file behind" against an app that had
+    // written exactly the file it was asked for.
+    const before = snap(['export-failed#7@0']);
+    const after = snap(['export-failed#7@0']);
+    expect(newToastKeys(before, after)).not.toContain('export-failed');
+  });
+
+  it('reports a genuinely new toast', () => {
+    expect(newToastKeys(snap([]), snap(['export-failed#7@0']))).toEqual(['export-failed']);
+    expect(newToastKeys(snap(['export-failed#7@0']), snap(['export-failed#7@0', 'export-failed#9@0']))).toEqual([
+      'export-failed',
+    ]);
+  });
+
+  it('reports a REFRESH, because a repeat inside the dedup window is not a new toast', () => {
+    // `showToast` collapses a repeat of the same key within
+    // TOAST_DEDUP_WINDOW_MS into the toast already on screen and bumps its
+    // revision. A key-set diff sees no change and would call the second failure
+    // a success - the same bug pointing the other way, with X1 then demanding
+    // the file the failed export correctly did not write.
+    expect(newToastKeys(snap(['export-failed#7@0']), snap(['export-failed#7@1']))).toEqual(['export-failed']);
+  });
+
+  it('does not report a toast that merely went away', () => {
+    expect(newToastKeys(snap(['export-failed#7@0']), snap([]))).toEqual([]);
+  });
+
+  it('picks up a DOM-only key the store no longer lists', () => {
+    expect(newToastKeys({ marks: [], keys: [] }, { marks: [], keys: ['export-failed'] })).toEqual([
+      'export-failed',
+    ]);
+  });
+
+  it('does not double-count a key that is both in the DOM and in the store', () => {
+    expect(newToastKeys(snap([]), snap(['export-failed#7@0'], ['export-failed']))).toEqual(['export-failed']);
+  });
+
+  it('keeps unrelated keys apart', () => {
+    expect(
+      newToastKeys(snap(['command-failed#1@0']), snap(['command-failed#1@0', 'export-failed#2@0'])),
+    ).toEqual(['export-failed']);
+  });
 });
 
 describe('X1 file/result agreement', () => {

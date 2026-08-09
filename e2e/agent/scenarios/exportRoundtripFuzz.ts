@@ -442,6 +442,7 @@ import {
   ExportOracleError,
   finalizeExportPath,
   multisetDelta,
+  newToastKeys,
   strictShotKey,
   naturalExtension,
   PROJECT_OWNED_SHAPES,
@@ -472,7 +473,7 @@ import {
   readModeSnapshot,
   readPanelOptions,
   readPreview,
-  readToastKeys,
+  readToastSnapshot,
   roundtripEnabled,
   selectValue,
   setAppMode,
@@ -1017,12 +1018,25 @@ export const exportRoundtripFuzz: Scenario = {
       const projectBytesBefore =
         draw.shape === 'openProject' && projectFile !== null ? hashOf(projectFile) : null;
 
+      // The toast stack BEFORE the move, for the same reason and taken at the
+      // same moment: what the app says about this export is the DIFFERENCE the
+      // move makes, not whatever is on screen when it ends. An `export-failed`
+      // toast is an error toast, so it stays up for ten and a half seconds
+      // (`ToastStack.tsx`: 9000 ms dwell + 1500 ms fade), which is several
+      // moves at CSV speed. Reading the live key set made a later SUCCESSFUL
+      // export inherit an earlier one's failure, and X1 then reported "an
+      // export reported FAILURE and left a file behind" against an app that had
+      // done nothing wrong. `newToastKeys` states the other half - why a
+      // key-set diff is not enough either.
+      const toastsBefore = await readToastSnapshot(ctx);
+      if (toastsBefore.keys.includes('export-failed')) ctx.metric('staleExportFailedToast');
+
       if (draw.route === 'store') {
         const outcome = await runStoreExport(draw, requested);
         ok = outcome.ok;
         error = outcome.error;
         skipped = outcome.skipped;
-        toastKeys = await readToastKeys(ctx);
+        toastKeys = newToastKeys(toastsBefore, await readToastSnapshot(ctx));
       } else if (draw.format === 'preview') {
         // No file, no save dialog: mounting the preview IS the move. Reading it
         // back through the DOM is also the only way to exercise
@@ -1061,12 +1075,15 @@ export const exportRoundtripFuzz: Scenario = {
           rmrf(moveDir);
           return;
         }
-        toastKeys = await readToastKeys(ctx);
+        toastKeys = newToastKeys(toastsBefore, await readToastSnapshot(ctx));
         // A UI route has no promise to inspect. The app's own report is the
-        // toast, and X1 then asks whether the disk agrees with it - which is
-        // the non-tautological half.
+        // toast THIS move raised, and X1 then asks whether the disk agrees with
+        // it - which is the non-tautological half. Finding 1's regression check
+        // is unaffected by the diff: an export that fails and says nothing
+        // still produces no new toast, still reads as `ok`, and X1 still
+        // demands the file it did not write.
         ok = !toastKeys.includes('export-failed');
-        error = ok ? null : 'reported by the export-failed toast';
+        error = ok ? null : 'reported by the export-failed toast raised by THIS move';
       }
 
       if (skipped !== null) {

@@ -565,7 +565,11 @@ export interface ExportAttempt {
   error: string | null;
   /** `fs.statSync(effective).size`, or null when the file is absent. */
   size: number | null;
-  /** `data-toast-key`s live right after the attempt. */
+  /**
+   * Toast keys THIS MOVE produced - `newToastKeys(before, after)`, not every
+   * key that happens to be on screen. See that function for why the difference
+   * is the whole point.
+   */
   toastKeys: readonly string[];
   /** Files present in the export directory that the move did not intend. */
   strays: readonly string[];
@@ -573,6 +577,63 @@ export interface ExportAttempt {
 
 /** `TOAST_KEYS.EXPORT_FAILED` (`src/utils/toastKeys.ts`). */
 export const EXPORT_FAILED_TOAST_KEY = 'export-failed';
+
+/**
+ * The toast stack as one move sees it, taken before and after.
+ *
+ * `marks` identifies each toast the STORE holds by `key#id@revision`, which is
+ * exactly the identity `uiStore` mints and refreshes them under; `keys` is the
+ * key set the DOM and the store together show, which is what a failure message
+ * prints. Two fields because they answer different questions: what CHANGED, and
+ * what is on screen.
+ */
+export interface ToastSnapshot {
+  marks: readonly string[];
+  keys: readonly string[];
+}
+
+/**
+ * Toast keys that are NEW between two snapshots: a toast that was not there
+ * before, or one that was refreshed in place.
+ *
+ * WHY THIS IS NOT "IS THE KEY ON SCREEN". An `export-failed` toast is
+ * `kind: 'error'`, and ToastStack gives an error toast a 9000 ms dwell plus a
+ * 1500 ms fade (`ToastStack.tsx`), so it stays readable for ten and a half
+ * seconds - far longer than a CSV or JSON export takes. A move that read the
+ * live key set therefore inherited the PREVIOUS move's failure: the later
+ * export succeeded, was classified as failed, and X1 then reported "an export
+ * reported FAILURE and left a N-byte file behind" against an app that had done
+ * nothing wrong. The classification has to be a DIFF over the move, and the
+ * move's own bracket is the only thing that defines it.
+ *
+ * A refresh counts as new, and has to. `showToast` collapses a repeat of the
+ * same key within `TOAST_DEDUP_WINDOW_MS` (1000 ms) into the toast already on
+ * screen, bumping its `revision` instead of pushing a second one - so two
+ * failures a few hundred milliseconds apart produce ONE toast, and a key-set
+ * diff would see no change and call the second one a success. That is the same
+ * bug in the other direction, and X1 would then demand a file the failed export
+ * correctly did not write. Keying on `id@revision` catches both.
+ *
+ * DOM-only keys (a rendered toast the store no longer lists) are compared as a
+ * plain key set, because there is nothing else to compare them by. That is
+ * belt and braces: ToastStack renders from the store and a leaving toast stays
+ * in it until `removeToast`, so the store is a superset in practice.
+ */
+export function newToastKeys(before: ToastSnapshot, after: ToastSnapshot): string[] {
+  const seen = new Set(before.marks);
+  const fresh = new Set<string>();
+  for (const mark of after.marks) {
+    if (seen.has(mark)) continue;
+    const hash = mark.indexOf('#');
+    fresh.add(hash > 0 ? mark.slice(0, hash) : mark);
+  }
+  const beforeKeys = new Set(before.keys);
+  const afterMarkKeys = new Set(after.marks.map((mark) => (mark.indexOf('#') > 0 ? mark.slice(0, mark.indexOf('#')) : mark)));
+  for (const key of after.keys) {
+    if (!beforeKeys.has(key) && !afterMarkKeys.has(key)) fresh.add(key);
+  }
+  return [...fresh].sort();
+}
 
 /**
  * X1 - the result and the filesystem agree, and a failure is visible.
