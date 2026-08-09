@@ -3259,6 +3259,17 @@ export default function DmpNewImportDialog({
   ]);
 
   /**
+   * "Place on Map", clicked by the user. This is where the payload guard
+   * belongs: the click is a deliberate step toward an import, the dialog is
+   * VISIBLE, and the refusal toast names a section the user can then go and fix
+   * (#476 moved it off the auto-start path, where none of that was true).
+   */
+  const handlePlaceOnMapClick = useCallback(() => {
+    if (refuseIncompleteShots()) return;
+    handleStartSegmentPlacement();
+  }, [refuseIncompleteShots, handleStartSegmentPlacement]);
+
+  /**
    * The auto-start handoff, and the sole owner of `autoStartManualPlacementPending`.
    *
    * That flag hides the whole dialog (`hidden` -> `display:none` on
@@ -3280,17 +3291,6 @@ export default function DmpNewImportDialog({
    * re-runs this effect. Every other reason not to attempt is terminal, so it
    * ends the hidden window instead of waiting forever.
    */
-  /**
-   * "Place on Map", clicked by the user. This is where the payload guard
-   * belongs: the click is a deliberate step toward an import, the dialog is
-   * VISIBLE, and the refusal toast names a section the user can then go and fix
-   * (#476 moved it off the auto-start path, where none of that was true).
-   */
-  const handlePlaceOnMapClick = useCallback(() => {
-    if (refuseIncompleteShots()) return;
-    handleStartSegmentPlacement();
-  }, [refuseIncompleteShots, handleStartSegmentPlacement]);
-
   useEffect(() => {
     if (!autoStartManualPlacementPending) {
       return;
