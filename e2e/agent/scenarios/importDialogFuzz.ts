@@ -663,15 +663,29 @@ export const importDialogFuzz: Scenario = {
     // ---- paths -----------------------------------------------------------
 
     /**
-     * A session-relative `rel` as an absolute path.
+     * A session-relative `rel` as an absolute path, refusing anything that
+     * leaves the run's own directory.
      *
      * A tracked fixture is named by `fixtures/<basename>` and resolved through
      * `ctx.fixturePath`, which materializes a COPY into exactly that directory.
      * So one rel means the same file on any machine, without the trace carrying
-     * a fixture (which the repo forbids) or an absolute path.
+     * a fixture (which the repo forbids) or an absolute path. `path.basename` is
+     * the containment rule on that branch.
+     *
+     * `readTrace` already applies the same rule to every file-bearing step, so on
+     * the replay path this is belt and braces - but the GENERATOR path never goes
+     * through `readTrace`, and a containment rule that only one of two callers
+     * enforces is a convention rather than a boundary.
      */
-    const resolveRel = (rel: string): string =>
-      rel.startsWith('fixtures/') ? ctx.fixturePath(path.basename(rel)) : path.join(sessionDir, rel);
+    const resolveRel = (rel: string): string => {
+      if (rel.startsWith('fixtures/')) return ctx.fixturePath(path.basename(rel));
+      const root = path.resolve(sessionDir);
+      const target = path.resolve(root, rel);
+      if (target !== root && !target.startsWith(root + path.sep)) {
+        throw new Error(`generated file path ${JSON.stringify(rel)} escapes ${root}`);
+      }
+      return target;
+    };
 
     const materialize = (spec: GeneratedFileSpec, rel: string): string => {
       const target = resolveRel(rel);
