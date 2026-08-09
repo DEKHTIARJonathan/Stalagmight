@@ -325,6 +325,7 @@ import {
 import {
   CORPUS_DIR_ENV,
   corpusEntryFor,
+  corpusLookup,
   describeCorpus,
   discoverCorpus,
   materializeCorpusEntry,
@@ -715,16 +716,25 @@ export const importDialogFuzz: Scenario = {
         const destination = resolveRel(source.dirRel);
         const copied = materializeCorpusEntry(entry, destination);
         if (copied.skipped) {
-          ctx.metric('corpus:oversizedDirectory');
+          // WHICH bound, because they mean different things: `bytes`/`files`
+          // is a directory too big to copy per iteration, `depth` is a tree
+          // shape nobody expected, and `io` is a copy that failed and was
+          // undone. A half-copied project would look like a corrupt one from
+          // inside the app, which is why none of them copies anything.
+          ctx.metric(`corpus:notMaterialized:${copied.reason ?? 'unknown'}`);
           return null;
         }
         ctx.metric('corpus:materialized');
         ctx.metric('corpus:copiedBytes', copied.bytes);
+        ctx.metric('corpus:copiedFiles', copied.copied);
         // Both halves, and the directory FIRST so a full path is redacted whole
-        // rather than leaving `<corpus #id>/<basename>` behind.
+        // rather than leaving `<corpus #id>/<basename>` behind. `names` is every
+        // segment the copy created AT ANY DEPTH - a Walls project's `.PATH`
+        // subfolder can name a cave system exactly as well as a file can, and a
+        // single-level readdir here used to miss all of them.
         const tag = `<corpus #${source.id}>`;
         redactions.unshift({ find: destination, say: tag });
-        for (const name of fs.readdirSync(destination)) {
+        for (const name of copied.names) {
           redactions.push({ find: name, say: `${tag}/file` });
         }
         return copied.path;
@@ -756,6 +766,11 @@ export const importDialogFuzz: Scenario = {
         recorder.record({
           kind: 'corpusFile',
           corpusId: source.id,
+          // The resolution key. `corpusId` is 20 bits and labels the file in
+          // everything a human reads; this is what a replay looks it up by, so
+          // a corpus holding a second file that folds to the same id cannot be
+          // materialized in its place.
+          corpusHash: source.hash,
           // The DIRECTORY the copy lands in; the `route`/`fileDialog` step that
           // follows names the file inside it.
           rel: source.dirRel,
@@ -1495,19 +1510,30 @@ export const importDialogFuzz: Scenario = {
               continue;
             }
             if (step.kind === 'corpusFile') {
-              // The replayer's OWN corpus, or none. A trace carries an id and no
-              // content, so resolving one means scanning the corpus THIS machine
-              // configured for the entry whose id matches; a machine without
-              // that file replays everything else and the move that would have
-              // opened it is skipped and counted. That is a narrower replay, not
-              // a failed one.
-              const entry = corpusEntryFor(step.corpusId);
-              if (entry === null) {
-                ctx.metric('corpus:absent');
+              // The replayer's OWN corpus, or none. A trace carries a reference
+              // and no content, so resolving one means scanning the corpus THIS
+              // machine configured; a machine without that file replays
+              // everything else and the move that would have opened it is
+              // skipped and counted. That is a narrower replay, not a failed one.
+              //
+              // THE HASH IS PREFERRED AND THERE IS NO FALLBACK TO THE ID. Both
+              // resolve the same file when the replayer has it, and when the
+              // hash misses, the id is precisely the thing that might match a
+              // DIFFERENT file - 20 bits over a few thousand entries - which
+              // would materialize somebody else's survey and open it under the
+              // recorded file's name. A miss is a skip; a wrong file is a lie.
+              const lookup = corpusLookup(step.corpusHash ?? step.corpusId);
+              if (lookup.entry === null) {
+                // `ambiguous` is a v3-shaped step (id only) landing on a corpus
+                // whose crc20 collides. Counted apart from a plain absence
+                // because it says something about the corpus, not the trace.
+                ctx.metric(lookup.outcome === 'ambiguous' ? 'corpus:ambiguousId' : 'corpus:absent');
                 continue;
               }
-              const copied = materializeCorpusEntry(entry, resolveRel(step.rel));
-              ctx.metric(copied.skipped ? 'corpus:oversizedDirectory' : 'replay:corpusFile');
+              const copied = materializeCorpusEntry(lookup.entry, resolveRel(step.rel));
+              ctx.metric(
+                copied.skipped ? `corpus:notMaterialized:${copied.reason ?? 'unknown'}` : 'replay:corpusFile',
+              );
               continue;
             }
             const move = moveFromStep(step);

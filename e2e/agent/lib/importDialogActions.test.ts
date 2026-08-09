@@ -36,6 +36,7 @@ import {
   TESTID_INVENTORY,
 } from '../scenarios/importDialogModel';
 import { describeSource, enabledFamilies, GENERATORS } from '../scenarios/importDialogGenerators';
+import { corpusPathHash } from './fixtureCorpus';
 
 /**
  * Testids a generator can emit, as literals.
@@ -288,11 +289,15 @@ describe('import fuzzer testid allowlists', () => {
       origin: 'corpus',
       corpusRel: relPath,
       id: 'abc12',
+      hash: corpusPathHash(relPath),
       dirRel: 'fuzz-files/corpus-3',
       rel: 'fuzz-files/corpus-3/final.tml',
     });
     expect(described).toBe('corpus #abc12');
     for (const segment of relPath.split('/')) expect(described).not.toContain(segment);
+    // The resolution key is not published either: it is a lookup field on the
+    // trace step, and nothing renders it.
+    expect(described).not.toContain(corpusPathHash(relPath));
   });
 
   it('reads the format axis at call time and falls back to every family', () => {

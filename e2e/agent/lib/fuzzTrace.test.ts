@@ -11,7 +11,7 @@ import * as path from 'path';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { shortId } from './crc32';
-import { CORPUS_DIR_ENV, corpusFileId } from './fixtureCorpus';
+import { CORPUS_DIR_ENV, corpusFileId, corpusPathHash } from './fixtureCorpus';
 import {
   FILE_ARG_ACTIONS,
   TRACE_VERSION,
@@ -235,8 +235,157 @@ describe('TraceRecorder', () => {
     }
   });
 
-  it('is at schema v3, the import/export vocabulary with corpus files named by id', () => {
-    expect(TRACE_VERSION).toBe(3);
+  it('is at schema v4: oracle steps, and a corpus file that resolves', () => {
+    expect(TRACE_VERSION).toBe(4);
+  });
+});
+
+/**
+ * v4 - the two additions, and the reason the FILE version moved for them.
+ *
+ * A v3 export trace has no `oracle` steps, so replaying one under this build
+ * would run no structural oracles at all: a green replay of a red trace, which
+ * is the one thing a replay must never do. Refusing by version says "recorded by
+ * an older build, re-run the seed" instead.
+ */
+describe('schema v4 steps', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fuzz-trace-v4-'));
+  let seq = 0;
+
+  const write = (step: unknown): string => {
+    seq += 1;
+    const file = path.join(dir, `step-${seq}.json`);
+    fs.writeFileSync(file, JSON.stringify({ v: TRACE_VERSION, steps: [step] }));
+    return file;
+  };
+  const accepts = (step: unknown): void => {
+    expect(readTrace(write(step)).steps).toHaveLength(1);
+  };
+  const rejects = (step: unknown, message: RegExp): void => {
+    expect(() => readTrace(write(step))).toThrow(message);
+  };
+
+  afterAll(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('accepts an oracle step carrying resolved inputs', () => {
+    accepts({ kind: 'oracle', oracle: 'x3-differential', inputs: {}, label: 'X3' });
+    accepts({
+      kind: 'oracle',
+      oracle: 'x4-byte-identity',
+      inputs: { extension: 'tmlu' },
+      label: 'X4 tmlu',
+    });
+  });
+
+  it('refuses an oracle step with no name or no inputs object', () => {
+    // Both reach control flow: the name selects which oracle runs, and `inputs`
+    // is spread into its arguments.
+    rejects({ kind: 'oracle', inputs: {}, label: 'x' }, /oracle/);
+    rejects({ kind: 'oracle', oracle: '', inputs: {}, label: 'x' }, /oracle/);
+    rejects({ kind: 'oracle', oracle: 'x3', inputs: null, label: 'x' }, /must be an object/);
+    rejects({ kind: 'oracle', oracle: 'x3', inputs: 'svg', label: 'x' }, /must be an object/);
+    rejects({ kind: 'oracle', oracle: 'x3', inputs: {} }, /label/);
+  });
+
+  it('accepts a corpus step with or without the resolution hash', () => {
+    const id = corpusFileId('device/x.dmp');
+    accepts({ kind: 'corpusFile', corpusId: id, rel: 'in/x.dmp', label: 'corpus dmp' });
+    accepts({
+      kind: 'corpusFile',
+      corpusId: id,
+      corpusHash: corpusPathHash('device/x.dmp'),
+      rel: 'in/x.dmp',
+      label: 'corpus dmp',
+    });
+  });
+
+  it('refuses a corpusHash that is not a path hash, at the same door as the id', () => {
+    // Nothing RENDERS this field, so a path parked in it would be the quietest
+    // leak available - which is exactly why it is checked here and in
+    // `writeTrace` rather than trusted to the recorder.
+    const id = corpusFileId('device/x.dmp');
+    for (const value of ['some-cave/2019/final.tml', 'ABCDEF0123456789', 'b2c40fd5']) {
+      rejects({ kind: 'corpusFile', corpusId: id, corpusHash: value, rel: 'in/x.dmp', label: 'x' }, /path hash/);
+    }
+    // An empty string and a non-string are refused one step earlier, as "not a
+    // non-empty string"; `undefined` is the only spelling of "no hash here".
+    for (const value of ['', 12, null]) {
+      rejects({ kind: 'corpusFile', corpusId: id, corpusHash: value, rel: 'in/x.dmp', label: 'x' }, /non-empty/);
+    }
+  });
+
+  it('writeTrace refuses to emit a corpusHash that is not a hash', () => {
+    const trace = new TraceRecorder().build({
+      scenario: 'import-dialog-fuzz',
+      seed: 1,
+      iterations: 1,
+      fixture: 'f.stalx',
+      stream: 'v2',
+      failure: null,
+    });
+    trace.steps.push({
+      kind: 'corpusFile',
+      corpusId: corpusFileId('device/x.dmp'),
+      corpusHash: 'some-cave-system/final.tml',
+      rel: 'in/x.dmp',
+      label: 'x',
+    });
+    const file = path.join(dir, 'refused-hash.json');
+    expect(() => writeTrace(file, trace)).toThrow(/corpusHash/);
+    // The refusal does not quote the value, because the exception is printed.
+    expect(() => writeTrace(file, trace)).not.toThrow(/some-cave-system/);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('folds a path handed to the recorder into BOTH the id and the hash', () => {
+    // `redactStep` is the point a real name stops existing, and it now has two
+    // fields to produce. A caller that hands over the path gets both; one that
+    // hands over an id gets no hash, because 20 bits does not come back.
+    const rel = 'some-cave-system/2019-expedition/final.tml';
+    const recorder = new TraceRecorder();
+    recorder.record({ kind: 'corpusFile', corpusId: rel, rel: 'in/x.tml', label: 'x' });
+    recorder.record({ kind: 'corpusFile', corpusId: corpusFileId(rel), rel: 'in/y.tml', label: 'y' });
+    const [folded, idOnly] = recorder.snapshot() as {
+      corpusId: string;
+      corpusHash?: string;
+    }[];
+    expect(folded.corpusId).toBe(corpusFileId(rel));
+    expect(folded.corpusHash).toBe(corpusPathHash(rel));
+    expect(idOnly.corpusHash).toBeUndefined();
+    expect(JSON.stringify(recorder.snapshot())).not.toContain('cave-system');
+  });
+
+  it('agrees with fixtureCorpus about what a path hash is', () => {
+    // The hash is computed in two modules - fuzzTrace may not import the one
+    // that walks somebody's data directory - so this is the seam that keeps them
+    // one function. A drift would make every recorded step unresolvable.
+    const rel = 'x/y/z.tmlu';
+    const recorder = new TraceRecorder();
+    recorder.record({ kind: 'corpusFile', corpusId: rel, rel: 'in/z.tmlu', label: 'z' });
+    expect((recorder.snapshot()[0] as { corpusHash?: string }).corpusHash).toBe(corpusPathHash(rel));
+  });
+
+  it('prints the id and never the hash, because only one of them is publishable', () => {
+    const rel = 'some-cave-system/final.tml';
+    const line = describeSteps([
+      {
+        kind: 'corpusFile',
+        corpusId: corpusFileId(rel),
+        corpusHash: corpusPathHash(rel),
+        rel: 'in/x.tml',
+        label: `corpus #${corpusFileId(rel)}`,
+      },
+    ]);
+    expect(line).toContain(corpusFileId(rel));
+    expect(line).not.toContain(corpusPathHash(rel));
+  });
+
+  it('prints an oracle step as its name plus its label', () => {
+    expect(describeSteps([{ kind: 'oracle', oracle: 'x4-byte-identity', inputs: {}, label: 'X4 tmlu' }])).toBe(
+      '  1. oracle x4-byte-identity - X4 tmlu',
+    );
   });
 });
 
@@ -503,10 +652,13 @@ describe('a written trace never names a corpus file', () => {
     expect(raw).toContain(corpusFileId(PRIVATE_CORPUS_REL));
 
     // ...and it is still a trace this build replays: the step round trips, with
-    // the id in the field `corpusEntryFor` resolves from.
+    // the id in the field the metrics print and the hash in the field
+    // `corpusLookup` resolves from. The hash is derived from the same path and
+    // is not a fragment of it - the loop above already asserted that.
     expect(readTrace(file).steps[1]).toEqual({
       kind: 'corpusFile',
       corpusId: corpusFileId(PRIVATE_CORPUS_REL),
+      corpusHash: corpusPathHash(PRIVATE_CORPUS_REL),
       rel: 'fuzz-files/corpus-1',
       label: `corpus #${corpusFileId(PRIVATE_CORPUS_REL)}`,
     });
@@ -573,7 +725,7 @@ describe('a written trace never names a corpus file', () => {
         steps: [{ kind: 'corpusFile', corpusRel: PRIVATE_CORPUS_REL, rel: 'in/x.dmp', label: 'x' }],
       }),
     );
-    expect(() => readTrace(file)).toThrow(/schema v2; this build reads v3/);
+    expect(() => readTrace(file)).toThrow(/schema v2; this build reads v4/);
   });
 });
 

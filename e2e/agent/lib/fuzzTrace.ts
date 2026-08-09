@@ -71,15 +71,47 @@
  * so refusing it by version says "recorded by an older build, re-run the seed"
  * instead of failing per-step on a field that is missing or merely looks wrong -
  * and it guarantees nothing migrates a leaked name forward.
+ *
+ * ## Schema v4: a run's ORACLE inputs are steps too, and a corpus file resolves
+ *
+ * Two additions, one version, because both change what a v3 file means rather
+ * than what it contains.
+ *
+ * `oracle` IS A NEW STEP KIND, and it exists because a trace that carries only
+ * the MOVES is not the run. `export-roundtrip-fuzz` runs a rotation of structural
+ * oracles per episode, two of which DRAW their inputs (an image-option set, a
+ * container extension) off the same `ctx.rng` the moves came from. A replay that
+ * rebuilt the moves from the trace consumed none of those draws, so the oracles
+ * re-ran on a different option set than the recording used - and an X3 or X4
+ * failure that depended on the drawn options came back green on the very trace
+ * that dropped it. Recording the resolved inputs fixes that the same way the
+ * module already fixes it for moves, and for the same reason (see "Why a trace
+ * and not just a seed"): a replay then needs neither the generators nor the
+ * PRNG, so it cannot drift from them.
+ *
+ * `corpusFile` GAINS AN OPTIONAL `corpusHash`. `corpusId` is 20 bits, which is
+ * enough to LABEL a file in output and not enough to RESOLVE one: a corpus of a
+ * few thousand files probably holds a colliding pair, and a replay that took the
+ * first match would materialize the wrong private file and open it under the
+ * recorded file's name. `corpusHash` is 16 hex of SHA-256 over the same relative
+ * path (`fixtureCorpus.corpusPathHash`) and is a LOOKUP KEY ONLY - never
+ * rendered, never printed by `describeStep`, so `corpusId` remains the only
+ * identifier in anything publishable, which is the rule that does not move.
+ *
+ * The version moved rather than the field being optional-forever because a v3
+ * export trace has no `oracle` steps at all, so replaying one under this build
+ * would silently run NO structural oracles - a green replay of a red trace,
+ * which is the exact failure the additions are for.
  */
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
+import { createHash } from 'crypto';
 
 import { shortId } from './crc32';
 
 /** Current trace schema. Bumped when a step shape changes incompatibly. */
-export const TRACE_VERSION = 3;
+export const TRACE_VERSION = 4;
 
 /**
  * One replayable move.
@@ -123,17 +155,39 @@ export type TraceStep =
    * `rel`.
    *
    * `corpusId` is the entry's PUBLISHABLE ID - `fixtureCorpus.corpusFileId`, a
-   * 5-hex fold of its corpus-relative path - and never the path itself. The
-   * replayer resolves that id against its own `STALAGMIGHT_FUZZ_CORPUS_DIR`
-   * (`corpusEntryFor` looks up either key), so the trace carries no name, no
-   * root and no content, and a replayer whose corpus holds no file with that id
-   * skips the step and counts it.
+   * 5-hex fold of its corpus-relative path - and never the path itself. It is
+   * what `describeStep` prints and what the metric keys beside it carry.
    *
-   * The field is NAMED for what it holds. It was `corpusRel` in v2, when it held
-   * the path, and a `...Rel` field quietly holding a crc id is exactly how the
-   * next reader talks themselves into putting a path back in it.
+   * `corpusHash` (v4, optional) is `fixtureCorpus.corpusPathHash` over the same
+   * relative path: 16 hex of SHA-256, a LOOKUP KEY that is never rendered. It is
+   * here because 20 bits does not resolve - a corpus of a few thousand files
+   * probably holds a colliding pair, and taking the first match would materialize
+   * the wrong private file and then open it under the recorded file's name. The
+   * replayer prefers it and falls back to nothing rather than to a guess.
+   *
+   * Either way the trace carries no name, no root and no content, and a replayer
+   * whose corpus holds no such file skips the step and counts it.
+   *
+   * The fields are NAMED for what they hold. `corpusId` was `corpusRel` in v2,
+   * when it held the path, and a `...Rel` field quietly holding a crc id is
+   * exactly how the next reader talks themselves into putting a path back in it.
    */
-  | { kind: 'corpusFile'; corpusId: string; rel: string; label: string }
+  | { kind: 'corpusFile'; corpusId: string; corpusHash?: string; rel: string; label: string }
+  /**
+   * An ORACLE the scenario ran, and the inputs it DREW to run it.
+   *
+   * A structural oracle is not a move, so it was not a step, so a replay could
+   * only re-ASK it - and re-asking drew fresh options off an rng the replay had
+   * consumed differently, which meant an option-dependent failure could be
+   * retested with options that do not provoke it. `inputs` is the resolved draw
+   * (`{}` for an oracle that draws nothing), so a replay runs the oracle the
+   * recording ran, in the order and at the multiplicity the recording ran it.
+   *
+   * `oracle` names one of a scenario's OWN oracles; the scenario refuses a name
+   * it does not have, exactly as it refuses a `mutate` action outside its
+   * replayable set.
+   */
+  | { kind: 'oracle'; oracle: string; inputs: unknown; label: string }
   /** A file handed to the app by path rather than through a dialog. */
   | { kind: 'route'; rel: string; label: string }
   | { kind: 'mapClick'; lngLat: [number, number]; label: string }
@@ -298,9 +352,32 @@ function gitRev(): string {
  */
 const CORPUS_ID = /^[0-9a-f]{5}$/;
 
+/**
+ * A corpus file's RESOLUTION key: exactly what `fixtureCorpus.corpusPathHash`
+ * produces, 16 hex characters of SHA-256 over the corpus-relative path.
+ *
+ * Same one-directional test as `CORPUS_ID`, and sound for the same reason: a
+ * real corpus path carries an importable extension, so it can never be sixteen
+ * bare hex characters.
+ */
+const CORPUS_HASH = /^[0-9a-f]{16}$/;
+
 /** A corpus reference reduced to its id. Idempotent, by the rule above. */
 function asCorpusId(reference: string): string {
   return CORPUS_ID.test(reference) ? reference : shortId(reference);
+}
+
+/**
+ * A corpus reference reduced to its path hash. Idempotent, by the rule above.
+ *
+ * Duplicated from `fixtureCorpus.corpusPathHash` rather than imported for the
+ * same reason `shortId` lives in `crc32.ts`: this module is the one that reads
+ * untrusted input and it may not depend on the module that walks somebody's data
+ * directory. `fixtureCorpus.test.ts` pins that the two agree.
+ */
+function asCorpusHash(reference: string): string {
+  if (CORPUS_HASH.test(reference)) return reference;
+  return createHash('sha256').update(reference, 'utf8').digest('hex').slice(0, 16);
 }
 
 /**
@@ -320,7 +397,18 @@ function asCorpusId(reference: string): string {
  */
 function redactStep(step: TraceStep): TraceStep {
   if (step.kind !== 'corpusFile') return step;
-  return { ...step, corpusId: asCorpusId(step.corpusId) };
+  const corpusId = asCorpusId(step.corpusId);
+  // The hash is derivable from a reference that is still a PATH, and not from
+  // one already folded to an id - 20 bits does not come back. A caller holding
+  // the entry passes both; a caller holding only the id gets a step without a
+  // hash, which replays by the id and is refused if that id is ambiguous.
+  const corpusHash =
+    step.corpusHash !== undefined
+      ? asCorpusHash(step.corpusHash)
+      : CORPUS_ID.test(step.corpusId)
+        ? undefined
+        : asCorpusHash(step.corpusId);
+  return corpusHash === undefined ? { ...step, corpusId } : { ...step, corpusId, corpusHash };
 }
 
 /**
@@ -389,10 +477,20 @@ export class TraceRecorder {
  */
 export function writeTrace(filePath: string, trace: FuzzTrace): string {
   trace.steps.forEach((step, index) => {
-    if (step.kind === 'corpusFile' && !CORPUS_ID.test(step.corpusId)) {
+    if (step.kind !== 'corpusFile') return;
+    if (!CORPUS_ID.test(step.corpusId)) {
       throw new Error(
         `refusing to write ${filePath}: step ${index + 1} names a corpus file by something ` +
           `other than its id, and a trace is an artifact people attach to bug reports`,
+      );
+    }
+    // The hash field is a hash or it is absent. It is not rendered anywhere, so
+    // a path parked in it would be the quietest leak available - which is
+    // exactly why it is refused at the same door as the id.
+    if (step.corpusHash !== undefined && !CORPUS_HASH.test(step.corpusHash)) {
+      throw new Error(
+        `refusing to write ${filePath}: step ${index + 1} carries a corpusHash that is not a ` +
+          `path hash (16 hex characters), and a trace is an artifact people attach to bug reports`,
       );
     }
   });
@@ -419,6 +517,7 @@ const STEP_KINDS = new Set([
   'mapClick',
   'export',
   'reload',
+  'oracle',
 ]);
 
 const INPUT_MODES = new Set(['type', 'select', 'check']);
@@ -476,6 +575,26 @@ function requireCorpusId(value: unknown, field: string, where: string): void {
     throw new Error(
       `${where} has a ${field} that is not a corpus id (5 hex characters). A trace names a ` +
         `corpus file by its id, never by its path; re-record it on this build.`,
+    );
+  }
+}
+
+/**
+ * The optional v4 resolution key. Absent is legal; anything that is not a path
+ * hash is not.
+ *
+ * Same non-quoting rule as `requireCorpusId`, and the same reason: the value a
+ * hand-written file could park here is a survey path, and this exception is
+ * printed by `scenario-run.ts` and `fuzz-shrink.ts`. It also does the
+ * session-relative check's job as a side effect - a hash has no separators.
+ */
+function requireCorpusHash(value: unknown, field: string, where: string): void {
+  if (value === undefined) return;
+  const text = requireText(value, field, where);
+  if (!CORPUS_HASH.test(text)) {
+    throw new Error(
+      `${where} has a ${field} that is not a corpus path hash (16 hex characters). A trace ` +
+        `resolves a corpus file by that hash, never by its path; re-record it on this build.`,
     );
   }
 }
@@ -561,6 +680,7 @@ function validateStep(step: unknown, index: number, filePath: string): void {
     // refused at the door, whoever wrote it. `rel` is a genuine path, joined
     // against the replayer's session dir, and is checked as one.
     requireCorpusId(candidate.corpusId, 'corpusId', where);
+    requireCorpusHash(candidate.corpusHash, 'corpusHash', where);
     requireSessionRelative(candidate.rel, 'rel', where);
     requireText(candidate.label, 'label', where);
   }
@@ -581,6 +701,17 @@ function validateStep(step: unknown, index: number, filePath: string): void {
     requireText(candidate.label, 'label', where);
     if (typeof candidate.options !== 'object' || candidate.options === null) {
       throw new Error(`${where} has export options ${JSON.stringify(candidate.options)}; must be an object`);
+    }
+  }
+  if (candidate.kind === 'oracle') {
+    // The NAME reaches control flow (the scenario dispatches on it) and `inputs`
+    // is spread into an oracle's arguments, so both are shape-checked here and
+    // the name is allowlisted by the scenario - the same two-layer rule as
+    // `mutate`'s action.
+    requireText(candidate.oracle, 'oracle', where);
+    requireText(candidate.label, 'label', where);
+    if (typeof candidate.inputs !== 'object' || candidate.inputs === null) {
+      throw new Error(`${where} has oracle inputs ${JSON.stringify(candidate.inputs)}; must be an object`);
     }
   }
   if (candidate.kind === 'reload') {
@@ -724,6 +855,8 @@ function describeStep(step: TraceStep): string {
       return `mapClick ${step.lngLat[0]},${step.lngLat[1]} - ${step.label}`;
     case 'export':
       return `export ${step.format} -> ${step.rel} - ${step.label}`;
+    case 'oracle':
+      return `oracle ${step.oracle} - ${step.label}`;
     case 'reload':
       return `reload ${step.fixture}`;
     default:

@@ -78,11 +78,14 @@ export type FileSource =
    *
    * `corpusRel` is resolved against whatever `STALAGMIGHT_FUZZ_CORPUS_DIR` is
    * set to at the time, and never leaves this process: `id` is the publishable
-   * stand-in that the labels, the metrics and the `corpusFile` trace step all
-   * carry. A replayer resolves that id against its own corpus, and one that
-   * does not have it skips the move and counts it.
+   * stand-in that the labels, the metrics and the rendered trace all carry, and
+   * `hash` is the resolution key the `corpusFile` trace step also carries but
+   * nothing renders (`fixtureCorpus.corpusPathHash` - 20 bits does not resolve a
+   * corpus of a few thousand files without sometimes resolving it wrong). A
+   * replayer resolves the hash against its own corpus, and one that does not
+   * have that file skips the move and counts it.
    */
-  | { origin: 'corpus'; corpusRel: string; id: string; dirRel: string; rel: string }
+  | { origin: 'corpus'; corpusRel: string; id: string; hash: string; dirRel: string; rel: string }
   /**
    * REPLAY ONLY: a file a preceding `genFile` step already wrote. The spec does
    * not travel twice, so the reference is just the rel - and if ddmin cut the
@@ -341,7 +344,14 @@ export function drawFileSource(env: GenEnv): FileSource {
     const dirRel = `${env.filesRel}/corpus-${env.fileSeq}`;
     // `relPath` is POSIX by construction (`discoverCorpus` joins on '/').
     const base = entry.relPath.slice(entry.relPath.lastIndexOf('/') + 1);
-    return { origin: 'corpus', corpusRel: entry.relPath, id: entry.id, dirRel, rel: `${dirRel}/${base}` };
+    return {
+      origin: 'corpus',
+      corpusRel: entry.relPath,
+      id: entry.id,
+      hash: entry.pathHash,
+      dirRel,
+      rel: `${dirRel}/${base}`,
+    };
   }
 
   // Tracked fixtures are all `.dmp`; there are none for the other formats, and

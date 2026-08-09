@@ -54,10 +54,14 @@ export function crc32Text(text: string): number {
  * trace line that named a different id from the metric key would be worse than
  * either alone.
  *
- * 20 bits is ~1M values. Collisions are possible and harmless: the tag
- * distinguishes files WITHIN one run, where the real path is still on the
- * operator's own disk. It is deliberately short and deliberately not reversible,
- * so nobody mistakes it for an identifier worth correlating across runs.
+ * 20 bits is ~1M values, so it is a LABEL and not a key: over a corpus of a few
+ * thousand files the birthday bound says a colliding pair is more likely than
+ * not. That is fine for what this is for - telling two files apart in one run's
+ * output, where the real path is still on the operator's own disk - and it is
+ * not fine for RESOLVING one, which is what a replay does when it reads an id
+ * out of a trace. `fixtureCorpus.corpusPathHash` is the resolution key; this is
+ * the one that gets printed. Anything that looks a file up by this tag must
+ * treat two matches as no match, and `fixtureCorpus.corpusLookup` does.
  */
 export function shortId(text: string): string {
   return (crc32Text(text) & 0xfffff).toString(16).padStart(5, '0');
