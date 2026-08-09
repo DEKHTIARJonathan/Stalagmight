@@ -143,6 +143,35 @@ describe('discoverCorpus', () => {
     expect(corpusEntryFor('device/alpha.dmp')?.format).toBe('dmp');
     expect(corpusEntryFor('nope.dmp')).toBeNull();
   });
+
+  it('resolves an entry back from its ID, which is all a trace carries', () => {
+    // A `corpusFile` trace step names its file by `corpusFileId` and nothing
+    // else (trace schema v3), so replaying one means scanning THIS inventory -
+    // the replayer's own corpus - for the entry whose id matches.
+    const alpha = corpusEntryFor('device/alpha.dmp');
+    expect(alpha).not.toBeNull();
+    expect(corpusEntryFor(alpha!.id)?.relPath).toBe('device/alpha.dmp');
+    for (const entry of discoverCorpus().entries) {
+      expect(corpusEntryFor(entry.id)).toEqual(entry);
+    }
+  });
+
+  it('returns null for an id this corpus does not have, which is the skip case', () => {
+    // A trace recorded against somebody else's corpus, or on a machine that has
+    // one at all. The replayer counts the move and skips it; a missing corpus
+    // file is never a failure, because a corpus is optional by design.
+    expect(corpusEntryFor(corpusFileId('somebody-elses/unrelated-cave.dmp'))).toBeNull();
+    expect(corpusEntryFor('00000')).toBeNull();
+  });
+
+  it('keeps the two key spaces disjoint, so one lookup can serve both', () => {
+    // An id is five bare hex characters; every path the walk yields carries one
+    // of the importable extensions. Nothing can be read as both.
+    for (const entry of discoverCorpus().entries) {
+      expect(entry.id).toMatch(/^[0-9a-f]{5}$/);
+      expect(entry.relPath).not.toMatch(/^[0-9a-f]{5}$/);
+    }
+  });
 });
 
 describe('corpusFileId', () => {

@@ -18,7 +18,9 @@
  *     default path - nothing in the tracked tree names a location;
  *   - a discovered file is identified downstream by `corpusFileId`, a 5-hex-char
  *     fold of its RELATIVE path, and that id is what a failure payload, a metric
- *     key or a log line carries. The real name never leaves this module;
+ *     key, a log line and a recorded trace carry. The real name never leaves
+ *     this module - `corpusEntryFor` takes the id back the other way, so a
+ *     replay never needs it either;
  *   - the app is only ever pointed at a COPY, so an import that migrates or
  *     rewrites a file cannot touch the original.
  *
@@ -54,7 +56,7 @@ const FORMAT_BY_EXTENSION: Readonly<Record<string, CorpusFormat>> = {
 export type CorpusFormat = 'dmp' | 'tml' | 'tmlu' | 'dat' | 'mak' | 'srv' | 'wpj' | 'gpx';
 
 export interface CorpusEntry {
-  /** POSIX-style path relative to the corpus root. Never logged; see `id`. */
+  /** POSIX-style path relative to the corpus root. Never logged, never recorded; see `id`. */
   relPath: string;
   format: CorpusFormat;
   /** The publishable stand-in for `relPath`. */
@@ -109,10 +111,10 @@ export function corpusAvailable(): boolean {
  * unreleased project, and a failure payload, a metric key and a shrunk trace are
  * all things that get attached to an issue.
  *
- * The fold itself lives in `crc32.ts` as `shortId`, because
- * `fuzzTrace.describeSteps` prints the same tag for a `corpusFile` step: a trace
- * line naming a different id from the metric key beside it would be worse than
- * having no id at all.
+ * The fold itself lives in `crc32.ts` as `shortId`, because `fuzzTrace.ts` needs
+ * the same one: it folds a corpus reference at record time and prints the result
+ * for a `corpusFile` step. A trace line naming a different id from the metric
+ * key beside it would be worse than having no id at all.
  */
 export function corpusFileId(relPath: string): string {
   return shortId(relPath);
@@ -191,9 +193,31 @@ export function discoverCorpus(): CorpusInventory {
   return { available: entries.length > 0, root, entries, byFormat, skipped };
 }
 
-/** Look one entry up by its relative path - the shape a trace replays from. */
-export function corpusEntryFor(relPath: string): CorpusEntry | null {
-  return discoverCorpus().entries.find((entry) => entry.relPath === relPath) ?? null;
+/**
+ * Look one entry up by its relative path OR by its publishable `id`.
+ *
+ * Both, because the two callers hold different halves. A LIVE run drew the entry
+ * from the inventory and holds its path. A REPLAY holds only what a trace is
+ * allowed to carry, which since trace schema v3 is the id and nothing else
+ * (`fuzzTrace.ts`, the `corpusFile` step) - so resolving a trace means scanning
+ * this inventory for the entry whose id matches, against whatever corpus the
+ * REPLAYER configured.
+ *
+ * One lookup serves both without a mode flag because the two key spaces cannot
+ * collide: an id is exactly five hex characters, and every relative path this
+ * module yields ends in one of the importable extensions above.
+ *
+ * A miss returns null, and null is not an error. A trace recorded against
+ * somebody else's corpus - or on a machine that has one at all - is replayed by
+ * skipping those moves and counting them, which is a narrower replay rather than
+ * a failed one.
+ */
+export function corpusEntryFor(reference: string): CorpusEntry | null {
+  return (
+    discoverCorpus().entries.find(
+      (entry) => entry.relPath === reference || entry.id === reference,
+    ) ?? null
+  );
 }
 
 /**
