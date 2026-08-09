@@ -54,8 +54,10 @@ import { useUIStore, type PlacementResult } from '../../store/uiStore';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import {
   adjustStationForDeletedShots,
+  buildPlacementSectionData,
   findReverseImportConnection,
   redirectDeletedTargets,
+  resolveImportSectionDate,
   type SectionEditState,
   type ConfirmedOverlapInfo,
 } from '../../utils/batchImportHelpers';
@@ -656,7 +658,10 @@ export function buildBatchImport(
       // Use edits for metadata if available, otherwise fall back to DMP data + selectionConfig
       const sectionName = edits?.name ?? section.name;
       const surveyorValue = edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null;
-      const dateStr = edits?.date ?? selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
+      // `resolveImportSectionDate`, not the raw `??` chain plus a trailing
+      // `|| null`: a cleared date has to leave as null on EVERY emitter, and
+      // the rule is stated once (#478 - see the helper).
+      const dateStr = resolveImportSectionDate(edits?.date, selectionConfig.defaultDate, section.date);
       const selectedPos = sortedSelected.indexOf(idx);
       const colorValue = (edits?.color || null) ?? palette[(selectedPos >= 0 ? selectedPos : 0) % palette.length] ?? '#4ecdc4';
       const directionValue = edits?.direction ?? section.direction;
@@ -673,13 +678,7 @@ export function buildBatchImport(
         section_index: configs.length,
         name: sectionName,
         surveyor: surveyorValue || null,
-        // `|| null`, exactly like the line above it. `date` is `Option<NaiveDate>`
-        // on the Rust side (`models/section.rs`), and chrono parses "" as
-        // TOO_SHORT, whose Display is "premature end of input" - so an empty
-        // string is not "no date", it is a malformed argument that makes Tauri
-        // reject the WHOLE `import_sections` call before it reaches the command
-        // (#478). A cleared date field means null.
-        date: dateStr || null,
+        date: dateStr,
         color: colorValue,
         direction: directionValue,
         quality: qualityValue,
@@ -2916,22 +2915,15 @@ export default function DmpNewImportDialog({
         : convertToEditableShots(anchorDmpSection.shots).map(editableShotToShotData);
       const emittedStationIndex = emittedAnchorStation(anchor);
 
-      const sectionData = {
-        name: edits?.name ?? anchorDmpSection.name,
-        surveyor: edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null,
-        // Trailing `|| null` for the same reason as `buildBatchImport`'s date
-        // (#478): the `??` chain preserves "the user cleared it", and the empty
-        // string that expresses that has to leave as null. Kept as `??` inside
-        // so a cleared date does NOT fall back to the file's or the default.
-        date: (edits?.date ?? selectionConfig.defaultDate ?? anchorDmpSection.date?.split(/[T ]/)[0] ?? null) || null,
-        color:
-          (edits?.color || null) ??
-          sectionPalette[selectedIndices.indexOf(anchor.sectionIndex) % sectionPalette.length] ??
-          '#4ecdc4',
-        direction: edits?.direction ?? anchorDmpSection.direction,
-        quality: edits?.quality ?? 1.0,
+      const sectionData = buildPlacementSectionData({
+        dmpSection: anchorDmpSection,
+        edits,
+        defaultSurveyor: selectionConfig.defaultSurveyor,
+        defaultDate: selectionConfig.defaultDate,
+        palette: sectionPalette,
+        paletteIndex: selectedIndices.indexOf(anchor.sectionIndex),
         shots,
-      };
+      });
 
       // Build additional sections for segment shadow using effective (post-treatment)
       // sections so the overlay reflects deleted shots and interpolated values.

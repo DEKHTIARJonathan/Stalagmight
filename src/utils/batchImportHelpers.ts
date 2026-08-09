@@ -8,7 +8,8 @@
 import { isEmittedShot } from '../components/common/emittedShots';
 import type { EditableShot } from '../components/common/ShotTableEditor';
 import type { VirtualConnection } from './segmentContext';
-import type { CrossSectionSuggestion } from '../types/commands';
+import type { CrossSectionSuggestion, DmpSection } from '../types/commands';
+import type { SectionData, ShotData } from '../types/project';
 import { computeOverlapIds } from './overlapHelpers';
 
 // ─── Shared types ────────────────────────────────────────────────────────────
@@ -44,6 +45,74 @@ export interface ConfirmedOverlapInfo {
   targetImportIndex: number | null;
   /** User-selected merge station (determines which overlap shots are actionable). */
   mergeImportStation: number;
+}
+
+// ─── resolveImportSectionDate ────────────────────────────────────────────────
+
+/**
+ * The date an imported section leaves the wizard with.
+ *
+ * `date` is `Option<NaiveDate>` on the Rust side (`models/section.rs`), and
+ * chrono parses `""` as TOO_SHORT, whose Display is "premature end of input" -
+ * so an empty string is not "no date", it is a malformed argument that makes
+ * Tauri reject the WHOLE `import_sections` call before it reaches the command
+ * (#478). A cleared date field means null.
+ *
+ * Both halves are load-bearing and they say different things. The `??` chain
+ * keeps "the user cleared it" from falling back to the wizard default or to
+ * the file's own date - clearing the field has to mean cleared. The trailing
+ * `|| null` then turns that empty string into the absence the backend
+ * understands. One function rather than the same expression copied per
+ * emitter, because every payload builder in the wizard has to agree: this is
+ * the whole invariant, and it is exactly the half that went missing.
+ *
+ * `fileDate` arrives as the DMP's own timestamp, so the day is split off it.
+ */
+export function resolveImportSectionDate(
+  editedDate: string | null | undefined,
+  defaultDate: string | null | undefined,
+  fileDate: string | null | undefined,
+): string | null {
+  return (editedDate ?? defaultDate ?? fileDate?.split(/[T ]/)[0] ?? null) || null;
+}
+
+// ─── buildPlacementSectionData ───────────────────────────────────────────────
+
+/**
+ * The section metadata that rides along with a segment handed to map placement.
+ *
+ * Extracted from `buildSegmentPlacementPayload`, which is a `useCallback`
+ * closed over a dozen refs and therefore unreachable from any test - so the
+ * wizard's SECOND payload emitter could not be asked what it emits, and its
+ * copy of the date rule (#478) was pinned by nothing.
+ *
+ * Deliberately NOT merged with `buildBatchImport`'s config builder. That one
+ * resolves its palette slot from the section's position in the selection with
+ * a `>= 0 ? pos : 0` floor and also carries `reverse`; this one indexes the
+ * palette raw, so an anchor outside the selection falls through to the default
+ * colour. Unifying them would change a colour, which is not what this is for.
+ */
+export function buildPlacementSectionData(params: {
+  dmpSection: Pick<DmpSection, 'name' | 'date' | 'direction'>;
+  edits: SectionEditState | undefined;
+  defaultSurveyor: string | null;
+  defaultDate: string | null;
+  /** Section colours, in selection order. */
+  palette: readonly string[];
+  /** Slot in `palette` for this section; a negative value means "not selected". */
+  paletteIndex: number;
+  shots: ShotData[];
+}): SectionData {
+  const { dmpSection, edits, defaultSurveyor, defaultDate, palette, paletteIndex, shots } = params;
+  return {
+    name: edits?.name ?? dmpSection.name,
+    surveyor: edits?.surveyor ?? defaultSurveyor ?? null,
+    date: resolveImportSectionDate(edits?.date, defaultDate, dmpSection.date),
+    color: (edits?.color || null) ?? palette[paletteIndex % palette.length] ?? '#4ecdc4',
+    direction: edits?.direction ?? dmpSection.direction,
+    quality: edits?.quality ?? 1.0,
+    shots,
+  };
 }
 
 // ─── adjustStationForDeletedShots ────────────────────────────────────────────
