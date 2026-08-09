@@ -3,12 +3,20 @@
  * transients (moveCommentSource, merge picks, activeTool) after the new
  * project commits. The uiStore method has its own unit test; this pins the
  * call site inside loadProject so removing it fails a test.
+ *
+ * Same argument, same call site, for the Export-mode option set: it resets in
+ * `applyDisplaySettings`, whose own test calls that method DIRECTLY, so
+ * nothing pinned that a load still routes through it. The options are a
+ * rendering choice made for the project that was open, and a 600-DPI PNG
+ * framed for one survey staying selected while the preview draws the next one
+ * is exactly the failure this funnel exists to prevent.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
+import { useExportStore, DEFAULT_IMAGE_OPTIONS } from '../exportStore';
 import type { DisplaySettings } from '../../types/loading';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -116,5 +124,20 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
     expect(useProjectStore.getState().project?.name).toBe('Loaded Cave');
     expect(ui.activeTool).toBe('select');
     expect(ui.mergeStationA).toBeNull();
+  });
+
+  it('drops the previous project Export-mode options when a load commits', async () => {
+    const before = useExportStore.getState();
+    before.setExportType('data');
+    before.setDataFormat('tml');
+    before.setImageOptions({ ...DEFAULT_IMAGE_OPTIONS, format: 'pdf', dpi: 600 });
+
+    await useProjectStore.getState().loadProject('/mock/loaded.stalx');
+
+    const after = useExportStore.getState();
+    expect(useProjectStore.getState().project?.name).toBe('Loaded Cave');
+    expect(after.exportType).toBe('image');
+    expect(after.dataFormat).toBe('csv');
+    expect(after.imageOptions).toEqual(DEFAULT_IMAGE_OPTIONS);
   });
 });
