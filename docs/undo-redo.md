@@ -645,7 +645,7 @@ entry and drop the `undo_stack` guard before touching the project, and
 `undo_stack`.
 
 Where more than one IS held, `project` is the outermost of the three and nothing in
-the crate holds an `undo_stack` or `database` guard across a `project.lock()`. Two
+the workspace holds an `undo_stack` or `database` guard across a `project.lock()`. Two
 places rely on that: `save_project` (holds its `project` guard while it writes the
 DB and persists both stacks) and the close teardown
 `close_open_project_locked`, whose caller `delete_project` has to decide *whether*
@@ -697,7 +697,7 @@ Appears on item hover, positioned to the right of the dropdown (flips left if ne
 
 Section names in preview data are resolved at **display time**, not execution time. When you hover a "Merge stations" entry, it shows current section names, not the names at the time of the merge. This is intentional - the preview answers "what is this referring to now?" For historical names, only `ProjectSnapshotPair` data retains the state at execution time.
 
-### Preview Data Generation (`history.rs`)
+### Preview Data Generation (`core/undo/history_view.rs`)
 
 `derive_preview_data()` matches `(Command, UndoData)` pairs to extract meaningful field changes. Every command type produces preview data - the fallback arm returns the command description as an "Action" field so hover is never empty.
 
@@ -709,17 +709,18 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 
 | File | Contents |
 |------|----------|
-| `src-tauri/src/core/undo.rs` | `UndoStack`, `UndoEntry`, `UndoData` types, `DepthLimit` + the byte budget, the persist plan |
-| `src-tauri/src/core/state/undo.rs` | `undo()`, `redo()`, `undo_to()`, `redo_to()` implementation |
-| `src-tauri/src/core/state/undo_policy.rs` | `undo_policy()` (the Full/Disabled resolver), `speleodb_set_undo_mode` |
-| `src-tauri/src/models/undo_mode.rs` | `UndoMode`, `UndoPolicy` |
-| `src-tauri/src/speleodb/sync.rs` | `unwind_target` - the BASE-then-first-parents chain |
-| `src-tauri/src/core/state/speleodb_cache.rs` | `InheritedUndo` and the drop-on-adopt chokepoint |
+| `src-tauri/crates/core/src/core/undo.rs` | `UndoStack`, `UndoEntry`, `UndoData` types, `DepthLimit` + the byte budget, the persist plan |
+| `src-tauri/crates/core/src/core/state/undo.rs` | `undo()`, `redo()`, `undo_to()`, `redo_to()` implementation |
+| `src-tauri/crates/core/src/core/state/undo_policy.rs` | `undo_policy()` (the Full/Disabled resolver), `speleodb_set_undo_mode` |
+| `src-tauri/crates/models/src/undo_mode.rs` | `UndoMode`, `UndoPolicy` |
+| `src-tauri/crates/speleodb/src/speleodb/sync.rs` | `unwind_target` - the BASE-then-first-parents chain |
+| `src-tauri/crates/core/src/core/state/speleodb_cache.rs` | `InheritedUndo` and the drop-on-adopt chokepoint |
 | `src/components/Dialogs/SpeleoUnwindDialog.tsx` | The Unwind confirmation |
 | `src/components/Dialogs/settings/SpeleoUndoModeControl.tsx` | The per-project Full/Disabled control |
-| `src-tauri/src/core/state/commands.rs` | `execute()`, `generate_undo_data()`, `finalize_undo_data()` |
-| `src-tauri/src/core/command.rs` | `Command` enum and `description()` method |
-| `src-tauri/src/commands/history.rs` | Tauri commands for stacks, `derive_preview_data()`, `entry_to_history_item()` |
-| `src-tauri/src/core/state/project_io.rs` | Stack persistence (save/load to SQLite) |
+| `src-tauri/crates/core/src/core/state/commands.rs` | `execute()`, `generate_undo_data()`, `finalize_undo_data()` |
+| `src-tauri/crates/core/src/core/command.rs` | `Command` enum and `description()` method |
+| `src-tauri/src/commands/history.rs` | Tauri commands for stacks |
+| `src-tauri/crates/core/src/core/undo/history_view.rs` | `UndoHistoryItem` DTO, `derive_preview_data()`, `entry_to_history_item()` |
+| `src-tauri/crates/core/src/core/state/project_io.rs` | Stack persistence (save/load to SQLite) |
 | `src/components/SingleSystemView/UndoHistoryDropdown.tsx` | Frontend dropdown + preview popup |
-| `src-tauri/src/models/shot.rs` | `shot_display_position()` helper |
+| `src-tauri/crates/models/src/shot.rs` | `shot_display_position()` helper |

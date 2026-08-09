@@ -1,0 +1,76 @@
+[package]
+name = "stalagmight-core"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+
+# Opt into the workspace lint tables (see the workspace root manifest) so the
+# anti-slop policy applies here too.
+[lints]
+workspace = true
+
+[features]
+# Compiles the `#[cfg(any(test, feature = "test-support"))]` helpers that used
+# to be `#[cfg(test)]` when this code lived in the root crate (the
+# `test_helpers` module - TestDb, the isolated-config guard - the AppState
+# test setters in `core::state::tests_support`, and the config-path override
+# hook `Config::config_path` consults): the root crate's tests still call
+# them, and a dependency's `cfg(test)` items are invisible to a dependent's
+# test build. `dep:tempfile` rides along because `test_helpers` backs its
+# isolated dirs with it. Enabled only via the root crate's [dev-dependencies]
+# entry, so production builds compile exactly what they did before the split.
+test-support = ["dep:tempfile"]
+
+[dependencies]
+stalagmight-export = { path = "../export" }
+stalagmight-models = { path = "../models" }
+stalagmight-parsers = { path = "../parsers" }
+stalagmight-persistence = { path = "../persistence" }
+stalagmight-speleodb = { path = "../speleodb" }
+serde = { workspace = true, features = ["derive"] }
+# `float_roundtrip` mirrors the root crate's serde_json entry (see the full
+# rationale there): features are additive, so workspace builds already parse
+# floats roundtrip-exactly - declaring it here keeps a standalone
+# `cargo test -p stalagmight-core` on the same parser, and this crate is
+# precisely where the roundtrip matters: every undo/redo snapshot is a
+# serialized `Project` deserialized by `AppState::restore_snapshot_into`
+# HERE, so without it an undo silently rewrites survey measurements in their
+# last bit (issue #413, finding 25).
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+chrono = { workspace = true, features = ["serde"] }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+ts-rs = { workspace = true, features = ["no-serde-warnings"] }
+rusqlite = { workspace = true, features = ["bundled"] }
+toml = { workspace = true }
+directories = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+zip = { workspace = true }
+# The binary `load_project_full` IPC payload (`core::load_binary`). Always
+# available so the load path can stay off JSON without conditional
+# compilation.
+rmp-serde = { workspace = true }
+serde_bytes = { workspace = true }
+tempfile = { workspace = true, optional = true }
+
+# `trash` has no Android platform module, and the app ships desktop-only - gate it
+# off the Android `cdylib` target so `tauri android build` keeps compiling.
+# (Moved with `core::state::recent_projects::send_to_trash`, its only user.)
+[target.'cfg(not(target_os = "android"))'.dependencies]
+trash = "5.2.6"
+
+[dev-dependencies]
+# `test-support` compiles the siblings' formerly-`#[cfg(test)]` helpers for
+# this crate's own test build (models' comment/anchor probes and
+# `app_dirs::init_for_test`, parsers' tml `test_helpers`, speleodb's
+# TokenStore test-constructors); a dependency's `cfg(test)` items are
+# invisible here, exactly as they are to the root crate.
+stalagmight-models = { path = "../models", features = ["test-support"] }
+stalagmight-parsers = { path = "../parsers", features = ["test-support"] }
+stalagmight-speleodb = { path = "../speleodb", features = ["test-support"] }
+tempfile = { workspace = true }
+libc = "0.2"
+# The profiling harnesses in `core::state::tests` install a real fmt
+# subscriber so the timing markers land on stdout.
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

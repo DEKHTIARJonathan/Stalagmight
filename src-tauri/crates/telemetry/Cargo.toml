@@ -1,0 +1,36 @@
+[package]
+name = "stalagmight-telemetry"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+
+# Opt into the workspace lint tables (see the workspace root manifest) so the
+# anti-slop policy applies here too.
+[lints]
+workspace = true
+
+[features]
+# Compiles the real telemetry implementation (collector, registry, HTTP flush).
+# Off: every public item still exists as a no-op stub, so dependents build
+# identically either way. The root crate's own `telemetry` feature forwards
+# here; this crate's build script only requires TELEMETRY_ENDPOINT when the
+# feature is on.
+telemetry = []
+
+[dependencies]
+stalagmight-models = { path = "../models" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
+tracing-appender = { workspace = true }
+anyhow = { workspace = true }
+directories = { workspace = true }
+ts-rs = { workspace = true, features = ["no-serde-warnings"] }
+ureq = { workspace = true }
+flate2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

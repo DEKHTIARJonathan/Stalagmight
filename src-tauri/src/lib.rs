@@ -1,20 +1,40 @@
-pub mod app_dirs;
-pub mod cache;
+// Extracted to the `stalagmight-models` workspace member; re-exported under the
+// old names so every `crate::app_dirs::*` / `crate::models::*` path (and the
+// `stalagmight_lib::…` paths the integration tests and gen_ipc_types example
+// use) keeps compiling unchanged.
+pub use stalagmight_models::app_dirs;
+pub use stalagmight_persistence::cache;
 pub mod commands;
-pub mod config;
-pub mod core;
-pub mod export;
-pub mod logging;
-pub mod models;
-pub mod parsers;
-pub mod persistence;
-pub mod speleodb;
-pub mod telemetry;
+// Extracted to the `stalagmight-core` workspace member; re-exported under the
+// old names, same deal as `models` below (`tile_providers` and, for the test
+// builds, `test_helpers` ride along further down).
+pub use stalagmight_core::config;
+pub use stalagmight_core::core;
+// Extracted to the `stalagmight-export` workspace member; re-exported under
+// the old name, same deal as `models` below.
+pub use stalagmight_export::export;
+// Extracted to the `stalagmight-telemetry` workspace member; re-exported under
+// the old names, same deal as `models` above.
+pub use stalagmight_models as models;
+pub use stalagmight_telemetry::logging;
+// Extracted to the `stalagmight-parsers` workspace member; re-exported under
+// the old name, same deal as `models` above.
+pub use stalagmight_parsers::parsers;
+// Extracted to the `stalagmight-persistence` workspace member (together with
+// `cache` and `tilemap_cache`); re-exported under the old names, same deal.
+pub use stalagmight_persistence::persistence;
+// Extracted to the `stalagmight-speleodb` workspace member; re-exported under
+// the old name, same deal as `models` above.
+pub use stalagmight_speleodb::speleodb;
+pub use stalagmight_telemetry::telemetry;
+// The core member compiles `test_helpers` under its `test-support` feature
+// (enabled by this crate's [dev-dependencies]), so every
+// `crate::test_helpers::*` path in the tests keeps resolving.
 #[cfg(test)]
-pub mod test_helpers;
+pub use stalagmight_core::test_helpers;
 pub mod tile_attribution;
-pub mod tile_providers;
-pub mod tilemap_cache;
+pub use stalagmight_core::tile_providers;
+pub use stalagmight_persistence::tilemap_cache;
 /// Linux-only WebKit memory-pressure wiring (see the module docs and the
 /// patched wry fork: <https://github.com/Stalagmight/wry>).
 #[cfg(target_os = "linux")]
@@ -24,7 +44,7 @@ use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use std::collections::HashMap as StdHashMap;
 use std::io::Cursor;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{Emitter, Manager};
@@ -99,102 +119,11 @@ impl DecodedImageCache {
 static DECODED_IMAGE_CACHE: std::sync::LazyLock<Mutex<DecodedImageCache>> =
     std::sync::LazyLock::new(|| Mutex::new(DecodedImageCache::new(8)));
 
-/// Lock-free tile fetch statistics using atomic counters.
-///
-/// Shared across the protocol handler and IPC commands via `Arc`.
-/// All methods use `Relaxed` ordering since we only need approximate
-/// monotonic counters, not cross-field consistency.
-pub struct TileFetchStats {
-    total_fetched: AtomicU64,
-    total_errors: AtomicU64,
-    /// Cumulative sum of all successful fetch latencies (ms)
-    total_latency_ms: AtomicU64,
-    last_latency_ms: AtomicU64,
-    in_flight: AtomicU64,
-    /// true = we've notified the frontend that tiles are failing
-    notified_offline: AtomicBool,
-}
-
-/// Snapshot of tile fetch statistics at a point in time.
-pub struct TileFetchStatsSnapshot {
-    pub in_flight: u64,
-    pub total_fetched: u64,
-    pub total_errors: u64,
-    pub total_latency_ms: u64,
-    pub last_latency_ms: u64,
-}
-
-impl Default for TileFetchStats {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl TileFetchStats {
-    pub fn new() -> Self {
-        Self {
-            total_fetched: AtomicU64::new(0),
-            total_errors: AtomicU64::new(0),
-            total_latency_ms: AtomicU64::new(0),
-            last_latency_ms: AtomicU64::new(0),
-            in_flight: AtomicU64::new(0),
-            notified_offline: AtomicBool::new(false),
-        }
-    }
-
-    /// Call before starting a network fetch.
-    pub fn record_start(&self) {
-        self.in_flight.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Call after a successful network fetch.
-    pub fn record_success(&self, latency_ms: u64) {
-        self.in_flight.fetch_sub(1, Ordering::Relaxed);
-        self.total_fetched.fetch_add(1, Ordering::Relaxed);
-        self.total_latency_ms
-            .fetch_add(latency_ms, Ordering::Relaxed);
-        self.last_latency_ms.store(latency_ms, Ordering::Relaxed);
-    }
-
-    /// Call after a failed network fetch (all retries exhausted).
-    pub fn record_error(&self) {
-        self.in_flight.fetch_sub(1, Ordering::Relaxed);
-        self.total_errors.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Take a snapshot of the current counters.
-    pub fn snapshot(&self) -> TileFetchStatsSnapshot {
-        TileFetchStatsSnapshot {
-            in_flight: self.in_flight.load(Ordering::Relaxed),
-            total_fetched: self.total_fetched.load(Ordering::Relaxed),
-            total_errors: self.total_errors.load(Ordering::Relaxed),
-            total_latency_ms: self.total_latency_ms.load(Ordering::Relaxed),
-            last_latency_ms: self.last_latency_ms.load(Ordering::Relaxed),
-        }
-    }
-
-    /// Emit `tile-transport-error` once per online→offline transition.
-    pub fn notify_transport_error<R: tauri::Runtime>(&self, handle: &tauri::AppHandle<R>) {
-        if self
-            .notified_offline
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-        {
-            let _ = handle.emit("tile-transport-error", ());
-        }
-    }
-
-    /// Emit `tile-transport-success` once per offline→online transition.
-    pub fn notify_transport_success<R: tauri::Runtime>(&self, handle: &tauri::AppHandle<R>) {
-        if self
-            .notified_offline
-            .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-        {
-            let _ = handle.emit("tile-transport-success", ());
-        }
-    }
-}
+// Moved to the `stalagmight-core` member (AppState owns the shared instance,
+// and members stay tauri-free): the counters and the once-per-transition
+// latch live there; THIS crate keeps the actual `tile-transport-*` event
+// emission, at the call site in the tile protocol handler below.
+pub use stalagmight_core::tile_stats::{TileFetchStats, TileFetchStatsSnapshot};
 
 /// HTTP request timeout for tile fetches
 const TILE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1710,11 +1639,18 @@ pub fn run() {
                             )
                         });
 
-                    // Notify connectivity changes (debounced - only emits on state transitions)
+                    // Notify connectivity changes (debounced - only emits on state
+                    // transitions; the once-per-transition latch lives on
+                    // `TileFetchStats` in the core member, the emission stays here
+                    // with Tauri).
                     if had_network_success {
-                        tile_fetch_stats_notify.notify_transport_success(&app_handle);
-                    } else if had_network_error {
-                        tile_fetch_stats_notify.notify_transport_error(&app_handle);
+                        // Emit `tile-transport-success` once per offline→online transition.
+                        if tile_fetch_stats_notify.transition_to_online() {
+                            let _ = app_handle.emit("tile-transport-success", ());
+                        }
+                    } else if had_network_error && tile_fetch_stats_notify.transition_to_offline() {
+                        // Emit `tile-transport-error` once per online→offline transition.
+                        let _ = app_handle.emit("tile-transport-error", ());
                     }
 
                     // Tile-consumption telemetry (#31): one event per SERVED tile, tagged by
@@ -1771,15 +1707,15 @@ pub fn run() {
             // Resolve platform directories before anything else needs them.
             // On Android, the `directories` crate returns None; Tauri's
             // PathResolver delegates to the platform-native APIs correctly.
-            app_dirs::init(app.handle());
+            commands::event_sink::init_app_dirs(app.handle());
 
             // Initialize app state
             let app_state = core::state::AppState::new()?;
             app.manage(app_state);
 
-            // Set app handle on state for event emission
+            // Set event sink on state for event emission
             let state = app.state::<core::state::AppState>();
-            state.set_app_handle(app.handle().clone());
+            state.set_event_sink(commands::event_sink::tauri_sink(app.handle().clone()));
 
             // Initialize telemetry (no-op when feature is disabled)
             let telemetry_config = state.get_config();
@@ -2067,6 +2003,7 @@ pub fn run() {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicU64;
 
     // === parse_tile_uri tests ===
 

@@ -107,7 +107,7 @@ Ariane has one azimuth field per shot (`Azimut` / `AZ`). Stalagmight duplicates 
 
 | Component | File | Role |
 |-----------|------|------|
-| Parser | `src-tauri/src/parsers/tml.rs` | XML parsing, section linearization, unit conversion |
+| Parser | `src-tauri/crates/parsers/src/parsers/tml/` | XML parsing, section linearization, unit conversion |
 | Import command | `src-tauri/src/commands/import.rs` | IPC handler, deduplication, undo support |
 | Import dialog | `src/components/Dialogs/TmlImportDialog.tsx` | Preview, import options, progress, failure/cancel handling |
 

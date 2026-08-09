@@ -109,8 +109,16 @@ jobs:
       - name: mark toolchain ready
         run: echo "T_TOOLCHAIN=$(date +%s)" >> "$GITHUB_ENV"
 
+      # NOT `--all`: it would drag the vendored compass_data path dep into the
+      # gate (cargo-fmt --all ignores [workspace] exclude for local path deps).
+      # Mirrors the ci.yml fmt step: root package + every member under crates/.
       - name: Rust formatting (cargo fmt --check)
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --check
+          for m in src-tauri/crates/*/Cargo.toml; do
+            [ -e "$m" ] || continue
+            cargo fmt --manifest-path "$m" --check
+          done
 
       - name: Rust cache (hosted only)
         if: runner.environment == 'github-hosted'
@@ -156,7 +164,7 @@ jobs:
 
       - name: cargo test
         if: ${{ !inputs.skip_cargo_test }}
-        run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
+        run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"

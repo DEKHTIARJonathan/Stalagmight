@@ -6,26 +6,36 @@ CI `check` job and must be green to merge.
 
 | Gate | Command | Config |
 |------|---------|--------|
-| Format | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | `src-tauri/rustfmt.toml` (stable defaults, `edition` pinned) |
-| Lint | `cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets` | `src-tauri/Cargo.toml` → `[lints.clippy]` / `[lints.rust]` |
+| Format | `cargo fmt --manifest-path src-tauri/Cargo.toml --check`, then `for m in src-tauri/crates/*/Cargo.toml; do cargo fmt --manifest-path "$m" --check; done` | `src-tauri/rustfmt.toml` (stable defaults, `edition` pinned; applies to every member) |
+| Lint | `cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --features telemetry --all-targets` | `src-tauri/Cargo.toml` → `[workspace.lints.clippy]` / `[workspace.lints.rust]`, inherited by every member via `[lints] workspace = true` |
 
 Run `cargo fmt` and `cargo clippy` locally before pushing (they're in the
 [Pre-Push Checklist](../CLAUDE.md)).
 
 ## Formatting: rustfmt scope and adoption
 
-`cargo fmt` is the formatter for the **`src-tauri` crate**, enforced in CI: the
-`check` job runs `cargo fmt --manifest-path src-tauri/Cargo.toml --check` and
-fails on any drift. Run `cargo fmt` to fix formatting before pushing; the
-`--check` in the Pre-Push Checklist then passes. Config is
-`src-tauri/rustfmt.toml` - stable rustfmt defaults, only `edition` pinned; do
-**not** add nightly-only keys (they'd diverge local vs CI).
+`cargo fmt` is the formatter for the **`src-tauri` workspace** (the
+`stalagmight` app package plus the seven member crates under
+`src-tauri/crates/`), enforced in CI: the `check` job runs
+`cargo fmt --manifest-path src-tauri/Cargo.toml --check` and then the same
+check in a loop over `src-tauri/crates/*/Cargo.toml`, failing on any drift.
+Run `cargo fmt` (root + the same loop, without `--check`) to fix formatting
+before pushing; the `--check` forms in the Pre-Push Checklist then pass.
+Config is `src-tauri/rustfmt.toml` - stable rustfmt defaults, only `edition`
+pinned; do **not** add nightly-only keys (they'd diverge local vs CI).
 
-**Scope:** the gate formats only the `stalagmight` package. The separate
-first-party `scripts/lib/slice-rs` helper crate and the vendored,
-locally-patched `src-tauri/vendor/compass_data` path-dependency are **not**
-gated (vendored code is left as-is on purpose) - don't assume `cargo fmt`
-touched them.
+**Why a loop and not `--all`:** `cargo fmt --all` formats every *path
+dependency* as well as the workspace members, which would reformat the
+deliberately-unformatted vendored `src-tauri/vendor/compass_data` crate. The
+per-manifest loop touches exactly the workspace's own packages.
+
+**Scope:** the gate formats the `stalagmight` package and the workspace
+members. The separate first-party `scripts/lib/slice-rs` helper crate and the
+vendored, locally-patched `src-tauri/vendor/compass_data` path-dependency are
+**not** gated (vendored code is left as-is on purpose; `compass_data` is also
+explicitly kept out of the workspace via `[workspace] exclude`, so
+`--workspace` commands never touch it) - don't assume `cargo fmt` touched
+them.
 
 The crate was adopted into rustfmt in one mechanical commit (recorded in
 `.git-blame-ignore-revs`, so `git blame` skips it - wire it locally once with
@@ -50,14 +60,14 @@ cleanliness *and* **gate clippy in CI** so it can't drift again.
 
 ## The deny-level policy (the "must fix" set)
 
-Production code may not use (see `[lints.clippy]` for the full list + comments):
+Production code may not use (see `[workspace.lints.clippy]` for the full list + comments):
 
 - **Panic safety:** `unwrap_used`, `expect_used`, `panic`, `unwrap_in_result`
 - **Debug artifacts:** `dbg_macro`, `todo`, `unimplemented`, `print_stdout`, `print_stderr`
 - **Clone/string spam:** `inefficient_to_string`, `clone_on_ref_ptr`, `string_to_string`, `rc_clone_in_vec_init`
 - **Hygiene:** `wildcard_imports`, `allow_attributes` (you can't silence lints with `#[allow]`), `wildcard_dependencies`, `redundant_type_annotations`, `mem_forget`, `lossy_float_literal`, `needless_pass_by_ref_mut`, `semicolon_if_nothing_returned`, `explicit_into_iter_loop`
 - **Async footguns:** `await_holding_lock`, `await_holding_refcell_ref`
-- **`[lints.rust]`:** `unsafe_code`, `unused_must_use`, `unused_qualifications`, `unreachable_pub`
+- **`[workspace.lints.rust]`:** `unsafe_code`, `unused_must_use`, `unused_qualifications`, `unreachable_pub`
 
 `pedantic` is on at **warn** (advisory, with specific `allow`s for known-noisy
 members). Only deny-level lints fail the build.
@@ -88,7 +98,7 @@ When adding lints, **measure the hit count on the real tree first** - a
 conceptually-good lint can be unusable in practice:
 
 ```bash
-cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets \
+cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --features telemetry --all-targets \
   --message-format=json -- -W clippy::<candidate> | \
   python3 -c "import json,sys; print(sum('clippy::<candidate>' in l for l in sys.stdin))"
 ```

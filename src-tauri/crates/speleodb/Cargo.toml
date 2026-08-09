@@ -1,0 +1,71 @@
+[package]
+name = "stalagmight-speleodb"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+
+# Opt into the workspace lint tables (see the workspace root manifest) so the
+# anti-slop policy applies here too.
+[lints]
+workspace = true
+
+[features]
+# Compiles the `#[cfg(any(test, feature = "test-support"))]` helpers that used
+# to be `#[cfg(test)]` when this code lived in the root crate (the
+# grant_permission collaborator setup for the two-account live tests): the root
+# crate's tests still call them, and a dependency's `cfg(test)` items are
+# invisible to a dependent's test build. Enabled only via the root crate's
+# [dev-dependencies] entry, so production builds compile exactly what they did
+# before the split.
+test-support = []
+# Forwards to the telemetry member: the per-endpoint coverage test in
+# metrics.rs is gated on `#[cfg(all(test, feature = "telemetry"))]` and needs
+# the real registry (`EVENT_NAMES`), which only exists with the feature on.
+# The root crate's own `telemetry` feature forwards here, so a featured
+# workspace build turns every layer on together.
+telemetry = ["stalagmight-telemetry/telemetry"]
+
+[dependencies]
+stalagmight-models = { path = "../models" }
+stalagmight-telemetry = { path = "../telemetry" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+ts-rs = { workspace = true, features = ["no-serde-warnings"] }
+# Pinned exact (in the workspace table): the seed upload (#183) uses
+# `unversioned::multipart`, whose API is explicitly not semver-stable (see
+# #185). `multipart` adds to the existing default features (rustls, gzip).
+ureq = { workspace = true, features = ["multipart"] }
+http = { workspace = true }
+# Percent-encode the user-typed substring for the collaborator autocomplete query
+# param (#215). Already in the tree transitively; promoted to a direct dep.
+percent-encoding = { workspace = true }
+zip = { workspace = true }
+
+# SpeleoDB auth token at rest (#183, full tiering in #188). Per-OS native secret
+# store. On Linux, Secret Service (gnome-keyring / KWallet) is persistent across
+# sessions - unlike the session-scoped `linux-native` keyutils. `crypto-rust`
+# avoids a system OpenSSL dependency, and `vendored` statically builds libdbus
+# (keyring → dbus-secret-service → dbus → libdbus-sys) so there is no
+# `libdbus-1-dev` system build dependency to install on a clean box or in CI.
+# Headless CI has no secret service at runtime, so the client falls back to an
+# in-memory session token (see speleodb::auth).
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust", "vendored"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+
+[dev-dependencies]
+# Test-only and acyclic: the env-gated live tests in mod.rs seed a real server
+# round trip - exporting a project to `.tml` and opening the extracted `.stalx`.
+stalagmight-export = { path = "../export" }
+stalagmight-persistence = { path = "../persistence" }
+tempfile = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }

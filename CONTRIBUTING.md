@@ -111,15 +111,20 @@ pnpm lint:readonly-gates:test && pnpm lint:readonly-gates          # read-only g
 pnpm lint:private-leaks                                            # no internal/personal refs in the public tree (a CI gate)
 pnpm lint:no-em-dash:test && pnpm lint:no-em-dash                  # ASCII hyphens only, no Unicode dashes (a CI gate)
 pnpm lint:third-party:test && pnpm lint:third-party                # third-party attribution bundle is current (a CI gate)
-cargo fmt --manifest-path src-tauri/Cargo.toml --check             # Rust formatting
+cargo fmt --manifest-path src-tauri/Cargo.toml --check             # Rust formatting (root package)
+for m in src-tauri/crates/*/Cargo.toml; do cargo fmt --manifest-path "$m" --check; done   # every workspace member
 TELEMETRY_ENDPOINT=http://localhost/dummy \
-  cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets   # deny-level lints
+  cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --features telemetry --all-targets   # deny-level lints
 TELEMETRY_ENDPOINT=http://localhost/dummy \
-  cargo test --manifest-path src-tauri/Cargo.toml --features telemetry                   # Rust tests
+  cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry       # Rust tests
 ```
 
 (The dummy `TELEMETRY_ENDPOINT` just satisfies `build.rs` under the `telemetry`
-feature - it sends nothing.) On Windows, run the Rust tests via
+feature - it sends nothing.) `--workspace` is required: without it only the app
+package runs and the member crates under `src-tauri/crates/` are skipped
+entirely. For fast iteration on one crate use `-p`, e.g.
+`cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib fuzz_undo`.
+On Windows, run the Rust tests via
 `./scripts/test.ps1`. The Pre-Push Checklist in [`AGENTS.md`](AGENTS.md) is the
 canonical copy of this list - if the two drift, that one is authoritative.
 

@@ -8,19 +8,19 @@ to satisfy, see the [Testing Guide](TESTING.md).
 
 ## The undo fuzz gate (Rust tier)
 
-`src-tauri/src/core/state/fuzz_undo_tests.rs` runs the undo/redo fuzzing model
+`src-tauri/crates/core/src/core/state/fuzz_undo_tests.rs` runs the undo/redo fuzzing model
 directly against `AppState`, as ordinary tests. It is the only tier that gates
 CI: the agent harness never runs there, and `open_undo_bugs_tests.rs` is
 `#[ignore]`d by design.
 
 ```bash
 # The gate. Runs with the default suite; ~10 s for all four tests.
-TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib fuzz_undo
+cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib fuzz_undo
 
 # See the classified known-bug counts (they are printed, not asserted).
-TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib fuzz_undo -- --nocapture --test-threads=1
+cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib fuzz_undo -- --nocapture --test-threads=1
 ```
 
 Four gate tests: `undo_redo_fuzz_gate` (in-memory), `_gate_persistence` (one
@@ -59,8 +59,8 @@ So, for example, findings 8 and 12 in twelve moves:
 ```bash
 STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1 STALAGMIGHT_RUST_FUZZ_SEEDS=1 \
   STALAGMIGHT_RUST_FUZZ_ITERATIONS=12 \
-  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib fuzz_seed_survey -- --ignored --nocapture
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib fuzz_seed_survey -- --ignored --nocapture
 ```
 
 Every seed prints one summary line per mode ending in `classified hits: ...`,
@@ -77,8 +77,8 @@ allocators / collection growth over a long run.
 ```bash
 STALAGMIGHT_RUST_FUZZ_HORIZON=1 STALAGMIGHT_RUST_FUZZ_SEEDS=4 \
   STALAGMIGHT_RUST_FUZZ_ITERATIONS=10000 \
-  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib undo_redo_fuzz_horizon -- --ignored --nocapture
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib undo_redo_fuzz_horizon -- --ignored --nocapture
 ```
 
 The mode changes the move mix while it is CLIMBING (85/8/7 mutate/undo/redo, and
@@ -96,8 +96,8 @@ sliding window under maximum pressure at 60 moves instead of 10,000.
 ```bash
 STALAGMIGHT_RUST_FUZZ_CONFIG=1 STALAGMIGHT_RUST_FUZZ_SEEDS=32 \
   STALAGMIGHT_RUST_FUZZ_ITERATIONS=60 \
-  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib fuzz_seed_survey -- --ignored --nocapture
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib fuzz_seed_survey -- --ignored --nocapture
 ```
 
 The drawn value is printed at the end of every summary line and of every failure
@@ -119,8 +119,8 @@ module still holds the line, run it with the config dir redirected and assert
 nothing was written:
 
 ```bash
-XDG_CONFIG_HOME=$(mktemp -d) TELEMETRY_ENDPOINT=http://localhost/dummy \
-  cargo test --manifest-path src-tauri/Cargo.toml --features telemetry --lib \
+XDG_CONFIG_HOME=$(mktemp -d) \
+  cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
   -- core::state::metamorphic_undo_tests
 # then: find "$XDG_CONFIG_HOME" -type f   -> must be empty
 ```
@@ -134,8 +134,8 @@ and re-mining that gate's seeds means running the survey over the regime:
 ```bash
 STALAGMIGHT_RUST_FUZZ_COMBINED=1 STALAGMIGHT_RUST_FUZZ_SEEDS=40 \
   STALAGMIGHT_RUST_FUZZ_ITERATIONS=300 \
-  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib fuzz_seed_survey -- --ignored --nocapture
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib fuzz_seed_survey -- --ignored --nocapture
 ```
 
 Two facts that combining exposed, both fixed only for the combined regime so no
@@ -150,8 +150,8 @@ constructed shapes) because each reaches open findings:
 
 ```bash
 STALAGMIGHT_RUST_FUZZ_SEEDS=200 STALAGMIGHT_RUST_FUZZ_ITERATIONS=1000 \
-  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib undo_redo_fuzz_soak -- --ignored --nocapture
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib undo_redo_fuzz_soak -- --ignored --nocapture
 ```
 
 **All three sweeps run their seeds in parallel.** The soak, the survey and the
@@ -188,13 +188,13 @@ instead, because every reduction for those two was measured not to reproduce
 ```bash
 # libtest takes several filters and ORs them; a shell-regex filter matches
 # nothing, since cargo's own filter is a plain substring.
-TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib -- --ignored open_undo_bugs finding_14 bug_7
+cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib -- --ignored open_undo_bugs finding_14 bug_7
 ```
 
 ## The metamorphic gate (Rust tier)
 
-`src-tauri/src/core/state/metamorphic_undo_tests.rs` asks a question the
+`src-tauri/crates/core/src/core/state/metamorphic_undo_tests.rs` asks a question the
 roundtrip fuzzer structurally cannot: do two DIFFERENT ways of asking for the
 same edit agree? The roundtrip oracle compares a state against itself at an
 earlier moment, so a defect that is faithfully undone is invisible to it - and
@@ -213,13 +213,13 @@ said earlier, so there is no second route to compare it across.)
 
 ```bash
 # The gate. Runs with the default suite; ~11 s.
-TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib metamorphic
+cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib metamorphic
 
 # The sweep, and the tool for re-choosing the metamorphic GATE_SEEDS.
 STALAGMIGHT_RUST_META_SEEDS=40 STALAGMIGHT_RUST_META_REPEATS=4 \
-  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib metamorphic_fuzz -- --ignored --nocapture
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib metamorphic_fuzz -- --ignored --nocapture
 ```
 
 | env | effect |
@@ -250,19 +250,19 @@ it is intermittent on identical inputs and has not been root-caused.
 
 ## The file-format gate (Rust tier)
 
-`src-tauri/src/core/state/format_property_tests.rs` is the only thing that
+`src-tauri/crates/core/src/core/state/format_property_tests.rs` is the only thing that
 looks at the `.stalx` itself. Byte-comparison is the wrong instrument for a
 SQLite database (page allocation, freelists, the change counter), so the
 comparison is on the database's LOGICAL content: every user table, every row,
 sorted, with the save's own wall clock masked by value shape.
 
 ```bash
-TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib format_
+cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib format_
 
 STALAGMIGHT_RUST_FORMAT_SEEDS=60 STALAGMIGHT_RUST_FORMAT_CLOSURES=1 \
-  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib format_property_sweep -- --ignored --nocapture
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib format_property_sweep -- --ignored --nocapture
 ```
 
 Three properties: save -> load -> save is a fixpoint (finding 23, classified);
@@ -280,7 +280,7 @@ except bounded float dust in the derived and history tables.
 
 ## The crash-timing gate (Rust tier)
 
-`src-tauri/src/core/state/crash_property_tests.rs` tests the save pipeline's
+`src-tauri/crates/core/src/core/state/crash_property_tests.rs` tests the save pipeline's
 central promise - "a temp file with atomic rename to prevent data loss on crash
 or power failure" ([Saving](saving.md)) - by simulating a kill at each of its
 boundaries. Nothing else does: the file-format engine above is the only other
@@ -288,13 +288,13 @@ thing that looks at a `.stalx`, and it only ever looks at files a save
 FINISHED writing.
 
 ```bash
-TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib crash_property
+cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib crash_property
 
 STALAGMIGHT_RUST_CRASH_SEEDS=60 STALAGMIGHT_RUST_CRASH_MOVES=26 \
   STALAGMIGHT_RUST_CRASH_EXTRA=12 \
-  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib crash_property_sweep -- --ignored --nocapture
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib crash_property_sweep -- --ignored --nocapture
 ```
 
 The crash is SIMULATED by constructing the exact files a kill would leave -
@@ -328,17 +328,17 @@ not move, and neither does any total.
 
 ## The adversarial gate (Rust tier)
 
-`src-tauri/src/core/state/adversarial_tests.rs` fuzzes the command layer's
+`src-tauri/crates/core/src/core/state/adversarial_tests.rs` fuzzes the command layer's
 VALIDATION, which every other generator here avoids by construction.
 
 ```bash
-TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib adversarial
+cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib adversarial
 
 STALAGMIGHT_RUST_ADV_SEEDS=200 STALAGMIGHT_RUST_ADV_MOVES=400 \
   STALAGMIGHT_RUST_ADV_CLOSURES=1 \
-  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib adversarial_sweep -- --ignored --nocapture
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib adversarial_sweep -- --ignored --nocapture
 ```
 
 Two invariants: a rejected command is a PERFECT no-op (all five oracles, not
@@ -354,20 +354,20 @@ x 300 moves: 10 696 calls, 9 331 rejected, zero no-op violations.
 
 ## The concurrency gate (Rust tier)
 
-`src-tauri/src/core/state/concurrency_tests.rs` drives ONE `AppState` from
+`src-tauri/crates/core/src/core/state/concurrency_tests.rs` drives ONE `AppState` from
 several threads. `AppState`'s `command_lock` exists to serialize
 execute/undo/redo, and [Undo/Redo](undo-redo.md) documents a lock ordering
 discipline underneath it; nothing exercised either, because every other engine
 here is single-threaded.
 
 ```bash
-TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib concurrency
+cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib concurrency
 
 STALAGMIGHT_RUST_CONC_SEEDS=40 STALAGMIGHT_RUST_CONC_THREADS=8 \
   STALAGMIGHT_RUST_CONC_OPS=2000 \
-  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib concurrency_soak -- --ignored --nocapture
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib concurrency_soak -- --ignored --nocapture
 ```
 
 Inputs are seeded per thread so a failing run replays in what each thread
@@ -402,15 +402,15 @@ numbers and the two changes that would make it pay.
 **The second answer is also no.** One of those two changes - admission keyed on
 a RARE structural bit rather than on whole-signature novelty - was then measured
 in full: `fuzz_rarity_sweep` and `fuzz_rarity_carryover`
-(`src-tauri/src/core/state/fuzz_rarity_tests.rs`, both `#[ignore]`d), six
+(`src-tauri/crates/core/src/core/state/fuzz_rarity_tests.rs`, both `#[ignore]`d), six
 repetitions of 80 runs x 60 moves per arm across four admission predicates and
 two regimes.
 
 ```bash
 STALAGMIGHT_RUST_FUZZ_THREADS=8 STALAGMIGHT_RUST_FUZZ_RARITY_BUDGET=80 \
   STALAGMIGHT_RUST_FUZZ_RARITY_REPS=6 STALAGMIGHT_RUST_FUZZ_ITERATIONS=60 \
-  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib fuzz_rarity_sweep -- --ignored --nocapture
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib fuzz_rarity_sweep -- --ignored --nocapture
 ```
 
 Three things came out of it, and the third is the one to remember:
@@ -437,8 +437,8 @@ fixed and widen `GATE_SEEDS`:
 
 ```bash
 STALAGMIGHT_RUST_FUZZ_SEEDS=40 STALAGMIGHT_RUST_FUZZ_ITERATIONS=100 \
-  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib fuzz_seed_survey -- --ignored --nocapture
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib fuzz_seed_survey -- --ignored --nocapture
 ```
 
 `COMBINED_SEEDS` is chosen the same way, from the same tool under `COMBINED=1`,
@@ -478,13 +478,13 @@ SAME WAY, halve the chunk when nothing more can go.
 STALAGMIGHT_RUST_FUZZ_SHRINK=1 STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1 \
   STALAGMIGHT_RUST_FUZZ_ITERATIONS=200 \
   STALAGMIGHT_RUST_FUZZ_SHRINK_TARGET=finding-8-stale-id-deletes-the-wrong-shot \
-  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib fuzz_shrink -- --ignored --nocapture
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib fuzz_shrink -- --ignored --nocapture
 
 # Replay the minimized trace it wrote, and ASSERT the same failure comes back.
 STALAGMIGHT_RUST_FUZZ_REPLAY=/tmp/stalagmight-shrink-seed1-3moves.json \
-  TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib fuzz_replay -- --ignored --nocapture
+  cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib fuzz_replay -- --ignored --nocapture
 ```
 
 The plan comes from the SAME knobs the survey reads (`ITERATIONS`,
@@ -585,18 +585,45 @@ own on a free port (`pnpm exec vite --port 1421`) and run against a config whose
 ### Rust
 
 ```bash
-# What CI runs. --features telemetry is REQUIRED (see below).
+# What CI runs. --workspace and --features telemetry are REQUIRED (see below).
 TELEMETRY_ENDPOINT=http://localhost/dummy \
-  cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
+  cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry
 
-cargo test --manifest-path src-tauri/Cargo.toml parser            # by name
-cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture    # show println!
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-parsers        # one crate
+cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture   # app crate, show println!
 ```
 
-**Trap: a plain `cargo test` can pass while CI fails.** The
-`registry_covers_all_*` telemetry-registry coverage tests are gated behind the
-`telemetry` feature, so a plain run filters them out. `build.rs` also *requires*
-`TELEMETRY_ENDPOINT` to be set when building with that feature.
+**Trap: a plain `cargo test` can pass while CI fails, twice over.** Without
+`--workspace` only the app crate's tests run - the member crates under
+`src-tauri/crates/` are skipped entirely. And the `registry_covers_all_*`
+telemetry-registry coverage tests are gated behind the `telemetry` feature, so
+a featureless run filters them out. The telemetry member's `build.rs` also
+*requires* `TELEMETRY_ENDPOINT` to be set when building with that feature.
+
+#### Running one crate
+
+The backend is a cargo workspace: the `stalagmight` app package at `src-tauri/`
+plus seven members under `src-tauri/crates/` (`stalagmight-models`,
+`-telemetry`, `-parsers`, `-persistence`, `-export`, `-speleodb`, `-core`).
+Select one with `-p` for fast iteration:
+
+```bash
+# The fuzz / metamorphic / crash / adversarial / concurrency engines all live
+# in stalagmight-core (crates/core/src/core/state/):
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib fuzz_undo
+
+# A member without the telemetry feature needs neither the feature nor
+# TELEMETRY_ENDPOINT:
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-export dpi
+```
+
+`--features telemetry` only combines with the packages that define the feature -
+`stalagmight` (the app), `stalagmight-telemetry` and `stalagmight-speleodb`;
+cargo rejects it for any other `-p` selection (the error lists the packages
+that have it). The formerly-`#[cfg(test)]` shared helpers (`TestDb`,
+`isolated_config`, the AppState test setters) are stalagmight-core's
+`test-support` feature; it is enabled automatically for the crates whose
+dev-dependencies request it, so test commands never need to pass it by hand.
 
 **Trap: on Windows, run the Rust tests via `./scripts/test.ps1`.** That script
 sets `STALAGMIGHT_TEST_MANIFEST=1` (and the telemetry feature + endpoint).
@@ -1390,7 +1417,8 @@ at a surviving one, or they time out.
 
 ## Rust patterns
 
-Tests live alongside the source in `src-tauri/src/`. Per-test-module
+Tests live alongside the source - in the app crate (`src-tauri/src/`) and in
+each workspace member (`src-tauri/crates/*/src/`). Per-test-module
 `#[expect]` (never `#[allow]`) is the clippy idiom here - see
 [Linting & Format Policy](linting.md).
 
@@ -1421,17 +1449,21 @@ let conn = rusqlite::Connection::open_in_memory()?;
 ```
 
 Used by the tile cache, the `.plnx` dive-plan store, and the project database
-(`src-tauri/src/persistence/sqlite/open.rs`).
+(`src-tauri/crates/persistence/src/persistence/sqlite/open.rs`).
 
 ### Fixture files
 
 Resolve fixtures from the manifest directory - they are shared with the E2E
-tiers and live outside the crate:
+tiers and live outside the crate. Mind which crate the test is in: from a
+workspace member (`src-tauri/crates/<member>/`) the repo root is three levels
+up; from the app crate (`src-tauri/`) it is one.
 
 ```rust
 #[test]
 fn parses_v5_dmp() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v5.dmp");
+    // In a member crate (here: stalagmight-parsers). From the app crate the
+    // prefix is "../e2e/fixtures/" instead.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp");
     assert!(path.exists(), "Fixture missing: {}", path.display());
 
     let dmp = parse_dmp(&path).expect("v5 DMP should parse");
@@ -1469,7 +1501,7 @@ warns and leaves no phantom recent-projects entry), and
 
 ### Registering a new mutation entry point
 
-`MUTATION_ENTRYPOINTS` in `src-tauri/src/core/state/tests.rs` is a
+`MUTATION_ENTRYPOINTS` in `src-tauri/crates/core/src/core/state/tests.rs` is a
 hand-maintained tripwire. Any `execute_*` method that bypasses the generic
 `execute()` must be added there, or the read-only edit-gate test will not cover
 it.
@@ -1489,7 +1521,7 @@ coverage test. Treat it as authoritative if the two ever disagree.
 
 ## Export testing
 
-Image export is `src-tauri/src/export/image.rs`. It emits SVG, then rasterizes
+Image export is `src-tauri/crates/export/src/export/image.rs`. It emits SVG, then rasterizes
 to PNG or PDF.
 
 Sizing is **pixel-stable**: world coordinates are meters, and the SVG is scaled
@@ -1514,8 +1546,8 @@ copy of that table is worse than no table.
 PNG rasterization scales by DPI: `scale = dpi / 72`.
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml export      # the export module
-cargo test --manifest-path src-tauri/Cargo.toml dpi         # the DPI tests
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-export export   # the export module
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-export dpi      # the DPI tests
 ```
 
 `export_png_dimensions_scale_with_dpi` pins linear DPI scaling (72 vs 288, with a
@@ -1620,7 +1652,7 @@ data for a specific edge case, and record what it is for in the fixtures README.
 
 | Symptom | Check |
 |---------|-------|
-| Passes locally, fails in CI | Run with `--features telemetry` and `TELEMETRY_ENDPOINT` set - a plain run filters the registry-coverage tests out |
+| Passes locally, fails in CI | Run with `--workspace`, `--features telemetry` and `TELEMETRY_ENDPOINT` set - without `--workspace` the member crates are skipped, and a featureless run filters the registry-coverage tests out |
 | Every test binary aborts at startup on Windows (`0xC0000139`) | Use `./scripts/test.ps1` |
 | A permission-based save-failure test passes vacuously in CI | CI runs as root. Use a root-safe inducer (above) |
 | Flaky or order-dependent | Shared mutable state between tests |

@@ -17,7 +17,7 @@ User action → telemetry.ts (batch counts) → IPC → Rust TelemetryCollector
 **Frontend** (`src/utils/telemetry.ts`): Batches event counts in memory, flushes
 to Rust every 60 seconds.
 
-**Backend** (`src-tauri/src/telemetry.rs`): Aggregates counts per session, flushes
+**Backend** (`src-tauri/crates/telemetry/src/telemetry/mod.rs`): Aggregates counts per session, flushes
 to the configured telemetry endpoint every 60 seconds. Buffers to
 `<app-local-data-dir>/telemetry-buffer/*.json` when offline (the per-app data
 dir - see the path tables in [configuration.md](configuration.md)).
@@ -64,7 +64,7 @@ sub-2 KB per flush, and D1 storage is unchanged (it always stored string names).
 
 ### Event vocabulary
 
-`src-tauri/src/telemetry/registry.rs` keeps `EVENT_NAMES` / `SOURCE_NAMES` as the
+`src-tauri/crates/telemetry/src/telemetry/registry.rs` keeps `EVENT_NAMES` / `SOURCE_NAMES` as the
 canonical list of event names the app emits. It is **not** a wire ID map - it
 exists only to back the coverage tests (every command / tool / dialog has a
 tracked event; typo detection). Order is irrelevant, and there is no worker-side
@@ -285,9 +285,10 @@ walks the registry and fails until all three names for it are in `EVENT_NAMES`.
 | `src/utils/telemetry.ts` | Frontend batching, source hints, dialog/display tracking |
 | `src/utils/ipc.ts` | Calls `trackCommand` for every IPC invocation |
 | `src/store/uiStore.ts` | Wires tracking into `closeDialog`, `openDialog`, `setSelection`, `addToSelection`, panel toggles, display settings |
-| `src-tauri/src/telemetry/mod.rs` | Rust collector, HTTP send, disk buffer, periodic flush |
-| `src-tauri/src/telemetry/registry.rs` | Canonical event/source name vocabulary (backs the coverage tests) |
-| `src-tauri/src/speleodb/metrics.rs` | Per-endpoint SpeleoDB traffic instrumentation (`speleodb-api.*`, #210) |
+| `src-tauri/crates/telemetry/src/telemetry/mod.rs` | Rust collector, HTTP send, disk buffer, periodic flush |
+| `src-tauri/crates/telemetry/src/telemetry/registry.rs` | Canonical event/source name vocabulary (backs the coverage tests) |
+| `src-tauri/src/commands/telemetry_coverage_tests.rs` | The `registry_covers_all_*` coverage suite (app crate - it parses `lib.rs`'s `generate_handler![]` and the frontend sources) |
+| `src-tauri/crates/speleodb/src/speleodb/metrics.rs` | Per-endpoint SpeleoDB traffic instrumentation (`speleodb-api.*`, #210) |
 | `src-tauri/src/commands/telemetry.rs` | IPC commands: `track_events`, `flush_telemetry`, etc. |
 | `src/store/displaySelectors.ts` | `DISPLAY_DEFAULTS` - single source of truth for default values |
 
@@ -354,7 +355,7 @@ withTrackingSuppressed(() => toggleSectionsPanel());
 
 ## Event Vocabulary & Coverage
 
-`EVENT_NAMES` / `SOURCE_NAMES` in `src-tauri/src/telemetry/registry.rs` are the
+`EVENT_NAMES` / `SOURCE_NAMES` in `src-tauri/crates/telemetry/src/telemetry/registry.rs` are the
 canonical list of event names the app emits. Because the wire format sends names
 verbatim (self-describing JSON), this is **not** an ID map - order is irrelevant,
 entries can be added/renamed/removed freely, and there is no worker-side copy to
@@ -367,7 +368,17 @@ before they reach the database.
 1. Add the bare event name (e.g. `command.my_command`) to `EVENT_NAMES` in
    `registry.rs` - anywhere; order does not matter - and bump the `event_count`
    test.
-2. Run `cargo test --manifest-path src-tauri/Cargo.toml --features telemetry -- telemetry::registry`.
+2. Run the registry + coverage tests. They span three workspace crates - the
+   registry's own tests live with the vocabulary in `stalagmight-telemetry`,
+   the SpeleoDB traffic-event test in `stalagmight-speleodb`
+   (`speleodb/metrics.rs`), and the `registry_covers_all_*` suite in the app
+   crate (`src-tauri/src/commands/telemetry_coverage_tests.rs`, next to the
+   `generate_handler![]` it parses) - so use the workspace form:
+
+   ```bash
+   TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
+     --workspace --features telemetry -- telemetry metrics
+   ```
 
 The coverage tests flag a new command / tool / dialog that is missing its event
 name (or an event name with no corresponding feature).
@@ -504,7 +515,7 @@ don't make HTTP calls.
 ```yaml
 # CI - runs registry exhaustiveness tests (dummy endpoint, no HTTP)
 TELEMETRY_ENDPOINT=https://test.invalid/v1/events \
-  cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
+  cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry
 
 # Release - compiles telemetry into the binary (real endpoint from secret)
 TELEMETRY_ENDPOINT=$TELEMETRY_ENDPOINT \

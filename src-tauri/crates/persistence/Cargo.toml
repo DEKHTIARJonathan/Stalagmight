@@ -1,0 +1,43 @@
+[package]
+name = "stalagmight-persistence"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+
+# Opt into the workspace lint tables (see the workspace root manifest) so the
+# anti-slop policy applies here too.
+[lints]
+workspace = true
+
+[features]
+# Compiles the `#[cfg(any(test, feature = "test-support"))]` helpers that used
+# to be `#[cfg(test)]` when this code lived in the root crate (the TileCache
+# in-memory/expiry/grant test hooks): the root crate's tests still call them,
+# and a dependency's `cfg(test)` items are invisible to a dependent's test
+# build. Enabled only via the root crate's [dev-dependencies] entry, so
+# production builds compile exactly what they did before the split.
+test-support = []
+
+[dependencies]
+stalagmight-models = { path = "../models" }
+serde = { workspace = true, features = ["derive"] }
+# `float_roundtrip` mirrors the root crate's serde_json entry (see the rationale
+# there): features are additive, so workspace builds already parse floats
+# roundtrip-exactly - declaring it here keeps a standalone
+# `cargo test -p stalagmight-persistence` on the same parser, and this crate is
+# precisely where the roundtrip matters (it deserializes saved projects).
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+rusqlite = { workspace = true, features = ["bundled"] }
+chrono = { workspace = true, features = ["serde"] }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+flate2 = { workspace = true }
+ts-rs = { workspace = true, features = ["no-serde-warnings"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+# Test-only and acyclic: the sqlite round-trip tests import a real `.dmp`
+# through the parser to exercise a realistic project shape.
+stalagmight-parsers = { path = "../parsers" }
+tempfile = { workspace = true }

@@ -1,8 +1,8 @@
 # Stalagmight Configuration
 
 The reference for `config.toml`. Ground truth is the `Config` struct in
-`src-tauri/src/config/types.rs` plus the defaults in
-`src-tauri/src/config/defaults.rs` - change those and this file together.
+`src-tauri/crates/core/src/config/types.rs` plus the defaults in
+`src-tauri/crates/core/src/config/defaults.rs` - change those and this file together.
 
 ## Config File Location
 
@@ -279,7 +279,7 @@ log_hit_detection = false           # Log hit detection events to browser consol
 
 `[webkit_memory]` exists only for Linux WebKit memory-pressure tuning. It is
 backend-only (kept out of the frontend config types and out of `get_config`), so
-it is not documented here - see the field comment in `src-tauri/src/config/types.rs`.
+it is not documented here - see the field comment in `src-tauri/crates/core/src/config/types.rs`.
 
 ## Keyboard Shortcuts
 

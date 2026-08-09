@@ -292,7 +292,7 @@ which are the provider answering rather than absent. It is never presented as
 current, and any `Age` on the response is subtracted from the grant first, since
 `max-age` runs from when the origin made the response and not from when we got
 it. See
-`src-tauri/src/cache/tiles.rs`.
+`src-tauri/crates/persistence/src/cache/tiles.rs`.
 
 **The string is fetched, not hard-coded.** `src-tauri/src/tile_attribution.rs`
 reads `copyrightText` from the provider's `service_info_url`, caches it for a day,

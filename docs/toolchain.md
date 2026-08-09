@@ -64,3 +64,30 @@ rather than reading the exit code.
 
 `pnpm-lock.yaml` stays at `lockfileVersion: '9.0'`; pnpm 11 accepts it under
 `--frozen-lockfile` and does not rewrite it.
+
+## rust-analyzer
+
+A committed `rust-analyzer.toml` at the repo root configures rust-analyzer for
+the `src-tauri` cargo workspace:
+
+- `cargo.targetDir = true` - RA builds into its own target subdirectory instead
+  of sharing the CLI target dir. Without this, RA (no features) and terminal
+  runs (`--features telemetry`) evict each other's incremental caches, so every
+  terminal test run triggered a full RA recheck.
+- `cargo.features = ["telemetry"]` + `cargo.extraEnv.TELEMETRY_ENDPOINT` - the
+  exact feature/env shape CI and the pre-push checklist use, so RA sees the
+  telemetry module and flycheck matches CI. The env var is required: with the
+  feature on, the telemetry member's build script
+  (`src-tauri/crates/telemetry/build.rs`) refuses to build without it.
+
+If your editor's rust-analyzer does not pick the file up (older RA builds only
+read `rust-analyzer.toml` from certain roots), set the same three keys in your
+editor settings, e.g. gitignored `.vscode/settings.json`:
+
+```json
+{
+  "rust-analyzer.cargo.targetDir": true,
+  "rust-analyzer.cargo.features": ["telemetry"],
+  "rust-analyzer.cargo.extraEnv": { "TELEMETRY_ENDPOINT": "http://localhost/dummy" }
+}
+```

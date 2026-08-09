@@ -1,0 +1,31 @@
+[package]
+name = "stalagmight-models"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+
+# Opt into the workspace lint tables (see the workspace root manifest) so the
+# anti-slop policy applies here too.
+[lints]
+workspace = true
+
+[features]
+# Compiles the `#[cfg(any(test, feature = "test-support"))]` helpers that used
+# to be `#[cfg(test)]` when this code lived in the root crate: the root crate's
+# tests still call them, and a dependency's `cfg(test)` items are invisible to a
+# dependent's test build. Enabled only via the root crate's [dev-dependencies]
+# entry, so production builds compile exactly what they did before the split.
+test-support = []
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+# `float_roundtrip` mirrors the root crate's serde_json entry (see the rationale
+# there): features are additive, so workspace builds already parse floats
+# roundtrip-exactly - declaring it here keeps a standalone
+# `cargo test -p stalagmight-models` on the same parser.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+chrono = { workspace = true, features = ["serde"] }
+ts-rs = { workspace = true, features = ["no-serde-warnings"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }

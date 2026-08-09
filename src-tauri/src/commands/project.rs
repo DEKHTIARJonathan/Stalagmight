@@ -24,8 +24,9 @@ pub fn update_project_settings(
 ///
 /// `is_autosave` changes NOTHING about the save - it only names who asked for
 /// it, so a background write is distinguishable from a Ctrl+S in the log
-/// (#429). Absent means manual: every other Rust caller reaches the save
-/// through [`save_project_impl`].
+/// (#429). Absent means manual: every other Rust caller either goes through
+/// [`save_project_impl`] or constructs `Command::SaveProject` itself; both
+/// funnel into the same `execute` dispatch.
 #[tauri::command]
 pub fn save_project(
     state: State<AppState>,

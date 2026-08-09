@@ -2,6 +2,30 @@
 
 > For full data model, UI design, and workflows, see [SPEC.md](SPEC.md).
 
+## Workspace layout
+
+The Rust backend is a cargo workspace rooted at `src-tauri/Cargo.toml` (a
+hybrid root: the `stalagmight` app package lives there too). Seven library
+crates sit under `src-tauri/crates/`:
+
+| Crate | Contents | Key deps |
+|-------|----------|----------|
+| `stalagmight-models` | The data model: `Project` / `Section` / `Shot` / `Station`, geometry (`geo.rs`), closures/merges/offsets, `app_dirs`, gas config + engine | - (base crate) |
+| `stalagmight-telemetry` | Telemetry collector + event registry (`telemetry/`), tracing/logging setup (`logging/`); its `build.rs` owns `TELEMETRY_ENDPOINT` validation and `APP_VERSION` | models |
+| `stalagmight-parsers` | Import parsers: DMP, Ariane TML/TMLU, Compass, Walls, GPX | models |
+| `stalagmight-persistence` | `.stalx` SQLite store + `.plnx` dive-plan store (`persistence/`), tile caches (`cache/`, `tilemap_cache`) | models |
+| `stalagmight-export` | CSV / JSON / image (SVG->PNG/PDF) / TML export, dive profile | models, parsers |
+| `stalagmight-speleodb` | SpeleoDB client: HTTP surface, auth/token storage, dump handling, sync, TLS policy, metrics | models, telemetry |
+| `stalagmight-core` | `AppState`, the command executors, undo/redo, project I/O orchestration, config I/O (`config/`), `tile_providers`; shared test helpers behind the `test-support` feature | export, models, parsers, persistence, speleodb |
+| `stalagmight` (app, at `src-tauri/`) | The thin Tauri layer: `commands/` (IPC handlers), `lib.rs` (the single `generate_handler!`), `main.rs`, `tile_attribution.rs`, `webkit_memory.rs`, `examples/`, `tests/` | all of the above |
+
+The layering is strict and one-way - models -> telemetry / parsers /
+persistence -> export / speleodb -> core -> app, where `->` reads "is depended
+on by" - so a lower crate never imports from a higher one. The workspace root also carries the shared
+`[workspace.dependencies]`, the `[workspace.lints]` policy every member
+inherits, and the `telemetry` feature, which forwards to the members that
+implement it (`stalagmight-telemetry`, `stalagmight-speleodb`).
+
 ## State Flow
 
 ```
@@ -13,14 +37,14 @@ User Action → Zustand Store → Tauri IPC → Rust Command Executor
 ## Command Pattern
 
 All persistent operations go through the Rust `Command` enum in
-`src-tauri/src/core/command.rs`. `AppState` (`src-tauri/src/core/state/app_state.rs`)
+`src-tauri/crates/core/src/core/command.rs`. `AppState` (`src-tauri/crates/core/src/core/state/app_state.rs`)
 executes them and manages undo/redo; the executor bodies are split one module per command
 family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
-`src-tauri/src/core/state/`.
+`src-tauri/crates/core/src/core/state/`.
 
 ## Data Model
 
-- **Project** (`src-tauri/src/models/project.rs`): the whole in-memory document - the
+- **Project** (`src-tauri/crates/models/src/project.rs`): the whole in-memory document - the
   sections, plus everything that cross-references them.
   - `station_merges`, `zero_datums`, `loop_closures` - the cross-section ties. All three
     are held with position-independent `StationKey` endpoints and re-encoded to the
@@ -41,7 +65,7 @@ family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
 - **Station**: Computed from shots, can be merged or set as zero datum
 
 Two things a project owns are deliberately *not* fields on `Project`. The SpeleoDB link is
-a single `speleo_link` row inside the `.stalx` (`src-tauri/src/models/speleo_link.rs`). A
+a single `speleo_link` row inside the `.stalx` (`src-tauri/crates/models/src/speleo_link.rs`). A
 linked project is usable at exactly one path - the pull cache,
 `<cache>/speleodb/<project_id>/project.stalx` - and two seams enforce that:
 `do_load_project_full` refuses to open a linked file anywhere else
@@ -67,12 +91,12 @@ UI is in - so a missed gate is a real bug, not a cosmetic one.
 -> [app-modes.md](app-modes.md)
 
 **Gas and dive planning.** `Project::compute_gas_reach_field`
-(`src-tauri/src/models/project/gas.rs`) seeds a gas-weighted Dijkstra over the same survey
+(`src-tauri/crates/models/src/project/gas.rs`) seeds a gas-weighted Dijkstra over the same survey
 graph the distance overlay uses, weighting each shot by the gas it costs to swim in, and
 marks every station reachable within the turn budget. It runs on measured coordinates -
 reachability is coordinate-independent, so it never triggers the slow closure-adjusted
 solve. Inputs live in `src/store/gasPlanStore.ts` (runtime only, never persisted); named
-plans persist to the sibling `.plnx` (`src-tauri/src/persistence/plnx.rs`) and store the
+plans persist to the sibling `.plnx` (`src-tauri/crates/persistence/src/persistence/plnx.rs`) and store the
 engine's *input tuple*, never the derived field, so a loaded plan cannot show a stale
 overlay. -> [gas-planning.md](gas-planning.md)
 
@@ -88,7 +112,7 @@ interaction state, not survey size. Global View is custom-only too
 (`src/components/GlobalView/customRender/globalController.ts`).
 -> [map-renderer.md](map-renderer.md)
 
-**SpeleoDB.** `src-tauri/src/speleodb/` holds the client half: HTTP surface, token storage
+**SpeleoDB.** `src-tauri/crates/speleodb/src/speleodb/` holds the client half: HTTP surface, token storage
 (OS keychain with an in-memory fallback), ZIP-dump classification and `.stalx` extraction,
 the base-SHA fence and ancestry recovery. Orchestration against `AppState` lives in
 `core/state/speleodb.rs`, the IPC commands in `commands/speleodb.rs`. The model is a
@@ -98,7 +122,7 @@ unlike the mode-driven read-only above, that one has a real backend backstop -
 No subsystem page yet; the closest thing is the test-setup + verified-API-contract
 guide -> [speleodb-dev-testing.md](speleodb-dev-testing.md)
 
-**Telemetry.** `src-tauri/src/telemetry/` is always compiled but real only behind the
+**Telemetry.** `src-tauri/crates/telemetry/src/telemetry/` is always compiled but real only behind the
 `telemetry` Cargo feature; with it off every method is an empty no-op. Anonymous
 session-level counters, off by default and opt-in via config, buffered to disk on a failed
 flush and retried. `registry.rs` owns the event vocabulary and the `registry_covers_all_*`
@@ -109,17 +133,17 @@ tests that fail when a new command / tool / dialog is added without a matching e
 
 | File | Purpose |
 |------|---------|
-| `src-tauri/src/core/command.rs` | Command enum and result types |
-| `src-tauri/src/core/state/` | `AppState` (`app_state.rs`) plus one module per command family |
-| `src-tauri/src/persistence/sqlite.rs` | `Database` struct + `SCHEMA_VERSION` and its migration history; the impl is split across `persistence/sqlite/` (open, read, write, schema, integrity, undo, repair, settings, warnings) |
-| `src-tauri/src/persistence/plnx.rs` | `.plnx` sibling store for named dive plans |
-| `src-tauri/src/parsers/dmp.rs` | mNemo DMP file parser |
-| `src-tauri/src/models/project.rs` | Project model with merge/offset logic |
-| `src-tauri/src/models/project/gas.rs` | Gas-weighted reachability engine (`compute_gas_reach_field`) |
-| `src-tauri/src/models/geo.rs` | GPS-to-local coordinate transformation (WGS84 → ENU) |
-| `src-tauri/src/speleodb/mod.rs` | SpeleoDB client module root (HTTP, auth, dump, sync, TLS policy) |
-| `src-tauri/src/cache/tiles.rs` | Satellite tile cache (SQLite-based) |
-| `src-tauri/src/tile_providers.rs` | Tile provider registry (provider metadata, URL expansion) |
+| `src-tauri/crates/core/src/core/command.rs` | Command enum and result types |
+| `src-tauri/crates/core/src/core/state/` | `AppState` (`app_state.rs`) plus one module per command family |
+| `src-tauri/crates/persistence/src/persistence/sqlite.rs` | `Database` struct + `SCHEMA_VERSION` and its migration history; the impl is split across `persistence/sqlite/` (open, read, write, schema, integrity, undo, repair, settings, warnings) |
+| `src-tauri/crates/persistence/src/persistence/plnx.rs` | `.plnx` sibling store for named dive plans |
+| `src-tauri/crates/parsers/src/parsers/dmp.rs` | mNemo DMP file parser |
+| `src-tauri/crates/models/src/project.rs` | Project model with merge/offset logic |
+| `src-tauri/crates/models/src/project/gas.rs` | Gas-weighted reachability engine (`compute_gas_reach_field`) |
+| `src-tauri/crates/models/src/geo.rs` | GPS-to-local coordinate transformation (WGS84 → ENU) |
+| `src-tauri/crates/speleodb/src/speleodb/mod.rs` | SpeleoDB client module root (HTTP, auth, dump, sync, TLS policy) |
+| `src-tauri/crates/persistence/src/cache/tiles.rs` | Satellite tile cache (SQLite-based) |
+| `src-tauri/crates/core/src/tile_providers.rs` | Tile provider registry (provider metadata, URL expansion) |
 | `src-tauri/src/commands/cache.rs` | Cache IPC commands (stats, clear, fetch) |
 | `src-tauri/src/commands/survey_geometry.rs` | Survey geometry IPC command (`get_survey_geometry_for_file`) |
 | `src/store/projectStore.ts` | Frontend state, Tauri IPC calls |
@@ -147,7 +171,7 @@ tests that fail when a new command / tool / dialog is added without a matching e
 | `src/components/Dialogs/KeyboardShortcutsDialog.tsx` | Keyboard shortcuts overlay (`?` key) |
 | `src/components/Dialogs/settings/AppearanceSettings.tsx` | Theme mode & color theme selection UI |
 | `src/components/Dialogs/settings/ThemePreviewCard.tsx` | Mini app mockup preview cards for themes |
-| `src-tauri/src/config/types.rs` | Config types incl. `AppearanceConfig`, `PlacementSuggestionConfig`, `ImportConfig` |
+| `src-tauri/crates/core/src/config/types.rs` | Config types incl. `AppearanceConfig`, `PlacementSuggestionConfig`, `ImportConfig` |
 
 ## Color Theme System
 
@@ -194,9 +218,11 @@ Pressing `?` opens the `KeyboardShortcutsDialog`, a filterable grid showing all 
 
 ### Module size (file-size ratchet)
 
-Non-test `.rs` files under `src-tauri/src` are kept under a size budget by a CI gate
+Non-test `.rs` files under `src-tauri/src` and `src-tauri/crates/*/src` are kept
+under a size budget by a CI gate
 (`check` job → `pnpm lint:rust-file-size`, `scripts/check-rust-file-size.mjs`) that
-ratchets against `src-tauri/file-size-baseline.json`. It **fails** if a file at/above
+ratchets against `src-tauri/file-size-baseline.json` (baseline keys are the
+repo-relative paths under both roots). It **fails** if a file at/above
 1500 production LOC grows past its recorded baseline, if a *new* file is introduced
 at/above 1500 prod LOC, or if a new/grown file crosses the 2000-prod-LOC hard cap.
 Files below 1500 grow freely (ordinary edits don't need a rebaseline). Keep modules
@@ -245,7 +271,7 @@ When stations are merged, section positions are recalculated:
 4. Store in `Project.section_offsets: HashMap<SectionId, (f64, f64)>`
 
 Offsets are **derived** state that the file merely caches, which is why
-`redrive_offsets_after_load` (`src-tauri/src/models/project/offsets.rs`) re-solves them
+`redrive_offsets_after_load` (`src-tauri/crates/models/src/project/offsets.rs`) re-solves them
 from the merge and datum constraints on every open. A project therefore always opens
 geometrically correct even if an older build persisted drift.
 
@@ -269,7 +295,7 @@ the recorded map rather than re-deriving a frame.
 - Use `Database::open_existing()` for reading (doesn't create files)
 - Use `Database::open()` for writing (creates if needed)
 - Shot IDs are generated on load: `section_id * FEATURE_ID_STRIDE + sequence_order`
-  (`FEATURE_ID_STRIDE` = 100000, `src-tauri/src/models/id_stride.rs`, mirrored in
+  (`FEATURE_ID_STRIDE` = 100000, `src-tauri/crates/models/src/id_stride.rs`, mirrored in
   `src/utils/ids.ts`). They are therefore *not* stable identity - use `Shot::uuid` for
   anything that has to survive a save/load
 
@@ -277,7 +303,7 @@ the recorded map rather than re-deriving a frame.
 
 When a station is set as zero datum with GPS coordinates, the system converts GPS (WGS84) to local ENU (East-North-Up) meters:
 
-**Algorithm** (in `src-tauri/src/models/geo.rs`):
+**Algorithm** (in `src-tauri/crates/models/src/geo.rs`):
 1. **Geodetic → ECEF**: Convert lat/lon to Earth-Centered Earth-Fixed coordinates using WGS84 ellipsoid
 2. **ECEF → ENU**: Rotate ECEF difference to local tangent plane at origin
 3. **Result**: (east, north) offset in meters relative to zero datum

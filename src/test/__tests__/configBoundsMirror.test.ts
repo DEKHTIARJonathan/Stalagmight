@@ -12,10 +12,11 @@ import { PANEL_SIZE_BOUNDS } from '../../components/SingleSystemView/layoutConst
  * together:
  *
  *   - column widths: `MIN_COLUMN_WIDTH`/`MAX_COLUMN_WIDTH` in
- *     src-tauri/src/config/column_widths.rs vs `MIN_COL_WIDTH`/`MAX_COL_WIDTH`
+ *     src-tauri/crates/core/src/config/column_widths.rs vs
+ *     `MIN_COL_WIDTH`/`MAX_COL_WIDTH`
  *     in src/components/common/SpreadsheetGrid/useColumnWidths.ts.
  *   - panel sizes: the three `.clamp(a, b)` calls in
- *     `PanelsConfig::normalize` (src-tauri/src/config/panels.rs) vs
+ *     `PanelsConfig::normalize` (src-tauri/crates/core/src/config/panels.rs) vs
  *     `PANEL_SIZE_BOUNDS` in src/components/SingleSystemView/layoutConstants.ts.
  *
  * A one-sided bump gives a SILENT SNAP-BACK: the frontend accepts and saves a
@@ -29,8 +30,8 @@ import { PANEL_SIZE_BOUNDS } from '../../components/SingleSystemView/layoutConst
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../../../');
-const COLUMN_WIDTHS_RS = path.join(REPO_ROOT, 'src-tauri/src/config/column_widths.rs');
-const PANELS_RS = path.join(REPO_ROOT, 'src-tauri/src/config/panels.rs');
+const COLUMN_WIDTHS_RS = path.join(REPO_ROOT, 'src-tauri/crates/core/src/config/column_widths.rs');
+const PANELS_RS = path.join(REPO_ROOT, 'src-tauri/crates/core/src/config/panels.rs');
 
 function parseRustConst(source: string, name: string, file: string): number {
   const re = new RegExp(`const ${name}:\\s*u32\\s*=\\s*(\\d+)\\s*;`);

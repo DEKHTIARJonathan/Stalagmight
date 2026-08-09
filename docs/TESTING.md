@@ -18,7 +18,7 @@ model below.
 | Unit (logic) | Vitest | `node` | Stores, utils, selectors (`*.test.ts`) | Milliseconds |
 | Component | Vitest + Testing Library | `jsdom` | Render a React component, assert handlers/wiring (`*.test.tsx`) | Milliseconds |
 | Playwright E2E | Playwright | Chromium, **mocked IPC** | UI flows across views (`e2e-playwright/`) | Seconds per test; full suite ~15 min |
-| Backend | Rust `#[test]` | native | Rust logic, and the **real** file I/O / persistence paths (`src-tauri/src/`) | Fast |
+| Backend | Rust `#[test]` | native | Rust logic, and the **real** file I/O / persistence paths (`src-tauri/src/` + `src-tauri/crates/*/src/`) | Fast |
 | WebdriverIO E2E | WebdriverIO + tauri-driver / tauri-wd | **real Tauri app** | Real webview + real backend (`e2e/legacy/`, on-demand only) | Slow |
 | Agent harness | MCP + WebdriverIO | **real Tauri app** | LLM-agent exploration, stress scenarios, bug repro (`e2e/agent/`, on-demand) - see [Agent Harness](agent-harness.md) | Slow |
 
@@ -93,8 +93,9 @@ workflows, and is not repeated here.
 
 Three workflows gate `master`:
 
-- **`ci.yml` (`check`)** - the Rust and TypeScript gate: `cargo fmt --check`,
-  `cargo clippy` at deny level, `cargo test --features telemetry`, `tsc`, the
+- **`ci.yml` (`check`)** - the Rust and TypeScript gate: `cargo fmt --check`
+  (root package + every workspace member), `cargo clippy --workspace` at deny
+  level, `cargo test --workspace --features telemetry`, `tsc`, the
   agent-harness typecheck, the Vitest suite, and the file-size / read-only-gating
   tripwires. Each tripwire runs its own `:test` fixture first, so the rule itself
   is pinned.

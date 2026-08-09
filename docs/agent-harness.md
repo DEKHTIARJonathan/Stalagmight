@@ -245,7 +245,7 @@ not rebuild.
 `app_start(build: "auto")` rebuilds when either signal says stale
 (`e2e/agent/lib/build.ts`):
 
-1. **mtimes** - any file under `src/`, `src-tauri/src/`, or one of
+1. **mtimes** - any file under `src/`, `src-tauri/src/`, `src-tauri/crates/`, or one of
    `tauri.conf.json` / `package.json` / `index.html` / `vite.config.ts` is newer
    than the binary for the profile being started.
 2. **E2E build stamp** - `buildApp` writes
@@ -539,7 +539,7 @@ each one buys:
 
 | tier | drives | catches | runs |
 |---|---|---|---|
-| `src-tauri/src/core/state/fuzz_undo_tests.rs` | `AppState` directly | undo/redo model + persistence regressions | **every CI run** |
+| `src-tauri/crates/core/src/core/state/fuzz_undo_tests.rs` | `AppState` directly | undo/redo model + persistence regressions | **every CI run** |
 | this harness | the real app over IPC | anything the frontend store or the IPC boundary breaks | on demand |
 | `open_undo_bugs_tests.rs` | `AppState` directly | one reduction per finding, kept as its regression guard | **every CI run** |
 
@@ -550,8 +550,8 @@ since two findings are pinned by a SEED in the fuzz module rather than by a
 reduction in the red one:
 
 ```bash
-TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml \
-  --features telemetry --lib -- open_undo_bugs finding_14 bug_7
+cargo test --manifest-path src-tauri/Cargo.toml \
+  -p stalagmight-core --lib -- open_undo_bugs finding_14 bug_7
 ```
 
 The Rust tier exists because the harness GATES nothing: it needs a built desktop
@@ -699,7 +699,7 @@ body: each `mutate` line is one `Command` with its arguments, in order, and the
 crossed the boundary. Add the closing `undo()` / `redo()` walk the replayer
 regenerates, assert what the fuzzer's diff said should have been restored, and
 `#[ignore]` it per the convention in
-`src-tauri/src/core/state/open_undo_bugs_tests.rs`. Everything is synthetic by
+`src-tauri/crates/core/src/core/state/open_undo_bugs_tests.rs`. Everything is synthetic by
 construction - a trace holds generated values, never fixture data.
 
 **One caveat, worth knowing before you trust a minimal trace.** ddmin finds the
@@ -736,11 +736,11 @@ a `finding` event to the action log. Severity ranks: `warning` < `error` <
 
 Added under a small, always-safe surface:
 
-- **Ring buffer** (`src-tauri/src/logging/mod.rs`): `VecDeque<RingLogEntry>`
+- **Ring buffer** (`src-tauri/crates/telemetry/src/logging/mod.rs`): `VecDeque<RingLogEntry>`
   (`{seq, ts_ms, line}`), cap 500. `get_recent_logs_since(after_seq)` returns
   `{entries, latest_seq, dropped}` where `dropped` is true when the ring rotated
   past the checkpoint.
-- **Rust panic hook** (`src-tauri/src/logging/panic_hook.rs`): writes a
+- **Rust panic hook** (`src-tauri/crates/telemetry/src/logging/panic_hook.rs`): writes a
   synchronous crash-marker JSON `crash-<pid>-<millis>.json` into the log
   directory (message, location, thread, `Backtrace::force_capture()`) and logs
   `PANIC: ...` to the ring. The marker is the durable signal (the file log layer

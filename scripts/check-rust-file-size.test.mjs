@@ -10,7 +10,10 @@
 // style). Run: node scripts/check-rust-file-size.test.mjs  (also a CI `check` step).
 
 import assert from 'node:assert/strict';
-import { prodLoc, classify, markCfgTestItems, maskNonCode, WARN_LOC, FAIL_LOC } from './check-rust-file-size.mjs';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { prodLoc, classify, markCfgTestItems, maskNonCode, discoverSrcRoots, WARN_LOC, FAIL_LOC } from './check-rust-file-size.mjs';
 
 let passed = 0;
 const failures = [];
@@ -144,6 +147,29 @@ test('a new/grown file over the hard cap reports the budget error', () => {
 test('a grandfathered over-cap file only warns while it is not growing', () => {
   assert.equal(classify('project.rs', 7174, 7174).level, 'warn');
   assert.equal(classify('project.rs', 7000, 7174).level, 'warn'); // shrank - still just a warn
+});
+
+// --- discoverSrcRoots: workspace-aware scan roots -----------------------------
+
+test('discoverSrcRoots tolerates a missing crates/ dir (pre-extraction layout)', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rust-file-size-roots-'));
+  fs.mkdirSync(path.join(base, 'src'));
+  assert.deepEqual(discoverSrcRoots(base), [path.join(base, 'src')]);
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('discoverSrcRoots adds every crates/*/src after the root src', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rust-file-size-roots-'));
+  fs.mkdirSync(path.join(base, 'src'));
+  fs.mkdirSync(path.join(base, 'crates', 'zeta', 'src'), { recursive: true });
+  fs.mkdirSync(path.join(base, 'crates', 'alpha', 'src'), { recursive: true });
+  fs.mkdirSync(path.join(base, 'crates', 'no-src-yet'), { recursive: true }); // skipped: no src/
+  assert.deepEqual(discoverSrcRoots(base), [
+    path.join(base, 'src'),
+    path.join(base, 'crates', 'alpha', 'src'),
+    path.join(base, 'crates', 'zeta', 'src'),
+  ]);
+  fs.rmSync(base, { recursive: true, force: true });
 });
 
 // --- report ------------------------------------------------------------------

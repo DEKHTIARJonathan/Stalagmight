@@ -4422,25 +4422,20 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
- "compass_data",
  "directories",
- "flate2",
  "http",
- "igrf",
  "image",
- "keyring",
  "libc",
- "percent-encoding",
- "proj4rs",
- "quick-xml 0.37.5",
- "resvg",
- "rmp-serde",
- "rusqlite",
  "serde",
- "serde_bytes",
  "serde_json",
  "sha2",
- "svg2pdf",
+ "stalagmight-core",
+ "stalagmight-export",
+ "stalagmight-models",
+ "stalagmight-parsers",
+ "stalagmight-persistence",
+ "stalagmight-speleodb",
+ "stalagmight-telemetry",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -4449,18 +4444,155 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-webdriver-automation",
  "tempfile",
- "thiserror 1.0.69",
- "time",
  "toml 0.8.2",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "trash",
  "ts-rs",
  "ureq",
+]
+
+[[package]]
+name = "stalagmight-core"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "directories",
+ "libc",
+ "rmp-serde",
+ "rusqlite",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "stalagmight-export",
+ "stalagmight-models",
+ "stalagmight-parsers",
+ "stalagmight-persistence",
+ "stalagmight-speleodb",
+ "tempfile",
+ "toml 0.8.2",
+ "tracing",
+ "tracing-subscriber",
+ "trash",
+ "ts-rs",
+ "uuid",
+ "zip",
+]
+
+[[package]]
+name = "stalagmight-export"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "quick-xml 0.37.5",
+ "resvg",
+ "serde",
+ "serde_json",
+ "stalagmight-models",
+ "stalagmight-parsers",
+ "stalagmight-persistence",
+ "svg2pdf",
+ "tempfile",
+ "tracing",
+ "ts-rs",
  "usvg",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "stalagmight-models"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tracing",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
+name = "stalagmight-parsers"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "compass_data",
+ "igrf",
+ "proj4rs",
+ "quick-xml 0.37.5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "stalagmight-models",
+ "tempfile",
+ "time",
+ "tracing",
+ "ts-rs",
+ "zip",
+]
+
+[[package]]
+name = "stalagmight-persistence"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "flate2",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "stalagmight-models",
+ "stalagmight-parsers",
+ "tempfile",
+ "tracing",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
+name = "stalagmight-speleodb"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "http",
+ "keyring",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "stalagmight-export",
+ "stalagmight-models",
+ "stalagmight-persistence",
+ "stalagmight-telemetry",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tracing",
+ "ts-rs",
+ "ureq",
+ "uuid",
+ "zip",
+]
+
+[[package]]
+name = "stalagmight-telemetry"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "directories",
+ "flate2",
+ "serde",
+ "serde_json",
+ "stalagmight-models",
+ "tempfile",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "ts-rs",
+ "ureq",
 ]
 
 [[package]]

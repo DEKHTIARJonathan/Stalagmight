@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, State};
 use ts_rs::TS;
 
+use crate::commands::event_sink::tauri_sink;
 use crate::config::GasConfig;
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::AppState;
@@ -209,7 +210,7 @@ pub async fn export_image(
             .get_adjusted_stations();
 
         // Use shared ProgressEmitter for consistent progress events
-        let mut emitter = ProgressEmitter::new_for_export(app_handle);
+        let mut emitter = ProgressEmitter::new_for_export(tauri_sink(app_handle));
 
         // Start preparing phase
         emitter.start_phase(LoadingPhase::ExportPreparing);

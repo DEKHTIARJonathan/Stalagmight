@@ -88,7 +88,7 @@ fn resolve_env_pairs(
 /// Resolve the config path the way Tauri does on Linux:
 /// `<XDG config base>/<bundle identifier>/config.toml`.
 ///
-/// This runs before Tauri's `.setup()` (and thus before `app_dirs::init()`), so
+/// This runs before Tauri's `.setup()` (and thus before `app_dirs::init_paths()`), so
 /// the resolved config dir is not available yet. Keep the identifier in sync with
 /// `identifier` in `tauri.conf.json`.
 fn config_path() -> Option<std::path::PathBuf> {

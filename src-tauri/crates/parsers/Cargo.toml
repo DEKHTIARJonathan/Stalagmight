@@ -1,0 +1,43 @@
+[package]
+name = "stalagmight-parsers"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+
+# Opt into the workspace lint tables (see the workspace root manifest) so the
+# anti-slop policy applies here too.
+[lints]
+workspace = true
+
+[features]
+# Compiles the `#[cfg(any(test, feature = "test-support"))]` helpers that used
+# to be `#[cfg(test)]` when this code lived in the root crate: the root crate's
+# tests still call them, and a dependency's `cfg(test)` items are invisible to a
+# dependent's test build. Enabled only via the root crate's [dev-dependencies]
+# entry, so production builds compile exactly what they did before the split.
+# `dep:tempfile` because `tml::test_helpers::parse_synthetic_tmlu` round-trips
+# through a throwaway `.tmlu` file.
+test-support = ["dep:tempfile"]
+
+[dependencies]
+stalagmight-models = { path = "../models" }
+# The vendored Compass reader stays at the workspace root's vendor/ directory
+# (and stays excluded from the workspace) - only the relative path changes.
+compass_data = { path = "../../vendor/compass_data" }
+serde = { workspace = true, features = ["derive"] }
+chrono = { workspace = true, features = ["serde"] }
+ts-rs = { workspace = true, features = ["no-serde-warnings"] }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+quick-xml = { workspace = true }
+zip = { workspace = true }
+sha2 = { workspace = true }
+igrf = { workspace = true }
+proj4rs = { workspace = true }
+time = { workspace = true }
+tempfile = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }

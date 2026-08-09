@@ -1,0 +1,35 @@
+[package]
+name = "stalagmight-export"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+
+# Opt into the workspace lint tables (see the workspace root manifest) so the
+# anti-slop policy applies here too.
+[lints]
+workspace = true
+
+[dependencies]
+stalagmight-models = { path = "../models" }
+# Production use is exactly one constant (`parsers::geo::FEET_TO_METERS` in
+# dive_profile); the tml round-trip tests also parse what they exported.
+stalagmight-parsers = { path = "../parsers" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+quick-xml = { workspace = true }
+zip = { workspace = true }
+ts-rs = { workspace = true, features = ["no-serde-warnings"] }
+uuid = { workspace = true, features = ["v4"] }
+resvg = { workspace = true }
+usvg = { workspace = true }
+svg2pdf = { workspace = true }
+
+[dev-dependencies]
+# Test-only and acyclic: the hand-run `.stalx` export diagnostic in tml.rs
+# opens a real project database to root-check every exported shot.
+stalagmight-persistence = { path = "../persistence" }
+tempfile = { workspace = true }

@@ -15,7 +15,7 @@ which fixed a DMP import that skipped the conversion.
 
 | Source | In-file convention | Where it is normalised |
 |---|---|---|
-| mNemo DMP | +up (device: `-90` = straight down) | `parse_section` (`src-tauri/src/parsers/dmp.rs`) |
+| mNemo DMP | +up (device: `-90` = straight down) | `parse_section` (`src-tauri/crates/parsers/src/parsers/dmp.rs`) |
 | Walls `.srv` | +up | `walls/srv.rs`, negates `inc_up` into `pitch_in`/`pitch_out` |
 | Compass | +up | `compass.rs`, `pitch_in: Some(-inclination)` |
 | Ariane `.tml` / `.tmlu` | +up (inferred, see below) | `parsers::tml::inclination_to_pitch`, inverse `export::tml::pitch_to_inclination` |

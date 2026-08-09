@@ -8,9 +8,77 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/Stalagmight/Stalagmight"
 default-run = "stalagmight"
 
+# Hybrid workspace root: this package stays where it is, extracted crates land
+# in crates/*.
+[workspace]
+members = [
+    "crates/core",
+    "crates/export",
+    "crates/models",
+    "crates/parsers",
+    "crates/persistence",
+    "crates/speleodb",
+    "crates/telemetry",
+]
+resolver = "2"
+# Required: path deps inside the workspace directory are auto-adopted as
+# members, which would drag the vendored crate into the fmt/clippy gates.
+exclude = ["vendor/compass_data"]
+
+# Shared keys future members inherit via `key.workspace = true`. Deliberately
+# no `version` here: members declare their own 0.0.0, and the root package
+# keeps its real version line above (scripts/release.sh asserts on it).
+[workspace.package]
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+# Single source of truth for shared dependency versions; members write
+# `dep = { workspace = true }` and may add features (workspace features are
+# additive). tauri + its plugins, tauri-build, and the vendored compass_data
+# path dep stay declared on the packages that use them.
+[workspace.dependencies]
+serde = "1"
+serde_json = "1"
+rusqlite = "0.31"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tracing-appender = "0.2"
+chrono = "0.4"
+ts-rs = "7"
+thiserror = "1"
+anyhow = "1"
+toml = "0.8"
+directories = "5"
+svg2pdf = "0.12"
+usvg = "0.43"
+resvg = "0.43"
+sha2 = "0.10"
+uuid = "1"
+# Pinned exact - rationale on the speleodb member's entry (crates/speleodb).
+ureq = "=3.1.4"
+http = "1"
+percent-encoding = "2"
+# `default-features = false` must live HERE for these two: a member-level
+# `default-features = false` is ignored (with a warning) when the workspace
+# entry doesn't carry it, which would silently re-enable default features.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+quick-xml = "0.37"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+flate2 = "1"
+rmp-serde = "1"
+serde_bytes = "0.11"
+igrf = "0.2"
+proj4rs = "0.1"
+time = "0.3"
+tempfile = "3.24.0"
+
 [features]
 e2e = ["tauri-plugin-webdriver-automation"]
-telemetry = []
+# Forwards to the members that own the implementations, and stays a real
+# feature of this crate too: the root's own `#[cfg(feature = "telemetry")]`
+# users (the registry coverage tests in commands/) are gated on it. The
+# speleodb member forwards for the same reason (its metrics.rs coverage test).
+telemetry = ["stalagmight-telemetry/telemetry", "stalagmight-speleodb/telemetry"]
 # Dev-only: gates the gen_ipc_types example so it isn't compiled in normal
 # builds/tests. Enabled by `pnpm gen:ipc-types`.
 ipc-typegen = []
@@ -36,11 +104,18 @@ required-features = ["ipc-typegen"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+stalagmight-core = { path = "crates/core" }
+stalagmight-export = { path = "crates/export" }
+stalagmight-models = { path = "crates/models" }
+stalagmight-parsers = { path = "crates/parsers" }
+stalagmight-persistence = { path = "crates/persistence" }
+stalagmight-speleodb = { path = "crates/speleodb" }
+stalagmight-telemetry = { path = "crates/telemetry" }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
-serde = { version = "1", features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
 # `float_roundtrip` is REQUIRED, not a preference. serde_json's default float
 # parser is best-effort and lands up to 1 ULP away from the value the writer
 # emitted: it writes `-26.759999999999998` faithfully and reads it back as
@@ -50,49 +125,21 @@ serde = { version = "1", features = ["derive"] }
 # is what the map draws and every export writes, moved by 28 microns on a shot
 # whose stored value never changed (issue #413, finding 25). Costs ~2x on float
 # parsing only.
-serde_json = { version = "1", features = ["float_roundtrip"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
-tracing-appender = "0.2"
-chrono = { version = "0.4", features = ["serde"] }
-ts-rs = { version = "7", features = ["no-serde-warnings"] }
-thiserror = "1"
-anyhow = "1"
-toml = "0.8"
-directories = "5"
-svg2pdf = "0.12"
-usvg = "0.43"
-resvg = "0.43"
-sha2 = "0.10"
-uuid = { version = "1", features = ["v4"] }
-# Pinned exact: the SpeleoDB seed upload (#183) uses `unversioned::multipart`,
-# whose API is explicitly not semver-stable (see #185). `multipart` adds to the
-# existing default features (rustls, gzip); the tile fetch is unaffected.
-ureq = { version = "=3.1.4", features = ["multipart"] }
-http = "1"
-# Percent-encode the user-typed substring for the collaborator autocomplete query
-# param (#215). Already in the tree transitively; promoted to a direct dep.
-percent-encoding = "2"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-quick-xml = "0.37"
-zip = { version = "2", default-features = false, features = ["deflate"] }
-flate2 = "1"
-# Used both for telemetry's batched event encoding and for the binary
-# load_project_full IPC. Always available so we can switch the load path
-# off JSON without conditional compilation.
-rmp-serde = "1"
-serde_bytes = "0.11"
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json", "env-filter"] }
+tracing-appender = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+ts-rs = { workspace = true, features = ["no-serde-warnings"] }
+anyhow = { workspace = true }
+directories = { workspace = true }
+sha2 = { workspace = true }
+# The tile fetch. The exact pin (and the `multipart` feature it exists for)
+# is explained on the speleodb member's entry (crates/speleodb).
+ureq = { workspace = true }
+http = { workspace = true }
+image = { workspace = true }
 tauri-plugin-webdriver-automation = { git = "https://github.com/FumblingBarbell/tauri-webdriver", branch = "fix/resolve-element-refs-in-execute-sync", optional = true }
-compass_data = { path = "vendor/compass_data" }
-igrf = "0.2"
-proj4rs = "0.1"
-time = "0.3"
-
-# `trash` has no Android platform module, and the app ships desktop-only - gate it
-# off the Android `cdylib` target so `tauri android build` keeps compiling.
-[target.'cfg(not(target_os = "android"))'.dependencies]
-trash = "5.2.6"
 
 # Second-instance forwarding for the OS file association (#424): "Open with" on
 # an already-running app must hand the path to the running window, not start a
@@ -113,23 +160,6 @@ trash = "5.2.6"
 # the ones the dev/e2e workflows depend on.
 [target.'cfg(all(not(target_os = "macos"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "~2.3.7"
-
-# SpeleoDB auth token at rest (#183, full tiering in #188). Per-OS native secret
-# store. On Linux, Secret Service (gnome-keyring / KWallet) is persistent across
-# sessions - unlike the session-scoped `linux-native` keyutils. `crypto-rust`
-# avoids a system OpenSSL dependency, and `vendored` statically builds libdbus
-# (keyring → dbus-secret-service → dbus → libdbus-sys) so there is no
-# `libdbus-1-dev` system build dependency to install on a clean box or in CI.
-# Headless CI has no secret service at runtime, so the client falls back to an
-# in-memory session token (see speleodb::auth).
-[target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust", "vendored"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3", default-features = false, features = ["apple-native"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 # Minimally-patched wry so the Linux WebKit web process returns freed memory to
 # the OS. The patch adds `WebKitMemoryPressureSettings` (read from
@@ -157,7 +187,7 @@ inherits = "release"
 strip = false
 debug = 1
 
-[lints.clippy]
+[workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 
 # Pedantic noise - suppressed (too many false positives or impractical to fix)
@@ -242,14 +272,30 @@ needless_pass_by_ref_mut = "deny"
 # Dependency hygiene: no `version = "*"` deps.
 wildcard_dependencies = "deny"
 
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "deny"
 unused_must_use = "deny"
 missing_debug_implementations = "allow"
 unused_qualifications = "deny"
 unreachable_pub = "deny"
 
+# The root package opts into the workspace lint tables above; every future
+# member does the same, so the anti-slop policy applies workspace-wide.
+[lints]
+workspace = true
+
 [dev-dependencies]
-tempfile = "3.24.0"
+# `test-support` compiles the member's test-only helpers (formerly plain
+# `#[cfg(test)]` in the unsplit crate) for this crate's own test builds;
+# dev-dependencies don't affect production builds, so `cargo build` is unchanged.
+stalagmight-core = { path = "crates/core", features = ["test-support"] }
+stalagmight-models = { path = "crates/models", features = ["test-support"] }
+stalagmight-parsers = { path = "crates/parsers", features = ["test-support"] }
+stalagmight-persistence = { path = "crates/persistence", features = ["test-support"] }
+stalagmight-speleodb = { path = "crates/speleodb", features = ["test-support"] }
+tempfile = { workspace = true }
+# The config round-trip assertions in tests/integration_tests.rs parse the
+# saved file themselves; the config I/O itself lives in stalagmight-core now.
+toml = { workspace = true }
 tauri = { version = "2", features = ["test"] }
 libc = "0.2"
