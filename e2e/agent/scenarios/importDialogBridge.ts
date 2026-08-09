@@ -313,6 +313,19 @@ export interface StepOutcome {
   performed: boolean;
   /** Null when performed; otherwise why not. */
   reason: SkipReason | null;
+  /**
+   * The target's disabled state read IMMEDIATELY BEFORE the dispatch gate, or
+   * null when there was no element to read (absent, or a `key:` chord).
+   *
+   * The digest's `live` map cannot answer this. It is taken one round trip
+   * earlier, and the gap is exactly where the wizards' async enables land - the
+   * Walls dialog holds Import disabled behind `!hashChecked` and flips it when a
+   * hash + duplicate-check round trip returns, which the settle marker does not
+   * track by design (closing that window would retire the race generators). So
+   * "the digest said disabled" and "it was disabled when we clicked" are
+   * different facts, and only this one describes what the app was asked to do.
+   */
+  offAtDispatch: boolean | null;
   /** Value read back after a `type`/`select` (what the control actually took). */
   valueAfter: string | null;
   digest: ImportScreenDigest;
@@ -472,6 +485,10 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
     let performed = false;
     let reason = null;
     let valueAfter = null;
+    // Set by every branch that has an element to read, immediately before that
+    // branch's gate. See StepOutcome.offAtDispatch for why the digest's own
+    // reading is not a substitute.
+    let offAtDispatch = null;
     const actionStarted = Date.now();
 
     if (req.kind === 'ui' && req.testid.indexOf('key:') === 0) {
@@ -515,9 +532,10 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
           }
         }
       }
+      offAtDispatch = el ? isOff(el) : null;
       if (reason === null) {
         if (!el) reason = 'absent';
-        else if (!isVisible(el) || isOff(el)) reason = 'not-actionable';
+        else if (!isVisible(el) || offAtDispatch) reason = 'not-actionable';
         else {
           dispatchClick(el, false, req.double === true);
           performed = true;
@@ -525,8 +543,9 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
       }
     } else if (req.mode === 'type') {
       const el = q(req.testid);
+      offAtDispatch = el ? isOff(el) : null;
       if (!el) reason = 'absent';
-      else if (!isVisible(el) || isOff(el)) reason = 'not-actionable';
+      else if (!isVisible(el) || offAtDispatch) reason = 'not-actionable';
       else if (!setReactValue(el, req.value)) reason = 'not-typeable';
       else {
         // The grid's cell editor is a textarea that commits on BLUR
@@ -539,8 +558,9 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
       }
     } else if (req.mode === 'select') {
       const trigger = q(req.testid);
+      offAtDispatch = trigger ? isOff(trigger) : null;
       if (!trigger) reason = 'absent';
-      else if (!isVisible(trigger) || isOff(trigger)) reason = 'not-actionable';
+      else if (!isVisible(trigger) || offAtDispatch) reason = 'not-actionable';
       else if (trigger.tagName.toLowerCase() === 'select') {
         const before = trigger.value;
         trigger.value = req.value;
@@ -572,8 +592,9 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
       }
     } else {
       const el = q(req.testid);
+      offAtDispatch = el ? isOff(el) : null;
       if (!el) reason = 'absent';
-      else if (!isVisible(el) || isOff(el)) reason = 'not-actionable';
+      else if (!isVisible(el) || offAtDispatch) reason = 'not-actionable';
       else {
         const want = req.value === 'true';
         if (el.checked === want) reason = 'no-change';
@@ -597,6 +618,7 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
       performed: performed,
       reason: reason,
       valueAfter: valueAfter,
+      offAtDispatch: offAtDispatch,
       digest: digest,
       timing: { actionMs: actionMs, settleMs: settleMs, digestMs: digestMs },
     };

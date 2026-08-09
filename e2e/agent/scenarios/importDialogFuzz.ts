@@ -63,15 +63,20 @@
  *   plus `check_project_integrity` after any step that pushed an undo entry -
  *   `save_blocked`, or a non-finite-geometry message, is a hard failure
  *
- * Five inline expected-behaviour checks ride along with the moves that provoke
+ * Four inline expected-behaviour checks ride along with the moves that provoke
  * them, because each one is only meaningful against the state immediately
  * before its own move:
- *   RACE          a DISABLED confirm must not advance the flow (`RACE_TARGETS`)
  *   FROZEN DELETE an all-frozen selection must survive, and must say so
  *   IMPORT GATE   a second file routed into a screen an import owns must be
  *                 refused (#411's `importFlowOwnsScreen`)
- *   EXPORT CHORD  Ctrl+E must be inert while a dialog owns the screen
+ *   EXPORT CHORD  Ctrl+E must be inert while a dialog owns the screen - judged
+ *                 on the dialog the DISPATCHER saw, not the one the digest did
  *   CLOSE         closing the project at idle must leave nothing behind
+ *
+ * The `RACE_TARGETS` generators still play (clicking a confirm the digest saw
+ * disabled is a real thing to do to a wizard), but what they produce is COUNTED
+ * rather than asserted: see the `raceMove` branch for why neither end of that
+ * race is a contract this harness can hold the app to.
  *
  * Per FLOW (`lib/importFlowOracles.ts`): F1 undo roundtrip, F2 residue,
  * F3 receipt-vs-project accounting, F4 receipt rendering, F5 temp files.
@@ -845,6 +850,12 @@ export const importDialogFuzz: Scenario = {
       digest: ImportScreenDigest;
       performed: boolean;
       skip: string | null;
+      /**
+       * The target's disabled state as the BRIDGE read it, one round trip after
+       * the digest that chose the move. Null for every move that is not a click
+       * or an edit on a live element. See `StepOutcome.offAtDispatch`.
+       */
+      offAtDispatch: boolean | null;
     }
 
     /** Run one move, record it if it happened, and report the screen after. */
@@ -852,12 +863,14 @@ export const importDialogFuzz: Scenario = {
       inFlight = move.label;
       let performed = false;
       let skip: string | null = null;
+      let offAtDispatch: boolean | null = null;
       let digest: ImportScreenDigest;
 
       if (move.kind === 'ui') {
         const outcome = await runUiStep(ctx, move as Move);
         performed = outcome.performed;
         skip = outcome.reason;
+        offAtDispatch = outcome.offAtDispatch;
         digest = outcome.digest;
         ctx.metric('bridgeActionMs', outcome.timing.actionMs);
         ctx.metric('bridgeSettleMs', outcome.timing.settleMs);
@@ -875,6 +888,7 @@ export const importDialogFuzz: Scenario = {
         const outcome = await runUiStep(ctx, dispatchable(move) as Move);
         performed = outcome.performed;
         skip = outcome.reason;
+        offAtDispatch = outcome.offAtDispatch;
         digest = outcome.digest;
         ctx.metric('bridgeActionMs', outcome.timing.actionMs);
         ctx.metric('bridgeSettleMs', outcome.timing.settleMs);
@@ -1000,7 +1014,7 @@ export const importDialogFuzz: Scenario = {
       inFlight = null;
       history.push(`${move.label}${performed ? '' : ` -> SKIPPED (${skip ?? 'unknown'})`} [${digest.screen}]`);
       ctx.metric(performed ? 'movesPerformed' : `skip:${skip ?? 'unknown'}`);
-      return { digest, performed, skip };
+      return { digest, performed, skip, offAtDispatch };
     };
 
     // ---- per-step oracles ------------------------------------------------
@@ -1633,13 +1647,41 @@ export const importDialogFuzz: Scenario = {
           steps += 1;
           await afterMove(move, outcome);
 
-          if (raceMove && outcome.performed) {
-            ctx.metric('raceContinue');
-            if (digest.screen !== screenBefore) {
-              fail(
-                `RACE: a DISABLED ${move.kind === 'ui' ? move.testid : '?'} advanced the flow`,
-                `  screen ${screenBefore} -> ${digest.screen}; a disabled control must not act`,
-              );
+          if (raceMove) {
+            // COUNTED, never asserted - and the reason is the same one that took
+            // the screen-equality check out of the IMPORT GATE branch below.
+            //
+            // The generator picks a confirm the DIGEST saw disabled. The bridge
+            // then refuses a disabled element at dispatch with byte-identical
+            // predicates, so a race move that was performed is a move whose
+            // target was ENABLED when it was clicked, and clicking an enabled
+            // confirm is not a defect - it is the app having finished the async
+            // work the digest caught it in the middle of (`WallsImportDialog`
+            // holds Import behind `!hashChecked` while a hash and a
+            // duplicate-check round trip run). Asserting on it reported that
+            // legal click as "a DISABLED control advanced the flow" on four
+            // campaign cells; `raceContinue` never once fired for another reason.
+            //
+            // And the other branch cannot be asserted either. When the target IS
+            // still disabled the bridge does not click it, so nothing the app did
+            // can be attributed to the move: any screen change belongs to work
+            // that was already in flight, which is precisely the shape that made
+            // this scenario abandon screen-equality once already. The contract
+            // "a disabled control must not act" is not reachable through a
+            // synthetic dispatch that respects `disabled` - and one that did not
+            // respect it would be testing the harness, since `dispatchEvent`
+            // bypasses the browser's own gate and would run React's onClick on a
+            // button no user could press.
+            if (outcome.offAtDispatch === true) {
+              ctx.metric('raceRefused');
+              if (digest.screen !== screenBefore) ctx.metric('raceRefusedScreenMoved');
+            } else if (outcome.performed) {
+              ctx.metric('raceEnabledBeforeClick');
+              if (digest.screen !== screenBefore) ctx.metric('raceEnabledAdvanced');
+            } else {
+              // Gone from the DOM between the digest and the dispatch - the
+              // dialog closed under the race. Same window, other end.
+              ctx.metric(`raceVanished:${outcome.skip ?? 'unknown'}`);
             }
           }
           if (exportChord && outcome.performed) {
