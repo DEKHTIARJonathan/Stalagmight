@@ -424,8 +424,10 @@ check_build_freshness() {
         NEEDS_REBUILD=true
     fi
 
-    # Check Rust source
-    NEWEST_RUST=$(find "$PROJECT_ROOT/src-tauri/src" -name "*.rs" 2>/dev/null | head -100 | xargs stat -c %Y 2>/dev/null | sort -rn | head -1 || echo "0")
+    # Check Rust source (app package + workspace member crates; the old
+    # head -100 cap would drop most member files, so it is raised to cover
+    # the whole workspace with headroom)
+    NEWEST_RUST=$(find "$PROJECT_ROOT/src-tauri/src" "$PROJECT_ROOT/src-tauri/crates" -name "*.rs" 2>/dev/null | head -2000 | xargs stat -c %Y 2>/dev/null | sort -rn | head -1 || echo "0")
     if [[ "$NEWEST_RUST" -gt "$BINARY_MTIME" ]]; then
         warn "Rust source is newer than binary"
         NEEDS_REBUILD=true

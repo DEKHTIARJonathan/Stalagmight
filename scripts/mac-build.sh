@@ -150,7 +150,12 @@ fi
 # macOS defaults to 256 open files which is too low for the test suite
 ulimit -n 4096 2>/dev/null || ulimit -n 1024 2>/dev/null || true
 info "Running Rust tests (ulimit -n $(ulimit -n))"
-if cargo test --manifest-path "$PROJECT_DIR/src-tauri/Cargo.toml"; then
+# Mirrors the CI command: --workspace is required (without it only the app
+# package runs and the member crates under src-tauri/crates are skipped), and
+# --features telemetry gates the registry-coverage tests. The dummy endpoint
+# just satisfies build.rs under that feature; a real one from .env wins.
+if TELEMETRY_ENDPOINT="${TELEMETRY_ENDPOINT:-http://localhost/dummy}" \
+  cargo test --manifest-path "$PROJECT_DIR/src-tauri/Cargo.toml" --workspace --features telemetry; then
   ok "Rust tests passed"
 else
   warn "Some Rust tests failed (continuing with build)"
