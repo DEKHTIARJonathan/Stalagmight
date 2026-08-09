@@ -17,12 +17,18 @@ import { runTreeReplacement } from './projectTransition';
  * `null` (the lock was released and nothing was swapped), and the rest of the
  * reconciliation is harmless there. Re-reading the discarded-history flag is NOT
  * harmless, because it clears the user's dismissal - so on a plain lock release the
- * banner they dismissed came straight back. Default `false`: a caller that does not know
- * whether the tree moved gets the conservative answer.
+ * banner they dismissed came straight back.
+ *
+ * REQUIRED, deliberately, with no default. A `= false` default reads like the safe
+ * choice and is the opposite: it is unreachable today (every call site passes the
+ * argument), so its only possible effect is to let a FUTURE call site omit it and
+ * silently skip the re-read - which is the silent history loss this issue exists to
+ * prevent, reintroduced with no type error to catch it. Making it required turns that
+ * omission into a compile error instead.
  */
 export async function applySpeleoTreeReplacement(
-  issuedFor?: SpeleoProjectSessionIdentity,
-  treeReplaced = false,
+  issuedFor: SpeleoProjectSessionIdentity | undefined,
+  treeReplaced: boolean,
 ): Promise<boolean> {
   return runTreeReplacement(async () => {
     if (issuedFor && !speleoProjectSessionStillCurrent(issuedFor)) return false;

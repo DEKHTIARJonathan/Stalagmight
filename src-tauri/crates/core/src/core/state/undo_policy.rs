@@ -640,6 +640,80 @@ mod tests {
                  the rows past it are never fetched"
             );
         }
+
+        no_production_caller_mints_its_own_history_budget();
+    }
+
+    /// [#473] No PRODUCTION code anywhere in this crate calls a history loader that mints
+    /// its own `InflationBudget`.
+    ///
+    /// Six `Database::load_*` loaders do, and each bounds only itself - so two of them in
+    /// one open is 2x the documented ceiling. While the backend was a single crate they
+    /// carried `#[cfg(test)]`, which made a production caller a COMPILE error. The
+    /// workspace split ended that (`cfg(test)` is per-crate, and other crates' tests call
+    /// them across the boundary), and the first replacement was a source scan of
+    /// `project_load.rs` alone - blind to a new caller in any other file, which is exactly
+    /// what the compile error had covered.
+    ///
+    /// So this walks the whole crate's source, cutting each file at its `#[cfg(test)]`
+    /// boundary so test code may keep using them. Still weaker than a compile error - it
+    /// cannot see the other crates - but it covers every file a history reader would
+    /// plausibly be added to.
+    fn no_production_caller_mints_its_own_history_budget() {
+        // The trailing `(` is load-bearing: it is what separates these from the
+        // budget-SHARING `_within(` variants, which share the same prefixes.
+        const BUDGET_MINTING: [&str; 6] = [
+            "load_undo_stack(",
+            "load_undo_stack_capped(",
+            "load_undo_stack_with_timestamps(",
+            "load_undo_stack_with_timestamps_capped(",
+            "load_redo_stack_with_timestamps(",
+            "load_redo_stack_with_timestamps_capped(",
+        ];
+        let mut offenders = Vec::new();
+        let mut scanned = 0_usize;
+        let mut stack = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read crate source dir") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|ext| ext != "rs") {
+                    continue;
+                }
+                // WHOLE-file test modules carry no inner `#[cfg(test)]` - the attribute is
+                // on the `mod` declaration in the parent - so the split below cannot see
+                // they are test code. Same set `scripts/check-rust-file-size.mjs` excludes,
+                // and leaving it out is not theoretical: it fired on `core/state/tests.rs`
+                // the first time this test ran.
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name == "tests.rs"
+                    || name == "test_helpers.rs"
+                    || name.ends_with("_tests.rs")
+                    || name.ends_with("_fuzz.rs")
+                {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("read source file");
+                // Production half only: everything from the first `#[cfg(test)]` onward is
+                // test code, which is allowed to use these.
+                let production = text.split("#[cfg(test)]").next().unwrap_or("");
+                scanned += 1;
+                for needle in BUDGET_MINTING {
+                    if production.contains(needle) {
+                        offenders.push(format!("{}: {needle}", path.display()));
+                    }
+                }
+            }
+        }
+        assert!(scanned > 50, "the walk must actually reach the sources");
+        assert!(
+            offenders.is_empty(),
+            "production code must share the open's budget through the `_within` loaders \
+             (see Database::load_history_budget), never mint its own: {offenders:?}"
+        );
     }
 
     #[test]

@@ -417,10 +417,19 @@ fn decompress_json_under(data: &[u8], budget: &InflationBudget) -> Result<String
     // silently multiplied. The refund is what keeps that affordable - `from_utf8_lossy`
     // triples only fully-invalid input, so an ordinary legacy row hands back ~2/3 of its
     // reservation immediately and does not starve the rows behind it.
+    //
+    // `saturating_sub` on both refunds, and it is not defensive noise. `out.len()` cannot
+    // exceed `declared` today - the legacy branch's `declared` is `3 * len`, the exact
+    // `from_utf8_lossy` worst case, and the gzip branch is hard-capped at `declared` by
+    // `decompress_json_capped`. But `[profile.release]` sets no `overflow-checks`, so a
+    // plain `-` that ever did underflow would wrap and hand `refund` ~2^64, leaving the
+    // budget effectively unbounded for the rest of the open. That is a bound failing OPEN,
+    // silently, in release only - the one direction this whole issue exists to prevent -
+    // and the guard against it costs nothing.
     if !is_gzip(data) {
         budget.reserve(declared)?;
         let out = String::from_utf8_lossy(data).into_owned();
-        budget.refund(declared - out.len() as u64);
+        budget.refund(declared.saturating_sub(out.len() as u64));
         return Ok(out);
     }
 
@@ -431,7 +440,7 @@ fn decompress_json_under(data: &[u8], budget: &InflationBudget) -> Result<String
     // leak would drain the budget permanently and refuse honest rows behind it.
     match decompress_json_capped(data, declared) {
         Ok(out) => {
-            budget.refund(declared - out.len() as u64);
+            budget.refund(declared.saturating_sub(out.len() as u64));
             Ok(out)
         }
         Err(e) => {

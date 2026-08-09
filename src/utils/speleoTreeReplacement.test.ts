@@ -56,7 +56,7 @@ beforeEach(() => {
 
 describe('applySpeleoTreeReplacement', () => {
   it('reconciles every store that owns per-tree state', async () => {
-    const applied = await applySpeleoTreeReplacement(speleoProjectSessionIssuedFor('p1'));
+    const applied = await applySpeleoTreeReplacement(speleoProjectSessionIssuedFor('p1'), true);
 
     expect(applied).toBe(true);
     expect(useUIStore.getState()).toMatchObject({
@@ -83,7 +83,7 @@ describe('applySpeleoTreeReplacement', () => {
     const issuedFor = speleoProjectSessionIssuedFor('p1');
     useSpeleoStore.setState({ remoteProjectId: 'p2' });
 
-    const applied = await applySpeleoTreeReplacement(issuedFor);
+    const applied = await applySpeleoTreeReplacement(issuedFor, true);
 
     expect(applied).toBe(false);
     expect(useUIStore.getState().selection).not.toBeNull();
@@ -103,7 +103,7 @@ describe('applySpeleoTreeReplacement', () => {
     );
     useProjectStore.setState({ refreshProjectState });
 
-    const replacement = applySpeleoTreeReplacement(speleoProjectSessionIssuedFor('p1'));
+    const replacement = applySpeleoTreeReplacement(speleoProjectSessionIssuedFor('p1'), true);
     await vi.waitFor(() => expect(refreshProjectState).toHaveBeenCalledOnce());
 
     const switchWork = vi.fn(async () => {});
