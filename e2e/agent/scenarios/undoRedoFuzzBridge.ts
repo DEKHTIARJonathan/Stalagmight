@@ -81,6 +81,30 @@ export const REPLAYABLE_MUTATIONS: ReadonlySet<string> = new Set([
   'deleteShotRangeSplit',
   'executeBatch',
   'importSections',
+  // ---- v3: the import group (undoRedoFuzzImportActions.ts) ----------------
+  // The four file importers and the two file-taking probes DO take a path, so
+  // the `saveProject` argument above would seem to exclude them. It does not,
+  // and the difference is where the path can point: `FILE_ARG_ACTIONS`
+  // (lib/fuzzTrace.ts) makes `readTrace` refuse any of these whose `args[0]` is
+  // absolute or escapes the session directory, and `undoRedoFuzz.ts` resolves
+  // what is left against a directory IT chose. A trace can pick a name inside
+  // the replayer's own scratch space and nothing else - whereas `saveProject`
+  // has no such gate and would be choosing where a .stalx gets written.
+  //
+  // `saveAfterImport` takes NO arguments at all, so a trace choosing it chooses
+  // nothing; with `importContext` null (which this scenario asserts at startup)
+  // it only marks the frontend dirty.
+  'calculateFileHash',
+  'checkDuplicateImport',
+  'checkSectionHashes',
+  'executeCompassImport',
+  'executeGpxImport',
+  'executeTmlImport',
+  'executeWallsImport',
+  'importDmp',
+  'saveAfterImport',
+  'suggestImportPlacement',
+  // ------------------------------------------------------------------------
   'mergeStations',
   'moveComment',
   'moveSection',

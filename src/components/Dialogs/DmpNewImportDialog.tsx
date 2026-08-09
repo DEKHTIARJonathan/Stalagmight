@@ -54,8 +54,10 @@ import { useUIStore, type PlacementResult } from '../../store/uiStore';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import {
   adjustStationForDeletedShots,
+  buildPlacementSectionData,
   findReverseImportConnection,
   redirectDeletedTargets,
+  resolveImportSectionDate,
   type SectionEditState,
   type ConfirmedOverlapInfo,
 } from '../../utils/batchImportHelpers';
@@ -656,7 +658,10 @@ export function buildBatchImport(
       // Use edits for metadata if available, otherwise fall back to DMP data + selectionConfig
       const sectionName = edits?.name ?? section.name;
       const surveyorValue = edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null;
-      const dateStr = edits?.date ?? selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
+      // `resolveImportSectionDate`, not the raw `??` chain plus a trailing
+      // `|| null`: a cleared date has to leave as null on EVERY emitter, and
+      // the rule is stated once (#478 - see the helper).
+      const dateStr = resolveImportSectionDate(edits?.date, selectionConfig.defaultDate, section.date);
       const selectedPos = sortedSelected.indexOf(idx);
       const colorValue = (edits?.color || null) ?? palette[(selectedPos >= 0 ? selectedPos : 0) % palette.length] ?? '#4ecdc4';
       const directionValue = edits?.direction ?? section.direction;
@@ -2910,18 +2915,15 @@ export default function DmpNewImportDialog({
         : convertToEditableShots(anchorDmpSection.shots).map(editableShotToShotData);
       const emittedStationIndex = emittedAnchorStation(anchor);
 
-      const sectionData = {
-        name: edits?.name ?? anchorDmpSection.name,
-        surveyor: edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null,
-        date: edits?.date ?? selectionConfig.defaultDate ?? anchorDmpSection.date?.split(/[T ]/)[0] ?? null,
-        color:
-          (edits?.color || null) ??
-          sectionPalette[selectedIndices.indexOf(anchor.sectionIndex) % sectionPalette.length] ??
-          '#4ecdc4',
-        direction: edits?.direction ?? anchorDmpSection.direction,
-        quality: edits?.quality ?? 1.0,
+      const sectionData = buildPlacementSectionData({
+        dmpSection: anchorDmpSection,
+        edits,
+        defaultSurveyor: selectionConfig.defaultSurveyor,
+        defaultDate: selectionConfig.defaultDate,
+        palette: sectionPalette,
+        paletteIndex: selectedIndices.indexOf(anchor.sectionIndex),
         shots,
-      };
+      });
 
       // Build additional sections for segment shadow using effective (post-treatment)
       // sections so the overlay reflects deleted shots and interpolated values.
@@ -3084,11 +3086,25 @@ export default function DmpNewImportDialog({
     [dmpFile, refreshProjectState, reportEmptySections, selectionConfig, zeroDatumConfig?.sectionIndex, resolvedTheme],
   );
 
-  // Manual map placement for a segment
+  /**
+   * Hand this segment off to map placement.
+   *
+   * Carries NO payload guard, deliberately (#476). `refuseIncompleteShots`
+   * exists to protect an IPC payload, and this hands off nothing: the payload
+   * leaves later, from `importPlacedSegmentNow`, once the user has dropped the
+   * section. Gating the handoff on the completeness of the WHOLE selection is
+   * what turned one zero-length row in the file into a dead end - the auto-start
+   * effect below runs this while the dialog is hidden, so a refusal here was
+   * invisible AND unrecoverable. The guard stays where a payload is actually at
+   * stake: `handlePlaceOnMapClick` (the user-initiated button), the segment
+   * submit, and `handleConfirm`/`handleSkip`.
+   *
+   * It also no longer clears `autoStartManualPlacementPending`. That window is
+   * owned by the effect that opened it - see there.
+   */
   const handleStartSegmentPlacement = useCallback(() => {
-    if (refuseIncompleteShots()) return;
+    // The payload is still guarded: importPlacedSegmentNow -> buildBatchImport -> assertSendableShots.
     if (!currentSegment || !segmentAnchor) return;
-    setAutoStartManualPlacementPending(false);
 
     // Reopen data (same as what App.tsx passes)
     const reopenData = {
@@ -3242,16 +3258,61 @@ export default function DmpNewImportDialog({
     showToast,
   ]);
 
+  /**
+   * "Place on Map", clicked by the user. This is where the payload guard
+   * belongs: the click is a deliberate step toward an import, the dialog is
+   * VISIBLE, and the refusal toast names a section the user can then go and fix
+   * (#476 moved it off the auto-start path, where none of that was true).
+   */
+  const handlePlaceOnMapClick = useCallback(() => {
+    if (refuseIncompleteShots()) return;
+    handleStartSegmentPlacement();
+  }, [refuseIncompleteShots, handleStartSegmentPlacement]);
+
+  /**
+   * The auto-start handoff, and the sole owner of `autoStartManualPlacementPending`.
+   *
+   * That flag hides the whole dialog (`hidden` -> `display:none` on
+   * DialogWrapper's container), so the window it opens MUST be closed by
+   * whatever happens next. Its honest meaning is "the handoff has not been
+   * ATTEMPTED yet" - a state that any single attempt leaves, whatever the
+   * attempt decides.
+   *
+   * It used to be cleared inside `handleStartSegmentPlacement`, after two early
+   * returns, so a callee that declined left the dialog mounted, `display:none`,
+   * with `activeDialog` still set - an invisible modal that made the whole app
+   * `inert` with no mouse affordance and no retry, because nothing in this
+   * effect's dependencies changes on a refusal (#476). Keeping ownership here
+   * makes the window unstrandable by any future early return, which is the
+   * actual invariant; clearing above each individual `return` would be correct
+   * today and re-breakable tomorrow.
+   *
+   * `isImporting` is the ONLY guard that is transient - it flips false and
+   * re-runs this effect. Every other reason not to attempt is terminal, so it
+   * ends the hidden window instead of waiting forever.
+   */
   useEffect(() => {
     if (!autoStartManualPlacementPending) {
       return;
     }
-    if (phase !== 'manual_placing' || !currentSegment || !segmentAnchor || isImporting) {
+    if (isImporting) {
+      return;
+    }
+    if (phase !== 'manual_placing' || !currentSegment || !segmentAnchor) {
+      setAutoStartManualPlacementPending(false);
       return;
     }
 
     const timeoutId = window.setTimeout(() => {
-      handleStartSegmentPlacement();
+      // Attempted, so the window is over either way. In the success case the
+      // handoff closes the dialog in this same commit, so nothing flashes; in
+      // any other case the wizard becomes VISIBLE on the manual-placing screen,
+      // which is where the user can act.
+      try {
+        handleStartSegmentPlacement();
+      } finally {
+        setAutoStartManualPlacementPending(false);
+      }
     }, 0);
 
     return () => {
@@ -3846,7 +3907,7 @@ export default function DmpNewImportDialog({
                         <Button
                           variant="primary"
                           size="sm"
-                          onClick={handleStartSegmentPlacement}
+                          onClick={handlePlaceOnMapClick}
                           data-testid="segment-place-on-map-button"
                         >
                           {t('dialogs.dmpNewImport.manualPlacing.placeOnMap')}

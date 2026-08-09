@@ -343,6 +343,117 @@
  * reproduces the legacy stream byte for byte - so no repro was lost, and the
  * fallback was a stream selector rather than a weakened assertion.
  *
+ * ## v3: the import group, opt-in
+ *
+ * `STALAGMIGHT_FUZZ_STREAM=v3` is v2 PLUS the thirteen generators in
+ * `undoRedoFuzzImportActions.ts`: synthetic `ImportSectionConfig` batches across
+ * all six placement variants, the null-in-a-required-f64 family, the DMP
+ * wizard's `existing_shot_updates`, the four file importers on files built by
+ * `surveyFileSpecs.ts`, and the cheap read-only probes. About 22% of a balanced
+ * run's draws; see that file's header for what each one is for.
+ *
+ * v1 AND v2 DRAW IDENTICALLY, which is the property the table above depends on.
+ * The group is filtered out before the weighted name array is built and appended
+ * at its END when it is not, so every index `ctx.pick` reads still holds what it
+ * held; the `import-heavy` swarm profile is likewise appended only under the v3
+ * gate, because merging it into `SWARM_PROFILES` would have changed the divisor
+ * every v2 seed picks its profile with. Both are pinned by
+ * `e2e/agent/lib/undoRedoFuzzImportActions.test.ts`, and both were re-measured
+ * against the pre-v3 tree: v1 fractal seed 4 x60 and v2 fractal seeds 1 x40 /
+ * 4 x60 give metric-for-metric identical runs before and after.
+ *
+ * A v3 run legitimately produces `log-error` findings from the oracle sweep - a
+ * malformed file that the parser refuses, or the deliberate missing-file probe,
+ * is the app reporting a problem properly. That is a finding at severity
+ * `error`, which does not fail a run; only an unexplained one is worth reading.
+ *
+ * A FOURTH oracle applies to v3 payloads only. `mustBeRejected` names the two
+ * shapes that cannot be deserialized at all - a required `f64` arriving `null`,
+ * and `date: ""` (issue #478, here on the route that BYPASSES the wizard's
+ * normalisation) - and a run FAILS if the app accepts one. It is a pure function
+ * of the recorded args rather than a flag on the drawn action, which is what
+ * lets a replayed trace assert exactly what the recording did.
+ *
+ * ## A v3 OBSERVATION that is not a finding
+ *
+ * `execute_import_sections` refuses a non-finite value in an
+ * `existing_shot_updates` patch by name, before any mutation, and has a Rust
+ * test for it (`test_execute_import_sections_rejects_non_finite_shot_update`,
+ * "attacker-controllable input ... must hold the same all_finite invariant as
+ * update_shot"). NOTHING THAT CROSSED JSON CAN REACH IT. Every `ShotUpdates`
+ * field is `Option<f64>` (or the double-option `Option<Option<f64>>`) with
+ * `#[serde(default)]` (models/shot.rs), `JSON.stringify` spells `NaN` and
+ * `Infinity` as `null` on the real `invoke` exactly as on this bridge, and an
+ * explicit `null` on a plain `Option<f64>` deserializes to `None` - the
+ * double-option's "leave this field alone". So the import SUCCEEDS, having
+ * quietly dropped that one field of that one patch.
+ *
+ * Measured, not reasoned: naharon seed 59 x60 under v3 is what found it, by
+ * failing an oracle that had claimed the refusal. It is not reported as an app
+ * defect because the wizard's own guard covers the shots it interpolates FROM,
+ * so no shipped route produces the value; what it means is that the backend
+ * check is a Rust-API defence and cannot be cited as protecting the frontend.
+ * If a caller ever needs a non-finite patch field rejected rather than dropped,
+ * `ShotUpdates` has to distinguish "absent" from "explicitly null" for the
+ * non-nullable numbers, exactly as finding 5 made `SectionUpdates` do.
+ *
+ * V3 SWEEP, at the wave that introduced it. 8 cells (both fixtures, seeds 1-4,
+ * x40) plus 14 more on the seven seeds whose swarm profile is `import-heavy`
+ * (14, 15, 21, 23, 26, 56, 59, both fixtures, x60), plus fractal seeds 1 x80 and
+ * 5 x80 with `STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P=0.8`. All green. The one RED
+ * the sweep produced was the oracle's, not the app's - naharon seed 59 x60,
+ * written up in the observation above - and it is why `mustBeRejected` is now
+ * two claims rather than three. No app defect was found; the group is coverage
+ * that did not exist rather than a bug hunt that came back empty, and the seeds
+ * above are its regression cover.
+ *
+ * ## v3 file inputs: what a trace carries, and what it rebuilds
+ *
+ * A file-backed import cannot record its path: the recording machine's absolute
+ * path means nothing to a replayer, and a trace is meant to be attachable to a
+ * bug report. So a file-backed move records TWO steps - a `genFile` carrying the
+ * generator SPEC and a session-relative `rel`, then the `mutate` whose `args[0]`
+ * is that same `rel` - and the replayer rebuilds the file from the spec into its
+ * own directory before resolving `args[0]` against it. `surveyFileWriters.ts` is
+ * a pure function of the spec, so the rebuilt bytes are identical; the trace
+ * carries no fixture (which the repo forbids) and no absolute path.
+ *
+ * `FILE_ARG_ACTIONS` (`lib/fuzzTrace.ts`) is what says "argument zero is a
+ * path", and `readTrace` refuses a trace that points one of those actions
+ * outside the session directory - the same rule every other v2 `rel` has, and
+ * for the same reason: a trace is untrusted input, and these arguments reach the
+ * filesystem instead of the model.
+ *
+ * The generated files live under the run's own temp directory, removed in the
+ * same `finally` as the save/reload copies. Nothing is lost by deleting them -
+ * the trace regenerates them - and `pnpm agent:fuzz-shrink` replays this
+ * scenario hundreds of times per shrink, so leaving them behind is not an option.
+ *
+ * Verified end to end: v3 fractal seed 1 x80 recorded with
+ * `STALAGMIGHT_FUZZ_TRACE`, then replayed with `--trace`, reproduces the run
+ * metric for metric (34 mutations, 31 undos, 19 redos, 18 rejected, 2 no-ops,
+ * depth 15, 66037-byte snapshot) with all five `genFile` steps re-materialized.
+ *
+ * ## What v3 does NOT reach, and why
+ *
+ * `suggest_orphan_placements` is not a `projectStore` action - `App.tsx` and the
+ * three import dialogs invoke it directly - and this scenario dispatches store
+ * actions by name. Widening the bridge to dispatch IPC commands by name for one
+ * read-only probe would give a recorded trace a much larger surface; the probe
+ * is covered by `import-dialog-fuzz`, which drives the dialogs that call it.
+ *
+ * There is no Rust-tier analogue of this group in
+ * `src-tauri/src/core/state/fuzz_undo_tests.rs`, and adding one is a design
+ * problem rather than a transcription. `Refs::learn` pairs what a recorded move
+ * created against what the replayed move created POSITIONALLY, with `zip` and no
+ * length check - which is sound only because every existing `Op` creates a fixed
+ * number of entities (at most one section, one shot, one closure; `BatchOp` has
+ * no creating variant at all). An import creates an arbitrary number in one
+ * move, and `execute_import_sections` drops sections whose placement does not
+ * resolve - so a replay that places one fewer would pair a PREFIX, silently, and
+ * the shrinker would then minimize toward the mis-pairing instead of toward the
+ * bug. Whoever adds it has to give `learn` a checked, arity-aware pairing first.
+ *
  * ALL OF THEM ALSO REPRODUCE IN THE RUST TIER, classified by finding id rather
  * than merely hit, and about a thousand times cheaper per sequence - which is
  * where they are now pinned as green regression tests. See the BUG
@@ -497,12 +608,16 @@ import {
 import type { TargetingDigest } from '../lib/fuzzOracleCore';
 import {
   streamV2,
+  streamV3,
   drawAction,
   swarmProfileFor,
   weightedNamesFor,
   type FuzzAction,
 } from './undoRedoFuzzActions';
+import { mustBeRejected } from './undoRedoFuzzImportActions';
+import { materializeSurveyFile, type GeneratedFileSpec } from '../lib/surveyFileSpecs';
 import {
+  FILE_ARG_ACTIONS,
   TraceRecorder,
   defaultTracePath,
   readTrace,
@@ -580,6 +695,18 @@ function traceOutPath(): string {
  */
 function fuzzFixture(): string {
   return process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
+}
+
+/** The stream label a run reports, in traces, metrics and the repro line. */
+function streamName(): 'v1' | 'v2' | 'v3' {
+  if (streamV3()) return 'v3';
+  return streamV2() ? 'v2' : 'v1';
+}
+
+/** The `STALAGMIGHT_FUZZ_STREAM=` clause a repro line needs, if any. */
+function streamClause(): string {
+  const name = streamName();
+  return name === 'v2' ? '' : ` with STALAGMIGHT_FUZZ_STREAM=${name}`;
 }
 
 /** Move mix. Undo/redo are re-rolled when the stack they need is empty. */
@@ -849,6 +976,23 @@ async function runFuzz(
     );
   }
 
+  // `saveAfterImport` (v3) branches on `uiStore.importContext`: null or
+  // 'existing-project' only marks the frontend dirty, but 'new-project' SAVES
+  // the open project - undo-lessly, with the healing mutations a save applies -
+  // and this scenario would then be comparing against a model that never saw
+  // it. Nothing here opens an import wizard, so it must be null; asserting that
+  // once turns an assumption the generator relies on into a checked fact.
+  // `readStore` answers `{ value, truncated }` for a dot path, never the bare
+  // value - reading it as the value itself compares an object against null and
+  // fails on a project that is perfectly fine.
+  const importContext = (await ctx.readStore('ui', 'importContext')) as { value?: unknown };
+  if (importContext.value !== null && importContext.value !== undefined) {
+    throw new Error(
+      `uiStore.importContext opened as ${JSON.stringify(importContext.value)}; the v3 import ` +
+        'group assumes null, because saveAfterImport() saves the project when it is "new-project"',
+    );
+  }
+
   const historyLimit = await ctx.eval<number>(`
     const config = window.__E2E_TEST__.projectStore.getState().config;
     return config && config.general && typeof config.general.undo_history_limit === 'number'
@@ -920,7 +1064,7 @@ async function runFuzz(
   const swarm = swarmProfileFor(ctx.seed);
   const weightedNames = weightedNamesFor(swarm);
   ctx.setMetric(`swarm:${swarm.name}`, 1);
-  ctx.setMetric(`stream:${streamV2() ? 'v2' : 'v1'}`, 1);
+  ctx.setMetric(`stream:${streamName()}`, 1);
   const saveRng = mulberry32((ctx.seed ^ SAVE_STREAM_SALT) >>> 0);
   let savesDone = 0;
   let reloadsDone = 0;
@@ -934,6 +1078,66 @@ async function runFuzz(
       ? config.general.undo_persist_limit
       : 20;
   `);
+
+  /**
+   * Where the v3 import group's generated input files live.
+   *
+   * A subdirectory of the run's own temp dir, which `undoRedoFuzz.run` removes
+   * in a `finally` - so a failing run and every one of `pnpm agent:fuzz-shrink`'s
+   * hundreds of candidates clean up after themselves, exactly as the save/reload
+   * copies already do. Nothing is lost by deleting them: the trace carries the
+   * SPEC, and `surveyFileWriters.ts` is a pure function of it, so a replay
+   * rebuilds byte-identical files.
+   */
+  const filesRoot = saveDir;
+
+  /**
+   * A session-relative `rel` as an absolute path, refusing anything that leaves
+   * the run's own directory.
+   *
+   * `readTrace` already applies the same rule to every file-bearing step, so on
+   * the replay path this is belt and braces - but the GENERATOR path never goes
+   * through `readTrace`, and a containment rule that only one of two callers
+   * enforces is a convention rather than a boundary.
+   */
+  const resolveSessionPath = (rel: string): string => {
+    const root = path.resolve(filesRoot);
+    const target = path.resolve(root, rel);
+    if (target !== root && !target.startsWith(root + path.sep)) {
+      throw new Error(`generated file path ${JSON.stringify(rel)} escapes ${root}`);
+    }
+    return target;
+  };
+
+  /** Write a generated spec at `rel`, returning the absolute path it landed on. */
+  const materializeFile = (spec: GeneratedFileSpec, rel: string): string => {
+    const target = resolveSessionPath(rel);
+    // Renamed to the rel's basename rather than trusting `spec.name`: they agree
+    // for anything a generator produced, and when a hand-edited trace disagrees
+    // the file must still land where the mutation is about to look for it.
+    const named: GeneratedFileSpec = { ...spec, name: path.basename(target) };
+    materializeSurveyFile(path.dirname(target), named);
+    ctx.metric('generatedFiles');
+    return target;
+  };
+
+  /**
+   * The args a file-taking action is DISPATCHED with: `args[0]` swapped from the
+   * recorded session-relative path to this process's absolute one.
+   *
+   * The trace keeps the relative form, which is what makes a v3 trace portable
+   * and publishable - see `FILE_ARG_ACTIONS` in `lib/fuzzTrace.ts`.
+   */
+  const resolveFileArgs = (action: string, args: readonly unknown[]): unknown[] => {
+    if (!FILE_ARG_ACTIONS.has(action)) return [...args];
+    const rel = args[0];
+    if (typeof rel !== 'string' || rel === '') {
+      throw new Error(
+        `${action} takes an input file path as args[0], got ${JSON.stringify(rel ?? null)}`,
+      );
+    }
+    return [resolveSessionPath(rel), ...args.slice(1)];
+  };
 
   const note = (line: string): void => {
     history.push(line);
@@ -998,7 +1202,7 @@ async function runFuzz(
           seed: ctx.seed,
           iterations,
           fixture,
-          stream: streamV2() ? 'v2' : 'v1',
+          stream: streamName(),
           failure,
         }),
       );
@@ -1021,10 +1225,10 @@ async function runFuzz(
       headline,
       `  reproduce: run_scenario("undo-redo-fuzz", seed=${ctx.seed}, iterations=${iterations})` +
         `${fixture === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${fixture}`}` +
-        `${streamV2() ? '' : ' with STALAGMIGHT_FUZZ_STREAM=v1'}` +
+        `${streamClause()}` +
         `${allowKnownBugs() ? ' with STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1 (INERT: nothing left to allow)' : ''}` +
         `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
-      `  fixture=${fixture} stream=${streamV2() ? 'v2' : 'v1'} swarm=${swarm.name} ` +
+      `  fixture=${fixture} stream=${streamName()} swarm=${swarm.name} ` +
         `depth=${cursor} modelTop=${top} baseUndo=${baseUndo}`,
       ...(detail ? [detail] : []),
       `  last ${tail.length} action(s):`,
@@ -1428,16 +1632,36 @@ async function runFuzz(
    * no draw moved and every recorded repro seed is unaffected.
    */
   const applyMutation = async (action: FuzzAction, tag: string): Promise<void> => {
+    // The FILE comes first, in the trace and on disk: a replay reads the steps
+    // in order, so the step that writes the input has to precede the step that
+    // opens it. On the replay path the `genFile` step was already recorded and
+    // materialized by `applyTraceStep`, and `action.file` is absent - the two
+    // paths converge here with the same relative path in `args[0]`.
+    if (action.file) {
+      recorder.record({
+        kind: 'genFile',
+        spec: action.file.spec,
+        rel: action.file.rel,
+        label: action.label,
+      });
+      materializeFile(action.file.spec, action.file.rel);
+    }
     recorder.record({
       kind: 'mutate',
       action: action.action,
       args: action.args,
       label: action.label,
     });
+    /**
+     * Payloads that CANNOT legally be accepted, re-derived from the args rather
+     * than carried on the action - so a replayed trace asserts exactly what the
+     * recording did (see `mustBeRejected`). Null for every v1/v2 action.
+     */
+    const refusalRequired = mustBeRejected(action.action, action.args);
     const beforeUndo = undoLen;
     const beforeRedo = redoLen;
     startingMove(`${tag} ${action.label}`);
-    const res = await step('mutate', action.action, action.args);
+    const res = await step('mutate', action.action, resolveFileArgs(action.action, action.args));
     finishedMove();
     const accepted = res.actionOk && res.commandSuccess !== false;
     const pushed = res.undoLen - beforeUndo;
@@ -1445,6 +1669,20 @@ async function runFuzz(
       `${tag} ${action.label} -> ${accepted ? 'ok' : 'rejected'} ` +
         `(undo ${beforeUndo}->${res.undoLen}, redo ${beforeRedo}->${res.redoLen})`,
     );
+
+    if (refusalRequired !== null) {
+      // Counted either way, so the oracle can be shown to be doing work rather
+      // than never reaching a payload it has an opinion about.
+      ctx.metric('contractRefusals');
+      if (accepted) {
+        fail(
+          `${action.action} ACCEPTED a payload that cannot be represented`,
+          `  ${refusalRequired}\n` +
+            '  The frontend guard (src/utils/importPayloadGuard.ts) refuses this shape before it\n' +
+            '  is sent; a route that bypasses the wizard must still be refused BELOW it.',
+        );
+      }
+    }
 
     if (!accepted) {
       ctx.metric('rejected');
@@ -1585,6 +1823,43 @@ async function runFuzz(
       await saveAndReload(tag);
       return;
     }
+    if (traceStep.kind === 'genFile') {
+      // The v3 import group's input file, rebuilt from the recorded SPEC. This
+      // is the whole replay contract for file-backed imports: the trace carries
+      // no bytes and no absolute path, `surveyFileWriters.ts` is a pure function
+      // of the spec, and the mutation that follows names the same session-
+      // relative `rel` this writes - which `resolveFileArgs` then resolves
+      // against THIS run's directory.
+      //
+      // A shrink is allowed to drop this step and keep the mutation: the file is
+      // then simply absent, the import fails, and that is a legitimate (if
+      // different) run rather than a broken one - so ddmin keeps the step
+      // whenever removing it stops the failure reproducing.
+      const spec = traceStep.spec as GeneratedFileSpec | null;
+      if (spec === null || typeof spec !== 'object' || typeof spec.format !== 'string') {
+        throw new Error(`trace step ${tag} has a genFile spec with no format to rebuild from`);
+      }
+      recorder.record(traceStep);
+      materializeFile(spec, traceStep.rel);
+      ctx.metric('replayGenFiles');
+      return;
+    }
+    // Schema v2 added the rest of the import/export step vocabulary (`ui`,
+    // `export`, ...). This scenario drives the store, not the UI, so it cannot
+    // run them - and it must say so rather than let one fall through into the
+    // history-move arm below, which is the exact bug the `kind` allow-list in
+    // `validateStep` was added for.
+    if (
+      traceStep.kind !== 'undo' &&
+      traceStep.kind !== 'redo' &&
+      traceStep.kind !== 'undoTo' &&
+      traceStep.kind !== 'redoTo'
+    ) {
+      throw new Error(
+        `trace step kind ${traceStep.kind} is not one undo-redo-fuzz replays; ` +
+          `it belongs to a scenario that drives the import/export UI.`,
+      );
+    }
     const back = traceStep.kind === 'undo' || traceStep.kind === 'undoTo';
     const reach = back ? cursor : top - cursor;
     if (reach < 1) {
@@ -1681,7 +1956,7 @@ async function runFuzz(
   ctx.setMetric('historyLimit', historyLimit);
   ctx.log(
     `${replay ? `REPLAY of ${replayPath} (${replay.steps.length} recorded step(s)) ` : ''}` +
-    `fixture=${fixture} stream=${streamV2() ? 'v2' : 'v1'} swarm=${swarm.name} ` +
+    `fixture=${fixture} stream=${streamName()} swarm=${swarm.name} ` +
       `(stripped ${strippedRows} inherited undo row(s)) seed=${ctx.seed}: ` +
       `${ctx.metrics.mutations ?? 0} mutations, ${ctx.metrics.undos ?? 0} undos, ` +
       `${ctx.metrics.redos ?? 0} redos, ${ctx.metrics.rejected ?? 0} rejected, ` +

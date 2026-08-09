@@ -115,9 +115,38 @@ Ariane has one azimuth field per shot (`Azimut` / `AZ`). Stalagmight duplicates 
 
 Parsed but dropped:
 
+- **Ariane shot UUIDs are PRESERVED**, and have been since [#423](https://github.com/Stalagmight/Stalagmight/issues/423)
+  - this entry used to say the opposite and was stale. `foreign_shot_uuid`
+  (`parsers/tml/mod.rs:525`) validates the SHAPE of a `UUID`/`UU` element (non-empty, at most 128
+  characters, no XML-unexportable character) and never coerces the value; `Shot::with_uuid`
+  (`models/shot.rs:614`) lets the file's value win over the caller's fresh mint. So re-importing
+  a file this app exported round-trips by ID, and importing the SAME file twice hands two shots
+  the same foreign uuid - which is why the export path re-mints document-level duplicates
+  (`export/tml.rs::remint_duplicate_uuids`). A uuid whose shape is rejected costs THAT SHOT its
+  foreign identity and nothing else.
+
 - **Declination is never applied.** The `useMagneticAzimuth` flag is parsed onto `TmlFile` and read by nobody: a magnetic file's azimuths are imported as-is, with no declination correction and no warning that one may be needed.
 - **Entrance elevation is not wired.** `firstStartAbsoluteElevation` reaches `TmlFile` (and the geo-coding altitude) but has no home in the project model, so it is dropped - Ariane's elevation is +up from sea level while the zero datum's `depth_reference` is +down from the surface ([#431](https://github.com/Stalagmight/Stalagmight/issues/431)).
-- **Ariane shot UUIDs are dropped.** Stalagmight mints its own; re-importing the same file produces new identities, so nothing round-trips by ID.
+- **A `0.0` LRUD field is read as UNMEASURED, per field.** `lrud_opt`
+  (`parsers/tml/mod.rs:1908-1914`) maps any of `Left`/`Right`/`Up`/`Down` whose
+  `abs()` is under `f64::EPSILON` to `None`, independently of the other three - so
+  `left=0, right=3` imports as `null/3`. This is the read half of an INTENDED
+  sentinel collision, not a loss of information the file had: the export writes
+  `unwrap_or(0.0)` because Ariane's format has no null, so an unmeasured dimension
+  and one measured as zero arrive identical. The consequence is that a MEASURED
+  zero does not survive a round trip through this app's own `.tml`/`.tmlu`; an
+  unmeasured one does. The full argument, and the measured scale of it, is in
+  [ariane-export.md](ariane-export.md#the-lrud-zeronull-collision).
+
+- **Leading and trailing whitespace is trimmed off every text field.** The reader does
+  `e.unescape()?.trim()` on every shot element's text (`parsers/tml/mod.rs:398`), which is what
+  makes a pretty-printed `<Comment>\n  text\n</Comment>` from another tool read as `text` rather
+  than as `text` with its indentation. The cost is that a comment which BEGINS or ENDS with
+  whitespace does not round-trip: `"\tleading tab"` comes back as `"leading tab"`. A literal CR is
+  lost twice over - XML 1.0 line-end handling normalises it to LF before the reader sees it, and
+  then the trim removes it - so writing `&#13;` would not help either. Interior whitespace, and the
+  U+200B station-comment separator (not whitespace in Unicode terms), are unaffected. CSV export is
+  lossless here by contrast; this is a property of the XML text format, not of the comment.
 - **Per-shot surveyor / date / color collapse to the chain head.** A section takes those three fields from its FIRST shot, so a chain surveyed by several people over several days lands under one surveyor, one date and one color ([#427](https://github.com/Stalagmight/Stalagmight/issues/427)).
 
 Structural:

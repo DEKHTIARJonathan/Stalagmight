@@ -187,6 +187,8 @@ pub fn parse_project(
                     project_stations: convert_stations(stations),
                     file_state,
                     surveys: vec![],
+                    unread: String::new(),
+                    unread_at: 0,
                     state: PhantomData,
                 });
             }

@@ -1180,6 +1180,20 @@ async function runIteration(
       ctx.metric('replaySkipped:repair');
       return;
     }
+    // Schema v2 added the import/export step vocabulary. This scenario drives
+    // the store, not the UI, so an unrunnable kind must be named rather than
+    // fall through into the history walk below and replay as an undo.
+    if (
+      traceStep.kind !== 'undo' &&
+      traceStep.kind !== 'redo' &&
+      traceStep.kind !== 'undoTo' &&
+      traceStep.kind !== 'redoTo'
+    ) {
+      throw new Error(
+        `trace step kind ${traceStep.kind} is not one undo-persistence-fuzz replays; ` +
+          `it belongs to a scenario that drives the import/export UI.`,
+      );
+    }
     const back = traceStep.kind === 'undo' || traceStep.kind === 'undoTo';
     const reach = back ? cursor : top - cursor;
     if (reach < 1) {

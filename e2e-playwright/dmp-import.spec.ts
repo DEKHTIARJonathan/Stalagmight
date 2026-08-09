@@ -44,6 +44,34 @@ async function proceedToStep2(page: Page): Promise<void> {
   await proceedToDmpSectionConfig(page);
 }
 
+/** How many sections the open project holds. */
+async function countSections(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore?: { getState: () => { project: { sections: unknown[] } | null } };
+      };
+    }).__E2E_TEST__;
+    if (!e2e?.projectStore) {
+      throw new Error('E2E project store unavailable');
+    }
+    return e2e.projectStore.getState().project?.sections.length ?? 0;
+  });
+}
+
+/** `uiStore.importContext`: which import flow, if any, the app thinks is running. */
+async function readImportContext(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__?: { uiStore?: { getState: () => { importContext: string | null } } };
+    }).__E2E_TEST__;
+    if (!e2e?.uiStore) {
+      throw new Error('E2E UI store unavailable');
+    }
+    return e2e.uiStore.getState().importContext;
+  });
+}
+
 test.describe('DMP Import Dialog', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
@@ -585,6 +613,75 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     });
     expect(lastArgs).not.toBeNull();
     expect((lastArgs as { fileHash?: string | null }).fileHash ?? '').toContain('mock_hash_');
+  });
+
+  /**
+   * Test: a completed DMP import drops its import context (#477)
+   *
+   * `importContext` says an import flow is in progress, and it decides what
+   * `saveAfterImport` does with the next import ('new-project' forces a real
+   * save to disk, 'existing-project' only marks dirty). Every other importer
+   * ends through `completeImportToSingleView`, which drops it; both failure
+   * routes drop it via `surfaceImportFailure`. The DMP wizard's completion in
+   * App.tsx was a hand-rolled copy that did four of those five things, so a
+   * finished DMP import left the app believing one was still running.
+   */
+  test('should clear importContext after the wizard completes @smoke', async ({ page }) => {
+    await createProject(page, 'Import Context Clear');
+    await createSectionViaStore(page, {
+      name: 'Anchor Section',
+      shots: [{ azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: -1, depth_out: -2 }],
+    });
+
+    await page.evaluate(() => {
+      const setSuggestions = (window as unknown as Record<string, unknown>).__MOCK_SET_IMPORT_PLACEMENT_SUGGESTIONS__;
+      if (typeof setSuggestions !== 'function') {
+        throw new Error('Mock suggestion setter not available');
+      }
+      (setSuggestions as (suggestions: unknown[]) => void)([
+        {
+          existingStationIndex: 0,
+          importStationIndex: 0,
+          score: 0.95,
+          matchedShots: 0,
+          direction: 'forward',
+          isPartial: false,
+          confidence: 'high',
+          existingSectionName: 'Anchor Section',
+          importSectionIndex: 0,
+          importSectionName: 'Main Passage',
+          targetType: 'existing',
+          existingSectionId: 1,
+          targetImportIndex: null,
+        },
+      ]);
+    });
+
+    // Ctrl+I routes the mocked file by extension, and that router is what SETS
+    // the context - so read it back before proceeding, or a wizard that never
+    // set one would make the assertion below vacuous.
+    await openDmpSelectionDialog(page);
+    expect(await readImportContext(page)).toBe('existing-project');
+
+    const dialog = page.getByTestId('dmp-selection-dialog');
+    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await dialog.locator('[data-testid="select-none-button"]').click();
+    await page.locator('[data-testid="section-checkbox-0"]').click();
+
+    await proceedToDmpSectionConfig(page);
+
+    await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
+    await page.getByTestId('confirm-button').click();
+
+    // Anchor on the import actually LANDING, not on the context going null:
+    // a cancelled wizard also closes and also (correctly) clears the context,
+    // so without this the test could pass having exercised nothing. A clean
+    // receipt is surfaced as a toast rather than the modal, so the section
+    // count is the honest signal that the shared exit ran.
+    await expect(page.getByTestId('dmp-new-import-dialog')).toBeHidden({ timeout: 15000 });
+    await expect.poll(() => countSections(page), { timeout: 10000 }).toBe(2);
+
+    expect(await readImportContext(page)).toBeNull();
   });
 
   /**

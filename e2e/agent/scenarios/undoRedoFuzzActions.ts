@@ -18,6 +18,7 @@
  * `undefined` and rely on `JSON.stringify` dropping it.
  */
 import { mulberry32, type ScenarioContext } from './framework';
+import { IMPORT_ACTION_GENERATORS } from './undoRedoFuzzImportActions';
 
 /**
  * Generator STREAM VERSION.
@@ -27,6 +28,9 @@ import { mulberry32, type ScenarioContext } from './framework';
  * weights. It necessarily draws differently from v1, so v1 repro lines do not
  * replay under it - the scenario header carries a v2 repro for every documented
  * bug.
+ *
+ * v3 is v2 PLUS the import group (`undoRedoFuzzImportActions.ts`), opt-in via
+ * `STALAGMIGHT_FUZZ_STREAM=v3`. See `streamV3` below.
  *
  * `STALAGMIGHT_FUZZ_STREAM=v1` restores the ORIGINAL generator set, weights and
  * value ranges exactly: the v2-only helpers below all short-circuit without
@@ -40,6 +44,29 @@ import { mulberry32, type ScenarioContext } from './framework';
  */
 export function streamV2(): boolean {
   return process.env.STALAGMIGHT_FUZZ_STREAM !== 'v1';
+}
+
+/**
+ * v3 = v2 PLUS the import group in `undoRedoFuzzImportActions.ts`.
+ *
+ * It is a strict SUPERSET of v2 rather than a replacement, and that is a choice
+ * worth stating because the v1/v2 relationship is not the same shape: v1 is a
+ * SUBSET of v2 (v2 added generators to it and moved every trajectory), while
+ * `STALAGMIGHT_FUZZ_STREAM=v3` leaves `streamV2()` true - so every v2 generator,
+ * weight and value range is present and unaltered under v3. What changes is only
+ * that thirteen more names join the weighted array, at the END, so the array a
+ * v1 or v2 run builds is byte-identical to what it was before v3 existed.
+ *
+ * v3 is OPT-IN, not the default. A v3 run necessarily draws differently from a
+ * v2 run of the same seed (a longer weighted array re-partitions every `pick`),
+ * so making it the default would invalidate every repro line in this scenario's
+ * header at a stroke - the same reason v2 kept a v1 escape hatch instead of
+ * rewriting the lines.
+ *
+ * Read at CALL time, never cached, for exactly the reason `streamV2` is.
+ */
+export function streamV3(): boolean {
+  return process.env.STALAGMIGHT_FUZZ_STREAM === 'v3';
 }
 
 /** Share of generated values that take an extreme instead of a nominal value. */
@@ -92,6 +119,7 @@ export interface StationRef {
  * documented repro seed, is unchanged.
  */
 import type { TargetingDigest } from '../lib/fuzzOracleCore';
+import type { GeneratedFileSpec } from '../lib/surveyFileSpecs';
 export type { TargetingDigest };
 
 /** `[sectionId, [shotId, ...]]`, one entry of the digest's section list. */
@@ -103,21 +131,36 @@ export interface FuzzAction {
   args: unknown[];
   /** Short label for the action-history tail in a failure message. */
   label: string;
+  /**
+   * An input FILE this action needs on disk (v3 import generators only).
+   *
+   * A generator is PURE - the shrinker re-derives steps from a trace and the
+   * draw loop discards candidates - so it never writes anything. It hands over
+   * the spec and the session-relative path it put in `args[0]`, and
+   * `undoRedoFuzz.ts` materializes it immediately before dispatch, records a
+   * `genFile` trace step carrying the SPEC (never the bytes, never an absolute
+   * path), and swaps `args[0]` for the absolute path for this process only.
+   * See the header of `undoRedoFuzzImportActions.ts`.
+   */
+  file?: { spec: GeneratedFileSpec; rel: string };
 }
 
 export interface ActionGenerator {
   name: string;
   /** Relative draw weight. */
   weight: number;
-  /** Stream version this generator belongs to; v1 runs draw only from 'v1'. */
-  since?: 'v1' | 'v2';
+  /**
+   * Stream version this generator belongs to. A v1 run draws only from 'v1'; a
+   * v2 run from 'v1' + 'v2'; a v3 run from all three.
+   */
+  since?: 'v1' | 'v2' | 'v3';
   /** Returns null when the live project has no valid target for this action. */
   build(ctx: ScenarioContext, state: TargetingDigest): FuzzAction | null;
 }
 
-const COLORS = ['#3388FF', '#FF8833', '#33CC66', '#CC33AA', '#FFCC00', '#6666FF'] as const;
-const SHOT_KINDS = ['Normal', 'Jump', 'Reference'] as const;
-const SURVEY_DIRECTIONS = ['in', 'out'] as const;
+export const COLORS = ['#3388FF', '#FF8833', '#33CC66', '#CC33AA', '#FFCC00', '#6666FF'] as const;
+export const SHOT_KINDS = ['Normal', 'Jump', 'Reference'] as const;
+export const SURVEY_DIRECTIONS = ['in', 'out'] as const;
 /**
  * `Batch` is the deferred-distribution marker and `ProportionalByLength` /
  * `EqualDistribution` are rejected outright by `create_loop_closure`
@@ -135,11 +178,11 @@ const CLOSURE_STRATEGIES = [
   'Batch',
 ] as const;
 
-function chance(ctx: ScenarioContext, probability: number): boolean {
+export function chance(ctx: ScenarioContext, probability: number): boolean {
   return ctx.rng() < probability;
 }
 
-function roundedFloat(ctx: ScenarioContext, min: number, max: number, decimals: number): number {
+export function roundedFloat(ctx: ScenarioContext, min: number, max: number, decimals: number): number {
   return Number((min + ctx.rng() * (max - min)).toFixed(decimals));
 }
 
@@ -175,7 +218,7 @@ const BOUNDARY_STRINGS = [
   '"quoted", \\backslash\\ and \nnewline',
 ] as const;
 
-function biasedText(ctx: ScenarioContext, nominal: string): string {
+export function biasedText(ctx: ScenarioContext, nominal: string): string {
   if (!streamV2()) return nominal;
   if (ctx.rng() < P_BOUNDARY) return ctx.pick(BOUNDARY_STRINGS);
   return nominal;
@@ -193,11 +236,11 @@ function pickDistinct<T>(ctx: ScenarioContext, items: readonly T[], count: numbe
 }
 
 /** Sections by ascending id, so the draw does not depend on Vec order. */
-function sortedSections(state: TargetingDigest): DigestSection[] {
+export function sortedSections(state: TargetingDigest): DigestSection[] {
   return [...state.s].sort((a, b) => a[0] - b[0]);
 }
 
-function pickSection(ctx: ScenarioContext, state: TargetingDigest): DigestSection | null {
+export function pickSection(ctx: ScenarioContext, state: TargetingDigest): DigestSection | null {
   const sections = sortedSections(state);
   return sections.length > 0 ? ctx.pick(sections) : null;
 }
@@ -216,7 +259,7 @@ function pickSmallSection(ctx: ScenarioContext, state: TargetingDigest): DigestS
   return ctx.pick(sections);
 }
 
-function pickShot(
+export function pickShot(
   ctx: ScenarioContext,
   state: TargetingDigest,
 ): { sectionId: number; shotId: number } | null {
@@ -227,11 +270,11 @@ function pickShot(
   return { sectionId: section[0], shotId: ctx.pick(shotIds) };
 }
 
-function sortedStationRefs(state: TargetingDigest): [number, number][] {
+export function sortedStationRefs(state: TargetingDigest): [number, number][] {
   return [...state.st].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
 }
 
-function pickStationRef(ctx: ScenarioContext, state: TargetingDigest): [number, number] | null {
+export function pickStationRef(ctx: ScenarioContext, state: TargetingDigest): [number, number] | null {
   const refs = sortedStationRefs(state);
   return refs.length > 0 ? ctx.pick(refs) : null;
 }
@@ -261,11 +304,11 @@ function pickCrossSectionPair(
 }
 
 /** Digest tuple -> the `StationRef` shape the store actions and IPC expect. */
-function toRef(ref: [number, number]): StationRef {
+export function toRef(ref: [number, number]): StationRef {
   return { section_id: ref[0], station_index: ref[1] };
 }
 
-function refLabel(ref: [number, number]): string {
+export function refLabel(ref: [number, number]): string {
   return `${ref[0]}/${ref[1]}`;
 }
 
@@ -553,11 +596,34 @@ const SWARM_PROFILES: readonly { name: string; boost: Record<string, number> }[]
   { name: 'metadata-heavy', boost: { updateShot: 4, updateSection: 4, updateStationComment: 5, setShotKind: 4, moveComment: 3 } },
 ];
 
+/**
+ * The v3-only profile, appended rather than merged into the list above.
+ *
+ * Merging it would change `SWARM_PROFILES.length`, and the profile a seed
+ * selects is `floor(rng() * length)` - so every v2 seed would have silently
+ * changed profile and every v2 repro line with it. Appending under the v3 gate
+ * leaves the v2 selection arithmetic untouched and gives a v3 campaign one run
+ * in eight where the import group dominates.
+ */
+const IMPORT_HEAVY_PROFILE: { name: string; boost: Record<string, number> } = {
+  name: 'import-heavy',
+  boost: {
+    importSectionsSynthetic: 4,
+    importSectionsWithOverlap: 4,
+    importSectionsNonFinite: 3,
+    importTmlFile: 2,
+    importCompassFile: 2,
+    importWallsFile: 2,
+    importGpxFile: 2,
+  },
+};
+
 /** The profile a seed selects. Stable for a seed, independent of every other stream. */
 export function swarmProfileFor(seed: number): SwarmProfile {
   if (!streamV2()) return { name: 'v1-legacy', multipliers: {} };
+  const profiles = streamV3() ? [...SWARM_PROFILES, IMPORT_HEAVY_PROFILE] : SWARM_PROFILES;
   const rng = mulberry32((seed ^ SWARM_STREAM_SALT) >>> 0);
-  const chosen = SWARM_PROFILES[Math.floor(rng() * SWARM_PROFILES.length)] ?? SWARM_PROFILES[0];
+  const chosen = profiles[Math.floor(rng() * profiles.length)] ?? profiles[0];
   return { name: chosen?.name ?? 'balanced', multipliers: { ...(chosen?.boost ?? {}) } };
 }
 
@@ -1005,19 +1071,50 @@ export const ACTION_GENERATORS: readonly ActionGenerator[] = [
   },
 ];
 
-const BY_NAME = new Map(ACTION_GENERATORS.map((generator) => [generator.name, generator]));
+/**
+ * Every generator this build knows about: the v1/v2 set above, then the v3
+ * import group, in that order and never interleaved.
+ *
+ * Resolved LAZILY, on first use, rather than as a module-level const. That is
+ * not a micro-optimization - it breaks an import CYCLE. `undoRedoFuzzImportActions`
+ * imports the draw helpers from this module, so whichever of the two a caller
+ * loads first, the other is mid-evaluation when its bindings are read. Reading
+ * `IMPORT_ACTION_GENERATORS` inside a function defers that read until both
+ * modules have finished, which a top-level array literal cannot do (it would
+ * throw a TDZ `ReferenceError` whenever the import module happened to be
+ * imported first - as a unit test importing it directly does).
+ *
+ * The ORDER is what keeps v1/v2 byte-identical: appending means the weighted
+ * name array a v1 or v2 run builds is exactly the array it built before the v3
+ * group existed, index for index.
+ */
+let allGeneratorsCache: readonly ActionGenerator[] | null = null;
+
+function allGenerators(): readonly ActionGenerator[] {
+  allGeneratorsCache ??= [...ACTION_GENERATORS, ...IMPORT_ACTION_GENERATORS];
+  return allGeneratorsCache;
+}
+
+let byNameCache: Map<string, ActionGenerator> | null = null;
+
+function generatorsByName(): Map<string, ActionGenerator> {
+  byNameCache ??= new Map(allGenerators().map((generator) => [generator.name, generator]));
+  return byNameCache;
+}
 
 /**
  * Weight-expanded generator names for a run.
  *
  * v1 uses the ORIGINAL generators at their original weights, so the legacy draw
- * stream is reproduced exactly. v2 adds the new families and applies the seed's
- * swarm multipliers.
+ * stream is reproduced exactly. v2 adds the delete/split, batch and comment
+ * families and applies the seed's swarm multipliers. v3 adds the import group on
+ * top of v2, at the end of the array.
  */
 export function weightedNamesFor(profile: SwarmProfile): string[] {
   const names: string[] = [];
-  for (const generator of ACTION_GENERATORS) {
+  for (const generator of allGenerators()) {
     if (!streamV2() && generator.since === 'v2') continue;
+    if (!streamV3() && generator.since === 'v3') continue;
     const weight = Math.max(1, Math.round(generator.weight * (profile.multipliers[generator.name] ?? 1)));
     for (let i = 0; i < weight; i++) names.push(generator.name);
   }
@@ -1037,7 +1134,7 @@ export function drawAction(
   attempts = 8,
 ): FuzzAction {
   for (let i = 0; i < attempts; i++) {
-    const generator = BY_NAME.get(ctx.pick(weightedNames));
+    const generator = generatorsByName().get(ctx.pick(weightedNames));
     const action = generator?.build(ctx, state);
     if (action) return action;
   }

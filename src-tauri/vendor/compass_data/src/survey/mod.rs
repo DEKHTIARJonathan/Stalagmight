@@ -427,8 +427,28 @@ impl Survey {
     /// # Errors
     /// If the input is not a valid survey.dat file
     pub fn parse_dat_file(input: &str) -> Result<Vec<Self>, Error> {
+        Self::parse_dat_file_with_remainder(input).map(|(surveys, _remainder)| surveys)
+    }
+
+    /// Parse the contents of a survey.dat file, returning the input that was
+    /// left over.
+    ///
+    /// Stalagmight fork: the file parser is a `many0`, so it stops at the first
+    /// survey it cannot read and returns the ones before it WITHOUT consuming
+    /// the rest of the file. To the caller that is indistinguishable from a
+    /// short file parsed cleanly, and the surveys after the bad one disappear
+    /// with nothing said about them. The unconsumed remainder is the only
+    /// evidence that happened, so it comes back with the surveys.
+    /// # Arguments
+    /// input - A string containing the contents of the survey.dat file
+    /// # Returns
+    /// The parsed surveys, plus the tail of `input` the parser did not consume
+    /// (empty, or only record separators, when the whole file was read)
+    /// # Errors
+    /// If the input is not a valid survey.dat file
+    pub fn parse_dat_file_with_remainder(input: &str) -> Result<(Vec<Self>, &str), Error> {
         match parser::parse_dat_file(input) {
-            Ok((_, survey)) => Ok(survey),
+            Ok((remainder, surveys)) => Ok((surveys, remainder)),
             Err(e) => Err(Error::CouldntParseSurvey(e.to_string())),
         }
     }

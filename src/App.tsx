@@ -8,7 +8,7 @@ import { useSpeleoStore } from './store/speleoStore';
 import { useGasPlanStore, selectIsPlanDirty } from './store/gasPlanStore';
 import { useShallow } from 'zustand/react/shallow';
 import { invokeIpc, getErrorMessage } from './utils/ipc';
-import { surfaceSaveFailure, presentImportReceipt } from './utils/saveFeedback';
+import { surfaceSaveFailure, completeImportToSingleView } from './utils/saveFeedback';
 import { extractFilename } from './utils/path';
 import { routeOpenedFile } from './utils/openOrImport';
 import { useLaunchWithFile } from './utils/launchWithFile';
@@ -762,12 +762,22 @@ function App() {
                 // Non-fatal: proceed without orphan detection
               }
             }
-            closeDialog();
-            setView('single');
-            triggerFitToBounds();
-            if (receipt) {
-              presentImportReceipt(receipt, { openDialog, showToast: useUIStore.getState().showToast });
-            }
+            // The shared exit, not a hand-rolled copy of it (#477). The inline
+            // version this replaces did the same four things in the same order
+            // and omitted the fifth - `setImportContext(null)` - so a completed
+            // DMP import left its context set while every other importer
+            // (TML/Compass/Walls/GPX, and both failure paths via
+            // `surfaceImportFailure`) dropped it. The sibling branch had already
+            // been fixed for exactly that reason: `OrphanPlacementDialog.finish`
+            // clears it explicitly and points at #435 for this duplication.
+            // Runs AFTER `saveAfterImport` above, which reads the context.
+            completeImportToSingleView('dmp-import-new', {
+              closeDialog,
+              setView,
+              triggerFitToBounds,
+              openDialog,
+              showToast: useUIStore.getState().showToast,
+            }, receipt);
           }}
         />
       ) : null}

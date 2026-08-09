@@ -1598,6 +1598,9 @@
       "metadataHeading": "Section Metadata",
       "shotsHeading": "Shot Data"
     },
+    "export": {
+      "failed": "Export failed - try a different folder or file name"
+    },
     "tmlUnanchoredWarning": {
       "titleAllUnanchored": "No section is connected to a zero datum",
       "titlePartial": "Some sections aren't connected to a zero datum",

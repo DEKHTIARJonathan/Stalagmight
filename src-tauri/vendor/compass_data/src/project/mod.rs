@@ -153,6 +153,13 @@ pub struct DatFile<S> {
     pub file_state: FileState,
     /// The loaded surveys (empty until loaded)
     pub(crate) surveys: Vec<Survey>,
+    /// The tail of the file the survey parser did not consume, and the offset
+    /// it stopped at (both empty/zero until loaded).  (Stalagmight fork: the
+    /// file parser is a `many0` and stops at the first survey it cannot read,
+    /// leaving the rest of the file behind; without this the surveys after it
+    /// disappear from the import with nothing said about them.)
+    pub(crate) unread: String,
+    pub(crate) unread_at: usize,
     pub(crate) state: PhantomData<S>,
 }
 
@@ -174,12 +181,18 @@ impl DatFile<Unloaded> {
         // than failing on invalid UTF-8.
         let bytes = std::fs::read(&full_path).map_err(Error::CouldntReadFile)?;
         let file_contents: String = bytes.iter().map(|&b| b as char).collect();
-        let surveys = Survey::parse_dat_file(&file_contents)?;
+        let (surveys, remainder) = Survey::parse_dat_file_with_remainder(&file_contents)?;
+        // One latin1 byte is one `char`, so the chars ahead of the remainder
+        // count the bytes of the file that were read.
+        let unread_at = file_contents.chars().count() - remainder.chars().count();
+        let unread = remainder.to_string();
         Ok(DatFile {
             file_path: self.file_path,
             project_stations: self.project_stations,
             file_state: self.file_state,
             surveys,
+            unread,
+            unread_at,
             state: PhantomData,
         })
     }
@@ -190,6 +203,24 @@ impl DatFile<Loaded> {
     #[must_use]
     pub fn surveys(&self) -> &[Survey] {
         &self.surveys
+    }
+
+    /// The tail of the file the survey parser did not consume.
+    ///
+    /// Empty, or only the record separators Compass writes between surveys,
+    /// when the whole file was read; anything else is the survey text the
+    /// parse stopped on, and the surveys behind it are not in [`Self::surveys`].
+    /// (Stalagmight fork.)
+    #[must_use]
+    pub fn unread(&self) -> &str {
+        &self.unread
+    }
+
+    /// The byte offset into the file where the parse stopped, i.e. where
+    /// [`Self::unread`] begins.  (Stalagmight fork.)
+    #[must_use]
+    pub fn unread_at(&self) -> usize {
+        self.unread_at
     }
 }
 

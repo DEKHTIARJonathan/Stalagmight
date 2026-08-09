@@ -153,6 +153,49 @@ mod tests {
         assert_eq!(escape_csv(""), "");
     }
 
+    /// The exact table `e2e/agent/lib/exportOracles.ts`'s `escapeCsvMirror`
+    /// mirrors, kept here so a change to `escape_csv` fails on THIS side too.
+    ///
+    /// The agent harness cannot call this function: `export-roundtrip-fuzz`
+    /// seeds hostile comments, exports a CSV and then re-checks every cell
+    /// against a TypeScript reimplementation of the rule below. A copy that
+    /// drifted would go on agreeing with a broken exporter, which is the one
+    /// failure mode a neutralisation check must not have. The two halves are
+    /// therefore pinned against the same table from both languages; if you
+    /// change the rule, change both.
+    ///
+    /// The three rows nobody reconstructs correctly from memory are the last
+    /// three: a leading TAB is neutralised and NOT quoted (tab is in no
+    /// quote-trigger set), a leading LF is quoted and NOT neutralised (LF is in
+    /// no neutralisation set), and an empty string stays empty.
+    #[test]
+    fn escape_csv_matches_the_agent_harness_mirror_table() {
+        let table: &[(&str, &str)] = &[
+            ("", ""),
+            ("plain", "plain"),
+            ("=cmd|' /C calc'!A0", "'=cmd|' /C calc'!A0"),
+            ("+1+1", "'+1+1"),
+            ("-2+3", "'-2+3"),
+            ("@SUM(1)", "'@SUM(1)"),
+            ("\tleading tab", "'\tleading tab"),
+            (
+                "\rleading carriage return",
+                "\"'\rleading carriage return\"",
+            ),
+            ("\nleading newline", "\"\nleading newline\""),
+            ("a,b", "\"a,b\""),
+            ("say \"hi\"", "\"say \"\"hi\"\"\""),
+            ("line1\nline2", "\"line1\nline2\""),
+            ("=a,b", "\"'=a,b\""),
+            ("x=1", "x=1"),
+            ("\u{6d1e}\u{7a74}", "\u{6d1e}\u{7a74}"),
+            ("part one\u{200b}part two", "part one\u{200b}part two"),
+        ];
+        for (input, expected) in table {
+            assert_eq!(&escape_csv(input), expected, "input {input:?}");
+        }
+    }
+
     #[test]
     fn test_format_optional_outputs_two_decimals_or_empty() {
         assert_eq!(format_optional(Some(1.234)), "1.23");

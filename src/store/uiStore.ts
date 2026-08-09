@@ -17,6 +17,7 @@ import type { AppearanceConfig, PanelsConfig, SyntacticHighlightingConfig, Synta
 import type { DisplaySettings } from '../types/loading';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
 import { useGasPlanStore } from './gasPlanStore';
+import { useExportStore } from './exportStore';
 
 // Import tool utilities for internal use and re-export for convenience
 import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
@@ -1782,6 +1783,14 @@ export const useUIStore = create<UIStore>((set) => ({
     // load so a previous project's plan - and especially its advanced-preset ack - can't leak
     // into the next (mirrors the showDevStats/showIssueSeverity per-load resets below).
     useGasPlanStore.getState().reset();
+    // Same argument, same funnel: the Export-mode option set (format, DPI,
+    // line-weight threshold, label toggles) is a rendering choice made FOR the
+    // project that was open, and nothing else cleared it - `setAppMode` says so
+    // explicitly. A 600-DPI PNG framed for one survey would otherwise stay
+    // selected when the next opened, with the Export-mode preview rendering a
+    // different cave at settings nobody chose for it. The modal Export dialog is
+    // unaffected by design: it owns local state and always opens on data/CSV.
+    useExportStore.getState().reset();
     // Apply display settings from backend, merging with existing state.
     // Uses ?? to only apply fields that are defined, preserving current state for undefined fields.
     // EXACT 13 persisted fields matching uiStore - NO colorBy (not persisted).

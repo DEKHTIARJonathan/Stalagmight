@@ -17,6 +17,7 @@ import { useUIStore } from './uiStore';
 import { autosaveFailureMessage, surfaceSaveFailure } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
 import { useSpeleoStore } from './speleoStore';
+import { useExportStore } from './exportStore';
 import type {
   Project,
   ProjectState,
@@ -37,6 +38,7 @@ import type {
   Coordinates,
   FrozenShotRef,
 } from '../types/project';
+import type { ExistingShotUpdate } from '../types/ipc/ExistingShotUpdate';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
 import type { SpeleoManagedFile } from '../types/ipc/SpeleoManagedFile';
 import type { Config } from '../types/config';
@@ -447,12 +449,20 @@ export interface ProjectStore extends ProjectConfigActions {
   calculateFileHash: (path: string) => Promise<string>;
   checkDuplicateImport: (hash: string) => Promise<boolean>;
   checkSectionHashes: (hashes: string[]) => Promise<boolean[]>;
+  /**
+   * `existingShotUpdates` is the overlap interpolation the DMP wizard computes
+   * client-side (`applyAllOverlapTreatments`). It is LAST rather than in the
+   * command's own third position deliberately: appending leaves every existing
+   * call's argument positions untouched. Optional and defaulted to `null`, which
+   * the backend reads as "no updates".
+   */
   importSections: (
     sections: ImportSectionConfig[],
     fileHash?: string | null,
     sectionHashes?: string[] | null,
     virtualShotMode?: VirtualShotMode,
     provenance?: ImportReceiptProvenance,
+    existingShotUpdates?: ExistingShotUpdate[] | null,
   ) => Promise<CommandResult>;
   suggestImportPlacement: (shots: ShotData[]) => Promise<PlacementSuggestion[]>;
   exportCsv: (path: string) => Promise<void>;
@@ -563,6 +573,12 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
   // Losing a project bypasses the setView() cleanup funnel, so drop the gas
   // sub-mode (#38) here too - a stale overlay/panel must not outlive the project.
   useUIStore.getState().exitGasPlan();
+  // Same bypass, same fix, for the Export-mode option set: `applyDisplaySettings`
+  // resets it on load/create, but a CLOSE never reaches that funnel, so without
+  // this the next project opened from a closed state would still inherit the
+  // previous one's format/DPI/threshold. `exitGasPlan()` above only leaves the
+  // sub-mode; it does not clear either store's values.
+  useExportStore.getState().reset();
   // #204: drop the SpeleoDB action-shell edit-state - no project is open.
   useSpeleoStore.getState().clearLink();
 }
@@ -2309,6 +2325,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     sectionHashes?: string[] | null,
     virtualShotMode?: VirtualShotMode,
     provenance?: ImportReceiptProvenance,
+    existingShotUpdates?: ExistingShotUpdate[] | null,
   ) => {
     const s = peekProjectActionSource();
     if (s) setSource(s);
@@ -2319,6 +2336,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           sections,
           fileHash: fileHash ?? null,
           sectionHashes: sectionHashes ?? null,
+          // The command has taken these since the overlap work; this wrapper
+          // could not express them, so the only route to the overlap path was
+          // the DMP wizard's direct `invokeIpc`. Optional and null-defaulted, so
+          // no existing caller changes behaviour.
+          existingShotUpdates: existingShotUpdates ?? null,
           virtualShotMode: virtualShotMode ?? null,
           sourceLabel: provenance?.sourceLabel ?? null,
           sourceFileName: provenance?.sourceFileName ?? null,

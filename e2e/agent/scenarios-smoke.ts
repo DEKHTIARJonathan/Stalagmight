@@ -60,6 +60,26 @@ const SMOKE_ITERATIONS: Record<string, number> = {
   'rapid-project-cycle': 4,
 };
 
+/**
+ * Scenarios this gate does NOT run, per an explicit user decision: they execute
+ * on REQUEST only - `pnpm agent:scenario`, `pnpm agent:fuzz-matrix`, or the MCP
+ * `run_scenario` tool - and never in a gate.
+ *
+ * `import-dialog-fuzz` generates files, drives native file dialogs and walks a
+ * multi-screen wizard, so one iteration costs far more wall clock than anything
+ * else here and its failures want a shrink rather than a red gate.
+ *
+ * `export-roundtrip-fuzz` is excluded for the same reasons and two more of its
+ * own: an episode rasterizes the whole survey up to three times, and its
+ * round-trip oracles CREATE PROJECTS on disk and import into them. Neither
+ * belongs in a gate that runs every scenario back to back on one session.
+ *
+ * Excluding either is NOT an expected-failure list in disguise: both are
+ * expected GREEN, neither has a classifier or a tolerance, and a red from
+ * either is the app's.
+ */
+const SMOKE_EXCLUDED = new Set(['import-dialog-fuzz', 'export-roundtrip-fuzz']);
+
 // There is no expected-failure list, and adding one back would be a regression.
 // `undo-redo-fuzz` and `undo-persistence-fuzz` are expected GREEN and STRICT:
 // every issue-413 finding is fixed in the Rust tier and every classifier and
@@ -78,6 +98,10 @@ async function main(): Promise<void> {
 
   try {
     for (const name of listScenarios()) {
+      if (SMOKE_EXCLUDED.has(name)) {
+        process.stdout.write(`SKIP: ${name} (runs on explicit request only)\n`);
+        continue;
+      }
       // Reset to a clean slate between scenarios.
       await session.exclusive(() => callStoreAction(session.browser, 'project', 'closeProject', [])).catch(() => undefined);
       try {

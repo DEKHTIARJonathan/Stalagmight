@@ -171,7 +171,19 @@ hazards over long runs.
     environment rather than inherited (an exported replay path would otherwise
     make every cell replay one trace and report a green matrix for coverage
     nothing ran). `--release=0` means what it says: the flag takes an optional
-    `1/0`, `true/false`, `yes/no`, `on/off` value.
+    `1/0`, `true/false`, `yes/no`, `on/off` value. `--axis KEY=v1,v2` is the
+    optional third dimension; it accepts `STALAGMIGHT_*` keys only (the children
+    run cargo and launch the app, so a matrix flag does not get to set `PATH` or
+    `LD_PRELOAD`) and REFUSES the six the matrix assigns per cell -
+    `STALAGMIGHT_FUZZ_FIXTURE`, `STALAGMIGHT_AGENT_BASE_PORT`,
+    `STALAGMIGHT_AGENT_DISPLAYS`, `STALAGMIGHT_AGENT_RELEASE`,
+    `STALAGMIGHT_FUZZ_REPLAY`, `STALAGMIGHT_FUZZ_TRACE`. An axis over the
+    fixture would mislabel every row of the results table; one over the port
+    block or the display would put K concurrent sessions on one of each, which
+    is the race the slot assignment exists to remove. The refusal names the flag
+    that owns the key, because silently reordering would ignore what was asked
+    for. Parsing lives in `e2e/agent/lib/fuzzMatrixArgs.ts` so a unit test can
+    assert the refusal list is the same list the per-cell environment writes.
   - `pnpm agent:mcp` - run the server standalone (for an external MCP client).
   - `pnpm agent:bridge <dir>` - file-based access to the same server for plain
     shells and subagents without an MCP client: append JSON tool calls to
@@ -321,14 +333,22 @@ Registered in `e2e/agent/scenarios/index.ts`; each is a seeded loop that FAILS b
 throwing. Small-n values for the `pnpm agent:scenarios` gate live in
 `e2e/agent/scenarios-smoke.ts`.
 
-Two of them - `undo-redo-fuzz` and `undo-persistence-fuzz` - reproduce open app
-bugs by construction, so they are RED by design and a green run would mean their
-oracles had been weakened. They are listed in that file's `EXPECTED_RED`, which
-reports them as **XFAIL** and does not fail the gate: with them failing
-unconditionally the gate exited 1 whatever the other nine did, and so could no
-longer answer the question it exists to answer. The other direction is enforced -
-an expected-red scenario that PASSES fails the run, because that means the bug it
-pins was fixed and the entry (and the scenario's header) needs updating.
+There is no expected-failure list, and adding one back would be a regression.
+`EXPECTED_RED` existed while `undo-redo-fuzz` and `undo-persistence-fuzz`
+reproduced open bugs by construction; every issue-413 finding is now fixed in the
+Rust tier and every classifier and tolerance was deleted with it, so both are
+expected GREEN and STRICT and `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS=1` has nothing
+left to allow. If either goes red the red is the APP's: shrink it
+(`pnpm agent:fuzz-shrink`) and fix the app.
+
+Two scenarios are EXCLUDED from the gate rather than expected to fail:
+`import-dialog-fuzz` and `export-roundtrip-fuzz`, both in `SMOKE_EXCLUDED`. They
+run on explicit request only (see their sections below), and both are expected
+green with no classifier and no tolerance of their own. The export one is out
+for two reasons of its own on top of the wall clock: an episode rasterizes the
+whole survey up to three times, and its round-trip oracles create projects on
+disk and import into them - neither belongs in a gate that runs every scenario
+back to back on one session.
 
 | Scenario | What it asserts |
 |---|---|
@@ -341,6 +361,8 @@ pins was fixed and the entry (and the scenario's header) needs updating.
 | `map-storm` | A seeded `jumpTo` barrage does not stall the main thread. |
 | `save-under-churn` | Mutate+save leaves `isDirty=false`, no `.tmp`, and reopens clean. |
 | `import-repeatedly` | Re-importing a `.tml` keeps the undo stack at or under 100. |
+| `import-dialog-fuzz` | Generates DMP/Ariane/Compass/Walls/GPX files and walks the real import UI at random; per-step coherence plus a per-flow undo-roundtrip / residue / accounting / receipt / temp-file contract (see below). |
+| `export-roundtrip-fuzz` | Exports every format through the modal, the Export-mode panel and the raw store action at hostile destination paths; file/result agreement, refusal parity, a svg/png/pdf differential, byte identity, round-trip convergence and shot survival (see below). |
 | `rapid-project-cycle` | Open/close cycles leave clean project transitions. |
 
 ### undo-redo-fuzz
@@ -392,7 +414,8 @@ so it can only ever touch a temp copy.
 | Env var | Effect |
 |---|---|
 | `STALAGMIGHT_FUZZ_FIXTURE` | Which `.stalx` under `e2e/fixtures/` to fuzz, by BASENAME (`fixtureSourcePath`'s `path.basename` is the containment guard). Defaults to `DEFAULT_FIXTURE`. Recorded in the metrics and the log line so a run stays attributable. |
-| `STALAGMIGHT_FUZZ_STREAM` | `v1` restores the ORIGINAL generator set, weights and value ranges, reproducing the legacy draw stream byte for byte. The default v2 stream adds the delete/split family, batches, comment moves, synthetic imports, boundary-biased values and per-run swarm weights - and necessarily draws differently, so v1-era repro lines need this variable. |
+| `STALAGMIGHT_FUZZ_STREAM` | `v1` restores the ORIGINAL generator set, weights and value ranges, reproducing the legacy draw stream byte for byte. The default v2 stream adds the delete/split family, batches, comment moves, synthetic imports, boundary-biased values and per-run swarm weights - and necessarily draws differently, so v1-era repro lines need this variable. `v3` is v2 PLUS the import group; see below. |
+| `STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P` | v3 only: share of generated input files drawn from the corruption catalog rather than written clean. Default 0.2. The same knob, with the same default, that `import-dialog-fuzz` uses. |
 | `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | INERT. It used to keep a run going past a mismatch that was entirely a classified known bug; every classifier is deleted now that the findings are fixed, so there is nothing left to allow. Still read, and still named in the failure's `reproduce:` line, so a tolerant-looking invocation cannot be mistaken for one that relaxed something. |
 
 Fixture choice is load-bearing, not cosmetic. The fractal fixture has no loop
@@ -431,6 +454,130 @@ A 60-cell v2 sweep (both fixtures, seeds 1-30, x40) yielded 18 failures and a v2
 repro for bugs 1, 5, 6, 7 and 8; bugs 2, 3 and 4 were not re-found and keep their
 v1 lines, executable with `STALAGMIGHT_FUZZ_STREAM=v1`. The full table is in the
 scenario header.
+
+#### v3: the import stream
+
+```bash
+STALAGMIGHT_FUZZ_STREAM=v3 pnpm agent:scenario undo-redo-fuzz --seed 1 --iterations 80
+STALAGMIGHT_FUZZ_STREAM=v3 pnpm agent:fuzz-matrix --seeds 1..4 --workers 1 --iterations 40
+```
+
+`import_sections` and the four `execute_*_import` commands push ONE undo entry
+covering an arbitrary number of new sections, placements, station comments and
+in-place edits to shots that were already there. That is the widest single
+command in the app, and it is a `ProjectSnapshotPair` - the entry family findings
+8 and 11 both lived in. v3 adds thirteen generators for it
+(`e2e/agent/scenarios/undoRedoFuzzImportActions.ts`), about 22% of a balanced
+run's draws:
+
+- **`importSectionsSynthetic`** - fully synthetic `ImportSectionConfig` batches:
+  0 to 6 sections under a 24-shot cap, all six `ImportPlacement` variants,
+  duplicate names inside one batch, `reverse`, `station_comments` past the end of
+  a section, and refs the targeting digest says are no longer live (the shape a
+  placement takes when it names a section the run has since deleted).
+- **`importSectionsNonFinite`** - one guarded shot field poisoned. This is really
+  the NULL family: `JSON.stringify` spells `NaN` and `Infinity` as `null` on the
+  WebDriver bridge exactly as it does on the real `invoke`, which is the whole
+  premise of `src/utils/importPayloadGuard.ts`.
+- **`importSectionsWithOverlap`** - `existing_shot_updates`, the DMP wizard's
+  overlap interpolation, aimed at the doubly-anchored range the wizard's
+  `useMemo` greys out. The backend refuses it independently
+  (`command_import.rs` collects zero datums, datum-backed merges and aligned
+  closures into `anchor_indices` and skips the section when one sits on each
+  side), and that parity is only testable if something sends the payload the UI
+  will not.
+- **The four file importers** plus the parse-only `importDmp`, on files built by
+  `surveyFileSpecs.ts` / `surveyFileCorrupt.ts` - the same writers
+  `import-dialog-fuzz` uses, never a fixture.
+- **The cheap probes** - `calculateFileHash`, `checkDuplicateImport`,
+  `checkSectionHashes`, `suggestImportPlacement`, `saveAfterImport`.
+
+**v1 and v2 draw identically.** The group is filtered out before the weighted
+name array is built, and appended at its END when it is not, so every index
+`ctx.pick` reads still holds what it held. The `import-heavy` swarm profile is
+likewise appended only under the v3 gate, because merging it into the profile
+list would have changed the divisor every v2 seed picks its profile with. Both
+properties are pinned by `e2e/agent/lib/undoRedoFuzzImportActions.test.ts`, and
+both were re-measured against the pre-v3 tree: v1 fractal seed 4 x60 and v2
+fractal seeds 1 x40 / 4 x60 are metric-for-metric identical before and after.
+
+A **fourth oracle** applies to v3 payloads only. `mustBeRejected` names the two
+shapes that cannot be deserialized at all - a required `f64` arriving `null`, and
+`date: ""` (issue #478, here on the route that BYPASSES the wizard's
+normalisation) - and the run FAILS if the app accepts one. It says nothing about
+the OPTIONAL shot numbers, where `null` legally means "absent": the frontend
+guard refuses those because dropping a measurement is data loss, but the backend
+accepting them is not a defect. It is a pure function of the recorded args rather
+than a flag on the drawn action, which is what lets a replayed trace assert
+exactly what the recording did.
+
+A v3 run legitimately produces `log-error` findings from the oracle sweep: a
+malformed file the parser refuses, or the deliberate missing-file probe, is the
+app reporting a problem properly. Those are findings at severity `error`, which
+does not fail a run.
+
+The introducing sweep was 8 cells (both fixtures, seeds 1-4, x40), 14 more on the
+seven seeds whose swarm profile is `import-heavy` (14, 15, 21, 23, 26, 56, 59,
+both fixtures, x60), and two malformed-heavy runs at
+`STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P=0.8`. All green. The one red it produced was
+the ORACLE's - a claim that the backend refuses a non-finite
+`existing_shot_updates` field, which it cannot, because `JSON.stringify` spells
+NaN `null` and `Option<f64>` reads `null` as "leave this field alone". That
+measurement is written up in the scenario header as an observation, not a
+finding: the backend check is a Rust-API defence and cannot be cited as
+protecting the frontend.
+
+##### File inputs: what a trace carries, and what it rebuilds
+
+A file-backed import takes a PATH, and a path cannot be recorded verbatim - the
+recording machine's absolute path means nothing to a replayer, and a trace is
+meant to be attachable to a bug report. So a file-backed move records **two**
+steps:
+
+1. a `genFile` carrying the generator SPEC and a session-relative `rel`
+   (`fuzz-files/<content-hash>.<ext>`), and
+2. the `mutate` whose `args[0]` is that same `rel`.
+
+The replayer rebuilds the file from the spec into its OWN directory and then
+resolves `args[0]` against it. `surveyFileWriters.ts` is a pure function of the
+spec, so the rebuilt bytes are identical; the trace carries no fixture (which the
+repo forbids), no bytes, and no absolute path.
+
+`FILE_ARG_ACTIONS` (`e2e/agent/lib/fuzzTrace.ts`) is the single list that says
+"argument zero is a path", and `readTrace` refuses a trace that points one of
+those actions outside the session directory - the same rule every other v2 `rel`
+field has, and for the same reason: a trace is untrusted input, and these
+arguments reach the filesystem instead of the model.
+
+Generated files live under the run's own temp directory and are removed in the
+same `finally` as the save/reload copies. Nothing is lost by deleting them (the
+trace regenerates them), and `pnpm agent:fuzz-shrink` replays this scenario
+hundreds of times per shrink, so leaving them behind is not an option.
+
+Verified end to end: v3 fractal seed 1 x80 recorded with `STALAGMIGHT_FUZZ_TRACE`
+and replayed with `--trace` reproduces the run metric for metric (34 mutations,
+31 undos, 19 redos, 18 rejected, 2 no-ops, depth 15, 66037-byte snapshot) with
+all five `genFile` steps re-materialized.
+
+##### What v3 does not reach
+
+`suggest_orphan_placements` is not a `projectStore` action - `App.tsx` and the
+three import dialogs invoke it directly - and this scenario dispatches store
+actions by name. Widening the bridge to dispatch IPC commands by name for one
+read-only probe would give a recorded trace a much larger surface; the probe is
+covered by `import-dialog-fuzz`, which drives the dialogs that call it.
+
+There is no Rust-tier analogue of the import group, and adding one is a design
+problem rather than a transcription. `Refs::learn`
+(`src-tauri/src/core/state/fuzz_undo_tests.rs`) pairs what a recorded move
+created against what the replayed move created POSITIONALLY, with `zip` and no
+length check - sound only because every existing `Op` creates a fixed number of
+entities (at most one section, one shot, one closure; `BatchOp` has no creating
+variant at all). An import creates an arbitrary number in one move, and
+`execute_import_sections` drops sections whose placement does not resolve, so a
+replay that places one fewer would pair a PREFIX, silently, and the shrinker
+would minimize toward the mis-pairing instead of toward the bug. Whoever adds it
+has to give `learn` a checked, arity-aware pairing first.
 
 The findings are tracked at
 <https://github.com/Stalagmight/Stalagmight/issues/413>, one comment per finding
@@ -531,6 +678,214 @@ one normalizing writer, plus re-normalization at the loader and at snapshot
 restore, the two boundaries that ingest maps this app did not write.
 `STALAGMIGHT_FUZZ_FIXTURE=naharon.stalx --seed 5 --iterations 2` is kept as its
 regression check; the shrinker had reduced it to five steps.
+
+### import-dialog-fuzz
+
+The first scenario that drives the app by CLICKING it rather than by calling
+store actions, so it is the first one whose oracle has to know what is on screen.
+That job belongs to `e2e/agent/lib/importScreenDigest.ts`: one self-contained
+function, injected exactly the way `fuzzOracleCore.ts` injects its oracle, that
+returns in a single in-page pass which screen is up, which testids are actionable
+and what the project looks like. `scenarios/importDialogModel.ts` owns the screen
+table, the verified testid inventory and the escape paths;
+`scenarios/importDialogGenerators.ts` is the weighted move catalog;
+`scenarios/importDialogBridge.ts` holds the testid ALLOWLISTS, which are the
+security boundary for a replayed trace exactly as `REPLAYABLE_MUTATIONS` is for
+store actions.
+
+An EPISODE opens a fresh fixture and runs a few FLOWS with no reload between
+them; a FLOW is one input file from an entry point to whatever ends it.
+Per-step oracles cover the screen table, the error boundary, the project
+invariants, unexpected error dialogs and wedges, plus an integrity check after
+any step that pushed an undo entry. Per-flow oracles are in
+`e2e/agent/lib/importFlowOracles.ts`: the undo roundtrip, dialog/placement/context
+residue, the receipt's numbers against the project's delta, the receipt's own
+rendering, and leftover staging files.
+
+It covers all five importable families - mNemo `.dmp`, Ariane `.tml`/`.tmlu`,
+Compass `.dat`/`.mak`, Walls `.srv`/`.wpj` and GPX - which is not just five
+parsers but two flow SHAPES: `.dmp` is the only additive import, and every other
+extension routes to `new-project-for-import` whether or not a project is open
+(with one open it goes through `import-as-new-project`, whose confirm closes the
+project first). So a non-DMP flow always creates a project in the middle of
+itself. `STALAGMIGHT_FUZZ_IMPORT_FORMAT` is a csv of family names that restricts
+the draw, and it is the natural third matrix axis.
+
+Input files come from three sources: a seeded spec rendered by
+`e2e/agent/lib/surveyFileWriters.ts` / `surveyFileWritersText.ts` (valid-biased,
+or run through the named corruption catalog), a tracked `.dmp` fixture, or - when
+`STALAGMIGHT_FUZZ_CORPUS_DIR` points at one - an entry from a PRIVATE corpus of
+real survey files. Generated files reach the parsers' edges; real files reach the
+shapes nobody would think to generate. A run with no corpus counts
+`corpus:absent` and is exactly as valid, just narrower.
+
+**Nothing a corpus run writes ever names a corpus file.** An entry is identified
+everywhere by `corpusFileId`, a 5-hex fold of its relative path
+(`e2e/agent/lib/fixtureCorpus.ts`), because a survey filename can name a cave, a
+landowner or an unreleased project - and a metric key, a log line, a failure
+payload and a recorded trace are all things that end up attached to an issue.
+
+A trace is the artifact that rule is easiest to lose, so it is enforced rather
+than observed. A `corpusFile` step carries `corpusId` plus `corpusHash`, and
+nothing that could be a name; `TraceRecorder.record` is the redaction boundary,
+so a caller that hands over a path gets it folded before the step is stored; and
+`writeTrace` refuses outright to emit a corpus step named any other way, whoever
+assembled it. The corpus ROOT is not recorded either -
+`STALAGMIGHT_FUZZ_CORPUS_DIR` is an absolute path on the recorder's disk, so it
+is excluded from the trace's `env` header and never restored on replay.
+
+**`corpusId` labels; `corpusHash` resolves.** The 5-hex crc20 is 20 bits, which
+is ample for telling two files apart in one run's output and far too little to
+look one up: discovery permits 20000 entries, and by the birthday bound a corpus
+of a few thousand files probably holds a colliding pair. Taking the first match
+would materialize the wrong private file and then open it under the recorded
+file's name. So `corpusHash` (16 hex of SHA-256 over the same relative path,
+`fixtureCorpus.corpusPathHash`) is what replay resolves by, and it is a lookup
+field only - nothing renders it, so `corpusId` remains the sole identifier in
+every log line, metric key, failure payload and `describeSteps` line. A bare-id
+lookup that matches twice resolves to NOTHING and counts `corpus:ambiguousId`;
+`discoverCorpus` reports the colliding ids (never the paths) and `describeCorpus`
+warns about them on every run that has them. A reference this machine does not
+have is a skipped and counted move, never a failure.
+
+**A corpus entry materializes as its whole directory TREE.** A Compass `.mak`
+names `.dat` files by relative path and a Walls `.wpj` names its surveys with
+`.PATH` directives that DESCEND into subfolders, so the copy is recursive and
+structure-preserving, bounded at 64 MB / 4000 files / 16 levels. Over any bound
+it copies nothing and says which one, because a half-copied project is
+indistinguishable from a corrupt one from inside the app and the fuzzer would
+file the difference against the importer.
+
+Before it fuzzes anything, the run pushes a valid-biased spec of EVERY enabled
+format through the real parse command and checks the count against
+`selfCheckClaim`. That is the writer/parser drift detector: without it a writer
+that had drifted would have every file rejected at the door and the whole run
+would pass green having exercised nothing.
+
+Not in `pnpm agent:scenarios`. It is listed in that file's `SMOKE_EXCLUDED` and
+runs on explicit request only - `pnpm agent:scenario`, `pnpm agent:fuzz-matrix`,
+or the MCP `run_scenario` tool. That is not an expected-failure list in disguise:
+the scenario has no classifier and no tolerance, so a red from it is the app's.
+
+```bash
+pnpm agent:scenario import-dialog-fuzz --seed 7 --iterations 8
+pnpm agent:fuzz-matrix --scenario import-dialog-fuzz --seeds 1..4 --workers 2
+# one format family per cell:
+pnpm agent:fuzz-matrix --scenario import-dialog-fuzz \
+  --axis STALAGMIGHT_FUZZ_IMPORT_FORMAT=dmp,tml,compass,walls,gpx --seeds 1..3 --workers 2
+# sweep a knob as a third matrix dimension:
+pnpm agent:fuzz-matrix --scenario import-dialog-fuzz \
+  --axis STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P=0,0.5,1
+# widen the inputs with a private corpus (never baked in, never named in output):
+STALAGMIGHT_FUZZ_CORPUS_DIR=~/data/my-survey-files \
+  pnpm agent:scenario import-dialog-fuzz --seed 4 --iterations 6
+```
+
+Its knobs, all read at call time so a replayed trace's restored environment
+reaches them: `STALAGMIGHT_FUZZ_IMPORT_FORMAT` (all five families),
+`STALAGMIGHT_FUZZ_IMPORT_FLOWS_PER_EPISODE` (3), `_MAX_FLOW_STEPS` (140),
+`_MALFORMED_P` (0.2), `_INTERJECT_P` (0.08), `_AUX_INTERJECT_P` (0.04),
+`_SETTLE_MS` (12000), plus `STALAGMIGHT_FUZZ_CORPUS_DIR` (unset).
+
+Two interjection streams, not one: `_INTERJECT_P` drives the original
+Escape/route/undo/redo/save set, and `_AUX_INTERJECT_P` drives the wave-3
+additions (Ctrl+E, an app-mode switch, `closeProject`, and Ctrl+O with an armed
+picker). They are separate PRNG streams so that adding the second left the
+first's draws bit-identical, which bounds how far the existing repro lines
+moved - the convention `mulberry32`'s header states.
+
+The open findings it has produced are written up in the scenario file's header,
+each with the `reproduce:` line that still runs.
+
+### export-roundtrip-fuzz
+
+The mirror image of `import-dialog-fuzz`: it drives survey data OUT of the app,
+and then back in. Each iteration draws a `{format, route, path shape, options}`
+and exports through the real surface, then asserts that the app's report, the
+filesystem and what the user was told all agree.
+
+Three routes, because they are not interchangeable. The modal Export dialog and
+the Export-mode panel are ONE component (`ExportControls`) over two option sets
+- the dialog's local `useState`, the panel's `exportStore` - and both push the
+answered path through `ensureExtension`, so a destination the user typed is
+REWRITTEN before the command sees it. The raw store action hands the path over
+verbatim, which is the only way the backend's own guards are reached. Each route
+is asserted against its own contract rather than forced to agree move for move.
+
+Ten destination-path shapes, each aimed at a rule somewhere in the stack:
+`NAME.TMLU` (the exporter lowercases before comparing), `a.tml.txt` (the
+extension is replaced, not appended), no extension, a trailing dot, a name
+carrying U+202E, a ~200-character name, `%`/`"`/space, and the two that name a
+file the open project owns - its `.stalx` and the `.plnx` dive-plan sibling.
+
+| Env var | Effect |
+|---|---|
+| `STALAGMIGHT_FUZZ_EXPORT_FORMATS` | csv list of `csv,json,tml,tmlu,png,svg,pdf,preview,diveProfile`. Default all nine. An unknown name is a hard error, not a silent drop - a typo in a matrix cell would otherwise run the full set and be reported as covering something it did not. |
+| `STALAGMIGHT_FUZZ_EXPORT_MAX_DPI` | Ceiling for the DPI draw, default 600. There is no backend ceiling (`export_png` bounds the derived PIXEL dimensions at 16384, not the DPI), so drawing freely mostly measures the size bail. Raise it to go looking for that deliberately. |
+| `STALAGMIGHT_FUZZ_EXPORT_ROUNDTRIP` | `0` turns the X5/X6 import chains off. They are the expensive half: each creates projects on disk and imports into them. |
+| `STALAGMIGHT_FUZZ_EXPORT_MOVES` | Export moves per episode, default 3. |
+| `STALAGMIGHT_FUZZ_EXPORT_SETTLE_MS` | In-page settle cap, default 20000. |
+
+```bash
+pnpm agent:scenario export-roundtrip-fuzz --seed 1 --iterations 10
+# round-trip heavy: every draw is a .tml or .tmlu
+STALAGMIGHT_FUZZ_EXPORT_FORMATS=tml,tmlu \
+  pnpm agent:scenario export-roundtrip-fuzz --seed 4 --iterations 20
+pnpm agent:fuzz-matrix --scenario export-roundtrip-fuzz --seeds 1..3 --workers 1 --iterations 8
+# one format per cell:
+pnpm agent:fuzz-matrix --scenario export-roundtrip-fuzz \
+  --axis STALAGMIGHT_FUZZ_EXPORT_FORMATS=csv,json,tml,png,svg,pdf --seeds 1..2
+```
+
+The nine oracles, the two probe results it recorded rather than asserted (the
+`.plnx` x image guard asymmetry, and the inert `ExportSettings` config
+defaults), and the findings it produced are all written up in the scenario
+file's header, each with the `reproduce:` line that still runs.
+
+**A recorded run replays as its whole STRUCTURE.** Per episode the trace carries
+a `reload` step, one `export` step per move, and one `oracle` step per
+structural oracle the rotation selected - each carrying the inputs that oracle
+DREW. A replay walks that list through the same dispatch table the recording
+used, so it runs the same oracles at the same points on the same inputs, and it
+consumes no randomness at all. Both halves of that are load-bearing: with
+`reload` ignored, a multi-episode replay ran episode 2 against whatever episode
+1 left behind; with the inputs re-drawn, X3's option set and X4's container
+extension came off an rng the replay had advanced differently, so an
+option-dependent failure was retested with options that do not provoke it.
+Measured on seed 5 x 3 episodes: before, 11 of 18 oracle metrics differed
+between the recording and its replay (X3 ran 2x then 1x, X4 lost its `.tmlu`
+arm, X7 ran 1x then 2x on a project that had already been mutated); after, all
+18 agree and the replay reports the same 3 episodes and 6 export moves.
+
+Its first run against a fixture other than the default found that a real
+532-shot survey did not round-trip through `.tmlu` (finding 4 in that header):
+78 shot uuids were re-minted, because the exporter dropped the UUID on the
+reversed pre-zero-datum leg, and every measured-zero LRUD came back null. The
+first half is fixed; the second is Ariane's absent sentinel and is now written
+up in both lossiness tables, with the oracle folding that one documented
+equivalence and nothing else.
+
+Neither was the whole story. Finding 5 classifies the 198 residual keys into
+three families: 150 were one physical leg seen through the exporter's deliberate
+reversal (X6's key is now direction-agnostic, which is a fact about the key),
+2 were this harness failing to see station comments at all, and 48 are the
+exporter re-hanging branch depths to fit the format - which is designed,
+tested behaviour and needs a product call rather than an oracle change.
+
+All three are now closed - the depth family turned out to be the exporter
+re-hanging a branch's datum while preserving every measurement (matched by uuid:
+of 24 shots, length changed on 0, azimuth on 0, LRUD on 0, descent on 1, and
+that one shot's source descent exceeds its own tape), so X6 keys the descent
+rather than the absolute depths and counts the re-hangs as a metric.
+
+Closing them let X5 run on that fixture for the first time, and finding 6 is its
+own correction: the chain settles at the THIRD export there, not the second,
+because the first import inherits its section order from the source project
+rather than deriving it. T3 and T4 are byte-identical, no boundary moves and no
+shot changes section - so X5 now asserts a fixed POINT rather than a fixed index
+and reports `x5:settledAt:N`.
+
+Both fixtures are green.
 
 ### Three tiers, and which one gates CI
 

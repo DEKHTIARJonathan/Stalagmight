@@ -32,7 +32,9 @@ vi.mock('../../utils/fileDialogs', () => ({
 
 import ExportControls from './ExportControls';
 import { useProjectStore } from '../../store/projectStore';
+import { useUIStore } from '../../store/uiStore';
 import { saveDialog } from '../../utils/fileDialogs';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 import { DEFAULT_IMAGE_OPTIONS } from '../../store/exportStore';
 import type { Project } from '../../types/ipc/Project';
 import type { Section } from '../../types/ipc/Section';
@@ -163,5 +165,103 @@ describe('TML export unanchored-section notice', () => {
 
     await waitFor(() => expect(saveDialog).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId('tml-unanchored-warning-dialog')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * A failed export must reach a surface.
+ *
+ * Before this, `handleExport`'s catch was a bare `console.error`: the dialog
+ * stayed open with its button un-greyed and the panel did nothing at all, which
+ * is indistinguishable from "the file was written". Every reachable refusal ends
+ * up in that catch - the backend's "Cannot export over the open project file",
+ * `export_png`'s DPI/size bails, and any I/O error - and none of them is visible
+ * anywhere else, because the four `projectStore` export actions do NOT go through
+ * `executeCommand` and so never reach its `COMMAND_FAILED` catch-all.
+ */
+describe('export failure surface', () => {
+  const dataProps = { ...baseProps, dataFormat: 'csv' as const, onComplete: vi.fn() };
+
+  beforeEach(() => {
+    useUIStore.setState({ toasts: [] });
+  });
+
+  it('raises an error toast carrying the backend message when the export command rejects', async () => {
+    const exportCsv = vi.fn(async () => {
+      throw new Error('Cannot export over the open project file');
+    });
+    useProjectStore.setState({
+      project: buildProject([section(1)], [ZERO_DATUM]),
+      getAnchoredSectionIds,
+      exportCsv,
+    });
+
+    render(<ExportControls {...dataProps} />);
+    await userEvent.click(screen.getByTestId('export-button'));
+
+    await waitFor(() => expect(useUIStore.getState().toasts).toHaveLength(1));
+    const toast = useUIStore.getState().toasts[0]!;
+    expect(toast.key).toBe(TOAST_KEYS.EXPORT_FAILED);
+    expect(toast.kind).toBe('error');
+    // The backend message, not the generic fallback: it names WHICH refusal
+    // happened, and "Cannot export over the open project file" is already the
+    // one-line "what happened, then what to do" the copy rules ask for.
+    expect(toast.message).toBe('Cannot export over the open project file');
+    // A failed export is not a completed one.
+    expect(dataProps.onComplete).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the localized string when the rejection carries no message', async () => {
+    const exportCsv = vi.fn(async () => {
+      throw undefined;
+    });
+    useProjectStore.setState({
+      project: buildProject([section(1)], [ZERO_DATUM]),
+      getAnchoredSectionIds,
+      exportCsv,
+    });
+
+    render(<ExportControls {...dataProps} />);
+    await userEvent.click(screen.getByTestId('export-button'));
+
+    await waitFor(() => expect(useUIStore.getState().toasts).toHaveLength(1));
+    expect(useUIStore.getState().toasts[0]!.message).toBe(
+      'Export failed - try a different folder or file name',
+    );
+  });
+
+  it('stays silent when the export succeeds', async () => {
+    const exportCsv = vi.fn(async () => undefined);
+    useProjectStore.setState({
+      project: buildProject([section(1)], [ZERO_DATUM]),
+      getAnchoredSectionIds,
+      exportCsv,
+    });
+
+    render(<ExportControls {...dataProps} />);
+    await userEvent.click(screen.getByTestId('export-button'));
+
+    await waitFor(() => expect(dataProps.onComplete).toHaveBeenCalled());
+    expect(useUIStore.getState().toasts).toHaveLength(0);
+  });
+
+  it('does not toast when the pre-export anchor check throws - that check fails OPEN', async () => {
+    // The check is informational and the export proceeds, so reporting a failure
+    // here would report one that did not happen. See the comment on the catch in
+    // ExportControls.tsx.
+    const exportTmlOk = vi.fn(async () => undefined);
+    getAnchoredSectionIds.mockRejectedValue(new Error('anchored ids IPC exploded'));
+    useProjectStore.setState({
+      project: buildProject([section(1)], [ZERO_DATUM]),
+      getAnchoredSectionIds,
+      exportTml: exportTmlOk,
+    });
+
+    render(<ExportControls {...baseProps} onComplete={vi.fn()} />);
+    await userEvent.click(screen.getByTestId('export-button'));
+
+    await waitFor(() => expect(exportTmlOk).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('tml-unanchored-warning-dialog')).not.toBeInTheDocument();
+    expect(useUIStore.getState().toasts).toHaveLength(0);
   });
 });
