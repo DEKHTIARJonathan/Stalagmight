@@ -560,6 +560,15 @@ export const importDialogFuzz: Scenario = {
     ctx.log(`formats: ${enabledFamilies().join(',')} (${formats.join(',')})`);
     ctx.log(describeCorpus(inventory));
     ctx.setMetric('corpusEntriesUsable', corpusUsable);
+    if (inventory.tooDeep > 0) {
+      // The inventory above is a LOWER bound: this many directories sat past the
+      // discovery walk's depth limit and were never opened. A metric as well as
+      // the log line, because the log scrolls and the metric block is what a
+      // run's summary and an issue carry - and a corpus the fuzzer can only half
+      // see is a coverage claim wrong by an unknown amount. It names a count,
+      // never a path, like everything else corpus-shaped that leaves this run.
+      ctx.setMetric('corpusDirsTooDeep', inventory.tooDeep);
+    }
     if (corpusUsable === 0) {
       // Not a failure and never one: a corpus is optional by design, and a run
       // without one is exactly as valid, just narrower. Counted so a run that
