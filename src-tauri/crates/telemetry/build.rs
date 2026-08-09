@@ -92,16 +92,32 @@ fn app_pkg_version() -> Result<String, Box<dyn std::error::Error>> {
     // A root version bump must re-derive APP_VERSION.
     println!("cargo::rerun-if-changed=../../Cargo.toml");
     let contents = std::fs::read_to_string(&root_manifest)?;
-    contents
+    package_version(&contents).ok_or_else(|| {
+        format!(
+            "no `version = \"...\"` line in the [package] table of {}",
+            root_manifest.display()
+        )
+        .into()
+    })
+}
+
+/// First `version = "..."` line inside the `[package]` table: the scan is
+/// anchored on the `[package]` header and stops at the next table header (a
+/// line starting with `[`), so it stays correct even if `[package]` stops
+/// being the manifest's first table. The deliberate absence of a
+/// [workspace.package] version (see the root manifest) keeps the table itself
+/// unambiguous; dependency `{ version = ... }` entries never start the line
+/// with `version`.
+fn package_version(manifest: &str) -> Option<String> {
+    manifest
         .lines()
-        // First bare `version = "..."` line: the root [package] table. The
-        // deliberate absence of a [workspace.package] version (see the root
-        // manifest) keeps this unambiguous; dependency `{ version = ... }`
-        // entries never start the line with `version`.
+        .map(str::trim_start)
+        .skip_while(|line| !line.starts_with("[package]"))
+        .skip(1)
+        .take_while(|line| !line.starts_with('['))
         .find_map(|line| line.strip_prefix("version = \""))
         .and_then(|rest| rest.split('"').next())
         .map(str::to_string)
-        .ok_or_else(|| format!("no `version = \"...\"` line in {}", root_manifest.display()).into())
 }
 
 /// The release tag on the checked-out commit, or `None`.

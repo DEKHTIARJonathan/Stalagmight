@@ -3,6 +3,52 @@
 //! `tauri.conf.json` stay with the app crate, so the tests that read them
 //! live here too.
 
+/// The body of the `generate_handler![...]` block in `src`, found by counting
+/// `[`/`]` depth from the macro's opening bracket to its matching close. A
+/// first-`]` slice would end the scan at the `]` of any attribute inside the
+/// block (e.g. `#[cfg(feature = "e2e")]`), silently truncating the scanned
+/// region and letting the contract tests below pass vacuously.
+pub(super) fn generate_handler_block(src: &str) -> &str {
+    let start = src
+        .find("generate_handler![")
+        .expect("generate_handler![ not found")
+        + "generate_handler![".len();
+    let mut depth = 1usize;
+    let end = src[start..]
+        .char_indices()
+        .find_map(|(i, c)| {
+            match c {
+                '[' => depth += 1,
+                ']' => depth -= 1,
+                _ => {}
+            }
+            (depth == 0).then_some(i)
+        })
+        .expect("matching closing ] not found for generate_handler!");
+    &src[start..start + end]
+}
+
+#[test]
+fn generate_handler_block_scans_past_inner_brackets() {
+    let src = "\
+        .invoke_handler(tauri::generate_handler![\n\
+            commands::project::create_project,\n\
+            #[cfg(feature = \"e2e\")]\n\
+            commands::debug::e2e_probe,\n\
+            commands::project::after_attribute,\n\
+        ])\n\
+        .setup(trailing_marker)";
+    let block = generate_handler_block(src);
+    assert!(
+        block.contains("after_attribute"),
+        "an attribute's `]` inside the block must not truncate the scan; got: {block}"
+    );
+    assert!(
+        !block.contains("trailing_marker"),
+        "the scan must stop at the macro's own closing bracket; got: {block}"
+    );
+}
+
 #[test]
 fn the_legacy_open_project_is_not_exposed_over_ipc() {
     // `AppState::open_project` deliberately has NO canonical-storage guard
@@ -11,15 +57,7 @@ fn the_legacy_open_project_is_not_exposed_over_ipc() {
     // cannot reach it, so pin the non-exposure the same way
     // `registry_covers_all_commands` reads the handler block.
     let lib_src = include_str!("../lib.rs");
-    let start = lib_src
-        .find("generate_handler![")
-        .expect("generate_handler![ not found in lib.rs")
-        + "generate_handler![".len();
-    let end = start
-        + lib_src[start..]
-            .find(']')
-            .expect("closing ] not found for generate_handler!");
-    let block = &lib_src[start..end];
+    let block = generate_handler_block(lib_src);
     let exposed = block.lines().any(|line| {
         let trimmed = line.trim();
         !trimmed.starts_with("//")

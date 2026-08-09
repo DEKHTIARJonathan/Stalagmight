@@ -69,16 +69,10 @@ fn registry_covers_all_commands() {
     let lib_src = std::fs::read_to_string(&lib_path)
         .unwrap_or_else(|e| panic!("Failed to read {lib_path}: {e}"));
 
-    // Extract the generate_handler![...] block
-    let start = lib_src
-        .find("generate_handler![")
-        .expect("generate_handler![ not found in lib.rs")
-        + "generate_handler![".len();
-    let end = start
-        + lib_src[start..]
-            .find(']')
-            .expect("closing ] not found for generate_handler!");
-    let block = &lib_src[start..end];
+    // Extract the generate_handler![...] block. The bracket-counting helper
+    // (shared with app_contract_tests) survives attributes inside the block,
+    // which a first-`]` slice would truncate at.
+    let block = super::app_contract_tests::generate_handler_block(&lib_src);
 
     // Parse command names from each line
     let mut handler_commands: HashSet<String> = HashSet::new();
