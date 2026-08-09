@@ -5408,12 +5408,56 @@ mod tests {
             .collect()
     }
 
+    /// How many PROJECT shots the export re-emitted into a reversed block,
+    /// counted by the section label only the reversal constructors write and
+    /// the shot types only a real project shot gets. Deliberately blind to the
+    /// UUID, so it stays a statement about the SHAPE of the export and cannot
+    /// pass or fail for the reason the tests below are about.
+    fn reversed_leg_shot_count(shots: &[ExportShot]) -> usize {
+        shots
+            .iter()
+            .filter(|s| {
+                (s.section.ends_with("(pre-zero-datum)") || s.section.ends_with("(reversed)"))
+                    && (s.shot_type == "REAL" || s.shot_type == "VIRTUAL")
+            })
+            .count()
+    }
+
+    /// The three shapes that make the exporter emit a reversed leg, each with
+    /// the number of project shots that leg has to carry.
+    ///
+    /// The count is asserted HERE, once, for every consumer below, because
+    /// these tests are worth nothing the moment a fixture stops reaching the
+    /// reversed constructor at all: a project whose shots are all emitted
+    /// forward satisfies every assertion in this section trivially, and the
+    /// suite goes green over an export that no longer contains the thing under
+    /// test. WHICH shots get reversed is a function of the export root, and the
+    /// root is chosen from `Project::frame_datum` and the merge graph - both of
+    /// which have moved before (the frame rule replaced `zero_datums[0]`) and
+    /// can move again without touching a line of this module.
     fn reversal_shapes() -> Vec<(&'static str, Project)> {
-        vec![
-            ("zero-datum split", project_split_by_a_zero_datum()),
-            ("mid-section merge", project_with_a_mid_section_merge()),
-            ("end merge", project_with_an_end_merge()),
-        ]
+        let shapes = vec![
+            // 4 shots split at station 2: shots 0 and 1 come back reversed.
+            ("zero-datum split", project_split_by_a_zero_datum(), 2),
+            // The child's 4 shots merge at its station 2: shots 0 and 1 reversed.
+            ("mid-section merge", project_with_a_mid_section_merge(), 2),
+            // The child merges at its LAST station: all 3 shots reversed, and
+            // there is no forward block at all.
+            ("end merge", project_with_an_end_merge(), 3),
+        ];
+        shapes
+            .into_iter()
+            .map(|(label, project, reversed)| {
+                let shots = build_export_shots(&project, TmlProfile::User);
+                assert_eq!(
+                    reversed_leg_shot_count(&shots),
+                    reversed,
+                    "{label}: fixture rot - the export no longer re-emits these shots \
+                     as a reversed leg, so every assertion about one is vacuous"
+                );
+                (label, project)
+            })
+            .collect()
     }
 
     /// Every REAL project shot reaches the file with its own UUID, whichever
