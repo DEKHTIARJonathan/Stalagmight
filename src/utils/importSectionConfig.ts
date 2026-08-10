@@ -25,8 +25,15 @@ import { mirrorPlacementForReverse, targetShotCountForMirror } from './reversePl
  * carries neither a declination nor a georeference, so there is no number to
  * record - `unknown` says exactly that, and leaves the geometry uncorrected
  * (correction 0), which is what the DMP importer has always produced. Declaring
- * it rather than leaving the field out means the UI can tell a mNemo section
- * apart from one whose reference nobody has established.
+ * it rather than leaving the field out is load-bearing in one place and
+ * documentation in the other. It is load-bearing on the SUGGESTION payload
+ * (`ImportSectionForSuggestion.azimuthReference`): the matcher scores incoming
+ * bearings against existing sections', and without it the backend falls back to
+ * the project default, so a DMP section matched against an existing Compass
+ * section would be compared across that section's declination. On the import
+ * CONFIG it currently resolves to the same value the default would, and is sent
+ * anyway so the section records what it IS rather than inheriting whatever the
+ * project later declares.
  */
 export const DMP_AZIMUTH_REFERENCE: AzimuthReference = {
   north: 'magnetic',

@@ -37,26 +37,38 @@ pub(super) enum AzimuthExport {
     Magnetic,
     /// Every section is already true north: emit untouched, flag false.
     TrueAsStored,
-    /// The sections disagree. Apply each section's correction so the file is
-    /// uniformly true north, and flag false.
+    /// The sections disagree and EVERY one of them has a correction on record,
+    /// so each can be rotated into true north. Apply them and flag false.
     MixedToTrue,
+    /// The sections disagree and at least one has NO correction on record, so
+    /// the rewrite is impossible: a section whose offset from true north is
+    /// unknown cannot be put into true north. Emit the readings untouched and
+    /// flag magnetic - the only claim that is true of the unknown sections -
+    /// and say in the export note that the declared ones are misdescribed by it.
+    ///
+    /// This exists because the alternative was silently wrong: the branch used
+    /// to fall into [`Self::MixedToTrue`], where an undeclared section's
+    /// reference resolves to identity, so its bearings went out UNROTATED under
+    /// `useMagneticAzimuth=false` - the exact false claim the branch is for.
+    MagneticUnresolved,
 }
 
 impl AzimuthExport {
     pub(super) fn decide(project: &Project) -> Self {
-        let references = || {
-            project
-                .sections
-                .iter()
-                .filter(|section| !section.shots.is_empty())
-                .map(|section| project.azimuth_reference_for(section))
-        };
+        let references: Vec<AzimuthReference> = project
+            .sections
+            .iter()
+            .filter(|section| !section.shots.is_empty())
+            .map(|section| project.azimuth_reference_for(section))
+            .collect();
 
-        // Raw magnetic readings with nothing declared about them. They cannot
-        // make a document mixed, but they can only ride in a magnetic one.
-        let undeclared_magnetic = references()
-            .any(|r| r.source == CorrectionSource::Unknown && r.north == NorthReference::Magnetic);
-        let mut declared = references().filter(|r| r.source != CorrectionSource::Unknown);
+        // A section with no correction on record cannot be rotated anywhere.
+        let any_unknown = references
+            .iter()
+            .any(|r| r.source == CorrectionSource::Unknown);
+        let mut declared = references
+            .iter()
+            .filter(|r| r.source != CorrectionSource::Unknown);
 
         // Nothing declared at all - every existing project, and the historical
         // declaration this must keep producing.
@@ -71,24 +83,82 @@ impl AzimuthExport {
             r.north == first.north
                 && (r.applied_correction() - first.applied_correction()).abs() < 1e-12
         });
+
+        // Every rewrite below needs EVERY section's correction, not just the
+        // declared ones - the document is rotated as a whole or not at all.
+        let can_rewrite = !any_unknown;
         if !uniform {
-            return AzimuthExport::MixedToTrue;
+            return if can_rewrite {
+                AzimuthExport::MixedToTrue
+            } else {
+                AzimuthExport::MagneticUnresolved
+            };
         }
         match first.north {
+            NorthReference::Magnetic => AzimuthExport::Magnetic,
             // A true-north declaration and a raw magnetic section cannot share
             // one flag: whichever it names is a false claim about the other.
-            NorthReference::True if undeclared_magnetic => AzimuthExport::MixedToTrue,
+            NorthReference::True if any_unknown => AzimuthExport::MagneticUnresolved,
             NorthReference::True => AzimuthExport::TrueAsStored,
-            NorthReference::Magnetic => AzimuthExport::Magnetic,
             // Grid bearings are neither: declaring them magnetic would have
             // Ariane add a declination to a grid azimuth, and declaring them
-            // true would keep the meridian convergence in. Rotate them out.
-            NorthReference::Grid => AzimuthExport::MixedToTrue,
+            // true would keep the meridian convergence in. Rotate them out -
+            // when every section can be.
+            NorthReference::Grid if can_rewrite => AzimuthExport::MixedToTrue,
+            NorthReference::Grid => AzimuthExport::MagneticUnresolved,
         }
     }
 
     pub(super) fn is_magnetic(self) -> bool {
-        matches!(self, AzimuthExport::Magnetic)
+        matches!(
+            self,
+            AzimuthExport::Magnetic | AzimuthExport::MagneticUnresolved
+        )
+    }
+
+    /// What the user has to be told about this document's azimuths, or `None`
+    /// when there is nothing worth saying.
+    ///
+    /// A stable CODE, not prose: the toast copy is the frontend's and goes
+    /// through i18n (`docs/notifications.md` - hardcoded English in a
+    /// `showToast` call is a defect), and a note the backend spelled out in
+    /// English could never be translated. The prose lives in
+    /// [`Self::log_message`], which is for the log and for a run with no user.
+    ///
+    /// Only the two compromises speak. The plain cases are the format working
+    /// as intended, and a note on every export is a note nobody reads.
+    pub(super) fn note_code(self) -> Option<&'static str> {
+        match self {
+            AzimuthExport::Magnetic | AzimuthExport::TrueAsStored => None,
+            AzimuthExport::MixedToTrue => Some("azimuth-rotated-to-true"),
+            AzimuthExport::MagneticUnresolved => Some("azimuth-mixed-unresolved"),
+        }
+    }
+
+    /// The long form of [`Self::note_code`], for the log.
+    pub(super) fn log_message(self) -> &'static str {
+        match self {
+            AzimuthExport::Magnetic => {
+                "Sections agree on magnetic; wrote the readings as stored under \
+                 useMagneticAzimuth=true."
+            }
+            AzimuthExport::TrueAsStored => {
+                "Sections agree on true north; wrote the readings as stored under \
+                 useMagneticAzimuth=false."
+            }
+            AzimuthExport::MixedToTrue => {
+                "Sections declare different north references, which one Ariane file cannot \
+                 express: every bearing was rotated to true north on the way out and the file is \
+                 marked useMagneticAzimuth=false. The project's own readings are untouched."
+            }
+            AzimuthExport::MagneticUnresolved => {
+                "Sections declare different north references AND at least one has no declination \
+                 on record, so the document could not be rotated into one frame: the readings \
+                 were written as stored under useMagneticAzimuth=true, which misdescribes the \
+                 sections that ARE corrected. Ariane will apply its own declination to all of \
+                 them."
+            }
+        }
     }
 
     /// The reference to push each of `section`'s azimuths through on the way

@@ -1,7 +1,8 @@
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    ClosureStrategy, Coordinates, Project, SectionData, SectionId, ShotData, ShotKind, StationRef,
+    AzimuthReference, ClosureStrategy, Coordinates, Project, SectionData, SectionId, ShotData,
+    ShotKind, StationRef,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -722,7 +723,13 @@ impl AppState {
             // default - the same value written onto the section below (#438).
             // The compensation has to be measured in that frame, because the
             // coordinate walk it cancels is.
-            let azimuth_reference = config.azimuth_reference.unwrap_or_else(|| {
+            // `sanitised` because the config is DESERIALIZED: serde builds the
+            // struct field by field and honours no constructor, so a payload can
+            // assert `north: true` with a correction of 5 or a NaN correction,
+            // and every geometry path below would apply it. Same rule the
+            // `.stalx` read path imposes on the stored columns (#438).
+            let declared_reference = config.azimuth_reference.map(AzimuthReference::sanitised);
+            let azimuth_reference = declared_reference.unwrap_or_else(|| {
                 self.get_project_state()
                     .and_then(|p| p.default_azimuth_reference)
                     .unwrap_or_default()
@@ -767,7 +774,7 @@ impl AppState {
             // side of a shot a terminal station sits on - leaving it false here would make two
             // geometrically identical projects ("import then reverse" vs "import with the
             // toggle") disagree about that, and about which end the least-squares gauge pins.
-            if config.reverse || config.azimuth_reference.is_some() {
+            if config.reverse || declared_reference.is_some() {
                 if let Ok(mut guard) = self.project.lock() {
                     if let Some(section) =
                         guard.as_mut().and_then(|p| p.get_section_mut(section_id))
@@ -777,9 +784,11 @@ impl AppState {
                         }
                         // #438: what the file said its azimuths are measured
                         // against. Written here because `SectionData` cannot
-                        // carry it through `create_section`.
-                        if config.azimuth_reference.is_some() {
-                            section.azimuth_reference = config.azimuth_reference;
+                        // carry it through `create_section`, and the SANITISED
+                        // value, so what the section holds is what the reverse
+                        // compensation above was measured in.
+                        if declared_reference.is_some() {
+                            section.azimuth_reference = declared_reference;
                         }
                     }
                 }

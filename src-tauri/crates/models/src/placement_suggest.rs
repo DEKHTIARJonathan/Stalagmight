@@ -143,18 +143,31 @@ pub struct ImportSectionForSuggestion {
     pub index: u32,
     pub name: String,
     pub shots: Vec<ShotData>,
+    /// What THIS section's readings are measured against (#438), as the
+    /// importer that produced them declared it on its `ImportSectionConfig`.
+    ///
+    /// The matcher compares bearings across the import/existing boundary, so a
+    /// section scored in the wrong frame mismatches a correct overlap by the
+    /// difference of the two corrections - 5 degrees is already outside the
+    /// default `max_azimuth_error_full`. `None` falls back to the project
+    /// default, which is what a caller with nothing better to say sends.
+    #[serde(default)]
+    #[ts(optional)]
+    pub azimuth_reference: Option<AzimuthReference>,
 }
 
 /// Suggest placements for ALL import sections against BOTH existing project
 /// sections AND each other. Returns a flat list sorted by score descending.
 ///
-/// `import_reference` applies to EVERY import section: the wizard's IPC shape
-/// carries no per-section north reference, so the caller passes the project
-/// default (#438). Import-to-import comparisons therefore use one frame on both
-/// sides, and import-to-existing uses each existing section's own.
+/// Each import section is scored in ITS OWN frame
+/// ([`ImportSectionForSuggestion::azimuth_reference`]); `fallback_reference` is
+/// what a section that declares none is read against, normally the project
+/// default (#438). Every comparison therefore has both sides in true north:
+/// import-to-existing uses each existing section's own reference, and
+/// import-to-import uses each import section's.
 pub fn suggest_all_placements(
     import_sections: &[ImportSectionForSuggestion],
-    import_reference: AzimuthReference,
+    fallback_reference: AzimuthReference,
     existing_sections: &[ExistingSection],
     ps_config: &PlacementSuggestionConfig,
 ) -> Vec<CrossSectionSuggestion> {
@@ -175,7 +188,7 @@ pub fn suggest_all_placements(
                 .enumerate()
                 .map(|(i, sd)| Shot::new(i as u32, sd.clone()))
                 .collect(),
-            azimuth_reference: import_reference,
+            azimuth_reference: s.azimuth_reference.unwrap_or(fallback_reference),
         })
         .collect();
 
@@ -185,6 +198,7 @@ pub fn suggest_all_placements(
         }
 
         let fake_self_id = FAKE_ID_BASE + SectionId::from(import.index);
+        let import_reference = import.azimuth_reference.unwrap_or(fallback_reference);
 
         // Match against existing project sections
         let existing_suggestions = suggest_placements(
@@ -1423,6 +1437,137 @@ mod tests {
             shots,
             azimuth_reference: AzimuthReference::default(),
         }
+    }
+
+    /// #438: the matcher compares an INCOMING section's bearings against
+    /// sections already in the project, and the two can carry different
+    /// declinations. Both sides have to be read in one frame or a correct
+    /// overlap scores as a mismatch by the difference of the corrections - 5
+    /// degrees is already past `max_azimuth_error_full`.
+    ///
+    /// The fixture is the smallest thing that can tell the two apart: the same
+    /// physical passage, recorded once as magnetic readings with a declared 5
+    /// degree declination and once as the corrected bearings, so it matches
+    /// only when the import side is read through its own reference.
+    #[test]
+    fn an_import_section_is_scored_in_its_own_frame_not_the_projects() {
+        let corrected: Vec<Shot> = (0..4)
+            .map(|i| {
+                make_shot(
+                    i,
+                    15.0 + f64::from(i) * 20.0,
+                    15.0 + f64::from(i) * 20.0,
+                    10.0,
+                    0.0,
+                    0.0,
+                )
+            })
+            .collect();
+        let existing = vec![make_section(0, "Existing", corrected)];
+
+        // The same line as MEASURED, 5 degrees off, with the declination on the
+        // section rather than in the readings.
+        let measured: Vec<ShotData> = (0..4)
+            .map(|i| {
+                make_shot_data(
+                    10.0 + f64::from(i) * 20.0,
+                    10.0 + f64::from(i) * 20.0,
+                    10.0,
+                    0.0,
+                    0.0,
+                )
+            })
+            .collect();
+        let config = PlacementSuggestionConfig::default();
+
+        let declared = AzimuthReference::magnetic(5.0, crate::CorrectionSource::FileDeclared);
+        let with_reference = suggest_placements(&measured, declared, &existing, &config);
+        assert!(
+            !with_reference.is_empty(),
+            "read through its own reference the two are the same passage and must match"
+        );
+
+        // The bug: scoring the same shots as if they were already corrected.
+        let without =
+            suggest_placements(&measured, AzimuthReference::default(), &existing, &config);
+        let best_with = with_reference
+            .iter()
+            .map(|s| s.score)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let best_without = without
+            .iter()
+            .map(|s| s.score)
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            best_with > best_without,
+            "the correct frame must score higher: {best_with} vs {best_without}"
+        );
+    }
+
+    /// The cross-section entry point reads each import section's OWN reference,
+    /// and only falls back for one that declares none.
+    #[test]
+    fn suggest_all_reads_each_import_sections_own_reference() {
+        let corrected: Vec<Shot> = (0..4)
+            .map(|i| {
+                make_shot(
+                    i,
+                    15.0 + f64::from(i) * 20.0,
+                    15.0 + f64::from(i) * 20.0,
+                    10.0,
+                    0.0,
+                    0.0,
+                )
+            })
+            .collect();
+        let existing = vec![make_section(0, "Existing", corrected)];
+        let measured: Vec<ShotData> = (0..4)
+            .map(|i| {
+                make_shot_data(
+                    10.0 + f64::from(i) * 20.0,
+                    10.0 + f64::from(i) * 20.0,
+                    10.0,
+                    0.0,
+                    0.0,
+                )
+            })
+            .collect();
+        let config = PlacementSuggestionConfig::default();
+
+        let declaring = vec![ImportSectionForSuggestion {
+            index: 0,
+            name: "Incoming".to_string(),
+            shots: measured.clone(),
+            azimuth_reference: Some(AzimuthReference::magnetic(
+                5.0,
+                crate::CorrectionSource::FileDeclared,
+            )),
+        }];
+        // The FALLBACK is deliberately wrong here, so a suggestion can only
+        // come from the section's own reference being read.
+        let found =
+            suggest_all_placements(&declaring, AzimuthReference::default(), &existing, &config);
+        assert!(
+            !found.is_empty(),
+            "the section's own reference must win over the fallback"
+        );
+
+        let silent = vec![ImportSectionForSuggestion {
+            index: 0,
+            name: "Incoming".to_string(),
+            shots: measured,
+            azimuth_reference: None,
+        }];
+        let via_fallback = suggest_all_placements(
+            &silent,
+            AzimuthReference::magnetic(5.0, crate::CorrectionSource::FileDeclared),
+            &existing,
+            &config,
+        );
+        assert!(
+            !via_fallback.is_empty(),
+            "a section that declares nothing must still be read through the fallback"
+        );
     }
 
     // ========================================================================

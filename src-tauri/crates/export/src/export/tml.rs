@@ -237,7 +237,12 @@ enum TmlProfile {
 // ============================================================================
 
 /// Export a project to Ariane TML (`.tml` = ZIP) or TMLU (`.tmlu` = plain XML).
-pub fn export_tml(project: &Project, path: &Path) -> Result<()> {
+/// Returns the notes the user has to be told about THIS document - today only
+/// the azimuth compromises (#438), which are empty for an ordinary project.
+/// Notes, not warnings: nothing failed, but something about the file is not
+/// what the reader would assume, and the export command is the only moment the
+/// user is looking.
+pub fn export_tml(project: &Project, path: &Path) -> Result<Vec<String>> {
     export_with_profile(project, path, TmlProfile::User)
 }
 
@@ -245,12 +250,15 @@ pub fn export_tml(project: &Project, path: &Path) -> Result<()> {
 /// `openspeleo_lib`'s GeoJSON conversion. See `TmlProfile` and
 /// `harden_for_speleodb` for what differs and why; the survey itself does not.
 pub fn export_tml_for_speleodb(project: &Project, path: &Path) -> Result<()> {
-    export_with_profile(project, path, TmlProfile::SpeleoDbSidecar)
+    // The sidecar has no user watching it; its notes go to the log with the
+    // rest of the push.
+    export_with_profile(project, path, TmlProfile::SpeleoDbSidecar).map(|_| ())
 }
 
-fn export_with_profile(project: &Project, path: &Path, profile: TmlProfile) -> Result<()> {
-    let xml = build_xml(project, names_for_path(path), profile)?;
-    write_output(path, &xml)
+fn export_with_profile(project: &Project, path: &Path, profile: TmlProfile) -> Result<Vec<String>> {
+    let (xml, notes) = build_xml(project, names_for_path(path), profile)?;
+    write_output(path, &xml)?;
+    Ok(notes)
 }
 
 fn names_for_path(path: &Path) -> &'static Names {
@@ -283,18 +291,22 @@ fn write_output(path: &Path, xml: &[u8]) -> Result<()> {
 // XML generation
 // ============================================================================
 
-fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<Vec<u8>> {
+fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<(Vec<u8>, Vec<String>)> {
     let azimuth_export = AzimuthExport::decide(project);
-    if azimuth_export == AzimuthExport::MixedToTrue {
-        // The one export decision that CHANGES the numbers rather than just
-        // labelling them, so it is stated rather than done quietly. The TML
-        // export command returns no receipt, so the log is the surface (#438).
+    // The two azimuth compromises are decisions the FILE carries and the
+    // project does not, so they are stated rather than done quietly (#438):
+    // returned to the caller, which raises a toast, and logged for a run that
+    // has no user.
+    let mut notes: Vec<String> = Vec::new();
+    if let Some(code) = azimuth_export.note_code() {
         tracing::warn!(
+            decision = ?azimuth_export,
+            note = code,
             purpose = "honest single-flag Ariane document",
-            "Project sections declare different north references; azimuths were rotated to \
-             true north on export and the file is marked useMagneticAzimuth=false. The \
-             project's own stored readings are untouched."
+            "{}",
+            azimuth_export.log_message()
         );
+        notes.push(code.to_string());
     }
     let shots = build_export_shots(project, profile, azimuth_export);
     ensure_rooted_chain(&shots, profile)?;
@@ -346,7 +358,7 @@ fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<Vec<u8
     writer.write_event(Event::End(BytesEnd::new(n.cave_file)))?;
 
     drop(writer);
-    Ok(buf)
+    Ok((buf, notes))
 }
 
 fn write_text_element<W: std::io::Write>(

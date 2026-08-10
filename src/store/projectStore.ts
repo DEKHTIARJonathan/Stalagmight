@@ -42,6 +42,7 @@ import type { ExistingShotUpdate } from '../types/ipc/ExistingShotUpdate';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
 import type { SpeleoManagedFile } from '../types/ipc/SpeleoManagedFile';
 import type { Config } from '../types/config';
+import type { AzimuthReference } from '../types/ipc/AzimuthReference';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 
 /** Additive import-receipt provenance (#391) - see `import_sections` (Rust) for the fields' meaning. */
@@ -466,7 +467,10 @@ export interface ProjectStore extends ProjectConfigActions {
     provenance?: ImportReceiptProvenance,
     existingShotUpdates?: ExistingShotUpdate[] | null,
   ) => Promise<CommandResult>;
-  suggestImportPlacement: (shots: ShotData[]) => Promise<PlacementSuggestion[]>;
+  suggestImportPlacement: (
+    shots: ShotData[],
+    azimuthReference?: AzimuthReference | null,
+  ) => Promise<PlacementSuggestion[]>;
   exportCsv: (path: string) => Promise<void>;
   exportJson: (path: string) => Promise<void>;
   exportTml: (path: string) => Promise<void>;
@@ -2366,10 +2370,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  suggestImportPlacement: async (shots: ShotData[]) => {
-    return await invokeIpc<PlacementSuggestion[]>('suggest_import_placement', { shots }, {
-      purpose: 'suggest placement from reference shot overlap',
-    });
+  suggestImportPlacement: async (
+    shots: ShotData[],
+    // What `shots` are measured against (#438). Pass the same value the
+    // `ImportSectionConfig` will carry: the matcher compares these bearings
+    // against existing sections' and scores them in one frame, so omitting it
+    // falls back to the project default and mis-scores a real overlap by the
+    // difference of the two corrections.
+    azimuthReference?: AzimuthReference | null,
+  ) => {
+    return await invokeIpc<PlacementSuggestion[]>(
+      'suggest_import_placement',
+      { shots, azimuthReference: azimuthReference ?? null },
+      { purpose: 'suggest placement from reference shot overlap' },
+    );
   },
 
   exportCsv: async (path: string) => {
@@ -2387,10 +2401,29 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   exportTml: async (path: string) => {
-    await invokeIpc('export_tml', { path }, {
+    // The command returns NOTES (#438): what the single-flag `.tml` format
+    // could not carry about this project's north references. Empty for an
+    // ordinary project. Raised here rather than in `ExportControls` so every
+    // route reaches the user - the modal, the Export-mode panel and this action
+    // called directly.
+    const notes = await invokeIpc<string[]>('export_tml', { path }, {
       purpose: 'export project as Ariane TML',
       fields: { path },
     });
+    for (const code of notes ?? []) {
+      // `warning`, per docs/notifications.md: the export SUCCEEDED, with a
+      // caveat about what the file says. The copy is i18n's, never the
+      // backend's - the note is a stable code.
+      // `exists` rather than `t`'s defaultValue: a note code this build has no
+      // copy for must show as the code, never as the i18n key path, which is
+      // what a bare `t()` renders for a miss.
+      const key = `dialogs.export.notes.${code}`;
+      useUIStore.getState().showToast(
+        i18n.exists(key) ? i18n.t(key) : code,
+        TOAST_KEYS.EXPORT_NOTE,
+        'warning',
+      );
+    }
   },
 
   exportImage: async (path: string, options: ExportImageOptions) => {

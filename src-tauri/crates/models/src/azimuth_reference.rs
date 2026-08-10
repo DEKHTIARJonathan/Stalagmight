@@ -188,6 +188,18 @@ impl AzimuthReference {
         }
     }
 
+    /// Re-impose the type's invariants on a value that arrived from OUTSIDE -
+    /// deserialized off the IPC wire or read out of a `.stalx` column.
+    ///
+    /// `serde` builds the struct field by field and honours no constructor, so
+    /// a payload can assert `north: true` with a correction of 5, or a NaN
+    /// correction, and every geometry path downstream would apply it. This is
+    /// the one call every ingress makes; [`Self::from_parts`] is the same rule
+    /// spelled out for a caller that holds the three columns separately.
+    pub fn sanitised(self) -> Self {
+        Self::from_parts(self.north, self.correction, self.source)
+    }
+
     fn sanitise(correction: f64) -> f64 {
         if correction.is_finite() {
             correction
@@ -207,7 +219,16 @@ impl AzimuthReference {
         self.applied_correction() == 0.0
     }
 
-    /// Measured azimuth -> true-north bearing, degrees in `[0, 360)`.
+    /// Measured azimuth -> true-north bearing.
+    ///
+    /// Degrees in `[0, 360)` **when a correction is applied**. The identity fast
+    /// path returns its input UNTOUCHED, including an out-of-range or non-finite
+    /// one: an uncorrected project has to walk the exact numbers it walked
+    /// before this type existed, and `normalize_azimuth` is not the identity on
+    /// a reading outside the range (the DMP parser stores headings verbatim, and
+    /// `validation.rs` only warns). So a caller that needs a canonical value
+    /// from an arbitrary reading must normalise it itself - this is a rotation,
+    /// not a sanitiser.
     pub fn to_true(self, measured_degrees: f64) -> f64 {
         if self.is_identity() {
             // Not just a fast path: `normalize_azimuth` is not the identity on
@@ -218,8 +239,8 @@ impl AzimuthReference {
         normalize_azimuth(measured_degrees + self.applied_correction())
     }
 
-    /// True-north bearing -> measured azimuth, degrees in `[0, 360)`. The
-    /// inverse of [`Self::to_true`]; every writer of a solved bearing needs it.
+    /// True-north bearing -> measured azimuth. The inverse of [`Self::to_true`],
+    /// with the same range caveat: every writer of a solved bearing needs it.
     pub fn to_measured(self, true_degrees: f64) -> f64 {
         if self.is_identity() {
             return true_degrees;

@@ -2285,6 +2285,11 @@ mod tests {
                     .filter(|sh| sh.shot_type == DmpShotType::Standard)
                     .map(DmpShot::to_shot_data)
                     .collect(),
+                // The mNemo measures magnetic and declares no declination.
+                azimuth_reference: Some(stalagmight_models::AzimuthReference::magnetic(
+                    0.0,
+                    stalagmight_models::CorrectionSource::Unknown,
+                )),
             })
             .collect();
 
@@ -2502,6 +2507,11 @@ mod tests {
                     .filter(|sh| sh.shot_type == DmpShotType::Standard)
                     .map(DmpShot::to_shot_data)
                     .collect(),
+                // The mNemo measures magnetic and declares no declination.
+                azimuth_reference: Some(stalagmight_models::AzimuthReference::magnetic(
+                    0.0,
+                    stalagmight_models::CorrectionSource::Unknown,
+                )),
             })
             .collect();
 

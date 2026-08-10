@@ -82,7 +82,12 @@ impl Database {
                     // All four NULL together mean "no reference recorded" (#438),
                     // which reads back as `None` - inherit the project default.
                     section.azimuth_reference.map(|r| r.north.as_str()),
-                    section.azimuth_reference.map(|r| r.correction),
+                    // `applied_correction`, not the raw field: what is stored has
+                    // to be the rotation geometry APPLIED, or a project saved
+                    // with a non-finite correction (which applies as 0) reloads
+                    // as a NaN column and the read path's repair is the only
+                    // thing between it and the walk.
+                    section.azimuth_reference.map(|r| r.applied_correction()),
                     section.azimuth_reference.map(|r| r.source.as_str()),
                     section
                         .azimuth_reference

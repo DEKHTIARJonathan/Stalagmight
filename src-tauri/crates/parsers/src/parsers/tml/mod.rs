@@ -2805,15 +2805,8 @@ mod tests {
         let tml = parse_synthetic_tmlu(&xml);
         assert_eq!(tml.parse_anomalies, None);
 
-        // #438 adds exactly one line to every magnetic file: what north the
-        // readings refer to and what correction (if any) was recorded. The
-        // assertion stays sharp - anything ELSE still fails it.
         let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
-        assert_eq!(warnings.len(), 1, "clean file warned: {warnings:?}");
-        assert!(
-            warnings[0].contains("magnetic azimuths"),
-            "the only warning must be the north-reference note: {warnings:?}"
-        );
+        assert!(warnings.is_empty(), "clean file warned: {warnings:?}");
     }
 
     /// A file the parser could make NO section out of used to leave
@@ -4718,8 +4711,15 @@ mod tests {
             let mut expected_x = 0.0_f64;
             let mut expected_y = 0.0_f64;
 
+            // Through the section's own reference, not the raw reading (#438).
+            // The two coincide for a fixture whose correction is zero, which is
+            // exactly why the raw form would rot: the day this oracle is pointed
+            // at a georeferenced file it would silently start comparing a
+            // magnetic walk against a corrected one and report the declination
+            // as a coordinate bug.
+            let azimuth_reference = project.azimuth_reference_for(section);
             for (i, shot) in section.shots.iter().enumerate() {
-                let azi_rad = shot.average_azimuth_measured().to_radians();
+                let azi_rad = shot.average_azimuth_true_rad(azimuth_reference);
                 let h = shot.horizontal_length();
                 expected_x += h * azi_rad.sin();
                 expected_y += h * azi_rad.cos();

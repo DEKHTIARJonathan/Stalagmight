@@ -355,50 +355,6 @@ fn undeclared_magnetic_sections_do_not_make_a_declared_one_mixed() {
     );
 }
 
-/// The other side of that rule: a section that DOES declare true north cannot
-/// share a flag with a raw magnetic one, so the document is converted.
-#[test]
-fn a_true_north_declaration_beside_a_raw_magnetic_section_is_still_mixed() {
-    let mut project = Project::new("mixed conventions".to_string(), None);
-    let true_north = project
-        .add_section(SectionData {
-            name: Some("True".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#ffffff".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![shot(30.0, 10.0)],
-        })
-        .id;
-    let undeclared = project
-        .add_section(SectionData {
-            name: Some("Raw magnetic".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#ffffff".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![shot(200.0, 10.0)],
-        })
-        .id;
-    project
-        .get_section_mut(true_north)
-        .unwrap()
-        .azimuth_reference = Some(AzimuthReference::true_north(CorrectionSource::FileDeclared));
-    project
-        .get_section_mut(undeclared)
-        .unwrap()
-        .azimuth_reference = Some(AzimuthReference::magnetic(0.0, CorrectionSource::Unknown));
-    project.ensure_shot_uuids();
-
-    let xml = exported_xml(&project);
-    assert!(
-        xml.contains("<useMagneticAzimuth>false</useMagneticAzimuth>"),
-        "a true-north declaration cannot be published as magnetic"
-    );
-}
-
 /// Two DECLARED corrections that disagree are the case the mixed path is for.
 #[test]
 fn two_different_declared_corrections_are_mixed() {
@@ -441,6 +397,106 @@ fn two_different_declared_corrections_are_mixed() {
     assert!(
         azimuths.contains(&35.0) && azimuths.contains(&27.0),
         "each section's own correction should be applied: {azimuths:?}"
+    );
+}
+
+/// #438 review item 4: the escape hatch used to emit a FALSE claim.
+///
+/// A declared-true section beside one with no correction on record took the
+/// `MixedToTrue` arm, where the undeclared section's reference resolves to
+/// identity - so its bearings went out UNROTATED under
+/// `useMagneticAzimuth=false`, which is exactly the claim the branch exists to
+/// prevent. A section whose offset from true north is unknown cannot be put
+/// into true north, so the rewrite is refused and the note says why.
+#[test]
+fn a_true_declaration_beside_an_unknown_one_never_claims_true_north() {
+    let mut project = Project::new("unresolvable".to_string(), None);
+    let declared = project
+        .add_section(SectionData {
+            name: Some("True".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ffffff".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot(30.0, 10.0)],
+        })
+        .id;
+    let unknown = project
+        .add_section(SectionData {
+            name: Some("Raw magnetic".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ffffff".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot(200.0, 10.0)],
+        })
+        .id;
+    project.get_section_mut(declared).unwrap().azimuth_reference =
+        Some(AzimuthReference::true_north(CorrectionSource::FileDeclared));
+    project.get_section_mut(unknown).unwrap().azimuth_reference =
+        Some(AzimuthReference::magnetic(0.0, CorrectionSource::Unknown));
+    project.ensure_shot_uuids();
+
+    let xml = exported_xml(&project);
+    let azimuths = azimuths_in(&xml);
+    // Both readings leave untouched - so the file must NOT say true north.
+    assert!(
+        azimuths.contains(&30.0) && azimuths.contains(&200.0),
+        "premise: nothing was rotated, so an unrotated bearing is in the file: {azimuths:?}"
+    );
+    assert!(
+        !xml.contains("<useMagneticAzimuth>false</useMagneticAzimuth>"),
+        "the file declared true north over bearings it did not rotate"
+    );
+    assert!(xml.contains("<useMagneticAzimuth>true</useMagneticAzimuth>"));
+}
+
+/// The same refusal on the non-uniform path: two disagreeing declared
+/// corrections AND an unknown one cannot be rotated into one frame either.
+#[test]
+fn a_disagreeing_pair_with_an_unknown_third_is_refused_rather_than_half_rotated() {
+    let mut project = Project::new("unresolvable mix".to_string(), None);
+    let mut add = |name: &str, azimuth: f64| {
+        project
+            .add_section(SectionData {
+                name: Some(name.to_string()),
+                surveyor: None,
+                date: None,
+                color: "#ffffff".to_string(),
+                direction: None,
+                quality: 1.0,
+                shots: vec![shot(azimuth, 10.0)],
+            })
+            .id
+    };
+    let a = add("A", 30.0);
+    let b = add("B", 30.0);
+    let c = add("C", 30.0);
+    project.get_section_mut(a).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
+        5.0,
+        CorrectionSource::FileDeclared,
+    ));
+    project.get_section_mut(b).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
+        -3.0,
+        CorrectionSource::FileDeclared,
+    ));
+    project.get_section_mut(c).unwrap().azimuth_reference =
+        Some(AzimuthReference::magnetic(0.0, CorrectionSource::Unknown));
+    project.ensure_shot_uuids();
+
+    let xml = exported_xml(&project);
+    assert!(
+        xml.contains("<useMagneticAzimuth>true</useMagneticAzimuth>"),
+        "one section with no correction on record makes the rewrite impossible"
+    );
+    let azimuths = azimuths_in(&xml);
+    assert!(
+        azimuths
+            .iter()
+            .all(|a| (a - 30.0).abs() < 1e-9 || *a == 0.0),
+        "refusing the rewrite means writing the readings as stored: {azimuths:?}"
     );
 }
 

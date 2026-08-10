@@ -996,10 +996,15 @@ fn auto_declination_gated_on_derive_flag() {
 }
 
 #[test]
-fn convergence_applied_from_survey_georef() {
-    // azimuth = reading(100) + decl(0) - convergence(2) = 98
+fn convergence_from_a_survey_georef_is_reported_not_applied() {
+    // #438: the app's world frame is TRUE north - `gps_to_local` returns
+    // true-north ENU and every datum path places against it - so a grid
+    // convergence is not ours to apply. Walls subtracts it because Walls's own
+    // output is grid-relative. The reading stays, the correction stays 0 (this
+    // survey declares no declination), and the receipt says the convergence was
+    // dropped rather than leaving the user to discover a 2 degree rotation.
     let georef = Some(test_ref(2.0, 0.0, 0.0));
-    let (configs, _c, _w) = convert_survey_with(
+    let (configs, _c, warnings) = convert_survey_with(
         parse_srv_geo(
             "#UNITS meters order=DAV\nA B 10 100 0\n",
             georef.clone(),
@@ -1008,17 +1013,95 @@ fn convergence_applied_from_survey_georef() {
         georef.clone(),
         &WallsImportOptions::default(),
     );
-    // #438: measured reading in the shot, convergence on the section.
     assert!(approx(configs[0].shots[0].azimuth_in, 100.0));
     let reference = configs[0]
         .azimuth_reference
         .expect("the importer records a reference");
     assert!(
-        approx(reference.applied_correction(), -2.0),
-        "convergence rotates true north to grid north, so it is SUBTRACTED, got {}",
+        reference.is_identity(),
+        "no declination declared means no correction, got {}",
         reference.applied_correction()
     );
-    assert!(approx(reference.to_true(100.0), 98.0));
+    assert!(approx(reference.to_true(100.0), 100.0));
+    assert!(
+        warnings.iter().any(|w| w.contains("convergence")),
+        "the dropped convergence must be in the receipt: {warnings:?}"
+    );
+}
+
+/// #438: a chain whose vectors declare DIFFERENT declinations cannot be
+/// expressed by one section-level constant, so each shot's own correction is
+/// folded into its readings and the section is declared true north.
+///
+/// The label is only honest because the per-vector correction reaches TRUE
+/// north (the grid convergence is never folded in): with a `Grid=` in play the
+/// old code baked `declination - convergence` and still said "true north", so a
+/// project exported the resulting GRID bearings under a true-north flag.
+#[test]
+fn a_mid_survey_declination_change_bakes_true_north_bearings_under_a_grid() {
+    let srv = "#UNITS meters order=DAV Grid=1.5 Decl=2\n\
+               A B 10 100 0\n\
+               #UNITS Decl=6\n\
+               B C 10 100 0\n";
+    let (configs, _c, warnings) = convert_one(parse_srv(srv));
+    let shots = &configs[0].shots;
+    assert_eq!(shots.len(), 2, "premise: one chain of two shots");
+
+    // Each shot carries its OWN declination, and only the declination: 100 + 2
+    // and 100 + 6. A convergence folded in would put these at 100.5 and 104.5.
+    assert!(
+        approx(shots[0].azimuth_in, 102.0) && approx(shots[1].azimuth_in, 106.0),
+        "expected true-north bearings 102 and 106, got {} and {}",
+        shots[0].azimuth_in,
+        shots[1].azimuth_in
+    );
+    let reference = configs[0]
+        .azimuth_reference
+        .expect("the importer records a reference");
+    assert_eq!(reference.north, crate::models::NorthReference::True);
+    assert!(
+        reference.is_identity(),
+        "already true north: nothing to add"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("more than one declination")),
+        "rewriting the readings must be announced: {warnings:?}"
+    );
+}
+
+/// A chain whose vectors agree on the NUMBER but disagree on where it came from
+/// must not attribute the whole section to whichever vector happened to be
+/// first: the provenance is what the UI explains and what a policy change may
+/// recompute, so an inconsistent one is `Unknown`.
+#[test]
+fn a_chain_whose_vectors_disagree_about_provenance_claims_none() {
+    // Shot 1 pins an explicit `Decl=0`, which is a DECLARATION. Shot 2 clears
+    // it, so the derive flag takes over - and with no georeference to derive
+    // from it lands on 0 with nothing known about it. Same number, different
+    // provenance.
+    let srv = "#UNITS meters order=DAV Decl=0\n\
+               A B 10 100 0\n\
+               #UNITS Decl\n\
+               B C 10 100 0\n";
+    let (configs, _c, _w) = convert_survey_with(
+        parse_srv_geo(srv, None, true),
+        None,
+        &WallsImportOptions::default(),
+    );
+    let reference = configs[0]
+        .azimuth_reference
+        .expect("the importer records a reference");
+    assert!(
+        reference.is_identity(),
+        "the corrections agree at 0, so the section is still uniform"
+    );
+    assert_eq!(
+        reference.source,
+        crate::models::CorrectionSource::Unknown,
+        "disagreeing provenance cannot be claimed as one section's"
+    );
 }
 
 #[test]
@@ -1766,7 +1849,8 @@ fn units_grid_convergence_subtracted_from_ct() {
     let srv = "#UNITS meters order=DAV Grid=2\n\
                A B 10 100 0\n";
     let (configs, _c, _w) = convert_one(parse_srv(srv));
-    // #438: stored measured, corrected at compute time.
+    // #438: stored measured, and the grid convergence is REPORTED rather than
+    // applied - see `convergence_from_a_survey_georef_is_reported_not_applied`.
     assert!(
         approx(configs[0].shots[0].azimuth_in, 100.0),
         "the measured reading must survive the import, got {}",
@@ -1776,11 +1860,10 @@ fn units_grid_convergence_subtracted_from_ct() {
         .azimuth_reference
         .expect("the importer records a reference");
     assert!(
-        approx(reference.applied_correction(), -2.0),
-        "#Units Grid=2 must subtract 2° of convergence, got {}",
+        reference.is_identity(),
+        "#Units Grid=2 is not a declination, got {}",
         reference.applied_correction()
     );
-    assert!(approx(reference.to_true(100.0), 98.0));
 }
 
 #[test]
@@ -1970,8 +2053,9 @@ fn rect_vector_honors_units_grid() {
     let srv = "#UNITS RECT order=ENU Grid=2\n\
                A B 0 10 0\n";
     let (configs, _c, _w) = convert_one(parse_srv(srv));
-    // #438: the reading stays as the file wrote it; the grid convergence is
-    // recorded on the section and applied when geometry is computed.
+    // #438: a RECT vector's bearing comes from its E/N components, so it is
+    // already a true-north bearing in the file's own Cartesian frame - nothing
+    // to correct, and nothing for the grid convergence to do here either.
     assert!(
         approx(configs[0].shots[0].azimuth_in, 0.0),
         "the RECT-derived bearing must be stored as measured, got {}",
@@ -1980,12 +2064,12 @@ fn rect_vector_honors_units_grid() {
     let reference = configs[0]
         .azimuth_reference
         .expect("the importer records a reference");
-    assert!(
-        approx(reference.applied_correction(), -2.0),
-        "RECT must honor #Units Grid=, got {}",
-        reference.applied_correction()
+    assert_eq!(
+        reference.north,
+        crate::models::NorthReference::True,
+        "a RECT bearing is not a compass reading"
     );
-    assert!(approx(reference.to_true(0.0), 358.0));
+    assert!(reference.is_identity());
 }
 
 #[test]

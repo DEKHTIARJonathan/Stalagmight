@@ -838,14 +838,30 @@ fn build_ctx(
             sanitize("backsight inclination correction", &mut bcf.inclination);
         }
     }
-    // #438: what the file said, recorded rather than baked in. The correction
-    // is `declination - convergence` - the exact quantity `shot_geometry` used
-    // to add to every reading - so geometry is unchanged and the readings are
-    // now the ones the surveyor wrote down. `north` stays Magnetic because that
-    // is what the STORED numbers are; the convergence rides in the correction so
-    // a UTM-referenced Compass project keeps drawing in the frame it declared.
-    let azimuth_reference =
-        AzimuthReference::magnetic(declination - convergence_angle, declination_source);
+    // #438: what the file said, recorded rather than baked in.
+    //
+    // The correction is the DECLINATION alone, not `declination - convergence`.
+    // `correction` means "add this to reach TRUE north", and the app's world
+    // frame is true north: `gps_to_local` returns true-north ENU
+    // (`models/geo.rs:79-81`) and every georeferencing path - `set_zero_datum`,
+    // `renormalize_frame`, `realign_after_shot_edit` - places datums with it and
+    // compares them against the shot walk. A survey walked in GRID bearings
+    // inside that frame is misaligned with its own GPS by the convergence, so
+    // applying it here would be the same class of frame error #438 exists to
+    // remove. Compass subtracts it because Compass's own display is the UTM
+    // grid; ours is not.
+    //
+    // `north` is Magnetic because that is what the STORED numbers are: compass
+    // readings. The convergence is reported below rather than applied.
+    let azimuth_reference = AzimuthReference::magnetic(declination, declination_source);
+    if convergence_angle.abs() > f64::EPSILON {
+        warnings.push(format!(
+            "Survey '{}': the file applies a {:.2} degree UTM grid convergence. Stalagmight \
+             draws in true north, so the convergence was NOT applied - only the declination. \
+             Bearings here differ from Compass's grid-relative display by that angle.",
+            survey.name, convergence_angle
+        ));
+    }
     SurveyCtx {
         azimuth_reference,
         length_to_m,
@@ -924,9 +940,14 @@ fn survey_declination(
     warnings: &mut Vec<String>,
 ) -> (f64, CorrectionSource) {
     match mode {
-        // The file declares "do not correct". That is a declaration, not an
-        // absence of one, so it is FileDeclared rather than Unknown.
-        DeclinationMode::Ignore => (0.0, CorrectionSource::FileDeclared),
+        // "Ignore" is an instruction not to correct, NOT a declaration that
+        // zero is the true-north offset - the file is silent about what the
+        // readings are off by. `Unknown` says exactly that, and the difference
+        // is load-bearing at export: a declared correction votes in the
+        // document's uniformity test, so calling this one FileDeclared dragged
+        // any project mixing an Ignore survey with a real declination into the
+        // rewrite-every-bearing path (#438).
+        DeclinationMode::Ignore => (0.0, CorrectionSource::Unknown),
         DeclinationMode::Entered => (
             survey.parameters.declination,
             CorrectionSource::FileDeclared,
@@ -2549,9 +2570,13 @@ mod tests {
         );
     }
 
-    /// A file that declares no declination must record an IDENTITY reference,
-    /// not merely a zero one: an inherited project default would otherwise reach
-    /// a survey whose file explicitly said there is nothing to apply.
+    /// An ENTERED zero is a declaration: the surveyor wrote `DECLINATION: 0.00`
+    /// in the book, which says the readings need no correction. It votes in the
+    /// export's uniformity test like any other declared value.
+    ///
+    /// Contrast [`ignore_mode_declares_nothing_at_all`]: the `!I` project flag
+    /// says "do not apply declinations", which is an instruction about
+    /// PROCESSING and tells us nothing about the readings.
     #[test]
     fn a_zero_declination_is_still_a_declaration() {
         let dir = tempfile::tempdir().unwrap();
@@ -2566,6 +2591,101 @@ mod tests {
             .expect("Compass always declares a reference");
         assert!(reference.is_identity());
         assert_eq!(reference.source, CorrectionSource::FileDeclared);
+    }
+
+    /// #438 review item 2: the grid convergence is REPORTED, not applied.
+    ///
+    /// `shot_geometry` used to fold `declination - convergence` into every
+    /// reading and the reference then recorded that same combined number under
+    /// a `Magnetic` label - so the convergence was invisible to the export and
+    /// the label was wrong about what the correction reached.
+    ///
+    /// The resolution is that the correction reaches TRUE north and nothing
+    /// else: the app's world frame is true north (`models/geo.rs:79-81` -
+    /// `gps_to_local` returns true-north ENU, and every datum path places
+    /// against it), so a survey walked in grid bearings sits at an angle to its
+    /// own GPS. Compass subtracts convergence because Compass's display is the
+    /// UTM grid; ours is not.
+    #[test]
+    fn a_grid_convergence_is_reported_and_not_folded_into_the_correction() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("cave.dat"),
+            synthetic_dat_with_declination(5.0),
+        )
+        .unwrap();
+        // `!V` turns UTM convergence on; the `@` line's fifth field is the
+        // convergence angle in degrees.
+        let mak = dir.path().join("cave.mak");
+        std::fs::write(
+            &mak,
+            "@100.0,200.0,300.0,13,2.0;\r\n&North American 1983;\r\n!V;\r\n#cave.dat;\r\n",
+        )
+        .unwrap();
+
+        let parsed = parse_compass(&mak).unwrap();
+        let (configs, _closures, warnings) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+
+        assert!(
+            (configs[0].shots[0].azimuth_in - 90.0).abs() < 1e-9,
+            "the measured reading is untouched, got {}",
+            configs[0].shots[0].azimuth_in
+        );
+        let reference = configs[0]
+            .azimuth_reference
+            .expect("Compass always records a reference");
+        assert!(
+            (reference.applied_correction() - 5.0).abs() < 1e-9,
+            "the correction is the DECLINATION alone - a convergence folded in \
+             would make this 3.0 - got {}",
+            reference.applied_correction()
+        );
+        assert_eq!(reference.north, crate::models::NorthReference::Magnetic);
+        assert!(
+            warnings.iter().any(|w| w.contains("convergence")),
+            "a convergence the import drops has to be in the receipt: {warnings:?}"
+        );
+    }
+
+    /// `!I` (ignore declinations) is not a declaration that zero is the offset
+    /// to true north - the file is silent about what the readings are off by.
+    ///
+    /// The difference only shows at export, and it is the whole reason the
+    /// distinction is kept: a DECLARED correction votes in the document's
+    /// uniformity test, so recording this as `FileDeclared` dragged any project
+    /// mixing an Ignore survey with a real declination onto the
+    /// rewrite-every-bearing path (#438).
+    #[test]
+    fn ignore_mode_declares_nothing_at_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let dat = dir.path().join("cave.dat");
+        std::fs::write(&dat, synthetic_dat_with_declination(5.0)).unwrap();
+        // `!I` on the MAK's project parameters selects Ignore for every file.
+        // A `#file` entry needs a base location and a datum ahead of it.
+        let mak = dir.path().join("cave.mak");
+        std::fs::write(
+            &mak,
+            "@100.0,200.0,300.0,13,0.5;\r\n&North American 1983;\r\n!I;\r\n#cave.dat;\r\n",
+        )
+        .unwrap();
+
+        let parsed = parse_compass(&mak).unwrap();
+        let (configs, _closures, _warnings) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        let reference = configs[0]
+            .azimuth_reference
+            .expect("Compass always records a reference");
+        assert!(
+            reference.is_identity(),
+            "Ignore applies no correction, got {}",
+            reference.applied_correction()
+        );
+        assert_eq!(
+            reference.source,
+            CorrectionSource::Unknown,
+            "Ignore is an instruction, not a declaration"
+        );
     }
 
     /// Compass files are read one byte per code point, so a "UTF-8 with BOM"

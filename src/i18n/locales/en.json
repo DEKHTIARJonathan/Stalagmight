@@ -1613,7 +1613,11 @@
       "shotsHeading": "Shot Data"
     },
     "export": {
-      "failed": "Export failed - try a different folder or file name"
+      "failed": "Export failed - try a different folder or file name",
+      "notes": {
+        "azimuth-rotated-to-true": "Bearings rotated to true north for Ariane",
+        "azimuth-mixed-unresolved": "Some sections have no declination - Ariane will re-correct all"
+      }
     },
     "tmlUnanchoredWarning": {
       "titleAllUnanchored": "No section is connected to a zero datum",

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use anyhow::Result;
 use chrono::{Datelike, NaiveDate};
 
-use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource};
+use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource, NorthReference};
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
@@ -231,6 +231,9 @@ pub fn convert_walls_to_import_configs(
         /// declination at all.
         azimuth_correction: f64,
         correction_source: CorrectionSource,
+        /// What this vector's stored reading IS: a compass reading, or the
+        /// already-true-north bearing a RECT vector's E/N components imply.
+        north: NorthReference,
     }
 
     let mut kept: Vec<KeptSurvey> = Vec::new();
@@ -283,11 +286,32 @@ pub fn convert_walls_to_import_configs(
             } else {
                 resolve_declination(v, survey_georef, &mut warnings)
             };
-            // #438: the stored azimuth is the MEASURED one. The declination and
-            // convergence are recorded on the section instead of being folded
-            // into every reading here - except on the mixed-correction fallback
-            // below, where one per-section constant cannot express the file.
-            let azimuth_correction = declination - convergence;
+            // #438: the stored azimuth is the MEASURED one, and the correction
+            // recorded beside it is what reaches TRUE north - the declination
+            // alone.
+            //
+            // The grid convergence is deliberately NOT part of it. `correction`
+            // means "add this to reach true north", and the app's world frame is
+            // true north: `gps_to_local` returns true-north ENU
+            // (`models/geo.rs:79-81`) and every georeferencing path places datums
+            // with it. Walls subtracts convergence because its own output is
+            // grid-relative; drawing in that frame here would put the survey at
+            // an angle to its own GPS. A RECT vector's bearing is already a
+            // true-north one in the file's Cartesian frame, so it needs nothing.
+            let azimuth_correction = declination;
+            let north = if v.is_rect {
+                NorthReference::True
+            } else {
+                NorthReference::Magnetic
+            };
+            if convergence.abs() > f64::EPSILON {
+                warnings.push(format!(
+                    "Shot {}->{}: the file applies a {convergence:.2} degree grid convergence. \
+                     Stalagmight draws in true north, so the convergence was NOT applied - only \
+                     the declination.",
+                    v.from, v.to
+                ));
+            }
             let measured = |a: Option<f64>| a.map(|x| x.rem_euclid(360.0)).unwrap_or(0.0);
             let azimuth_in = measured(v.azimuth_in);
             let azimuth_out = measured(v.azimuth_out);
@@ -364,6 +388,7 @@ pub fn convert_walls_to_import_configs(
                 lrud_is_to: v.lrud_is_to,
                 azimuth_correction,
                 correction_source,
+                north,
             });
         }
         if kept_vectors.is_empty() {
@@ -509,35 +534,70 @@ pub fn convert_walls_to_import_configs(
             };
             // #438: one reference per section, so the chain's per-vector
             // corrections have to agree. They do for every ordinary survey (one
-            // `Decl=`, one grid setting). When they do not - a `Decl=` changed
+            // `Decl=`, one datum). When they do not - a `Decl=` changed
             // mid-survey, or RECT vectors mixed with compass ones - no single
-            // constant can express the file, so this chain falls back to the
-            // pre-#438 behaviour: fold each shot's own correction into its
-            // readings and declare the result true north. That is lossy for the
-            // measured reading, which is why it is announced.
+            // constant can express the file, so this chain folds each shot's own
+            // correction into its readings and declares the result true north.
+            //
+            // That fallback is only honest because the per-vector correction is
+            // the one that reaches TRUE north (see where it is computed): the
+            // grid convergence is never folded in, so the rotated bearings are
+            // true-north bearings and the label is the truth about them. It is
+            // still lossy for the MEASURED reading, which is why it is
+            // announced.
+            //
+            // `shots` was built by pushing exactly one `ShotData` per element of
+            // `chain`, in order, and the zip below is only correct while that
+            // holds - a `continue` added to that loop would silently pair each
+            // shot with the wrong vector's correction from the skip onward.
+            debug_assert_eq!(
+                shots.len(),
+                chain.len(),
+                "one shot per chain vector: the correction zip below pairs them positionally"
+            );
             let azimuth_reference = {
-                let mut corrections = chain
+                let mut declared = chain
                     .iter()
-                    .map(|&idx| survey.vectors[idx].azimuth_correction);
-                let first = corrections.next().unwrap_or(0.0);
-                let uniform = corrections.all(|c| (c - first).abs() < 1e-9);
-                if uniform {
-                    let source = survey.vectors[chain[0]].correction_source;
-                    AzimuthReference::magnetic(first, source)
-                } else {
-                    for (shot, &idx) in shots.iter_mut().zip(chain.iter()) {
-                        let correction = survey.vectors[idx].azimuth_correction;
-                        shot.azimuth_in = (shot.azimuth_in + correction).rem_euclid(360.0);
-                        shot.azimuth_out = (shot.azimuth_out + correction).rem_euclid(360.0);
+                    .map(|&idx| &survey.vectors[idx])
+                    .map(|v| (v.north, v.azimuth_correction, v.correction_source));
+                let first = declared.next();
+                let uniform = match first {
+                    Some((north, correction, _)) => declared
+                        .clone()
+                        .all(|(n, c, _)| n == north && (c - correction).abs() < 1e-9),
+                    None => true,
+                };
+                match first {
+                    Some((north, correction, source)) if uniform => {
+                        // The SOURCE has to agree too, and it is not part of the
+                        // uniformity test above because it does not change the
+                        // geometry - only what the UI may say about it and what
+                        // the export may recompute. Taking `chain[0]`'s over a
+                        // chain whose vectors disagree would attribute the whole
+                        // section to whichever entry happened to come first.
+                        let source = if declared.all(|(_, _, s)| s == source) {
+                            source
+                        } else {
+                            CorrectionSource::Unknown
+                        };
+                        AzimuthReference::from_parts(north, correction, source)
                     }
-                    warnings.push(format!(
-                        "Section '{}': the shots declare more than one declination or grid \
-                         correction, which a single section-level north reference cannot \
-                         express. Each shot's own correction was applied to its readings and \
-                         the section is recorded as true north.",
-                        label
-                    ));
-                    AzimuthReference::true_north(CorrectionSource::FileDeclared)
+                    Some(_) => {
+                        for (shot, &idx) in shots.iter_mut().zip(chain.iter()) {
+                            let correction = survey.vectors[idx].azimuth_correction;
+                            shot.azimuth_in = (shot.azimuth_in + correction).rem_euclid(360.0);
+                            shot.azimuth_out = (shot.azimuth_out + correction).rem_euclid(360.0);
+                        }
+                        warnings.push(format!(
+                            "Section '{}': the shots declare more than one declination, which a \
+                             single section-level north reference cannot express. Each shot's own \
+                             correction was applied to its readings and the section is recorded \
+                             as true north.",
+                            label
+                        ));
+                        AzimuthReference::true_north(CorrectionSource::FileDeclared)
+                    }
+                    None => AzimuthReference::default(),
                 }
             };
             chains.push(PendingChain {

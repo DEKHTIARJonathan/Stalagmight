@@ -4072,7 +4072,7 @@ fn test_text_exports_refuse_to_overwrite_the_plnx_sibling() {
     for res in [
         export::export_csv(state(&app), plnx.clone()),
         export::export_json(state(&app), plnx.clone()),
-        export::export_tml(state(&app), plnx.clone()),
+        export::export_tml(state(&app), plnx.clone()).map(|_| ()),
     ] {
         assert!(res.is_err(), "text export must refuse the .plnx sibling");
         assert!(
@@ -4098,7 +4098,7 @@ fn test_text_exports_refuse_to_overwrite_open_project_file() {
     for res in [
         export::export_csv(state(&app), saved_path.clone()),
         export::export_json(state(&app), saved_path.clone()),
-        export::export_tml(state(&app), saved_path.clone()),
+        export::export_tml(state(&app), saved_path.clone()).map(|_| ()),
     ] {
         assert!(
             res.is_err(),
