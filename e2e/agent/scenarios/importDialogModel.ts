@@ -274,9 +274,15 @@ export const TESTID_INVENTORY: readonly string[] = [
   'manual-import-section-select',
   'manual-import-station-select',
   // --- wizard confirm overlays ---------------------------------------------
+  // Three actions once the wizard has imported anything (#394): continue
+  // editing, close KEEPING what is in the project (`confirm-cancel-button`,
+  // which kept its id and its meaning), or remove it first
+  // (`cancel-remove-button`). Back offers no keep - the step it returns to
+  // re-imports from scratch - so `confirm-back-button` always withdraws.
   'cancel-confirm-dialog',
   'cancel-confirm-continue',
   'confirm-cancel-button',
+  'cancel-remove-button',
   'back-confirm-dialog',
   'back-confirm-continue',
   'confirm-back-button',
@@ -434,6 +440,15 @@ export const ESCAPE_PATH: Readonly<Record<ScreenId, readonly string[]>> = {
   'wiz-done': ['cancel-button', 'key:Escape'],
   'wiz-error': ['cancel-button', 'key:Escape'],
   'wiz-blank': ['cancel-button', 'key:Escape'],
+  // `confirm-cancel-button` first, and it still means "close, changing nothing
+  // in the project" after #394 - the removal is the separate
+  // `cancel-remove-button`, which the walk reaches through the generators
+  // rather than while trying to leave. Neither this overlay's buttons nor the
+  // wizard's own Cancel/Back are actionable while an import is in flight (they
+  // carry `disabled`, and the handlers refuse anyway, so a withdrawal can never
+  // snapshot a section list that is about to grow) - so an escape attempt
+  // during an import falls through to `key:Escape` and retries on the next
+  // loop, once the import has settled.
   'wiz-confirm': ['confirm-cancel-button', 'confirm-back-button', 'key:Escape'],
   'map-placement': ['key:Escape'],
   'new-project': ['dirty-dialog-discard', 'new-project-for-import-cancel', 'key:Escape'],

@@ -38,6 +38,93 @@ nothing writes any more (`buildSavedState` omits it, and it is the only place
 a saved state is built). Pre-existing, and left in place - it still carries the
 aggregate, so it stays correct if a caller ever sets that field again.
 
+`importedSectionIds` is the other per-run accumulator on that struct, and it
+fails LOUDER when it is not carried: App.tsx gates `suggest_orphan_placements`
+on `newSectionIds?.length`, so an instance that completes with an empty list
+skips orphan detection entirely - which is what the manual-placement route used
+to do while the direct route always ran it.
+
+### Leaving the wizard: Back and Cancel (#394)
+
+Because the imports are eager, both exits have to decide what happens to
+sections that are ALREADY in the project - `connections` does not answer that
+question (it is a client-side record that has imported nothing), so both gates
+read `importedSectionIdsRef` as well.
+
+* **Cancel** offers three actions once anything is imported: remove and close,
+  keep and close, or continue editing. The copy names the count.
+* **Back** offers no "keep". It returns to a step BEFORE any import, and the
+  forward pass re-runs the whole pipeline from the mount effect, so a kept
+  section would simply be imported a second time. Back therefore withdraws
+  first, and App.tsx hands the zero-datum config the user entered back to
+  `zero-datum-config` (`previousZeroDatumConfig` in `dialogData`, consumed as
+  `ZeroDatumConfigDialog`'s `initialConfig` prop) so stepping back is an edit
+  rather than a restart. The prefill covers the GPS, the metadata, the shot-table
+  edits AND the station pick - the last two together, because `stationIndex` is
+  numbered over the edited rows, so restoring one without the other silently
+  re-anchors the datum.
+
+There is no "carry a done-flag across Back" alternative: the mount effect that
+imports the anchor is the same one that fires `suggest_all_import_placements`,
+so suppressing it strands the reopened instance in `init` - and it would pin the
+anchor to the first pass's GPS/name/shot edits, which is what the user pressed
+Back to change.
+
+The carry is ONE HOP. `ZeroDatumConfigDialog`'s own Back reopens
+`zero-datum-selection` without it, and `openDialog` replaces `dialogData`
+wholesale (`uiStore.ts`), so stepping back twice does start blank. Deliberate:
+the second step back is a change of anchor SECTION, which invalidates the
+station pick and the shot edits anyway.
+
+The withdrawal is ONE `execute_batch` of `delete_section` - one undo entry for
+one user action. `Command::DeleteSection` is batch-allowed for exactly this
+(`AppState::is_batch_allowed`). Four properties it has to keep, each pinned by a
+test:
+
+* **Deduplicated.** The id list is seeded from the saved state and appended to by
+  live imports, so one id can appear twice across the map-placement handoff.
+  `execute_batch` is all-or-nothing and a second `delete_section` for one id
+  fails "not found", which would roll the whole withdrawal back.
+* **Exclusive with imports.** Neither exit opens while an import is in flight (an
+  import banks its ids only on resolution, so a withdrawal decided mid-flight
+  would leave the late arrival untracked), and every button in both
+  confirmations - Escape and the backdrop included - is shut while the delete is
+  on the wire.
+* **Project-stamped.** The ids travel with the project's `created_at` and the
+  withdrawal refuses on a mismatch. Nothing clears `dialogData` when the open
+  project changes, and section ids are small per-project integers, so a stale id
+  would otherwise resolve happily against an unrelated survey.
+* **Written through.** In the import-into-NEW-project flow the withdrawal saves,
+  because the eager anchor import already resolved that project's deferred first
+  save (`finalize_deferred_import`) and the file would otherwise keep the
+  sections that were just removed. Importing into an EXISTING project it only
+  marks dirty, exactly as `saveAfterImport` does, so unrelated pending edits are
+  not committed behind the user's back. That save is NOT best-effort: a failed
+  write keeps the wizard open with the reason, and the next Remove click retries
+  the SAVE (there are no sections left to delete by then), because closing is
+  what makes the removal final from the user's side.
+* **Forgetful.** `Command::UntrackImport` rides the same batch. `import_sections`
+  records the file hash and each section's content hash for duplicate detection,
+  and deleting a section does not touch them - so without this the project still
+  claims the file was imported while none of it remains, and `DmpSelectionDialog`
+  auto-DESELECTS every section it believes is a duplicate: the obvious retry
+  offers nothing to import. In the batch, so one undo restores the sections and
+  their tracking together. Only the hashes this run sent are forgotten; the file
+  hash is per-file, so a file also imported in an earlier session loses its
+  file-level duplicate flag (its per-section flags stand).
+
+Two residues, both deliberate:
+
+* **Remove and close empties the project; the file itself stays where you
+  created it.** Nothing here unlinks a file the user asked for, and the Recent
+  Projects entry stays with it.
+* **Undoing the withdrawal from the main window is outside the wizard's
+  knowledge.** The accumulators are cleared when it succeeds, so sections
+  restored by a later undo are ones a re-entered wizard no longer tracks, and a
+  second forward pass would import them again. Cheap guards were considered and
+  rejected: the wizard is gone by then, and the undo entry is an ordinary one the
+  user is entitled to.
+
 ## Virtual Connections
 
 During the `suggesting` phase, confirmed placements are recorded as **virtual connections** - lightweight client-side records that describe how two sections should be joined. No backend call happens until the `placing` phase.
@@ -291,5 +378,12 @@ Receipt round trip (both halves of the carry, plus the `done` phase):
 `src/components/Dialogs/__tests__/DmpNewImportDialog.receiptCarry.test.tsx` -
 a component test that renders the wizard against a synthetic DMP file and
 drives `placementMode.onComplete` in place of a click on the map.
+
+Back/Cancel transactionality:
+`src/components/Dialogs/__tests__/DmpNewImportDialog.transactionality.test.tsx`,
+whose IPC mock keeps a fake project that `import_sections` and `execute_batch`
+really mutate, so "the second pass leaves one section" is measured rather than
+inferred from call counts. That a batch of `delete_section` is ONE undo entry is
+pinned in Rust: `batched_section_deletes_are_one_undo_entry`.
 
 Backend integration test for overlap interpolation: `src-tauri/crates/core/src/core/state/tests.rs` (`kb5_import_overlap_interpolation_integration`, currently `#[ignore]`).

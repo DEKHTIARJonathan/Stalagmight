@@ -206,8 +206,42 @@ function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEdit
   }
 }
 
-/** Rows straight from the file, the pick at the head, temp ids past the last row. */
-function initialShotEditState(section: DmpSection | undefined): ShotEditState {
+/**
+ * Rows straight from the file, the pick at the head, temp ids past the last row
+ * - UNLESS this is a re-entry, in which case the rows and the pick are the ones
+ * the user left with (#394 F10).
+ *
+ * The pick has to come back with them or the two disagree: `stationIndex` is
+ * numbered over the EDITED rows, so restoring edited rows under a pick reset to
+ * 0 would silently re-anchor the survey at the head of the section. Both, or
+ * neither.
+ */
+function initialShotEditState({
+  section,
+  initialConfig,
+}: {
+  section: DmpSection | undefined;
+  initialConfig: ZeroDatumConfigResult | undefined;
+}): ShotEditState {
+  if (initialConfig) {
+    const shots = initialConfig.shots;
+    // Rows the user ADDED carry a `tempId` (`makeNewShot`), and the counter must
+    // clear every one of them - not just the file's row count - or the next
+    // insert would mint an id a carried row already holds, and this grid keys
+    // its rows by that id.
+    const highestTempId = shots.reduce((max, shot) => Math.max(max, shot.tempId ?? 0), 0);
+    return {
+      shots,
+      stationIndex: initialConfig.stationIndex,
+      previewStationIndex: initialConfig.stationIndex,
+      nextTempId: Math.max(shots.length, highestTempId) + 1,
+      // NOT dirty. Carried rows are what this dialog OPENED with, so re-showing
+      // them is not an edit - only `edit`/`insert`/`delete` set the flag. A
+      // `true` here would make every reopened dialog prompt about discarding
+      // changes the user has not made yet.
+      dirty: false,
+    };
+  }
   const shots = section ? convertToEditableShots(section.shots) : [];
   return { shots, stationIndex: 0, previewStationIndex: 0, nextTempId: shots.length + 1, dirty: false };
 }
@@ -220,6 +254,16 @@ interface ZeroDatumConfigDialogProps {
   onCancel: () => void;
   onBack: () => void;
   onConfirm: (result: ZeroDatumConfigResult) => void;
+  /**
+   * What this dialog was confirmed with LAST time (#394 F10).
+   *
+   * Stepping Back out of the import wizard returns here, and the wizard
+   * withdraws what it imported on the way (the forward pass re-imports from
+   * scratch, so keeping would duplicate). Without this the user would also lose
+   * the GPS and the metadata they typed, which turns "adjust one field" into
+   * "start over". Absent on the first visit.
+   */
+  initialConfig?: ZeroDatumConfigResult | undefined;
 }
 
 export default function ZeroDatumConfigDialog({
@@ -230,6 +274,7 @@ export default function ZeroDatumConfigDialog({
   onCancel,
   onBack,
   onConfirm,
+  initialConfig,
 }: ZeroDatumConfigDialogProps) {
   const { t } = useTranslation();
   const showToast = useUIStore((st) => st.showToast);
@@ -254,34 +299,63 @@ export default function ZeroDatumConfigDialog({
   // why they cannot be separate pieces of state.
   const [{ shots, stationIndex, previewStationIndex, dirty: shotsDirty }, dispatch] = useReducer(
     shotEditReducer,
-    section,
+    { section, initialConfig },
     initialShotEditState,
   );
-  // The reducer's OWN initial pick, captured once - not hardcoded to 0, so
-  // this stays correct if a future initial-config carry (Package A) seeds a
-  // non-default station.
+  // The reducer's OWN initial pick, captured once - not hardcoded to 0. That
+  // carry has now landed (#394 F10): on a re-entry this is
+  // `initialConfig.stationIndex`, so a restored non-zero pick does not read as
+  // a user change.
   const initialStationIndexRef = useRef(stationIndex);
 
-  // GPS input state
-  const [gpsInput, setGpsInput] = useState('');
-  const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(null);
-  const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(null);
+  // GPS input state. Re-entered as DECIMAL DEGREES whatever the user originally
+  // typed: `gps` is the already-parsed pair, and the source text (a UTM grid
+  // reference, a maps URL) cannot be re-derived from it. Interpolated plainly
+  // rather than through `formatGpsCoordinates`, because this string has to PARSE
+  // again on the next confirm and that formatter is locale-aware - a comma
+  // decimal separator would not round-trip through `parseDD`.
+  //
+  // The ref is the dirty guard's baseline: '' on a first visit, the carried pair
+  // on a re-entry. `useState` reads it so the displayed value and the baseline
+  // cannot drift.
+  const initialGpsInputRef = useRef(
+    initialConfig ? `${initialConfig.gps.latitude}, ${initialConfig.gps.longitude}` : ''
+  );
+  const [gpsInput, setGpsInput] = useState(initialGpsInputRef.current);
+  const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(initialConfig?.gps ?? null);
+  const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(initialConfig ? 'DD' : null);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
   // Metadata state. Each field keeps an initial-value ref alongside it, so the
-  // dirty guard (#F9) can tell "touched" from "still what the file/defaults
-  // gave it" without re-deriving the same expression twice.
-  const initialNameRef = useRef(section?.name ?? '');
+  // dirty guard (#F9) can tell "touched" from "still what the dialog opened
+  // with" without re-deriving the same expression twice - and on a re-entry
+  // (#394 F10) what it opened with is the CARRIED value, not the file default,
+  // or every reopened dialog would report itself dirty on arrival.
+  //
+  // A field the user CLEARED last time stays cleared, so each branch is chosen
+  // by whether there is a previous visit at all - `??` per field would
+  // resurrect the file/selection default under an emptied one.
+  const initialNameRef = useRef(initialConfig?.metadata.name ?? section?.name ?? '');
   const [name, setName] = useState(initialNameRef.current);
-  const initialSurveyorRef = useRef(selectionConfig.defaultSurveyor || '');
+  const initialSurveyorRef = useRef(
+    initialConfig ? (initialConfig.metadata.surveyor ?? '') : (selectionConfig.defaultSurveyor || '')
+  );
   const [surveyor, setSurveyor] = useState(initialSurveyorRef.current);
-  const initialDateRef = useRef(selectionConfig.defaultDate ?? section?.date?.split(/[T ]/)[0] ?? '');
+  const initialDateRef = useRef(
+    initialConfig
+      ? (initialConfig.metadata.date ?? '')
+      : (selectionConfig.defaultDate ?? section?.date?.split(/[T ]/)[0] ?? '')
+  );
   const [date, setDate] = useState(initialDateRef.current);
-  const initialColorRef = useRef(sectionPalette[colorIndex % sectionPalette.length] ?? '#4ecdc4');
+  const initialColorRef = useRef(
+    initialConfig?.metadata.color ?? sectionPalette[colorIndex % sectionPalette.length] ?? '#4ecdc4'
+  );
   const [color, setColor] = useState(initialColorRef.current);
-  const initialDirectionRef = useRef<'in' | 'out'>(section?.direction === 'out' ? 'out' : 'in');
+  const initialDirectionRef = useRef<'in' | 'out'>(
+    initialConfig?.metadata.direction ?? (section?.direction === 'out' ? 'out' : 'in')
+  );
   const [direction, setDirection] = useState(initialDirectionRef.current);
-  const initialReverseRef = useRef(false);
+  const initialReverseRef = useRef(initialConfig?.metadata.reverse ?? false);
   const [reverse, setReverse] = useState(initialReverseRef.current);
 
   // Station count = counted shots + 1. The dropdown, the preview, the payload
@@ -336,8 +410,15 @@ export default function ZeroDatumConfigDialog({
   // pick that only MOVED because of a shot edit is already covered by
   // `shotsDirty` (the reducer marks that itself), so this only fires for a
   // pick made with no accompanying edit.
+  //
+  // Every term compares against what the dialog OPENED with, which on a re-entry
+  // (#394 F10) is the carried value. The GPS term especially: `!== ''` would
+  // make every reopened dialog dirty on arrival, and both this guard and
+  // DialogWrapper's "Unsaved Changes" would fire over zero edits. With an empty
+  // baseline it reduces to exactly `gpsInput.trim() !== ''`, so first-visit
+  // behaviour (including its tolerance of whitespace-only input) is unchanged.
   const isDirty =
-    gpsInput.trim() !== '' ||
+    gpsInput.trim() !== initialGpsInputRef.current.trim() ||
     name !== initialNameRef.current ||
     surveyor !== initialSurveyorRef.current ||
     date !== initialDateRef.current ||
@@ -348,10 +429,13 @@ export default function ZeroDatumConfigDialog({
     shotsDirty;
 
   // Back has no DialogWrapper-level guard (that machinery only ever discards
-  // via `onClose`/`onCancel`), so it gets its own small, self-contained
-  // confirm here. NOTE for integration: Package A is making Back
-  // state-preserving in App.tsx; if that lands, this confirm - which still
-  // frames Back as a discard - may need to be dropped or reworded.
+  // via `onClose`/`onCancel`), so it gets its own small, self-contained confirm
+  // here. Still a discard after #394 F10, which was checked rather than assumed:
+  // the WIZARD's Back carries this dialog's config forward (App.tsx passes
+  // `previousZeroDatumConfig`), but THIS Back reopens 'zero-datum-selection'
+  // with no carry, and the forward path from there
+  // (`ZeroDatumSelectionDialog.onSelectSection`) passes none either - so
+  // everything typed since the dialog opened really is lost.
   const [backConfirmPending, setBackConfirmPending] = useState(false);
   const handleBackClick = useCallback(() => {
     if (isDirty) {

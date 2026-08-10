@@ -28,7 +28,7 @@ import {
   finalizePlacementForReverse,
 } from '../../utils/importSectionConfig';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
-import { useProjectStore } from '../../store/projectStore';
+import { useProjectStore, projectSwitched } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { editableShotToShotData, editableShotsToDmpSection } from '../../utils/shotConversion';
@@ -190,6 +190,32 @@ export interface SavedManualPlacingState {
    * none; absent reads as "nothing banked yet".
    */
   importedReceipts?: ImportReceipt[];
+  /**
+   * Every project `section_id` this wizard run has created so far (#487
+   * residue 2).
+   *
+   * Same carry, same reason, as `importedReceipts` above - and the same
+   * consequence when it is missing: the reopened instance completes with an
+   * empty list, App.tsx's `if (newSectionIds?.length)` is false, and
+   * `suggest_orphan_placements` is never called. So the manual-placement route
+   * silently skipped orphan detection that the direct route always ran.
+   *
+   * It is also what `withdrawImportedSections` needs to be able to undo a run
+   * that crossed the handoff. Optional for the same reason: an older saved
+   * state (or a test) has none, and absent reads as "nothing imported yet".
+   */
+  importedSectionIds?: number[];
+  /**
+   * The `created_at` of the project those ids were created in.
+   *
+   * Nothing clears `dialogData` when the open project changes, so this struct
+   * can outlive the project it describes - and section ids are small
+   * per-project integers, so every one of them would RESOLVE against whatever
+   * is open instead. Carried so the withdrawal can refuse rather than delete
+   * same-numbered sections in the wrong survey. Optional: a state saved by an
+   * older build has none, and absent means "unknown", which never refuses.
+   */
+  projectKey?: string | null;
   /** DMP indices of segments the user chose to discard ("Do not place"). */
   discardedIndices?: number[];
 }
@@ -799,6 +825,7 @@ export default function DmpNewImportDialog({
 
   // Store selectors
   const importSections = useProjectStore((s) => s.importSections);
+  const executeBatch = useProjectStore((s) => s.executeBatch);
   const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
   const config = useProjectStore((s) => s.config);
   const updateConfig = useProjectStore((s) => s.updateConfig);
@@ -1021,8 +1048,18 @@ export default function DmpNewImportDialog({
   // Prevent re-entering early-import transition before state updates land.
   const transitionToPlacingInFlightRef = useRef(false);
 
-  // Accumulate all section IDs created during import for post-import orphan detection
-  const importedSectionIdsRef = useRef<number[]>([]);
+  // Accumulate all section IDs created during import for post-import orphan
+  // detection - seeded from the saved state for the same reason the receipts
+  // below are, and with a sharper failure when it is not: an empty list here
+  // reaches App.tsx as "this import created nothing", which skips
+  // `suggest_orphan_placements` altogether.
+  const importedSectionIdsRef = useRef<number[]>([...(saved?.importedSectionIds ?? [])]);
+  // WHICH project those ids belong to, carried with them. `created_at` is the
+  // identity `executeCommand`'s own staleness guard uses: immutable for the life
+  // of a project, unlike `file_path`. Read once (the ref keeps its first value).
+  const importProjectKeyRef = useRef<string | null>(
+    saved?.projectKey ?? useProjectStore.getState().project?.created_at ?? null
+  );
   // Accumulate the import_receipt from each import_sections call (early/segment/
   // late/pending) into one #391 summary for the whole wizard run, keyed by
   // constant file-level provenance (source label/name/total sections) spread
@@ -2020,10 +2057,22 @@ export default function DmpNewImportDialog({
         // bounded ones to Jump, putting the duplicated geometry back into gas
         // and penetration, which is the double-count keep-both exists to avoid.
         // AllReferences leaves Normal shots untouched and preserves the choice.
-        const result = await importSections(
-          [config], selectionConfig.fileHash, selectionConfig.sectionHashes, 'AllReferences', dmpProvenance,
-        );
-        setIsImporting(false);
+        // try/finally, unlike the other four import sites which already had it:
+        // a throw here used to leave `isImporting` stuck true forever (this
+        // `init()` is called with no catch). That was merely a stuck spinner
+        // until the exits started refusing to open mid-import - now it would
+        // TRAP the user in a wizard with Cancel and Back both disabled.
+        let result: CommandResult;
+        try {
+          result = await importSections(
+            [config], selectionConfig.fileHash, selectionConfig.sectionHashes, 'AllReferences', dmpProvenance,
+          );
+        } catch (e) {
+          setError(importErrorMessage(e));
+          return;
+        } finally {
+          setIsImporting(false);
+        }
 
         if (!result.success) {
           setError(result.error ?? 'Failed to import zero datum section');
@@ -3198,6 +3247,11 @@ export default function DmpNewImportDialog({
       // (`importPlacedSegmentNow`) banks its receipt into this ref first, and
       // this builder runs inside the placement callback, after it.
       importedReceipts: [...importedReceiptsRef.current],
+      // Same liveness requirement, same call: that import also banks the
+      // section ids the reopened instance must complete with.
+      importedSectionIds: [...importedSectionIdsRef.current],
+      // Which project they mean. Ids alone are ambiguous across a switch.
+      projectKey: importProjectKeyRef.current,
     });
 
     const openPlacementDialog = (
@@ -3394,22 +3448,212 @@ export default function DmpNewImportDialog({
     handleStartSegmentPlacement,
   ]);
 
-  // Cancel/Back
+  // ─── Cancel / Back ────────────────────────────────────────────────────────
+  //
+  // This wizard imports EAGERLY - the zero-datum anchor lands in the project on
+  // mount, and each reachable segment as it is placed, because the map has to
+  // render what it is placing. So by the time either exit is reached the project
+  // may already hold sections the user never agreed to keep, and neither exit
+  // used to say so: the gate asked only about `connections` (client-side records
+  // that have imported nothing), so cancelling right after the zero-datum import
+  // closed silently and left the section behind (#394 F2).
+  //
+  // Both exits therefore offer to WITHDRAW what was imported, and the withdrawal
+  // is one batched `delete_section` - one undo entry for one user action, not N.
+
+  /** A withdrawal already running. A REF, not just the state mirror below: two
+   *  clicks in the same tick both read the pre-`setState` value, and the second
+   *  must not send a second batch for ids the first one is already deleting. */
+  const withdrawInFlightRef = useRef(false);
+  const [withdrawInFlight, setWithdrawInFlight] = useState(false);
+
+  /** The removal landed in memory but is not yet on disk. Survives a failed
+   *  save so a second Remove click RETRIES THE SAVE instead of finding an empty
+   *  id list, returning true, and closing over the stale file it just refused to
+   *  close over. */
+  const withdrawalNeedsSaveRef = useRef(false);
+
+  /** Remove every section this wizard run imported, as ONE undoable step, and
+   *  leave the result on disk.
+   *  Returns false (leaving the accumulators untouched) if it refused, the
+   *  backend did, or the follow-up save did, so the caller can keep the wizard
+   *  open on a visible error instead of closing over a project it failed to
+   *  clean up. */
+  const withdrawImportedSections = useCallback(async (): Promise<boolean> => {
+    if (withdrawInFlightRef.current) return false;
+    // DEDUPLICATED: this accumulator is seeded from the saved state AND appended
+    // to by live imports, so one id can appear twice across the map-placement
+    // handoff. `execute_batch` is all-or-nothing and the second delete of an id
+    // fails with "not found", which rolls the WHOLE batch back - the withdrawal
+    // would remove nothing at all and report an error for it.
+    const sectionIds = [...new Set(importedSectionIdsRef.current)];
+    if (sectionIds.length === 0 && !withdrawalNeedsSaveRef.current) return true;
+    // Section ids are small per-project integers, so a withdrawal aimed at a
+    // project that is no longer open would delete same-numbered sections in
+    // whatever replaced it - and every id would RESOLVE, so nothing downstream
+    // fails safe. Nothing clears `dialogData` on a project switch
+    // (`resetToolTransientsForProjectSwitch` leaves the dialog slot alone), so
+    // a saved state really can outlive its project. This is the refusal.
+    const openProjectKey = useProjectStore.getState().project?.created_at ?? null;
+    if (projectSwitched(importProjectKeyRef.current, openProjectKey)) {
+      setError(t('dialogs.dmpNewImport.removeImportedWrongProject'));
+      return false;
+    }
+    withdrawInFlightRef.current = true;
+    setWithdrawInFlight(true);
+    setIsImporting(true);
+    try {
+      if (sectionIds.length > 0) {
+        const fileHashes = selectionConfig.fileHash ? [selectionConfig.fileHash] : [];
+        const sectionHashes = selectionConfig.sectionHashes ?? [];
+        const result = await executeBatch([
+          ...sectionIds.map((sectionId) => ({ type: 'delete_section', section_id: sectionId }) as const),
+          // In the SAME batch, and that is the point of batching it: deleting a
+          // section does not touch the import-dedup hashes `import_sections`
+          // recorded (they are project-level bookkeeping, not references), so
+          // without this the project still claims this file was imported while
+          // none of it remains - and `DmpSelectionDialog` DESELECTS every section
+          // it believes is a duplicate, so the obvious retry silently offers
+          // nothing to import. One batch, so one undo restores the sections and
+          // their tracking together.
+          //
+          // Only the hashes THIS run sent to `import_sections`: `sectionHashes`
+          // holds the selected sections alone (duplicates were auto-deselected
+          // before the wizard opened), so an earlier session's tracking is out of
+          // reach. The file hash is coarser - one per file - so a file imported
+          // in an earlier session too loses its file-level duplicate flag. That
+          // is the intended direction: after a withdrawal the user may well want
+          // to re-import it, and the per-section flags still stand.
+          ...(fileHashes.length > 0 || sectionHashes.length > 0
+            ? [{
+                type: 'untrack_import',
+                file_hashes: fileHashes,
+                section_hashes: sectionHashes,
+              } as const]
+            : []),
+        ]);
+        if (!result.success) {
+          setError(result.error ?? t('dialogs.dmpNewImport.removeImportedFailed'));
+          return false;
+        }
+
+        // DIFFED, not cleared: an import that resolved while the batch was in
+        // flight has pushed an id the batch never named, and that section is
+        // still in the project. Wiping the list would drop it from tracking
+        // while it survives on disk - the very shape F2 exists to prevent. (The
+        // handlers refuse to start a withdrawal mid-import, so this is the
+        // second line of defence, not the first.)
+        const removed = new Set(sectionIds);
+        importedSectionIdsRef.current = importedSectionIdsRef.current.filter((id) => !removed.has(id));
+        for (const dmpIndex of [...earlyImportedRef.current.keys()]) {
+          const sectionId = earlyImportedRef.current.get(dmpIndex);
+          if (sectionId != null && removed.has(sectionId)) earlyImportedRef.current.delete(dmpIndex);
+        }
+        // Receipts are per-`import_sections` CALL and carry no section id, so
+        // they cannot be diffed - only safe to drop once nothing survives.
+        if (importedSectionIdsRef.current.length === 0) importedReceiptsRef.current = [];
+
+        // #394 F14. The eager anchor import already RESOLVED this project's
+        // deferred first save (`finalize_deferred_import`), so the file on disk
+        // still holds the sections just withdrawn. It has to be written through.
+        //
+        // Gated as `saveAfterImport` gates its own save, for its reason:
+        // importing INTO AN EXISTING project the user may have unrelated pending
+        // edits, and committing those behind their back is not this action's to
+        // do. There the withdrawal leaves the project dirty and autosave / the
+        // close guard carry it, as for any other edit.
+        withdrawalNeedsSaveRef.current = useUIStore.getState().importContext === 'new-project';
+      }
+
+      // The save is NOT best-effort: closing here is what makes the removal
+      // final from the user's side, and a `.stalx` still holding the sections
+      // they chose to remove is the exact F2 shape one layer out. So a failed
+      // write keeps the wizard open with the reason on screen, and
+      // `withdrawalNeedsSaveRef` makes the next Remove click retry the SAVE -
+      // without it the retry would find an empty id list, return true, and close
+      // over the very file the first attempt refused to close over.
+      if (withdrawalNeedsSaveRef.current) {
+        const saved = await useProjectStore.getState().saveProject();
+        if (!saved.success) {
+          setError(saved.error ?? t('dialogs.dmpNewImport.removeImportedSaveFailed'));
+          return false;
+        }
+        withdrawalNeedsSaveRef.current = false;
+      }
+      return true;
+    } catch (e) {
+      setError(importErrorMessage(e));
+      return false;
+    } finally {
+      withdrawInFlightRef.current = false;
+      setWithdrawInFlight(false);
+      setIsImporting(false);
+    }
+  }, [executeBatch, selectionConfig.fileHash, selectionConfig.sectionHashes, t]);
+
+  /** How many sections the pending confirmation is talking about. Snapshotted
+   *  into state when the confirmation opens: the live count lives in a ref, and
+   *  a ref does not re-render the copy that quotes it. */
+  const [pendingWithdrawCount, setPendingWithdrawCount] = useState(0);
+
+  /**
+   * Neither exit may be OPENED while an import is in flight.
+   *
+   * An import banks its section ids only when it resolves, so a withdrawal
+   * decided now would snapshot a list that is about to grow, and the late
+   * arrival would survive in the project with nothing tracking it - the exact
+   * shape F2 exists to prevent. The footer buttons are disabled for the same
+   * reason; this also covers the routes that bypass them (the dialog's own
+   * close button and Escape, both of which land on `handleCancel`).
+   */
+  const exitBlocked = isImporting;
+
   const handleCancel = useCallback(() => {
-    if (connections.length > 0) {
+    if (isImporting) return;
+    const importedCount = importedSectionIdsRef.current.length;
+    if (connections.length > 0 || importedCount > 0) {
+      setPendingWithdrawCount(importedCount);
       setShowCancelConfirm(true);
     } else {
       onCancel();
     }
-  }, [connections.length, onCancel]);
+  }, [connections.length, onCancel, isImporting]);
+
+  /** Close the wizard, first removing what it imported. */
+  const handleCancelWithRemoval = useCallback(async () => {
+    if (!(await withdrawImportedSections())) return;
+    setShowCancelConfirm(false);
+    onCancel();
+  }, [withdrawImportedSections, onCancel]);
 
   const handleBack = useCallback(() => {
-    if (connections.length > 0) {
+    if (isImporting) return;
+    const importedCount = importedSectionIdsRef.current.length;
+    if (connections.length > 0 || importedCount > 0) {
+      setPendingWithdrawCount(importedCount);
       setShowBackConfirm(true);
     } else {
       onBack();
     }
-  }, [connections.length, onBack]);
+  }, [connections.length, onBack, isImporting]);
+
+  /**
+   * Back re-enters the flow at a step BEFORE anything was imported (zero-datum
+   * config, or the section selection), and the forward pass re-imports from
+   * scratch - the anchor on mount, then the whole suggest/early-import pipeline.
+   * So Back has to withdraw first, or the second pass duplicates every section
+   * the first one created (#394 F1). Carrying "already imported, don't redo it"
+   * across instead cannot work: the mount effect that imports the anchor is the
+   * same one that fires `suggest_all_import_placements`, so suppressing it
+   * strands the reopened wizard in `init` with nothing to do - and it would also
+   * pin the anchor to the GPS/name/shot edits of the FIRST pass, which is
+   * exactly what the user pressed Back to change.
+   */
+  const handleBackWithRemoval = useCallback(async () => {
+    if (!(await withdrawImportedSections())) return;
+    setShowBackConfirm(false);
+    onBack();
+  }, [withdrawImportedSections, onBack]);
 
   // Confidence helpers
   const confidenceColors: Record<string, string> = {
@@ -4129,10 +4373,20 @@ export default function DmpNewImportDialog({
           className="px-4 py-3 border-t border-border flex justify-between items-center"
         >
           <div className="flex gap-2">
-            <Button onClick={handleCancel} className={importSecondaryButtonClass} data-testid="cancel-button">
+            <Button
+              onClick={handleCancel}
+              disabled={exitBlocked}
+              className={importSecondaryButtonClass}
+              data-testid="cancel-button"
+            >
               {t('common.actions.cancel')}
             </Button>
-            <Button onClick={handleBack} className={importSecondaryButtonClass} data-testid="back-button">
+            <Button
+              onClick={handleBack}
+              disabled={exitBlocked}
+              className={importSecondaryButtonClass}
+              data-testid="back-button"
+            >
               {t('common.actions.back')}
             </Button>
           </div>
@@ -4193,48 +4447,98 @@ export default function DmpNewImportDialog({
         </div>
       </div>
 
-      {/* Cancel confirmation */}
+      {/* Cancel confirmation. Three actions once anything has been imported -
+          the exit is no longer just "close a dialog", it decides what happens to
+          sections that are already in the project. `confirm-cancel-button` keeps
+          its id and its meaning (close, change nothing on disk); the removal is
+          the new, additional action. */}
       <AlertDialog
         open={showCancelConfirm}
         title={t('dialogs.dmpNewImport.cancelWizard')}
-        onClose={() => setShowCancelConfirm(false)}
+        // A delete is on the wire; every route out of this confirmation is shut
+        // until it lands, including Escape and the backdrop. "Keep and close"
+        // above all: it would close the wizard over a removal that still
+        // completes, leaving the user looking at a project they chose to keep
+        // sections in while those sections disappear behind them.
+        onClose={() => { if (!withdrawInFlight) setShowCancelConfirm(false); }}
         data-testid="cancel-confirm-dialog"
         actions={
           <>
-            <Button onClick={() => setShowCancelConfirm(false)} className={importSecondaryButtonClass} data-testid="cancel-confirm-continue">
-              {t('common.actions.continue')}
+            <Button
+              onClick={() => setShowCancelConfirm(false)}
+              disabled={withdrawInFlight}
+              className={importSecondaryButtonClass}
+              data-testid="cancel-confirm-continue"
+            >
+              {pendingWithdrawCount > 0
+                ? t('dialogs.dmpNewImport.cancelContinueEditing')
+                : t('common.actions.continue')}
             </Button>
-            <Button variant="danger" onClick={onCancel} data-testid="confirm-cancel-button">
-              {t('common.actions.cancel')}
+            <Button
+              onClick={onCancel}
+              disabled={withdrawInFlight}
+              className={importSecondaryButtonClass}
+              data-testid="confirm-cancel-button"
+            >
+              {pendingWithdrawCount > 0
+                ? t('dialogs.dmpNewImport.cancelKeepAndClose')
+                : t('common.actions.cancel')}
             </Button>
+            {pendingWithdrawCount > 0 && (
+              <Button
+                variant="danger"
+                disabled={withdrawInFlight}
+                onClick={() => { void handleCancelWithRemoval(); }}
+                data-testid="cancel-remove-button"
+              >
+                {t('dialogs.dmpNewImport.cancelRemoveAndClose')}
+              </Button>
+            )}
           </>
         }
       >
-        <p>
-          {connections.length > 0
-            ? t('dialogs.dmpNewImport.cancelWizardMessage')
+        <p data-testid="cancel-confirm-message">
+          {pendingWithdrawCount > 0
+            ? t('dialogs.dmpNewImport.cancelWizardMessage', { count: pendingWithdrawCount })
             : t('dialogs.dmpNewImport.cancelWizardNoImports')}
         </p>
       </AlertDialog>
 
-      {/* Back confirmation */}
+      {/* Back confirmation. No "keep" here: the step Back returns to re-imports
+          from scratch on the way forward, so keeping would duplicate. */}
       <AlertDialog
         open={showBackConfirm}
         title={t('dialogs.dmpNewImport.backWizard')}
-        onClose={() => setShowBackConfirm(false)}
+        onClose={() => { if (!withdrawInFlight) setShowBackConfirm(false); }}
         data-testid="back-confirm-dialog"
         actions={
           <>
-            <Button onClick={() => setShowBackConfirm(false)} className={importSecondaryButtonClass} data-testid="back-confirm-continue">
+            <Button
+              onClick={() => setShowBackConfirm(false)}
+              disabled={withdrawInFlight}
+              className={importSecondaryButtonClass}
+              data-testid="back-confirm-continue"
+            >
               {t('common.actions.continue')}
             </Button>
-            <Button variant="danger" onClick={onBack} data-testid="confirm-back-button">
-              {t('common.actions.back')}
+            <Button
+              variant="danger"
+              disabled={withdrawInFlight}
+              onClick={() => { void handleBackWithRemoval(); }}
+              data-testid="confirm-back-button"
+            >
+              {pendingWithdrawCount > 0
+                ? t('dialogs.dmpNewImport.backRemoveAndGo')
+                : t('common.actions.back')}
             </Button>
           </>
         }
       >
-        <p>{t('dialogs.dmpNewImport.backWizardMessage')}</p>
+        <p data-testid="back-confirm-message">
+          {pendingWithdrawCount > 0
+            ? t('dialogs.dmpNewImport.backWizardMessage', { count: pendingWithdrawCount })
+            : t('dialogs.dmpNewImport.backWizardNoImports')}
+        </p>
       </AlertDialog>
     </DialogWrapper>
   );

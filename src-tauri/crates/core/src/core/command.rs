@@ -177,6 +177,26 @@ pub enum Command {
         swap: bool,
     },
 
+    /// Forget import-dedup bookkeeping for an import that was WITHDRAWN (#394).
+    ///
+    /// `execute_import_sections` records the file hash and each section's content
+    /// hash so a later re-import can be recognised as a duplicate, and deleting
+    /// the sections does not touch those lists (`cleanup_section_references`
+    /// walks merges, closures, offsets, comments and datums - nothing else). So
+    /// the DMP wizard's "Cancel, remove what was imported" left the project
+    /// claiming the file was already imported while none of it remained, and the
+    /// selection dialog silently DESELECTED every section on the next attempt.
+    ///
+    /// Batched with the deletes it belongs to, so one undo restores the sections
+    /// and their tracking together - the snapshot pair covers both, since both
+    /// live on `Project`.
+    UntrackImport {
+        /// File-level hashes to forget (`Project::imported_file_hashes`).
+        file_hashes: Vec<String>,
+        /// Section content hashes to forget (`Project::imported_section_hashes`).
+        section_hashes: Vec<String>,
+    },
+
     // Batch commands
     Batch {
         commands: Vec<Command>,
@@ -399,7 +419,9 @@ pub struct CommandResult {
     ///   batch reversed an even number of times, because such a batch leaves the
     ///   numbering exactly as it found it and there is nothing to mirror. At most
     ///   one entry per section, and `shot_count` is unambiguous because a batch
-    ///   cannot change it (`is_batch_allowed` admits no shot create/delete).
+    ///   cannot change a SURVIVING section's shot count (`is_batch_allowed` admits
+    ///   no shot create/delete; the `DeleteSection` it does admit removes the whole
+    ///   section, which is then dropped from this report entirely).
     /// * From `undo_to` / `redo_to`, this is an ORDERED PER-STEP LOG: one entry
     ///   per reversing step, in the order the steps ran, repeats intact. It is
     ///   deliberately NOT parity-reduced, because `shot_count` can differ between
@@ -607,6 +629,8 @@ impl Command {
             | Command::MoveComment { .. }
             | Command::RepairIntegrity
             | Command::UpdateProjectSettings
+            // Import-dedup bookkeeping is a set of hashes; it moves no station.
+            | Command::UntrackImport { .. }
             | Command::SetSurfaceElevation => false,
             Command::UpdateShot { updates, .. } => updates.touches_geometry(),
             Command::Batch { commands } => commands.iter().any(Command::affects_geometry),
@@ -634,9 +658,11 @@ impl Command {
     ///
     /// Parity is associative and commutative, so reducing sub-lists and then the
     /// concatenation gives the same answer as reducing once - nested batches are
-    /// safe. Within a batch the shot count `N` cannot change (`is_batch_allowed`
-    /// admits no `CreateShot`/`DeleteShot`/`DeleteSection`; `merge_stations` only
-    /// records relations and `move_segment` only offsets), so a section reversed
+    /// safe. Within a batch a SURVIVING section's shot count `N` cannot change
+    /// (`is_batch_allowed` admits no `CreateShot`/`DeleteShot`; `merge_stations`
+    /// only records relations and `move_segment` only offsets; the `DeleteSection`
+    /// it admits takes the whole section, and `settle_reversed_sections` drops a
+    /// section that is gone), so a section reversed
     /// twice is not renumbered AT ALL: it must be neither reported nor fixed up.
     /// Reporting it would be actively wrong, because the two fix-ups
     /// `settle_reversed_sections` runs are applied once per list entry against one
@@ -812,6 +838,9 @@ impl Command {
                     output_name
                 )
             }
+            Command::UntrackImport { section_hashes, .. } => {
+                format!("Forget {} imported sections", section_hashes.len())
+            }
             Command::RepairIntegrity => "Repair integrity".to_string(),
             Command::UpdateProjectSettings => "Update project settings".to_string(),
             Command::SetSurfaceElevation => "Set entrance elevation".to_string(),
@@ -878,7 +907,7 @@ mod tests {
 
         assert_eq!(
             variants.len(),
-            29,
+            30,
             "Command's variant set changed. A removal leaves persisted undo \
              history unloadable at that entry and holed either side of it - keep \
              the tag deserializable, or bump SCHEMA_VERSION and call \
@@ -1068,11 +1097,18 @@ mod tests {
             (Command::RepairIntegrity, false),
             (Command::UpdateProjectSettings, false),
             (Command::SetSurfaceElevation, false),
+            (
+                Command::UntrackImport {
+                    file_hashes: Vec::new(),
+                    section_hashes: Vec::new(),
+                },
+                false,
+            ),
         ];
 
         assert_eq!(
             cases.len(),
-            29,
+            30,
             "add every new Command variant to this table"
         );
         for (command, expected) in cases {

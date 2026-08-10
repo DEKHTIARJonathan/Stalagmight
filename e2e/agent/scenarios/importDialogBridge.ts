@@ -162,9 +162,13 @@ export const CLICKABLE_TESTIDS: ReadonlySet<string> = new Set([
   'segment-place-on-map-button',
   'toggle-alternatives',
   'shot-editor-expand',
-  // wizard confirm overlays
+  // wizard confirm overlays. `cancel-remove-button` DELETES the sections the
+  // wizard imported (one batched, undoable step) - a real destructive action
+  // the walk is allowed to take, since the whole point of the overlay is that
+  // both answers are legitimate exits.
   'cancel-confirm-continue',
   'confirm-cancel-button',
+  'cancel-remove-button',
   'back-confirm-continue',
   'confirm-back-button',
   // grid context menu
