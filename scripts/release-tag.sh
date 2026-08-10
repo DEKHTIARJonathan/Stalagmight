@@ -52,7 +52,15 @@ for arg in "$@"; do
     --allow-unannounced) ALLOW_UNANNOUNCED=true ;;
     --dry-run) DRY_RUN=true ;;
     -*) echo "Unknown flag: $arg" >&2; exit 1 ;;
-    *) TAG="$arg" ;;
+    *)
+      # Refuse a second tag rather than silently keeping the last one: the two
+      # spellings of a near-miss ("v0.5.0 v0.5.1") should not quietly pick one.
+      if [ -n "$TAG" ]; then
+        echo "Error: more than one tag given ('$TAG' and '$arg'). Tag one at a time." >&2
+        exit 1
+      fi
+      TAG="$arg"
+      ;;
   esac
 done
 
@@ -89,10 +97,18 @@ fi
 # about to commit it. Here there is no commit: anything uncommitted is by
 # definition not in the tree being tagged, so a dirty changelog means the notes
 # on disk are not the notes that will publish.
-if [ -n "$(git -C "$PROJECT_ROOT" status --porcelain)" ]; then
-  echo "Error: the working tree has uncommitted changes." >&2
-  echo "A tag names a commit, so anything not committed is not in the release." >&2
-  echo "Commit or stash first. Nothing was tagged." >&2
+#
+# Untracked files count too, and the message has to say so: `git stash` without
+# `-u` does not take them, so "commit or stash" alone is advice that does not
+# work. An untracked file cannot change what the tag names, but a release cut
+# with one sitting there is usually a forgotten `git add`, which can.
+DIRT="$(git -C "$PROJECT_ROOT" status --porcelain)"
+if [ -n "$DIRT" ]; then
+  echo "Error: the working tree is not clean." >&2
+  echo "A tag names a commit, so nothing below is in the release:" >&2
+  printf '%s\n' "$DIRT" | sed 's/^/  /' >&2
+  echo "Commit them (or 'git stash -u' - plain stash leaves '??' files behind)." >&2
+  echo "Nothing was tagged." >&2
   exit 1
 fi
 
@@ -124,7 +140,8 @@ fi
 # release-notes.sh falls back to this exact one-line body when it finds no
 # section at all. Publishing it would announce a release by restating its
 # version number, so treat it as a missing changelog rather than a valid body.
-if printf '%s\n' "$BODY" | grep -qx "Release $TAG"; then
+# -F because the tag's dots are literals here, not wildcards.
+if printf '%s\n' "$BODY" | grep -qxF "Release $TAG"; then
   echo "Error: CHANGELOG.md has no notes for $TAG." >&2
   echo "Neither '## [$BASE_VERSION]' nor '## [Unreleased]' has any content, so the" >&2
   echo "published body would be the bare string 'Release $TAG'." >&2
@@ -168,8 +185,13 @@ if [ "$PRERELEASE" = false ]; then
   # release.sh stamped the section header the day the version was bumped, which
   # for anything that went through candidates is well before the day it ships.
   # The date is published verbatim in the notes.
-  SECTION_DATE="$(awk -v ver="$(version_pattern "$BASE_VERSION")" '
-    $0 ~ "^## +\\[?" ver "\\]? +- +" { print $NF; exit }
+  # A literal prefix via index(), not a regex. awk re-processes backslash escapes
+  # in a -v assignment, so a grep/sed-escaped version arrives with its dots bare
+  # and "## [0X5Y0] - ..." would match - the escaping defeated by the tool it was
+  # handed to. release.sh writes exactly this header shape; anything else simply
+  # yields no date and no advisory.
+  SECTION_DATE="$(awk -v hdr="## [$BASE_VERSION] - " '
+    index($0, hdr) == 1 { print $NF; exit }
   ' "$PROJECT_ROOT/CHANGELOG.md")"
   TODAY="$(date +%Y-%m-%d)"
   if [ -n "$SECTION_DATE" ] && [ "$SECTION_DATE" != "$TODAY" ]; then

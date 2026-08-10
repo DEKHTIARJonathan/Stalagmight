@@ -48,11 +48,22 @@ lock_version() {
 # "The string is present somewhere" is too weak a check: it passes just as
 # happily when a substitution hit two lines and clobbered an unrelated field as
 # when it hit the one line it was aimed at. Counting is what distinguishes them.
+# A file that cannot be read is checked EXPLICITLY rather than left to the count
+# below. `grep -c` on a missing file prints nothing, so `n` is empty, and `[ ""
+# -ne 1 ]` is not false - it is a bash *error* (status 2), which an `if` reads as
+# false, skipping the branch and returning 0. The check would report a clean bill
+# of health for a file it never opened, which is the exact failure this file's
+# header claims to prevent. `-e`/`--` keep a future caller's leading-dash pattern
+# from being read as a grep option.
 require_one_match() {
   local file="$1" pattern="$2" when="$3" n
-  n=$(grep -c "$pattern" "$PROJECT_ROOT/$file" || true)
-  if [ "$n" -ne 1 ]; then
-    echo "Error: $file has $n lines matching /$pattern/ $when, expected exactly 1." >&2
+  if [ ! -r "$PROJECT_ROOT/$file" ]; then
+    echo "Error: $file is missing or unreadable, so its version could not be checked $when." >&2
+    return 1
+  fi
+  n=$(grep -c -e "$pattern" -- "$PROJECT_ROOT/$file" || true)
+  if [ "${n:-x}" != 1 ]; then
+    echo "Error: $file has ${n:-no} lines matching /$pattern/ $when, expected exactly 1." >&2
     return 1
   fi
 }
@@ -89,9 +100,15 @@ version_files_match() {
   # The lock is checked by value rather than by pattern count, so its two failure
   # shapes stay distinguishable: a stanza that is missing or duplicated is a
   # format problem, a stanza holding the wrong number is a drift problem.
+  if [ ! -r "$PROJECT_ROOT/src-tauri/Cargo.lock" ]; then
+    echo "Error: src-tauri/Cargo.lock is missing or unreadable." >&2
+    return 1
+  fi
+  # String comparison, not `-ne`: an empty count is an error rather than a
+  # number, and `[ "" -ne 1 ]` would abort the test itself into a false `if`.
   stanzas="$(lock_stanza_count)"
-  if [ "$stanzas" -ne 1 ]; then
-    echo "Error: src-tauri/Cargo.lock has $stanzas lines matching 'name = \"stalagmight\"'," >&2
+  if [ "${stanzas:-x}" != 1 ]; then
+    echo "Error: src-tauri/Cargo.lock has ${stanzas:-no} lines matching 'name = \"stalagmight\"'," >&2
     echo "expected exactly 1. The lock's shape is not what the rewrite assumes." >&2
     return 1
   fi

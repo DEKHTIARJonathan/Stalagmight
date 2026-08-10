@@ -7,14 +7,20 @@ Releases are created through Claude Code. The process:
 1. Claude reviews git log since the last tag
 2. Claude writes a human-readable summary into the `## [Unreleased]` section of `CHANGELOG.md`
 3. Claude commits the changelog update
-4. Claude runs `./scripts/release.sh <patch|minor|major> --no-edit`, or
-   `--no-tag` when candidates come first
+4. Claude runs `./scripts/release.sh <patch|minor|major> --no-edit --no-tag`
 5. Claude tags with `./scripts/release-tag.sh vX.Y.Z[-rcN]`, then pushes the
    commit and the tag
 6. GitHub Actions builds the app and creates a release with artifacts
 
 Three scripts, one each: `release.sh` bumps a version, `release-tag.sh` tags a
 tree already at one, `release-notes.sh` renders what gets published.
+
+⚠ **`--no-tag` at step 4 is what makes step 5 reachable.** Without it `release.sh`
+tags `vX.Y.Z` itself, and `release-tag.sh` then refuses that tag as already
+existing - correctly, but the advice it prints ("cut the next number") is wrong
+for the situation. Dropping `--no-tag` is only right when you are cutting the
+final release with no candidates and want the tag unchecked, which is the older
+flow; prefer the two steps above.
 
 ## Release notes
 

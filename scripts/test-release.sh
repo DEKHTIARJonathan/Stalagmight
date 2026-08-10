@@ -128,9 +128,11 @@ version_of() {
 
 # Cargo.lock has a `version = "..."` line per dependency, so read only the one
 # belonging to this crate: the line right after its `name` line.
-# Mirrors release.sh's own helper, including CRLF tolerance - without that this
-# reads empty on a CRLF checkout and every assertion built on it fails for the
-# wrong reason, or worse, passes vacuously.
+# Deliberately a SECOND implementation of lib/release-version.sh's `lock_version`,
+# not a call to it: a test that reads the value through the same code it is
+# checking would confirm that code agrees with itself. Includes the same CRLF
+# tolerance - without it this reads empty on a CRLF checkout and every assertion
+# built on it fails for the wrong reason, or worse, passes vacuously.
 lock_version_of() {
   awk '
     /^name = "stalagmight"[[:space:]]*$/ {
@@ -146,9 +148,12 @@ lock_version_of() {
 }
 
 # Rewrite that line to an arbitrary value, to fixture a drifted lock.
+# The stanza pattern carries the same `[[:space:]]*$` CRLF tolerance as the real
+# helper: without it this matches nothing on a CRLF checkout, so the case that
+# calls it fixtures no drift and then asserts a refusal that cannot come.
 set_lock_version() {
   awk -v v="$2" '
-    /^name = "stalagmight"$/ { print; getline; print "version = \"" v "\""; next }
+    /^name = "stalagmight"[[:space:]]*$/ { print; getline; print "version = \"" v "\""; next }
     { print }
   ' "$1/src-tauri/Cargo.lock" > "$1/.locktmp"
   mv "$1/.locktmp" "$1/src-tauri/Cargo.lock"
@@ -398,6 +403,39 @@ else
   refute "no tag created" has_tag "$D" "v$CUR-rc1"
 fi
 
+echo "== case 12c: a missing version file refuses, rather than passing unread =="
+# The check must fail CLOSED. `grep -c` on an unreadable file prints nothing, and
+# `[ "" -ne 1 ]` is not false in bash - it is an error (status 2), which an `if`
+# reads as false, skipping the refusal and returning success. Without the
+# readability guard, version_files_match reports all four files agree having
+# opened none of them. Each file gets its own case: the guard is per-file, and
+# one shared assertion would pass on a fix that only covered the first.
+for missing in package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock; do
+  D=$(fresh_clone "case12c-$(basename "$missing")")
+  CUR=$(version_of "$D")
+  rm "$D/$missing"
+  git -C "$D" commit --quiet -am "remove $missing"
+  if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" 2>&1); then
+    fail "tagged with $missing missing"
+  else
+    assert "refusal names $missing" \
+      bash -c 'printf "%s" "$1" | grep -q "$2"' _ "$out" "$missing"
+    refute "no tag created without $missing" has_tag "$D" "v$CUR-rc1"
+  fi
+done
+# release.sh shares the same helper, so it must fail closed too - it is the
+# script that would otherwise rewrite three files and commit.
+D=$(fresh_clone case12c-bump)
+rm "$D/src-tauri/Cargo.toml"
+git -C "$D" commit --quiet -am "remove Cargo.toml"
+if "$D/scripts/release.sh" 7.7.7 --no-edit >/dev/null 2>&1; then
+  fail "release.sh bumped with Cargo.toml missing"
+else
+  pass "release.sh refuses a missing version file"
+  refute "package.json not rewritten" grep -q '"version": "7\.7\.7"' "$D/package.json"
+  refute "no tag created" has_tag "$D" v7.7.7
+fi
+
 echo "== case 13: an existing tag is refused rather than moved =="
 D=$(fresh_clone case13)
 CUR=$(version_of "$D")
@@ -422,9 +460,26 @@ if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" 2>&1); then
   fail "tagged a dirty tree"
 else
   pass "refused a dirty tree"
-  assert "message names the uncommitted changes" \
-    bash -c 'printf "%s" "$1" | grep -q "uncommitted changes"' _ "$out"
+  # Naming the offending path, not just "the tree is dirty": with several clones
+  # of this repo open, which file is dirty is the whole question.
+  assert "message lists the dirty file" \
+    bash -c 'printf "%s" "$1" | grep -q "CHANGELOG.md"' _ "$out"
   refute "no tag created" has_tag "$D" "v$CUR-rc1"
+fi
+# An untracked file blocks too, and the advice has to work: plain `git stash`
+# leaves '??' files behind, so a message saying only "stash" sends the operator
+# in a circle.
+D=$(fresh_clone case14b)
+CUR=$(version_of "$D")
+printf 'scratch\n' > "$D/notes-to-self.txt"
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" 2>&1); then
+  fail "tagged with an untracked file present"
+else
+  pass "refused an untracked file"
+  assert "message names the untracked file" \
+    bash -c 'printf "%s" "$1" | grep -q "notes-to-self.txt"' _ "$out"
+  assert "message gives advice that actually works" \
+    bash -c 'printf "%s" "$1" | grep -q -- "git stash -u"' _ "$out"
 fi
 
 echo "== case 15: entries left under [Unreleased] refuse the tag =="
@@ -462,9 +517,12 @@ fi
 
 echo "== case 16: a malformed tag is refused =="
 D=$(fresh_clone case16)
+# Asserting the MESSAGE, not just a non-zero exit. These tags fail the version
+# check too, so an exit-code-only assertion stays green with the shape check
+# deleted - it would be testing that a malformed tag fails for some other reason.
 for bad in "0.5.0" "v0.5" "v0.5.0.1" "release-1"; do
-  refute "refused '$bad'" \
-    bash -c '"$1" "$2" >/dev/null 2>&1' _ "$D/scripts/release-tag.sh" "$bad"
+  assert "refused '$bad' as malformed" \
+    bash -c '"$1" "$2" 2>&1 | grep -q "is not a release tag"' _ "$D/scripts/release-tag.sh" "$bad"
 done
 assert "tree untouched" tree_clean "$D"
 
