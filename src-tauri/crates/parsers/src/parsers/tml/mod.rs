@@ -25,7 +25,7 @@ mod linearize;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_helpers;
 
-use linearize::linearize_section;
+use linearize::{join_contiguous_chains, linearize_section};
 
 // ============================================================================
 // IPC-visible types
@@ -882,6 +882,16 @@ fn build_sections(mut raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosu
     for (section_name, group_shots) in &section_groups {
         let linearized = linearize_section(section_name, group_shots, &successors, &shot_by_id);
         sections.extend(linearized);
+    }
+
+    // Sew the cuts back up where the file's own topology allows it: a chain that
+    // starts exactly where another ends is the same passage under a new name
+    // (#412). Must run BEFORE extract_closures, which keys closures on
+    // (section index, station index) and would otherwise index the pre-merge
+    // fragments.
+    let joins = join_contiguous_chains(&mut sections);
+    if joins > 0 {
+        tracing::debug!(joins, "Joined contiguous TML chains");
     }
 
     // Extract closures: find CLOSURE shots and map to section:station indices
@@ -3398,8 +3408,20 @@ mod tests {
     // Multi-section topology
     // -------------------------------------------------------------------
 
+    /// Two declared sections running in SERIES are one linear passage, so they
+    /// import as one config (#412).
+    ///
+    /// This is the whole of the cross-section join: B's first shot hangs off
+    /// A's LAST shot, so B's station 0 already IS A's final station and one
+    /// polyline holds both. The names are not thrown away - the merged run is
+    /// called "Section A + Section B", because nothing else in an
+    /// `ImportSectionConfig` can carry the fact that the surveyor named these
+    /// separately.
+    ///
+    /// A file whose sections branch instead of running in series is untouched;
+    /// `test_branch_leftovers_preserve_parent_child_topology` covers that.
     #[test]
-    fn test_multi_section_topology() {
+    fn sections_running_in_series_import_as_one_named_run() {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
@@ -3415,17 +3437,35 @@ mod tests {
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, _) = build_sections(raw_shots);
 
-        assert_eq!(sections.len(), 2);
-        assert_eq!(sections[0].name, "Section A");
-        assert_eq!(sections[0].shots.len(), 2);
-        assert_eq!(sections[1].name, "Section B");
-        assert_eq!(sections[1].shots.len(), 2);
+        assert_eq!(sections.len(), 1, "series sections join into one run");
+        assert_eq!(sections[0].name, "Section A + Section B");
+        assert_eq!(
+            sections[0].shots.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4],
+            "the join keeps file order, so the run stays a valid import sequence"
+        );
+        assert_eq!(
+            sections[0].start_ariane_id, 0,
+            "the merged run still starts where the parent chain did"
+        );
+        assert_eq!(
+            sections[0].end_ariane_id, 4,
+            "and ends where the absorbed chain did"
+        );
     }
 
     // -------------------------------------------------------------------
     // Import config conversion
     // -------------------------------------------------------------------
 
+    /// Cross-section `FromImporting` placement, on a section that BRANCHES off
+    /// mid-chain.
+    ///
+    /// Section B hangs off shot 1, which is mid-Section-A, so the two stay
+    /// separate configs and the topology has to be carried by placement - the
+    /// case this test exists for. (Were B parented on A's LAST shot the two
+    /// would join into one run instead; see
+    /// `sections_running_in_series_import_as_one_named_run`.)
     #[test]
     fn test_convert_to_import_configs() {
         let xml = wrap_xml(
@@ -3433,7 +3473,7 @@ mod tests {
                 tml_shot_xml(0, -1, "START", "Start"),
                 tml_shot_xml(1, 0, "REAL", "Section A"),
                 tml_shot_xml(2, 1, "REAL", "Section A"),
-                tml_shot_xml(3, 2, "REAL", "Section B"),
+                tml_shot_xml(3, 1, "REAL", "Section B"),
             ]
             .join("\n"),
         );
@@ -3464,8 +3504,8 @@ mod tests {
         assert_eq!(configs[0].section_index, 0);
 
         // Second section → FromImporting (linked via topology)
-        // Section B's first shot (ID=3) has FromID=2, which is the 2nd shot in Section A.
-        // Shot ID=2 is at import shot index 1, so it ends at station 2.
+        // Section B's first shot (ID=3) has FromID=1, the 1st shot in Section A.
+        // Shot ID=1 is at import shot index 0, so it ends at station 1.
         match &configs[1].placement {
             ImportPlacement::FromImporting {
                 import_station,
@@ -3478,8 +3518,8 @@ mod tests {
                 );
                 assert_eq!(*target_section_index, 0, "should link to section 0");
                 assert_eq!(
-                    *target_station_index, 2,
-                    "should link to station 2 (end of shot ID=2)"
+                    *target_station_index, 1,
+                    "should link to station 1 (end of shot ID=1)"
                 );
             }
             other => panic!("Expected FromImporting, got {:?}", other),
@@ -4703,6 +4743,13 @@ mod tests {
         /// Chains that share a start station with an earlier chain: a "V" that
         /// one reversed-then-concatenated linear run could express.
         sibling_v_merge_savings: usize,
+        /// Of `cross_root_at_parent_chain_end`, those whose surveyor, date and
+        /// colour all match the chain they would be appended to. A config
+        /// carries ONE of each, so merging a mismatched pair silently
+        /// reattributes one leg's trip metadata to the other's.
+        cross_root_at_chain_end_metadata_match: usize,
+        /// Same guard for the sibling-V pairs.
+        sibling_v_metadata_match: usize,
     }
 
     fn classify_chain_origins(tml: &TmlFile) -> ChainOrigins {
@@ -4713,15 +4760,28 @@ mod tests {
         let mut shot_section: HashMap<i64, String> = HashMap::new();
         let mut ends_a_chain: std::collections::HashSet<i64> = std::collections::HashSet::new();
         let mut chains_per_start: HashMap<i64, usize> = HashMap::new();
-        for section in &tml.sections {
+        // Which chain ENDS at a given shot id, so a candidate can be compared
+        // against the exact chain it would be appended to.
+        let mut chain_ending_at: HashMap<i64, usize> = HashMap::new();
+        let mut chains_by_start: HashMap<i64, Vec<usize>> = HashMap::new();
+        for (idx, section) in tml.sections.iter().enumerate() {
             for shot in &section.shots {
                 shot_section.insert(shot.id, shot.section.clone());
             }
             if let Some(last) = section.shots.last() {
                 ends_a_chain.insert(last.id);
+                chain_ending_at.insert(last.id, idx);
             }
             *chains_per_start.entry(section.start_ariane_id).or_insert(0) += 1;
+            chains_by_start
+                .entry(section.start_ariane_id)
+                .or_default()
+                .push(idx);
         }
+        let trip_metadata_matches = |a: usize, b: usize| {
+            let (x, y) = (&tml.sections[a], &tml.sections[b]);
+            x.surveyor == y.surveyor && x.date == y.date && x.color == y.color
+        };
 
         let mut out = ChainOrigins {
             sibling_v_merge_savings: chains_per_start
@@ -4731,7 +4791,7 @@ mod tests {
                 - chains_per_start.values().filter(|&&n| n >= 2).count(),
             ..ChainOrigins::default()
         };
-        for section in &tml.sections {
+        for (idx, section) in tml.sections.iter().enumerate() {
             let parent_ends_chain = ends_a_chain.contains(&section.start_ariane_id);
             match shot_section.get(&section.start_ariane_id) {
                 None => out.entrance_root += 1,
@@ -4739,11 +4799,32 @@ mod tests {
                     out.cross_section_root += 1;
                     if parent_ends_chain {
                         out.cross_root_at_parent_chain_end += 1;
+                        if chain_ending_at
+                            .get(&section.start_ariane_id)
+                            .is_some_and(|&parent| trip_metadata_matches(parent, idx))
+                        {
+                            out.cross_root_at_chain_end_metadata_match += 1;
+                        }
                     }
                 }
                 Some(_) if parent_ends_chain => out.in_section_parent_is_chain_end += 1,
                 Some(_) => out.in_section_parent_mid_chain += 1,
             }
+        }
+
+        // Sibling-V pairs that also agree on trip metadata.
+        let mut starts: Vec<&i64> = chains_by_start.keys().collect();
+        starts.sort_unstable();
+        for start in starts {
+            let group = &chains_by_start[start];
+            if group.len() < 2 {
+                continue;
+            }
+            let head = group[0];
+            out.sibling_v_metadata_match += group[1..]
+                .iter()
+                .filter(|&&other| trip_metadata_matches(head, other))
+                .count();
         }
         out
     }
@@ -4931,7 +5012,8 @@ mod tests {
         eprintln!(
             "ORIGIN sections={} entrance_root={} cross_section_root={} \
              in_section_parent_is_chain_end={} in_section_parent_mid_chain={} \
-             cross_root_at_parent_chain_end={} sibling_v_merge_savings={}",
+             cross_root_at_parent_chain_end={} sibling_v_merge_savings={} \
+             cross_root_at_chain_end_metadata_match={} sibling_v_metadata_match={}",
             tml.sections.len(),
             origins.entrance_root,
             origins.cross_section_root,
@@ -4939,6 +5021,8 @@ mod tests {
             origins.in_section_parent_mid_chain,
             origins.cross_root_at_parent_chain_end,
             origins.sibling_v_merge_savings,
+            origins.cross_root_at_chain_end_metadata_match,
+            origins.sibling_v_metadata_match,
         );
 
         let (configs, closures, warnings) =

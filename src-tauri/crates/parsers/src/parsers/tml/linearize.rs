@@ -15,7 +15,165 @@
 
 use std::collections::HashMap;
 
-use super::{RawShot, TmlSection, TmlShot};
+use super::{RawShot, TmlSection, TmlShot, TmlShotType};
+
+/// Append every chain that begins exactly where another chain ends (#412).
+///
+/// `linearize_section` cuts one chain per (declared section name, linear run),
+/// so a passage that carries on under a NEW name arrives as a separate chain
+/// whose first shot's parent is the LAST shot of the previous chain. That join
+/// is contiguous - the child's station 0 IS the parent's final station - so one
+/// linear run holds both, and a `models::Section` polyline can express it
+/// losslessly. Every other adjacency in the file attaches MID-chain, where a
+/// polyline has nowhere to put it; see the module docs.
+///
+/// Trip metadata follows the rule the chain builder already applies: a run's
+/// surveyor, date and colour are its FIRST shot's (see `linearize_section`), so
+/// the parent's survive.
+///
+/// The absorbed chain's NAME does not just vanish, because every join here is
+/// necessarily cross-name: a chain that continues under the SAME declared
+/// section is never a candidate (it would have to attach at a chain end, and
+/// the continuation walk always leaves its junction shot mid-chain). Two
+/// sections a surveyor named separately would otherwise silently become one, so
+/// the merged run is named `"A + B"` - capped by `MAX_JOINED_NAMES`, after
+/// which it counts the rest.
+///
+/// Deterministic: parents are visited in ascending index order, and where two
+/// chains start at the same end shot the LONGER one is appended (ties by lowest
+/// index), so the same file always yields the same runs.
+///
+/// Returns the number of joins performed.
+pub(super) fn join_contiguous_chains(sections: &mut Vec<TmlSection>) -> usize {
+    if sections.len() < 2 {
+        return 0;
+    }
+    /// How many declared names a merged run spells out before it starts
+    /// counting. A run of eight joined names is not a label a person can read
+    /// in the wizard's fragment list.
+    const MAX_JOINED_NAMES: usize = 3;
+
+    fn joined_name(names: &[String]) -> String {
+        match names.len() {
+            0 => String::new(),
+            1 => names[0].clone(),
+            n if n <= MAX_JOINED_NAMES => names.join(" + "),
+            n => format!(
+                "{} + {} more",
+                names[..MAX_JOINED_NAMES].join(" + "),
+                n - MAX_JOINED_NAMES
+            ),
+        }
+    }
+
+    // A CLOSURE shot is a loop marker that `convert_shots_to_shot_data` filters
+    // out of the import, so it contributes no station. Joining THROUGH one would
+    // silently land the child's first station on the previous real shot's end -
+    // a different physical point. Structural, and independent of the
+    // excluded-shots toggle, so section splitting stays toggle-invariant.
+    let joinable_end = |s: &TmlSection| {
+        s.shots
+            .last()
+            .is_some_and(|shot| shot.shot_type != TmlShotType::Closure)
+    };
+    let joinable_start = |s: &TmlSection| {
+        s.shots
+            .first()
+            .is_some_and(|shot| shot.shot_type != TmlShotType::Closure)
+    };
+
+    // Which chain ends at a given shot id. A shot belongs to exactly one chain,
+    // so it ends at most one.
+    let mut ends_at: HashMap<i64, usize> = HashMap::new();
+    for (idx, section) in sections.iter().enumerate() {
+        if !joinable_end(section) {
+            continue;
+        }
+        if let Some(last) = section.shots.last() {
+            ends_at.insert(last.id, idx);
+        }
+    }
+
+    // Group the chains that could extend each parent. A chain has ONE
+    // start_ariane_id, so it can appear under at most one parent.
+    let mut candidates: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (idx, section) in sections.iter().enumerate() {
+        if !joinable_start(section) {
+            continue;
+        }
+        if let Some(&parent) = ends_at.get(&section.start_ariane_id) {
+            if parent != idx {
+                candidates.entry(parent).or_default().push(idx);
+            }
+        }
+    }
+
+    // At most one child per parent: appending a second would branch the run.
+    let mut child_of: Vec<Option<usize>> = vec![None; sections.len()];
+    let mut parent_of: Vec<Option<usize>> = vec![None; sections.len()];
+    let mut parents: Vec<usize> = candidates.keys().copied().collect();
+    parents.sort_unstable();
+    for parent in parents {
+        let Some(&best) = candidates[&parent]
+            .iter()
+            .max_by_key(|&&i| (sections[i].shots.len(), std::cmp::Reverse(i)))
+        else {
+            continue;
+        };
+        child_of[parent] = Some(best);
+        parent_of[best] = Some(parent);
+    }
+
+    let mut slots: Vec<Option<TmlSection>> = sections.drain(..).map(Some).collect();
+    let mut out: Vec<TmlSection> = Vec::with_capacity(slots.len());
+    let mut joins = 0;
+
+    for idx in 0..slots.len() {
+        if parent_of[idx].is_some() {
+            continue; // this chain is somebody's tail
+        }
+        let Some(mut run) = slots[idx].take() else {
+            continue;
+        };
+        let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        seen.insert(idx);
+        let mut names: Vec<String> = vec![run.name.clone()];
+        let mut cursor = idx;
+        while let Some(child) = child_of[cursor] {
+            if !seen.insert(child) {
+                break; // malformed file: a join cycle
+            }
+            let Some(tail) = slots[child].take() else {
+                break;
+            };
+            if !names.contains(&tail.name) {
+                names.push(tail.name.clone());
+            }
+            run.shots.extend(tail.shots);
+            run.end_ariane_id = tail.end_ariane_id;
+            run.is_branch_split = run.is_branch_split || tail.is_branch_split;
+            joins += 1;
+            cursor = child;
+        }
+        run.name = joined_name(&names);
+        out.push(run);
+    }
+
+    // A pure cycle has no root, so nothing above emitted it. Emit the members
+    // untouched rather than dropping shots on the floor.
+    for slot in &mut slots {
+        if let Some(run) = slot.take() {
+            tracing::warn!(
+                section = run.name,
+                "Chain join cycle; emitting the chain unmerged"
+            );
+            out.push(run);
+        }
+    }
+
+    *sections = out;
+    joins
+}
 
 /// Linearize a group of shots belonging to one section name.
 /// Splits into multiple sub-sections if branching is detected.
