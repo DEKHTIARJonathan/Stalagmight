@@ -17,6 +17,7 @@ import {
   detectFormat,
   validateCoordinates,
   formatGpsCoordinates,
+  looksTransposed,
   type GpsParseResult,
   type GpsParseError,
 } from './gps';
@@ -533,5 +534,41 @@ describe('formatGpsCoordinates', () => {
     // UTM/MGRS/PlusCodes formatting not implemented, falls back to DD
     const result = formatGpsCoordinates(coords, 'UTM');
     expect(result).toContain('48.8584');
+  });
+});
+
+describe('looksTransposed', () => {
+  // Injection check: a stub that always returns `false` would still pass a
+  // suite that only asserts "does not fire on plausible input" - every test
+  // below pairs a firing case with a structurally close non-firing one, so a
+  // constant-false (or constant-true) implementation fails at least one.
+
+  it('fires when the given latitude is extreme and the longitude reads as a plausible latitude', () => {
+    // True fix would be lat 12, lon 77 (Bengaluru); entered swapped.
+    expect(looksTransposed(77, 12)).toBe(true);
+  });
+
+  it('fires in the other direction (negative extreme latitude)', () => {
+    // True fix would be lat -9, lon -70; entered swapped.
+    expect(looksTransposed(-70, -9)).toBe(true);
+  });
+
+  it('does not fire on a plausible, non-extreme pair', () => {
+    // Paris: neither value is past the threshold.
+    expect(looksTransposed(48.8584, 2.2945)).toBe(false);
+  });
+
+  it('does not fire when both values are genuinely extreme (real polar survey)', () => {
+    expect(looksTransposed(78, -70)).toBe(false);
+  });
+
+  it('does not fire when the latitude is extreme but swapping would not help', () => {
+    // Swapped longitude (77) is itself past the threshold - not a plausible latitude either.
+    expect(looksTransposed(85, 77)).toBe(false);
+  });
+
+  it('does not fire on non-finite input', () => {
+    expect(looksTransposed(NaN, 12)).toBe(false);
+    expect(looksTransposed(77, NaN)).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useReducer } from 'react';
+import { useState, useCallback, useMemo, useReducer, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
 import { blankEditableShot } from '../common/editableShot';
@@ -10,7 +10,7 @@ import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
-import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
+import { parseGps, detectFormat, looksTransposed, type GpsFormat } from '../../utils/gps';
 import { formatFixed } from '../../i18n/format';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -97,6 +97,9 @@ interface ShotEditState {
   /** Identity for the next blank row; never reused, so rows stay distinct
    *  however many one gesture adds. */
   nextTempId: number;
+  /** Set once a shot row is edited, inserted or deleted - feeds the dirty
+   *  guard (#F9). A hover/pick alone does not change the payload. */
+  dirty: boolean;
 }
 
 type ShotEditAction =
@@ -133,18 +136,21 @@ function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEdit
       // cleared to blank.
       const was = isCounted(current);
       const now = isCounted(updated);
-      if (was === now) return { ...state, shots };
+      if (was === now) return { ...state, shots, dirty: true };
       const delta = now ? 1 : -1;
-      return withPick(
-        state,
-        shots,
-        reanchorStation(
-          state.stationIndex,
-          survivorsBefore(state.shots, action.index),
-          delta,
-          state.shots.filter(isCounted).length + delta,
+      return {
+        ...withPick(
+          state,
+          shots,
+          reanchorStation(
+            state.stationIndex,
+            survivorsBefore(state.shots, action.index),
+            delta,
+            state.shots.filter(isCounted).length + delta,
+          ),
         ),
-      );
+        dirty: true,
+      };
     }
     case 'insert': {
       const n = Math.max(1, action.count);
@@ -165,6 +171,7 @@ function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEdit
           reanchorStation(state.stationIndex, survivorsBefore(state.shots, at), 0, counted),
         ),
         nextTempId: state.nextTempId + n,
+        dirty: true,
       };
     }
     case 'delete': {
@@ -178,16 +185,19 @@ function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEdit
       // every target moved the anchor a station upstream.
       const counted = state.shots.filter(isCounted).length;
       const countedGone = targets.filter((i) => isCounted(state.shots[i])).length;
-      return withPick(
-        state,
-        shots,
-        reanchorAfterRunDelete(
-          state.stationIndex,
-          survivorsBefore(state.shots, Math.min(...targets)),
-          countedGone,
-          counted - countedGone,
+      return {
+        ...withPick(
+          state,
+          shots,
+          reanchorAfterRunDelete(
+            state.stationIndex,
+            survivorsBefore(state.shots, Math.min(...targets)),
+            countedGone,
+            counted - countedGone,
+          ),
         ),
-      );
+        dirty: true,
+      };
     }
     case 'pick':
       return withPick(state, state.shots, action.index);
@@ -199,7 +209,7 @@ function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEdit
 /** Rows straight from the file, the pick at the head, temp ids past the last row. */
 function initialShotEditState(section: DmpSection | undefined): ShotEditState {
   const shots = section ? convertToEditableShots(section.shots) : [];
-  return { shots, stationIndex: 0, previewStationIndex: 0, nextTempId: shots.length + 1 };
+  return { shots, stationIndex: 0, previewStationIndex: 0, nextTempId: shots.length + 1, dirty: false };
 }
 
 interface ZeroDatumConfigDialogProps {
@@ -242,7 +252,7 @@ export default function ZeroDatumConfigDialog({
 
   // The shots and the station pick, in one reducer - see `shotEditReducer` for
   // why they cannot be separate pieces of state.
-  const [{ shots, stationIndex, previewStationIndex }, dispatch] = useReducer(
+  const [{ shots, stationIndex, previewStationIndex, dirty: shotsDirty }, dispatch] = useReducer(
     shotEditReducer,
     section,
     initialShotEditState,
@@ -255,6 +265,7 @@ export default function ZeroDatumConfigDialog({
   const [gpsError, setGpsError] = useState<string | null>(null);
 
   // Metadata state
+  const initialNameRef = useRef(section?.name ?? '');
   const [name, setName] = useState(section?.name ?? '');
   const [surveyor, setSurveyor] = useState(selectionConfig.defaultSurveyor || '');
   const [date, setDate] = useState(
@@ -295,6 +306,18 @@ export default function ZeroDatumConfigDialog({
     if (!gpsCoords) return null;
     return { latitude: gpsCoords.latitude, longitude: gpsCoords.longitude };
   }, [gpsCoords]);
+
+  // Soft (non-blocking) heuristic (#F7): a plausibly-valid pair that still
+  // looks like the fields were swapped. Coexists with `gpsError` - never
+  // replaces it, and never blocks Confirm.
+  const gpsTransposedWarning = useMemo(() => {
+    if (!gpsCoords) return false;
+    return looksTransposed(gpsCoords.latitude, gpsCoords.longitude);
+  }, [gpsCoords]);
+
+  // Dirty guard (#F9): GPS text entered, the section renamed, or a shot
+  // edited/inserted/deleted - anything ESC would otherwise discard silently.
+  const isDirty = gpsInput.trim() !== '' || name !== initialNameRef.current || shotsDirty;
 
   // When dropdown hovers an option, show it on the map; when dropdown closes
   // without selecting, the reducer reverts to the committed station.
@@ -405,6 +428,7 @@ export default function ZeroDatumConfigDialog({
     <DialogWrapper
       title={t('dialogs.zeroDatumConfig.title')}
       onClose={onCancel}
+      isDirty={isDirty}
       size={expanded ? 'fullscreen' : '5xl'}
       overflow="hidden"
       {...(expanded
@@ -491,6 +515,11 @@ export default function ZeroDatumConfigDialog({
                   </span>
                 )}
               </div>
+              {!gpsInput.trim() && !gpsError && (
+                <div className="text-xs text-text-secondary pl-1" data-testid="zero-datum-gps-empty-hint">
+                  {t('dialogs.zeroDatumConfig.gpsEmptyHint')}
+                </div>
+              )}
               {gpsError && (
                 <div className="text-xs text-error pl-1" data-testid="zero-datum-gps-error">
                   {gpsError}
@@ -500,6 +529,11 @@ export default function ZeroDatumConfigDialog({
                 <div className="text-xs text-success pl-1" data-testid="zero-datum-gps-parsed">
                   Lat: {formatFixed(gpsCoords.latitude, undefined, precision.gps)}, Lon:{' '}
                   {formatFixed(gpsCoords.longitude, undefined, precision.gps)}
+                </div>
+              )}
+              {gpsTransposedWarning && (
+                <div className="text-xs text-warning pl-1" data-testid="zero-datum-gps-transposed-warning">
+                  {t('dialogs.zeroDatumConfig.transposedWarning')}
                 </div>
               )}
             </div>

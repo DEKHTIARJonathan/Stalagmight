@@ -89,6 +89,27 @@ function normalizeGpsWhitespace(input: string): string {
 }
 
 /**
+ * Latitude beyond this is treated as "extreme" for the transposition heuristic
+ * below - most survey sites sit well inside it, so a value past it is more
+ * likely a longitude that landed in the latitude slot.
+ */
+const TRANSPOSITION_LAT_THRESHOLD = 60;
+
+/**
+ * Soft (non-blocking) heuristic: does this lat/lon pair look like the two
+ * values were swapped? Fires only when the given latitude is implausibly
+ * extreme AND the longitude would read as a plausible latitude if the two
+ * were swapped - a real polar survey (both values genuinely extreme, or the
+ * longitude also past the threshold) does not trip it.
+ */
+export function looksTransposed(lat: number, lon: number): boolean {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+  const givenLatExtreme = Math.abs(lat) > TRANSPOSITION_LAT_THRESHOLD;
+  const swappedLatPlausible = Math.abs(lon) <= TRANSPOSITION_LAT_THRESHOLD;
+  return givenLatExtreme && swappedLatPlausible;
+}
+
+/**
  * Validate latitude and longitude values.
  */
 export function validateCoordinates(lat: number, lon: number): GpsValidationResult {

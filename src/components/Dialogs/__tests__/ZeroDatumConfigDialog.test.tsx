@@ -58,8 +58,12 @@ vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel: (s: unknown) => unknown) => sel({ project: null, config: null }),
 }));
 
+export const mockDialogWrapperSpy = vi.fn();
 vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogWrapper: ({ children, ...props }: { children: React.ReactNode; [k: string]: unknown }) => {
+    mockDialogWrapperSpy(props);
+    return <div>{children}</div>;
+  },
 }));
 
 // Date picker and colour swatches are irrelevant here and pull in more DOM.
@@ -470,5 +474,105 @@ describe('ZeroDatumConfigDialog pick inside a deleted run', () => {
     pickStation(1);
     deleteRowRange(4, 6);
     expect(confirmedStationIndex()).toBe(1);
+  });
+});
+
+/**
+ * The dirty guard (#F9): DialogWrapper's own confirm-on-close only fires when
+ * `isDirty` is true, so a stub that always passes `true` (or always `false`)
+ * would either nag on an untouched dialog or silently drop a filled-in one -
+ * every case below pairs "still clean" with "now dirty" so a constant answer
+ * fails at least one.
+ */
+describe('ZeroDatumConfigDialog dirty guard', () => {
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function lastIsDirty(): boolean {
+    const calls = mockDialogWrapperSpy.mock.calls;
+    const last = calls[calls.length - 1]?.[0] as { isDirty?: boolean } | undefined;
+    return Boolean(last?.isDirty);
+  }
+
+  it('starts clean', () => {
+    renderDialog();
+    expect(lastIsDirty()).toBe(false);
+  });
+
+  it('goes dirty when GPS text is entered', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '2' } });
+    expect(lastIsDirty()).toBe(true);
+  });
+
+  it('returns to clean when the GPS text is cleared back out', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '2' } });
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '' } });
+    expect(lastIsDirty()).toBe(false);
+  });
+
+  it('goes dirty when the section is renamed', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('section-name-input'), { target: { value: 'New Name' } });
+    expect(lastIsDirty()).toBe(true);
+  });
+
+  it('goes dirty on a shot-table edit', () => {
+    renderDialog();
+    deleteRow(0);
+    expect(lastIsDirty()).toBe(true);
+  });
+
+  it('stays clean on a station pick alone (no payload change)', () => {
+    renderDialog();
+    pickStation(PICK);
+    expect(lastIsDirty()).toBe(false);
+  });
+});
+
+describe('ZeroDatumConfigDialog GPS hints', () => {
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows the empty-state hint before anything is typed', () => {
+    renderDialog();
+    expect(screen.getByTestId('zero-datum-gps-empty-hint')).toBeInTheDocument();
+  });
+
+  it('hides the empty-state hint once GPS text is entered', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '48.8584, 2.2945' } });
+    expect(screen.queryByTestId('zero-datum-gps-empty-hint')).not.toBeInTheDocument();
+  });
+
+  it('warns on a plausibly-transposed pair', () => {
+    renderDialog();
+    // True fix would be lat 12, lon 77 (Bengaluru); entered swapped.
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '77, 12' } });
+    expect(screen.getByTestId('zero-datum-gps-transposed-warning')).toBeInTheDocument();
+  });
+
+  it('does not warn on a plausible, non-extreme pair', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '48.8584, 2.2945' } });
+    expect(screen.queryByTestId('zero-datum-gps-transposed-warning')).not.toBeInTheDocument();
+  });
+
+  it('does not block Confirm - the warning is advisory only', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '77, 12' } });
+    expect(screen.getByTestId('zero-datum-gps-transposed-warning')).toBeInTheDocument();
+    expect(screen.getByTestId('zero-datum-config-confirm')).not.toBeDisabled();
   });
 });
