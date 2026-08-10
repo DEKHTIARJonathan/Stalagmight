@@ -26,10 +26,18 @@ import {
 } from '../scenarios/importDialogBridge';
 import { oracleInjectionSource } from '../lib/fuzzOracleCore';
 import { mapClick } from '../lib/controls';
+import { parseReceiptSummary } from '../lib/importFlowOracles';
 
 const DMP_FIXTURE = 'test_v2.dmp';
-/** Generous cap: the whole golden path is well under this many screen actions. */
+/** Generous cap: the whole golden path is well under this many screen ACTIONS. */
 const MAX_STEPS = 40;
+/**
+ * Separate budget for transient observations (wiz-init/placing/blank/etc.).
+ * Transients must NOT consume the action budget: a slow placing phase on a
+ * large fixture or a loaded nightly box would otherwise exhaust MAX_STEPS by
+ * polling and fail as a load flake. Each poll is a settled observe + 150ms.
+ */
+const MAX_TRANSIENT_POLLS = 200;
 
 interface ParsedDmpShot {
   shot_type: string;
@@ -81,17 +89,25 @@ function primaryAction(screen: string, live: Record<string, 0 | 1 | 2>): Move | 
     case 'dmp-select':
       // The golden path ACCEPTS the default selection (see
       // defaultSelectionCounts, which mirrors it) - never click select-all.
-      return click('continue-button');
+      // GATE on actionability: continue is disabled until two async hash
+      // checks settle, and the bridge's settle deliberately does NOT cover
+      // that window (importDialogBridge.ts, the race-continue note) - an
+      // ungated click there dies as 'not-actionable'.
+      return live['continue-button'] === 2 ? click('continue-button') : null;
     case 'zero-datum-select':
       return click('zero-datum-selection-skip');
     case 'wiz-suggest':
-    case 'wiz-done':
       return live['confirm-button'] === 2 ? click('confirm-button') : null;
-    case 'wiz-no-suggest':
-      return live['skip-button'] === 2 ? click('skip-button') : null;
     case 'wiz-init':
     case 'wiz-placing':
     case 'wiz-blank':
+    // `wiz-no-suggest` renders no skip button (it classifies on
+    // !currentSuggestion, and skip-button renders only WITH one) - it
+    // self-transitions to manual placing. `wiz-done` has no footer buttons in
+    // phase 'done'; it auto-advances via the completion effect. Both are
+    // transients here; if either sticks, the poll budget names it.
+    case 'wiz-no-suggest':
+    case 'wiz-done':
       return null; // transient - observe again
     case 'orphan-placement':
       return click('orphan-close');
@@ -134,7 +150,9 @@ export const newProjectFromDmp: Journey = {
 
     const visited: string[] = [];
     let digest = await observeScreen(ctx);
-    for (let step = 0; step < MAX_STEPS; step++) {
+    let actions = 0;
+    let polls = 0;
+    while (actions < MAX_STEPS && polls < MAX_TRANSIENT_POLLS) {
       if (digest.screen !== visited[visited.length - 1]) visited.push(digest.screen);
       if (digest.screen === 'idle') break;
       // A WARNING-BEARING receipt is a modal and gets its content checked here.
@@ -142,9 +160,10 @@ export const newProjectFromDmp: Journey = {
       // can see it, so receipt PRESENCE is deliberately not a check - the flow
       // oracles measured that gate as unenforceable (importFlowOracles.ts).
       if (digest.screen === 'receipt' && digest.receipt) {
-        ctx.expect('receipt names every imported section',
-          digest.receipt.summary.startsWith(`${expectedSections} section`),
-          `summary="${digest.receipt.summary}" expected ${expectedSections}`);
+        const claim = parseReceiptSummary(digest.receipt.summary);
+        ctx.expect('receipt accounts for every imported section and shot',
+          claim.sections === expectedSections && claim.shots === expectedShots,
+          `summary="${digest.receipt.summary}" expected ${expectedSections}/${expectedShots}`);
         await ctx.checkpoint('receipt');
       }
       if (digest.screen === 'map-placement') {
@@ -158,7 +177,10 @@ export const newProjectFromDmp: Journey = {
           return [c.lng, c.lat];
         `);
         if (!centre) throw new Error('map-placement with no live map to click');
+        // mapClick THROWS on any failure (off-viewport, missing hooks,
+        // unprocessed click) - the abort message carries the reason.
         await ctx.exclusive(() => mapClick(ctx.browser, centre));
+        actions += 1;
         digest = await observeScreen(ctx);
         continue;
       }
@@ -174,7 +196,9 @@ export const newProjectFromDmp: Journey = {
               ` path: ${visited.join(' -> ')})`,
           );
         }
+        actions += 1;
       } else {
+        polls += 1;
         await ctx.sleep(150);
       }
       digest = await observeScreen(ctx);
@@ -188,9 +212,22 @@ export const newProjectFromDmp: Journey = {
     ctx.expect('project carries every default-selected section',
       project.sections === expectedSections,
       `sections=${project.sections} expected=${expectedSections}`);
-    ctx.expect('project carries every importable shot of those sections',
-      project.shots === expectedShots,
-      `shots=${project.shots} expected=${expectedShots}`);
+    // A CONFIRMED overlap suggestion legitimately deletes actionable overlap
+    // shots (docs/dmp-import.md, overlap treatment), so the exact-count claim
+    // only holds when the wizard never offered one. With a suggestion in the
+    // path, exactness would red on correct behavior - assert no-invention
+    // instead. test_v2.dmp takes the exact branch today; a fixture swap that
+    // starts suggesting is visible in the recorded path, not a silent skip.
+    const sawSuggestion = visited.includes('wiz-suggest');
+    if (sawSuggestion) {
+      ctx.expect('no shots invented beyond the default selection (overlap path)',
+        project.shots > 0 && project.shots <= expectedShots,
+        `shots=${project.shots} expected<=${expectedShots}; path: ${visited.join(' -> ')}`);
+    } else {
+      ctx.expect('project carries every importable shot of those sections',
+        project.shots === expectedShots,
+        `shots=${project.shots} expected=${expectedShots}`);
+    }
     ctx.expect('deferred initial save resolved to a real file on disk',
       project.filePath !== null && fs.existsSync(project.filePath),
       `file_path=${project.filePath ?? 'null'}`);
