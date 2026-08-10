@@ -869,7 +869,11 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 - Pan: Click-hold-drag anywhere, middle mouse drag, or Ctrl+drag
 - Zoom: Scroll wheel, pinch, double-click, +/- keys, F to fit
 - Select: Left click
-- Multi-select: Shift+click (add), Ctrl+click (toggle)
+- Multi-select: Shift+click (add), Ctrl+click (toggle) - **Cmd+click on macOS**,
+  where Ctrl+click is a secondary click and opens the context menu instead, so
+  no `click` event ever reaches the toggle. Both modifiers are accepted by the
+  handler (`useMapTools.ts`, the `ctrlKey || metaKey` branch); it is the
+  platform that decides which one arrives
 - Context menu: Right click
 - Snap to station: Automatic when within threshold (configurable)
 
