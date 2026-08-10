@@ -5040,6 +5040,91 @@ mod tests {
         );
     }
 
+    /// The series join must not manufacture a duplicate shot UUID.
+    ///
+    /// Ariane shot ids are unique per SECTION, not per file, so two shots in
+    /// different sections may legally carry the same `<UUID>` (#423) - there is
+    /// a core test, `the_same_uuid_in_two_sections_of_one_file_is_left_alone`,
+    /// that requires exactly that to survive an import. Joining those two
+    /// sections would turn the legal repeat into a duplicate WITHIN one
+    /// section, and `ensure_unique_shot_uuids` keeps the FIRST and re-mints the
+    /// second - changing the identity of a shot that had one from the file and
+    /// moving every station cross-reference anchored on it.
+    ///
+    /// So the join yields: the two chains stay separate even though they run in
+    /// series. Fewer fragments is not worth a silently re-minted identity.
+    #[test]
+    fn the_join_backs_off_rather_than_duplicate_a_shot_uuid() {
+        const SHARED: &str = "bebebebe-0000-4000-8000-000000000001";
+        let with_uuid = |id: i64, from_id: i64, section: &str, uuid: &str| {
+            format!(
+                r"<SurveyData>
+    <ID>{id}</ID>
+    <FromID>{from_id}</FromID>
+    <UUID>{uuid}</UUID>
+    <ClosureToID>-1</ClosureToID>
+    <Type>REAL</Type>
+    <Section>{section}</Section>
+    <Azimut>90.0</Azimut>
+    <Length>10.0</Length>
+    <Depth>5.0</Depth>
+    <DepthIn>-1.0</DepthIn>
+    <Inclination>0.0</Inclination>
+    <Left>0.0</Left>
+    <Right>0.0</Right>
+    <Up>0.0</Up>
+    <Down>0.0</Down>
+    <Comment></Comment>
+    <Explorer>Tester</Explorer>
+    <Date>2024-06-15</Date>
+    <Color>0x8f6112ff</Color>
+    <Excluded>false</Excluded>
+    <Latitude>0.0</Latitude>
+    <Longitude>0.0</Longitude>
+</SurveyData>"
+            )
+        };
+
+        // Series topology: shot 3's parent is shot 2, the last shot of "A".
+        // Without the UUID clash these two WOULD join.
+        let clashing = [
+            with_uuid(1, -1, "A", SHARED),
+            tml_shot_xml_az_len(2, 1, "A", 90.0, 10.0),
+            with_uuid(3, 2, "B", SHARED),
+            tml_shot_xml_az_len(4, 3, "B", 90.0, 10.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&clashing));
+        assert_eq!(
+            tml.sections
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["A", "B"],
+            "a cross-section UUID repeat is legal, so the join must back off"
+        );
+
+        // The identical topology with distinct UUIDs still joins, so the guard
+        // is the UUID clash and not the shape of the fixture.
+        let distinct = [
+            with_uuid(1, -1, "A", SHARED),
+            tml_shot_xml_az_len(2, 1, "A", 90.0, 10.0),
+            with_uuid(3, 2, "B", "bebebebe-0000-4000-8000-000000000002"),
+            tml_shot_xml_az_len(4, 3, "B", 90.0, 10.0),
+        ]
+        .join("\n");
+        let joined = parse_synthetic_tmlu(&wrap_xml(&distinct));
+        assert_eq!(
+            joined
+                .sections
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["A + B"],
+            "with no clash the same shape joins"
+        );
+    }
+
     /// Re-joining must not silently break the two things every emitted config
     /// carries besides its shots: the closure indices and the depth rebase.
     ///

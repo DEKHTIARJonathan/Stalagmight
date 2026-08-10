@@ -138,10 +138,28 @@ pub(super) fn join_contiguous_chains(sections: &mut Vec<TmlSection>) -> usize {
         let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
         seen.insert(idx);
         let mut names: Vec<String> = vec![run.name.clone()];
+        // Ariane shot ids are unique per SECTION, not per file, so two shots in
+        // different sections may legally carry the same `<UUID>` (#423). Merging
+        // those sections would turn that legal repeat into a duplicate WITHIN
+        // one section, and `ensure_unique_shot_uuids` keeps the first and
+        // re-mints the second - silently changing the identity of a shot that
+        // had one from the file, and moving every station cross-reference
+        // anchored on it. Fewer fragments is not worth that, so the join stops
+        // at the first collision and both chains stay separate.
+        let mut uuids: std::collections::HashSet<String> =
+            run.shots.iter().filter_map(|s| s.uuid.clone()).collect();
         let mut cursor = idx;
         while let Some(child) = child_of[cursor] {
             if !seen.insert(child) {
                 break; // malformed file: a join cycle
+            }
+            if slots[child].as_ref().is_some_and(|tail| {
+                tail.shots
+                    .iter()
+                    .filter_map(|s| s.uuid.as_deref())
+                    .any(|u| uuids.contains(u))
+            }) {
+                break;
             }
             let Some(tail) = slots[child].take() else {
                 break;
@@ -149,6 +167,7 @@ pub(super) fn join_contiguous_chains(sections: &mut Vec<TmlSection>) -> usize {
             if !names.contains(&tail.name) {
                 names.push(tail.name.clone());
             }
+            uuids.extend(tail.shots.iter().filter_map(|s| s.uuid.clone()));
             run.shots.extend(tail.shots);
             run.end_ariane_id = tail.end_ariane_id;
             run.is_branch_split = run.is_branch_split || tail.is_branch_split;
