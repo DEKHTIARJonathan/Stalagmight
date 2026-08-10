@@ -93,6 +93,87 @@ fn a_pre_v2_rebuild_keeps_the_reverse_parity_column() {
     );
 }
 
+/// [#485] `project.schema_version` may not certify that migrations have run.
+///
+/// It is an ordinary column: `save_project` stamps it with the writing build's
+/// constant, and it travels with the file through every copy, push/pull and hand
+/// edit. `PRAGMA user_version` is the only value this app writes exclusively at
+/// the end of a completed migration chain. When `ensure_schema_version`'s
+/// "already current" fast path was gated on the project row, a file with an
+/// unstamped `user_version` skipped `migrate_schema` on EVERY connection that
+/// ever opened it - and skipped the stamp too, so the next open repeated the
+/// skip. The v8 `resolved_warnings.shot_uuid` ALTER is one of the columns left
+/// missing, which is what makes the save path's carry-over read fail with
+/// `no such column: shot_uuid` and drop every ignore.
+#[test]
+fn a_project_row_claiming_the_current_version_cannot_skip_the_migration_chain() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("unstamped.stalx");
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Unstamped".to_string(), None))
+            .unwrap();
+        // Narrow `resolved_warnings` back to its pre-v8 shape, then clear the
+        // migration stamp while leaving the project row's claim intact.
+        db.conn
+            .execute_batch(
+                "DROP TABLE resolved_warnings;
+                 CREATE TABLE resolved_warnings (
+                    id INTEGER PRIMARY KEY,
+                    section_id INTEGER NOT NULL,
+                    shot_id INTEGER NOT NULL,
+                    warning_code TEXT NOT NULL,
+                    resolved_at TEXT NOT NULL,
+                    resolved_comment TEXT,
+                    UNIQUE(section_id, shot_id, warning_code),
+                    FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+                 );
+                 PRAGMA user_version = 0;",
+            )
+            .unwrap();
+        let claimed: i64 = db
+            .conn
+            .query_row("SELECT schema_version FROM project LIMIT 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            claimed,
+            i64::from(SCHEMA_VERSION),
+            "precondition: the project row claims the current version"
+        );
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+
+    let has_column: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('resolved_warnings') WHERE name='shot_uuid'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        has_column, 1,
+        "the v8 ALTER must run: an unstamped file has no proof its migrations happened"
+    );
+    // ...and the read the save path performs must now work at all.
+    db.load_resolved_warnings()
+        .expect("load_resolved_warnings must not fail with `no such column: shot_uuid`");
+    // The chain is stamped afterwards, so the ~10 ms scan is paid exactly once.
+    let stamped: i64 = db
+        .conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        stamped,
+        i64::from(SCHEMA_VERSION),
+        "the completed chain must stamp user_version, or every open re-scans"
+    );
+}
+
 /// The v14 azimuth migration must leave `section_offsets` exactly as it found them.
 ///
 /// An offset is an accumulated translation from past head insert/remove edits, not a function

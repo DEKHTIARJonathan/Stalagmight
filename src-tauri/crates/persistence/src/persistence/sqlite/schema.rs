@@ -1170,7 +1170,17 @@ impl Database {
 
     /// Ensure schema migrations are applied and user_version is current.
     pub(super) fn ensure_schema_version(&mut self) -> Result<()> {
-        let mut current = self.get_user_version().unwrap_or(0);
+        // Two different claims, and only one of them is evidence that migrations
+        // RAN. `PRAGMA user_version` is written by this app in exactly two places:
+        // at the end of a completed migration chain (below), and on a file it just
+        // created at the current DDL. `project.schema_version` is an ordinary
+        // column that `save_project` stamps with the writing build's constant, so
+        // it says "which build last saved me", not "which ALTERs my tables have
+        // seen" - and it travels with the file through every copy, push/pull and
+        // hand edit. Keep them apart: the project row may only pick which
+        // version-gated arms below apply, never certify that the chain is done.
+        let stamped = self.get_user_version().unwrap_or(0);
+        let mut current = stamped;
         if current == 0 {
             if let Ok(Some(project_version)) = self.get_project_schema_version() {
                 current = project_version;
@@ -1201,7 +1211,20 @@ impl Database {
         // table_info() for every conditional column add on every open,
         // which previously cost ~10 ms per project load even when no
         // migration was needed.
-        if current == SCHEMA_VERSION {
+        //
+        // Gated on `stamped`, NOT `current` (#485). A file whose `user_version` is
+        // 0 while its project row claims the current version used to take this
+        // return, so `migrate_schema` never ran on it - on ANY connection, ever,
+        // because nothing here stamps `user_version` either, and the next open
+        // repeats the same skip. The v8 `resolved_warnings.shot_uuid` ALTER is one
+        // of the columns that then stays missing, and the save path's
+        // "carry resolved warnings across save" read fails with
+        // `no such column: shot_uuid` - dropping every "Ignore" the user had
+        // recorded. `migrate_schema` is idempotent (every step is an IF NOT EXISTS
+        // or a pragma_table_info-guarded ALTER), and the tail below stamps
+        // `user_version`, so such a file pays the ~10 ms scan exactly once and
+        // every later open takes this fast path.
+        if stamped == SCHEMA_VERSION {
             return Ok(());
         }
 
