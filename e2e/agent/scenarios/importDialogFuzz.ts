@@ -160,7 +160,9 @@
  *   STALAGMIGHT_FUZZ_IMPORT_AUX_INTERJECT_P     default 0.04 (wave-3 stream)
  *   STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS           default 12000
  *   STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P      default 0.6, clamped to [0.5, 1]
- *   STALAGMIGHT_FUZZ_CORPUS_DIR                 optional private corpus root
+ *   STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P        default 0.3; 0 = fixture always
+ *   STALAGMIGHT_FUZZ_CORPUS_DIR                 optional corpus root
+ *   STALAGMIGHT_FUZZ_CORPUS_DRAW_P              default 0.25; 1 = corpus only
  *   STALAGMIGHT_FUZZ_TRACE / _REPLAY            record / replay a trace
  *
  * ## Findings
@@ -447,12 +449,26 @@ const IDLE_CONFIRMATIONS = 3;
 /** Grace between those observations. One IPC round trip is tens of ms. */
 const IDLE_CONFIRM_MS = 200;
 /**
- * Share of episodes that run with NO project open.
+ * Default share of episodes that run with NO project open.
  *
- * Fixed rather than a knob: it is a coverage split, not something a repro would
- * want to vary, and every seed's trajectory depends on it.
+ * The split matters: with nothing loaded a `.dmp` routes to
+ * `new-project-for-import` instead of the selection dialog, which is the only
+ * way to reach `importContext='new-project'` and its deferred initial save.
+ *
+ * It is now a knob (`STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P`) because the other
+ * end matters too, and could not be asked for: the DMP wizard's suggester scores
+ * an import against the sections ALREADY in the project, so a campaign aimed at
+ * the suggestion surface wants the fixture open every time. Zero is a legal
+ * value and means exactly that. Every seed's trajectory depends on it, so a
+ * repro line has to carry it - which the `STALAGMIGHT_FUZZ_` prefix rule in
+ * `fuzzTrace.ts` makes automatic.
  */
 const NO_PROJECT_EPISODE_P = 0.3;
+
+function noProjectEpisodeProbability(): number {
+  const raw = Number(process.env.STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P);
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : NO_PROJECT_EPISODE_P;
+}
 
 // ---------------------------------------------------------------------------
 // Knobs. Read at CALL time, never frozen at import: a replay restores the
@@ -1620,7 +1636,7 @@ export const importDialogFuzz: Scenario = {
       // only way to reach `importContext='new-project'` and the DEFERRED
       // initial save that context selects. The fixture is still opened first,
       // so E2's integrity check on it runs either way.
-      const headless = !replaySteps && ctx.rng() < NO_PROJECT_EPISODE_P;
+      const headless = !replaySteps && ctx.rng() < noProjectEpisodeProbability();
       if (headless) {
         await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
         ctx.metric('episodeWithoutProject');

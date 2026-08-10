@@ -367,8 +367,30 @@ export function suggestiveProbability(): number {
   return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
 }
 
-/** Share of drawn files taken from the private corpus, when one is configured. */
+/** Default share of drawn files taken from the corpus, when one is configured. */
 export const CORPUS_DRAW_P = 0.25;
+
+/**
+ * Share of drawn files taken from the corpus, from
+ * `STALAGMIGHT_FUZZ_CORPUS_DRAW_P`.
+ *
+ * At 1.0 a run imports NOTHING but real files, which is the only way to fuzz
+ * against survey data whose sections genuinely overlap without generating the
+ * overlap first. It is still a share and not a switch: with no corpus
+ * configured, or with none of this run's enabled formats present in it, the draw
+ * falls through to a generated file and counts `corpus:absent`, which is a
+ * narrower run and not a failed one.
+ *
+ * Read at CALL time like every other knob, clamped to `[0, 1]`, and carried in a
+ * trace header by the `STALAGMIGHT_FUZZ_` prefix rule (`fuzzTrace.ts`) - unlike
+ * `STALAGMIGHT_FUZZ_CORPUS_DIR`, which names a directory tree and is on the
+ * never-restored list for exactly that reason. A replay therefore reproduces the
+ * SHARE while its own operator still chooses the corpus.
+ */
+export function corpusDrawProbability(): number {
+  const raw = Number(process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P);
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : CORPUS_DRAW_P;
+}
 /** Share of DMP draws taken from a tracked fixture. */
 const FIXTURE_DRAW_P = 0.25;
 
@@ -412,7 +434,7 @@ export function drawFileSource(env: GenEnv): FileSource {
   const format = pickFrom(rng, enabledFormats()) as SurveyFileFormat;
 
   const corpus = env.corpus[format];
-  if (corpus !== undefined && corpus.length > 0 && rng() < CORPUS_DRAW_P) {
+  if (corpus !== undefined && corpus.length > 0 && rng() < corpusDrawProbability()) {
     const entry = pickFrom(rng, corpus) as CorpusEntry;
     const dirRel = `${env.filesRel}/corpus-${env.fileSeq}`;
     // `relPath` is POSIX by construction (`discoverCorpus` joins on '/').

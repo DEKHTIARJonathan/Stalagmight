@@ -36,6 +36,8 @@ import {
   TESTID_INVENTORY,
 } from '../scenarios/importDialogModel';
 import {
+  CORPUS_DRAW_P,
+  corpusDrawProbability,
   describeSource,
   enabledFamilies,
   GENERATORS,
@@ -44,6 +46,7 @@ import {
   gpsPassableProbability,
 } from '../scenarios/importDialogGenerators';
 import { corpusPathHash } from './fixtureCorpus';
+import { restoreTraceEnv } from './fuzzTrace';
 
 /**
  * Testids a generator can emit, as literals.
@@ -386,6 +389,54 @@ describe('import fuzzer testid allowlists', () => {
     // hostile one, not a replacement for it.
     expect(GPS_PASSABLE.length).toBeGreaterThan(4);
     expect(GPS_HOSTILE.length).toBeGreaterThan(4);
+  });
+
+  it('reads the corpus draw share at call time and clamps it', () => {
+    // 1.0 is the value that matters: it is how a campaign says "import nothing
+    // but real files". It stays a SHARE and not a switch, so a run with no
+    // corpus configured still falls through to a generated file.
+    const before = process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P;
+    try {
+      delete process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P;
+      expect(corpusDrawProbability()).toBe(CORPUS_DRAW_P);
+      for (const [raw, want] of [
+        ['1', 1],
+        ['0', 0],
+        ['0.4', 0.4],
+        ['nonsense', CORPUS_DRAW_P],
+        ['2', CORPUS_DRAW_P],
+        ['-1', CORPUS_DRAW_P],
+      ] as const) {
+        process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P = raw;
+        expect(corpusDrawProbability(), `raw=${raw}`).toBe(want);
+      }
+    } finally {
+      if (before === undefined) delete process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P;
+      else process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P = before;
+    }
+  });
+
+  it('carries the two new shares in a trace header but never the corpus root', () => {
+    // The share reproduces; the directory does not. `STALAGMIGHT_FUZZ_CORPUS_DIR`
+    // names a tree this process would walk and copy out of, so a trace does not
+    // get to choose it - which is the v3 privacy rule, and it has to keep
+    // holding now that a sibling knob with the same prefix exists.
+    const restored = restoreTraceEnv({
+      STALAGMIGHT_FUZZ_CORPUS_DRAW_P: '1',
+      STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P: '0',
+      STALAGMIGHT_FUZZ_CORPUS_DIR: '/somebody/elses/surveys',
+    });
+    try {
+      expect(restored.applied.map(([key]) => key).sort()).toEqual([
+        'STALAGMIGHT_FUZZ_CORPUS_DRAW_P',
+        'STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P',
+      ]);
+      expect(restored.refused).toEqual(['STALAGMIGHT_FUZZ_CORPUS_DIR']);
+      expect(corpusDrawProbability()).toBe(1);
+    } finally {
+      delete process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P;
+      delete process.env.STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P;
+    }
   });
 
   it('has a generator catalog with only positive weights', () => {
