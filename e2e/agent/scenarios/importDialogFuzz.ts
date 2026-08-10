@@ -845,6 +845,36 @@ export const importDialogFuzz: Scenario = {
 
     // ---- move execution --------------------------------------------------
 
+    /**
+     * Per-call WALL TIME, summed and at its worst.
+     *
+     * The maxima are the load-bearing half. Every in-page call this scenario
+     * makes goes through WebDriver's `execute/async`, which
+     * `lib/sessionShared.ts` gives 30 s and no more - and a fused UI step is
+     * action + settle (up to `STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS`, 12 s) + a
+     * digest that invokes `get_project_state` on whatever the project has grown
+     * to. On a corpus run that is a real number, so how close the worst call came
+     * to the ceiling is something a campaign should be able to read off its own
+     * metrics rather than reconstruct from a `WebDriverError: operation was
+     * aborted due to timeout` with no attribution in it.
+     */
+    let bridgeStepMsMax = 0;
+    let bridgeDigestMsMax = 0;
+    const noteBridgeTiming = (timing: { actionMs: number; settleMs: number; digestMs: number }): void => {
+      ctx.metric('bridgeActionMs', timing.actionMs);
+      ctx.metric('bridgeSettleMs', timing.settleMs);
+      ctx.metric('bridgeDigestMs', timing.digestMs);
+      const step = timing.actionMs + timing.settleMs + timing.digestMs;
+      if (step > bridgeStepMsMax) {
+        bridgeStepMsMax = step;
+        ctx.setMetric('bridgeStepMsMax', step);
+      }
+      if (timing.digestMs > bridgeDigestMsMax) {
+        bridgeDigestMsMax = timing.digestMs;
+        ctx.setMetric('bridgeDigestMsMax', timing.digestMs);
+      }
+    };
+
     interface Executed {
       digest: ImportScreenDigest;
       performed: boolean;
@@ -882,9 +912,7 @@ export const importDialogFuzz: Scenario = {
         offAtDispatch = outcome.offAtDispatch;
         dialogAtDispatch = outcome.dialogAtDispatch;
         digest = outcome.digest;
-        ctx.metric('bridgeActionMs', outcome.timing.actionMs);
-        ctx.metric('bridgeSettleMs', outcome.timing.settleMs);
-        ctx.metric('bridgeDigestMs', outcome.timing.digestMs);
+        noteBridgeTiming(outcome.timing);
         if (record && performed) {
           recorder.record(
             move.double === true
@@ -901,9 +929,7 @@ export const importDialogFuzz: Scenario = {
         offAtDispatch = outcome.offAtDispatch;
         dialogAtDispatch = outcome.dialogAtDispatch;
         digest = outcome.digest;
-        ctx.metric('bridgeActionMs', outcome.timing.actionMs);
-        ctx.metric('bridgeSettleMs', outcome.timing.settleMs);
-        ctx.metric('bridgeDigestMs', outcome.timing.digestMs);
+        noteBridgeTiming(outcome.timing);
         if (record && performed) {
           recorder.record({
             kind: 'input',
@@ -1222,15 +1248,35 @@ export const importDialogFuzz: Scenario = {
 
     // ---- flow bookkeeping ------------------------------------------------
 
+    /**
+     * The whole project state, canonicalized IN PAGE - the single most expensive
+     * call this scenario makes, and the one with the most room to grow: it
+     * invokes `get_project_state` and then walks the result. Timed and sized for
+     * the same reason `noteBridgeTiming` keeps maxima.
+     */
+    let canonicalMsMax = 0;
+    let canonicalBytesMax = 0;
     const canonicalNow = async (has: boolean): Promise<string | null> => {
       if (!has) return null;
-      return ctx.eval<string | null>(`
+      const startedAt = Date.now();
+      const canonical = await ctx.eval<string | null>(`
         const O = globalThis.${ORACLE_GLOBAL};
         if (!O) throw new Error('fuzz oracle is not injected');
         const core = window.__TAURI__ && window.__TAURI__.core;
         const state = await core.invoke('get_project_state');
         return state === null || state === undefined ? null : O.canonical(state, false);
       `);
+      const elapsed = Date.now() - startedAt;
+      ctx.metric('canonicalMs', elapsed);
+      if (elapsed > canonicalMsMax) {
+        canonicalMsMax = elapsed;
+        ctx.setMetric('canonicalMsMax', elapsed);
+      }
+      if (canonical !== null && canonical.length > canonicalBytesMax) {
+        canonicalBytesMax = canonical.length;
+        ctx.setMetric('canonicalBytesMax', canonical.length);
+      }
+      return canonical;
     };
 
     const projectFilePath = async (): Promise<string | null> =>

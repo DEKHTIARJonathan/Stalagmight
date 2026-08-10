@@ -74,7 +74,18 @@ const CHILD_TIMEOUT_MS = 20 * 60 * 1000;
  * `knownAsymmetry`, ...) and sums. A per-run constant such as `historyLimit`
  * still sums, so it reads as cells * constant - that is the documented rule.
  */
-const MAX_MERGED_METRICS = new Set(['snapshotBytesMax', 'maxDepth']);
+const MAX_MERGED_METRICS = new Set([
+  'snapshotBytesMax',
+  'maxDepth',
+  // `import-dialog-fuzz`'s in-page call maxima. Summing them would report a
+  // matrix of 30 cells as having spent 30x its worst call, which is exactly the
+  // number nobody wants: the question these answer is how close ONE call came to
+  // WebDriver's 30 s `execute/async` ceiling.
+  'bridgeStepMsMax',
+  'bridgeDigestMsMax',
+  'canonicalMsMax',
+  'canonicalBytesMax',
+]);
 
 const USAGE =
   'usage: pnpm agent:fuzz-matrix [--scenario NAME] [--fixtures a.stalx,b.stalx] [--seeds 1..8|1,3,7] ' +
