@@ -31,8 +31,12 @@ empty list there aggregates to `undefined`, which App.tsx reads as "no receipt
 to show". A new per-run accumulator has to be added to the struct in the same
 change that introduces it.
 
-All four completion sites pass that aggregate to `onComplete`: early import,
-pending-segment import, late import, and the `done` phase.
+Three live completion sites pass that aggregate to `onComplete`: early import,
+late import, and the `done` phase. A fourth, the pending-segment import, is
+dormant: it fires on `SavedManualPlacingState.pendingSegmentImport`, which
+nothing writes any more (`buildSavedState` omits it, and it is the only place
+a saved state is built). Pre-existing, and left in place - it still carries the
+aggregate, so it stays correct if a caller ever sets that field again.
 
 ## Virtual Connections
 

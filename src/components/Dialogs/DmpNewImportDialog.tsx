@@ -3102,6 +3102,10 @@ export default function DmpNewImportDialog({
       if (result.section_ids.length > 0) {
         importedSectionIdsRef.current.push(...result.section_ids);
       }
+      // Banked BEFORE the refresh below deliberately: if that throws, the catch
+      // in the placement callback reopens with the same queue and the retry
+      // banks a second receipt - which is the honest count, because the backend
+      // did import twice. Moving this after the await would under-report.
       if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
 
       await refreshProjectState();
