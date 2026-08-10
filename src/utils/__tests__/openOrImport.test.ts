@@ -461,6 +461,38 @@ describe('routeOpenedFile - import context (#411)', () => {
   });
 });
 
+describe('routeOpenedFile - TML default project name prefers the cave name (#447)', () => {
+  const parseTml = vi.fn();
+
+  beforeEach(() => {
+    useProjectStore.setState({ parseTml } as never);
+  });
+
+  it('uses the parsed cave name over the filename', async () => {
+    parseTml.mockResolvedValue({ sections: [], cave_name: 'Naharon' });
+    await routeOpenedFile('/cave/exports/some-file.tml');
+    expect(useUIStore.getState().dialogData).toMatchObject({ defaultName: 'Naharon' });
+  });
+
+  it('trims surrounding whitespace on the cave name', async () => {
+    parseTml.mockResolvedValue({ sections: [], cave_name: '  Naharon  ' });
+    await routeOpenedFile('/cave/exports/some-file.tml');
+    expect(useUIStore.getState().dialogData).toMatchObject({ defaultName: 'Naharon' });
+  });
+
+  it('falls back to the filename when the file carries no cave name', async () => {
+    parseTml.mockResolvedValue({ sections: [], cave_name: '' });
+    await routeOpenedFile('/cave/exports/some-file.tml');
+    expect(useUIStore.getState().dialogData).toMatchObject({ defaultName: 'some-file' });
+  });
+
+  it('falls back to the filename when the cave name is only whitespace', async () => {
+    parseTml.mockResolvedValue({ sections: [], cave_name: '   ' });
+    await routeOpenedFile('/cave/exports/some-file.tml');
+    expect(useUIStore.getState().dialogData).toMatchObject({ defaultName: 'some-file' });
+  });
+});
+
 describe('pickAndRoute', () => {
   it('clears the source when the picker is cancelled (null result)', async () => {
     openMock.mockResolvedValue(null);
