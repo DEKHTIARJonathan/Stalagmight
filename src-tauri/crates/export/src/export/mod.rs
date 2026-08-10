@@ -4,6 +4,7 @@ pub mod dive_profile;
 pub mod image;
 pub mod json;
 pub mod tml;
+mod tml_azimuth;
 
 pub use csv::*;
 pub use dive_profile::*;

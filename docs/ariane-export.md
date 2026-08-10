@@ -33,15 +33,28 @@ The user chooses between the two formats in the save dialog's file-type filter.
 The flag is file-level and the references are per section, so the exporter picks
 one of three shapes:
 
+Only a section that DECLARES something votes. A section whose correction source
+is `unknown` - every `.dmp`, and any `.tml` with no georeference - is raw
+magnetic with nothing on record; it constrains the document to be magnetic and
+otherwise abstains. Counting it as "correction 0" would make the ordinary case
+(a georeferenced `.tml` plus `.dmp` files from the same cave) mixed, rewriting
+every bearing and declaring true north about readings known to be magnetic.
+
 | Project | `useMagneticAzimuth` | Azimuths written |
 |---------|----------------------|------------------|
-| Every section magnetic, one correction (including a project that declares nothing) | `true` | exactly as stored - Ariane applies its own declination |
+| Nothing declared, or every declared section magnetic with one correction | `true` | exactly as stored - Ariane applies its own declination |
 | Every section true north | `false` | exactly as stored |
-| Sections disagree, or any section is grid-referenced | `false` | each section's correction applied, so the document is uniformly true north |
+| Declared corrections disagree, a true-north declaration sits beside a raw magnetic section, or any section is grid-referenced | `false` | each section's correction applied, so the document is uniformly true north |
 
 The third case is the only one that changes a number on the way out, and it
 changes only the FILE: the project keeps its measured readings. It is logged
 (`tracing::warn`) because the TML export command returns no receipt.
+
+**Round-trip cost of that third case.** Re-importing such a file reads the
+rotated bearings as measured true-north ones, so the per-section corrections are
+gone and the export/re-import multiset of azimuths legitimately differs - the
+same class of documented lossiness as the LRUD zero/null collision below. The
+first two cases round-trip byte-identically.
 
 ### Section-level fields
 
