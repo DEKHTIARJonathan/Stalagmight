@@ -362,28 +362,28 @@ describe('GasPlanPanel entry card (#395)', () => {
 /**
  * #480: with no zero datum set, `Project::zero_datum_roots` (backend) returns an empty root set
  * and the entrance origin (`origin === null`) walks from nowhere - every station comes back
- * unreachable with nothing on screen to explain why. The CTA must not silently walk into that;
- * the same `origin === null` state reached via a loaded entrance-origin plan needs its own
- * warning, since by then the entry card is gone.
+ * unreachable with nothing on screen to explain why. The CTA still works (blocking it would
+ * strand a diver who has not set a zero datum yet with no way to answer the entry question), but
+ * a warning must appear so the empty field is never silent; the same `origin === null` state
+ * reached via a loaded entrance-origin plan needs its own warning, since by then the entry card
+ * is gone.
  */
 describe('GasPlanPanel entrance requires a zero datum (#480)', () => {
-  it('disables "Start from entrance" and shows a hint when the project has no zero datum', () => {
+  it('shows a hint but still lets "Start from entrance" through when the project has no zero datum', () => {
     useGasPlanStore.setState({ originChosen: false, originPickArmed: false });
     useProjectStore.setState({ project: { zero_datums: [] } as never });
 
     render(<GasPlanPanel />);
 
     const cta = screen.getByTestId('gas-start-entrance');
-    expect(cta).toBeDisabled();
+    expect(cta).toBeEnabled();
     expect(screen.getByTestId('gas-entrance-no-zero-datum-hint')).toBeInTheDocument();
 
-    // A disabled button's click handler never fires - the CTA cannot silently walk into the
-    // degenerate field.
     fireEvent.click(cta);
-    expect(useGasPlanStore.getState().originChosen).toBe(false);
+    expect(useGasPlanStore.getState().originChosen).toBe(true);
   });
 
-  it('enables "Start from entrance" with no hint once a zero datum exists', () => {
+  it('shows no hint once a zero datum exists', () => {
     useGasPlanStore.setState({ originChosen: false, originPickArmed: false });
     useProjectStore.setState({ project: { zero_datums: [{}] } as never });
 

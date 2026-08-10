@@ -369,10 +369,8 @@ export function GasPlanPanel() {
           <p className="text-xs opacity-70">{t('gasPanel.entry.helper')}</p>
           <button
             type="button"
-            className="w-full text-sm px-3 py-2 rounded border border-accent bg-accent/10 hover:bg-accent/20 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-accent/10"
+            className="w-full text-sm px-3 py-2 rounded border border-accent bg-accent/10 hover:bg-accent/20"
             onClick={chooseEntrance}
-            disabled={entranceHasNoZeroDatum}
-            aria-disabled={entranceHasNoZeroDatum}
             data-testid="gas-start-entrance"
           >
             {t('gasPanel.entry.startFromEntrance')}
@@ -443,8 +441,8 @@ export function GasPlanPanel() {
             </button>
           </div>
           {origin === null && entranceHasNoZeroDatum && (
-            // #480: the same degenerate-field cause as the entry card's disabled CTA, but reached
-            // here via a loaded plan whose saved origin was the entrance (`applyLoadedPlan` in
+            // #480: the same degenerate-field cause as the entry card's hint, but reached here
+            // via a loaded plan whose saved origin was the entrance (`applyLoadedPlan` in
             // gasPlanStore) landing in a project with no zero datum - `origin` reads null either
             // way, so this can't be told apart from a healthy entrance plan without checking the
             // project directly.
