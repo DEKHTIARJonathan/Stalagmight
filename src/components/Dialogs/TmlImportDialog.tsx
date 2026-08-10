@@ -547,8 +547,17 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           </div>
         )}
 
-        {/* Footer */}
-        <div className="flex justify-end gap-2 pt-4 border-t border-border">
+        {/* Footer - sticky at the bottom of the scrolling body so the primary
+            action stays reachable without scrolling past the section table.
+            This establishes the repo's sticky-footer idiom (mirrored by
+            CompassImportDialog/WallsImportDialog): `-bottom-4 -mx-4 -mb-4`
+            bleeds the sticky element to the DialogWrapper body's scroll-
+            container edges and `bg-panel` covers content scrolling behind it.
+            It assumes the body keeps DialogWrapper's default `bodyClassName`
+            (`p-4`) - a dialog that overrides that padding would need matching
+            offsets here too. No `mt-4`: the parent's `space-y-4` already
+            supplies the gap above the footer, so an explicit one is dead. */}
+        <div className="sticky -bottom-4 -mx-4 -mb-4 flex justify-end gap-2 px-4 py-4 border-t border-border bg-panel">
           <Button onClick={handleCancel} disabled={isImporting} data-testid="tml-import-cancel">
             {t('dialogs.tmlImport.cancel')}
           </Button>

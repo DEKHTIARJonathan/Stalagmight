@@ -289,15 +289,32 @@ export function surfaceImportFailure(
     case 'empty':
       trackDialogComplete(dialogName);
       ui.closeDialog();
+      // Nothing survived the chosen options - the user's file/toggles, not a
+      // Stalagmight defect, so the report-a-bug hint would be wrong advice (#447).
       ui.openDialog('error', {
         title: i18n.t('dialogs.importFailure.emptyTitle'),
         message,
+        hideReportHint: true,
       });
       return;
     case 'command':
       // Report BEFORE anything moves: no setView, no fit-to-bounds.
       trackDialogComplete(dialogName);
       ui.closeDialog();
+      // Unlike 'empty', 'command' is NOT a safe class to blanket-hide the
+      // report-a-bug hint for (#447 review): execute_tml_import (and its
+      // Compass/Walls/GPX siblings) return this same CommandResult::failure
+      // shape for a malformed source file (`Failed to parse TML file: ...`)
+      // AND for internal/invariant failures with no file-fixable cause -
+      // `guard_mutation`'s "read-only, acquire the lock to edit" and
+      // `execute_tml_import_sections`'s "Failed to acquire command lock" (a
+      // poisoned mutex) among them (src-tauri/crates/core/src/core/state/
+      // command_import.rs, src-tauri/crates/core/src/core/state/app_state.rs
+      // `guard_mutation`). The backend attaches no error-kind/classification
+      // to distinguish them, so hiding by phase alone would hide the hint for
+      // a genuine bug too. Keep the hint here; the file case is instead
+      // caught before it ever reaches this router, at the parse step
+      // (`parseForImport` in openOrImport.ts).
       ui.openDialog('error', {
         title: i18n.t('dialogs.importFailure.commandTitle'),
         message,
