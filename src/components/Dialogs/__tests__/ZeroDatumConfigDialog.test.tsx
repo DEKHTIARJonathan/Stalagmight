@@ -574,10 +574,22 @@ describe('ZeroDatumConfigDialog dirty guard', () => {
     expect(lastIsDirty()).toBe(true);
   });
 
-  it('stays clean on a station pick alone (no payload change)', () => {
+  it('stays clean when the pick matches the initial (station 0, unchanged)', () => {
+    // `stationIndex` starts at 0; re-picking the same station is not a change
+    // to the confirm payload, so it must not arm the guard. Not routed
+    // through the shared `pickStation` helper: with 0 already selected, the
+    // dropdown's own closed-state label and the freshly opened option both
+    // read "Station 0", so the option is picked by role instead of text.
+    renderDialog();
+    fireEvent.click(screen.getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'Station 0' }));
+    expect(lastIsDirty()).toBe(false);
+  });
+
+  it('goes dirty on a changed pick - stationIndex IS sent in the confirm payload', () => {
     renderDialog();
     pickStation(PICK);
-    expect(lastIsDirty()).toBe(false);
+    expect(lastIsDirty()).toBe(true);
   });
 });
 
@@ -757,5 +769,15 @@ describe('ZeroDatumConfigDialog GPS hints', () => {
     fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '77, 12' } });
     expect(screen.getByTestId('zero-datum-gps-transposed-warning')).toBeInTheDocument();
     expect(screen.getByTestId('zero-datum-config-confirm')).not.toBeDisabled();
+  });
+
+  it('shows the swap hint ALONGSIDE the range error when the first field is an impossible latitude', () => {
+    // Regression: 120 fails `parseDD`'s range check before any GpsCoordinates
+    // exist, so the coords-based check alone never ran and the hint was
+    // silently absent next to the error.
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '120, 45' } });
+    expect(screen.getByTestId('zero-datum-gps-error')).toBeInTheDocument();
+    expect(screen.getByTestId('zero-datum-gps-transposed-warning')).toBeInTheDocument();
   });
 });

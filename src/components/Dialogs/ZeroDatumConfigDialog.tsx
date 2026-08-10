@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useReducer, useRef } from 'react';
+import { useState, useCallback, useMemo, useReducer, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
 import { blankEditableShot } from '../common/editableShot';
@@ -10,7 +10,7 @@ import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
-import { parseGps, detectFormat, looksTransposed, type GpsFormat } from '../../utils/gps';
+import { parseGps, detectFormat, looksTransposed, looksTransposedRawDD, type GpsFormat } from '../../utils/gps';
 import { formatFixed } from '../../i18n/format';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -257,6 +257,10 @@ export default function ZeroDatumConfigDialog({
     section,
     initialShotEditState,
   );
+  // The reducer's OWN initial pick, captured once - not hardcoded to 0, so
+  // this stays correct if a future initial-config carry (Package A) seeds a
+  // non-default station.
+  const initialStationIndexRef = useRef(stationIndex);
 
   // GPS input state
   const [gpsInput, setGpsInput] = useState('');
@@ -314,15 +318,24 @@ export default function ZeroDatumConfigDialog({
 
   // Soft (non-blocking) heuristic (#F7): a plausibly-valid pair that still
   // looks like the fields were swapped. Coexists with `gpsError` - never
-  // replaces it, and never blocks Confirm.
+  // replaces it, and never blocks Confirm. Falls back to the raw-pair variant
+  // when parsing FAILED (`gpsCoords` is null): a swapped "120, 45" never
+  // produces coordinates to run the coords-based check on, so without this
+  // branch it got only the generic range error and no swap hint at all.
   const gpsTransposedWarning = useMemo(() => {
-    if (!gpsCoords) return false;
-    return looksTransposed(gpsCoords.latitude, gpsCoords.longitude);
-  }, [gpsCoords]);
+    if (gpsCoords) return looksTransposed(gpsCoords.latitude, gpsCoords.longitude);
+    if (gpsError) return looksTransposedRawDD(gpsInput);
+    return false;
+  }, [gpsCoords, gpsError, gpsInput]);
 
   // Dirty guard (#F9): GPS text entered, the section renamed, a metadata
-  // field touched, or a shot edited/inserted/deleted - anything ESC (or
-  // Cancel/Back) would otherwise discard silently.
+  // field touched, the zero-datum STATION PICK changed, or a shot
+  // edited/inserted/deleted - anything ESC (or Cancel/Back) would otherwise
+  // discard silently. `stationIndex` is sent in the confirm payload just like
+  // the rest, so a pick the user actually changed is losable intent too - a
+  // pick that only MOVED because of a shot edit is already covered by
+  // `shotsDirty` (the reducer marks that itself), so this only fires for a
+  // pick made with no accompanying edit.
   const isDirty =
     gpsInput.trim() !== '' ||
     name !== initialNameRef.current ||
@@ -331,6 +344,7 @@ export default function ZeroDatumConfigDialog({
     color !== initialColorRef.current ||
     direction !== initialDirectionRef.current ||
     reverse !== initialReverseRef.current ||
+    stationIndex !== initialStationIndexRef.current ||
     shotsDirty;
 
   // Back has no DialogWrapper-level guard (that machinery only ever discards
@@ -346,6 +360,24 @@ export default function ZeroDatumConfigDialog({
       onBack();
     }
   }, [isDirty, onBack]);
+
+  // Intercept Escape ourselves while the Back confirm is open, so it dismisses
+  // ONLY that confirm - left alone, the keydown bubbles past this (unhandled)
+  // to DialogWrapper's own handler, which opens ITS "Unsaved Changes" overlay
+  // on top of this one (isDirty is still true; DialogWrapper has no idea this
+  // local confirm exists). Wrapping the render-prop output in a `display:
+  // contents` div (rather than a Fragment) is what gives this a DOM node to
+  // attach the listener to without disturbing the flex layout below.
+  const handleContentKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (backConfirmPending && (e.key === 'Escape' || e.key === 'Esc') && !e.repeat) {
+        e.preventDefault();
+        e.stopPropagation();
+        setBackConfirmPending(false);
+      }
+    },
+    [backConfirmPending],
+  );
 
   // When dropdown hovers an option, show it on the map; when dropdown closes
   // without selecting, the reducer reverts to the committed station.
@@ -467,7 +499,7 @@ export default function ZeroDatumConfigDialog({
       data-testid="zero-datum-config-dialog"
     >
       {({ requestClose }) => (
-      <>
+      <div className="contents" onKeyDown={handleContentKeyDown}>
       {/* Scrollable content area */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Left column: Preview (fixed) */}
@@ -685,7 +717,7 @@ export default function ZeroDatumConfigDialog({
           </div>
         </div>
       )}
-      </>
+      </div>
       )}
     </DialogWrapper>
   );
