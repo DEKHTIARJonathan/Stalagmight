@@ -190,9 +190,9 @@ fn compress_json(json: &str) -> Vec<u8> {
 /// backstop for a blob that lies about that size.
 ///
 /// The number is picked to be far above any legitimate payload. The largest a history
-/// row can honestly be is a [`crate::core::undo::UndoData::ProjectSnapshotPair`] - TWO
+/// row can honestly be is a `UndoData::ProjectSnapshotPair` (stalagmight-core) - TWO
 /// whole-project JSON snapshots - which the table on
-/// [`crate::core::undo::UNDO_BYTE_BUDGET_BYTES`] measures at ~4.2 MB for a 5,000-shot
+/// [`crate::persistence::undo_limits::UNDO_BYTE_BUDGET_BYTES`] measures at ~4.2 MB for a 5,000-shot
 /// project and ~17 MB for a 20,000-shot one. That grows roughly linearly in shot count,
 /// so 256 MiB is more than ten times the biggest payload any plausible survey produces,
 /// and reaching it means the blob is not one we wrote.
@@ -203,7 +203,7 @@ fn compress_json(json: &str) -> Vec<u8> {
 /// This one is tighter because a history blob is JSON WE produced, where a dump entry
 /// is a whole `.stalx`.
 ///
-/// Independent of [`crate::core::undo::MAX_PERSISTED_HISTORY_ROWS`], and neither implies
+/// Independent of [`crate::persistence::undo_limits::MAX_PERSISTED_HISTORY_ROWS`], and neither implies
 /// the other: that constant bounds how many rows one load reads, this one bounds how
 /// large one row may inflate. A file can be well inside either bound and hostile under
 /// the other - which is exactly why neither is sufficient and the load also carries a
@@ -229,7 +229,7 @@ const MAX_DECOMPRESSED_BLOB_BYTES: u64 = 256 * 1024 * 1024;
 /// This is the bound the per-blob ceiling could not provide. Without it the two
 /// existing bounds MULTIPLY rather than compose: a count-window project reads 100 rows x
 /// 2 blobs x 256 MiB = 50 GiB, and a Full-mode one reads
-/// [`crate::core::undo::MAX_PERSISTED_HISTORY_ROWS`] (65536) rows for 32 TiB nominal -
+/// [`crate::persistence::undo_limits::MAX_PERSISTED_HISTORY_ROWS`] (65536) rows for 32 TiB nominal -
 /// the read window is 100 only in count-window mode, never in Full.
 ///
 /// Read "per open" literally. An open reads the undo stack and then the redo stack and
@@ -345,7 +345,11 @@ impl InflationBudget {
     }
 }
 
-/// [#473] What a blob SAYS it inflates to, in O(1) and without allocating.
+/// [#473] What a blob SAYS it inflates to, without allocating.
+///
+/// O(1) for gzip (a trailer read). O(n) for the legacy branch, which scans the blob for
+/// UTF-8 validity - cheap relative to the bytes sqlite has already read, and no
+/// amplification, but not the constant-time answer this doc used to claim.
 ///
 /// A gzip member ends with a 4-byte little-endian ISIZE trailer carrying the
 /// uncompressed length, and the blob is already fully in memory (sqlite read it), so
@@ -365,9 +369,11 @@ impl InflationBudget {
 /// multi-member gzip, so such a blob is not one we produced, and either direction of
 /// disagreement is handled above.
 ///
-/// Non-gzip blobs report the legacy fallback's true worst case: `from_utf8_lossy`
-/// substitutes a 3-byte U+FFFD for every invalid byte, so its output is up to 3x the
-/// input - not a copy of it.
+/// Non-gzip blobs report what `from_utf8_lossy` will ACTUALLY produce, which is decided
+/// by validity: valid UTF-8 passes through unchanged (exactly the input length), and only
+/// invalid input expands, by at most a 3-byte U+FFFD per maximal invalid subsequence.
+/// Answering the 3x worst case unconditionally refused valid legacy rows over a third of
+/// the ceiling - see the comment on that branch in [`decompress_json_under`].
 fn declared_inflated_size(data: &[u8]) -> u64 {
     // `checked_sub`, not `data.len() - 4`: the magic-byte test only guarantees TWO
     // bytes, and a hostile blob is free to be exactly that long.
@@ -485,11 +491,13 @@ fn decompress_json(data: &[u8]) -> Result<String> {
 /// `Take` reports end-of-stream identically to a genuinely finished one. Hence the
 /// explicit `buf.len() > limit` check rather than trusting the reader to complain.
 ///
-/// `saturating_add` rather than `+`, and `max_bytes` clamped to `usize::MAX` first: a
-/// caller asking for a very large ceiling ("no practical limit") would otherwise wrap
-/// the `+ 1` to zero, and since `[profile.release]` sets no `overflow-checks` that turns
-/// into `take(0)` - an EMPTY string reported as success - in exactly the build where it
-/// is hardest to notice.
+/// `saturating_add` rather than `+` is what prevents the wrap: a caller asking for a very
+/// large ceiling ("no practical limit") would otherwise turn `+ 1` into zero, and since
+/// `[profile.release]` sets no `overflow-checks` that becomes `take(0)` - an EMPTY string
+/// reported as success - in exactly the build where it is hardest to notice. The
+/// `min(usize::MAX)` beside it does NOT help with that (on 64-bit the two are the same
+/// number); it earns its place only by keeping the `usize::try_from` below exact on a
+/// 32-bit target.
 ///
 /// Read into a `Vec<u8>` and validated afterwards rather than `read_to_string` on the
 /// `Take`: the cut is at a byte offset, so on a multi-byte payload it can land mid

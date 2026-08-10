@@ -176,6 +176,14 @@ pub struct AppState {
     /// commit writes it, so a clean load clears a previous project's flag by assignment
     /// rather than by anyone remembering to reset it.
     ///
+    /// ONE flag for TWO stacks, deliberately, and the banner copy is written to match.
+    /// The undo and redo loads fail independently, so `true` means "at least one stack
+    /// could not be read" - it cannot say which. That is not hypothetical: both stacks
+    /// now share a single inflation budget, so a large-but-legitimate undo history can
+    /// leave the redo pre-scan nothing to spend. Copy that named both stacks was
+    /// therefore false in exactly that case, and now says only what this flag knows.
+    /// Splitting it in two is the change to make if the copy ever needs to be specific.
+    ///
     /// Transient, never persisted: it describes THIS read of the file, and the next save
     /// overwrites the unreadable rows anyway.
     pub(super) history_discarded: AtomicBool,

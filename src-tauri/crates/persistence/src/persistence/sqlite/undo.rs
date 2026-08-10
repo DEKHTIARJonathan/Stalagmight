@@ -23,9 +23,10 @@ fn rows_per_decompress_batch() -> usize {
 ///
 /// **This is the check that actually stops a hostile file**, and the running
 /// `InflationBudget` behind it is defense in depth (see its doc for why it is unreachable
-/// while this runs first). Every blob declares its own inflated size for free
-/// (`declared_inflated_size`), so the whole window can be priced by walking the
-/// compressed rows sqlite already handed us - failing at zero allocation, with an error
+/// while this runs first). Every blob can state its own inflated size without allocating
+/// (`declared_inflated_size` - a trailer read for gzip, a validity scan for legacy), so
+/// the whole window is priced by walking the compressed rows sqlite already handed us,
+/// with an error
 /// that names the real problem ("this file claims 51 GiB of history") rather than "row 37
 /// did not fit".
 ///

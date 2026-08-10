@@ -4187,6 +4187,45 @@ fn a_legacy_blob_is_priced_by_its_real_utf8_expansion() {
     );
 }
 
+/// [#473] THE invariant every bound rests on: a blob never produces more than it declared.
+///
+/// The pre-scan approves a window by summing `declared_inflated_size`, and the running
+/// budget reserves the same number per row, so both are sound only while actual <=
+/// declared for every possible input. Asserted over a spread of byte patterns rather than
+/// the handful of shapes the other tests happen to use - lone invalid bytes, truncated
+/// multi-byte prefixes (which collapse SEVERAL bytes into one U+FFFD, so they expand by
+/// less than 3x), valid ASCII and valid multi-byte text.
+#[test]
+fn a_legacy_blob_never_produces_more_than_it_declares() {
+    let cases: Vec<Vec<u8>> = vec![
+        vec![],
+        b"{}".to_vec(),
+        b"plain ascii json".to_vec(),
+        "\u{e9}\u{4e2d}\u{1f600}".repeat(8).into_bytes(), // valid, 2/3/4-byte chars
+        vec![0xFF; 32],                                   // every byte its own bad subsequence
+        vec![0x80; 32],                                   // stray continuation bytes
+        b"\xE0\xA0".repeat(16),                           // truncated 3-byte prefixes
+        b"\xF0\x9F\x98".repeat(16),                       // truncated 4-byte prefixes
+        {
+            let mut mixed = b"valid text ".to_vec();
+            mixed.extend_from_slice(&[0xFF, 0xFE, 0x80]);
+            mixed.extend_from_slice(b" more valid text");
+            mixed
+        },
+    ];
+
+    for data in cases {
+        // Only the legacy branch is under test; a gzip-magic prefix would route elsewhere.
+        assert!(!is_gzip(&data), "fixture must take the legacy branch");
+        let declared = declared_inflated_size(&data);
+        let produced = String::from_utf8_lossy(&data).len() as u64;
+        assert!(
+            produced <= declared,
+            "declared {declared} but produced {produced} for {data:?}"
+        );
+    }
+}
+
 /// [#473] The per-blob ceiling binds the LEGACY branch too, not only gzip.
 ///
 /// It used to sit below the `is_gzip` branch, which silently exempted legacy blobs from
@@ -4573,47 +4612,53 @@ fn the_inflation_budget_reserves_refunds_and_refuses() {
 /// cost 3 KiB forever and two of them would not fit in 4 KiB.
 #[test]
 fn the_legacy_branch_reserves_its_worst_case_then_refunds_the_difference() {
-    // INVALID bytes, because only they carry a worst case worth refunding: valid UTF-8 is
-    // now priced exactly (`declared_inflated_size`), so it reserves what it uses and there
-    // is no difference to hand back. Each 0xFF is its own invalid subsequence, so 1024
-    // bytes in becomes 3072 bytes of U+FFFD out - and here declared == produced, which is
-    // what makes the ARITHMETIC below the point rather than the refund size.
-    let messy = [0xFF_u8; 1024];
-    // 4 KiB, so exactly one 3 KiB row fits at a time.
-    let budget = InflationBudget::new(4 * 1024);
+    // A MIXED blob - mostly valid text with a few invalid bytes - because that is the
+    // only shape where the reservation and the output differ, and so the only shape that
+    // can prove the refund happens at all. All-valid is priced exactly (no difference to
+    // refund) and all-invalid produces exactly its 3x worst case (likewise); a version of
+    // this test using those left `declared == produced` in both cases, so deleting the
+    // refund entirely kept it green. It is also the realistic corrupt-legacy-row shape.
+    let mut mixed = vec![b'x'; 1020];
+    mixed.extend_from_slice(&[0xFF; 4]);
+    assert_eq!(mixed.len(), 1024);
+    // Reserved: 3 * 1024 = 3072 (the worst case, since the blob is not valid UTF-8).
+    // Produced: 1020 valid bytes + 4 x 3-byte U+FFFD = 1032. Refund: 2040.
+    assert_eq!(declared_inflated_size(&mixed), 3 * 1024);
+    assert_eq!(String::from_utf8_lossy(&mixed).len(), 1032);
 
+    // 5 KiB, sized so the refund is the ONLY thing that lets row 2 in: with it 4088
+    // remains (>= the 3072 reservation), without it 2048 (short by 1024).
+    let budget = InflationBudget::new(5 * 1024);
     assert_eq!(
-        decompress_json_under(&messy, &budget).unwrap().len(),
-        3 * 1024,
-        "every invalid byte expands to a 3-byte U+FFFD"
+        decompress_json_under(&mixed, &budget).unwrap().len(),
+        1032,
+        "the produced string is the lossy expansion, not the reservation"
     );
     assert_eq!(
         budget.remaining(),
-        1024,
-        "the 3x worst case is what gets reserved, and it is exactly what was produced"
+        5 * 1024 - 1032,
+        "the unused 2040 bytes of the worst-case reservation must come back"
     );
 
-    // A second row needs 3 KiB and only 1 KiB remains, so the reservation - not the
-    // steady state - is what binds, and a refusal deducts nothing.
-    let err = decompress_json_under(&messy, &budget).unwrap_err();
+    // THE discriminating step: a second row needs another 3072-byte reservation. It fits
+    // only because the first row refunded - without the refund just 1024 would remain and
+    // this would be refused, which is what makes the assertion above load-bearing rather
+    // than decorative.
+    assert!(
+        decompress_json_under(&mixed, &budget).is_ok(),
+        "the second row fits only because the first refunded its unused reservation"
+    );
+    assert_eq!(budget.remaining(), 5 * 1024 - 2 * 1032);
+
+    // ...and it is still genuinely charged: a third row's 3072-byte reservation exceeds
+    // what is left, so the PEAK reservation binds, and a refusal deducts nothing.
+    let left = budget.remaining();
+    let err = decompress_json_under(&mixed, &budget).unwrap_err();
     assert!(
         format!("{err:#}").contains("while inflating"),
         "the legacy branch must spend the shared budget, got: {err:#}"
     );
-    assert_eq!(budget.remaining(), 1024, "a refusal must not deduct");
-
-    // ...and a VALID row of the same length costs a third of that, because it is priced
-    // at what it really produces. This is the half the unconditional 3x got wrong.
-    let plain = "x".repeat(1024);
-    assert_eq!(
-        decompress_json_under(plain.as_bytes(), &budget).unwrap(),
-        plain
-    );
-    assert_eq!(
-        budget.remaining(),
-        0,
-        "a valid legacy row reserves its own length, not three times it"
-    );
+    assert_eq!(budget.remaining(), left, "a refusal must not deduct");
 }
 
 /// [#473] A blob that fails to inflate hands its reservation back.

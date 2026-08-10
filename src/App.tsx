@@ -237,9 +237,14 @@ function App() {
   //   - The adopt reopen (`speleodb_pull.rs`, right after the staged file is renamed
   //     over the destination) is NEW bytes, not a rollback - it is covered because
   //     adoption ends in a full `loadProject`, not because the bytes are unchanged.
-  //   - Only the `speleodb_cache.rs` ROLLBACK arms reopen a byte-identical file: they
-  //     run after the staged download is deleted and `dest` was never touched, so the
-  //     verdict they produce cannot differ from the one already on screen.
+  //   - The ROLLBACK reopens are byte-identical and owe nothing, and there are FOUR of
+  //     them, not one: `speleodb_cache.rs` x3 (after the staged download is deleted,
+  //     `dest` never having been touched) and `speleodb_pull.rs` x2 - the post-promote
+  //     arm that reopens `previous` when the adopt failed to open, and
+  //     `adopt_abandon_staging`, which runs only before or instead of the promote. An
+  //     earlier version of this comment said "only `speleodb_cache.rs`" and silently
+  //     omitted the latter two, which is the same shape of enumeration error that let
+  //     the `discardChanges` route go unnoticed.
   // A future path that reopens DIFFERENT bytes with no frontend load must re-ask, and
   // the tree-replacement seam is where it should do it.
   useEffect(() => {

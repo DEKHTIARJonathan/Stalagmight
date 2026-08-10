@@ -679,7 +679,13 @@ mod tests {
                 continue;
             }
             let trimmed = line.trim_start();
-            if trimmed.is_empty() {
+            // Blank, comment, or attribute lines all sit BETWEEN the gate and the module.
+            // The comment case is not hypothetical: `speleodb/sync.rs` explains its
+            // `#[expect]` waiver in three `//` lines between the two, and leaving them out
+            // meant that file was never cut - its whole test module counted as production,
+            // which both risks a false offender and inflates `production_bytes`, the one
+            // number that is supposed to notice a bad cut.
+            if trimmed.is_empty() || trimmed.starts_with("//") {
                 continue;
             }
             if trimmed.starts_with("#[") {
@@ -701,19 +707,23 @@ mod tests {
 
     #[test]
     fn no_production_caller_mints_its_own_history_budget() {
-        // Leading `.` and trailing `(` are both load-bearing. The `(` separates these
-        // from the budget-SHARING `_within(` variants, which share the same prefixes; the
-        // `.` matches a CALL (`db.load_undo_stack(`) and not the `pub fn` that defines
-        // one, which the workspace-wide walk below otherwise reports against the
-        // persistence crate itself.
+        // The bare names. The trailing `(` in each form below separates them from the
+        // budget-SHARING `_within(` variants, which share every one of these prefixes.
         const BUDGET_MINTING: [&str; 6] = [
-            ".load_undo_stack(",
-            ".load_undo_stack_capped(",
-            ".load_undo_stack_with_timestamps(",
-            ".load_undo_stack_with_timestamps_capped(",
-            ".load_redo_stack_with_timestamps(",
-            ".load_redo_stack_with_timestamps_capped(",
+            "load_undo_stack",
+            "load_undo_stack_capped",
+            "load_undo_stack_with_timestamps",
+            "load_undo_stack_with_timestamps_capped",
+            "load_redo_stack_with_timestamps",
+            "load_redo_stack_with_timestamps_capped",
         ];
+        // BOTH call syntaxes. Method position (`db.load_undo_stack(`) is what anyone
+        // writes, but UFCS (`Database::load_undo_stack(&db, ..)`) is the same function
+        // with the same 2x-budget consequence and matched nothing while the needle
+        // required a leading dot. Neither form matches the `pub fn` that DEFINES a
+        // loader, which is what keeps the workspace-wide walk from reporting the
+        // persistence crate against itself.
+        let call_forms = |name: &str| [format!(".{name}("), format!("Database::{name}(")];
         // POSITIVE CONTROL, first, because everything below is a negative assertion and a
         // negative assertion over stale needles passes forever while guarding nothing.
         // These names live in another crate, so renaming one there is not a compile error
@@ -725,7 +735,7 @@ mod tests {
         ));
         for needle in BUDGET_MINTING {
             assert!(
-                defining_src.contains(&format!("pub fn {}", needle.trim_start_matches('.'))),
+                defining_src.contains(&format!("pub fn {needle}(")),
                 "{needle} no longer names a loader in persistence/sqlite/undo.rs - this \
                  test is guarding a symbol that does not exist"
             );
@@ -794,9 +804,11 @@ mod tests {
                 scanned += 1;
                 production_bytes += production.len();
                 total_bytes += text.len();
-                for needle in BUDGET_MINTING {
-                    if production.contains(needle) {
-                        offenders.push(format!("{}: {needle}", path.display()));
+                for name in BUDGET_MINTING {
+                    for needle in call_forms(name) {
+                        if production.contains(&needle) {
+                            offenders.push(format!("{}: {needle}", path.display()));
+                        }
                     }
                 }
             }
