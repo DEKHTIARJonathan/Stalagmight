@@ -18,6 +18,22 @@ The STORE copy only ever takes `suggesting`, `manual_placing` or `null`, so it i
 a phase oracle - the DOM markers (`wizard-suggestion`, `wizard-manual-placing`, ...)
 are.
 
+### The manual-placement round trip
+
+Placing a segment on the map needs the map, so `handleStartSegmentPlacement`
+CLOSES the wizard and reopens a fresh instance afterwards, handing the run's
+state across in `SavedManualPlacingState` (`openDialog`'s `dialogData`). The
+new instance is a new component: anything living in a ref of the old one is
+gone unless it rides that struct. `importedReceipts` is one of those (#487) -
+each `import_sections` call returns an `import_receipt`, the wizard banks them
+all and aggregates them once at completion (`aggregateImportReceipts`), and an
+empty list there aggregates to `undefined`, which App.tsx reads as "no receipt
+to show". A new per-run accumulator has to be added to the struct in the same
+change that introduces it.
+
+All four completion sites pass that aggregate to `onComplete`: early import,
+pending-segment import, late import, and the `done` phase.
+
 ## Virtual Connections
 
 During the `suggesting` phase, confirmed placements are recorded as **virtual connections** - lightweight client-side records that describe how two sections should be joined. No backend call happens until the `placing` phase.
@@ -266,5 +282,10 @@ pnpm vitest run src/utils/__tests__/segmentContext.test.ts
 ```
 
 Overlap helper tests: `src/utils/__tests__/overlapHelpers.test.ts`
+
+Receipt round trip (both halves of the carry, plus the `done` phase):
+`src/components/Dialogs/__tests__/DmpNewImportDialog.receiptCarry.test.tsx` -
+a component test that renders the wizard against a synthetic DMP file and
+drives `placementMode.onComplete` in place of a click on the map.
 
 Backend integration test for overlap interpolation: `src-tauri/crates/core/src/core/state/tests.rs` (`kb5_import_overlap_interpolation_integration`, currently `#[ignore]`).
