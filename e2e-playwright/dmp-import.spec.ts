@@ -461,7 +461,10 @@ test.describe('DMP Import Dialog - Zero Datum + Wizard Flow', () => {
     });
     expect(escapesPreview).toEqual({ contained: false, inBody: true });
 
-    await page.keyboard.press('Escape');
+    // Dismiss via the toggle, not Escape: with GPS text entered the dialog is
+    // dirty, so DialogWrapper turns Escape into its discard confirm (#526) and
+    // the dialog - and this panel - stay mounted.
+    await toggle.click();
     await expect(panel).toBeHidden();
   });
 
