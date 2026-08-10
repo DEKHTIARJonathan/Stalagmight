@@ -298,9 +298,11 @@ export default function GlobalView() {
   // metadata panel). Routed through the shared open/import router (#450) for
   // consistency and defense-in-depth - the SpeleoDB hand-back / unsaved-
   // changes / swap-confirm guards it applies are currently unreachable here
-  // (both setView('global') callers, useProject.ts and UnsavedChangesDialog.tsx,
-  // already close the project first, so GlobalView never renders with one
-  // open), but sharing the router also gets recents the `allow: 'project-only'`
+  // (all three setView('global') callers - useProject.ts, UnsavedChangesDialog.tsx
+  // and TmlImportDialog.tsx's discard path - already close the project first, so
+  // GlobalView never renders with one open; Ctrl+I's picker choice now leans on
+  // that same invariant, see fileShortcutActions.ts), but sharing the router also
+  // gets recents the `allow: 'project-only'`
   // extension gate below for free, which IS load-bearing: a persisted recents
   // entry is untrusted input and must not reach the import parsers.
   //
