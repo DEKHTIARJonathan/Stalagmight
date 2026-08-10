@@ -169,9 +169,17 @@ export function ProjectSettingsDialog() {
     // back to meters for an untouched field can land a hair off the stored
     // value (feet round-trip, or a stored value finer than display
     // precision) and would otherwise push a spurious write/undo entry.
-    // Read-only mode blocks only this write (see the input's own
-    // `disabled={editingBlocked}`) - name/validation above are still allowed.
-    if (elevationDraftChanged && !editingBlocked) {
+    //
+    // `editingBlocked` is NOT checked here: it only disables the input
+    // against NEW edits (see `disabled={editingBlocked}` below). Gating the
+    // SAVE on it too would let a flip from editable to read-only, landing
+    // between typing and clicking Save, silently discard an already-staged
+    // change (closeDialog() would still run). The backend is authoritative -
+    // attempt the write whenever the draft changed, and if guard_mutation
+    // rejects it (EDIT_DISABLED), fall into the same failure path as a
+    // rejected name/validation save: dialog stays open, error shown, the
+    // user's staged draft is untouched.
+    if (elevationDraftChanged) {
       const elevationMeters =
         elevationParsed === null ? null : convertLengthToMeters(elevationParsed, elevationUnit);
       const result = await setSurfaceElevation(elevationMeters);
@@ -188,7 +196,6 @@ export function ProjectSettingsDialog() {
     hasValidationError,
     elevationValid,
     elevationDraftChanged,
-    editingBlocked,
     elevationParsed,
     elevationUnit,
     saving,

@@ -138,4 +138,42 @@ describe('ProjectSettingsDialog entrance elevation (#465)', () => {
 
     expect(setSurfaceElevation).not.toHaveBeenCalled();
   });
+
+  it('a changed draft is attempted even when editingBlocked flips true before Save; on EDIT_DISABLED it keeps the dialog open, shows the error, and keeps the staged draft', async () => {
+    setSurfaceElevation = vi.fn(
+      async (): Promise<CommandResult> =>
+        ({ success: false, error: 'EDIT_DISABLED: Set entrance elevation is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.' }) as CommandResult,
+    );
+    useProjectStore.setState({ setSurfaceElevation });
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    render(<Dialog />);
+    const input = await screen.findByTestId('project-settings-elevation');
+    fireEvent.change(input, { target: { value: '42.5' } });
+
+    // Read-only flips true AFTER the draft was typed, BEFORE Save is clicked.
+    useUIStore.setState({ geometryMode: 'closureAdjusted' });
+    await userEvent.click(screen.getByTestId('project-settings-save'));
+
+    expect(setSurfaceElevation).toHaveBeenCalledWith(42.5);
+    expect(closeDialog).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith(expect.stringContaining('EDIT_DISABLED'), expect.anything(), 'error');
+    expect(screen.getByTestId('project-settings-elevation')).toHaveValue(42.5);
+  });
+
+  it('a changed draft still saves when editingBlocked is (stale-)true but the backend accepts it', async () => {
+    useUIStore.setState({ geometryMode: 'closureAdjusted' });
+    render(<Dialog />);
+    const input = await screen.findByTestId('project-settings-elevation');
+    expect(input).toBeDisabled();
+    // The disabled input can't be typed into directly by a user while blocked,
+    // but a value staged just before the flip (previous test) must still save;
+    // simulate that staged state by changing the draft via fireEvent (bypasses
+    // the DOM disabled attribute, mirroring "typed, then blocked").
+    fireEvent.change(input, { target: { value: '42.5' } });
+    await userEvent.click(screen.getByTestId('project-settings-save'));
+
+    expect(setSurfaceElevation).toHaveBeenCalledWith(42.5);
+    expect(closeDialog).toHaveBeenCalled();
+  });
 });
