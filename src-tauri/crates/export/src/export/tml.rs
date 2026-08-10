@@ -25,9 +25,7 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
 use crate::models::comment_split;
-use crate::models::{
-    normalize_azimuth, AzimuthReference, Project, Section, SectionId, Shot, StationRef,
-};
+use crate::models::{normalize_azimuth, Project, Section, SectionId, Shot, StationRef};
 
 use super::tml_azimuth::AzimuthExport;
 
