@@ -100,6 +100,14 @@ describe('ImportReceiptDialog', () => {
     );
   });
 
+  it('renders the full info sentence in the summary, not just a short scale (#446)', () => {
+    dialogData.receipt = baseReceipt({ info: ['3 sections are not connected to a zero datum'] });
+    render(<ImportReceiptDialog />);
+    expect(screen.getByTestId('import-receipt-summary').textContent).toContain(
+      '3 sections are not connected to a zero datum',
+    );
+  });
+
   it('does NOT derive a "not imported" warning from sections_found/sections_imported', () => {
     dialogData.receipt = baseReceipt({ sections_found: 5, sections_imported: 3, warnings: [] });
     render(<ImportReceiptDialog />);

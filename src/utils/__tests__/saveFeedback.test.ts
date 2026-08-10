@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('../ipc', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../ipc')>()),
+  invokeIpc: vi.fn(),
+}));
+
 import {
   autosaveFailureMessage,
   surfaceSaveFailure,
@@ -8,13 +13,20 @@ import {
   finalizeDeferredSaveWarnings,
   deferredSaveWarnings,
   presentImportReceipt,
+  finishImportWithoutOrphanSuggestions,
   type ImportDialogUi,
+  type ImportReceiptWithUnanchoredCount,
 } from '../saveFeedback';
+import { importReceiptSummaryParts } from '../importReceipt';
+import { invokeIpc } from '../ipc';
+import i18n from '../../i18n';
 import { FS_PATH_NOT_FOUND, FS_PATH_TOO_LONG, FS_PERMISSION_DENIED } from '../saveErrors';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { ValidationWarning } from '../../types/ipc/ValidationWarning';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
+
+const invokeIpcMock = vi.mocked(invokeIpc);
 
 const mockUi = (): ImportDialogUi & { [K in keyof ImportDialogUi]: ReturnType<typeof vi.fn> } => ({
   closeDialog: vi.fn(),
@@ -283,19 +295,120 @@ describe('presentImportReceipt (#411/#420)', () => {
 
   it('an info line does not promote a warning-free receipt from toast to dialog (#446)', () => {
     const ui = mockUi();
-    const withInfo: ImportReceipt = {
+    // The shape `finishImportWithoutOrphanSuggestions` actually produces:
+    // the full sentence rides `info` (for the modal path), the SHORT toast
+    // form is driven by `unanchoredCount` (item 5).
+    const withInfo: ImportReceiptWithUnanchoredCount = {
       ...receiptFixture(),
       info: ['1 section is not connected to a zero datum'],
+      unanchoredCount: 1,
     };
 
     presentImportReceipt(withInfo, ui);
 
     expect(ui.openDialog).not.toHaveBeenCalled();
     expect(ui.showToast).toHaveBeenCalledTimes(1);
-    expect(ui.showToast).toHaveBeenCalledWith(
-      expect.stringContaining('1 section is not connected to a zero datum'),
+  });
+
+  it('the toast never carries the full info sentence - only the short scale (#446)', () => {
+    const ui = mockUi();
+    const withInfo: ImportReceiptWithUnanchoredCount = {
+      ...receiptFixture(),
+      info: ['3 sections are not connected to a zero datum'],
+      unanchoredCount: 3,
+    };
+
+    presentImportReceipt(withInfo, ui);
+
+    const [message] = ui.showToast.mock.calls[0] as [string, string, string];
+    expect(message).toContain('3 sections unanchored');
+    expect(message).not.toContain('3 sections are not connected to a zero datum');
+  });
+
+  it('the modal path (ImportReceiptDialog via importReceiptSummaryParts) still gets the full sentence', () => {
+    const withInfo: ImportReceipt = {
+      ...receiptFixture(['triggers the modal']),
+      info: ['3 sections are not connected to a zero datum'],
+    };
+
+    const parts = importReceiptSummaryParts(withInfo, i18n.t);
+
+    expect(parts).toContain('3 sections are not connected to a zero datum');
+  });
+});
+
+describe('finishImportWithoutOrphanSuggestions (#446)', () => {
+  beforeEach(() => {
+    invokeIpcMock.mockReset();
+  });
+
+  it('appends the info line and stamps unanchoredCount when the count is > 0', async () => {
+    invokeIpcMock.mockResolvedValue(2);
+    const ui = mockUi();
+
+    await finishImportWithoutOrphanSuggestions('tml-import', ui, [1, 2], receiptFixture());
+
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'count_unanchored_sections',
+      { newlyImportedSectionIds: [1, 2] },
+      expect.anything(),
+    );
+    expect(ui.showToast).toHaveBeenCalledTimes(1);
+    const [message] = ui.showToast.mock.calls[0] as [string, string, string];
+    expect(message).toContain('2 sections unanchored');
+  });
+
+  it('leaves the receipt untouched when the count is 0', async () => {
+    invokeIpcMock.mockResolvedValue(0);
+    const ui = mockUi();
+
+    await finishImportWithoutOrphanSuggestions('tml-import', ui, [1], receiptFixture());
+
+    expect(ui.showToast).toHaveBeenCalledTimes(1);
+    const [message] = ui.showToast.mock.calls[0] as [string, string, string];
+    expect(message).not.toContain('unanchored');
+  });
+
+  it('is non-fatal when the IPC call throws - the import still completes', async () => {
+    invokeIpcMock.mockRejectedValue(new Error('boom'));
+    const ui = mockUi();
+
+    await finishImportWithoutOrphanSuggestions('tml-import', ui, [1], receiptFixture());
+
+    expect(ui.closeDialog).toHaveBeenCalled();
+    expect(ui.showToast).toHaveBeenCalledTimes(1);
+    const [message] = ui.showToast.mock.calls[0] as [string, string, string];
+    expect(message).not.toContain('unanchored');
+  });
+
+  it('does nothing (no IPC call) when there is no receipt to decorate', async () => {
+    const ui = mockUi();
+
+    await finishImportWithoutOrphanSuggestions('tml-import', ui, [1]);
+
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+    expect(ui.closeDialog).toHaveBeenCalled();
+  });
+
+  it('routes through the dialog path when the resulting receipt also carries a warning', async () => {
+    invokeIpcMock.mockResolvedValue(1);
+    const ui = mockUi();
+
+    await finishImportWithoutOrphanSuggestions(
+      'tml-import',
+      ui,
+      [1],
+      receiptFixture(['1 shot skipped']),
+    );
+
+    expect(ui.showToast).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith(
       'import-receipt',
-      'success',
+      expect.objectContaining({
+        receipt: expect.objectContaining({
+          info: ['1 section is not connected to a zero datum'],
+        }),
+      }),
     );
   });
 });

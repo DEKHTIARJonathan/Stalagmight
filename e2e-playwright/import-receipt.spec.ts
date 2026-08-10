@@ -42,6 +42,7 @@ test.describe('Import receipt dialog', () => {
           closures_created: 1,
           unit_conversion: 'Lengths converted from feet to meters',
           warnings: ['Survey A had 2 unresolved stations', 'Survey B date is missing'],
+          info: [],
         },
       });
     });
@@ -86,6 +87,7 @@ test.describe('Import receipt dialog', () => {
             'Survey C was empty',
             'Survey D had a zero-shot section',
           ],
+          info: [],
         },
       });
     });
