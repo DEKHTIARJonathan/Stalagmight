@@ -285,3 +285,104 @@ fn end_to_end_import_respects_datum_invariants() {
         "exactly one datum survives in a single merge component"
     );
 }
+
+/// Every shot in the project, cross-checked with the real validator - the
+/// same call `command_shot.rs` makes.
+fn inclination_depth_mismatch_count(project: &crate::models::Project) -> usize {
+    use crate::config::ValidationConfig;
+    use crate::core::Validator;
+
+    let config = ValidationConfig::default();
+    project
+        .sections
+        .iter()
+        .flat_map(|section| {
+            section.shots.iter().enumerate().flat_map(|(i, shot)| {
+                Validator::validate_shot(&shot.to_shot_data(), &config, section.id, i)
+            })
+        })
+        .filter(|w| w.code == "INCLINATION_DEPTH_MISMATCH")
+        .count()
+}
+
+/// #482: a clean TML export/import cycle must not fabricate
+/// `INCLINATION_DEPTH_MISMATCH` warnings for depth-only surveys. Red on
+/// master: export collapses `pitch_in: None` to a wire `0.0` inclination,
+/// and import used to read every wire inclination back as `Some`, so the
+/// re-imported shot's fabricated `Some(0.0)` disagreed with its real depth
+/// change on every one of these depth-only shots.
+#[test]
+fn depth_only_tml_round_trip_fabricates_no_inclination_depth_mismatch() {
+    use crate::core::state::{AppState, VirtualShotMode};
+    use crate::core::Command;
+
+    // Five depth-only shots (Inclination 0.0, i.e. never sighted), each with
+    // a real, distinct depth change - the shape issue #482 reports.
+    let shots = [
+        tml_shot_xml_gps(0, -1, "START", "Main", 20.5, -87.3),
+        tml_shot_xml_depth(1, 0, "REAL", "Main", 5.0, -1.0),
+        tml_shot_xml_depth(2, 1, "REAL", "Main", 12.0, -1.0),
+        tml_shot_xml_depth(3, 2, "REAL", "Main", 8.0, -1.0),
+        tml_shot_xml_depth(4, 3, "REAL", "Main", 20.0, -1.0),
+        tml_shot_xml_depth(5, 4, "REAL", "Main", 15.0, -1.0),
+    ]
+    .join("\n");
+
+    let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 100.0, &shots));
+    let (sections, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Depth Only".to_string(),
+        location: None,
+    });
+    let result = state.execute_tml_import_sections(
+        sections,
+        closures,
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+        Some(tml.first_start_absolute_elevation),
+    );
+    assert!(result.success, "import failed: {:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        inclination_depth_mismatch_count(&project),
+        0,
+        "first import must not fabricate a mismatch for a never-sighted inclination"
+    );
+
+    // Export and re-import to complete the round trip the issue describes.
+    let out_dir = tempfile::tempdir().unwrap();
+    let out_path = out_dir.path().join("depth_only.tmlu");
+    crate::export::tml::export_tml(&project, &out_path).unwrap();
+    let round_tripped = parse_tml(&out_path).unwrap();
+    let (sections, closures, _) =
+        convert_tml_to_import_configs(&round_tripped, false, false).unwrap();
+
+    let state2 = AppState::new().unwrap();
+    state2.execute(Command::CreateProject {
+        name: "Depth Only Round Trip".to_string(),
+        location: None,
+    });
+    let result2 = state2.execute_tml_import_sections(
+        sections,
+        closures,
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+        Some(round_tripped.first_start_absolute_elevation),
+    );
+    assert!(result2.success, "re-import failed: {:?}", result2.error);
+
+    let project2 = state2.get_project_state().unwrap();
+    assert_eq!(
+        inclination_depth_mismatch_count(&project2),
+        0,
+        "a clean export/import round trip must not fabricate inclination-depth \
+         mismatch warnings for a depth-only survey"
+    );
+}

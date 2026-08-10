@@ -15,7 +15,10 @@ use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig, ShotData, ShotKind};
+use crate::models::{
+    ImportClosure, ImportPlacement, ImportSectionConfig, ShotData, ShotKind,
+    DEPTH_ROUNDING_EPSILON_M,
+};
 
 mod decode;
 // `test-support` (never on in production builds) keeps these fixture builders
@@ -1934,6 +1937,35 @@ pub fn inclination_to_pitch(inclination: f64) -> f64 {
     }
 }
 
+/// Resolve a TML shot's `pitch_in`, treating a wire `0.0` inclination on a
+/// depth-surveyed shot as "not recorded" rather than "recorded as level".
+///
+/// `export::tml::pitch_to_inclination` collapses both `None` (never measured)
+/// and `Some(0.0)` (genuinely level) to the same wire `0.0`, so import cannot
+/// tell them apart from the inclination field alone (#482). It can, though,
+/// use the shot's own depth change as a tiebreaker: a shot whose depth barely
+/// moved is plausibly level and a stray `Some(0.0)` there is harmless, but a
+/// shot with a real depth change and wire-`0.0` inclination is a depth-gauge
+/// survey where the sighted inclination was never taken - re-importing it as
+/// `Some(0.0)` fabricates a "level" reading that then disagrees with the
+/// depth/length geometry and trips `INCLINATION_DEPTH_MISMATCH` on every
+/// clean round trip.
+///
+/// The epsilon is [`DEPTH_ROUNDING_EPSILON_M`], the same tolerance the
+/// validator itself treats as "no real depth change" for this shot's
+/// geometry, so a depth delta that would not move the validator's own
+/// checks does not move this decision either.
+///
+/// Only fires on an exact wire `0.0`: any other inclination value came from
+/// somewhere and is trusted as recorded, per [`inclination_to_pitch`].
+fn tml_pitch_in(inclination: f64, depth_in: f64, depth_out: f64) -> Option<f64> {
+    if inclination == 0.0 && (depth_out - depth_in).abs() > DEPTH_ROUNDING_EPSILON_M {
+        None
+    } else {
+        Some(inclination_to_pitch(inclination))
+    }
+}
+
 /// Canonical mapping of a single Ariane TML shot to Stalagmight's `ShotData`.
 ///
 /// This is the SINGLE source of truth for the TML to Stalagmight field mapping
@@ -1970,7 +2002,7 @@ pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
         length: shot.length,
         depth_in,
         depth_out: shot.depth,
-        pitch_in: Some(inclination_to_pitch(shot.inclination)),
+        pitch_in: tml_pitch_in(shot.inclination, depth_in, shot.depth),
         pitch_out: None, // No backsight inclination
         left: lrud_opt(shot.left),
         right: lrud_opt(shot.right),
@@ -3755,6 +3787,72 @@ mod tests {
         assert!((shot_data[0].right.unwrap_or(0.0) - 2.5).abs() < f64::EPSILON);
         assert!(shot_data[0].up.is_none());
         assert!((shot_data[0].down.unwrap_or(0.0) - 1.0).abs() < f64::EPSILON);
+    }
+
+    /// #482: a wire `0.0` inclination on a shot with a real depth change
+    /// (the shape a depth-only, depth-gauge survey exports as) must import
+    /// as `pitch_in: None`, not a fabricated `Some(0.0)`. Without this,
+    /// re-importing an exported depth-only project trips
+    /// `INCLINATION_DEPTH_MISMATCH` on every such shot.
+    #[test]
+    fn test_zero_inclination_with_depth_change_imports_as_no_pitch() {
+        let shots = vec![TmlShot {
+            depth: 5.0,
+            depth_in: 0.0,
+            inclination: 0.0,
+            ..sample_tml_shot()
+        }];
+
+        let shot_data = convert_shots_to_shot_data(&shots, 0.0, false);
+        assert_eq!(shot_data[0].pitch_in, None);
+    }
+
+    /// #482 companion: a wire `0.0` inclination with (near-)zero depth
+    /// change is indistinguishable from a genuinely level, measured shot
+    /// and stays `Some(0.0)` - the ambiguous case is resolved in favour of
+    /// the harmless reading.
+    #[test]
+    fn test_zero_inclination_with_zero_depth_change_stays_some_zero() {
+        let shots = vec![TmlShot {
+            depth: 0.0,
+            depth_in: 0.0,
+            inclination: 0.0,
+            ..sample_tml_shot()
+        }];
+
+        let shot_data = convert_shots_to_shot_data(&shots, 0.0, false);
+        assert_eq!(shot_data[0].pitch_in, Some(0.0));
+    }
+
+    /// #482 boundary: the depth-delta epsilon is
+    /// [`stalagmight_models::DEPTH_ROUNDING_EPSILON_M`]. Just inside it, the
+    /// shot still reads as "no real depth change" (`Some(0.0)`); just
+    /// beyond it, it reads as depth-surveyed (`None`).
+    #[test]
+    fn test_zero_inclination_depth_change_epsilon_boundary() {
+        let epsilon = DEPTH_ROUNDING_EPSILON_M;
+
+        let just_inside = vec![TmlShot {
+            depth: epsilon * 0.5,
+            depth_in: 0.0,
+            inclination: 0.0,
+            ..sample_tml_shot()
+        }];
+        assert_eq!(
+            convert_shots_to_shot_data(&just_inside, 0.0, false)[0].pitch_in,
+            Some(0.0)
+        );
+
+        let just_beyond = vec![TmlShot {
+            depth: epsilon * 2.0,
+            depth_in: 0.0,
+            inclination: 0.0,
+            ..sample_tml_shot()
+        }];
+        assert_eq!(
+            convert_shots_to_shot_data(&just_beyond, 0.0, false)[0].pitch_in,
+            None
+        );
     }
 
     #[test]

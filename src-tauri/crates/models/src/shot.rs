@@ -27,6 +27,16 @@ pub fn shot_display_position(shot_id: ShotId, section_id: SectionId) -> u32 {
     }
 }
 
+/// Rounding tolerance, in metres, for depth-change geometry checks.
+///
+/// Shared between the validator's length/depth-change cross-check
+/// (`core::validation`, `LENGTH_BELOW_DEPTH_CHANGE` and
+/// `INCLINATION_DEPTH_MISMATCH`) and the TML importer's zero-means-absent
+/// pitch inference (`parsers::tml::normalize_tml_shot`), so both agree on what
+/// counts as "no real depth change" rather than drifting apart with two
+/// independently-chosen magic numbers.
+pub const DEPTH_ROUNDING_EPSILON_M: f64 = 1e-6;
+
 /// Convert slope length + vertical delta into horizontal length.
 /// Returns 0.0 if the inputs are invalid (e.g., slope < |dz|).
 pub(crate) fn horizontal_length_from_slope(length: f64, dz: f64) -> f64 {

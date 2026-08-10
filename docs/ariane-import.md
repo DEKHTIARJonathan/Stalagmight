@@ -138,6 +138,24 @@ Parsed but dropped:
   unmeasured one does. The full argument, and the measured scale of it, is in
   [ariane-export.md](ariane-export.md#the-lrud-zeronull-collision).
 
+- **The Inclination zero/null collision.** `Inclination`/`INC` has the same
+  format-forced ambiguity as LRUD (above): Ariane has no null, so
+  `pitch_to_inclination` (`export/tml.rs:153-158`) writes both `None` (never
+  sighted) and `Some(0.0)` (genuinely level) as the same wire `0.0`. Unlike
+  LRUD, though, a plain "0.0 means absent" read would fabricate data:
+  `Validator::validate_shot`'s inclination/depth cross-check treats an absent
+  pitch as nothing to check, but a `Some(0.0)` as a claim to verify against the
+  shot's depth change, so reading every wire `0.0` back as `Some(0.0)` turned a
+  clean round trip of a depth-only survey into a wall of fabricated
+  `INCLINATION_DEPTH_MISMATCH` warnings ([#482](https://github.com/Stalagmight/Stalagmight/issues/482)).
+  The importer (`parsers::tml::normalize_tml_shot`) resolves the ambiguity with
+  the shot's own depth change as a tiebreaker: a wire `0.0` paired with a real
+  depth change (beyond the same rounding epsilon the validator itself treats
+  as noise, `DEPTH_ROUNDING_EPSILON_M`) imports as `None`; a wire `0.0` with
+  no real depth change stays `Some(0.0)`, since a genuinely level measured
+  shot is indistinguishable from an unsighted one at that point and the
+  ambiguity is harmless either way.
+
 - **Leading and trailing whitespace is trimmed off every text field.** The reader does
   `e.unescape()?.trim()` on every shot element's text (`parsers/tml/mod.rs:398`), which is what
   makes a pretty-printed `<Comment>\n  text\n</Comment>` from another tool read as `text` rather

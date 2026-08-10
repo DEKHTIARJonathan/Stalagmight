@@ -1,7 +1,7 @@
 use crate::config::ValidationConfig;
 use crate::models::shot::pitch_from_components;
 use crate::models::warning::severity_for_code;
-use crate::models::{SectionId, ShotData};
+use crate::models::{SectionId, ShotData, DEPTH_ROUNDING_EPSILON_M};
 
 use super::{ValidationWarning, WarningSeverity};
 
@@ -258,7 +258,7 @@ impl Validator {
         if shot.length > 0.0 {
             // The slope length can never be shorter than the vertical change -
             // that would need sin(pitch) > 1. A small epsilon absorbs rounding.
-            if shot.length + 1e-6 < dz.abs() {
+            if shot.length + DEPTH_ROUNDING_EPSILON_M < dz.abs() {
                 warnings.push(warn(
                     "LENGTH_BELOW_DEPTH_CHANGE",
                     format!(
@@ -1154,6 +1154,36 @@ mod tests {
         assert!(
             w.iter().all(|w| w.code != "INCLINATION_DEPTH_MISMATCH"),
             "skip the cross-check for an invalid pitch"
+        );
+    }
+
+    /// #482: the validator itself must NOT be weakened. A genuinely recorded
+    /// `Some(0.0)` pitch on a shot with a real depth change (as any non-TML
+    /// importer, or a shot entered by hand, can produce) still disagrees
+    /// with the geometry and must still warn - only the TML importer's
+    /// zero-means-absent inference (`parsers::tml::normalize_tml_shot`)
+    /// tells `Some(0.0)` apart from "never recorded"; the validator has no
+    /// such distinction to make and keeps cross-checking every `Some`.
+    #[test]
+    fn test_recorded_zero_pitch_with_depth_change_still_warns() {
+        let config = default_config();
+        let shot = ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 5.0,
+            pitch_in: Some(0.0),
+            pitch_out: Some(0.0),
+            ..Default::default()
+        };
+        let warnings = Validator::validate_shot(&shot, &config, 0, 0);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.code == "INCLINATION_DEPTH_MISMATCH"),
+            "a recorded 0° pitch on a shot that descended 5m over 10m must still \
+             be cross-checked, got {warnings:?}"
         );
     }
 
