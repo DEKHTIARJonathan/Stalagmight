@@ -370,6 +370,11 @@ export const VIRTUAL_SHOT_MODES: readonly string[] = ['Auto', 'AllJumps', 'AllRe
  * `gpx-import-confirm` when only waypoints are selected and
  * `gpx-continue-button` otherwise, and they are opposite branches of one
  * ternary. The walk plays the first entry that is actionable.
+ *
+ * An entry ending in `*` is a PREFIX PATTERN, expanded against the live digest
+ * exactly as `TESTID_INVENTORY`'s patterns are: `zero-datum-select` advances by
+ * picking a section CARD, and the card ids carry an index this table cannot
+ * know. The shell plays the lowest-indexed actionable member.
  */
 export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, readonly string[]>>> = {
   'dmp-select': ['continue-button'],
@@ -381,7 +386,19 @@ export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, readonly string[]>>
   walls: ['walls-import-confirm', 'walls-import-cancel'],
   'gpx-select': ['gpx-continue-button', 'gpx-import-confirm', 'gpx-selection-cancel'],
   'gpx-place': ['gpx-import-confirm'],
-  'zero-datum-select': ['zero-datum-selection-skip'],
+  // PICK A SECTION first, and only skip if there is none to pick.
+  //
+  // Skipping is not advancing this screen, it is declining its whole purpose:
+  // behind a picked card sits `zero-datum-config`, which owns a station select,
+  // a GPS parser, a shot table and the confirm that starts the wizard WITH an
+  // anchor. Routing every stalled visit to Skip meant the forced advance walked
+  // around that surface every time. Measured on the naharon campaign: 27 samples
+  // on this screen, 7 picks against 8 skips, and the anchored wizard entry
+  // behind it almost never reached.
+  //
+  // The `*` is a PREFIX the shell expands against the digest - the cards are
+  // `zero-datum-section-card-N` and the model cannot know N.
+  'zero-datum-select': ['zero-datum-section-card-*', 'zero-datum-selection-skip'],
   'zero-datum-config': ['zero-datum-config-confirm'],
   'wiz-suggest': ['confirm-button'],
   // No entry for `wiz-no-suggest`: the bridge's settle predicate waits through

@@ -1410,7 +1410,23 @@ export const importDialogFuzz: Scenario = {
     const drawMove = (digest: ImportScreenDigest, mode: 'draw' | 'advance'): FuzzMove | null => {
       if (mode === 'advance') {
         const route = ADVANCE_MOVE[digest.screen] ?? [];
-        const testid = route.find((candidate) => digest.live[candidate] === 2);
+        // A `*` entry is a PREFIX the model could not spell concretely (the
+        // zero-datum section cards carry an index). Expanded against the live
+        // digest and resolved to the LOWEST actionable index, so a forced
+        // advance is as deterministic as a literal one.
+        const resolve = (candidate: string): string | undefined => {
+          if (!candidate.endsWith('*')) return digest.live[candidate] === 2 ? candidate : undefined;
+          const prefix = candidate.slice(0, -1);
+          const matches = Object.keys(digest.live)
+            .filter((id) => id.startsWith(prefix) && digest.live[id] === 2 && /^\d+$/.test(id.slice(prefix.length)))
+            .sort((a, b) => Number(a.slice(prefix.length)) - Number(b.slice(prefix.length)));
+          return matches[0];
+        };
+        let testid: string | undefined;
+        for (const candidate of route) {
+          testid = resolve(candidate);
+          if (testid !== undefined) break;
+        }
         if (testid !== undefined) {
           ctx.metric('forcedAdvance');
           // Per screen as well as in total. The aggregate said 135 forced

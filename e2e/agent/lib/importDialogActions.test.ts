@@ -143,8 +143,28 @@ describe('import fuzzer testid allowlists', () => {
       ...Object.values(ESCAPE_PATH).flatMap((route) => [...route]),
     ].filter((id): id is string => typeof id === 'string');
     expect(forced.length).toBeGreaterThan(30);
-    const rejected = forced.filter((id) => !isDispatchable({ kind: 'ui', testid: id, label: 'x' }));
+    // A `*` entry is a PREFIX the shell expands against the digest, so what has
+    // to be dispatchable is the EXPANDED id - which means the bridge needs a
+    // matching pattern for it, not a literal.
+    const rejected = forced
+      .map((id) => (id.endsWith('*') ? `${id.slice(0, -1)}7` : id))
+      .filter((id) => !isDispatchable({ kind: 'ui', testid: id, label: 'x' }));
     expect(rejected).toEqual([]);
+  });
+
+  it('keeps every advance-route prefix inside the observable inventory', () => {
+    // The other half: the shell expands a `*` route entry out of `digest.live`,
+    // so the digest has to be reporting those ids in the first place. A prefix
+    // the inventory does not carry would expand to nothing, every time, and the
+    // screen would silently have no advancing move at all.
+    const prefixes = Object.values(ADVANCE_MOVE)
+      .flatMap((route) => [...(route ?? [])])
+      .filter((id) => id.endsWith('*'));
+    expect(prefixes.length).toBeGreaterThan(0);
+    const inventoryPrefixes = TESTID_INVENTORY.filter((entry) => entry.endsWith('*'));
+    for (const prefix of prefixes) {
+      expect(inventoryPrefixes, `${prefix} must be observable`).toContain(prefix);
+    }
   });
 
   it('allows every dynamic testid the generators can select', async () => {
