@@ -877,6 +877,24 @@ impl Project {
             suggest_placements, ExistingSection, OrphanPlacementSuggestion,
         };
 
+        if newly_imported_section_ids.is_empty() {
+            return Vec::new();
+        }
+
+        // Cheap early-out: nothing in the project resolves to a zero datum at
+        // all, so no component can ever be a valid suggestion TARGET (targets
+        // must themselves be datum-anchored - see the per-component filter
+        // below). Without this, a datum-less project makes EVERY component an
+        // "orphan" and the O(components x sections) walk below runs for
+        // nothing (#446).
+        if !self
+            .zero_datums
+            .iter()
+            .any(|zd| self.resolve_key(&zd.station_ref).is_some())
+        {
+            return Vec::new();
+        }
+
         // 1. Build all connected components (via merges only), over the WHOLE
         // post-import project - not just pre-existing sections - so a first
         // import into an empty project can suggest an unanchored component
@@ -884,19 +902,7 @@ impl Project {
         // targets stay newly-imported-only (built below), so a pre-existing
         // orphan is never re-suggested against a pre-existing anchor: only
         // "orphan vs. newly imported" pairs are ever produced.
-        let mut visited: HashSet<SectionId> = HashSet::new();
-        let mut components: Vec<HashSet<SectionId>> = Vec::new();
-
-        for section in &self.sections {
-            if visited.contains(&section.id) {
-                continue;
-            }
-            let component = self.get_merged_section_ids(section.id);
-            for &sid in &component {
-                visited.insert(sid);
-            }
-            components.push(component);
-        }
+        let components = self.connected_components();
 
         // 2. Filter to orphan components: no datum (an empty component -
         // impossible here - is treated as non-orphan).
@@ -910,7 +916,7 @@ impl Project {
             })
             .collect();
 
-        if orphan_components.is_empty() || newly_imported_section_ids.is_empty() {
+        if orphan_components.is_empty() {
             return Vec::new();
         }
 
@@ -958,9 +964,13 @@ impl Project {
         // already connected to the leaf via the merges that make up this very
         // component, so matching against them would be a self-suggestion.
         for component in &orphan_components {
+            // Targets must themselves be datum-anchored: without this, two
+            // distinct floating (unanchored) components can be suggested onto
+            // each other - a "placement" that is circular and anchors
+            // nothing (#446).
             let component_targets: Vec<ExistingSection> = target_sections
                 .iter()
-                .filter(|t| !component.contains(&t.id))
+                .filter(|t| !component.contains(&t.id) && self.rigid_group_has_datum(t.id))
                 .cloned()
                 .collect();
             if component_targets.is_empty() {
@@ -1090,13 +1100,13 @@ impl Project {
         suggestions
     }
 
-    /// Count sections not connected to a zero datum (directly or through
-    /// merges), across the whole project. Used to add an info line to the
-    /// import receipt when an import leaves unanchored data and the
-    /// placement-suggestion pass could not offer anything to fix it (#446).
-    pub fn count_unanchored_sections(&self) -> u32 {
+    /// Build all connected components of the project's sections (via merges
+    /// only), covering every section exactly once. Shared by
+    /// [`Self::suggest_orphan_placements`] and [`Self::count_unanchored_sections`]
+    /// so the two walks cannot drift apart.
+    fn connected_components(&self) -> Vec<HashSet<SectionId>> {
         let mut visited: HashSet<SectionId> = HashSet::new();
-        let mut count = 0u32;
+        let mut components: Vec<HashSet<SectionId>> = Vec::new();
 
         for section in &self.sections {
             if visited.contains(&section.id) {
@@ -1106,14 +1116,33 @@ impl Project {
             for &sid in &component {
                 visited.insert(sid);
             }
-            let Some(&any_member) = component.iter().next() else {
-                continue;
-            };
-            if !self.rigid_group_has_datum(any_member) {
-                count += component.len() as u32;
-            }
+            components.push(component);
         }
 
-        count
+        components
+    }
+
+    /// Count sections not connected to a zero datum (directly or through
+    /// merges), restricted to components that contain at least one of
+    /// `newly_imported_section_ids`. Used to add an info line to the import
+    /// receipt when an import leaves unanchored data and the
+    /// placement-suggestion pass could not offer anything to fix it - scoped
+    /// to THIS import so a clean import into a project with unrelated,
+    /// pre-existing orphans doesn't blame this receipt for orphans it didn't
+    /// create (#446).
+    pub fn count_unanchored_sections(&self, newly_imported_section_ids: &[SectionId]) -> u32 {
+        let new_set: HashSet<SectionId> = newly_imported_section_ids.iter().copied().collect();
+
+        self.connected_components()
+            .iter()
+            .filter(|comp| comp.iter().any(|sid| new_set.contains(sid)))
+            .filter(|comp| {
+                let Some(&any_member) = comp.iter().next() else {
+                    return false;
+                };
+                !self.rigid_group_has_datum(any_member)
+            })
+            .map(|comp| comp.len() as u32)
+            .sum()
     }
 }

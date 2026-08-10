@@ -27,7 +27,10 @@ pub struct ImportReceipt {
     /// `saveFeedback.ts`), unlike a non-empty `warnings`. Currently used for
     /// the "N sections are not connected to a zero datum" line the import
     /// dialogs add when the orphan-placement pass found nothing to suggest
-    /// (#446).
+    /// (#446). `#[serde(default)]` so an older cached/replayed payload
+    /// without this field still deserializes instead of rejecting the whole
+    /// receipt.
+    #[serde(default)]
     pub info: Vec<String>,
 }
 
