@@ -12,6 +12,7 @@ import {
   finalizeDeferredSaveWarnings,
   surfaceImportFailure,
 } from '../../utils/saveFeedback';
+import { importButtonLabel } from '../../utils/importButtonLabel';
 
 interface GpxSelectionDialogProps {
   gpxFile: GpxFile;
@@ -337,7 +338,13 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
               onClick={handleImportWaypointsOnly}
               disabled={isImporting || !hashChecked || !hasSelection}
             >
-              {isImporting ? t('dialogs.gpxSelection.importing') : t('dialogs.gpxSelection.import')}
+              {importButtonLabel(t, {
+                isImporting,
+                hashChecked,
+                importingKey: 'dialogs.gpxSelection.importing',
+                checkingKey: 'dialogs.gpxSelection.checkingDuplicates',
+                defaultKey: 'dialogs.gpxSelection.import',
+              })}
             </Button>
           ) : (
             <Button
@@ -346,7 +353,13 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
               onClick={handleContinue}
               disabled={!hashChecked || !hasSelection}
             >
-              {t('dialogs.gpxSelection.continue')}
+              {importButtonLabel(t, {
+                isImporting: false,
+                hashChecked,
+                importingKey: 'dialogs.gpxSelection.continue',
+                checkingKey: 'dialogs.gpxSelection.checkingDuplicates',
+                defaultKey: 'dialogs.gpxSelection.continue',
+              })}
             </Button>
           )}
         </div>

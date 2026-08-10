@@ -9,6 +9,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { WallsFile, OrphanPlacementSuggestion } from '../../types/commands';
 import { setSource } from '../../utils/telemetry';
+import { importButtonLabel } from '../../utils/importButtonLabel';
 import {
   finalizeDeferredSaveWarnings,
   finishImportWithoutOrphanSuggestions,
@@ -411,7 +412,13 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
               (selectedShotCount === 0 && !(includeSplays && selectedSplayCount > 0))
             }
           >
-            {isImporting ? t('dialogs.wallsImport.importing') : t('dialogs.wallsImport.import')}
+            {importButtonLabel(t, {
+              isImporting,
+              hashChecked,
+              importingKey: 'dialogs.wallsImport.importing',
+              checkingKey: 'dialogs.wallsImport.checkingDuplicates',
+              defaultKey: 'dialogs.wallsImport.import',
+            })}
           </Button>
         </div>
       </div>
