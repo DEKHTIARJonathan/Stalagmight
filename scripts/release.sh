@@ -310,10 +310,13 @@ if [ "$NO_TAG" = true ]; then
   echo ""
   echo "Prepared v$NEW_VERSION (no tag created)"
   echo ""
+  # Through release-tag.sh, not `git tag`: it is the half of the release that
+  # this script's checks do not cover, and a bare tag command gets none of them.
   echo "Next steps:"
   echo "  git push"
-  echo "  git tag v$NEW_VERSION-rc1 && git push origin v$NEW_VERSION-rc1   # a candidate"
-  echo "  git tag v$NEW_VERSION     && git push origin v$NEW_VERSION       # the release"
+  echo "  ./scripts/release-tag.sh v$NEW_VERSION-rc1   # a candidate, then rc2, rc3, ..."
+  echo "  ./scripts/release-tag.sh v$NEW_VERSION       # the release"
+  echo "  git push origin <the tag it created>"
   exit 0
 fi
 
