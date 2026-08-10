@@ -1638,19 +1638,39 @@ const DIRTY_OVERLAY: Generator[] = [
 
 const PLACEMENT: Generator[] = [
   {
+    /**
+     * Land the placement, NEAR the survey or well away from it.
+     *
+     * An OFFSET from the map centre, which is where the survey is: the shell
+     * resolves it against the live centre at dispatch. An absolute draw would
+     * land in the Gulf of Guinea and be refused before it reached the app.
+     *
+     * The two ranges are different code paths, not two flavours of the same
+     * one. A click within snapping distance of a station commits a
+     * `manual_snap` placement, which MERGES the segment onto what it snapped to;
+     * a click far from everything commits a plain `manual` placement, which
+     * merges onto nothing and leaves the segment as its own component with no
+     * zero datum. That second outcome is the only thing this fuzzer can build an
+     * ORPHAN out of (`Project::suggest_orphan_placements` wants a component with
+     * no datum and no newly-imported member), and with the tight jitter alone
+     * essentially every placement snapped: 214 campaign cells, zero orphans.
+     *
+     * The far range stays well inside a normal viewport, and one that lands
+     * outside is refused by `lib/controls.ts` and counted as `mapSkip:*` like
+     * any other impossible move.
+     */
     name: 'map:click',
     weight: 12,
     screens: ['map-placement'],
     build: (env) => {
-      // An OFFSET from the map centre, which is where the survey is: the shell
-      // resolves it against the live centre at dispatch. An absolute draw would
-      // land in the Gulf of Guinea and be refused before it reached the app.
-      const jitter = (): number => (env.ctx.rng() - 0.5) * 0.0008;
+      const far = env.ctx.rng() < 0.5;
+      const span = far ? 0.005 : 0.0008;
+      const jitter = (): number => (env.ctx.rng() - 0.5) * span;
       return {
         kind: 'mapClick',
         lngLat: [jitter(), jitter()],
         relative: true,
-        label: 'place near the map centre',
+        label: far ? 'place well away from the survey' : 'place near the map centre',
       };
     },
   },

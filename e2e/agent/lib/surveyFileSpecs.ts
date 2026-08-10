@@ -448,15 +448,30 @@ interface MotifShot {
   depthOut: number;
 }
 
-function motifRun(rng: Rng, count: number, heading0: number, headingStep: number, depth0: number): MotifShot[] {
+/**
+ * A run of shots.
+ *
+ * With `length0` the run is DETERMINISTIC in every field the suggester compares
+ * - azimuth, length and the two depths - so two files that drew the same shape
+ * produce the same motif and can match each other. Without it the run is drawn,
+ * which is what the filler wants: filler must not look like anything.
+ */
+function motifRun(
+  rng: Rng,
+  count: number,
+  heading0: number,
+  headingStep: number,
+  depth0: number,
+  length0?: number,
+): MotifShot[] {
   const out: MotifShot[] = [];
   let heading = heading0;
   let depth = depth0;
   for (let i = 0; i < count; i++) {
-    const length = randInt(rng, 300, 900);
+    const length = length0 === undefined ? randInt(rng, 300, 900) : length0 + i * 70;
     // Under a metre of depth change per shot, and never more than a third of
     // the slope length, so the horizontal projection stays comfortably real.
-    const step = randInt(rng, -60, 90);
+    const step = length0 === undefined ? randInt(rng, -60, 90) : 45 + (i % 3) * 15;
     const next = Math.max(20, Math.min(3800, depth + step));
     out.push({ heading, length, depthIn: depth, depthOut: next });
     depth = next;
@@ -550,13 +565,37 @@ function suggestiveSection(
   };
 }
 
+/**
+ * Motif shapes two DIFFERENT files can share.
+ *
+ * Within one file the anchor's repeat is what produces alternatives. ACROSS
+ * files nothing matched at all, and that is what kept the orphan surface dark:
+ * an orphan component is a set of EXISTING sections with no datum and no
+ * newly-imported member (`Project::suggest_orphan_placements`), so the only way
+ * this fuzzer makes one is to place a segment manually in one flow and then
+ * import something that MATCHES it in a later flow. With every file drawing a
+ * fresh random motif, the later import never matched.
+ *
+ * Four shapes, drawn per file: two files in the same episode collide often
+ * enough to make the cross-file match routine, while the files stay visibly
+ * different (section count, filler, jitter and every date/LRUD field still come
+ * off the stream).
+ */
+const SUGGESTIVE_MOTIF_SHAPES: readonly { heading0: number; headingStep: number; depth0: number; length0: number }[] = [
+  { heading0: 200, headingStep: 60, depth0: 320, length0: 480 },
+  { heading0: 1100, headingStep: -45, depth0: 780, length0: 640 },
+  { heading0: 2000, headingStep: 95, depth0: 150, length0: 550 },
+  { heading0: 2900, headingStep: -80, depth0: 610, length0: 720 },
+];
+
 export function suggestiveDmpSpec(rng: Rng): DmpSpec {
   const version = pick(rng, [5, 5, 5, 4, 4, 3]);
   const motifLength = randInt(rng, 3, 5);
-  const heading0 = randInt(rng, 0, 3599);
-  const headingStep = randInt(rng, -120, 120);
-  const depth0 = randInt(rng, 50, 900);
-  const motif = motifRun(rng, motifLength, heading0, headingStep, depth0);
+  const shape = pick(rng, SUGGESTIVE_MOTIF_SHAPES);
+  const heading0 = shape.heading0;
+  const headingStep = shape.headingStep;
+  const depth0 = shape.depth0;
+  const motif = motifRun(rng, motifLength, heading0, headingStep, depth0, shape.length0);
   const zero = { heading: 0, length: 0, depth: 0 };
   const lastHeading = motif[motif.length - 1]!.heading;
   const lastDepth = motif[motif.length - 1]!.depthOut;

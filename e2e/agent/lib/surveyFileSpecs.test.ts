@@ -331,6 +331,33 @@ describe('suggestiveDmpSpec', () => {
       );
     }
   });
+
+  it('lets two DIFFERENT files match each other often enough to matter', () => {
+    // The orphan surface needs it. An orphan component is a set of EXISTING
+    // sections with no datum and no newly-imported member, so this fuzzer can
+    // only make one by placing a segment manually in one flow and importing
+    // something that MATCHES it in a later flow. With every file drawing a
+    // fresh random motif that later import never matched, and
+    // `screen:orphan-placement` stayed at zero for 214 campaign cells.
+    const specs = SEEDS.map((seed) => suggestiveDmpSpec(mulberry32(seed)));
+    let pairs = 0;
+    let matched = 0;
+    for (let i = 0; i < specs.length; i += 1) {
+      for (let j = i + 1; j < specs.length; j += 1) {
+        pairs += 1;
+        const anchor = specs[i]!.sections[0]!.shots.map(toMatchShot);
+        const leaf = specs[j]!.sections[1]!.shots.map(toMatchShot).slice(0, PS.maxReferenceShots);
+        const best = bestRun(leaf, anchor);
+        if (best.matched >= 2 && best.score > PS.minAggregateScore) matched += 1;
+      }
+    }
+    // Four shapes, drawn uniformly, so a random pair shares one about a quarter
+    // of the time. Asserted as a BAND: too low and the orphan surface goes dark
+    // again, too high and every generated file is the same survey.
+    const rate = matched / pairs;
+    expect(rate, `cross-file match rate (${matched}/${pairs})`).toBeGreaterThan(0.1);
+    expect(rate, `cross-file match rate (${matched}/${pairs})`).toBeLessThan(0.6);
+  });
 });
 
 describe('randomTmlSpec (valid)', () => {

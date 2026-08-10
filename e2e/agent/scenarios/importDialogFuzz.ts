@@ -1679,6 +1679,51 @@ export const importDialogFuzz: Scenario = {
       return read();
     };
 
+    /**
+     * How many merge-connected components carry NO zero datum.
+     *
+     * A transcription of the first two steps of
+     * `Project::suggest_orphan_placements` - union-find over `station_merges`,
+     * then drop every component that holds a datum - computed in the page off
+     * `get_project_state`, which is the same payload the digest reads. It is the
+     * PRECONDITION for the orphan dialog, and nothing else the harness records
+     * can distinguish "no orphan component existed" from "one existed and the
+     * geometry did not match".
+     */
+    const countUnanchoredComponents = async (): Promise<number> =>
+      ctx.eval<number>(`
+        const core = window.__TAURI__ && window.__TAURI__.core;
+        if (!core || typeof core.invoke !== 'function') return -1;
+        const state = await core.invoke('get_project_state');
+        const project = (state && state.project) || null;
+        if (!project || !Array.isArray(project.sections)) return -1;
+        const parent = new Map();
+        const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+        for (const section of project.sections) parent.set(section.id, section.id);
+        const union = (a, b) => {
+          if (!parent.has(a) || !parent.has(b)) return;
+          const ra = find(a); const rb = find(b);
+          if (ra !== rb) parent.set(ra, rb);
+        };
+        for (const merge of (project.station_merges || [])) {
+          union(merge.station_a && merge.station_a.section_id, merge.station_b && merge.station_b.section_id);
+        }
+        // \`ZeroDatumWire.station_ref\` - the field name matters, and getting it
+        // wrong is silent: every component then reads as unanchored.
+        const anchored = new Set();
+        for (const datum of (project.zero_datums || [])) {
+          const ref = datum && datum.station_ref;
+          const id = ref && ref.section_id;
+          if (id !== undefined && parent.has(id)) anchored.add(find(id));
+        }
+        if (anchored.size === 0 && (project.zero_datums || []).length > 0) return -2;
+        const roots = new Set();
+        for (const section of project.sections) roots.add(find(section.id));
+        let count = 0;
+        for (const root of roots) if (!anchored.has(root)) count += 1;
+        return count;
+      `);
+
     /** The episode loop. Extracted so `forceClean` can wrap it in a finally. */
     const runEpisodes = async (): Promise<void> => {
     for (let episode = 0; episode < iterations; episode += 1) {
@@ -2182,6 +2227,26 @@ export const importDialogFuzz: Scenario = {
         const what = `flow ${flow + 1} of episode ${episode + 1}`;
         const shape: FlowShape = sawCommit || sawReceipt ? 'imported' : 'cancelled';
         ctx.metric(`flowShape:${shape}`);
+        // The ORPHAN precondition, measured rather than assumed.
+        //
+        // `Project::suggest_orphan_placements` offers a placement only for a
+        // merge-connected component that has NO zero datum and NO newly-imported
+        // member - so unless a flow LEAVES one behind, the next flow's import
+        // cannot raise the dialog whatever its geometry does. Counting it here
+        // separates "the orphan surface is unreachable" from "the geometry never
+        // matched", which are different bugs with different fixes and read
+        // identically from `screen:orphan-placement` alone.
+        if (digest.hasProject) {
+          const unanchored = await countUnanchoredComponents();
+          // -1 no project state, -2 the datum field name stopped resolving. Both
+          // are reported rather than folded into a bucket, because a probe that
+          // silently reads every component as unanchored is worse than none.
+          ctx.metric(
+            unanchored < 0
+              ? `unanchoredComponents:probeFailed${unanchored}`
+              : `unanchoredComponents:${unanchored === 0 ? 'none' : unanchored === 1 ? 'one' : 'many'}`,
+          );
+        }
         guarded(() => checkResidue(digest, what));
         guarded(() => checkTempFiles(before, after, what));
         // Counted, never asserted: `checkResidue` documents why this scenario
