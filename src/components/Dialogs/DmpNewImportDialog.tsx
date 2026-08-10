@@ -742,6 +742,21 @@ export function buildBatchImport(
     }
   }
 
+  // A reachable section that never got emitted is stuck in the DEFERRED loop
+  // or was silently skipped - a genuinely unexpected condition worth production
+  // signal (debugLog.ts: "keep console.warn for genuinely unexpected runtime
+  // conditions"), unlike the trace-only diagnostics above. Index/count only,
+  // never a section NAME or `JSON.stringify`'d connection - both are
+  // file-controlled content that must not reach a production console log.
+  const unemittedReachableCount = reachableOrder.filter(
+    (idx) => idx !== zeroDatumIndex && !emittedPosition.has(idx),
+  ).length;
+  if (unemittedReachableCount > 0) {
+    console.warn(
+      `[buildBatchImport] ${unemittedReachableCount} reachable section(s) were not emitted`,
+    );
+  }
+
   return {
     configs,
     unreachable,
@@ -1372,11 +1387,18 @@ export default function DmpNewImportDialog({
     // Restore from ref if previously edited
     const existing = sectionEditsRef.current.get(idx);
     if (existing) {
-      debugLog(
-        `[init-effect] RESTORE section=${idx} from sectionEditsRef`,
-        `shots.length=${existing.shots.length}`,
-        `deleted=${existing.shots.filter(s => s.isDeleted).length}`,
-      );
+      // Re-wrapped in the DEV guard (unlike the trivial-argument sites nearby):
+      // `debugLog` itself no-ops in production, but JS evaluates a function's
+      // arguments before the call, so the `.filter(...).length` scan below ran
+      // on every restore in production regardless - the guard is what actually
+      // skips the work, not the no-op.
+      if (import.meta.env.DEV) {
+        debugLog(
+          `[init-effect] RESTORE section=${idx} from sectionEditsRef`,
+          `shots.length=${existing.shots.length}`,
+          `deleted=${existing.shots.filter(s => s.isDeleted).length}`,
+        );
+      }
       // The counter is per section, and only the initialize branch below used to
       // seed it: coming back to a section after editing a SHORTER one handed out
       // temp ids this section had already used, so two rows shared a key and the
