@@ -107,6 +107,87 @@ pub fn tml_shot_xml_depth(
     )
 }
 
+/// A REAL shot with every field the #412 join tests need to vary.
+///
+/// The join refuses on trip metadata, on an excluded seam, and on a repeated
+/// UUID, so its tests have to drive `<Explorer>`/`<Date>`/`<Color>`,
+/// `<Excluded>` and `<UUID>` independently - more knobs than the positional
+/// builders above carry, and a positional builder with nine parameters is
+/// worse to read than a struct literal with defaults.
+pub struct TripShot<'a> {
+    pub id: i64,
+    pub from_id: i64,
+    pub section: &'a str,
+    pub uuid: Option<&'a str>,
+    pub excluded: bool,
+    pub explorer: &'a str,
+    pub date: &'a str,
+    pub color: &'a str,
+    pub depth: f64,
+    /// `-1.0` is Ariane's "derive it from the previous station" sentinel.
+    pub depth_in: f64,
+}
+
+impl Default for TripShot<'_> {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            from_id: -1,
+            section: "A",
+            uuid: None,
+            excluded: false,
+            explorer: "Tester",
+            date: "2024-06-15",
+            color: "0x8f6112ff",
+            depth: 5.0,
+            depth_in: -1.0,
+        }
+    }
+}
+
+impl TripShot<'_> {
+    pub fn xml(&self) -> String {
+        let Self {
+            id,
+            from_id,
+            section,
+            uuid,
+            excluded,
+            explorer,
+            date,
+            color,
+            depth,
+            depth_in,
+        } = self;
+        let uuid_element = uuid.map_or_else(String::new, |u| format!("\n    <UUID>{u}</UUID>"));
+        format!(
+            r"<SurveyData>
+    <ID>{id}</ID>
+    <FromID>{from_id}</FromID>{uuid_element}
+    <ClosureToID>-1</ClosureToID>
+    <Type>REAL</Type>
+    <Section>{section}</Section>
+    <Azimut>90.0</Azimut>
+    <Length>10.0</Length>
+    <Depth>{depth}</Depth>
+    <DepthIn>{depth_in}</DepthIn>
+    <Inclination>0.0</Inclination>
+    <Left>0.0</Left>
+    <Right>0.0</Right>
+    <Up>0.0</Up>
+    <Down>0.0</Down>
+    <Comment></Comment>
+    <Explorer>{explorer}</Explorer>
+    <Date>{date}</Date>
+    <Color>{color}</Color>
+    <Excluded>{excluded}</Excluded>
+    <Latitude>0.0</Latitude>
+    <Longitude>0.0</Longitude>
+</SurveyData>"
+        )
+    }
+}
+
 pub fn tml_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &str) -> String {
     format!(
         r#"<SurveyData>

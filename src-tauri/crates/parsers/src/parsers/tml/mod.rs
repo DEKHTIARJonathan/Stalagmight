@@ -889,7 +889,11 @@ fn build_sections(mut raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosu
     // (#412). Must run BEFORE extract_closures, which keys closures on
     // (section index, station index) and would otherwise index the pre-merge
     // fragments.
-    let joins = join_contiguous_chains(&mut sections);
+    //
+    // The join matches a chain's start against another chain's end BY SHOT ID,
+    // so it needs to know whether this file's ids are actually unique - a
+    // duplicate id would splice an unrelated chain onto the wrong parent.
+    let joins = join_contiguous_chains(&mut sections, count_duplicate_shot_ids(&raw_shots));
     if joins > 0 {
         tracing::debug!(joins, "Joined contiguous TML chains");
     }
@@ -1459,6 +1463,30 @@ pub fn convert_tml_to_import_configs(
     Ok((configs, import_closures, warnings))
 }
 
+/// A config's name with a TRAILING `" (branch N)"` removed, or unchanged.
+///
+/// The suffix has to be at the END, and `N` has to be digits. A merged run is
+/// named `"A + B"` (#412) and either part can itself be a branch, giving
+/// `"A (branch 2) + B"` - a plain `rfind` would strip from the middle and
+/// rename that config to `"A"`, silently dropping the fact that it also holds
+/// B. A file-supplied name containing the literal `" (branch "` is likewise
+/// left alone unless it really ends in a branch number.
+fn branch_base(name: &str) -> &str {
+    let suffix = " (branch ";
+    let Some(pos) = name.rfind(suffix) else {
+        return name;
+    };
+    let inner = &name[pos + suffix.len()..];
+    let Some(number) = inner.strip_suffix(')') else {
+        return name;
+    };
+    if !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()) {
+        &name[..pos]
+    } else {
+        name
+    }
+}
+
 /// Simplify branch-suffixed names when only one branch of a group survives.
 ///
 /// During linearization, sections that branch get names like "Foo (branch 1)",
@@ -1467,16 +1495,12 @@ pub fn convert_tml_to_import_configs(
 /// a given base name, strip the suffix so it's just "Foo".
 fn simplify_lone_branch_names(configs: &mut [ImportSectionConfig]) {
     // Count how many configs share each base name (name without " (branch N)")
-    let re_suffix = " (branch ";
     let mut base_counts: HashMap<String, u32> = HashMap::new();
     for c in configs.iter() {
         let name = c.name.as_deref().unwrap_or("");
-        let base = if let Some(pos) = name.rfind(re_suffix) {
-            &name[..pos]
-        } else {
-            name
-        };
-        *base_counts.entry(base.to_string()).or_insert(0) += 1;
+        *base_counts
+            .entry(branch_base(name).to_string())
+            .or_insert(0) += 1;
     }
 
     // Rename lone survivors
@@ -1485,11 +1509,9 @@ fn simplify_lone_branch_names(configs: &mut [ImportSectionConfig]) {
             Some(n) => n,
             None => continue,
         };
-        if let Some(pos) = name.rfind(re_suffix) {
-            let base = &name[..pos];
-            if base_counts.get(base).copied() == Some(1) {
-                c.name = Some(base.to_string());
-            }
+        let base = branch_base(name);
+        if base.len() != name.len() && base_counts.get(base).copied() == Some(1) {
+            c.name = Some(base.to_string());
         }
     }
 }
@@ -3114,7 +3136,20 @@ mod tests {
                 .collect()
         };
 
+        // Hard-coded, not just self-consistent: repeating the same parse proves
+        // stability, but a rule that changed which successor continues the
+        // mainline would be stably WRONG and still pass. At shot 2 the walk
+        // takes 20 (20.0 m downstream) over 3 (9.0 m), and the two deferred
+        // chains keep the mid-chain parents that make them unjoinable.
+        const EXPECTED: &str = "Section 1|0|[1, 2, 20, 21]\n\
+                                Section 1 (branch 2)|1|[10]\n\
+                                Section 1 (branch 3)|2|[3]\n";
+
         let first = fingerprint(&parse_synthetic_tmlu(&xml));
+        assert_eq!(
+            first, EXPECTED,
+            "the continuation rule picked a new mainline"
+        );
         for _ in 0..5 {
             assert_eq!(
                 fingerprint(&parse_synthetic_tmlu(&xml)),
@@ -4995,7 +5030,9 @@ mod tests {
         assert_eq!(merged.start_ariane_id, -1, "still starts where Trunk did");
         assert_eq!(merged.end_ariane_id, 10, "and ends where Deep did");
 
-        // Nothing was lost or duplicated by the join.
+        // Nothing was lost or duplicated by the join, and every emitted run is
+        // still a polyline - the invariant every consumer of a TmlSection
+        // assumes and nothing else in the pipeline checks.
         let mut ids: Vec<i64> = tml
             .sections
             .iter()
@@ -5004,6 +5041,7 @@ mod tests {
             .collect();
         ids.sort_unstable();
         assert_eq!(ids, (1..=10).collect::<Vec<_>>());
+        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
 
         // The one remaining candidate class is gone: nothing else runs in
         // series, so a second pass would find nothing to do.
@@ -5037,6 +5075,354 @@ mod tests {
             (closures[0].to_section_index, closures[0].to_station_index),
             (1, 2),
             "and its far end still points at the untouched branch"
+        );
+    }
+
+    /// Section names and shot ids for the join-refusal fixtures: "A" is a
+    /// two-shot chain from the entrance, "B" continues from A's LAST shot.
+    /// Every refusal test below is this same shape with one thing changed, so
+    /// what the test is about is the difference and nothing else.
+    fn series_a_b(a_tail: TripShot<'_>, b_head: TripShot<'_>) -> TmlFile {
+        let shots = [
+            TripShot {
+                id: 1,
+                from_id: -1,
+                section: "A",
+                depth: 5.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            a_tail.xml(),
+            b_head.xml(),
+            TripShot {
+                id: 4,
+                from_id: 3,
+                section: "B",
+                depth: 12.0,
+                ..TripShot::default()
+            }
+            .xml(),
+        ]
+        .join("\n");
+        parse_synthetic_tmlu(&wrap_xml(&shots))
+    }
+
+    fn section_names(tml: &TmlFile) -> Vec<&str> {
+        tml.sections.iter().map(|s| s.name.as_str()).collect()
+    }
+
+    /// The seam has to be a station the import actually keeps.
+    ///
+    /// `convert_shots_to_shot_data` drops CLOSURE shots and excluded ones with
+    /// the same filter, so joining onto an EXCLUDED tail would resolve the
+    /// absorbed leg's first `depth_in` from the previous SURVIVING station -
+    /// translating the whole leg - and the result would change with the
+    /// include-excluded toggle, which section splitting must be invariant to.
+    #[test]
+    fn the_join_refuses_a_seam_the_import_would_filter_out() {
+        let tml = series_a_b(
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "A",
+                excluded: true,
+                depth: 9.0,
+                ..TripShot::default()
+            },
+            // DepthIn -1 means "derive from the previous station", which is
+            // exactly the value the seam would corrupt.
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "B",
+                depth: 11.0,
+                depth_in: -1.0,
+                ..TripShot::default()
+            },
+        );
+
+        assert_eq!(
+            section_names(&tml),
+            vec!["A", "B"],
+            "an excluded tail is not a station, so it is not a seam"
+        );
+
+        let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("convert");
+        assert_eq!(configs.len(), 2);
+        // B's first shot derives its depth from the EXCLUDED shot 2 (9.0) via
+        // start_depth, not from shot 1 (5.0) which is what a join through the
+        // excluded seam would have left behind.
+        assert!(
+            (configs[1].shots[0].depth_in - 9.0).abs() < f64::EPSILON,
+            "the absorbed leg must not be translated; got {}",
+            configs[1].shots[0].depth_in
+        );
+    }
+
+    /// A config carries ONE surveyor, date and colour, so absorbing a chain
+    /// surveyed by someone else on another day would silently reattribute it.
+    #[test]
+    fn the_join_refuses_chains_from_a_different_trip() {
+        let tml = series_a_b(
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "A",
+                depth: 9.0,
+                ..TripShot::default()
+            },
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "B",
+                explorer: "Somebody Else",
+                date: "2025-02-02",
+                depth: 11.0,
+                ..TripShot::default()
+            },
+        );
+
+        assert_eq!(
+            section_names(&tml),
+            vec!["A", "B"],
+            "different trip metadata must not be merged away"
+        );
+        assert_eq!(tml.sections[1].surveyor.as_deref(), Some("Somebody Else"));
+    }
+
+    /// With duplicate shot ids in the file, a chain END no longer names a
+    /// unique parent, so an unrelated chain could splice onto the wrong one.
+    /// Joining is disabled wholesale rather than guessing.
+    #[test]
+    fn the_join_is_disabled_when_the_file_reuses_shot_ids() {
+        let shots = [
+            TripShot {
+                id: 1,
+                from_id: -1,
+                section: "A",
+                depth: 5.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "A",
+                depth: 9.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "B",
+                depth: 11.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 4,
+                from_id: 3,
+                section: "B",
+                depth: 12.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            // The reused id is deliberately OFF the A/B seam: without the
+            // guard, A and B still join happily, so this fixture isolates the
+            // guard rather than some incidental effect of the duplicate on the
+            // topology index.
+            TripShot {
+                id: 9,
+                from_id: -1,
+                section: "C",
+                depth: 3.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 9,
+                from_id: -1,
+                section: "D",
+                depth: 3.0,
+                ..TripShot::default()
+            }
+            .xml(),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        assert_eq!(
+            tml.parse_anomalies.map(|a| a.duplicate_shot_ids),
+            Some(1),
+            "the fixture must actually trip the duplicate-id tally"
+        );
+        assert!(
+            !section_names(&tml).iter().any(|n| n.contains(" + ")),
+            "no join may happen on a file with reused ids; got {:?}",
+            section_names(&tml)
+        );
+    }
+
+    /// A refused join hands the child back as a fresh RUN ROOT, so the child
+    /// still performs its own legal joins downstream.
+    ///
+    /// Chain A -> B -> C, where A/B repeat a UUID but B/C do not. Backing off
+    /// A/B must not also cost B/C: the child re-enters as a root and absorbs C.
+    /// Previously the child was left marked as somebody's tail, so the main
+    /// pass skipped it and a trailing sweep emitted it - and C with it - as
+    /// separate singletons, logged as a cycle neither was part of.
+    ///
+    /// This also covers the only way a config now attaches to the LAST station
+    /// of another: a chain that WOULD have joined and backed off.
+    #[test]
+    fn a_refused_join_still_lets_the_child_absorb_its_own_tail() {
+        const SHARED: &str = "bebebebe-0000-4000-8000-000000000001";
+        let shots = [
+            TripShot {
+                id: 1,
+                from_id: -1,
+                section: "A",
+                uuid: Some(SHARED),
+                depth: 5.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "A",
+                depth: 9.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            // Same UUID as shot 1: legal across sections, so A/B backs off.
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "B",
+                uuid: Some(SHARED),
+                depth: 11.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 4,
+                from_id: 3,
+                section: "B",
+                depth: 12.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 5,
+                from_id: 4,
+                section: "C",
+                depth: 14.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 6,
+                from_id: 5,
+                section: "C",
+                depth: 16.0,
+                ..TripShot::default()
+            }
+            .xml(),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        assert_eq!(
+            section_names(&tml),
+            vec!["A", "B + C"],
+            "the backed-off chain re-enters as a root and keeps its own tail"
+        );
+        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+
+        let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("convert");
+        assert_eq!(configs.len(), 2);
+        assert!(
+            matches!(configs[0].placement, ImportPlacement::Origin),
+            "the file's first chain still anchors the import"
+        );
+        // A has two shots, so its LAST station is 2 - the placement shape that
+        // only a refused join can produce.
+        match &configs[1].placement {
+            ImportPlacement::FromImporting {
+                import_station,
+                target_section_index,
+                target_station_index,
+            } => {
+                assert_eq!(
+                    (
+                        *import_station,
+                        *target_section_index,
+                        *target_station_index
+                    ),
+                    (0, 0, 2),
+                    "B attaches at A's final station"
+                );
+            }
+            other => panic!("expected FromImporting, got {other:?}"),
+        }
+    }
+
+    /// A merged name is bounded and sanitised, and the branch-suffix stripper
+    /// does not eat half of one.
+    ///
+    /// Section names come from the file, so an attacker-controlled name can be
+    /// arbitrarily long and can carry control characters; three of them
+    /// concatenated flows to the wizard's fragment list and to log lines. And
+    /// `simplify_lone_branch_names` used to `rfind(" (branch ")` anywhere in
+    /// the name, so `"A (branch 2) + B"` collapsed to `"A"` - quietly losing
+    /// the fact that the config also holds B.
+    #[test]
+    fn merged_names_are_bounded_and_survive_branch_simplification() {
+        assert_eq!(branch_base("Foo (branch 2)"), "Foo");
+        assert_eq!(
+            branch_base("Foo (branch 2) + Bar"),
+            "Foo (branch 2) + Bar",
+            "a merged name keeps every part it holds"
+        );
+        assert_eq!(
+            branch_base("Sump (branch note)"),
+            "Sump (branch note)",
+            "only a real trailing branch NUMBER is a suffix"
+        );
+        assert_eq!(branch_base("Plain"), "Plain");
+
+        // Five sections in series under long, control-character-bearing names.
+        let long = "N".repeat(400);
+        let shots: Vec<String> = (1..=5)
+            .map(|i| {
+                TripShot {
+                    id: i,
+                    from_id: if i == 1 { -1 } else { i - 1 },
+                    section: &format!("{long}\u{7}{i}"),
+                    depth: 5.0 * f64::from(u32::try_from(i).unwrap_or(0)),
+                    ..TripShot::default()
+                }
+                .xml()
+            })
+            .collect();
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots.join("\n")));
+
+        assert_eq!(tml.sections.len(), 1, "all five run in series");
+        let name = &tml.sections[0].name;
+        assert!(
+            !name.chars().any(char::is_control),
+            "control characters must not reach a merged label"
+        );
+        assert!(
+            name.chars().count() <= 203,
+            "merged name is capped; got {} chars",
+            name.chars().count()
+        );
+        assert!(
+            name.ends_with("..."),
+            "an over-long merged name is truncated visibly; got {name:?}"
         );
     }
 
@@ -5186,10 +5572,19 @@ mod tests {
         assert_eq!(configs.len(), 2, "mainline + the deferred branch");
         assert_eq!(closures.len(), 1, "the CLOSURE shot resolves to both ends");
         let closure = &closures[0];
-        assert_ne!(
+        // Mainline is [1, 2, 3]; shot 3 is its 3rd importable shot, so it ends
+        // at station 3. The branch is [4]; shot 4 ends at its station 1. Exact
+        // pairs, not merely "different": a closure that resolved to the right
+        // sections and the wrong stations would pass an inequality check.
+        assert_eq!(
             (closure.from_section_index, closure.from_station_index),
+            (1, 1),
+            "the closure's near end is the branch tip"
+        );
+        assert_eq!(
             (closure.to_section_index, closure.to_station_index),
-            "a closure spanning two fragments must keep two distinct endpoints"
+            (0, 3),
+            "and its far end is the mainline station it ties back to"
         );
     }
 
@@ -5204,6 +5599,16 @@ mod tests {
     /// fixture is committed (e2e/fixtures/naharon_sources/), so a missing file
     /// is a hard failure, not a silent skip: a skip here would make the test
     /// unfailable exactly when it matters.
+    ///
+    /// The numbers are set from what this file ACTUALLY produces, and they are
+    /// deliberately thin: the metadata gate on the join (a chain is only
+    /// absorbed when it agrees on surveyor, date and colour) leaves this file
+    /// with one join, so the margin over the un-joined baseline is exactly one
+    /// config and one shot of median. Both bounds still flip if the join is
+    /// removed - un-joined this file is 18 configs with a median of 13 - which
+    /// is what makes them worth asserting. The two <=2-shot stubs are chains a
+    /// same-trip file would have absorbed and this one may not, so they are
+    /// bounded rather than forbidden.
     #[test]
     fn the_naharon_tml_imports_as_few_long_fragments() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -5224,7 +5629,7 @@ mod tests {
         let short = sizes.iter().filter(|&&n| n <= 2).count();
 
         assert!(
-            configs.len() <= 16,
+            configs.len() <= 17,
             "the file's 14 declared names should not explode into fragments; got {} configs (sizes {sizes:?})",
             configs.len()
         );
@@ -5232,10 +5637,14 @@ mod tests {
             median >= 14,
             "the median fragment should be a usable run, not a stub; got {median} (sizes {sizes:?})"
         );
-        assert_eq!(
-            short, 0,
-            "a fragment of <=2 shots is the #412 complaint itself; sizes {sizes:?}"
+        assert!(
+            short <= 2,
+            "a fragment of <=2 shots is the #412 complaint itself, and this file \
+             should not grow more of them; got {short} (sizes {sizes:?})"
         );
+
+        // Whatever the counts, every emitted run must still be a polyline.
+        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
     }
 
     /// Baseline harness for #412: how many linear sections the importer

@@ -17,6 +17,51 @@ use std::collections::HashMap;
 
 use super::{RawShot, TmlSection, TmlShot, TmlShotType};
 
+/// How many declared names a merged run spells out before it starts counting.
+/// A run of eight joined names is not a label a person can read in the wizard's
+/// fragment list.
+const MAX_JOINED_NAMES: usize = 3;
+
+/// Character cap on a merged name. Section names are file-supplied and
+/// unbounded, so three of them concatenated is attacker-controlled length on
+/// a label that flows to the UI.
+const MAX_JOINED_NAME_LEN: usize = 200;
+
+/// Build the merged run's label from the names it absorbed.
+///
+/// Only merged names are sanitised and capped: a lone name is returned
+/// verbatim, so this cannot change how an unjoined section is presented.
+fn joined_name(names: &[String], extra: usize) -> String {
+    if names.is_empty() {
+        return String::new();
+    }
+    if let ([only], 0) = (names, extra) {
+        return only.clone();
+    }
+    // Section names come from the file, so they can carry control characters
+    // that would corrupt a log line or a UI label once concatenated.
+    let mut out = names
+        .iter()
+        .map(|n| n.chars().filter(|c| !c.is_control()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join(" + ");
+    if extra > 0 {
+        out.push_str(&format!(" + {extra} more"));
+    }
+    if out.chars().count() > MAX_JOINED_NAME_LEN {
+        out = out.chars().take(MAX_JOINED_NAME_LEN).collect::<String>() + "...";
+    }
+    out
+}
+
+/// Why a run stopped absorbing, for the aggregated logs.
+#[derive(Default)]
+struct JoinRefusals {
+    uuid_backoff: usize,
+    cycle_break: usize,
+    cycle_stranded: usize,
+}
+
 /// Append every chain that begins exactly where another chain ends (#412).
 ///
 /// `linearize_section` cuts one chain per (declared section name, linear run),
@@ -27,63 +72,73 @@ use super::{RawShot, TmlSection, TmlShot, TmlShotType};
 /// losslessly. Every other adjacency in the file attaches MID-chain, where a
 /// polyline has nowhere to put it; see the module docs.
 ///
-/// Trip metadata follows the rule the chain builder already applies: a run's
-/// surveyor, date and colour are its FIRST shot's (see `linearize_section`), so
-/// the parent's survive.
+/// # What it refuses, and why
+///
+/// * **A seam that is not a station.** Both ends must be a shot the import
+///   actually keeps. `convert_shots_to_shot_data` drops CLOSURE shots AND
+///   excluded ones with the same filter, and either would make the child's
+///   station 0 land on the previous SURVIVING station - translating the whole
+///   absorbed leg, and making the output depend on the include-excluded
+///   toggle. Keying on `shots.last()`/`shots.first()` rather than "last
+///   surviving shot" is deliberate: a chain that merely ENDS in a closure or
+///   an excluded shot never joins. The alternative - seam on the last
+///   surviving shot - would re-introduce toggle dependence, because which shot
+///   that is changes with the toggle.
+/// * **Mismatched trip metadata.** A config carries one surveyor, one date and
+///   one colour, and a run takes its FIRST shot's (see `linearize_section`), so
+///   absorbing a chain surveyed by someone else on another day would silently
+///   reattribute it. Only chains that agree on all three merge.
+/// * **A shot UUID already in the run.** Ariane shot ids are unique per
+///   SECTION, so two sections may legally repeat a `<UUID>` (#423); merging
+///   them would turn that into an intra-section duplicate that
+///   `ensure_unique_shot_uuids` re-mints. The run stops there and the child
+///   starts a fresh run of its own.
+/// * **Everything, when the file has duplicate shot ids.** `ends_at` keys on
+///   the file's own ids, so with duplicates two chains can end at the same id
+///   and an unrelated chain splices onto the wrong parent. The caller passes
+///   the parse-time tally; any duplicate at all disables joining.
 ///
 /// The absorbed chain's NAME does not just vanish, because every join here is
 /// necessarily cross-name: a chain that continues under the SAME declared
 /// section is never a candidate (it would have to attach at a chain end, and
-/// the continuation walk always leaves its junction shot mid-chain). Two
-/// sections a surveyor named separately would otherwise silently become one, so
-/// the merged run is named `"A + B"` - capped by `MAX_JOINED_NAMES`, after
-/// which it counts the rest.
+/// the continuation walk always leaves its junction shot mid-chain). So the
+/// merged run is named `"A + B"`, capped by `MAX_JOINED_NAMES`.
 ///
-/// Deterministic: parents are visited in ascending index order, and where two
-/// chains start at the same end shot the LONGER one is appended (ties by lowest
-/// index), so the same file always yields the same runs.
+/// Deterministic: roots are taken in ascending index order, where two chains
+/// start at the same end shot the LONGER one is appended (ties by lowest
+/// index), and runs are emitted in the file order of their first chain - so a
+/// refusal moves nothing else, and the same file always yields the same runs.
 ///
 /// Returns the number of joins performed.
-pub(super) fn join_contiguous_chains(sections: &mut Vec<TmlSection>) -> usize {
+pub(super) fn join_contiguous_chains(
+    sections: &mut Vec<TmlSection>,
+    duplicate_shot_ids: u32,
+) -> usize {
     if sections.len() < 2 {
         return 0;
     }
-    /// How many declared names a merged run spells out before it starts
-    /// counting. A run of eight joined names is not a label a person can read
-    /// in the wizard's fragment list.
-    const MAX_JOINED_NAMES: usize = 3;
-
-    fn joined_name(names: &[String]) -> String {
-        match names.len() {
-            0 => String::new(),
-            1 => names[0].clone(),
-            n if n <= MAX_JOINED_NAMES => names.join(" + "),
-            n => format!(
-                "{} + {} more",
-                names[..MAX_JOINED_NAMES].join(" + "),
-                n - MAX_JOINED_NAMES
-            ),
-        }
+    if duplicate_shot_ids > 0 {
+        tracing::info!(
+            duplicate_shot_ids,
+            "Not joining contiguous TML chains: the file reuses shot ids, so a \
+             chain end cannot be matched to a unique parent"
+        );
+        return 0;
     }
 
-    // A CLOSURE shot is a loop marker that `convert_shots_to_shot_data` filters
-    // out of the import, so it contributes no station. Joining THROUGH one would
-    // silently land the child's first station on the previous real shot's end -
-    // a different physical point. Structural, and independent of the
-    // excluded-shots toggle, so section splitting stays toggle-invariant.
-    let joinable_end = |s: &TmlSection| {
-        s.shots
-            .last()
-            .is_some_and(|shot| shot.shot_type != TmlShotType::Closure)
-    };
-    let joinable_start = |s: &TmlSection| {
-        s.shots
-            .first()
-            .is_some_and(|shot| shot.shot_type != TmlShotType::Closure)
+    let n = sections.len();
+
+    // A seam is only a station if the import keeps the shot on both sides of
+    // it - same filter `convert_shots_to_shot_data` applies.
+    let survives_import = |shot: &TmlShot| shot.shot_type != TmlShotType::Closure && !shot.excluded;
+    let joinable_end = |s: &TmlSection| s.shots.last().is_some_and(survives_import);
+    let joinable_start = |s: &TmlSection| s.shots.first().is_some_and(survives_import);
+    let same_trip = |a: &TmlSection, b: &TmlSection| {
+        a.surveyor == b.surveyor && a.date == b.date && a.color == b.color
     };
 
-    // Which chain ends at a given shot id. A shot belongs to exactly one chain,
-    // so it ends at most one.
+    // Which chain ends at a given shot id. Ids are unique here (duplicates bail
+    // out above), so a shot ends at most one chain.
     let mut ends_at: HashMap<i64, usize> = HashMap::new();
     for (idx, section) in sections.iter().enumerate() {
         if !joinable_end(section) {
@@ -102,15 +157,15 @@ pub(super) fn join_contiguous_chains(sections: &mut Vec<TmlSection>) -> usize {
             continue;
         }
         if let Some(&parent) = ends_at.get(&section.start_ariane_id) {
-            if parent != idx {
+            if parent != idx && same_trip(&sections[parent], section) {
                 candidates.entry(parent).or_default().push(idx);
             }
         }
     }
 
     // At most one child per parent: appending a second would branch the run.
-    let mut child_of: Vec<Option<usize>> = vec![None; sections.len()];
-    let mut parent_of: Vec<Option<usize>> = vec![None; sections.len()];
+    let mut child_of: Vec<Option<usize>> = vec![None; n];
+    let mut parent_of: Vec<Option<usize>> = vec![None; n];
     let mut parents: Vec<usize> = candidates.keys().copied().collect();
     parents.sort_unstable();
     for parent in parents {
@@ -124,74 +179,156 @@ pub(super) fn join_contiguous_chains(sections: &mut Vec<TmlSection>) -> usize {
         parent_of[best] = Some(parent);
     }
 
+    // Resolve the runs before touching any shots, so a refusal can hand the
+    // child back as a fresh root instead of stranding it at the end of the
+    // output. `group_of[i]` is the root of the run that owns chain `i`.
+    let mut group_of: Vec<Option<usize>> = vec![None; n];
+    let mut members_of: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut refusals = JoinRefusals::default();
+
+    while let Some(root) = (0..n).find(|&i| group_of[i].is_none() && parent_of[i].is_none()) {
+        let mut members = vec![root];
+        group_of[root] = Some(root);
+        let mut uuids: std::collections::HashSet<&str> = sections[root]
+            .shots
+            .iter()
+            .filter_map(|s| s.uuid.as_deref())
+            .collect();
+        let mut cursor = root;
+        while let Some(child) = child_of[cursor] {
+            // Already grouped means we walked back into this run: a cycle. Each
+            // chain has at most one parent and one child, so it cannot belong
+            // to a different run.
+            if group_of[child].is_some() {
+                refusals.cycle_break += 1;
+                child_of[cursor] = None;
+                break;
+            }
+            if sections[child]
+                .shots
+                .iter()
+                .filter_map(|s| s.uuid.as_deref())
+                .any(|u| uuids.contains(u))
+            {
+                refusals.uuid_backoff += 1;
+                child_of[cursor] = None;
+                // Hand the child back as a root so it is emitted in file order
+                // rather than stranded after everything else.
+                parent_of[child] = None;
+                break;
+            }
+            uuids.extend(
+                sections[child]
+                    .shots
+                    .iter()
+                    .filter_map(|s| s.uuid.as_deref()),
+            );
+            group_of[child] = Some(root);
+            members.push(child);
+            cursor = child;
+        }
+        members_of.insert(root, members);
+    }
+
+    // A pure cycle has no root at all, so the scan above never reached it.
+    // Emit each member unmerged rather than dropping shots on the floor.
+    for idx in 0..n {
+        if group_of[idx].is_none() {
+            refusals.cycle_stranded += 1;
+            group_of[idx] = Some(idx);
+            members_of.insert(idx, vec![idx]);
+        }
+    }
+
+    // Emit in the file order of each run's first chain.
+    let mut roots: Vec<usize> = members_of.keys().copied().collect();
+    roots.sort_unstable();
+
     let mut slots: Vec<Option<TmlSection>> = sections.drain(..).map(Some).collect();
-    let mut out: Vec<TmlSection> = Vec::with_capacity(slots.len());
+    let mut out: Vec<TmlSection> = Vec::with_capacity(roots.len());
     let mut joins = 0;
 
-    for idx in 0..slots.len() {
-        if parent_of[idx].is_some() {
-            continue; // this chain is somebody's tail
-        }
-        let Some(mut run) = slots[idx].take() else {
+    for root in roots {
+        let members = members_of.remove(&root).unwrap_or_default();
+        let mut iter = members.into_iter();
+        let Some(first) = iter.next().and_then(|i| slots[i].take()) else {
             continue;
         };
-        let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        seen.insert(idx);
+        let mut run = first;
+        let mut seen_names: std::collections::HashSet<String> =
+            std::collections::HashSet::from([run.name.clone()]);
         let mut names: Vec<String> = vec![run.name.clone()];
-        // Ariane shot ids are unique per SECTION, not per file, so two shots in
-        // different sections may legally carry the same `<UUID>` (#423). Merging
-        // those sections would turn that legal repeat into a duplicate WITHIN
-        // one section, and `ensure_unique_shot_uuids` keeps the first and
-        // re-mints the second - silently changing the identity of a shot that
-        // had one from the file, and moving every station cross-reference
-        // anchored on it. Fewer fragments is not worth that, so the join stops
-        // at the first collision and both chains stay separate.
-        let mut uuids: std::collections::HashSet<String> =
-            run.shots.iter().filter_map(|s| s.uuid.clone()).collect();
-        let mut cursor = idx;
-        while let Some(child) = child_of[cursor] {
-            if !seen.insert(child) {
-                break; // malformed file: a join cycle
-            }
-            if slots[child].as_ref().is_some_and(|tail| {
-                tail.shots
-                    .iter()
-                    .filter_map(|s| s.uuid.as_deref())
-                    .any(|u| uuids.contains(u))
-            }) {
-                break;
-            }
-            let Some(tail) = slots[child].take() else {
-                break;
+        let mut extra_names = 0usize;
+
+        for member in iter {
+            let Some(tail) = slots[member].take() else {
+                continue;
             };
-            if !names.contains(&tail.name) {
-                names.push(tail.name.clone());
+            // Bounded: a HashSet probe, and at most MAX_JOINED_NAMES stored, so
+            // a file with thousands of one-shot sections cannot make this
+            // quadratic in the number of joins.
+            if seen_names.insert(tail.name.clone()) {
+                if names.len() < MAX_JOINED_NAMES {
+                    names.push(tail.name.clone());
+                } else {
+                    extra_names += 1;
+                }
             }
-            uuids.extend(tail.shots.iter().filter_map(|s| s.uuid.clone()));
             run.shots.extend(tail.shots);
             run.end_ariane_id = tail.end_ariane_id;
             run.is_branch_split = run.is_branch_split || tail.is_branch_split;
             joins += 1;
-            cursor = child;
         }
-        run.name = joined_name(&names);
+        run.name = joined_name(&names, extra_names);
         out.push(run);
     }
 
-    // A pure cycle has no root, so nothing above emitted it. Emit the members
-    // untouched rather than dropping shots on the floor.
-    for slot in &mut slots {
-        if let Some(run) = slot.take() {
-            tracing::warn!(
-                section = run.name,
-                "Chain join cycle; emitting the chain unmerged"
-            );
-            out.push(run);
-        }
+    // One line per refusal CLASS, never one per chain - the policy
+    // `push_parse_anomaly_warnings` already applies to file-level anomalies.
+    if refusals.uuid_backoff > 0 {
+        tracing::warn!(
+            chains = refusals.uuid_backoff,
+            "Stopped joining TML chains that would repeat a shot UUID inside one section"
+        );
+    }
+    if refusals.cycle_break > 0 || refusals.cycle_stranded > 0 {
+        tracing::warn!(
+            broken = refusals.cycle_break,
+            stranded = refusals.cycle_stranded,
+            "Cycle among TML chain joins; the chains involved were emitted unmerged"
+        );
     }
 
     *sections = out;
+    debug_assert!(
+        first_linearity_violation(sections).is_none(),
+        "join produced a non-linear run: {:?}",
+        first_linearity_violation(sections)
+    );
     joins
+}
+
+/// The first place an emitted run stops being a strictly linear chain, if any.
+///
+/// Every consumer of a `TmlSection` treats it as a polyline: shot `i` runs from
+/// station `i` to station `i + 1`, so `shots[i].from_id` must be `shots[i-1].id`.
+/// Nothing else in the pipeline checks it, and a join is exactly the operation
+/// that could break it, so this backs a `debug_assert!` after the join and is
+/// asserted directly by the join tests.
+#[cfg(any(debug_assertions, test))]
+pub(super) fn first_linearity_violation(sections: &[TmlSection]) -> Option<String> {
+    for section in sections {
+        for pair in section.shots.windows(2) {
+            let (previous, next) = (&pair[0], &pair[1]);
+            if next.from_id != previous.id {
+                return Some(format!(
+                    "section {:?}: shot {} follows shot {} but its FromID is {}",
+                    section.name, next.id, previous.id, next.from_id
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Linearize a group of shots belonging to one section name.
@@ -520,20 +657,24 @@ const COMPARABLE_LENGTH_RATIO: f64 = 0.8;
 /// Decide which successor continues the current chain at a branch point (#412).
 ///
 /// The continuation should be the mainline; every other successor defers into
-/// its own "(branch N)" section. The rule, in order:
-/// 1. Greatest total downstream length wins outright: rivals below
-///    `COMPARABLE_LENGTH_RATIO` (80%) of the longest are eliminated.
-/// 2. Among comparable survivors, azimuth continuity: the successor whose
-///    azimuth is closest (minimum angular distance) to the current shot's
-///    azimuth continues - a mainline tends to hold its heading through a
-///    junction, while a side passage leaves at an angle.
-/// 3. Ascending shot id.
+/// its own "(branch N)" section. The rule is elimination, THEN azimuth - length
+/// never decides on its own:
+/// 1. Eliminate: a candidate below `COMPARABLE_LENGTH_RATIO` (80%) of the
+///    longest downstream length is out. Being longest is not itself a win, so
+///    a candidate 1% longer than its rival does not take the junction on that
+///    alone.
+/// 2. Choose among the survivors by azimuth continuity: smallest angular
+///    distance from the current shot's azimuth - a mainline tends to hold its
+///    heading through a junction, while a side passage leaves at an angle. A
+///    survivor that is much shorter than the longest cannot reach this step,
+///    which is what keeps a stub from stealing a straight-ahead junction.
+/// 3. Break ties on ascending shot id.
 ///
 /// Deterministic by construction: `candidates` arrives in the section's
 /// sorted encounter order (never HashMap iteration order), the downstream
 /// lengths are fixed-order IEEE 754 sums of parsed values (see
-/// `downstream_lengths`), and the comparisons above are the same total order
-/// over those values on every run and platform.
+/// `downstream_lengths`), and step 2 compares with `f64::total_cmp`, which is
+/// a total order on every run and platform.
 fn choose_continuation(
     current_id: i64,
     candidates: &[i64],
@@ -567,13 +708,19 @@ fn choose_continuation(
         if length_of(candidate) < threshold {
             continue;
         }
+        // A turn that is not a real angle sorts LAST rather than winning by
+        // default. With `partial_cmp` a NaN first candidate became `best` and
+        // then nothing could beat it, because every later comparison returned
+        // `None` and fell through to "not better" - an accidental win for the
+        // one candidate we know least about.
         let turn = turn_of(candidate);
+        let turn = if turn.is_nan() { f64::INFINITY } else { turn };
         let better = match best {
             None => true,
-            Some((best_id, best_turn)) => match turn.partial_cmp(&best_turn) {
-                Some(std::cmp::Ordering::Less) => true,
-                Some(std::cmp::Ordering::Equal) => candidate < best_id,
-                _ => false,
+            Some((best_id, best_turn)) => match turn.total_cmp(&best_turn) {
+                std::cmp::Ordering::Less => true,
+                std::cmp::Ordering::Equal => candidate < best_id,
+                std::cmp::Ordering::Greater => false,
             },
         };
         if better {
@@ -595,8 +742,21 @@ fn choose_continuation(
 /// Excluded and CLOSURE shots count toward the length: segmentation reflects
 /// the topology the file declares, and the excluded-shots import toggle
 /// (applied downstream of section building) must not change how sections
-/// split. A back-edge in a malformed cycle (guarded during chain collection)
-/// contributes 0, so each cycle member's length is counted exactly once.
+/// split.
+///
+/// This sums over PATHS, not over distinct shots. Where the section's graph
+/// rejoins - a diamond, i.e. a loop closed inside one section - the shared
+/// tail is added once for every path into it, so in `A -> {B, C} -> D` the
+/// length of D lands in A's total twice. The result is therefore an upper
+/// bound on physical passage length, not a measurement of it.
+///
+/// That is deliberate rather than merely tolerated: the only consumer,
+/// `choose_continuation`, ranks ONE junction's successors against each other,
+/// and a shared tail contributes to every rival at that junction, so it
+/// cancels out of the comparison. Making it exact would need a reachable-set
+/// union per node, which is precisely the cost the O(V + E) memoization
+/// exists to avoid. A back-edge in a malformed cycle contributes 0 instead,
+/// because that node is still in progress and has no memoized length yet.
 fn downstream_lengths(
     shots: &[&RawShot],
     shot_by_id: &HashMap<i64, &RawShot>,
