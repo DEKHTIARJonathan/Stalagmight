@@ -63,15 +63,20 @@
  *   plus `check_project_integrity` after any step that pushed an undo entry -
  *   `save_blocked`, or a non-finite-geometry message, is a hard failure
  *
- * Four inline expected-behaviour checks ride along with the moves that provoke
+ * Six inline expected-behaviour checks ride along with the moves that provoke
  * them, because each one is only meaningful against the state immediately
  * before its own move:
- *   FROZEN DELETE an all-frozen selection must survive, and must say so
- *   IMPORT GATE   a second file routed into a screen an import owns must be
- *                 refused (#411's `importFlowOwnsScreen`)
- *   EXPORT CHORD  Ctrl+E must be inert while a dialog owns the screen - judged
- *                 on the dialog the DISPATCHER saw, not the one the digest did
- *   CLOSE         closing the project at idle must leave nothing behind
+ *   FROZEN DELETE    an all-frozen selection must survive, and must say so
+ *   INCOMPLETE SHOTS a wizard commit the incomplete-shot guard refused must
+ *                    import nothing, push no undo entry, and leave the wizard up
+ *   OVERLAP MODES    the two unconditional overlap treatments must always be
+ *                    offered, and changing the treatment - which writes the
+ *                    GLOBAL CONFIG mid-import - must not move the undo stack
+ *   IMPORT GATE      a second file routed into a screen an import owns must be
+ *                    refused (#411's `importFlowOwnsScreen`)
+ *   EXPORT CHORD     Ctrl+E must be inert while a dialog owns the screen -
+ *                    judged on the dialog the DISPATCHER saw, not the digest
+ *   CLOSE            closing the project at idle must leave nothing behind
  *
  * The `RACE_TARGETS` generators still play (clicking a confirm the digest saw
  * disabled is a real thing to do to a wizard), but what they produce is COUNTED
@@ -501,6 +506,32 @@ const RACE_TARGETS: ReadonlySet<string> = new Set([
   'gpx-continue-button',
   'gpx-import-confirm',
 ]);
+
+/**
+ * Wizard commits `refuseIncompleteShots()` guards.
+ *
+ * All three open with `if (refuseIncompleteShots()) return;`
+ * (`DmpNewImportDialog.tsx`), so a row the grid left half-filled blocks every
+ * way forward until it is fixed. The guard is the only one in the wizard whose
+ * refusal the fuzzer could reach and never checked.
+ */
+const INCOMPLETE_GUARDED_MOVES: ReadonlySet<string> = new Set([
+  'confirm-button',
+  'skip-button',
+  'segment-place-button',
+]);
+
+/** `TOAST_KEYS.DMP_WIZARD_INCOMPLETE` - the key, which is i18n-independent. */
+const TOAST_INCOMPLETE = 'dmp-wizard-incomplete';
+
+/**
+ * Overlap treatments NO guard in the wizard disables.
+ *
+ * `isTargetDoublyAnchored` greys out `interpolate` and `import_data` only; the
+ * other two are rendered unconditionally, so a build that stopped offering one
+ * of them would leave a user with an overlap and no treatment to apply to it.
+ */
+const OVERLAP_MODES_ALWAYS_LEGAL: ReadonlySet<string> = new Set(['existing_data', 'keep_both']);
 
 /**
  * `mutate` actions a REPLAYED trace may drive - the DOM allowlist's twin.
@@ -1761,6 +1792,17 @@ export const importDialogFuzz: Scenario = {
             digest.selRows.every((row) => digest.frozen.includes(row));
           const interjectRoute =
             move.kind === 'openFile' && move.label.startsWith('INTERJECT:') && IMPORT_GUARDED_SCREENS.has(screenBefore);
+          // A wizard move the incomplete-shot guard can refuse. All three call
+          // `refuseIncompleteShots()` before they do anything else.
+          const wizardCommit =
+            move.kind === 'ui' && INCOMPLETE_GUARDED_MOVES.has(move.testid) && screenBefore.startsWith('wiz-');
+          const incompleteBefore = digest.toast.includes(TOAST_INCOMPLETE);
+          const overlapMode =
+            move.kind === 'input' && move.mode === 'select' && move.testid === 'overlap-mode-select'
+              ? move.value
+              : null;
+          const sectionsBefore = digest.sections;
+          const undoBefore = digest.undo;
 
           const outcome = await execute(move, true);
           steps += 1;
@@ -1846,6 +1888,74 @@ export const importDialogFuzz: Scenario = {
               fail(
                 'FROZEN DELETE: the refusal was SILENT',
                 `  no dmp-wizard-frozen-delete toast; toasts=${JSON.stringify(digest.toast)}`,
+              );
+            }
+          }
+          // INCOMPLETE SHOTS. `handleConfirm`, `handleSkip` and
+          // `handleSegmentPlace` all open with `if (refuseIncompleteShots()) return;`
+          // (`DmpNewImportDialog.tsx`), which raises `dmp-wizard-incomplete` and
+          // does nothing else - so a row the grid's Clear left half-filled blocks
+          // the whole wizard until it is fixed.
+          //
+          // Armed on the TOAST rather than on a pre-move fact, because the digest
+          // cannot see what `findIncompleteSections` sees; and on a toast this
+          // move RAISED, because the key is deduped and one from two moves ago
+          // would otherwise blame whatever came next. A confirm that was allowed
+          // through never raises it, so the arming cannot fire on the happy path.
+          if (wizardCommit && outcome.performed && !incompleteBefore && digest.toast.includes(TOAST_INCOMPLETE)) {
+            ctx.metric('incompleteRefused');
+            if (sectionsBefore >= 0 && digest.sections !== sectionsBefore) {
+              fail(
+                'INCOMPLETE SHOTS: a refused wizard commit imported sections anyway',
+                `  after: ${move.label}\n  sections ${sectionsBefore} -> ${digest.sections}`,
+              );
+            }
+            if (undoBefore >= 0 && digest.undo > undoBefore) {
+              fail(
+                'INCOMPLETE SHOTS: a refused wizard commit pushed an undo entry',
+                `  after: ${move.label}\n  undo depth ${undoBefore} -> ${digest.undo}`,
+              );
+            }
+            // The guard returns before any transition, so the wizard is still the
+            // thing on screen - and a refusal that closed it would leave the user
+            // with a warning about a section they can no longer reach.
+            if (!digest.screen.startsWith('wiz-')) {
+              fail(
+                'INCOMPLETE SHOTS: the refusal closed the wizard',
+                `  after: ${move.label}\n  screen ${screenBefore} -> ${digest.screen}`,
+              );
+            }
+          }
+          if (overlapMode !== null) {
+            // The doubly-anchored guard disables `interpolate` and `import_data`
+            // when the target has positional constraints on BOTH sides of the
+            // overlap (`isTargetDoublyAnchored`), and the bridge will not click a
+            // disabled option - so a refusal here is the guard being reached, and
+            // worth counting rather than asserting.
+            if (!outcome.performed && outcome.skip === 'option-absent') {
+              ctx.metric(`overlapModeRefused:${overlapMode}`);
+              // But the guard must never disable ALL of them. `existing_data` and
+              // `keep_both` are unconditional in the source, and a build where
+              // one of them stopped being offered would leave a user with an
+              // overlap they cannot choose a treatment for.
+              if (OVERLAP_MODES_ALWAYS_LEGAL.has(overlapMode) && digest.live['overlap-mode-select'] === 2) {
+                fail(
+                  'OVERLAP MODES: an unconditional overlap treatment was not offered',
+                  `  after: ${move.label}\n  the picker is actionable but refused "${overlapMode}", ` +
+                    'which no guard in the wizard disables',
+                );
+              }
+            }
+            // The picker WRITES THE GLOBAL CONFIG (`handleOverlapModeChange` ->
+            // `updateConfig`) in the middle of an import. That is a preference,
+            // not a project mutation, so it must not reach the undo stack - if it
+            // ever did, every undo count F1 makes about the flow around it would
+            // be off by the number of times the user changed their mind.
+            if (outcome.performed && undoBefore >= 0 && digest.undo !== undoBefore) {
+              fail(
+                'OVERLAP MODES: changing the treatment moved the undo stack',
+                `  after: ${move.label}\n  undo depth ${undoBefore} -> ${digest.undo}; ` +
+                  'the overlap mode is config, not project state',
               );
             }
           }
