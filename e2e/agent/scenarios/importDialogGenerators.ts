@@ -1029,6 +1029,27 @@ const ZERO_DATUM_CONFIG: Generator[] = [
     build: (env) =>
       actionable(env.digest, 'zero-datum-config-cancel') ? click('zero-datum-config-cancel', 'cancel') : null,
   },
+  {
+    // Only actionable once `zdc:back` has raised the dialog's own Back-discard
+    // confirm (dirty state) - accepts it, actually leaving for zero-datum-select.
+    name: 'zdc:back-confirm-discard',
+    weight: 3,
+    screens: ['zero-datum-config'],
+    build: (env) =>
+      actionable(env.digest, 'zero-datum-config-back-confirm-discard')
+        ? click('zero-datum-config-back-confirm-discard', 'back (discard)')
+        : null,
+  },
+  {
+    // The other half: dismiss the Back-discard confirm and stay put.
+    name: 'zdc:back-confirm-cancel',
+    weight: 3,
+    screens: ['zero-datum-config'],
+    build: (env) =>
+      actionable(env.digest, 'zero-datum-config-back-confirm-cancel')
+        ? click('zero-datum-config-back-confirm-cancel', 'back (keep editing)')
+        : null,
+  },
 ];
 
 const WIZARD_SUGGEST: Generator[] = [

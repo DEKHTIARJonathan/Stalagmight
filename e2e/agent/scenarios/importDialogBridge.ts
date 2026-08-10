@@ -149,6 +149,9 @@ export const CLICKABLE_TESTIDS: ReadonlySet<string> = new Set([
   'zero-datum-config-cancel',
   'zero-datum-config-back',
   'zero-datum-config-confirm',
+  // zero-datum-config's own Back-discard confirm (see importDialogModel.ts)
+  'zero-datum-config-back-confirm-cancel',
+  'zero-datum-config-back-confirm-discard',
   // wizard
   'back-button',
   'skip-button',
