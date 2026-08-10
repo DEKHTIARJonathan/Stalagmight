@@ -89,6 +89,21 @@ pub fn pitch_from_components(horizontal: f64, dz: f64) -> f64 {
     dz.atan2(horizontal).to_degrees()
 }
 
+/// What a shot's own slope length and depth change imply the inclination
+/// should have been - `dz = depth_out - depth_in`, `horizontal =
+/// sqrt(length^2 - dz^2)`, then pitch from the two components.
+///
+/// The single source of truth for this computation. Shared by
+/// `core::validation`'s `INCLINATION_DEPTH_MISMATCH` cross-check and the TML
+/// importer's zero-means-absent pitch inference (#482): both need "what
+/// would the geometry have said the inclination was", and if they computed
+/// it separately they could silently drift apart.
+pub fn implied_pitch_deg(length: f64, depth_in: f64, depth_out: f64) -> f64 {
+    let dz = depth_out - depth_in;
+    let horizontal = horizontal_length_from_slope(length, dz);
+    pitch_from_components(horizontal, dz)
+}
+
 /// What a shot represents on the line (#27).
 ///
 /// Splits the old single `is_reference` boolean into the two things surveyors

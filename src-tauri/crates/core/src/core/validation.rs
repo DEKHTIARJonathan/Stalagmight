@@ -1,5 +1,5 @@
 use crate::config::ValidationConfig;
-use crate::models::shot::pitch_from_components;
+use crate::models::shot::implied_pitch_deg;
 use crate::models::warning::severity_for_code;
 use crate::models::{SectionId, ShotData};
 
@@ -9,6 +9,15 @@ use super::{ValidationWarning, WarningSeverity};
 /// [-90, 90] is physically impossible (issue #57).
 const PITCH_MIN: f64 = -90.0;
 const PITCH_MAX: f64 = 90.0;
+
+/// Rounding tolerance, in metres, absorbed by the length-vs-depth-change
+/// geometry check below (`LENGTH_BELOW_DEPTH_CHANGE`). Purely a slope/dz
+/// float-rounding slack, unrelated to any other decision in this codebase -
+/// do not reuse it as a "how much depth change counts as real" threshold
+/// elsewhere (#482 finding: the importer's zero-means-absent pitch inference
+/// needs the DIFFERENT question "would this fabricate a mismatch warning",
+/// answered by `implied_pitch_deg` + `DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD`).
+const DEPTH_ROUNDING_EPSILON_M: f64 = 1e-6;
 
 /// Validator for survey data
 pub struct Validator;
@@ -258,7 +267,7 @@ impl Validator {
         if shot.length > 0.0 {
             // The slope length can never be shorter than the vertical change -
             // that would need sin(pitch) > 1. A small epsilon absorbs rounding.
-            if shot.length + 1e-6 < dz.abs() {
+            if shot.length + DEPTH_ROUNDING_EPSILON_M < dz.abs() {
                 warnings.push(warn(
                     "LENGTH_BELOW_DEPTH_CHANGE",
                     format!(
@@ -286,8 +295,7 @@ impl Validator {
                 };
                 if let Some(recorded) = recorded_pitch {
                     if leg_in_range(shot.pitch_in) && leg_in_range(shot.pitch_out) {
-                        let horizontal = (shot.length * shot.length - dz * dz).max(0.0).sqrt();
-                        let implied = pitch_from_components(horizontal, dz);
+                        let implied = implied_pitch_deg(shot.length, shot.depth_in, shot.depth_out);
                         if (recorded - implied).abs() > config.inclination_depth_diff_threshold {
                             warnings.push(warn(
                                 "INCLINATION_DEPTH_MISMATCH",
@@ -1154,6 +1162,36 @@ mod tests {
         assert!(
             w.iter().all(|w| w.code != "INCLINATION_DEPTH_MISMATCH"),
             "skip the cross-check for an invalid pitch"
+        );
+    }
+
+    /// #482: the validator itself must NOT be weakened. A genuinely recorded
+    /// `Some(0.0)` pitch on a shot with a real depth change (as any non-TML
+    /// importer, or a shot entered by hand, can produce) still disagrees
+    /// with the geometry and must still warn - only the TML importer's
+    /// zero-means-absent inference (`parsers::tml::normalize_tml_shot`)
+    /// tells `Some(0.0)` apart from "never recorded"; the validator has no
+    /// such distinction to make and keeps cross-checking every `Some`.
+    #[test]
+    fn test_recorded_zero_pitch_with_depth_change_still_warns() {
+        let config = default_config();
+        let shot = ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 5.0,
+            pitch_in: Some(0.0),
+            pitch_out: Some(0.0),
+            ..Default::default()
+        };
+        let warnings = Validator::validate_shot(&shot, &config, 0, 0);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.code == "INCLINATION_DEPTH_MISMATCH"),
+            "a recorded 0° pitch on a shot that descended 5m over 10m must still \
+             be cross-checked, got {warnings:?}"
         );
     }
 

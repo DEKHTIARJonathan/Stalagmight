@@ -15,6 +15,8 @@ use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::models::config::DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD;
+use crate::models::shot::implied_pitch_deg;
 use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig, ShotData, ShotKind};
 
 mod decode;
@@ -1934,6 +1936,48 @@ pub fn inclination_to_pitch(inclination: f64) -> f64 {
     }
 }
 
+/// Resolve a TML shot's `pitch_in`, treating a wire `0.0` inclination as
+/// "not recorded" exactly when reading it as `Some(0.0)` would fabricate an
+/// `INCLINATION_DEPTH_MISMATCH` warning.
+///
+/// `export::tml::pitch_to_inclination` collapses both `None` (never measured)
+/// and `Some(0.0)` (genuinely level) to the same wire `0.0`, so import cannot
+/// tell them apart from the inclination field alone (#482). Gate on the real
+/// condition instead of a proxy: compute what the shot's own geometry implies
+/// the inclination should have been ([`implied_pitch_deg`], the SAME
+/// computation `core::validation`'s cross-check uses), and compare it
+/// against the SAME default threshold the validator would - a wire `0.0`
+/// only turns into `None` when a recorded `Some(0.0)` would have exceeded
+/// that threshold and been flagged. `DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD`
+/// (the config default), not the user's live `ValidationConfig`: the import
+/// mapping must be deterministic, not move if someone edits the threshold.
+///
+/// Two consequences are deliberate residual losses, not bugs:
+/// - A genuinely recorded `Some(0.0)` on a STEEP shot (implied pitch beyond
+///   the threshold) is erased to `None` by one round trip. The wire cannot
+///   distinguish it from an absent reading, and the warning it would have
+///   produced was never earnable back from a lossy `0.0` in the first place.
+/// - Corrupt geometry - wire `0.0` paired with a genuinely wrong depth or
+///   length that implies a steep pitch - imports silently, with no warning.
+///   No importer-side rule can recover that warning without re-fabricating
+///   #482's false positives for every ordinary depth-only survey.
+///
+/// A near-level shot (implied pitch under the threshold) keeps `Some(0.0)`:
+/// unlike the steep case, that reading would not have warned anyway, so
+/// there is no ambiguity worth resolving in the importer's favor.
+///
+/// Only fires on an exact wire `0.0`: any other inclination value came from
+/// somewhere and is trusted as recorded, per [`inclination_to_pitch`].
+fn tml_pitch_in(inclination: f64, length: f64, depth_in: f64, depth_out: f64) -> Option<f64> {
+    if inclination == 0.0 {
+        let implied = implied_pitch_deg(length, depth_in, depth_out);
+        if implied.abs() > DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD {
+            return None;
+        }
+    }
+    Some(inclination_to_pitch(inclination))
+}
+
 /// Canonical mapping of a single Ariane TML shot to Stalagmight's `ShotData`.
 ///
 /// This is the SINGLE source of truth for the TML to Stalagmight field mapping
@@ -1970,7 +2014,7 @@ pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
         length: shot.length,
         depth_in,
         depth_out: shot.depth,
-        pitch_in: Some(inclination_to_pitch(shot.inclination)),
+        pitch_in: tml_pitch_in(shot.inclination, shot.length, depth_in, shot.depth),
         pitch_out: None, // No backsight inclination
         left: lrud_opt(shot.left),
         right: lrud_opt(shot.right),
@@ -3755,6 +3799,93 @@ mod tests {
         assert!((shot_data[0].right.unwrap_or(0.0) - 2.5).abs() < f64::EPSILON);
         assert!(shot_data[0].up.is_none());
         assert!((shot_data[0].down.unwrap_or(0.0) - 1.0).abs() < f64::EPSILON);
+    }
+
+    /// #482: a wire `0.0` inclination on a shot with a real depth change
+    /// (the shape a depth-only, depth-gauge survey exports as) must import
+    /// as `pitch_in: None`, not a fabricated `Some(0.0)`. Without this,
+    /// re-importing an exported depth-only project trips
+    /// `INCLINATION_DEPTH_MISMATCH` on every such shot.
+    #[test]
+    fn test_zero_inclination_with_depth_change_imports_as_no_pitch() {
+        let shots = vec![TmlShot {
+            depth: 5.0,
+            depth_in: 0.0,
+            inclination: 0.0,
+            ..sample_tml_shot()
+        }];
+
+        let shot_data = convert_shots_to_shot_data(&shots, 0.0, false);
+        assert_eq!(shot_data[0].pitch_in, None);
+    }
+
+    /// #482 companion: a wire `0.0` inclination with (near-)zero depth
+    /// change is indistinguishable from a genuinely level, measured shot
+    /// and stays `Some(0.0)` - the ambiguous case is resolved in favour of
+    /// the harmless reading.
+    #[test]
+    fn test_zero_inclination_with_zero_depth_change_stays_some_zero() {
+        let shots = vec![TmlShot {
+            depth: 0.0,
+            depth_in: 0.0,
+            inclination: 0.0,
+            ..sample_tml_shot()
+        }];
+
+        let shot_data = convert_shots_to_shot_data(&shots, 0.0, false);
+        assert_eq!(shot_data[0].pitch_in, Some(0.0));
+    }
+
+    /// #482 boundary: `tml_pitch_in` pins the comparison as strictly-greater
+    /// (`>`), matching the validator's own `INCLINATION_DEPTH_MISMATCH` test
+    /// (`(recorded - implied).abs() > threshold`). Exactly at the default
+    /// threshold, a recorded `Some(0.0)` would NOT have been flagged, so the
+    /// wire `0.0` keeps reading as `Some(0.0)`; just a hair over, it does.
+    #[test]
+    fn test_zero_inclination_threshold_boundary_is_strictly_greater() {
+        let length = 10.0;
+        // dz for which implied_pitch_deg(length, 0.0, dz) == the threshold exactly.
+        let dz_at_threshold = length * DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD.to_radians().sin();
+        assert!(
+            (implied_pitch_deg(length, 0.0, dz_at_threshold)
+                - DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD)
+                .abs()
+                < 1e-9,
+            "fixture must land on the threshold, not near it"
+        );
+
+        assert_eq!(
+            tml_pitch_in(0.0, length, 0.0, dz_at_threshold),
+            Some(0.0),
+            "exactly at the threshold, a recorded 0.0 would not have been flagged"
+        );
+
+        let just_under = dz_at_threshold - 1e-4;
+        assert_eq!(
+            tml_pitch_in(0.0, length, 0.0, just_under),
+            Some(0.0),
+            "just under the threshold keeps the harmless reading"
+        );
+
+        let just_over = dz_at_threshold + 1e-4;
+        assert_eq!(
+            tml_pitch_in(0.0, length, 0.0, just_over),
+            None,
+            "just over the threshold, Some(0.0) would have fabricated a mismatch"
+        );
+    }
+
+    /// #482: an ASCENDING depth-only shot (negative dz) must map to `None`
+    /// the same as a descending one - the comparison is against the implied
+    /// pitch's MAGNITUDE, not its sign.
+    #[test]
+    fn test_zero_inclination_ascending_steep_shot_imports_as_no_pitch() {
+        let length = 10.0;
+        let steep_ascend = -(length
+            * (DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD + 10.0)
+                .to_radians()
+                .sin());
+        assert_eq!(tml_pitch_in(0.0, length, steep_ascend.abs(), 0.0), None);
     }
 
     #[test]

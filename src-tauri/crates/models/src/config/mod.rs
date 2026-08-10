@@ -17,8 +17,18 @@ fn default_pitch_diff_threshold() -> f64 {
     10.0
 }
 
+/// Default `ValidationConfig::inclination_depth_diff_threshold` (degrees).
+///
+/// Named and exported (not just a serde-default closure) because the TML
+/// importer's zero-means-absent pitch inference
+/// (`parsers::tml::normalize_tml_shot`, #482) needs the SAME threshold the
+/// validator's `INCLINATION_DEPTH_MISMATCH` check uses, deliberately reading
+/// this default rather than the user's runtime `ValidationConfig` - the
+/// import mapping must be deterministic across a config change, not track it.
+pub const DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD: f64 = 15.0;
+
 fn default_inclination_depth_diff_threshold() -> f64 {
-    15.0
+    DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -56,7 +66,7 @@ impl Default for ValidationConfig {
             warn_azimuth_deviation_max: 30.0,
             azimuth_diff_threshold: 20.0,
             pitch_diff_threshold: 10.0,
-            inclination_depth_diff_threshold: 15.0,
+            inclination_depth_diff_threshold: DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD,
         }
     }
 }
