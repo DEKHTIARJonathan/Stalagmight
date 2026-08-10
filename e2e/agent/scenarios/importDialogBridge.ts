@@ -397,6 +397,20 @@ const HELPERS = `
    * progress marker that OUTLASTS the settle cap is a hang, and the digest then
    * reports a screen whose controls are all disabled, which is what the WEDGE
    * oracle is for.
+   * \`wizard-no-suggestions\` is here for the same reason and is worth spelling
+   * out, because it LOOKS like a screen and is not one. It renders while
+   * \`phase === 'suggesting'\` with no current suggestion, which happens only in
+   * the gap between the pool running dry and \`transitionToPlacingOrManual\`
+   * setting \`isImporting\` - and that call sets it synchronously, so the frame
+   * rarely survives a paint. It carries no control of its own either: the footer
+   * renders nothing for a suggestion-less \`suggesting\` phase, leaving the
+   * wizard's standing Cancel and Back. The real "nothing could be placed
+   * automatically" surface is \`manual_placing\`, which is where this transition
+   * lands and which has four placement modes, a map placement and a shot table
+   * on it. Waiting through the gap sends the walk THERE instead of spending
+   * steps on an empty pane. Measured: over 130 cells the digest never once
+   * sampled this frame, so the two generators that named it never ran.
+   *
    * That last one is \`DialogWrapper\`'s \`hidden\` prop, which
    * \`DmpNewImportDialog\` sets while \`autoStartManualPlacementPending\` is true:
    * for a frame or two the dialog is \`display:none\` and \`placementMode\` is not
@@ -404,6 +418,10 @@ const HELPERS = `
    * here the digest catches that gap and the S1 oracle reports an unknown screen
    * for a transition the app is entitled to make. If it ever OUTLASTS the settle
    * cap it is a genuine wedge, and S1 then says so.
+   *
+   * Every marker in this list is a WAIT, never a suppression: one that outlasts
+   * the cap still reaches the digest, still gets classified, and is still judged
+   * by the escape and wedge oracles.
    *
    * The dmp-selection hash-settling window is deliberately NOT waited for -
    * that window is what \`race-continue\` exists to hit.
@@ -413,6 +431,7 @@ const HELPERS = `
     shown('wizard-importing-zero-datum') ||
     shown('wizard-early-importing') ||
     shown('wizard-placing') ||
+    shown('wizard-no-suggestions') ||
     shown('tml-import-progress') ||
     (!!q('dmp-new-import-dialog') && !shown('dmp-new-import-dialog'));
   const marker = () => {

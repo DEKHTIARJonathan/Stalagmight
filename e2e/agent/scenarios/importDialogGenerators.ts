@@ -1177,7 +1177,10 @@ const WIZARD_SUGGEST: Generator[] = [
   {
     name: 'wiz:back',
     weight: 3,
-    screens: ['wiz-suggest', 'wiz-manual', 'wiz-no-suggest'],
+    // `wiz-no-suggest` is deliberately NOT here - the bridge's settle predicate
+    // now waits through that frame, because it is a sub-paint transition into
+    // `wiz-manual` and not a screen. See `busy()` in importDialogBridge.ts.
+    screens: ['wiz-suggest', 'wiz-manual'],
     build: (env) => (actionable(env.digest, 'back-button') ? click('back-button', 'wizard back') : null),
   },
   {
@@ -1207,7 +1210,7 @@ const WIZARD_SUGGEST: Generator[] = [
   {
     name: 'wiz:cancel',
     weight: 2,
-    screens: ['wiz-suggest', 'wiz-manual', 'wiz-no-suggest', 'wiz-done', 'wiz-error'],
+    screens: ['wiz-suggest', 'wiz-manual', 'wiz-done', 'wiz-error'],
     build: (env) => (actionable(env.digest, 'cancel-button') ? click('cancel-button', 'wizard cancel') : null),
   },
 ];
