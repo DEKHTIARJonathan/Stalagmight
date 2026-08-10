@@ -620,7 +620,18 @@ export function ToastStack() {
   // given up. `setToastCapacity` is a no-op when the number has not moved, so
   // reporting on every render cannot loop.
   useEffect(() => {
-    setToastCapacity(fitToastCapacity(viewportHeight, [...liveHeights].reverse()));
+    // F8: the stack's bottom anchor sits at `24 + bottomOffsetPx` px above the
+    // window's bottom edge (see the container's `style.bottom` below), so the
+    // headroom actually available for the column is `viewportHeight -
+    // bottomOffsetPx`, not the raw window height - budgeting against the full
+    // height let a full 5-toast stack overflow off the TOP of a short viewport
+    // once a registered offset had already eaten into the room from the
+    // bottom. `viewportHeight - bottomOffsetPx` (not `viewportHeight -
+    // footerRect.top`): `bottomOffsetPx` is the exact quantity already driving
+    // the anchor position below, so reusing it keeps position and capacity
+    // answering the same question from the same number, and the registry only
+    // ever stores a clearance height, not an owner's absolute screen position.
+    setToastCapacity(fitToastCapacity(viewportHeight - bottomOffsetPx, [...liveHeights].reverse()));
   });
 
   /**

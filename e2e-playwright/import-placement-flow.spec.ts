@@ -382,16 +382,27 @@ test.describe('Import Placement Flow', () => {
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
 
-    // The toast may have expired by the time the dialog is back; only assert
-    // the no-overlap property while both are actually on screen.
-    if (await hintToast.isVisible()) {
-      const toastBox = await hintToast.boundingBox();
-      const footerBox = await page.getByTestId('dmp-import-dialog-footer').boundingBox();
-      expect(toastBox).not.toBeNull();
-      expect(footerBox).not.toBeNull();
-      if (toastBox && footerBox) {
-        expect(toastBox.y + toastBox.height).toBeLessThanOrEqual(footerBox.y + 1);
-      }
+    // Re-trigger the SAME toast key right after the dialog reopens: `showToast`
+    // refreshes a live toast of the same key in place, resetting its dwell
+    // clock. This pins the "both on screen at once" precondition deterministically
+    // instead of racing the toast's real ~6.5s dwell+fade against a slow CI
+    // machine, where the earlier version of this test silently asserted
+    // nothing once the toast had expired.
+    await page.evaluate(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: { uiStore?: { getState: () => { showToast: (m: string, k: string, kind: string) => void } } };
+      }).__E2E_TEST__;
+      if (!e2e?.uiStore) throw new Error('E2E UI store unavailable');
+      e2e.uiStore.getState().showToast('placement hint', 'dmp-manual-placement-hint', 'info');
+    });
+
+    await expect(hintToast).toBeVisible({ timeout: 10000 });
+    const toastBox = await hintToast.boundingBox();
+    const footerBox = await page.getByTestId('dmp-import-dialog-footer').boundingBox();
+    expect(toastBox).not.toBeNull();
+    expect(footerBox).not.toBeNull();
+    if (toastBox && footerBox) {
+      expect(toastBox.y + toastBox.height).toBeLessThanOrEqual(footerBox.y + 1);
     }
   });
 
