@@ -230,6 +230,42 @@ test.describe('Ariane TML import journey', () => {
     expect(await getImportedSections(page)).toEqual([]);
   });
 
+  // #447: the Cancel/Import footer used to scroll away with the dialog body,
+  // starting below the fold at 1024x640 (the issue's cited default zoom). A
+  // small viewport forces the body to overflow so scrolling is observable.
+  test('the sticky footer stays visible and does not cover the last row when the body scrolls', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 500 });
+    await openTmlImportDialog(page, TML_PATH, 'Sticky Footer Import');
+
+    const body = page.getByTestId('tml-import-dialog-body');
+    const confirmButton = page.getByTestId('tml-import-confirm');
+    const lastRow = page.getByTestId('tml-section-row-1');
+
+    // Scroll the dialog BODY (not the inner section-table scroller) part-way
+    // down: the primary action must still be reachable without a second,
+    // manual scroll to find it.
+    await body.evaluate((el) => {
+      el.scrollTop = el.scrollHeight / 2;
+    });
+    await expect(confirmButton).toBeInViewport();
+
+    // Scroll to the true bottom: the sticky footer must not overlap the last
+    // row of content above it (it occupies real flow space - a z-index or
+    // negative-margin regression could make it float on top instead).
+    await body.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect(confirmButton).toBeInViewport();
+
+    const rowBox = await lastRow.boundingBox();
+    const footerBox = await confirmButton.boundingBox();
+    expect(rowBox).not.toBeNull();
+    expect(footerBox).not.toBeNull();
+    if (rowBox && footerBox) {
+      expect(rowBox.y + rowBox.height).toBeLessThanOrEqual(footerBox.y + 1);
+    }
+  });
+
   test('discarding the empty project after cancelling returns to the project list', async ({ page }) => {
     await openTmlImportDialog(page, TML_PATH, 'Discarded Import');
 

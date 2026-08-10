@@ -395,8 +395,10 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
           {t('dialogs.wallsImport.options.includeSplays')}
         </label>
 
-        {/* Footer - sticky at the bottom of the scrolling body (mirrors TmlImportDialog). */}
-        <div className="sticky -bottom-4 -mx-4 -mb-4 flex justify-end gap-2 px-4 py-4 mt-4 border-t border-border bg-panel">
+        {/* Footer - sticky at the bottom of the scrolling body (mirrors
+            TmlImportDialog's idiom; see its comment for the assumptions this
+            relies on, incl. DialogWrapper's default `p-4` body padding). */}
+        <div className="sticky -bottom-4 -mx-4 -mb-4 flex justify-end gap-2 px-4 py-4 border-t border-border bg-panel">
           <Button onClick={closeDialog} data-testid="walls-import-cancel">{t('dialogs.wallsImport.cancel')}</Button>
           <Button
             data-primary-action=""
