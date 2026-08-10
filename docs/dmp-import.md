@@ -57,8 +57,10 @@ read `importedSectionIdsRef` as well.
   forward pass re-runs the whole pipeline from the mount effect, so a kept
   section would simply be imported a second time. Back therefore withdraws
   first, and App.tsx hands the zero-datum config the user entered back to
-  `zero-datum-config` (`previousZeroDatumConfig` in `dialogData`) so stepping
-  back is an edit rather than a restart.
+  `zero-datum-config` (`previousZeroDatumConfig` in `dialogData`, consumed as
+  `ZeroDatumConfigDialog`'s `initialConfig` prop) so stepping back is an edit
+  rather than a restart. The prefill covers the GPS and the metadata; the shot
+  edits and the station pick are re-derived from the file.
 
 There is no "carry a done-flag across Back" alternative: the mount effect that
 imports the anchor is the same one that fires `suggest_all_import_placements`,
