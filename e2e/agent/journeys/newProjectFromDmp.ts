@@ -85,6 +85,12 @@ function primaryAction(screen: string, live: Record<string, 0 | 1 | 2>): Move | 
     case 'first-run':
       return click('telemetry-opt-in-no');
     case 'new-project':
+      // The save-path input stays EMPTY on purpose: a blank path is what
+      // selects the deferred initial save (NewProjectForImportDialog passes
+      // `savePath` only when non-empty, and createProject defers iff no
+      // savePath) - filling it would switch this journey off the #92/#104
+      // contract it exists to exercise. The resulting default-location file
+      // is deleted in the journey's teardown.
       return click('create-and-continue-button');
     case 'dmp-select':
       // The golden path ACCEPTS the default selection (see
@@ -161,9 +167,17 @@ export const newProjectFromDmp: Journey = {
       // oracles measured that gate as unenforceable (importFlowOracles.ts).
       if (digest.screen === 'receipt' && digest.receipt) {
         const claim = parseReceiptSummary(digest.receipt.summary);
+        // Same overlap allowance as the final count checks: a confirmed
+        // suggestion legitimately deletes actionable overlap shots, and the
+        // receipt reports what actually imported.
+        const overlapPath = visited.includes('wiz-suggest');
+        const shotsOk = overlapPath
+          ? claim.shots !== null && claim.shots > 0 && claim.shots <= expectedShots
+          : claim.shots === expectedShots;
         ctx.expect('receipt accounts for every imported section and shot',
-          claim.sections === expectedSections && claim.shots === expectedShots,
-          `summary="${digest.receipt.summary}" expected ${expectedSections}/${expectedShots}`);
+          claim.sections === expectedSections && shotsOk,
+          `summary="${digest.receipt.summary}" expected ${expectedSections}/` +
+            `${overlapPath ? `<=${expectedShots}` : expectedShots}`);
         await ctx.checkpoint('receipt');
       }
       if (digest.screen === 'map-placement') {
@@ -205,6 +219,16 @@ export const newProjectFromDmp: Journey = {
     }
     ctx.expect('flow returned to idle within the step budget', digest.screen === 'idle',
       `ended on "${digest.screen}" after path: ${visited.join(' -> ')}`);
+
+    // MapCanvas clears placementMode BEFORE the wizard's async completion
+    // callback imports/saves and tears down importContext, so the first
+    // post-click idle can be a transient. Give completion a bounded settle;
+    // the assertions below still run (and still fail) if it never settles,
+    // so the #477 residue check keeps its teeth.
+    for (let i = 0; i < 20 && (digest.ctx !== null || digest.importInProgress); i++) {
+      await ctx.sleep(150);
+      digest = await observeScreen(ctx);
+    }
     await ctx.checkpoint('after-flow');
 
     const project = await projectFacts(ctx);
@@ -216,8 +240,12 @@ export const newProjectFromDmp: Journey = {
     // shots (docs/dmp-import.md, overlap treatment), so the exact-count claim
     // only holds when the wizard never offered one. With a suggestion in the
     // path, exactness would red on correct behavior - assert no-invention
-    // instead. test_v2.dmp takes the exact branch today; a fixture swap that
-    // starts suggesting is visible in the recorded path, not a silent skip.
+    // instead. KNOWN LIMIT: a suggestion with matchedShots === 0 deletes
+    // nothing and exactness should really still hold there, but the screen
+    // digest does not expose matchedShots - exposing it is a digest
+    // extension, tracked on #466. test_v2.dmp takes the exact branch today;
+    // a fixture swap that starts suggesting is visible in the recorded path,
+    // not a silent skip.
     const sawSuggestion = visited.includes('wiz-suggest');
     if (sawSuggestion) {
       ctx.expect('no shots invented beyond the default selection (overlap path)',
@@ -235,6 +263,19 @@ export const newProjectFromDmp: Journey = {
     ctx.expect('importContext cleared after completion (the #477 class)',
       digest.ctx === null, `importContext=${String(digest.ctx)}`);
     ctx.expect('no import reads as in-progress at idle', !digest.importInProgress);
+
+    // Teardown: the deferred save necessarily landed in the app's DEFAULT
+    // project location (an empty save path is what selects deferral, see the
+    // new-project comment), so the journey removes its own artifact - stale
+    // copies would otherwise accumulate via save auto-renaming and leak into
+    // later runs. Close FIRST: deleting the backing file under a live SQLite
+    // handle is the documented SIGBUS hazard.
+    if (project.filePath !== null) {
+      const closed = (await ctx.callAction('project', 'closeProject', [])) as { ok: boolean };
+      if (closed.ok) fs.rmSync(project.filePath, { force: true });
+      ctx.expect('journey artifact cleaned up', closed.ok && !fs.existsSync(project.filePath),
+        `file_path=${project.filePath} closed=${closed.ok}`);
+    }
   },
 };
 
