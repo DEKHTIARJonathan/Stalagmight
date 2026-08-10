@@ -6,10 +6,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-}));
-
 import '../../i18n';
 import { ProjectSettingsDialog as Dialog } from './ProjectSettingsDialog';
 import { useProjectStore } from '../../store/projectStore';
@@ -95,12 +91,51 @@ describe('ProjectSettingsDialog entrance elevation (#465)', () => {
     expect(setSurfaceElevation).not.toHaveBeenCalled();
   });
 
-  it('is disabled and Save is blocked when editing is blocked (read-only gate)', async () => {
+  it('scopes the read-only gate to the elevation field only: Save stays live and saves the name, elevation input is disabled and never written', async () => {
     useUIStore.setState({ geometryMode: 'closureAdjusted' });
     useProjectStore.setState({ project: baseProject({ surface_elevation: 10 }) });
     render(<Dialog />);
-    const input = await screen.findByTestId('project-settings-elevation');
-    expect(input).toBeDisabled();
-    expect(screen.getByTestId('project-settings-save')).toBeDisabled();
+    const elevationInput = await screen.findByTestId('project-settings-elevation');
+    expect(elevationInput).toBeDisabled();
+    const saveButton = screen.getByTestId('project-settings-save');
+    expect(saveButton).toBeEnabled();
+
+    fireEvent.change(screen.getByTestId('project-settings-name'), { target: { value: 'Renamed' } });
+    await userEvent.click(saveButton);
+
+    expect(updateProjectSettings).toHaveBeenCalledWith('Renamed', defaultConfig.validation);
+    expect(setSurfaceElevation).not.toHaveBeenCalled();
+  });
+
+  it('does not rewrite an unchanged elevation finer than display precision (metric)', async () => {
+    // 1234.56m rounds to "1234.6" at precision 1 on display; re-parsing and
+    // re-converting THAT back to meters must not be compared against the
+    // stored 1234.56 - the draft-string comparison must recognise "untouched".
+    useProjectStore.setState({
+      project: baseProject({ surface_elevation: 1234.56 }),
+      config: {
+        ...defaultConfig,
+        units: { ...defaultConfig.units, depth: 'meters', decimal_precision: { ...defaultConfig.units.decimal_precision, depth: 1 } },
+      },
+    });
+    render(<Dialog />);
+    await screen.findByTestId('project-settings-elevation');
+    await userEvent.click(screen.getByTestId('project-settings-save'));
+
+    expect(setSurfaceElevation).not.toHaveBeenCalled();
+  });
+
+  it('does not rewrite an unchanged elevation in a feet-unit project', async () => {
+    // 42.5m -> "139.4" ft on display; converting "139.4"ft back to meters
+    // lands at ~42.4894m, off the stored 42.5m by more than float noise.
+    useProjectStore.setState({
+      project: baseProject({ surface_elevation: 42.5 }),
+      config: { ...defaultConfig, units: { ...defaultConfig.units, depth: 'feet' } },
+    });
+    render(<Dialog />);
+    await screen.findByTestId('project-settings-elevation');
+    await userEvent.click(screen.getByTestId('project-settings-save'));
+
+    expect(setSurfaceElevation).not.toHaveBeenCalled();
   });
 });
