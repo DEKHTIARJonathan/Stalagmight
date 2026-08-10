@@ -377,6 +377,9 @@ impl AppState {
         // Apply shot updates to existing sections FIRST (overlap interpolation).
         // This must happen before placing new sections so that FromExisting placements
         // compute station positions using the updated (interpolated) shot data.
+        // Populated below when the doubly-anchored guard (F12b) skips shots, so
+        // the receipt can surface what was silently kept in the trace logs.
+        let mut doubly_anchored_shot_count: u32 = 0;
         if !existing_shot_updates.is_empty() {
             tracing::info!(
                 count = existing_shot_updates.len(),
@@ -502,6 +505,11 @@ impl AppState {
                     // (Connection-based constraints are handled post-update
                     //  by adjusting only the affected section's offset.)
                 }
+
+                doubly_anchored_shot_count = existing_shot_updates
+                    .iter()
+                    .filter(|u| blocked_sections.contains(&u.section_id))
+                    .count() as u32;
 
                 // Record anchor station positions BEFORE applying updates.
                 // For each affected section that has a zero datum, we need to keep
@@ -659,6 +667,10 @@ impl AppState {
         let mut all_warnings = Vec::new();
         // Collect commands for the undo entry description
         let mut batch_commands: Vec<Command> = Vec::new();
+        // Name of the first section placed via `ImportPlacement::ZeroDatum`
+        // (F12c): a GPS-anchored zero datum is a structural fact about the
+        // import worth a receipt line, not just a trace log.
+        let mut zero_datum_created: Option<String> = None;
 
         // Defer per-merge cascades during the placement loop. Each
         // `merge_stations` / `set_zero_datum` call would otherwise run a
@@ -890,6 +902,14 @@ impl AppState {
                         ));
                     }
                     all_warnings.extend(result.warnings);
+                    if zero_datum_created.is_none() {
+                        zero_datum_created = Some(
+                            config
+                                .name
+                                .clone()
+                                .unwrap_or_else(|| format!("Section {}", idx + 1)),
+                        );
+                    }
                     batch_commands.push(Command::SetZeroDatum {
                         station_ref,
                         coordinates: *coordinates,
@@ -1245,6 +1265,14 @@ impl AppState {
         if let Some(warning) = surface_elevation_warning {
             receipt_warnings.push(warning);
         }
+        if doubly_anchored_shot_count > 0 {
+            receipt_warnings.push(format!(
+                "{doubly_anchored_shot_count} shot{} kept {} position{}: section anchored on both sides",
+                if doubly_anchored_shot_count == 1 { "" } else { "s" },
+                if doubly_anchored_shot_count == 1 { "its" } else { "their" },
+                if doubly_anchored_shot_count == 1 { "" } else { "s" },
+            ));
+        }
         let closures_dropped = closures_skipped + closures_failed;
         if closures_dropped > 0 {
             receipt_warnings.push(format!(
@@ -1264,6 +1292,7 @@ impl AppState {
             unit_conversion: None,
             warnings: receipt_warnings,
             info: Vec::new(),
+            zero_datum_created,
         };
         receipt.cap_warnings();
 
