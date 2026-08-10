@@ -20,6 +20,15 @@ pub fn update_project_settings(
     state.update_project_settings(name, validation)
 }
 
+/// Set (or, given `null`/omitted, clear) the open project's entrance
+/// elevation in meters (#465). Stored in the .stalx so it travels with the
+/// file; the only recovery path for the TML import's no-clobber rule (#431)
+/// locking in a wrong first value.
+#[tauri::command]
+pub fn set_surface_elevation(state: State<AppState>, elevation: Option<f64>) -> CommandResult {
+    state.set_surface_elevation(elevation)
+}
+
 /// Save the current project.
 ///
 /// `is_autosave` changes NOTHING about the save - it only names who asked for

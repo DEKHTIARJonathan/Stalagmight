@@ -71,7 +71,8 @@ impl AppState {
             | MoveComment { .. }
             | Batch { .. }
             | RepairIntegrity
-            | UpdateProjectSettings => false,
+            | UpdateProjectSettings
+            | SetSurfaceElevation => false,
         }
     }
 
@@ -166,7 +167,8 @@ impl AppState {
             | SetStationComment { .. }
             | MoveComment { .. }
             | RepairIntegrity
-            | UpdateProjectSettings => SAFE_REFS,
+            | UpdateProjectSettings
+            | SetSurfaceElevation => SAFE_REFS,
 
             // Remove an entity / renumber stations: can dangle refs AND strand a
             // section behind a sole-bridge closure.
@@ -792,6 +794,10 @@ impl AppState {
             ),
             Command::UpdateProjectSettings => CommandResult::failure(
                 "UpdateProjectSettings is applied via update_project_settings, not execute()"
+                    .to_string(),
+            ),
+            Command::SetSurfaceElevation => CommandResult::failure(
+                "SetSurfaceElevation is applied via set_surface_elevation, not execute()"
                     .to_string(),
             ),
         };

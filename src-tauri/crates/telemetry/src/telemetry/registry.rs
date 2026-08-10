@@ -522,6 +522,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.get_along_line_distance",
     // Per-project settings: validation thresholds stored in the .stalx (#57).
     "command.update_project_settings",
+    // Entrance elevation edit, project settings dialog (#465).
+    "command.set_surface_elevation",
     // Project Settings dialog (#57).
     "action.dialog.project-settings",
     "dialog-cancel.project-settings",
@@ -1098,7 +1100,9 @@ mod tests {
         //   + 3 the hamburger menu's Debug submenu split the single showDevStats
         //       overlay toggle into four independent ones:
         //       action.toggle.{showMemoryStats,showMapStats,showZoomStats} = 734.
-        assert_eq!(EVENT_NAMES.len(), 734);
+        //   + 1 entrance elevation became editable in Project Settings (#465):
+        //       command.set_surface_elevation = 735.
+        assert_eq!(EVENT_NAMES.len(), 735);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

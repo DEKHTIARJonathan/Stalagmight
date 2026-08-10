@@ -59,6 +59,66 @@ test.describe('Project Settings', () => {
       .toBe(2);
   });
 
+  test('edits the entrance elevation (#465), including clearing it back to not recorded', async ({ page }) => {
+    await createProject(page, 'Proj Elevation');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    await page.getByTestId('detail-tab-details').click();
+    await page.getByTestId('open-project-settings').click();
+    await expect(page.getByTestId('project-settings-dialog')).toBeVisible();
+
+    // Not recorded by default: empty field, "Not recorded" placeholder.
+    const elevationInput = page.getByTestId('project-settings-elevation');
+    await expect(elevationInput).toHaveValue('');
+    await expect(elevationInput).toHaveAttribute('placeholder', 'Not recorded');
+
+    await elevationInput.fill('42.5');
+    await page.getByTestId('project-settings-save').click();
+    await expect(page.getByTestId('project-settings-dialog')).toHaveCount(0);
+
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __E2E_TEST__?: {
+                  projectStore: {
+                    getState: () => { project: { surface_elevation?: number | null } | null };
+                  };
+                };
+              }
+            ).__E2E_TEST__?.projectStore.getState().project?.surface_elevation,
+        ),
+      )
+      .toBe(42.5);
+
+    // Reopen, clear it back to "not recorded".
+    await page.getByTestId('open-project-settings').click();
+    await expect(elevationInput).toHaveValue('42.5');
+    await elevationInput.fill('');
+    await page.getByTestId('project-settings-save').click();
+    await expect(page.getByTestId('project-settings-dialog')).toHaveCount(0);
+
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __E2E_TEST__?: {
+                  projectStore: {
+                    getState: () => { project: { surface_elevation?: number | null } | null };
+                  };
+                };
+              }
+            ).__E2E_TEST__?.projectStore.getState().project?.surface_elevation,
+        ),
+      )
+      .toBe(null);
+  });
+
   test('Cancel discards a staged name edit', async ({ page }) => {
     // Both surviving tabs stage their edits in local state and commit only inside
     // handleSave, so Cancel must leave the .stalx untouched. That contract had no

@@ -14,6 +14,8 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { defaultConfig, type Config } from '../../types/config';
 import { isValidationConfigValid } from '../../utils/validation';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { convertLength, convertLengthToMeters, clampPrecision } from '../../utils/formatStats';
 
 // A compiler-checked subset of SettingsCategory, so these tabs can never drift
 // from the shared id helpers they are paired with.
@@ -37,13 +39,18 @@ export function ProjectSettingsDialog() {
   // every poll tick, so selecting the object re-rendered the whole settings dialog
   // on each one.
   const isRemote = useSpeleoStore((s) => s.link != null);
-  const { project, globalConfig, updateProjectSettings } = useProjectStore(
+  const { project, globalConfig, updateProjectSettings, setSurfaceElevation } = useProjectStore(
     useShallow((s) => ({
       project: s.project,
       globalConfig: s.config,
       updateProjectSettings: s.updateProjectSettings,
+      setSurfaceElevation: s.setSurfaceElevation,
     })),
   );
+  // read-only mode has no server backstop (see useEditingBlocked's docs/app-modes.md
+  // guard-parity rule): the backend also rejects via guard_mutation, but the field
+  // must disable itself too.
+  const editingBlocked = useEditingBlocked();
   const panelIdBase = useId();
 
   const [tab, setTab] = useState<ProjectSettingsTab>('general');
@@ -75,6 +82,33 @@ export function ProjectSettingsDialog() {
   const [hasValidationError, setHasValidationError] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // Entrance elevation (#465): edited in the project's configured depth unit,
+  // stored in meters. Empty string means "not recorded" (surface_elevation: null).
+  const elevationUnit = globalConfig?.units.depth ?? defaultConfig.units.depth;
+  const elevationPrecision = globalConfig?.units.decimal_precision.depth ?? defaultConfig.units.decimal_precision.depth;
+  const [elevationDraft, setElevationDraft] = useState('');
+  // The draft AS SEEDED from the project, so Save can compare strings rather
+  // than re-parsing + re-converting the (possibly display-rounded) draft back
+  // to meters: comparing against the stored meters value with a tolerance
+  // made an UNTOUCHED Save rewrite the elevation whenever the display
+  // precision was coarser than the stored value (e.g. 1234.56 at precision 1)
+  // or the unit conversion round-trip didn't land exactly (any feet project).
+  const [elevationInitialDraft, setElevationInitialDraft] = useState('');
+  useEffect(() => {
+    const meters = project?.surface_elevation ?? null;
+    const seeded =
+      meters === null || meters === undefined
+        ? ''
+        : convertLength(meters, elevationUnit).toFixed(clampPrecision(elevationPrecision));
+    setElevationDraft(seeded);
+    setElevationInitialDraft(seeded);
+  }, [project?.surface_elevation, elevationUnit, elevationPrecision]);
+  const elevationParsed = elevationDraft.trim() === '' ? null : Number(elevationDraft);
+  // Empty clears to None; anything else must parse to a finite number - a
+  // non-finite / unparsable draft blocks Save rather than silently rounding.
+  const elevationValid = elevationParsed === null || Number.isFinite(elevationParsed);
+  const elevationDraftChanged = elevationDraft !== elevationInitialDraft;
+
   // ValidationSettings is built against a full Config; wrap the project's
   // validation in a synthetic config and funnel its onChange back into local
   // state. It only ever mutates `.validation`.
@@ -90,10 +124,28 @@ export function ProjectSettingsDialog() {
   // Gate on the values directly (robust even if the Validation tab was never
   // opened), plus the live component check while it is mounted.
   const validationValid = isValidationConfigValid(validation);
-  const canSave = !!project && trimmedName.length > 0 && validationValid && !hasValidationError && !saving;
+  // Read-only mode blocks ONLY the elevation write (see the field's own
+  // `disabled={editingBlocked}` below): folding it into `canSave` would block
+  // the whole dialog - name + validation thresholds - in closure-adjusted/Plan/
+  // Export views, where those saves are allowed and the backend accepts them.
+  const canSave =
+    !!project &&
+    trimmedName.length > 0 &&
+    validationValid &&
+    !hasValidationError &&
+    elevationValid &&
+    !saving;
 
   const handleSave = useCallback(async () => {
-    if (!project || trimmedName.length === 0 || !isValidationConfigValid(validation) || hasValidationError || saving) return;
+    if (
+      !project ||
+      trimmedName.length === 0 ||
+      !isValidationConfigValid(validation) ||
+      hasValidationError ||
+      !elevationValid ||
+      saving
+    )
+      return;
     setSaving(true);
     // Skip the settings command when neither the name nor the validation changed:
     // it routes through executeCommand, which marks every success dirty, so even
@@ -111,13 +163,44 @@ export function ProjectSettingsDialog() {
         return;
       }
     }
+    // Compare the DRAFT STRING against what it was seeded with, not the
+    // re-parsed/re-converted value against the stored meters: the draft is
+    // rounded to display precision and unit-converted, so re-converting it
+    // back to meters for an untouched field can land a hair off the stored
+    // value (feet round-trip, or a stored value finer than display
+    // precision) and would otherwise push a spurious write/undo entry.
+    //
+    // `editingBlocked` is NOT checked here: it only disables the input
+    // against NEW edits (see `disabled={editingBlocked}` below). Gating the
+    // SAVE on it too would let a flip from editable to read-only, landing
+    // between typing and clicking Save, silently discard an already-staged
+    // change (closeDialog() would still run). The backend is authoritative -
+    // attempt the write whenever the draft changed, and if guard_mutation
+    // rejects it (EDIT_DISABLED), fall into the same failure path as a
+    // rejected name/validation save: dialog stays open, error shown, the
+    // user's staged draft is untouched.
+    if (elevationDraftChanged) {
+      const elevationMeters =
+        elevationParsed === null ? null : convertLengthToMeters(elevationParsed, elevationUnit);
+      const result = await setSurfaceElevation(elevationMeters);
+      if (!result.success) {
+        setSaving(false);
+        showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
+        return;
+      }
+    }
     setSaving(false);
     closeDialog();
   }, [
     trimmedName,
     hasValidationError,
+    elevationValid,
+    elevationDraftChanged,
+    elevationParsed,
+    elevationUnit,
     saving,
     updateProjectSettings,
+    setSurfaceElevation,
     validation,
     closeDialog,
     showToast,
@@ -185,6 +268,29 @@ export function ProjectSettingsDialog() {
                         aria-label={t('dialogs.projectSettings.name.label')}
                         data-testid="project-settings-name"
                       />
+                    </SettingRow>
+                    <SettingRow
+                      label={t('dialogs.projectSettings.elevation.label')}
+                      helpText={t('dialogs.projectSettings.elevation.help')}
+                      data-testid="project-settings-elevation-row"
+                    >
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          step="any"
+                          value={elevationDraft}
+                          disabled={editingBlocked}
+                          onChange={(e) => setElevationDraft(e.target.value)}
+                          placeholder={t('dialogs.projectSettings.elevation.notRecorded')}
+                          className="w-32 px-2 py-1 bg-background border border-border rounded text-sm disabled:opacity-60"
+                          aria-label={t('dialogs.projectSettings.elevation.aria')}
+                          title={editingBlocked ? t('dialogs.projectSettings.elevation.readOnlyReason') : undefined}
+                          data-testid="project-settings-elevation"
+                        />
+                        <span className="text-xs text-text-secondary">
+                          {elevationUnit === 'feet' ? t('common.units.feet') : t('common.units.meters')}
+                        </span>
+                      </div>
                     </SettingRow>
                   </SettingsSection>
                 </div>
