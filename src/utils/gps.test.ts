@@ -18,6 +18,7 @@ import {
   validateCoordinates,
   formatGpsCoordinates,
   looksTransposed,
+  looksTransposedRawDD,
   type GpsParseResult,
   type GpsParseError,
 } from './gps';
@@ -588,5 +589,48 @@ describe('looksTransposed', () => {
   // load-bearing here).
   it('does not fire on a non-finite latitude', () => {
     expect(looksTransposed(NaN, 12)).toBe(false);
+  });
+});
+
+describe('looksTransposedRawDD', () => {
+  // Regression: `parseDD("120, 45")` rejects 120 as an impossible latitude
+  // before any `GpsCoordinates` exist, so the coords-based `looksTransposed`
+  // never runs and the swap hint silently never showed up next to the range
+  // error. This is the raw-input path that fills that gap.
+
+  it('fires on a swapped pair where the first field is an impossible latitude', () => {
+    // 120 cannot be a latitude at all; swapped (45, 120) is a valid DD pair.
+    expect(looksTransposedRawDD('120, 45')).toBe(true);
+  });
+
+  it('fires on the same shape space-separated', () => {
+    expect(looksTransposedRawDD('120 45')).toBe(true);
+  });
+
+  it('fires just past the boundary too (95, 45) - a swap genuinely fixes it', () => {
+    // Deliberately not carved out: 95 is exactly as impossible a latitude as
+    // 120 is, and swapping produces a DD pair `parseDD` would accept either
+    // way - there is no principled reason to withhold the hint here.
+    expect(looksTransposedRawDD('95, 45')).toBe(true);
+  });
+
+  it('does not fire when the first field is already a valid latitude', () => {
+    expect(looksTransposedRawDD('48.8584, 2.2945')).toBe(false);
+  });
+
+  it('does not fire when swapping would not fix it either (both fields impossible)', () => {
+    // 200 is not a valid latitude NOR a valid longitude, so swapping leaves a
+    // pair `parseDD` would still reject - nothing for the hint to promise.
+    expect(looksTransposedRawDD('200, 45')).toBe(false);
+  });
+
+  it('does not fire on input that is not bare DD shape', () => {
+    // DMS-with-symbols input fails the same `parseDD` regex this mirrors, so
+    // it must not be misread as a DD pair either.
+    expect(looksTransposedRawDD('48°51\'30"N 2°17\'40"E')).toBe(false);
+  });
+
+  it('does not fire on empty input', () => {
+    expect(looksTransposedRawDD('')).toBe(false);
   });
 });
