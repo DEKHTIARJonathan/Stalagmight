@@ -284,6 +284,19 @@ describe('presentImportReceipt (#411/#420)', () => {
     expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', { receipt: converted });
   });
 
+  it('keeps the modal for a receipt naming a created zero datum, even with no warnings (F12c)', () => {
+    const ui = mockUi();
+    const withZeroDatum: ImportReceipt = {
+      ...receiptFixture(),
+      zero_datum_created: 'GPS Anchor',
+    };
+
+    presentImportReceipt(withZeroDatum, ui);
+
+    expect(ui.showToast).not.toHaveBeenCalled();
+    expect(ui.openDialog).toHaveBeenCalledWith('import-receipt', { receipt: withZeroDatum });
+  });
+
   it('toasts a warning-free, non-converted receipt (control case)', () => {
     const ui = mockUi();
     const plain: ImportReceipt = { ...receiptFixture(), unit_conversion: null };
