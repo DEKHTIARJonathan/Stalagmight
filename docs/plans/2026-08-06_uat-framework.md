@@ -119,8 +119,9 @@ first). A `replays-run.ts` runner executes the corpus with fullSweep.
 
 ### Verdict ledger
 
-Runners emit one JSONL record per run - `{date, tier, gitSha, platform,
-journeys: [{name, verdict, assertions, findings}], worstSeverity}` - into
+Runners emit one JSONL record per run - as shipped: `{kind, date, gitSha,
+platform, verdict, journeys: [{journey, verdict, durationMs, checks,
+sweepFindings}]}` (`journeys-run.ts`) - into
 `docs/uat/runs/`, plus an appended line in `docs/uat/ledger.md` linking issues. The
 ledger is the durable memory that today gets lost with session context. The
 app-tester protocol gains one closing step: file the verdict line.

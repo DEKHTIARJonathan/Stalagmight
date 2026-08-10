@@ -29,6 +29,9 @@ export const exportTmlRoundtrip: Journey = {
       `sections=${live.sections} shots=${live.shots}`);
 
     const exportPath = path.join(path.dirname(fixturePath), 'journey-export.tml');
+    // A reused session dir may hold a stale export; a leftover file must never
+    // satisfy the non-empty check for THIS run.
+    fs.rmSync(exportPath, { force: true });
     const exported = (await ctx.callAction('project', 'exportTml', [exportPath])) as {
       ok: boolean;
       error?: string;
@@ -43,15 +46,23 @@ export const exportTmlRoundtrip: Journey = {
 
     const parsedRes = (await ctx.callAction('project', 'parseTml', [exportPath])) as {
       ok: boolean;
-      result?: { sections: { shots: unknown[] }[] };
+      result?: { sections: { shots: { shot_type: string }[] }[] };
       error?: string;
     };
     ctx.expect('exported file parses back', parsedRes.ok && !!parsedRes.result,
       `error=${parsedRes.error ?? 'unknown'}`);
     if (!parsedRes.result) return;
 
+    // The exporter EMITS synthetic CLOSURE shots for loop closures
+    // (export/tml.rs, third pass); they are markers, not survey shots, and the
+    // importer filters them right back out. Counting them against live store
+    // shots would red this journey on a closure-bearing project despite a
+    // lossless export - compare survey shots only.
     const roundSections = parsedRes.result.sections.length;
-    const roundShots = parsedRes.result.sections.reduce((n, s) => n + s.shots.length, 0);
+    const roundShots = parsedRes.result.sections.reduce(
+      (n, s) => n + s.shots.filter((shot) => shot.shot_type !== 'Closure').length,
+      0,
+    );
     ctx.expect('every section survived the round-trip', roundSections === live.sections,
       `exported ${roundSections}, live ${live.sections}`);
     ctx.expect('every shot survived the round-trip', roundShots === live.shots,

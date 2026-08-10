@@ -42,7 +42,7 @@ export const saveReopen: Journey = {
       ok: boolean;
       result?: { success?: boolean; error?: string | null };
     };
-    ctx.expect('save reported success', saved.ok && saved.result?.success !== false,
+    ctx.expect('save reported success', saved.ok && saved.result?.success === true,
       `error=${saved.result?.error ?? 'none'}`);
 
     // Snapshot AFTER the save: save-time heals are then already applied, so the

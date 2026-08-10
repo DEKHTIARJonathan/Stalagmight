@@ -56,13 +56,42 @@ function parseArgs(argv: string[]): { only: string | null; ledger: boolean } {
   return { only, ledger };
 }
 
+/**
+ * The docs/uat/runs/ record is COMMITTED to the public tree, and a failing
+ * run's check details and sweep findings carry absolute session paths and raw
+ * log lines - content the marker-based `lint:private-leaks` scanner cannot be
+ * assumed to catch. Scrub before writing: absolute home paths collapse to
+ * their basename, and sweep findings keep only kind + severity. The verbatim
+ * record still lands in the session artifacts (`run.jsonl`) for triage.
+ */
+function sanitizeForLedger(record: RunRecord): RunRecord {
+  const scrubText = (text: string): string =>
+    text.replace(/\/(?:Users|home)\/[^\s'")\]]+/g, (m) => `<path>/${path.basename(m)}`);
+  return {
+    ...record,
+    journeys: record.journeys.map((j) => ({
+      ...j,
+      ...(j.aborted !== undefined ? { aborted: scrubText(j.aborted) } : {}),
+      checks: j.checks.map((c) =>
+        c.detail !== undefined ? { ...c, detail: scrubText(c.detail) } : c,
+      ),
+      sweepFindings: j.sweepFindings.map((f) => ({
+        ...f,
+        message: `<scrubbed - see the session run.jsonl>`,
+      })),
+    })),
+  };
+}
+
 function writeLedger(record: RunRecord): void {
   const uatDir = path.join(repoRoot, 'docs', 'uat');
   const runsDir = path.join(uatDir, 'runs');
   fs.mkdirSync(runsDir, { recursive: true });
-  const stamp = record.date.replace(/[:]/g, '').slice(0, 15); // YYYY-MM-DDTHHMM
+  const stamp = record.date.replace(/[:]/g, '').slice(0, 17); // YYYY-MM-DDTHHMMSS
   const runFile = path.join(runsDir, `${stamp}-${record.gitSha}.jsonl`);
-  fs.writeFileSync(runFile, `${JSON.stringify(record)}\n`);
+  // 'wx' so a same-second rerun fails loudly instead of silently replacing the
+  // evidence a previously appended ledger line points at (append-only ledger).
+  fs.writeFileSync(runFile, `${JSON.stringify(sanitizeForLedger(record))}\n`, { flag: 'wx' });
 
   const ledgerFile = path.join(uatDir, 'ledger.md');
   const failed = record.journeys.filter((j) => j.verdict === 'fail').map((j) => j.journey);

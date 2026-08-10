@@ -10,8 +10,32 @@ import { loadFixtureWithoutUndoHistory, disableAutoSave, undoDepth } from '../sc
 
 const TML_FIXTURE = 'test_simple.tml';
 
+interface ParsedShot {
+  shot_type: string;
+  excluded: boolean;
+}
+
 interface ParsedTml {
-  sections: { shots: unknown[] }[];
+  sections: { shots: ParsedShot[] }[];
+}
+
+/**
+ * Mirror of the import-side filter (`parsers/tml/mod.rs`, convert step): CLOSURE
+ * shots never import, excluded shots import only with `includeExcluded`, and a
+ * section left with zero shots after filtering is dropped entirely. Expected
+ * counts must be derived through this filter or a fixture containing any of
+ * those features reds the journey on CORRECT app behavior.
+ */
+function importableCounts(parsed: ParsedTml): { sections: number; shots: number } {
+  let sections = 0;
+  let shots = 0;
+  for (const section of parsed.sections) {
+    const kept = section.shots.filter((s) => s.shot_type !== 'Closure' && !s.excluded).length;
+    if (kept === 0) continue;
+    sections += 1;
+    shots += kept;
+  }
+  return { sections, shots };
 }
 
 interface StoreCounts {
@@ -36,10 +60,9 @@ export const importTml: Journey = {
       throw new Error(`parseTml failed: ${parsedRes.error ?? 'unknown'}`);
     }
     const parsed = parsedRes.result;
-    const expectedSections = parsed.sections.length;
-    const expectedShots = parsed.sections.reduce((n, s) => n + s.shots.length, 0);
-    ctx.expect('parse found survey data', expectedSections > 0 && expectedShots > 0,
-      `sections=${expectedSections} shots=${expectedShots}`);
+    const { sections: expectedSections, shots: expectedShots } = importableCounts(parsed);
+    ctx.expect('parse found importable survey data', expectedSections > 0 && expectedShots > 0,
+      `importable sections=${expectedSections} shots=${expectedShots}`);
 
     const before = await counts(ctx);
     const depthBefore = await undoDepth(ctx);

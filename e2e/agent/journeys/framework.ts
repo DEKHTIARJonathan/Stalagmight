@@ -93,6 +93,12 @@ export async function runJourney(
   } catch (err) {
     aborted = err instanceof Error ? err.message : String(err);
   }
+  // A journey that recorded no checks asserted nothing - a silent PASS from a
+  // spec whose early guards all bailed is exactly the vacuous-test defect the
+  // review contract exists to catch. Fail it.
+  if (aborted === undefined && ctx.checks.length === 0) {
+    aborted = 'journey recorded zero checks - a journey must assert something';
+  }
   const failed = aborted !== undefined || ctx.checks.some((c) => !c.ok);
   return {
     journey: journey.name,

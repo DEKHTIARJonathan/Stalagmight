@@ -43,7 +43,8 @@ broken and only a human session caught them:
 ## Any platform - core flows
 
 - [ ] Undo/redo a burst of edits across a save: no wrong-target edits, history
-      walks both ways (the #413 class; automated by `save-reopen-identity`,
-      re-verify by hand only if the journey was red).
+      walks both ways (the #413 class). `save-reopen-identity` automates only
+      DEPTH survival across the reopen - the walk itself is this manual item
+      (or the strict `undo-persistence-fuzz` scenario, on request).
 - [ ] Force-quit mid-session, relaunch: no data loss beyond the last save, no
       leftover `.stalx.tmp` beside the project.
