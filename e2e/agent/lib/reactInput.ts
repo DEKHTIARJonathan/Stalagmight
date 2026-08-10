@@ -1,41 +1,56 @@
 /**
- * In-page script bodies (run via `evalInApp`) that deliver a value into a
- * form control the way React's controlled-input machinery can see it (#531).
+ * In-page script bodies (run via `evalInApp`) that recover two macOS
+ * tauri-wd route defects, both observed during the #394 walkthrough and
+ * filed as #531:
  *
- * `element.value = text` on a React-controlled input writes through the
- * instance-level setter React installs on the node, which also updates
- * React's internal value tracker - so a later native `input` event finds
- * tracker.getValue() already equal to the DOM value and treats it as a
- * no-op, and onChange never fires. This bit macOS's tauri-wd route
- * specifically: its WebDriver `setValue()` sets the DOM value directly
- * (no real per-keystroke events), so the text "lands" (a plain DOM read
- * matches) while React state stays stale.
+ * 1. `type_text`: typing into a controlled React input through the driver's
+ *    `setValue()` lands the DOM value (a plain read-back matches) but
+ *    React's onChange never fires, so component state stays stale. The
+ *    well-known workaround - write through the value setter on the
+ *    element's PROTOTYPE (bypassing the instance-level setter React
+ *    installs on a controlled node, which is what stops a plain
+ *    `el.value = x` + `input` event from being seen as a change) and then
+ *    dispatch a real `input` event - is verified to work here:
+ *    `reactInput.test.ts` runs this exact script against a live
+ *    React-rendered controlled `<input>` and asserts onChange fires.
+ * 2. `press_keys(['Escape'])`: the native WebDriver key action produces no
+ *    observable effect on this route (no error, no app response). A
+ *    manually dispatched `KeyboardEvent('keydown', {key: 'Escape'})` on the
+ *    focused element does. This module does not diagnose *why* the native
+ *    path drops the key - only what was observed - and ships the dispatch
+ *    as a documented fallback.
  *
- * The fix is the well-known React workaround: write through the
- * *prototype's* value setter (bypassing the instance-level override React
- * installed, so the tracker is NOT updated) and then dispatch a real
- * `input` event. React's listener compares the tracker's stale value
- * against the now-different DOM value, sees a change, and fires onChange.
- *
- * Exported as script-body strings (not functions) because `evalInApp`
- * ships them across the WebDriver boundary as source text - see
- * `e2e/agent/lib/page.ts`. `reactInput.test.ts` runs this same string
- * in-process (mocked `browser.executeAsync` + jsdom) against a real
- * controlled React input, so it is exercised by more than a manual replay.
+ * Exported as script-body strings (not functions) because `evalInApp` ships
+ * them across the WebDriver boundary as source text - see
+ * `e2e/agent/lib/page.ts`.
  */
 
 /**
  * args: [selector: string, text: string, clear: boolean]
- * result: { ok: boolean; verified?: boolean }
+ * result: { ok: boolean; verified?: boolean; reason?: string }
  */
 export const REACT_SAFE_SET_VALUE_SCRIPT = `
   const el = document.querySelector(args[0]);
-  if (!el) return { ok: false };
+  if (!el) return { ok: false, reason: 'not-found' };
   const text = args[1];
   const clear = args[2];
-  const isTextarea = el.tagName === 'TEXTAREA';
-  const proto = isTextarea ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-  const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+  const tag = el.tagName;
+  if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+    // Native setter + input event only makes sense for INPUT/TEXTAREA -
+    // a SELECT has its own dedicated select_option tool, and anything else
+    // (e.g. contenteditable) is not a control this harness claims to type
+    // into.
+    return { ok: false, reason: 'unsupported-element' };
+  }
+  if (el.disabled || el.readOnly) {
+    // The prototype setter writes through disabled/readOnly - certifying
+    // that write as "typed" would hide a real read-only-mode regression.
+    return { ok: false, reason: 'not-editable' };
+  }
+  const proto = tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+  const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+  const setter = descriptor && descriptor.set;
+  if (!setter) return { ok: false, reason: 'no-native-setter' };
   const fire = (v) => {
     setter.call(el, v);
     el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -44,22 +59,46 @@ export const REACT_SAFE_SET_VALUE_SCRIPT = `
   if (clear && el.value !== '') fire('');
   fire(text);
   el.dispatchEvent(new Event('change', { bubbles: true }));
+  // A synchronous read here only proves the DOM accepted our assignment -
+  // exactly the non-evidence this whole workaround exists to get past.
+  // Give React (and any app-level validation/clamping in onChange, e.g. a
+  // maxLength clamp) a tick to commit its re-render before reading back.
+  await new Promise((resolve) => setTimeout(resolve, 0));
   return { ok: true, verified: el.value === text };
 `;
 
 /**
- * Fallback for `press_keys(['Escape'])` on the macOS tauri-wd route (#531):
- * the native WebDriver key action there lands on the window, not the
- * webview's focused element, so Escape is silently dropped. Synthesizes the
- * KeyboardEvent directly on `document.activeElement` instead.
+ * Synthesize a keydown/keyup pair for a key whose native WebDriver delivery
+ * was observed to drop on the macOS tauri-wd route (#531: 'Escape'; also
+ * used for the Enter that `type_text`'s `submit` relies on).
  *
- * args: none
+ * Prefers the focused element (an event dispatched there bubbles up through
+ * the app's mounted root on its way to document, so any listener along that
+ * path still sees it). When nothing is focused, dispatching on `document`
+ * would NOT reach the app: React 18 delegates its listeners to the root
+ * container it was `createRoot()`-ed on (`src/main.tsx`, `#root`), which
+ * sits BELOW document in the tree - an event dispatched at document only
+ * bubbles further up, never down into `#root`'s descendants. So the
+ * nothing-focused fallback targets `#root` itself (a `dispatchEvent` call
+ * fires same-node listeners too, not just descendants' bubbled ones).
+ *
+ * args: [key: string]
  * result: true
  */
-export const SYNTHETIC_ESCAPE_KEYDOWN_SCRIPT = `
+export const SYNTHETIC_KEY_SCRIPT = `
+  const key = args[0];
+  const keyCodes = { Escape: 27, Enter: 13 };
   const active = document.activeElement;
-  const target = active && active !== document.body ? active : document;
-  const opts = { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true };
+  const appRoot = document.getElementById('root');
+  const target = active && active !== document.body ? active : appRoot || document;
+  const opts = {
+    key,
+    code: key,
+    keyCode: keyCodes[key] || 0,
+    which: keyCodes[key] || 0,
+    bubbles: true,
+    cancelable: true,
+  };
   target.dispatchEvent(new KeyboardEvent('keydown', opts));
   target.dispatchEvent(new KeyboardEvent('keyup', opts));
   return true;
