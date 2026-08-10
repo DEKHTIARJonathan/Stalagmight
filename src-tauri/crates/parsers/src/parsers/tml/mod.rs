@@ -4915,6 +4915,131 @@ mod tests {
         assert_eq!(tml.sections.len(), 4, "Main + 2 deferred Ts + Side");
     }
 
+    /// The contiguous join drops the fragment count by exactly the chains that
+    /// run in SERIES, and leaves every mid-chain branch alone (#412).
+    ///
+    /// Synthetic multi-root, multi-T topology, entirely in-code:
+    ///
+    /// ```text
+    ///   "Trunk":  1 -> 2 -> 3         mainline, from the entrance
+    ///                  `-> 6 -> 7     T at 2: deferred, parent is MID-chain
+    ///   "Deep":   4 -> 5              parent is 3, Trunk's LAST shot -> JOINS
+    ///   "Stub":   8 -> 9              parent is 2, MID-Trunk -> stays split
+    /// ```
+    ///
+    /// So 4 chains become 3, and the one that merged is the only one whose
+    /// parent ended a chain. A closure spanning the join proves the endpoints
+    /// are re-indexed against the MERGED run rather than the pre-merge
+    /// fragments.
+    #[test]
+    fn the_join_absorbs_series_chains_and_only_those() {
+        let closure_5_to_7 = r"<SurveyData>
+    <ID>10</ID>
+    <FromID>5</FromID>
+    <ClosureToID>7</ClosureToID>
+    <Type>CLOSURE</Type>
+    <Section>Deep</Section>
+    <Azimut>0.0</Azimut>
+    <Length>0.0</Length>
+    <Depth>5.0</Depth>
+    <DepthIn>-1.0</DepthIn>
+    <Inclination>0.0</Inclination>
+    <Left>0.0</Left>
+    <Right>0.0</Right>
+    <Up>0.0</Up>
+    <Down>0.0</Down>
+    <Comment></Comment>
+    <Explorer>Tester</Explorer>
+    <Date>2024-06-15</Date>
+    <Color>0x8f6112ff</Color>
+    <Excluded>false</Excluded>
+    <Latitude>0.0</Latitude>
+    <Longitude>0.0</Longitude>
+</SurveyData>"
+            .to_owned();
+        let shots = [
+            tml_shot_xml_az_len(1, -1, "Trunk", 90.0, 10.0),
+            tml_shot_xml_az_len(2, 1, "Trunk", 90.0, 10.0),
+            // Longer downstream than shot 6, so the mainline continues here and
+            // shot 2 stays mid-chain.
+            tml_shot_xml_az_len(3, 2, "Trunk", 90.0, 40.0),
+            tml_shot_xml_az_len(4, 3, "Deep", 90.0, 10.0),
+            tml_shot_xml_az_len(5, 4, "Deep", 90.0, 10.0),
+            tml_shot_xml_az_len(6, 2, "Trunk", 180.0, 5.0),
+            tml_shot_xml_az_len(7, 6, "Trunk", 180.0, 5.0),
+            tml_shot_xml_az_len(8, 2, "Stub", 270.0, 5.0),
+            tml_shot_xml_az_len(9, 8, "Stub", 270.0, 5.0),
+            closure_5_to_7,
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        let names: Vec<&str> = tml.sections.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["Trunk + Deep", "Trunk (branch 2)", "Stub"],
+            "only the series chain is absorbed, and it says so in the name"
+        );
+
+        let merged = &tml.sections[0];
+        assert_eq!(
+            merged
+                .shots
+                .iter()
+                .filter(|s| s.shot_type != TmlShotType::Closure)
+                .map(|s| s.id)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5],
+            "the merged run is one strictly linear import sequence, in file order"
+        );
+        assert_eq!(merged.start_ariane_id, -1, "still starts where Trunk did");
+        assert_eq!(merged.end_ariane_id, 10, "and ends where Deep did");
+
+        // Nothing was lost or duplicated by the join.
+        let mut ids: Vec<i64> = tml
+            .sections
+            .iter()
+            .flat_map(|s| &s.shots)
+            .map(|s| s.id)
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (1..=10).collect::<Vec<_>>());
+
+        // The one remaining candidate class is gone: nothing else runs in
+        // series, so a second pass would find nothing to do.
+        let origins = classify_chain_origins(&tml);
+        assert_eq!(
+            origins.cross_root_at_parent_chain_end, 0,
+            "the join is a fixed point; origins were {origins:?}"
+        );
+
+        // Closure endpoints index the MERGED run. Shot 5 is the 5th importable
+        // shot of section 0, so it ends at station 5 - a number that only comes
+        // out right if the merge happened before the closure was resolved.
+        let (configs, closures, _) =
+            convert_tml_to_import_configs(&tml, false, false).expect("convert");
+        assert_eq!(configs.len(), 3);
+        assert_eq!(
+            configs[0].shots.len(),
+            5,
+            "the CLOSURE shot is not imported"
+        );
+        assert_eq!(closures.len(), 1);
+        assert_eq!(
+            (
+                closures[0].from_section_index,
+                closures[0].from_station_index
+            ),
+            (0, 5),
+            "the closure's near end is re-indexed against the merged run"
+        );
+        assert_eq!(
+            (closures[0].to_section_index, closures[0].to_station_index),
+            (1, 2),
+            "and its far end still points at the untouched branch"
+        );
+    }
+
     /// Re-joining must not silently break the two things every emitted config
     /// carries besides its shots: the closure indices and the depth rebase.
     ///
