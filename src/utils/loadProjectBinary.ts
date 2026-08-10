@@ -17,6 +17,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { decode as msgpackDecode } from '@msgpack/msgpack';
 import type { LoadProjectFullResult } from '../types/ipc/LoadProjectFullResult';
 import type { Project } from '../types/ipc/Project';
+import type { AzimuthReference } from '../types/ipc/AzimuthReference';
 import type { ValidationConfig } from '../types/ipc/ValidationConfig';
 import type { Section } from '../types/ipc/Section';
 import type { Shot } from '../types/ipc/Shot';
@@ -77,7 +78,7 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
  * find the key absent rather than misalign - the bump is a deliberate fence, not
  * a decode requirement, and it keeps this constant honest about the shape.
  */
-const EXPECTED_VERSION = 4;
+const EXPECTED_VERSION = 5;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */
 const SHOT_FLOAT_FIELDS = 12;
 /** u32 fields per shot. Mirror of SHOT_UINT_FIELDS in Rust. */
@@ -134,6 +135,13 @@ interface ProjectHeaderBinary {
   imported_section_hashes: string[];
   validation: ValidationConfig;
   surface_elevation: number | null;
+  /**
+   * The project-level north reference a section inherits when it declares none
+   * (#438). Absent on an envelope from a backend that predates it; the decoder
+   * folds that onto `null`, which is the same "nothing recorded" the JSON path
+   * means.
+   */
+  default_azimuth_reference?: AzimuthReference | null;
 }
 
 interface SectionHeaderBinary {
@@ -147,6 +155,8 @@ interface SectionHeaderBinary {
   shot_offset: number;
   shot_count: number;
   next_shot_id: number;
+  /** This section's own north reference (#438); absent/null inherits. */
+  azimuth_reference?: AzimuthReference | null;
 }
 
 /**
@@ -307,6 +317,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
       direction: sh.direction,
       quality: sh.quality,
       next_shot_id: sh.next_shot_id,
+      azimuth_reference: sh.azimuth_reference ?? null,
     } as Section;
     // Define-once lazy getter: on first read it materializes the Shot[] and
     // *replaces itself* with a plain data property holding that array. This
@@ -362,6 +373,13 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     next_closure_id: BigInt(env.project_header.next_closure_id as unknown as number | bigint),
     validation: env.project_header.validation,
     surface_elevation: env.project_header.surface_elevation,
+    // Spread rather than assigned: the generated `Project` declares this
+    // optional and the tsconfig sets `exactOptionalPropertyTypes`, so an absent
+    // envelope field has to stay ABSENT - writing `undefined` into it is a type
+    // error, and writing `null` claims a value the type does not admit.
+    ...(env.project_header.default_azimuth_reference
+      ? { default_azimuth_reference: env.project_header.default_azimuth_reference }
+      : {}),
   };
 
   // Stations: typed-array views over the binary buffers.
@@ -518,6 +536,7 @@ function buildSurveyData(
     direction: sh.direction,
     quality: sh.quality,
     next_shot_id: sh.next_shot_id,
+    azimuth_reference: sh.azimuth_reference ?? null,
     shotOffset: sh.shot_offset,
     shotCount: sh.shot_count,
   }));

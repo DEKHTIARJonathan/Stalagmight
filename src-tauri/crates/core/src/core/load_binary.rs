@@ -32,8 +32,9 @@ use serde_bytes::ByteBuf;
 
 use crate::core::loading::{DisplaySettings, LoadProjectFullResult};
 use crate::models::{
-    ClosureRef, FrozenShotRef, GpsCoordinates, LoopClosureWire, ProjectStats, ProjectWarning,
-    SectionId, ShotId, StationMergeWire, StationRef, SurveyDirection, ZeroDatumWire,
+    AzimuthReference, ClosureRef, FrozenShotRef, GpsCoordinates, LoopClosureWire, ProjectStats,
+    ProjectWarning, SectionId, ShotId, StationMergeWire, StationRef, SurveyDirection,
+    ZeroDatumWire,
 };
 
 /// f32 sentinel encoding `None` for nullable numeric fields. `f32::NAN`
@@ -79,7 +80,15 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 /// Bumped from 3 → 4 when Ariane collaboration mode was removed: the header
 /// no longer carries a `collab` field, so a stale frontend would misread the
 /// envelope from that field onwards.
-pub const BINARY_FORMAT_VERSION: u32 = 4;
+///
+/// Bumped 4 → 5 for the #438 north references: the project header gained
+/// `default_azimuth_reference` and every section header gained
+/// `azimuth_reference`. Both are APPENDED, so a stale frontend reading a
+/// msgpack map would simply ignore them - but the section field sits inside the
+/// per-section struct that the decoder walks positionally, and a frontend that
+/// does not know it exists would render every corrected section uncorrected
+/// while believing it had the whole project.
+pub const BINARY_FORMAT_VERSION: u32 = 5;
 
 #[derive(Serialize)]
 pub struct LoadProjectFullBinaryResult {
@@ -157,6 +166,11 @@ pub struct ProjectHeaderBinary {
     pub validation: crate::config::ValidationConfig,
     /// Entrance elevation (#431), so binary-loaded projects carry it too.
     pub surface_elevation: Option<f64>,
+    /// The project-level north reference a section inherits when it declares
+    /// none (#438). Without it a binary load resolved every inheriting section
+    /// to "nothing recorded" and drew the survey uncorrected - the JSON path
+    /// has carried it since the field existed.
+    pub default_azimuth_reference: Option<AzimuthReference>,
 }
 
 #[derive(Serialize)]
@@ -171,6 +185,9 @@ pub struct SectionHeaderBinary {
     pub shot_offset: u32,
     pub shot_count: u32,
     pub next_shot_id: ShotId,
+    /// This section's own north reference (#438); `None` inherits
+    /// [`ProjectHeaderBinary::default_azimuth_reference`].
+    pub azimuth_reference: Option<AzimuthReference>,
 }
 
 /// Convert a `LoadProjectFullResult` into the binary-friendly layout.
@@ -277,6 +294,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
             shot_offset,
             shot_count,
             next_shot_id: section.next_shot_id,
+            azimuth_reference: section.azimuth_reference,
         });
     }
 
@@ -372,6 +390,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         imported_section_hashes: project.imported_section_hashes,
         validation: project.validation,
         surface_elevation: project.surface_elevation,
+        default_azimuth_reference: project.default_azimuth_reference,
     };
 
     let result = LoadProjectFullBinaryResult {
@@ -485,12 +504,14 @@ mod tests {
     struct DecodedHeader {
         name: String,
         sections: Vec<DecodedSection>,
+        default_azimuth_reference: Option<AzimuthReference>,
     }
     #[derive(Deserialize)]
     struct DecodedSection {
         id: SectionId,
         shot_offset: u32,
         shot_count: u32,
+        azimuth_reference: Option<AzimuthReference>,
     }
 
     fn shot(id: u32, azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> Shot {
@@ -646,6 +667,69 @@ mod tests {
 
         // Survey direction (unused suffix, just to ensure import is referenced)
         let _ = SurveyDirection::default();
+    }
+
+    /// #438: the binary envelope carries BOTH halves of the north reference.
+    ///
+    /// It used to stop at `surface_elevation`, so a binary load - the fast path
+    /// every real open takes - silently dropped the project default and every
+    /// section's own, and the survey rendered uncorrected while the JSON path
+    /// showed it right. Nothing failed; the map was just rotated.
+    #[test]
+    fn azimuth_references_survive_the_binary_envelope() {
+        use crate::models::{AzimuthReference as Ref, CorrectionSource};
+
+        let mut project = new_project("declination");
+        project.default_azimuth_reference =
+            Some(Ref::magnetic(-4.25, CorrectionSource::FileDeclared));
+
+        let mut declared = new_section(1, "Declared", "#ff0000");
+        declared.shots.push(shot(101, 0.0, 10.0, 0.0, 0.0));
+        declared.azimuth_reference = Some(Ref::magnetic(
+            10.5,
+            CorrectionSource::IgrfAuto { epoch_year: 2024 },
+        ));
+        // Declares nothing of its own: it inherits, and the INHERITANCE is what
+        // the project-level field has to preserve.
+        let mut inheriting = new_section(2, "Inheriting", "#00ff00");
+        inheriting.shots.push(shot(201, 0.0, 10.0, 0.0, 0.0));
+        assert!(inheriting.azimuth_reference.is_none(), "premise");
+        project.sections.push(declared);
+        project.sections.push(inheriting);
+
+        let result = LoadProjectFullResult {
+            loading_id: 1,
+            project,
+            stations: vec![],
+            stats: empty_stats(),
+            warnings: Vec::new(),
+            display_settings: DisplaySettings::default(),
+            is_remote: false,
+        };
+        let bytes = encode(result).unwrap();
+        let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
+
+        assert_eq!(
+            decoded.version, BINARY_FORMAT_VERSION,
+            "adding header fields has to move the version the decoder pins"
+        );
+        assert_eq!(
+            decoded.project_header.default_azimuth_reference,
+            Some(Ref::magnetic(-4.25, CorrectionSource::FileDeclared)),
+            "the project default is what an inheriting section resolves to"
+        );
+        assert_eq!(
+            decoded.project_header.sections[0].azimuth_reference,
+            Some(Ref::magnetic(
+                10.5,
+                CorrectionSource::IgrfAuto { epoch_year: 2024 }
+            )),
+            "a section's own reference, provenance and all"
+        );
+        assert_eq!(
+            decoded.project_header.sections[1].azimuth_reference, None,
+            "a section that declares nothing must not be given a value here"
+        );
     }
 
     #[test]
