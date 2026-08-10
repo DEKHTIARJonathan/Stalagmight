@@ -308,6 +308,11 @@ export function ToastStack() {
   const toasts = useUIStore((s) => s.toasts);
   const dismissToast = useUIStore((s) => s.dismissToast);
   const setToastCapacity = useUIStore((s) => s.setToastCapacity);
+  // F8: the largest clearance any mounted owner has registered (e.g. the DMP
+  // wizard's footer), added on top of the default `bottom-6` anchor so a
+  // lingering toast never covers it. 0 when nothing has registered.
+  const toastBottomOffsets = useUIStore((s) => s.toastBottomOffsets);
+  const bottomOffsetPx = Math.max(0, ...Object.values(toastBottomOffsets));
   const reducedMotion = usePrefersReducedMotion();
   const viewportHeight = useViewportHeight();
 
@@ -729,8 +734,12 @@ export function ToastStack() {
           // alive indefinitely by re-arming the dwell on every leave. Only the
           // dismiss buttons opt back in; the pause is hit-tested against this box
           // instead of relying on pointer events it no longer receives.
-          className="absolute bottom-6 left-6 pointer-events-none"
-          style={{ height: stackHeight || undefined, width: stackWidth || undefined }}
+          className="absolute left-6 pointer-events-none"
+          style={{
+            bottom: 24 + bottomOffsetPx,
+            height: stackHeight || undefined,
+            width: stackWidth || undefined,
+          }}
           ref={stackRef}
           onFocusCapture={beginFocus}
           onBlurCapture={endFocus}

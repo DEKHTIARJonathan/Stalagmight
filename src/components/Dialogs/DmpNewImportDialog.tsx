@@ -54,6 +54,7 @@ import {
   computeSegmentLayout,
 } from '../../utils/segmentContext';
 import { sectionColorPalette } from '../../utils/colors';
+import { debugLog } from '../../utils/debugLog';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import {
@@ -473,8 +474,8 @@ export function buildBatchImport(
           // and then cleared arrived as NaN length, depths and azimuths.
           .filter(isEmittedShot)
           .map(editableShotToShotData);
-        if (import.meta.env.DEV && deletedCount > 0) {
-          console.warn(
+        if (deletedCount > 0) {
+          debugLog(
             `[buildBatchImport] Section ${idx} "${section.name}": ${edits.shots.length} total shots, ${deletedCount} deleted, ${backendShots.length} emitted`,
           );
         }
@@ -492,7 +493,7 @@ export function buildBatchImport(
             )) {
               modifiedCount++;
               if (modifiedCount <= 3) {
-                console.warn(
+                debugLog(
                   `[buildBatchImport]   MODIFIED shot id=${edited.id}:`,
                   `az_in ${orig.azimuth_in.toFixed(1)}→${edited.azimuth_in.toFixed(1)}`,
                   `len ${orig.length.toFixed(3)}→${edited.length.toFixed(3)}`,
@@ -502,15 +503,13 @@ export function buildBatchImport(
             }
           }
           if (modifiedCount > 0) {
-            console.warn(`[buildBatchImport] Section ${idx} "${section.name}": ${modifiedCount} shots have INTERPOLATED values`);
+            debugLog(`[buildBatchImport] Section ${idx} "${section.name}": ${modifiedCount} shots have INTERPOLATED values`);
           }
         }
       } else {
         const editableShots = convertToEditableShots(section.shots);
         backendShots = editableShots.map(editableShotToShotData);
-        if (import.meta.env.DEV) {
-          console.warn(`[buildBatchImport] Section ${idx} "${section.name}": no edits, using ${backendShots.length} DMP shots`);
-        }
+        debugLog(`[buildBatchImport] Section ${idx} "${section.name}": no edits, using ${backendShots.length} DMP shots`);
       }
       if (backendShots.length === 0) {
         // Reported, not just logged: the `unreachable` list names what was never
@@ -518,9 +517,7 @@ export function buildBatchImport(
         // through both and disappeared between the wizard and the map. Anything
         // anchored to it stalls the emit loop and disappears with it.
         emptySections.add(idx);
-        if (import.meta.env.DEV) {
-          console.warn(`[buildBatchImport] Section ${idx} "${section.name}": SKIPPED - 0 shots after filtering deleted`);
-        }
+        debugLog(`[buildBatchImport] Section ${idx} "${section.name}": SKIPPED - 0 shots after filtering deleted`);
         continue;
       }
       // The gates upstream ask the user to finish a half-filled row; this asks
@@ -553,14 +550,10 @@ export function buildBatchImport(
           }
         }
         if (!conn) {
-          if (import.meta.env.DEV) {
-            console.warn(`[buildBatchImport] Section ${idx} "${section.name}": SKIPPED - no connection or direct placement`);
-          }
+          debugLog(`[buildBatchImport] Section ${idx} "${section.name}": SKIPPED - no connection or direct placement`);
           continue;
         }
-        if (import.meta.env.DEV) {
-          console.warn(`[buildBatchImport] Section ${idx} "${section.name}": using reverse import connection → ${conn.targetImportIndex}`);
-        }
+        debugLog(`[buildBatchImport] Section ${idx} "${section.name}": using reverse import connection → ${conn.targetImportIndex}`);
       }
 
       let placement: ImportPlacement;
@@ -644,11 +637,9 @@ export function buildBatchImport(
               }
             } else {
               // No reverse available - will retry in next pass
-              if (import.meta.env.DEV) {
-                console.warn(
-                  `[buildBatchImport] Section ${idx} "${section.name}": DEFERRED - target import ${conn!.targetImportIndex} not yet emitted`,
-                );
-              }
+              debugLog(
+                `[buildBatchImport] Section ${idx} "${section.name}": DEFERRED - target import ${conn!.targetImportIndex} not yet emitted`,
+              );
               continue;
             }
           } else {
@@ -728,7 +719,7 @@ export function buildBatchImport(
     }
     for (const _dp of directPlacements ?? []) directCount++;
     const editedSections = sectionEdits ? Array.from(sectionEdits.keys()).length : 0;
-    console.warn(
+    debugLog(
       `[buildBatchImport] SUMMARY: ${configs.length} configs emitted, ${unreachable.length} unreachable,`,
       `connections: ${existingCount} existing + ${importingCount} importing + ${directCount} direct,`,
       `sectionEdits has ${editedSections} entries`,
@@ -742,7 +733,7 @@ export function buildBatchImport(
         const alive = ed ? ed.shots.filter(sh => !sh.isDeleted).length : s?.shots.length ?? 0;
         const hasConn = connectionMap.has(idx);
         const hasDirect = directPlacementMap.has(idx);
-        console.warn(
+        debugLog(
           `[buildBatchImport] ⚠ Section ${idx} "${s?.name}" REACHABLE but NOT EMITTED:`,
           `alive=${alive} hasConn=${hasConn} hasDirect=${hasDirect}`,
           hasConn ? `conn=${JSON.stringify(connectionMap.get(idx))}` : '',
@@ -824,6 +815,27 @@ export default function DmpNewImportDialog({
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [showBackConfirm, setShowBackConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // F8: registers this dialog's footer height with the toast stack for as long
+  // as the footer is mounted, so a lingering toast (e.g. the manual-placement
+  // hint, which fires just before this dialog closes and can still be on
+  // screen when it reopens) is raised above the footer instead of covering
+  // the Cancel/Back row.
+  const footerRef = useRef<HTMLDivElement | null>(null);
+  const registerToastBottomOffset = useUIStore((s) => s.registerToastBottomOffset);
+  const unregisterToastBottomOffset = useUIStore((s) => s.unregisterToastBottomOffset);
+  useEffect(() => {
+    const el = footerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const owner = 'dmp-import-new-footer';
+    const report = () => registerToastBottomOffset(owner, el.getBoundingClientRect().height);
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    report();
+    return () => {
+      ro.disconnect();
+      unregisterToastBottomOffset(owner);
+    };
+  }, [registerToastBottomOffset, unregisterToastBottomOffset]);
   const [placingRetry, setPlacingRetry] = useState(0);
 
   // Merge station selection
@@ -1360,13 +1372,11 @@ export default function DmpNewImportDialog({
     // Restore from ref if previously edited
     const existing = sectionEditsRef.current.get(idx);
     if (existing) {
-      if (import.meta.env.DEV) {
-        console.warn(
-          `[init-effect] RESTORE section=${idx} from sectionEditsRef`,
-          `shots.length=${existing.shots.length}`,
-          `deleted=${existing.shots.filter(s => s.isDeleted).length}`,
-        );
-      }
+      debugLog(
+        `[init-effect] RESTORE section=${idx} from sectionEditsRef`,
+        `shots.length=${existing.shots.length}`,
+        `deleted=${existing.shots.filter(s => s.isDeleted).length}`,
+      );
       // The counter is per section, and only the initialize branch below used to
       // seed it: coming back to a section after editing a SHORTER one handed out
       // temp ids this section had already used, so two rows shared a key and the
@@ -1388,12 +1398,10 @@ export default function DmpNewImportDialog({
 
     const shots = convertToEditableShots(section.shots);
     nextTempIdRef.current = shots.length + 1;
-    if (import.meta.env.DEV) {
-      console.warn(
-        `[init-effect] INITIALIZE section=${idx} "${section.name}"`,
-        `dmpShots=${section.shots.length} standardShots=${shots.length}`,
-      );
-    }
+    debugLog(
+      `[init-effect] INITIALIZE section=${idx} "${section.name}"`,
+      `dmpShots=${section.shots.length} standardShots=${shots.length}`,
+    );
 
     // Color based on position in selection order (matches zero datum dialog)
     const selectedPos = selectedIndices.indexOf(idx);
@@ -1421,19 +1429,15 @@ export default function DmpNewImportDialog({
   useEffect(() => {
     if (!editState || activeEditableSectionIndex == null) return;
     if (editStateForSection !== activeEditableSectionIndex) {
-      if (import.meta.env.DEV) {
-        console.warn(
-          `[sync-effect] SKIPPED stale write: editStateFor=${editStateForSection} !== active=${activeEditableSectionIndex}`,
-        );
-      }
+      debugLog(
+        `[sync-effect] SKIPPED stale write: editStateFor=${editStateForSection} !== active=${activeEditableSectionIndex}`,
+      );
       return;
     }
-    if (import.meta.env.DEV) {
-      console.warn(
-        `[sync-effect] WRITING sectionEditsRef[${activeEditableSectionIndex}]`,
-        `editState.shots.length=${editState.shots.length}`,
-      );
-    }
+    debugLog(
+      `[sync-effect] WRITING sectionEditsRef[${activeEditableSectionIndex}]`,
+      `editState.shots.length=${editState.shots.length}`,
+    );
     sectionEditsRef.current.set(activeEditableSectionIndex, editState);
   }, [editState, activeEditableSectionIndex, editStateForSection]);
 
@@ -1764,9 +1768,7 @@ export default function DmpNewImportDialog({
         }
         temporalDistanceFetchedOriginsRef.current.add(key);
       } catch (e) {
-        if (import.meta.env.DEV) {
-          console.warn('[dmp-temporal-rerank] distance fetch failed', origin, e);
-        }
+        debugLog('[dmp-temporal-rerank] distance fetch failed', origin, e);
       }
     }));
   }, []);
@@ -1809,8 +1811,8 @@ export default function DmpNewImportDialog({
       temporalDistanceCacheRef.current,
     );
     suggestionPoolRef.current = reranked.suggestions;
-    if (import.meta.env.DEV && reranked.rejectedCount > 0) {
-      console.warn(`[dmp-temporal-rerank] rejected ${reranked.rejectedCount} impossible candidate(s)`);
+    if (reranked.rejectedCount > 0) {
+      debugLog(`[dmp-temporal-rerank] rejected ${reranked.rejectedCount} impossible candidate(s)`);
     }
     if (reranked.suggestions.length === 0) return false;
 
@@ -2492,16 +2494,14 @@ export default function DmpNewImportDialog({
     if (suggestionActionInFlightRef.current || transitionToPlacingInFlightRef.current) return;
     suggestionActionInFlightRef.current = true;
     try {
-      if (import.meta.env.DEV) {
-        console.warn(
-          `[handleConfirm] import=${currentSuggestion.importSectionIndex} "${currentSuggestion.importSectionName}"`,
-          `→ target=${currentSuggestion.targetType === 'importing' ? currentSuggestion.targetImportIndex : currentSuggestion.existingSectionId}`,
-          `"${currentSuggestion.existingSectionName}"`,
-          `type=${currentSuggestion.targetType}`,
-          `impStn=${currentSuggestion.importStationIndex} exStn=${currentSuggestion.existingStationIndex}`,
-          `matched=${currentSuggestion.matchedShots} dir=${currentSuggestion.direction}`,
-        );
-      }
+      debugLog(
+        `[handleConfirm] import=${currentSuggestion.importSectionIndex} "${currentSuggestion.importSectionName}"`,
+        `→ target=${currentSuggestion.targetType === 'importing' ? currentSuggestion.targetImportIndex : currentSuggestion.existingSectionId}`,
+        `"${currentSuggestion.existingSectionName}"`,
+        `type=${currentSuggestion.targetType}`,
+        `impStn=${currentSuggestion.importStationIndex} exStn=${currentSuggestion.existingStationIndex}`,
+        `matched=${currentSuggestion.matchedShots} dir=${currentSuggestion.direction}`,
+      );
       setError(null);
 
       // Read fresh edit state from the ref (synchronously up-to-date) instead of
@@ -4101,7 +4101,11 @@ export default function DmpNewImportDialog({
         )}
 
         {/* Footer */}
-        <div className="px-4 py-3 border-t border-border flex justify-between items-center">
+        <div
+          ref={footerRef}
+          data-testid="dmp-import-dialog-footer"
+          className="px-4 py-3 border-t border-border flex justify-between items-center"
+        >
           <div className="flex gap-2">
             <Button onClick={handleCancel} className={importSecondaryButtonClass} data-testid="cancel-button">
               {t('common.actions.cancel')}

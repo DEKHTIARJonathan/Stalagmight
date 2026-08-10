@@ -669,6 +669,19 @@ interface UIStore {
    * - reset the stack through it between cases.
    */
   clearToast: () => void;
+  /**
+   * Extra clearance (px) the toast stack keeps above its default `bottom-6`
+   * anchor, keyed by the owner that requested it. A dialog with its own
+   * bottom-anchored footer near the toast's corner (e.g. the DMP wizard's
+   * Cancel/Back row) registers its footer height here for as long as it is
+   * mounted, so a lingering toast (F8: `dmp-manual-placement-hint`) is
+   * raised above the footer instead of covering it. Keyed rather than a
+   * single number so two owners never stomp each other's clearance; the
+   * stack uses the largest value currently registered.
+   */
+  toastBottomOffsets: Record<string, number>;
+  registerToastBottomOffset: (owner: string, px: number) => void;
+  unregisterToastBottomOffset: (owner: string) => void;
 
   // Snap state
   snappedStation: StationRef | null;
@@ -1929,6 +1942,16 @@ export const useUIStore = create<UIStore>((set) => ({
     set((s) => ({ toasts: s.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) })),
   removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   clearToast: () => set({ toasts: [] }),
+  toastBottomOffsets: {},
+  registerToastBottomOffset: (owner, px) =>
+    set((s) => ({ toastBottomOffsets: { ...s.toastBottomOffsets, [owner]: px } })),
+  unregisterToastBottomOffset: (owner) =>
+    set((s) => {
+      if (!(owner in s.toastBottomOffsets)) return s;
+      const next = { ...s.toastBottomOffsets };
+      delete next[owner];
+      return { toastBottomOffsets: next };
+    }),
 
   // Snap state
   snappedStation: null,
