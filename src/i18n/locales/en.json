@@ -1198,6 +1198,12 @@
         "label": "Project name",
         "help": "The name of this cave system / project.",
         "remoteHelp": "This project is managed by SpeleoDB. Edit its name in the SpeleoDB tab."
+      },
+      "elevation": {
+        "label": "Entrance elevation",
+        "help": "Elevation above sea level where the entrance is located. Leave empty if unknown.",
+        "aria": "Entrance elevation",
+        "notRecorded": "Not recorded"
       }
     },
     "unsaved": {
