@@ -1,7 +1,7 @@
 use crate::config::ValidationConfig;
-use crate::models::shot::pitch_from_components;
+use crate::models::shot::implied_pitch_deg;
 use crate::models::warning::severity_for_code;
-use crate::models::{SectionId, ShotData, DEPTH_ROUNDING_EPSILON_M};
+use crate::models::{SectionId, ShotData};
 
 use super::{ValidationWarning, WarningSeverity};
 
@@ -9,6 +9,15 @@ use super::{ValidationWarning, WarningSeverity};
 /// [-90, 90] is physically impossible (issue #57).
 const PITCH_MIN: f64 = -90.0;
 const PITCH_MAX: f64 = 90.0;
+
+/// Rounding tolerance, in metres, absorbed by the length-vs-depth-change
+/// geometry check below (`LENGTH_BELOW_DEPTH_CHANGE`). Purely a slope/dz
+/// float-rounding slack, unrelated to any other decision in this codebase -
+/// do not reuse it as a "how much depth change counts as real" threshold
+/// elsewhere (#482 finding: the importer's zero-means-absent pitch inference
+/// needs the DIFFERENT question "would this fabricate a mismatch warning",
+/// answered by `implied_pitch_deg` + `DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD`).
+const DEPTH_ROUNDING_EPSILON_M: f64 = 1e-6;
 
 /// Validator for survey data
 pub struct Validator;
@@ -286,8 +295,7 @@ impl Validator {
                 };
                 if let Some(recorded) = recorded_pitch {
                     if leg_in_range(shot.pitch_in) && leg_in_range(shot.pitch_out) {
-                        let horizontal = (shot.length * shot.length - dz * dz).max(0.0).sqrt();
-                        let implied = pitch_from_components(horizontal, dz);
+                        let implied = implied_pitch_deg(shot.length, shot.depth_in, shot.depth_out);
                         if (recorded - implied).abs() > config.inclination_depth_diff_threshold {
                             warnings.push(warn(
                                 "INCLINATION_DEPTH_MISMATCH",

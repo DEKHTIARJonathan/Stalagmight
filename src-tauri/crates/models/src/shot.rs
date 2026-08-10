@@ -27,16 +27,6 @@ pub fn shot_display_position(shot_id: ShotId, section_id: SectionId) -> u32 {
     }
 }
 
-/// Rounding tolerance, in metres, for depth-change geometry checks.
-///
-/// Shared between the validator's length/depth-change cross-check
-/// (`core::validation`, `LENGTH_BELOW_DEPTH_CHANGE` and
-/// `INCLINATION_DEPTH_MISMATCH`) and the TML importer's zero-means-absent
-/// pitch inference (`parsers::tml::normalize_tml_shot`), so both agree on what
-/// counts as "no real depth change" rather than drifting apart with two
-/// independently-chosen magic numbers.
-pub const DEPTH_ROUNDING_EPSILON_M: f64 = 1e-6;
-
 /// Convert slope length + vertical delta into horizontal length.
 /// Returns 0.0 if the inputs are invalid (e.g., slope < |dz|).
 pub(crate) fn horizontal_length_from_slope(length: f64, dz: f64) -> f64 {
@@ -97,6 +87,21 @@ pub(crate) fn slope_length_from_components(horizontal: f64, dz: f64) -> f64 {
 /// Positive pitch corresponds to increasing depth (downwards).
 pub fn pitch_from_components(horizontal: f64, dz: f64) -> f64 {
     dz.atan2(horizontal).to_degrees()
+}
+
+/// What a shot's own slope length and depth change imply the inclination
+/// should have been - `dz = depth_out - depth_in`, `horizontal =
+/// sqrt(length^2 - dz^2)`, then pitch from the two components.
+///
+/// The single source of truth for this computation. Shared by
+/// `core::validation`'s `INCLINATION_DEPTH_MISMATCH` cross-check and the TML
+/// importer's zero-means-absent pitch inference (#482): both need "what
+/// would the geometry have said the inclination was", and if they computed
+/// it separately they could silently drift apart.
+pub fn implied_pitch_deg(length: f64, depth_in: f64, depth_out: f64) -> f64 {
+    let dz = depth_out - depth_in;
+    let horizontal = horizontal_length_from_slope(length, dz);
+    pitch_from_components(horizontal, dz)
 }
 
 /// What a shot represents on the line (#27).
