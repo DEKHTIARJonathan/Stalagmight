@@ -4752,6 +4752,7 @@ mod tests {
         let (comment, station_comments) = import_comment(Some("muddy water".to_string()), false);
         assert_eq!(comment.as_deref(), Some("muddy water"));
         assert!(station_comments.is_empty());
+    }
 
     /// Why each emitted chain starts where it does (#412).
     ///
