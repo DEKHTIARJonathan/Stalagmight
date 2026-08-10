@@ -31,12 +31,36 @@ export interface ZeroDatumConfigResult {
     surveyor: string | null;
     date: string | null;
     color: string;
-    direction: 'in' | 'out';
+    // Carried through the #394/#534 re-entry paths like every other field,
+    // but `handleConfirm`/`buildCurrentDraft` below always re-emit this
+    // hardcoded 1.0 - there is no UI control for it yet, so nothing actually
+    // writes back what was carried. A future per-field quality control needs
+    // to read this back in, not just carry it.
     quality: number;
+    direction: 'in' | 'out';
     /** Reverse this section end-to-end on import (#24). */
     reverse: boolean;
   };
   shots: EditableShot[];
+}
+
+/**
+ * A snapshot of this dialog's live state, carried on ITS OWN Back to
+ * 'zero-datum-selection' and re-seeded on a same-section forward pass (#534).
+ * Frontend-only - never crosses IPC - so unlike a confirmed
+ * `ZeroDatumConfigResult` it can hold GPS text that never parsed: the user
+ * may press Back before finishing it, and losing the text they typed on the
+ * way is exactly the kind of loss this carry exists to prevent.
+ */
+export interface ZeroDatumConfigDraft extends Omit<ZeroDatumConfigResult, 'gps'> {
+  /** Null until `gpsInputText` parses. */
+  gps: GpsCoordinates | null;
+  /** The raw GPS box text. Optional: a confirmed `ZeroDatumConfigResult` (the
+   *  WIZARD's one-hop carry, `App.tsx`'s `previousZeroDatumConfig` set from
+   *  `dialogData.zeroDatumConfig`) has no such text and is also a valid
+   *  `ZeroDatumConfigDraft` - `initialGpsInputRef` below reconstructs it from
+   *  `gps` in that case. */
+  gpsInputText?: string;
 }
 
 /** A blank row for the shot table - one 'insert' action serves appending and
@@ -221,7 +245,7 @@ function initialShotEditState({
   initialConfig,
 }: {
   section: DmpSection | undefined;
-  initialConfig: ZeroDatumConfigResult | undefined;
+  initialConfig: ZeroDatumConfigDraft | undefined;
 }): ShotEditState {
   if (initialConfig) {
     const shots = initialConfig.shots;
@@ -252,10 +276,16 @@ interface ZeroDatumConfigDialogProps {
   sectionIndex: number;
   filePath: string;
   onCancel: () => void;
-  onBack: () => void;
+  /**
+   * Back, handed this dialog's OWN live state (#534) so App.tsx can relay it
+   * through 'zero-datum-selection' and re-seed it on a same-section forward
+   * pass - see `buildCurrentDraft`.
+   */
+  onBack: (current: ZeroDatumConfigDraft) => void;
   onConfirm: (result: ZeroDatumConfigResult) => void;
   /**
-   * What this dialog was confirmed with LAST time (#394 F10).
+   * What this dialog was confirmed with LAST time (#394 F10), or left with on
+   * ITS OWN Back and re-picked the same section (#534).
    *
    * Stepping Back out of the import wizard returns here, and the wizard
    * withdraws what it imported on the way (the forward pass re-imports from
@@ -263,7 +293,7 @@ interface ZeroDatumConfigDialogProps {
    * the GPS and the metadata they typed, which turns "adjust one field" into
    * "start over". Absent on the first visit.
    */
-  initialConfig?: ZeroDatumConfigResult | undefined;
+  initialConfig?: ZeroDatumConfigDraft | undefined;
 }
 
 export default function ZeroDatumConfigDialog({
@@ -315,15 +345,23 @@ export default function ZeroDatumConfigDialog({
   // again on the next confirm and that formatter is locale-aware - a comma
   // decimal separator would not round-trip through `parseDD`.
   //
-  // The ref is the dirty guard's baseline: '' on a first visit, the carried pair
-  // on a re-entry. `useState` reads it so the displayed value and the baseline
-  // cannot drift.
+  // `gpsInputText` (#534) carries the raw box text straight through when it
+  // never parsed - a wizard-carried `ZeroDatumConfigResult` has no such text
+  // (its `gps` always parsed, or it could not have been confirmed), so that
+  // path still reconstructs from `gps`.
+  //
+  // The ref is the dirty guard's baseline: '' on a first visit, the carried
+  // text on a re-entry. `useState` reads it so the displayed value and the
+  // baseline cannot drift.
   const initialGpsInputRef = useRef(
-    initialConfig ? `${initialConfig.gps.latitude}, ${initialConfig.gps.longitude}` : ''
+    initialConfig
+      ? (initialConfig.gpsInputText ??
+          (initialConfig.gps ? `${initialConfig.gps.latitude}, ${initialConfig.gps.longitude}` : ''))
+      : ''
   );
   const [gpsInput, setGpsInput] = useState(initialGpsInputRef.current);
   const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(initialConfig?.gps ?? null);
-  const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(initialConfig ? 'DD' : null);
+  const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(initialConfig?.gps ? 'DD' : null);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
   // Metadata state. Each field keeps an initial-value ref alongside it, so the
@@ -430,20 +468,45 @@ export default function ZeroDatumConfigDialog({
 
   // Back has no DialogWrapper-level guard (that machinery only ever discards
   // via `onClose`/`onCancel`), so it gets its own small, self-contained confirm
-  // here. This guard still matters after #534: App.tsx relays this dialog's
-  // OPENING config (`previousZeroDatumConfig`) through 'zero-datum-selection'
-  // and back, so an untouched reopened dialog now returns to exactly what it
-  // had - but any typing done in THIS visit, past that carried baseline, is
-  // still what `isDirty` guards, because the carry only replays the baseline,
-  // never picks up mid-visit edits.
+  // here. Still relevant after #534, which hands `onBack` this dialog's LIVE
+  // state (`buildCurrentDraft`, not just what it opened with): the carry only
+  // survives a SAME-section forward pass out of 'zero-datum-selection' - a
+  // different section, Back-ing further to 'dmp-selection', or leaving the
+  // wizard entirely all still lose it, so the prompt is honest about a real
+  // risk, not a phantom one. The backConfirm copy spells out the same
+  // distinction to the user.
+  /** This dialog's live state, handed to `onBack` (#534) so App.tsx can carry
+   *  it through 'zero-datum-selection' and re-seed it as `initialConfig` on a
+   *  same-section forward pass. Unlike `handleConfirm`'s payload, `gps` may be
+   *  null - Back does not require the GPS box to have parsed. */
+  const buildCurrentDraft = useCallback(
+    (): ZeroDatumConfigDraft => ({
+      sectionIndex,
+      stationIndex,
+      gps: gpsCoords,
+      gpsInputText: gpsInput,
+      metadata: {
+        name,
+        surveyor: surveyor || null,
+        date: date || null,
+        color,
+        direction,
+        quality: 1.0,
+        reverse,
+      },
+      shots,
+    }),
+    [sectionIndex, stationIndex, gpsCoords, gpsInput, name, surveyor, date, color, direction, reverse, shots]
+  );
+
   const [backConfirmPending, setBackConfirmPending] = useState(false);
   const handleBackClick = useCallback(() => {
     if (isDirty) {
       setBackConfirmPending(true);
     } else {
-      onBack();
+      onBack(buildCurrentDraft());
     }
-  }, [isDirty, onBack]);
+  }, [isDirty, onBack, buildCurrentDraft]);
 
   // Intercept Escape ourselves while the Back confirm is open, so it dismisses
   // ONLY that confirm - left alone, the keydown bubbles past this (unhandled)
@@ -790,7 +853,7 @@ export default function ZeroDatumConfigDialog({
                   variant="danger"
                   onClick={() => {
                     setBackConfirmPending(false);
-                    onBack();
+                    onBack(buildCurrentDraft());
                   }}
                   data-testid="zero-datum-config-back-confirm-discard"
                 >

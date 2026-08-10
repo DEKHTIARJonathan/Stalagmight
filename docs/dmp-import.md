@@ -70,14 +70,19 @@ so suppressing it strands the reopened instance in `init` - and it would pin the
 anchor to the first pass's GPS/name/shot edits, which is what the user pressed
 Back to change.
 
-The carry survives `ZeroDatumConfigDialog`'s own Back too (#534): it relays
-`previousZeroDatumConfig` into `zero-datum-selection`'s `dialogData`, and
-`onSelectSection` re-attaches it to the reopened `zero-datum-config` ONLY when
-the re-picked section matches the carried config's `sectionIndex`. A different
-section pick starts blank, and so does stepping back a THIRD time to
-`dmp-selection` - `openDialog` replaces `dialogData` wholesale (`uiStore.ts`),
-and that step is a change of anchor SECTION either way, which invalidates the
-station pick and the shot edits anyway.
+The carry survives `ZeroDatumConfigDialog`'s own Back too (#534), and what
+survives is the dialog's LIVE state - `onBack` is handed the current GPS
+(text and, if it parsed, the coordinates), metadata, station pick and shot
+edits (`buildCurrentDraft`), not just what the dialog opened with. App.tsx
+relays that draft into `zero-datum-selection`'s `dialogData`
+(`ZERO_DATUM_CARRY_KEY`, `src/utils/zeroDatumCarry.ts`), and
+`onSelectSection` re-attaches it to the reopened `zero-datum-config` ONLY
+when the re-picked section matches the draft's `sectionIndex`
+(`carryZeroDatumConfig`) - a different section starts blank, because the
+name/GPS/shots answered a different question. It also starts blank on a
+THIRD hop back to `dmp-selection`: `openDialog` replaces `dialogData`
+wholesale (`uiStore.ts`), and neither hop back through it relays the draft
+any further.
 
 The withdrawal is ONE `execute_batch` of `delete_section` - one undo entry for
 one user action. `Command::DeleteSection` is batch-allowed for exactly this

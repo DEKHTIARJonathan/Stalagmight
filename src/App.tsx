@@ -35,6 +35,7 @@ import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog
 import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfigDialog';
 import type { OrphanPlacementSuggestion } from './types/commands';
 import { TOAST_KEYS } from './utils/toastKeys';
+import { ZERO_DATUM_CARRY_KEY, readCarriedZeroDatumConfig, carryZeroDatumConfig } from './utils/zeroDatumCarry';
 
 function App() {
   const { t } = useTranslation();
@@ -743,7 +744,7 @@ function App() {
                 filePath: dialogData.filePath,
                 selectionConfig: dialogData.selectionConfig,
                 zeroDatumSectionIndex: (dialogData.zeroDatumConfig as ZeroDatumConfigResult).sectionIndex,
-                previousZeroDatumConfig: dialogData.zeroDatumConfig,
+                [ZERO_DATUM_CARRY_KEY]: dialogData.zeroDatumConfig,
               });
             } else {
               openDialog('dmp-selection', {
@@ -824,16 +825,17 @@ function App() {
           }}
           onSelectSection={(sectionIndex) => {
             // Re-seed the carry (#534) only when the re-picked section matches
-            // the one the carried config was entered for - a different pick
-            // means the name/shots/etc. answered a different question, so
-            // starting fresh is correct.
-            const carried = dialogData.previousZeroDatumConfig as ZeroDatumConfigResult | undefined;
+            // the one it was entered for - `carryZeroDatumConfig` owns that
+            // decision so App.tsx and the routing tests share one expression.
             openDialog('zero-datum-config', {
               dmpFile: dialogData.dmpFile,
               filePath: dialogData.filePath,
               selectionConfig: dialogData.selectionConfig,
               zeroDatumSectionIndex: sectionIndex,
-              previousZeroDatumConfig: carried?.sectionIndex === sectionIndex ? carried : undefined,
+              [ZERO_DATUM_CARRY_KEY]: carryZeroDatumConfig(
+                readCarriedZeroDatumConfig(dialogData),
+                sectionIndex
+              ),
             });
           }}
         />
@@ -849,17 +851,17 @@ function App() {
           // same section is re-picked (#534). A first visit, or a different
           // section pick, has no previous answers and the dialog falls back
           // to its defaults.
-          initialConfig={dialogData.previousZeroDatumConfig as ZeroDatumConfigResult | undefined}
+          initialConfig={readCarriedZeroDatumConfig(dialogData)}
           onCancel={closeDialog}
-          onBack={() => {
-            // Carry the entered config back through the selection step (#534)
-            // so a same-section forward pass re-seeds it; onSelectSection
-            // below drops it if the user picks a different section.
+          onBack={(current) => {
+            // Hand back the dialog's LIVE state, not just what it opened with
+            // (#534) - a first-visit Back (no prior carry at all) still has
+            // something worth restoring on a same-section forward pass.
             openDialog('zero-datum-selection', {
               dmpFile: dialogData.dmpFile,
               filePath: dialogData.filePath,
               selectionConfig: dialogData.selectionConfig,
-              previousZeroDatumConfig: dialogData.previousZeroDatumConfig,
+              [ZERO_DATUM_CARRY_KEY]: current,
             });
           }}
           onConfirm={(result) => {
