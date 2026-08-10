@@ -34,7 +34,7 @@ import { useSidePanelSqueeze, useDataPanelSqueeze, resolveResize } from './sideP
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { usePanelReveal } from './usePanelReveal';
 import { Dock, BAR } from './Dock';
-import { openOrImportFilters } from '../../utils/fileDialogs';
+import { dmpImportFilters } from '../../utils/fileDialogs';
 import { pickAndRoute } from '../../utils/openOrImport';
 import { useProjectMenuItems } from './useProjectMenuItems';
 import { setSource, withTrackingSuppressed, withPersistSuppressed, setProjectActionSource } from '../../utils/telemetry';
@@ -162,14 +162,15 @@ export default function SingleSystemView() {
     return rawSave(opts);
   }, [cancelPending, rawSave]);
 
-  // Toolbar "Import" button - one door (#407): the same unified picker as every
-  // Open/Import entry point, routed through the shared open/import router.
-  // `.dmp` routes additively into this project, other survey formats open the
-  // "import as new project?" confirm dialog, and a `.stalx` is a plain open
-  // (guarded by the router's SpeleoDB hand-back / unsaved-changes prompts).
+  // Toolbar "Import" button - `.dmp` only (#508), matching the hamburger Import
+  // row and Ctrl+I: with a project open, Import means adding mNemo data to it.
+  // The other survey formats would only ever reach the "import as new project?"
+  // confirm, and a `.stalx` is a plain open - both belong to the hamburger's
+  // Open / Import row, which keeps the full unified picker. Still routed through
+  // the shared router, so the read-only guard and its fix-it prompt apply.
   const handleImportDmp = useCallback(async () => {
     setProjectActionSource('toolbar');
-    await pickAndRoute(openOrImportFilters(), 'Import Failed');
+    await pickAndRoute(dmpImportFilters(), 'Import Failed');
   }, []);
 
   // Hamburger menu items (file/project actions). Built here so it can use the

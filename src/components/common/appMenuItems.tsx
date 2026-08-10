@@ -19,42 +19,42 @@ import { MENU_ICON_COLORS } from './menuColors';
 import { setProjectActionSource, type SourceName } from '../../utils/telemetry';
 import { quitApp } from '../../utils/quit';
 import { pickAndRoute } from '../../utils/openOrImport';
-import { openOrImportFilters } from '../../utils/fileDialogs';
+import { openOrImportFilters, dmpImportFilters } from '../../utils/fileDialogs';
 import type { AppMenuItem } from './AppMenu';
 
 const ICON_SIZE = 18;
 
 /**
- * The hamburger's "Import" group - one door (#407): its single row offers the
- * SAME unified filter set as the Open row and every other entry point, and
- * routes through the shared open/import router (per-extension dispatch, the DMP
- * read-only guard, the `.stalx` replacement prompts). The two words survive
- * because different survey packages use either; the behavior is one. Shared by
- * the GlobalView and in-project hamburgers so the group can't drift between
- * them (GlobalView used to carry five per-format rows here, and the in-project
- * copy used to disable the group whenever editing was blocked - too broad, now
- * that non-DMP imports legally close-and-create and `.stalx` is a plain open;
- * the router rejects exactly the additive DMP case, with a tailored message).
- * Kept as a one-row submenu so the menu structure (and the e2e helper that
- * drives it) is identical in both views.
+ * The IN-PROJECT hamburger's "Import" row (#508) - adds mNemo data to the open
+ * project, and nothing else.
+ *
+ * Two shapes died here on purpose. The pre-#407 version was five per-format
+ * rows; #407 collapsed them into a one-row submenu offering the SAME unified
+ * filters as Open, in BOTH hamburgers. That left the recents screen with two
+ * rows doing one thing, and left in-project Import offering formats it cannot
+ * actually import into an open project (every non-DMP format only ever reaches
+ * the "close this project and import as new?" prompt - which is Open's job).
+ * So: the recents hamburger drops the row entirely (Open / Import already does
+ * everything there), and this row keeps only the additive `.dmp` case, with the
+ * submenu flattened away now that structural parity between the two hamburgers
+ * is moot.
+ *
+ * No `editingBlocked` disable: the router owns that decision and rejects the
+ * DMP-into-read-only-project case with a tailored, fix-it message (an
+ * import-blocked prompt for the causes one click can fix).
  */
-export function importMenuGroup(t: TFunction): AppMenuItem {
+export function importMenuItem(t: TFunction): AppMenuItem {
   return {
+    // Id kept from the submenu parent for e2e/test-id continuity.
     id: 'global-import-menu-button',
     label: t('globalView.actions.import'),
     icon: <DownloadIcon size={ICON_SIZE} />,
     iconColor: MENU_ICON_COLORS.import,
-    submenu: [
-      {
-        id: 'global-import-dmp-button',
-        label: t('globalView.actions.importSurveyData'),
-        action: 'import_dmp',
-        onClick: () => {
-          setProjectActionSource('hamburger');
-          void pickAndRoute(openOrImportFilters(), 'Import Failed');
-        },
-      },
-    ],
+    action: 'import_dmp',
+    onClick: () => {
+      setProjectActionSource('hamburger');
+      void pickAndRoute(dmpImportFilters(), 'Import Failed');
+    },
   };
 }
 

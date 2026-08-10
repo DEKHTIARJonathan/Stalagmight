@@ -2420,7 +2420,7 @@ not live co-editing), and floating/dockable panels.
 | Undo | Ctrl+Z |
 | Redo | Ctrl+Y / Ctrl+Shift+Z |
 | Save | Ctrl+S |
-| Import survey data | Ctrl+I (configurable) |
+| Import | Ctrl+I (configurable) |
 | Export | Ctrl+E (configurable) |
 | Delete Selected | Delete / Backspace |
 | Select All | Ctrl+A |
@@ -2440,7 +2440,7 @@ not live co-editing), and floating/dockable panels.
 | Open Settings | Ctrl+, (Cmd+, on macOS) |
 | Keyboard Shortcuts Overlay | ? |
 
-**Note**: Import (Ctrl+I) and Export (Ctrl+E) shortcuts are user-configurable via the Settings dialog. Open (Ctrl+O) and Import (Ctrl+I) open the same unified picker - any supported file routes to the right open/import flow by extension (#407). The defaults shown above can be reassigned to any available key combination.
+**Note**: Import (Ctrl+I) and Export (Ctrl+E) shortcuts are user-configurable via the Settings dialog. Open (Ctrl+O) offers every supported file and routes it to the right open/import flow by extension (#407). Import (Ctrl+I) follows what "import" means at the time (#508): with a project open it offers `.dmp` only - the one format that adds to the open project - and with no project open it is the same unified picker as Open. The defaults shown above can be reassigned to any available key combination.
 
 **Note**: P and Z act only when `map.controls.show_navigation_tools` is on (Settings -> Map -> Controls). The Pan and Zoom tools are hidden by default, and while they are hidden both keys behave like unbound keys. The map still pans on a plain drag and zooms on the wheel under every tool.
 

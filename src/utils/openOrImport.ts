@@ -20,11 +20,16 @@
  * which carries its own SpeleoDB hand-back and unsaved-changes guards) rather
  * than mutating it, so the read-only guard doesn't apply to them.
  *
- * ONE DOOR (#407): every open/import entry point - the toolbar "Open / Import"
- * button, the hamburger Open and Import rows in both views, the EmptyState
- * card, the "open it from file" hint link, Ctrl+O, Ctrl+I, and drag-drop -
- * offers the same unified picker (`openOrImportFilters`) and routes the chosen
- * file through here, so "Open" and "Import" are two words for one behavior.
+ * ONE ROUTER (#407): every open/import entry point routes the chosen file
+ * through here - the hamburger Open / Import and Import rows, the EmptyState
+ * card, the "open it from file" hint link, Ctrl+O, Ctrl+I, drag-drop, and the
+ * OS file-launch channel - so the dispatch, the guards and the error text are
+ * defined once. What differs between doors is only which files their PICKER
+ * offers: the Open doors show everything (`openOrImportFilters`), while the
+ * in-project Import doors show `.dmp` alone (`dmpImportFilters`, #508), since
+ * that is the only format additive to an open project. Narrowing a picker
+ * narrows nothing here - a file that arrives by any other route (drag-drop, a
+ * typed filename, the OS) is still classified by extension below.
  * Stores are read via `getState()` so this is callable outside React (e.g.
  * from a raw keydown handler).
  */
@@ -421,7 +426,7 @@ export async function routeOpenedFile(
         importType: 'walls',
       });
       handedOff = true;
-    } else if (lowerPath.endsWith('.dmp')) {
+    } else if (isDmp) {
       // mNemo DMP: import into the current project, or seed a new one.
       const dmpFile = await parseForImport(store.importDmp(path), errorTitle);
       if (!dmpFile) return;

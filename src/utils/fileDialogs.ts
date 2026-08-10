@@ -111,11 +111,14 @@ export const IMPORTABLE_EXTENSIONS: readonly string[] = [
  * The first entry is the combined "everything" filter so a single selection
  * accepts any supported file; the rest narrow to one format each.
  *
- * ONE DOOR (#407): this is the ONLY picker filter set for opening or importing.
- * Every entry point - toolbar, hamburger (Open and Import rows), Ctrl+O, Ctrl+I,
- * the EmptyState card - offers the same full set and routes the choice through
- * `routeOpenedFile`, so "Open" and "Import" are two words for one behavior.
- * A `.stalx` picked through an Import-labeled door is a plain project open;
+ * This is the filter set of every door that can OPEN something: the hamburger's
+ * Open / Import row in both views, Ctrl+O, the EmptyState card, and Ctrl+I with
+ * no project open. The in-project Import doors (toolbar button, hamburger
+ * Import row, Ctrl+I) use `dmpImportFilters` instead (#508) - see there for
+ * why. Every one of them routes the choice through `routeOpenedFile`, so the
+ * filters decide only what the picker shows, never how a file is handled.
+ *
+ * A `.stalx` picked through a door labeled "Import" is a plain project open;
  * that's safe because the router's `.stalx` branch guards replacement behind
  * the SpeleoDB hand-back and unsaved-changes prompts (#270) - a picker-side
  * exclusion (the pre-#407 `inProjectImportFilters`) is not what protects data,
@@ -137,6 +140,28 @@ export function openOrImportFilters() {
     { name: 'GPX Files', extensions: [GPX_EXTENSION] },
     { name: 'All Files', extensions: ['*'] },
   ];
+}
+
+/**
+ * Filters for the IN-PROJECT "Import" picker (#508): `.dmp` only.
+ *
+ * With a project open, "import" means one thing - add mNemo data to THIS
+ * project. Every other importable format is new-project-only: picking one only
+ * ever leads to the "close this project and import as a new one?" prompt, which
+ * is the Open row's job, not Import's. So the in-project Import doors (hamburger
+ * row, toolbar button, Ctrl+I) narrow to the one format that is genuinely
+ * additive, and Open keeps `openOrImportFilters` for everything else.
+ *
+ * This is a picker-side affordance only: `routeOpenedFile` keeps its full
+ * extension dispatch, so drag-drop and the OS file-launch channel are unchanged
+ * (and a `.dmp` reaching the router with no project open still seeds a new one).
+ * No 'All Files' entry: nothing else is additive, so anything picked through it
+ * could only end at the router's unsupported-file dialog. (It would not reach
+ * the DMP parser - the router stopped assuming DMP for unknown extensions in
+ * #407, `routeOpenedFile`'s final `else`.)
+ */
+export function dmpImportFilters() {
+  return [{ name: 'mNemo DMP', extensions: [DMP_EXTENSION] }];
 }
 
 export function exportSaveFilters(label: string, extension: string) {

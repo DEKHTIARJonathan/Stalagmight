@@ -51,7 +51,7 @@ CLOSURE-type shots in Ariane encode loop closure metadata. During import these a
 
 Unlike the DMP wizard, the Ariane import is a single dialog with no map preview, no per-section toggles and no placement step. It always creates a NEW project - importing a `.tml` into an open project is not supported (the unified router offers to close the current project first).
 
-1. **Pick the file** - any open/import entry point (toolbar, hamburger, Ctrl+O / Ctrl+I, drag-drop) routes through the unified picker (`routeOpenedFile`), which parses the file (`parse_tml`) and marks the flow as a new-project import.
+1. **Pick the file** - the unified-picker entry points (the hamburger's Open / Import row, Ctrl+O, drag-drop, and Ctrl+I with no project open) route through `routeOpenedFile`, which parses the file (`parse_tml`) and marks the flow as a new-project import. The in-project Import affordances (toolbar button, hamburger Import row, Ctrl+I) offer `.dmp` only, since a `.tml` cannot be imported into an open project (#508) - drag-drop still accepts one and offers to close the project first.
 2. **Name the project** - `NewProjectForImportDialog` creates the project BEFORE the import is confirmed. For a project created without an explicit save path the initial save is deferred, so nothing is on disk yet.
 3. **Confirm the import** - `TmlImportDialog` shows the file's cave name, the sections table and the counts that will actually import under the current toggles (excluded shots, comment placement, virtual-shot classification), then runs `execute_tml_import`.
 4. **Receipt** - a successful import opens the import receipt (sections, shots, loops, unit conversion, any converter warnings).

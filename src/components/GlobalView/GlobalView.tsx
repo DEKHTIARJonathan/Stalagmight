@@ -10,7 +10,7 @@ import { useGlobalViewStore } from '../../store/globalViewStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { Button } from '../common/Button';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
-import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuGroup, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
+import { leadingMenuItems, serviceMenuItems, quitMenuItem, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
 import { CloseIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, ListIcon, MapIcon } from '../common/icons';
 import { SpeleoBadgedIcon, RefreshGlyph } from '../common/SpeleoBadgedIcon';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
@@ -298,9 +298,11 @@ export default function GlobalView() {
   // metadata panel). Routed through the shared open/import router (#450) for
   // consistency and defense-in-depth - the SpeleoDB hand-back / unsaved-
   // changes / swap-confirm guards it applies are currently unreachable here
-  // (both setView('global') callers, useProject.ts and UnsavedChangesDialog.tsx,
-  // already close the project first, so GlobalView never renders with one
-  // open), but sharing the router also gets recents the `allow: 'project-only'`
+  // (all three setView('global') callers - useProject.ts, UnsavedChangesDialog.tsx
+  // and TmlImportDialog.tsx's discard path - already close the project first, so
+  // GlobalView never renders with one open; Ctrl+I's picker choice now leans on
+  // that same invariant, see fileShortcutActions.ts), but sharing the router also
+  // gets recents the `allow: 'project-only'`
   // extension gate below for free, which IS load-bearing: a persisted recents
   // entry is untrusted input and must not reach the import parsers.
   //
@@ -705,9 +707,14 @@ export default function GlobalView() {
   const actionsCondensed = headerCondense >= 2;
   const tabsCondensed = headerCondense >= 3;
 
-  // Hamburger menu contents. The New/Open/Import/Settings/Debug/Quit rows are
-  // all shared with the in-project menu (appMenuItems) - one door (#407), so
-  // the two hamburgers cannot drift. Memoized so AppMenu's items-dependent
+  // Hamburger menu contents. The New/Open/Settings/Debug/Quit rows are all
+  // shared with the in-project menu (appMenuItems) - one door (#407), so the
+  // two hamburgers cannot drift. There is deliberately NO Import row here
+  // (#508): with no project open there is nothing to import INTO, so Import
+  // and Open would be two rows for one behavior - "Open / Import" above already
+  // accepts every importable format and routes it by extension. Import earns
+  // its own row only in-project, where it means the one thing Open does not do
+  // (add mNemo data to the open project). Memoized so AppMenu's items-dependent
   // callbacks don't churn on every keystroke-driven re-render.
   const menuItems: AppMenuItem[] = useMemo(
     () => [
@@ -717,7 +724,6 @@ export default function GlobalView() {
       ...(speleoLoggedIn
         ? [openFromSpeleoDbMenuItem(t, { onOpen: () => openDialog('open-from-speleodb') })]
         : []),
-      importMenuGroup(t),
       { id: 'app-menu-sep-1', label: '', separator: true },
       ...serviceMenuItems(t, { onSettings: () => openDialog('settings'), onDebug: () => openDialog('debug') }),
       { id: 'app-menu-sep-2', label: '', separator: true },

@@ -2071,7 +2071,6 @@
   "globalView": {
     "actions": {
       "import": "Import",
-      "importSurveyData": "Import survey data...",
       "mergeProjects": "Merge {{countFormatted}} projects",
       "mergeProjectsAria": "Merge {{countFormatted}} selected projects",
       "newProject": "New project",

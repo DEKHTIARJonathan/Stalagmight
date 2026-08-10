@@ -16,7 +16,8 @@ import { pickAndRoute } from './openOrImport';
 import { newProjectGuarded } from './projectActions';
 import { quitApp } from './quit';
 import { setProjectActionSource } from './telemetry';
-import { openOrImportFilters } from './fileDialogs';
+import { openOrImportFilters, dmpImportFilters } from './fileDialogs';
+import { useProjectStore } from '../store/projectStore';
 
 export type FileShortcutAction = 'new_file' | 'open_file' | 'import_dmp' | 'quit';
 
@@ -24,10 +25,17 @@ export type FileShortcutAction = 'new_file' | 'open_file' | 'import_dmp' | 'quit
  * Run one shared file action. Caller has already `preventDefault()`-ed the event
  * and (for telemetry on the toast path) may show a toast afterwards.
  *
- * One door (#407): Ctrl+O and Ctrl+I open the SAME unified picker (every file
- * the app can open or import) and route through the shared open/import router -
- * the two bindings survive because users reach for either word, but the
- * behavior is one (only the error-dialog title differs). The old Ctrl+I
+ * Ctrl+O always opens the unified picker (every file the app can open or
+ * import). Ctrl+I follows whichever meaning "import" has right now (#508):
+ * with a project open it is the additive door and narrows to `.dmp`, matching
+ * the in-project toolbar button and hamburger row; with no project open there
+ * is nothing to import into, so it stays an alias of Ctrl+O rather than
+ * offering a picker that can only produce a new project from one format. The
+ * discriminator is the OPEN PROJECT, not the view, because that is the thing
+ * that actually decides whether an import is additive - and the recents screen
+ * is only ever reached after the project is closed.
+ *
+ * Both route through the shared open/import router either way. The old Ctrl+I
  * pre-guard (skip the picker entirely while editing is blocked) is gone on
  * purpose: it silently swallowed the keystroke, and it wrongly blocked the
  * now-legal non-mutating routes (.stalx open, import-as-new-project). The
@@ -46,10 +54,12 @@ export function runFileShortcutAction(action: FileShortcutAction): void {
       setProjectActionSource('keyboard');
       void pickAndRoute(openOrImportFilters(), 'Open Failed');
       break;
-    case 'import_dmp':
+    case 'import_dmp': {
       setProjectActionSource('keyboard');
-      void pickAndRoute(openOrImportFilters(), 'Import Failed');
+      const additive = !!useProjectStore.getState().project;
+      void pickAndRoute(additive ? dmpImportFilters() : openOrImportFilters(), 'Import Failed');
       break;
+    }
     case 'quit':
       quitApp();
       break;

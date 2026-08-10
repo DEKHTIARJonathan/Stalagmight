@@ -18,7 +18,7 @@ vi.mock('../openOrImport', () => ({
 }));
 
 import { runFileShortcutAction } from '../fileShortcutActions';
-import { openOrImportFilters } from '../fileDialogs';
+import { openOrImportFilters, dmpImportFilters } from '../fileDialogs';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
@@ -63,7 +63,7 @@ describe('runFileShortcutAction("new_file")', () => {
   });
 });
 
-describe('runFileShortcutAction - one door for Ctrl+O and Ctrl+I (#407)', () => {
+describe('runFileShortcutAction - Ctrl+O vs Ctrl+I (#508)', () => {
   beforeEach(() => {
     pickAndRouteMock.mockClear();
     useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
@@ -76,16 +76,29 @@ describe('runFileShortcutAction - one door for Ctrl+O and Ctrl+I (#407)', () => 
     useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   });
 
-  it('open_file and import_dmp open the SAME unified picker (only the error title differs)', () => {
+  it('with a project open, Ctrl+O stays unified and Ctrl+I narrows to .dmp', () => {
     runFileShortcutAction('open_file');
     runFileShortcutAction('import_dmp');
     expect(pickAndRouteMock).toHaveBeenCalledTimes(2);
     const [openFilters, openTitle] = pickAndRouteMock.mock.calls[0]!;
     const [importFilters, importTitle] = pickAndRouteMock.mock.calls[1]!;
-    expect(importFilters).toEqual(openFilters);
     expect(openFilters).toEqual(openOrImportFilters());
+    expect(importFilters).toEqual(dmpImportFilters());
+    // Not just "different from Open": pin the exact extension set, so a filter
+    // list that quietly regrew .tml/.stalx entries fails here rather than
+    // re-offering formats that cannot be imported INTO the open project.
+    expect((importFilters as Array<{ extensions: string[] }>).flatMap((f) => f.extensions))
+      .toEqual(['dmp']);
     expect(openTitle).toBe('Open Failed');
     expect(importTitle).toBe('Import Failed');
+  });
+
+  // With no project open there is nothing to import INTO, so Ctrl+I keeps the
+  // full picker (the recents screen drops the Import row but keeps the binding).
+  it('with no project open, Ctrl+I falls back to the unified picker', () => {
+    useProjectStore.setState({ project: null });
+    runFileShortcutAction('import_dmp');
+    expect(pickAndRouteMock).toHaveBeenCalledWith(openOrImportFilters(), 'Import Failed');
   });
 
   // The pre-#407 Ctrl+I pre-guard silently swallowed the keystroke whenever
@@ -98,6 +111,6 @@ describe('runFileShortcutAction - one door for Ctrl+O and Ctrl+I (#407)', () => 
     useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
     useSpeleoStore.setState({ link: READ_ONLY_LINK });
     runFileShortcutAction('import_dmp');
-    expect(pickAndRouteMock).toHaveBeenCalledWith(openOrImportFilters(), 'Import Failed');
+    expect(pickAndRouteMock).toHaveBeenCalledWith(dmpImportFilters(), 'Import Failed');
   });
 });

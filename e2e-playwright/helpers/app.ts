@@ -253,13 +253,6 @@ export async function openDebugFromMenu(page: Page): Promise<void> {
   await page.getByTestId('global-debug-button').click();
 }
 
-/** Open the hamburger Import submenu and click a specific import item. */
-export async function openImportFromMenu(page: Page, itemTestId: string): Promise<void> {
-  await openAppMenu(page);
-  await page.getByTestId('global-import-menu-button').click();
-  await page.getByTestId(itemTestId).click();
-}
-
 /**
  * Open the hamburger Debug submenu (Dev/Memory/Map/Zoom Stats toggles) and
  * click a specific item in it. Not to be confused with `openDebugFromMenu`,
