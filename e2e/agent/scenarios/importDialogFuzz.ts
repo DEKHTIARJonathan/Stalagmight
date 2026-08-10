@@ -1761,12 +1761,16 @@ export const importDialogFuzz: Scenario = {
             // still disabled the bridge does not click it, so nothing the app did
             // can be attributed to the move: any screen change belongs to work
             // that was already in flight, which is precisely the shape that made
-            // this scenario abandon screen-equality once already. The contract
-            // "a disabled control must not act" is not reachable through a
-            // synthetic dispatch that respects `disabled` - and one that did not
-            // respect it would be testing the harness, since `dispatchEvent`
-            // bypasses the browser's own gate and would run React's onClick on a
-            // button no user could press.
+            // this scenario abandon screen-equality once already.
+            //
+            // Nor is there a third dispatch that reaches the contract. MEASURED
+            // on this app under WebKitGTK, on a disabled button carrying a click
+            // listener: a real WebDriver coordinate click ran the listener ZERO
+            // times, and `dispatchEvent` ran it ONCE. The browser itself already
+            // enforces "a disabled control must not act" and never delivers the
+            // click, so the only dispatch that reaches the app at all is the one
+            // that bypasses that gate - and asserting on THAT is testing the
+            // harness against a button no user could press.
             if (outcome.offAtDispatch === true) {
               ctx.metric('raceRefused');
               if (digest.screen !== screenBefore) ctx.metric('raceRefusedScreenMoved');
