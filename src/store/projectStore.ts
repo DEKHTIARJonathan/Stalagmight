@@ -509,7 +509,7 @@ const inFlightLoads = new Map<string, Promise<{ success: boolean }>>();
  * that is no longer open - and because section ids are small per-project integers, those entries
  * would otherwise match sections in whatever is now open.
  */
-function projectSwitched(before: string | null, after: string | null): boolean {
+export function projectSwitched(before: string | null, after: string | null): boolean {
   return before !== null && after !== null && before !== after;
 }
 

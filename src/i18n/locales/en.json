@@ -1396,6 +1396,7 @@
       "cancelKeepAndClose": "Keep and close",
       "cancelContinueEditing": "Continue editing",
       "removeImportedFailed": "Could not remove the imported sections.",
+      "removeImportedWrongProject": "Could not remove the imported sections: a different project is now open. Close this wizard and remove them from the project they were imported into.",
       "mergeStation": "Merge at",
       "sectionSettings": "Section Settings",
       "backWizard": "Go Back?",

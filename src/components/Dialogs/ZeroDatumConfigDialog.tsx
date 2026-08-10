@@ -196,8 +196,37 @@ function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEdit
   }
 }
 
-/** Rows straight from the file, the pick at the head, temp ids past the last row. */
-function initialShotEditState(section: DmpSection | undefined): ShotEditState {
+/**
+ * Rows straight from the file, the pick at the head, temp ids past the last row
+ * - UNLESS this is a re-entry, in which case the rows and the pick are the ones
+ * the user left with (#394 F10).
+ *
+ * The pick has to come back with them or the two disagree: `stationIndex` is
+ * numbered over the EDITED rows, so restoring edited rows under a pick reset to
+ * 0 would silently re-anchor the survey at the head of the section. Both, or
+ * neither.
+ */
+function initialShotEditState({
+  section,
+  initialConfig,
+}: {
+  section: DmpSection | undefined;
+  initialConfig: ZeroDatumConfigResult | undefined;
+}): ShotEditState {
+  if (initialConfig) {
+    const shots = initialConfig.shots;
+    // Rows the user ADDED carry a `tempId` (`makeNewShot`), and the counter must
+    // clear every one of them - not just the file's row count - or the next
+    // insert would mint an id a carried row already holds, and this grid keys
+    // its rows by that id.
+    const highestTempId = shots.reduce((max, shot) => Math.max(max, shot.tempId ?? 0), 0);
+    return {
+      shots,
+      stationIndex: initialConfig.stationIndex,
+      previewStationIndex: initialConfig.stationIndex,
+      nextTempId: Math.max(shots.length, highestTempId) + 1,
+    };
+  }
   const shots = section ? convertToEditableShots(section.shots) : [];
   return { shots, stationIndex: 0, previewStationIndex: 0, nextTempId: shots.length + 1 };
 }
@@ -255,7 +284,7 @@ export default function ZeroDatumConfigDialog({
   // why they cannot be separate pieces of state.
   const [{ shots, stationIndex, previewStationIndex }, dispatch] = useReducer(
     shotEditReducer,
-    section,
+    { section, initialConfig },
     initialShotEditState,
   );
 
