@@ -16,6 +16,13 @@ set -euo pipefail
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# lock_stanza_count, lock_version, require_one_match, version_pattern,
+# version_files_match - shared with release-tag.sh, which has to ask the same
+# question about the same four files.
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=lib/release-version.sh
+. "$SCRIPT_DIR/lib/release-version.sh"
+
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/release.XXXXXX")"
 trap 'rm -rf "$SCRATCH"' EXIT
 
@@ -34,39 +41,7 @@ replace_in_file() {
   cat "$tmp" > "$file"
 }
 
-# How many stanzas in Cargo.lock name this crate. Anything but 1 means the file's
-# shape is not what the rewrite assumes, which is a different failure from the
-# recorded version being wrong - and worth a different message, since the two send
-# the operator to different places.
-#
-# The `[[:space:]]*$` tolerates a trailing `\r`: the other pre-flight patterns are
-# not end-anchored so they survive a CRLF checkout, and this one has to as well or
-# a `core.autocrlf=true` clone cannot release at all.
-lock_stanza_count() {
-  grep -c '^name = "stalagmight"[[:space:]]*$' "$PROJECT_ROOT/src-tauri/Cargo.lock" || true
-}
-
-# Print the version of the local `stalagmight` package recorded in Cargo.lock,
-# one line per matching stanza (so a caller can notice if there is more than one).
-#
-# Cargo.lock carries a `version = "..."` line for EVERY dependency, so the plain
-# pattern the other files use would match dozens of unrelated entries. The only
-# line that belongs to this crate is the one directly after its `name` line.
-lock_version() {
-  awk '
-    /^name = "stalagmight"[[:space:]]*$/ {
-      if ((getline nxt) > 0) {
-        sub(/\r$/, "", nxt)
-        if (nxt ~ /^version = "/) {
-          gsub(/^version = "|"$/, "", nxt)
-          print nxt
-        }
-      }
-    }
-  ' "$PROJECT_ROOT/src-tauri/Cargo.lock"
-}
-
-# Rewrite that same line, and fail rather than write if it is not found exactly
+# Rewrite the Cargo.lock version line, and fail rather than write if it is not found exactly
 # once. Cargo would fix the version itself on the next build, but only by leaving
 # an unexplained dirty Cargo.lock in a tree the release just reported as clean -
 # and a hard error for anyone who does build with `--locked`.
@@ -106,20 +81,6 @@ rewrite_lock_version() {
     return 1
   fi
   cat "$tmp" > "$file"
-}
-
-# Assert a file matches a pattern on exactly one line.
-#
-# "The string is present somewhere" is too weak a check: it passes just as
-# happily when a substitution hit two lines and clobbered an unrelated field as
-# when it hit the one line it was aimed at. Counting is what distinguishes them.
-require_one_match() {
-  local file="$1" pattern="$2" when="$3" n
-  n=$(grep -c "$pattern" "$PROJECT_ROOT/$file" || true)
-  if [ "$n" -ne 1 ]; then
-    echo "Error: $file has $n lines matching /$pattern/ $when, expected exactly 1." >&2
-    return 1
-  fi
 }
 
 # --- Parse arguments ---
@@ -186,11 +147,9 @@ fi
 
 # Version strings are substituted into grep/sed patterns, where an unescaped dot
 # is a wildcard - "0.2.0" would match "0X2Y0".
-CURRENT_RE=$(printf '%s' "$CURRENT_VERSION" | sed 's/\./\\./g')
-NEW_RE=$(printf '%s' "$NEW_VERSION" | sed 's/\./\\./g')
+CURRENT_RE=$(version_pattern "$CURRENT_VERSION")
+NEW_RE=$(version_pattern "$NEW_VERSION")
 
-CURRENT_JSON="\"version\": \"$CURRENT_RE\""
-CURRENT_TOML="^version = \"$CURRENT_RE\""
 NEW_JSON="\"version\": \"$NEW_RE\""
 NEW_TOML="^version = \"$NEW_RE\""
 
@@ -201,29 +160,7 @@ NEW_TOML="^version = \"$NEW_RE\""
 # one condition this script most needs to report, and a dry run that printed a
 # confident "would update" for it while the real run refuses would be worse than
 # useless.
-if ! require_one_match "package.json"              "$CURRENT_JSON" "before the rewrite" \
-  || ! require_one_match "src-tauri/tauri.conf.json" "$CURRENT_JSON" "before the rewrite" \
-  || ! require_one_match "src-tauri/Cargo.toml"      "$CURRENT_TOML" "before the rewrite"; then
-  echo "The version string is not in the expected format. Nothing was modified." >&2
-  exit 1
-fi
-
-LOCK_STANZAS="$(lock_stanza_count)"
-LOCK_VERSION="$(lock_version)"
-if [ "$LOCK_STANZAS" -ne 1 ]; then
-  echo "Error: src-tauri/Cargo.lock has $LOCK_STANZAS lines matching 'name = \"stalagmight\"'," >&2
-  echo "expected exactly 1. The lock's shape is not what the rewrite assumes." >&2
-  echo "Nothing was modified." >&2
-  exit 1
-fi
-if [ -z "$LOCK_VERSION" ]; then
-  echo "Error: src-tauri/Cargo.lock has the stalagmight stanza but no 'version =' line" >&2
-  echo "directly after its 'name =' line. Nothing was modified." >&2
-  exit 1
-fi
-if [ "$LOCK_VERSION" != "$CURRENT_VERSION" ]; then
-  echo "Error: src-tauri/Cargo.lock records stalagmight at '$LOCK_VERSION'," >&2
-  echo "but package.json says '$CURRENT_VERSION'. Sync them, then re-run." >&2
+if ! version_files_match "$CURRENT_VERSION" "package.json" "before the rewrite"; then
   echo "Nothing was modified." >&2
   exit 1
 fi
@@ -373,10 +310,13 @@ if [ "$NO_TAG" = true ]; then
   echo ""
   echo "Prepared v$NEW_VERSION (no tag created)"
   echo ""
+  # Through release-tag.sh, not `git tag`: it is the half of the release that
+  # this script's checks do not cover, and a bare tag command gets none of them.
   echo "Next steps:"
   echo "  git push"
-  echo "  git tag v$NEW_VERSION-rc1 && git push origin v$NEW_VERSION-rc1   # a candidate"
-  echo "  git tag v$NEW_VERSION     && git push origin v$NEW_VERSION       # the release"
+  echo "  ./scripts/release-tag.sh v$NEW_VERSION-rc1   # a candidate, then rc2, rc3, ..."
+  echo "  ./scripts/release-tag.sh v$NEW_VERSION       # the release"
+  echo "  git push origin <the tag it created>"
   exit 0
 fi
 

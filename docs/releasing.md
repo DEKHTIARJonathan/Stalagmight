@@ -7,9 +7,20 @@ Releases are created through Claude Code. The process:
 1. Claude reviews git log since the last tag
 2. Claude writes a human-readable summary into the `## [Unreleased]` section of `CHANGELOG.md`
 3. Claude commits the changelog update
-4. Claude runs `./scripts/release.sh <patch|minor|major> --no-edit`
-5. Claude pushes the commit and tag
+4. Claude runs `./scripts/release.sh <patch|minor|major> --no-edit --no-tag`
+5. Claude tags with `./scripts/release-tag.sh vX.Y.Z[-rcN]`, then pushes the
+   commit and the tag
 6. GitHub Actions builds the app and creates a release with artifacts
+
+Three scripts, one each: `release.sh` bumps a version, `release-tag.sh` tags a
+tree already at one, `release-notes.sh` renders what gets published.
+
+⚠ **`--no-tag` at step 4 is what makes step 5 reachable.** Without it `release.sh`
+tags `vX.Y.Z` itself, and `release-tag.sh` then refuses that tag as already
+existing - correctly, but the advice it prints ("cut the next number") is wrong
+for the situation. Dropping `--no-tag` is only right when you are cutting the
+final release with no candidates and want the tag unchecked, which is the older
+flow; prefer the two steps above.
 
 ## Release notes
 
@@ -26,11 +37,15 @@ every release candidate after the first is cut from - anything written under
 hypothetical: four fixes went unannounced that way between `v0.5.0-rc1` and `rc2`.
 **Fold post-candidate entries into the version's own section before tagging.**
 
-`release-notes.sh` warns on stderr when it is about to leave entries behind, but
-that warning is **advisory, not a gate**: nothing calls it before a tag exists.
-`release.sh` never invokes it, and the workflow runs it after the tag is already
-pushed, where the warning reaches only the CI log. Running the preview below is
-what actually catches this.
+**`release-tag.sh` refuses to tag when this is about to happen** - it renders the
+body first and stops if `release-notes.sh` reports entries left behind, so the
+warning now arrives while it can still be acted on. Pass `--allow-unannounced` to
+ship them unmentioned deliberately.
+
+The warning by itself is only advisory: the workflow runs `release-notes.sh`
+after the tag is already pushed, where it reaches nothing but the CI log. A tag
+created by hand therefore still gets no gate, which is the reason to go through
+`release-tag.sh` rather than `git tag`.
 
 Preview the exact body before tagging - it is the same script CI runs:
 
@@ -59,13 +74,41 @@ Bump once, then cut as many candidates as you like before the real thing:
 ```bash
 ./scripts/release.sh 0.5.0 --no-edit --no-tag      # bump + changelog, no tag
 git push
-git tag v0.5.0-rc1 && git push origin v0.5.0-rc1   # then rc2, rc3, ...
-git tag v0.5.0     && git push origin v0.5.0       # the real one
+./scripts/release-tag.sh v0.5.0-rc1                # then rc2, rc3, ...
+git push origin v0.5.0-rc1
+./scripts/release-tag.sh v0.5.0                    # the real one
+git push origin v0.5.0
 ```
 
 `--no-tag` matters: without it `release.sh` creates `v0.5.0` immediately, which
 would either publish the real release early or sit on the wrong commit once
 further fixes land before `rc2`.
+
+**Use `release-tag.sh` rather than a bare `git tag`.** The two scripts split the
+work: `release.sh` owns a *new version* (bump the four files, move the changelog,
+commit), `release-tag.sh` owns *tagging a tree already at that version* - which is
+every candidate, and every release that follows one. A hand-typed `git tag` runs
+none of the checks either script owns; that is how four fixes shipped unannounced
+between `v0.5.0-rc1` and `rc2`
+([#406](https://github.com/Stalagmight/Stalagmight/issues/406)). It refuses:
+
+| Condition | Why |
+|-----------|-----|
+| the version files do not carry the tag's version | `v0.5.1-rc1` cut from a `0.5.0` tree builds `Stalagmight_0.5.0_*` artifacts and an About box reading `0.5.0` |
+| the working tree is dirty | a tag names a commit, so uncommitted notes are not the notes that publish |
+| the tag already exists | candidates are kept, not recycled - a tester's bug report names one |
+| the tag is malformed | the accepted shape matches what `release.yml` will mark as a pre-release |
+| the changelog has no notes for it | the published body would be the bare string `Release v0.5.0` |
+| entries sit under `[Unreleased]` | they ship in the build and are named nowhere (`--allow-unannounced` to override) |
+
+It also *notes*, without blocking, a final release that was never cut as a
+candidate and a `## [X.Y.Z] - date` older than today - both legitimate, both
+otherwise invisible.
+
+It stops at a **local** tag and prints the push command. Pushing is the
+irreversible step: it starts a paid three-platform build and, for a bare
+`vX.Y.Z`, publishes as **Latest**. `--dry-run` does everything except create the
+tag, which is the cheapest way to read the body you are about to publish.
 
 - **The version files stay at the plain `0.5.0`.** The candidate lives only in
   the tag. This is not a style choice: the Windows MSI bundler rejects a
@@ -115,20 +158,25 @@ is the flow for every candidate after the first, and for the final release that 
 them. **Do not run `release.sh` again** - it would bump you onto the *next* version:
 
 ```bash
-# 1. Fold anything under ## [Unreleased] into that version's own section.
-#    release-notes.sh reads `## [X.Y.Z]` and never looks at [Unreleased] once it
-#    exists, so entries left behind ship in the build and appear in no notes.
+# 1. Fold anything under ## [Unreleased] into that version's own section, and
+#    commit. release-notes.sh reads `## [X.Y.Z]` and never looks at [Unreleased]
+#    once it exists, so entries left behind ship in the build and appear in no
+#    notes. release-tag.sh refuses the tag until this is done.
 
-# 2. Render and READ the body that will actually be published.
-./scripts/release-notes.sh vX.Y.Z-rcN     # or vX.Y.Z for the real one
+# 2. Render and READ the body that will actually be published, and check the
+#    version files, the tree and the tag in the same pass.
+./scripts/release-tag.sh vX.Y.Z-rcN --dry-run     # or vX.Y.Z for the real one
 
-# 3. Tag the commit you mean, and push the tag.
-git tag vX.Y.Z-rcN && git push origin vX.Y.Z-rcN
+# 3. Tag the commit you mean, then push the tag.
+./scripts/release-tag.sh vX.Y.Z-rcN
+git push origin vX.Y.Z-rcN
 ```
 
 A tag with a suffix publishes as a pre-release; a bare `vX.Y.Z` publishes as **Latest**.
 Check the `## [X.Y.Z] - YYYY-MM-DD` date before the final tag: `release.sh` stamped it
 the day the version was bumped, which may be well before the day it ships.
+`release-tag.sh` says so when they differ, but only *you* can decide which date the
+release should carry.
 
 ## What `scripts/release.sh` does
 
@@ -152,6 +200,26 @@ the day the version was bumped, which may be well before the day it ships.
 | `--no-edit` | Skip opening `$EDITOR` on the changelog (required for Claude) |
 | `--dry-run` | Print what would happen without making changes |
 | `--no-tag` | Bump, move the changelog and commit, but create no tag - use when the next thing you cut is a candidate (`v0.5.0-rc1`) rather than the release |
+
+## What `scripts/release-tag.sh` does
+
+Tags a tree that is *already* at the right version - see [Release
+candidates](#release-candidates) for what it refuses and why. It writes nothing
+but the tag: no version files, no changelog, no push.
+
+1. Checks the tag's shape, and that it does not already exist
+2. Checks the working tree is clean
+3. Checks all 4 version files carry the tag's base version (`v0.5.0-rc1` -> `0.5.0`)
+4. Renders the release body with `release-notes.sh`, and refuses an empty one
+5. Refuses if entries under `[Unreleased]` would go unpublished
+6. Prints the body, then creates the annotated tag
+
+### Flags
+
+| Flag | Effect |
+|------|--------|
+| `--dry-run` | Every check, and print the body, but create no tag |
+| `--allow-unannounced` | Tag anyway with entries left under `[Unreleased]` - they ship in the build, mentioned nowhere |
 
 ## CI/CD Workflows
 
@@ -307,17 +375,20 @@ before it can be handed to anyone.
 ./scripts/test-release.sh
 ```
 
-Covers both scripts. For `release.sh` it clones the repo to a temp directory and
+Covers all three scripts. For `release.sh` it clones the repo to a temp directory and
 drives the real script through a normal bump, a `--no-tag` bump, and seven refusal
 or recovery cases (re-releasing the current version, an existing tag, a drifted
 version-string format, an empty `[Unreleased]`, a `Cargo.lock` already out of step,
 a `Cargo.lock` whose stanza is missing entirely, and a failing `$EDITOR`), plus a
 CRLF checkout, asserting each time that the tree is left clean and nothing was
-tagged. For `release-notes.sh` it runs the real script against a
+tagged. For `release-tag.sh` it drives the whole bump-then-tag flow in a clone,
+then each refusal above, asserting every time that the run failed, said why, and
+left no tag. For `release-notes.sh` it runs the real script against a
 fixture changelog and checks the section each tag shape resolves to, the
 candidate banner, and that an empty changelog still yields a usable body.
 
-Run it after touching either script; it takes a few seconds and needs no network.
+Run it after touching any of them, including `lib/release-version.sh`, which the
+two entry points share; it takes a few seconds and needs no network.
 
 ## Version locations
 
