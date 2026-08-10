@@ -461,35 +461,126 @@ describe('routeOpenedFile - import context (#411)', () => {
   });
 });
 
-describe('routeOpenedFile - TML default project name prefers the cave name (#447)', () => {
+describe('routeOpenedFile - default project name prefers the file-carried name (#447)', () => {
   const parseTml = vi.fn();
+  const parseCompass = vi.fn();
+  const parseWalls = vi.fn();
+  const parseGpxFile = vi.fn();
+
+  beforeEach(() => {
+    useProjectStore.setState({
+      parseTml,
+      parseCompass,
+      parseWalls,
+      parseGpx: parseGpxFile,
+    } as never);
+  });
+
+  // One row per format: the in-file name field, the path, and the filename
+  // fallback ('Imported' has no extension to strip). Covers all four formats
+  // that carry an in-file name (DMP does not - no case for it).
+  it.each([
+    {
+      label: 'TML cave_name',
+      path: '/cave/exports/some-file.tml',
+      mock: parseTml,
+      base: { sections: [] },
+      field: 'cave_name',
+      fallback: 'some-file',
+    },
+    {
+      label: 'Compass cave_name',
+      path: '/cave/exports/some-file.mak',
+      mock: parseCompass,
+      base: { survey_count: 0, shot_count: 0 },
+      field: 'cave_name',
+      fallback: 'some-file',
+    },
+    {
+      label: 'Walls project_name',
+      path: '/cave/exports/some-file.wpj',
+      mock: parseWalls,
+      base: { resolved_survey_count: 0, shot_count: 0 },
+      field: 'project_name',
+      fallback: 'some-file',
+    },
+    {
+      label: 'GPX name',
+      path: '/cave/exports/some-file.gpx',
+      mock: parseGpxFile,
+      base: { waypoints: [], tracks: [], routes: [] },
+      field: 'name',
+      fallback: 'some-file',
+    },
+  ])('$label: uses the in-file name over the filename', async ({ path, mock, base, field, fallback }) => {
+    mock.mockResolvedValue({ ...base, [field]: 'Naharon' });
+    await routeOpenedFile(path);
+    expect(useUIStore.getState().dialogData).toMatchObject({ defaultName: 'Naharon' });
+    void fallback; // unused in this case, kept for a single shared row shape
+  });
+
+  it.each([
+    { label: 'TML cave_name', path: '/cave/exports/some-file.tml', mock: parseTml, base: { sections: [] }, field: 'cave_name' },
+    { label: 'Compass cave_name', path: '/cave/exports/some-file.mak', mock: parseCompass, base: { survey_count: 0, shot_count: 0 }, field: 'cave_name' },
+    { label: 'Walls project_name', path: '/cave/exports/some-file.wpj', mock: parseWalls, base: { resolved_survey_count: 0, shot_count: 0 }, field: 'project_name' },
+    { label: 'GPX name', path: '/cave/exports/some-file.gpx', mock: parseGpxFile, base: { waypoints: [], tracks: [], routes: [] }, field: 'name' },
+  ])('$label: trims surrounding whitespace', async ({ path, mock, base, field }) => {
+    mock.mockResolvedValue({ ...base, [field]: '  Naharon  ' });
+    await routeOpenedFile(path);
+    expect(useUIStore.getState().dialogData).toMatchObject({ defaultName: 'Naharon' });
+  });
+
+  it.each([
+    { label: 'TML cave_name empty', path: '/cave/exports/some-file.tml', mock: parseTml, base: { sections: [] }, field: 'cave_name', value: '' },
+    { label: 'Compass cave_name empty', path: '/cave/exports/some-file.mak', mock: parseCompass, base: { survey_count: 0, shot_count: 0 }, field: 'cave_name', value: '' },
+    { label: 'Walls project_name empty', path: '/cave/exports/some-file.wpj', mock: parseWalls, base: { resolved_survey_count: 0, shot_count: 0 }, field: 'project_name', value: '' },
+    { label: 'GPX name null', path: '/cave/exports/some-file.gpx', mock: parseGpxFile, base: { waypoints: [], tracks: [], routes: [] }, field: 'name', value: null },
+    { label: 'TML cave_name whitespace-only', path: '/cave/exports/some-file.tml', mock: parseTml, base: { sections: [] }, field: 'cave_name', value: '   ' },
+  ])('$label: falls back to the filename', async ({ path, mock, base, field, value }) => {
+    mock.mockResolvedValue({ ...base, [field]: value });
+    await routeOpenedFile(path);
+    expect(useUIStore.getState().dialogData).toMatchObject({ defaultName: 'some-file' });
+  });
+});
+
+describe('routeOpenedFile - hideReportHint is scoped to the parse call, not the whole router (#447)', () => {
+  const parseTml = vi.fn();
+  // routeOpenedFile calls `ui.setImportContext(null)` unconditionally near
+  // the top, before any extension branch - overriding it to throw (below)
+  // would poison every later test in this file unless restored.
+  const realSetImportContext = useUIStore.getState().setImportContext;
 
   beforeEach(() => {
     useProjectStore.setState({ parseTml } as never);
   });
 
-  it('uses the parsed cave name over the filename', async () => {
+  afterEach(() => {
+    useUIStore.setState({ setImportContext: realSetImportContext });
+  });
+
+  it('hides the report-a-bug hint when the TML parser itself rejects (a malformed file)', async () => {
+    parseTml.mockRejectedValue(new Error('unexpected end of XML'));
+    await routeOpenedFile('/cave/track.tml');
+    expect(useUIStore.getState().activeDialog).toBe('error');
+    expect(useUIStore.getState().dialogData).toMatchObject({
+      message: 'unexpected end of XML',
+      hideReportHint: true,
+    });
+  });
+
+  it('keeps the report-a-bug hint when something OTHER than the parser throws (a routing/store bug)', async () => {
     parseTml.mockResolvedValue({ sections: [], cave_name: 'Naharon' });
-    await routeOpenedFile('/cave/exports/some-file.tml');
-    expect(useUIStore.getState().dialogData).toMatchObject({ defaultName: 'Naharon' });
-  });
-
-  it('trims surrounding whitespace on the cave name', async () => {
-    parseTml.mockResolvedValue({ sections: [], cave_name: '  Naharon  ' });
-    await routeOpenedFile('/cave/exports/some-file.tml');
-    expect(useUIStore.getState().dialogData).toMatchObject({ defaultName: 'Naharon' });
-  });
-
-  it('falls back to the filename when the file carries no cave name', async () => {
-    parseTml.mockResolvedValue({ sections: [], cave_name: '' });
-    await routeOpenedFile('/cave/exports/some-file.tml');
-    expect(useUIStore.getState().dialogData).toMatchObject({ defaultName: 'some-file' });
-  });
-
-  it('falls back to the filename when the cave name is only whitespace', async () => {
-    parseTml.mockResolvedValue({ sections: [], cave_name: '   ' });
-    await routeOpenedFile('/cave/exports/some-file.tml');
-    expect(useUIStore.getState().dialogData).toMatchObject({ defaultName: 'some-file' });
+    // A throw from routing code AFTER a successful parse - not a file problem.
+    useUIStore.setState({
+      setImportContext: () => {
+        throw new Error('unexpected store fault');
+      },
+    });
+    await routeOpenedFile('/cave/track.tml');
+    expect(useUIStore.getState().activeDialog).toBe('error');
+    const data = useUIStore.getState().dialogData;
+    expect(data.message).toBe('unexpected store fault');
+    expect(data.hideReportHint).toBeUndefined();
   });
 });
 

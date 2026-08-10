@@ -52,15 +52,48 @@ function unsupportedFileDisplayName(path: string): string {
 }
 
 /**
- * Default project name for a new-project import: prefer the cave name the
- * file itself carries (what NewProjectForImportDialog shows immediately
- * above the name field) over the filename, so "Naharon.tml" imports as
- * "Naharon" rather than as the filename. Falls back to `fallback` (the
- * filename-derived default) when the file carries no cave name, mirroring
- * the Walls branch's existing `project_name || filename` precedent.
+ * Await one of the six import parsers (parseTml/parseGpx/parseCompass/
+ * parseWalls/importDmp), converting a THROWN rejection into the error dialog
+ * with `hideReportHint: true`.
+ *
+ * Scoped to exactly the parse call - not the whole `routeOpenedFile` try block
+ * - because a parser rejection is almost always a malformed or unreadable user
+ * file, not an app defect, so the "report this as a bug" hint would send a
+ * damaged-file report where none is warranted (#447). Anything else that
+ * throws inside `routeOpenedFile` (a routing/store bug) falls through to the
+ * function's own catch, which keeps the hint - that failure mode IS worth a
+ * bug report.
+ *
+ * Returns null on a caught rejection, matching the existing `if (!file)
+ * return` abandon path every caller already has for a parser that resolves to
+ * null (no dialog, quiet abort) - the two null cases end up in the same
+ * no-op branch, only one of them opened a dialog first.
  */
-function projectNameFromCaveOrFile(caveName: string | null | undefined, fallback: string): string {
-  const trimmed = caveName?.trim();
+async function parseForImport<T>(promise: Promise<T>, errorTitle: string): Promise<T | null> {
+  try {
+    return await promise;
+  } catch (err) {
+    useUIStore.getState().openDialog('error', {
+      title: errorTitle,
+      message: getErrorMessage(err, 'Failed to open file'),
+      hideReportHint: true,
+    });
+    return null;
+  }
+}
+
+/**
+ * Default project name for a new-project import: prefer the name the file
+ * itself carries (TML/Compass's cave name, Walls's project name, GPX's track
+ * name - each shown in NewProjectForImportDialog's summary immediately above
+ * the name field) over the filename, so "Naharon.tml" imports as "Naharon"
+ * rather than as the filename. Falls back to `fallback` (the filename-derived
+ * default) when the file carries no such name, or only whitespace - trimmed
+ * so a name that is whitespace-only doesn't win over a real fallback. One
+ * helper for all four formats that carry an in-file name (DMP does not).
+ */
+function projectNameFromCaveOrFile(fileName: string | null | undefined, fallback: string): string {
+  const trimmed = fileName?.trim();
   return trimmed || fallback;
 }
 
@@ -312,13 +345,16 @@ export async function routeOpenedFile(
         handedOff = true;
         return;
       }
-      const gpxFile = await store.parseGpx(path);
+      const gpxFile = await parseForImport(store.parseGpx(path), errorTitle);
       if (!gpxFile) return;
       ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         gpxFile,
         filePath: path,
-        defaultName: extractFilename(path, /\.gpx$/i) || 'Imported',
+        defaultName: projectNameFromCaveOrFile(
+          gpxFile.name,
+          extractFilename(path, /\.gpx$/i) || 'Imported',
+        ),
         importType: 'gpx',
       });
       handedOff = true;
@@ -329,7 +365,7 @@ export async function routeOpenedFile(
         handedOff = true;
         return;
       }
-      const tmlFile = await store.parseTml(path);
+      const tmlFile = await parseForImport(store.parseTml(path), errorTitle);
       if (!tmlFile) return;
       // Mirror the DMP branch: the project about to be created exists only for
       // this import, and the import dialog has to know that to offer to discard
@@ -352,13 +388,16 @@ export async function routeOpenedFile(
         handedOff = true;
         return;
       }
-      const compassFile = await store.parseCompass(path);
+      const compassFile = await parseForImport(store.parseCompass(path), errorTitle);
       if (!compassFile) return;
       ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         compassFile,
         filePath: path,
-        defaultName: extractFilename(path, /\.(mak|dat)$/i) || 'Imported',
+        defaultName: projectNameFromCaveOrFile(
+          compassFile.cave_name,
+          extractFilename(path, /\.(mak|dat)$/i) || 'Imported',
+        ),
         importType: 'compass',
       });
       handedOff = true;
@@ -369,21 +408,22 @@ export async function routeOpenedFile(
         handedOff = true;
         return;
       }
-      const wallsFile = await store.parseWalls(path);
+      const wallsFile = await parseForImport(store.parseWalls(path), errorTitle);
       if (!wallsFile) return;
       ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         wallsFile,
         filePath: path,
-        // Prefer the .wpj project name; fall back to the file stem.
-        defaultName:
-          wallsFile.project_name || extractFilename(path, /\.(wpj|srv)$/i) || 'Imported',
+        defaultName: projectNameFromCaveOrFile(
+          wallsFile.project_name,
+          extractFilename(path, /\.(wpj|srv)$/i) || 'Imported',
+        ),
         importType: 'walls',
       });
       handedOff = true;
     } else if (lowerPath.endsWith('.dmp')) {
       // mNemo DMP: import into the current project, or seed a new one.
-      const dmpFile = await store.importDmp(path);
+      const dmpFile = await parseForImport(store.importDmp(path), errorTitle);
       if (!dmpFile) return;
       // Re-read project state fresh after the parse - the existing/new-project
       // decision must reflect the project as it is NOW, not the snapshot taken
@@ -409,14 +449,14 @@ export async function routeOpenedFile(
       });
     }
   } catch (err) {
-    // Reaching here means a parser (parseTml/parseGpx/parseCompass/parseWalls/
-    // importDmp) rejected - almost always a malformed or unreadable user file,
-    // not an app defect - so the "report this as a bug" hint would send a
-    // damaged-file report where none is warranted (#447).
+    // Every parser rejection is caught locally by `parseForImport` (with
+    // `hideReportHint: true`) before it can reach here, so anything landing in
+    // THIS catch is a routing/store bug - loadProject() throwing unexpectedly,
+    // a guard's own code faulting, etc. - which IS worth a bug report, so the
+    // hint stays on by default (#447).
     useUIStore.getState().openDialog('error', {
       title: errorTitle,
       message: getErrorMessage(err, 'Failed to open file'),
-      hideReportHint: true,
     });
   } finally {
     if (!handedOff) clearProjectActionSource();
