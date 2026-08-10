@@ -5108,6 +5108,51 @@ mod tests {
         );
     }
 
+    /// #412 regression bounds against the committed Naharon TML.
+    ///
+    /// The env-gated harness below measures whatever file you point it at; this
+    /// pins the numbers for one that ships with the repo, so a change that
+    /// re-fragments the importer fails in CI rather than in somebody's import.
+    ///
+    /// The bounds are one-sided on purpose - fewer, longer fragments may always
+    /// pass - so a later merge class can only make them easier to meet. The
+    /// fixture is committed (e2e/fixtures/naharon_sources/), so a missing file
+    /// is a hard failure, not a silent skip: a skip here would make the test
+    /// unfailable exactly when it matters.
+    #[test]
+    fn the_naharon_tml_imports_as_few_long_fragments() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../e2e/fixtures/naharon_sources/2025-12-09_23h05_naharon_resurvey.tml");
+        assert!(
+            path.exists(),
+            "committed fixture is missing: {}",
+            path.display()
+        );
+
+        let tml = parse_tml(&path).expect("the committed fixture parses");
+        let (configs, _, _) =
+            convert_tml_to_import_configs(&tml, false, false).expect("and converts");
+
+        let mut sizes: Vec<usize> = configs.iter().map(|c| c.shots.len()).collect();
+        sizes.sort_unstable();
+        let median = sizes.get(sizes.len() / 2).copied().unwrap_or(0);
+        let short = sizes.iter().filter(|&&n| n <= 2).count();
+
+        assert!(
+            configs.len() <= 16,
+            "the file's 14 declared names should not explode into fragments; got {} configs (sizes {sizes:?})",
+            configs.len()
+        );
+        assert!(
+            median >= 14,
+            "the median fragment should be a usable run, not a stub; got {median} (sizes {sizes:?})"
+        );
+        assert_eq!(
+            short, 0,
+            "a fragment of <=2 shots is the #412 complaint itself; sizes {sizes:?}"
+        );
+    }
+
     /// Baseline harness for #412: how many linear sections the importer
     /// produces from a real file, and how small the fragments are.
     ///
