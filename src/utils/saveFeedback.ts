@@ -120,6 +120,18 @@ export interface ImportDialogUi {
 }
 
 /**
+ * A receipt carrying the raw count backing the toast's short-form
+ * "N sections unanchored" line (#446). NOT part of the IPC contract - stamped
+ * locally by `finishImportWithoutOrphanSuggestions` alongside the full
+ * sentence it pushes onto `info` (that one is for the modal path, which has
+ * room for it). Optional, so a plain `ImportReceipt` from any other producer
+ * is still assignable here.
+ */
+export interface ImportReceiptWithUnanchoredCount extends ImportReceipt {
+  unanchoredCount?: number;
+}
+
+/**
  * The surface for a post-import receipt (docs/notifications.md, #411/#420): a
  * receipt with no decision in it - no warnings, and something actually
  * landed - is a toast, not a modal (there's nothing to acknowledge, just a
@@ -135,14 +147,24 @@ export interface ImportDialogUi {
  *    dropped or getting a second, second-class surface.
  */
 export function presentImportReceipt(
-  receipt: ImportReceipt,
+  receipt: ImportReceiptWithUnanchoredCount,
   ui: Pick<ImportDialogUi, 'openDialog' | 'showToast'>,
 ): void {
   if (receipt.warnings.length > 0 || isEmptyImportReceipt(receipt) || receipt.unit_conversion != null) {
     ui.openDialog('import-receipt', { receipt });
     return;
   }
-  const summary = importReceiptSummaryParts(receipt, i18n.t).join(' - ');
+  // Toast path: skip the full `info` sentence(s) (`includeInfo: false`) and
+  // append the short "N sections unanchored" scale instead - the toast's
+  // one-line budget has no room for the full sentence (the same reasoning
+  // that already routes `unit_conversion` to the modal above). The modal
+  // path (`ImportReceiptDialog`) calls `importReceiptSummaryParts` directly
+  // with the default `includeInfo: true` and shows the full sentence.
+  const parts = importReceiptSummaryParts(receipt, i18n.t, false);
+  if (receipt.unanchoredCount) {
+    parts.push(i18n.t('dialogs.importReceipt.unanchoredInfoShort', { count: receipt.unanchoredCount }));
+  }
+  const summary = parts.join(' - ');
   ui.showToast(
     i18n.t('dialogs.importReceipt.toast', { source: receipt.source_format, summary }),
     TOAST_KEYS.IMPORT_RECEIPT,
@@ -158,18 +180,30 @@ export function presentImportReceipt(
  * warning, so it rides `presentImportReceipt`'s existing routing rather than
  * promoting an otherwise clean receipt from toast to dialog. Non-fatal: if
  * the check itself fails, the import still finishes, just without the line.
+ *
+ * `newlyImportedSectionIds` scopes the unanchored-count check to components
+ * THIS import touched - otherwise a clean import into a project that already
+ * had unrelated orphans would blame this receipt for orphans it didn't
+ * create.
+ *
+ * Callers must invoke this at most once per import and never ALSO fall back
+ * to a bare `completeImportToSingleView` on the same path (double-completion
+ * would double-stamp `trackDialogComplete`/close/toast) - it already calls
+ * `completeImportToSingleView` itself exactly once, so it should sit outside
+ * any try/catch whose catch also completes the import.
  */
 export async function finishImportWithoutOrphanSuggestions(
   dialogName: string,
   ui: ImportDialogUi,
+  newlyImportedSectionIds: number[],
   receipt?: ImportReceipt,
 ): Promise<void> {
-  let finalReceipt = receipt;
+  let finalReceipt: ImportReceiptWithUnanchoredCount | undefined = receipt;
   if (receipt) {
     try {
       const unanchoredCount = await invokeIpc<number>(
         'count_unanchored_sections',
-        {},
+        { newlyImportedSectionIds },
         { purpose: 'check for unanchored sections after import' },
       );
       if (unanchoredCount > 0) {
@@ -179,6 +213,7 @@ export async function finishImportWithoutOrphanSuggestions(
             ...receipt.info,
             i18n.t('dialogs.importReceipt.unanchoredInfo', { count: unanchoredCount }),
           ],
+          unanchoredCount,
         };
       }
     } catch {

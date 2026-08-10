@@ -28,7 +28,10 @@ export function aggregateImportReceipts(receipts: ImportReceipt[]): ImportReceip
       closures_created: acc.closures_created + r.closures_created,
       unit_conversion: acc.unit_conversion ?? r.unit_conversion,
       warnings: [...acc.warnings, ...r.warnings],
-      info: [...acc.info, ...r.info],
+      // `info` is `#[serde(default)]` on the Rust side so an older cached or
+      // replayed receipt can arrive without the field at all - nullish-safe
+      // here for the same reason.
+      info: [...(acc.info ?? []), ...(r.info ?? [])],
     }),
     first,
   );
@@ -39,20 +42,33 @@ export function aggregateImportReceipts(receipts: ImportReceipt[]): ImportReceip
  * toast (docs/notifications.md): sections imported, shots imported, and loops
  * reconstructed (only when the receipt actually requested a closure), plus
  * any `info` notice lines (#446 - e.g. "N sections are not connected to a
- * zero datum"). `info` rides the same summary as these facts rather than a
- * `warnings`-style tier, so it never promotes a warning-free receipt from
- * toast to dialog (`presentImportReceipt`). `t` is either the component
- * `useTranslation()` hook's `t`, or `i18n.t` directly when called outside
- * React (the toast path in `saveFeedback.ts`).
+ * zero datum") when `includeInfo` is true. `info` rides the same summary as
+ * these facts rather than a `warnings`-style tier, so it never promotes a
+ * warning-free receipt from toast to dialog (`presentImportReceipt`).
+ *
+ * `includeInfo` defaults to true (the modal path, `ImportReceiptDialog`,
+ * which has room for the full sentence); `presentImportReceipt`'s TOAST path
+ * passes false and appends its own short-form line instead - the toast's
+ * one-line budget (docs/notifications.md) has no room for the full sentence,
+ * the same reasoning that already routes `unit_conversion` to the modal.
+ *
+ * `receipt.info` is nullish-safe (`#[serde(default)]` on the Rust side means
+ * an older cached/replayed receipt can arrive without the field). `t` is
+ * either the component `useTranslation()` hook's `t`, or `i18n.t` directly
+ * when called outside React (the toast path in `saveFeedback.ts`).
  */
-export function importReceiptSummaryParts(receipt: ImportReceipt, t: TFunction): string[] {
+export function importReceiptSummaryParts(
+  receipt: ImportReceipt,
+  t: TFunction,
+  includeInfo = true,
+): string[] {
   return [
     t('dialogs.importReceipt.sections', { count: receipt.sections_imported }),
     t('dialogs.importReceipt.shots', { count: receipt.shot_count }),
     ...(receipt.closures_requested > 0
       ? [t('dialogs.importReceipt.loops', { count: receipt.closures_created })]
       : []),
-    ...receipt.info,
+    ...(includeInfo ? (receipt.info ?? []) : []),
   ];
 }
 

@@ -758,22 +758,28 @@ function App() {
               openDialog,
               showToast: useUIStore.getState().showToast,
             };
+            // The suggest call is the ONLY thing wrapped in try/catch here
+            // (non-fatal - a failed lookup just skips the suggestion step);
+            // `finishImportWithoutOrphanSuggestions` sits outside it and
+            // completes the import exactly once, so a throw partway through
+            // IT can never fall through to a duplicate completion.
             if (newSectionIds?.length) {
+              let suggestions: OrphanPlacementSuggestion[] = [];
               try {
-                const suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
+                suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
                   'suggest_orphan_placements',
                   { newlyImportedSectionIds: newSectionIds },
                   { purpose: 'suggest orphan placements after DMP import' }
                 );
-                if (suggestions.length > 0) {
-                  openDialog('orphan-placement', { suggestions, receipt });
-                  return;
-                }
-                await finishImportWithoutOrphanSuggestions('dmp-import-new', importUi, receipt);
-                return;
               } catch {
                 // Non-fatal: proceed without orphan detection
               }
+              if (suggestions.length > 0) {
+                openDialog('orphan-placement', { suggestions, receipt });
+                return;
+              }
+              await finishImportWithoutOrphanSuggestions('dmp-import-new', importUi, newSectionIds, receipt);
+              return;
             }
             // The shared exit, not a hand-rolled copy of it (#477). The inline
             // version this replaces did the same four things in the same order

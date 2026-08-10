@@ -10,7 +10,6 @@ import { DialogWrapper } from './DialogWrapper';
 import type { WallsFile, OrphanPlacementSuggestion } from '../../types/commands';
 import { setSource } from '../../utils/telemetry';
 import {
-  completeImportToSingleView,
   finalizeDeferredSaveWarnings,
   finishImportWithoutOrphanSuggestions,
   surfaceImportFailure,
@@ -192,25 +191,27 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
         return;
       }
 
-      // Check for orphan placement opportunities
+      // Check for orphan placement opportunities. The suggest call is the
+      // ONLY thing wrapped in try/catch here (non-fatal - a failed lookup
+      // just skips the suggestion step); `finishImportWithoutOrphanSuggestions`
+      // sits outside it and completes the import exactly once, so a throw
+      // partway through IT can never fall through to a duplicate completion.
+      let suggestions: OrphanPlacementSuggestion[] = [];
       try {
-        const suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
+        suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
           'suggest_orphan_placements',
           { newlyImportedSectionIds: sectionIds },
           { purpose: 'suggest orphan placements after Walls import' }
         );
-        if (suggestions.length > 0) {
-          setSource('dialog');
-          openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
-          return;
-        }
-        await finishImportWithoutOrphanSuggestions('walls-import', importUi, result.import_receipt);
-        return;
       } catch {
         // Non-fatal: proceed without orphan detection
       }
-
-      completeImportToSingleView('walls-import', importUi, result.import_receipt);
+      if (suggestions.length > 0) {
+        setSource('dialog');
+        openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
+        return;
+      }
+      await finishImportWithoutOrphanSuggestions('walls-import', importUi, sectionIds, result.import_receipt);
     } catch (e) {
       resetLoading();
       setIsImporting(false);
