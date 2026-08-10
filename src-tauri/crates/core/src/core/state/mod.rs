@@ -72,6 +72,13 @@ mod import_pipeline_tests;
 )]
 mod issue_485_tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod issue_517_tests;
+#[cfg(test)]
 mod metamorphic_undo_tests;
 #[cfg(test)]
 mod open_undo_bugs_tests;

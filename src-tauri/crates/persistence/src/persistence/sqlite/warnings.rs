@@ -5,11 +5,16 @@ use std::collections::HashMap;
 
 use super::{Database, ResolvedWarning};
 
+/// The columns without which a `resolved_warnings` row says nothing: which shot
+/// it is about, and which warning on it was ignored. `resolved_comment` and
+/// `shot_uuid` are optional - a file that never ran the migration adding them
+/// still carries usable ignores - but these four are the row itself.
+const REQUIRED_RESOLVED_COLUMNS: [&str; 4] =
+    ["section_id", "shot_id", "warning_code", "resolved_at"];
+
 impl Database {
     /// Load resolved warnings from database
     pub fn load_resolved_warnings(&self) -> Result<Vec<ResolvedWarning>> {
-        let mut resolved = Vec::new();
-
         // Check if table exists (for backwards compatibility with older files)
         let table_exists: bool = self.conn.query_row(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='resolved_warnings'",
@@ -18,13 +23,81 @@ impl Database {
         ).map(|c| c > 0).unwrap_or(false);
 
         if !table_exists {
-            return Ok(resolved);
+            return Ok(Vec::new());
         }
 
-        let mut stmt = self.conn.prepare(
-            "SELECT section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid \
-             FROM resolved_warnings",
-        )?;
+        self.read_resolved_warnings("resolved_comment", "shot_uuid")
+    }
+
+    /// [#517] Read `resolved_warnings` taking whatever shape the file actually
+    /// has, rather than the shape this build writes.
+    ///
+    /// `load_resolved_warnings` names every CURRENT column, so a single missing
+    /// one fails the whole read - most plausibly `shot_uuid` on a file that never
+    /// ran the v8 `ALTER`, which a forged `PRAGMA user_version` over pre-v8
+    /// tables can still produce (the migration chain fast-paths on the stamp).
+    /// A degraded READ is a fair answer there; a degraded read on the SAVE path
+    /// is not, because the save REBUILDS this table from what it reads, so
+    /// "could not parse" arriving as "no ignores" erases the user's whole list.
+    /// This reads the rows verbatim instead: the optional columns are selected
+    /// only when present, and their absence yields `None`, exactly as a NULL
+    /// would.
+    ///
+    /// Errors are reserved for a table that genuinely cannot be understood -
+    /// a missing [`REQUIRED_RESOLVED_COLUMNS`] column, an unreadable value, an
+    /// I/O failure - so the caller can tell "no ignores" from "cannot tell". A
+    /// table that does not exist at all is not an error: it is a file from
+    /// before the feature, and it truly has no ignores.
+    pub fn load_resolved_warnings_verbatim(&self) -> Result<Vec<ResolvedWarning>> {
+        if !self.table_exists("resolved_warnings")? {
+            return Ok(Vec::new());
+        }
+
+        let mut columns = std::collections::HashSet::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT name FROM pragma_table_info('resolved_warnings')")?;
+            let names = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            for name in names {
+                columns.insert(name?);
+            }
+        }
+
+        for required in REQUIRED_RESOLVED_COLUMNS {
+            anyhow::ensure!(
+                columns.contains(required),
+                "the resolved_warnings table has no {required} column"
+            );
+        }
+
+        // A literal NULL stands in for a column this file does not have, so the
+        // row mapping below is identical either way.
+        let comment = if columns.contains("resolved_comment") {
+            "resolved_comment"
+        } else {
+            "NULL"
+        };
+        let uuid = if columns.contains("shot_uuid") {
+            "shot_uuid"
+        } else {
+            "NULL"
+        };
+        self.read_resolved_warnings(comment, uuid)
+    }
+
+    /// Shared row reader for the two loads above. `comment_expr` / `uuid_expr` are
+    /// column names this crate chose (or the literal `NULL`), never user input.
+    fn read_resolved_warnings(
+        &self,
+        comment_expr: &str,
+        uuid_expr: &str,
+    ) -> Result<Vec<ResolvedWarning>> {
+        let mut resolved = Vec::new();
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT section_id, shot_id, warning_code, resolved_at, {comment_expr}, {uuid_expr} \
+             FROM resolved_warnings"
+        ))?;
 
         let rows = stmt.query_map([], |row| {
             let resolved_at_str: String = row.get(3)?;
