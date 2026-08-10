@@ -22,6 +22,16 @@ pub struct ImportReceipt {
     pub closures_created: u32,
     pub unit_conversion: Option<String>,
     pub warnings: Vec<String>,
+    /// Notice-level lines, distinct from `warnings`: they never change the
+    /// receipt's toast-vs-dialog routing (`presentImportReceipt`,
+    /// `saveFeedback.ts`), unlike a non-empty `warnings`. Currently used for
+    /// the "N sections are not connected to a zero datum" line the import
+    /// dialogs add when the orphan-placement pass found nothing to suggest
+    /// (#446). `#[serde(default)]` so an older cached/replayed payload
+    /// without this field still deserializes instead of rejecting the whole
+    /// receipt.
+    #[serde(default)]
+    pub info: Vec<String>,
 }
 
 /// Make a file-controlled string fit to cross IPC and be rendered as UI text: drop
@@ -63,6 +73,7 @@ impl ImportReceipt {
             closures_created: 0,
             unit_conversion: None,
             warnings: Vec::new(),
+            info: Vec::new(),
         }
     }
 

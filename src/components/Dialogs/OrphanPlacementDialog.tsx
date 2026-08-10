@@ -316,6 +316,13 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     closeDialog();
     setView('single');
     triggerFitToBounds();
+    // Deliberately no "N sections unanchored" info line here, even if the
+    // user skipped/declined every suggestion and sections remain unanchored:
+    // this dialog existing at all means suggestions WERE offered and the
+    // user made an explicit choice about them - unlike
+    // `finishImportWithoutOrphanSuggestions` (saveFeedback.ts), whose info
+    // line exists specifically for the case where the suggestion pass had
+    // nothing to offer and the silence itself needed a receipt line (#446).
     if (receipt) {
       presentImportReceipt(receipt, { openDialog, showToast });
     }

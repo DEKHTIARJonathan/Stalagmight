@@ -2483,6 +2483,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 closures_created: 0,
                 unit_conversion: null,
                 warnings: [],
+                info: [],
               },
             };
           }
@@ -2510,6 +2511,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 closures_created: 0,
                 unit_conversion: null,
                 warnings: [],
+                info: [],
               },
             };
           }
@@ -2733,6 +2735,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 closures_created: 0,
                 unit_conversion: null,
                 warnings: [],
+                info: [],
               },
             };
           }
@@ -3756,6 +3759,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'suggest_orphan_placements':
             return [...mockOrphanPlacementSuggestions];
+
+          case 'count_unanchored_sections':
+            return 0;
 
           case 'get_segment_geometry':
             return {

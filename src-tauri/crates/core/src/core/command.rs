@@ -1465,6 +1465,7 @@ mod tests {
             closures_created: 0,
             unit_conversion: None,
             warnings: Vec::new(),
+            info: Vec::new(),
         }
     }
 

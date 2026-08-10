@@ -1904,6 +1904,7 @@ pub fn run() {
             commands::import::suggest_import_placement,
             commands::import::suggest_all_import_placements,
             commands::import::suggest_orphan_placements,
+            commands::import::count_unanchored_sections,
             commands::export::export_csv,
             commands::export::export_json,
             commands::export::export_tml,

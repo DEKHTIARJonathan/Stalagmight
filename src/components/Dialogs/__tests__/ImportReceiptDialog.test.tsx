@@ -53,6 +53,7 @@ const baseReceipt = (overrides: Partial<ImportReceipt> = {}): ImportReceipt => (
   closures_created: 0,
   unit_conversion: null,
   warnings: [],
+  info: [],
   ...overrides,
 });
 
@@ -96,6 +97,14 @@ describe('ImportReceiptDialog', () => {
     rerender(<ImportReceiptDialog />);
     expect(screen.getByTestId('import-receipt-unit-conversion').textContent).toBe(
       'Lengths converted from feet to meters',
+    );
+  });
+
+  it('renders the full info sentence in the summary, not just a short scale (#446)', () => {
+    dialogData.receipt = baseReceipt({ info: ['3 sections are not connected to a zero datum'] });
+    render(<ImportReceiptDialog />);
+    expect(screen.getByTestId('import-receipt-summary').textContent).toContain(
+      '3 sections are not connected to a zero datum',
     );
   });
 
