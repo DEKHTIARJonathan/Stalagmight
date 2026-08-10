@@ -1,5 +1,6 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
+import { setIpcOverrides } from './helpers/ipcOverrides';
 import {
   missingSystemCardRemoveTestId,
   missingSystemCardTestId,
@@ -28,20 +29,6 @@ async function switchToListTab(page: Page): Promise<void> {
   await expect(listTab).toBeVisible();
   await listTab.click();
   await expect(page.getByTestId(systemCardTestId(ALPHA))).toBeVisible();
-}
-
-/** #450: overrides the mocked IPC handler for one or more commands, same pattern as error-handling.spec.ts. */
-async function setIpcOverrides(page: Page, overrides: Record<string, unknown>): Promise<void> {
-  await page.evaluate((nextOverrides) => {
-    const current =
-      (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
-        | Record<string, unknown>
-        | undefined;
-    (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ = {
-      ...(current ?? {}),
-      ...nextOverrides,
-    };
-  }, overrides);
 }
 
 /** Inject a config whose recent list includes a path with no loadable metadata. */
@@ -135,8 +122,10 @@ test.describe('GlobalView Recent Projects - search, table view, missing files', 
   test('double-clicking a table row opens the project', async ({ page }) => {
     await page.getByTestId('recent-density-table').click();
     await page.getByTestId(systemRowTestId(GAMMA)).dblclick();
-    // Loading overlay/single-system view appears once a project opens.
-    await expect(page.getByTestId('single-system-view').or(page.getByTestId('global-view'))).toBeVisible();
+    // Asserted alone, not `.or(global-view)`: global-view is already visible
+    // before the dblclick, so an `.or()` here would pass even with the open
+    // routing deleted.
+    await expect(page.getByTestId('single-system-view')).toBeVisible();
   });
 
   // #450: a recents card must route its open through the same open/import
@@ -148,8 +137,10 @@ test.describe('GlobalView Recent Projects - search, table view, missing files', 
   test.describe('recents card open routing (#450)', () => {
     test('double-clicking a card opens the project', async ({ page }) => {
       // switchToListTab's beforeEach already lands us on the grid (card) view.
+      // Asserted alone (see the table-row test above for why `.or(global-view)`
+      // would be unfailable here).
       await page.getByTestId(systemCardTestId(GAMMA)).dblclick();
-      await expect(page.getByTestId('single-system-view').or(page.getByTestId('global-view'))).toBeVisible();
+      await expect(page.getByTestId('single-system-view')).toBeVisible();
     });
 
     test('a missing/moved file surfaces the loading-error overlay, like any other open entry point', async ({ page }) => {
