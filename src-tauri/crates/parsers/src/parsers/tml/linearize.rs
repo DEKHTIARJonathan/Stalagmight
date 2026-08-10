@@ -300,7 +300,10 @@ pub(super) fn join_contiguous_chains(
     }
 
     *sections = out;
-    debug_assert!(
+    // `debug_assert!` still type-checks its arguments in a release build, so the
+    // call has to be behind `cfg` as well as the helper it calls.
+    #[cfg(debug_assertions)]
+    assert!(
         first_linearity_violation(sections).is_none(),
         "join produced a non-linear run: {:?}",
         first_linearity_violation(sections)
@@ -313,8 +316,8 @@ pub(super) fn join_contiguous_chains(
 /// Every consumer of a `TmlSection` treats it as a polyline: shot `i` runs from
 /// station `i` to station `i + 1`, so `shots[i].from_id` must be `shots[i-1].id`.
 /// Nothing else in the pipeline checks it, and a join is exactly the operation
-/// that could break it, so this backs a `debug_assert!` after the join and is
-/// asserted directly by the join tests.
+/// that could break it, so this backs a debug-only assertion after the join and
+/// is asserted directly by the join tests.
 #[cfg(any(debug_assertions, test))]
 pub(super) fn first_linearity_violation(sections: &[TmlSection]) -> Option<String> {
     for section in sections {
