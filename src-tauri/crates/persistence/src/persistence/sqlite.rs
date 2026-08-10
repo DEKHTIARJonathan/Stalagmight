@@ -139,17 +139,6 @@ const SCHEMA_VERSION: i32 = 18;
 /// any future removal has to do as well.
 const UNDO_FORMAT_SAFE_VERSION: i32 = 7;
 
-/// The LOWEST version any arm in `ensure_schema_version` is gated on (`current <
-/// 2`, the foreign-key rebuild). Below it, a run skips no arm at all.
-///
-/// That is what makes it safe to stamp a file whose version came from the
-/// project row rather than from `PRAGMA user_version` (#485): the stamp claims
-/// every arm has been applied, and below this nothing was skipped, so the claim
-/// holds however untrustworthy the number was. `a_pre_v2_file_is_stamped_so_the_fk_rebuild_runs_once`
-/// pins that this really is the floor - if a lower gate is ever added, that test
-/// goes red rather than this constant going quietly stale.
-const LOWEST_GATED_MIGRATION: i32 = 2;
-
 /// Maximum number of rows a single raw-table page request may return.
 pub const MAX_RAW_PAGE_ROWS: u32 = 10_000;
 
@@ -290,6 +279,10 @@ mod diagnostic_tests;
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::print_stdout,
+    // The permission-bit tests (#485) say on stderr when the OS declined to make
+    // the fixture read-only - root ignores mode bits, and CI's check job runs as
+    // root - so a pass there is not read as a pass of the guard.
+    clippy::print_stderr,
     clippy::float_cmp,
     clippy::panic
 )]

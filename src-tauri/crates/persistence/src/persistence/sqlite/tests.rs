@@ -333,6 +333,20 @@ fn an_unwritable_unstamped_file_still_opens_without_running_the_chain() {
     }
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
 
+    // The mode bits are advice, not a guarantee: root ignores them, and CI's
+    // check job runs as root in a container. Confirm the protection actually
+    // took before asserting anything about it - otherwise this test reports a
+    // failure of the guard when what really happened is that the fixture could
+    // not be built. It stays live on every developer machine and on macOS.
+    if std::fs::OpenOptions::new().write(true).open(&path).is_ok() {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        eprintln!(
+            "skipping an_unwritable_unstamped_file_still_opens_without_running_the_chain: this \
+             user can write a 0444 file (root?), so there is no read-only database to test"
+        );
+        return;
+    }
+
     let opened = Database::open_existing(&path);
     // Restore before asserting so a failure cannot leave TempDir unable to clean up.
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -351,12 +365,111 @@ fn an_unwritable_unstamped_file_still_opens_without_running_the_chain() {
     assert_eq!(has_column, 0, "nothing was written to a read-only file");
 }
 
-/// [#485] The carve-out that keeps the no-stamp rule from becoming a much worse
-/// bug than the one it fixes.
+/// [#485] A write-protected file whose row claims the FUTURE does NOT take the
+/// read-only bypass.
 ///
-/// A genuine pre-v2 file has no stamp and a project row saying 1, so its version
-/// is row-derived - but 1 is below every arm gate, so the run skips nothing and
-/// the stamp it earns is honest. It has to be written: `current < 2` reaches
+/// The bypass exists so a file that reached no write before #485 still opens. A
+/// future claim is not that file: its branch drops the undo history precisely
+/// because no arm has sanitized those payloads, and bypassing that would hand
+/// the load path pre-v17 entries that replay into a wiped section name, surveyor
+/// and date. Master derived `current` from the row too and hit the same DELETE,
+/// so failing here is master's behaviour, not a regression.
+#[test]
+#[cfg(unix)]
+fn an_unwritable_file_claiming_the_future_is_refused_rather_than_left_unsanitized() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("readonly_future.stalx");
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Future".to_string(), None))
+            .unwrap();
+        // A persisted undo entry is what the DELETE exists to remove, so the
+        // write this test expects is a real one and not a no-op.
+        db.save_undo_stack_with_timestamps(vec![(
+            r#"{"type":"close_project"}"#.to_string(),
+            r#"{"InverseCommand":{"type":"close_project"}}"#.to_string(),
+            None,
+        )])
+        .unwrap();
+        db.conn
+            .execute_batch("UPDATE project SET schema_version = 99; PRAGMA user_version = 0;")
+            .unwrap();
+    }
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+    if std::fs::OpenOptions::new().write(true).open(&path).is_ok() {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        eprintln!("skipping: this user can write a 0444 file (root?)");
+        return;
+    }
+
+    let opened = Database::open_existing(&path);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(
+        opened.is_err(),
+        "a future-claiming file must never be opened with its unsanitized history intact"
+    );
+}
+
+/// [#485] Withholding the stamp may not re-arm a one-shot migration.
+///
+/// An unstamped file whose row says 12 re-derives 12 on every open and re-enters
+/// the `current < 13` arm, where `migrate_is_reference_to_kind` unconditionally
+/// re-inserts `pending_kind_classification`. The load path honours that flag
+/// ONCE, by running the classifier over the whole project and writing its
+/// verdicts through - so re-arming it silently overwrites the user's own
+/// Jump/Reference choices on every open. Master stamped these files; so do we.
+#[test]
+fn an_unstamped_file_claiming_a_mid_range_version_is_stamped_and_does_not_re_arm() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("row_says_12.stalx");
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Mid".to_string(), None))
+            .unwrap();
+        db.conn
+            .execute_batch(
+                "DELETE FROM project_settings WHERE key = 'pending_kind_classification';
+                 UPDATE project SET schema_version = 12;
+                 PRAGMA user_version = 0;",
+            )
+            .unwrap();
+    }
+
+    {
+        let db = Database::open_existing(&path).unwrap();
+        let stamped: i64 = db
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            stamped,
+            i64::from(SCHEMA_VERSION),
+            "a row-derived version BELOW SCHEMA_VERSION must still be stamped once its arms run"
+        );
+        assert!(
+            db.is_kind_classification_pending(),
+            "precondition: the v12->v13 arm really did run and arm the one-shot classifier"
+        );
+        // What the load path does with it, exactly once.
+        db.clear_pending_kind_classification().unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    assert!(
+        !db.is_kind_classification_pending(),
+        "the second open must take the fast path, not re-arm the classifier and overwrite the \
+         user's Jump/Reference choices"
+    );
+}
+
+/// [#485] A genuine pre-v2 file is row-derived (no stamp, row says 1) but below
+/// `SCHEMA_VERSION`, so it is stamped after its arms run - as master did.
+///
+/// Load-bearing rather than cosmetic: `current < 2` reaches
 /// `rebuild_tables_with_foreign_keys`, whose copy omits `shots.uuid`, so an
 /// unstamped file would rebuild on EVERY open and wipe every shot UUID each time.
 #[test]
@@ -381,12 +494,7 @@ fn a_pre_v2_file_is_stamped_so_the_fk_rebuild_runs_once() {
     assert_eq!(
         stamped,
         i64::from(SCHEMA_VERSION),
-        "a version below LOWEST_GATED_MIGRATION skips no arm, so the stamp is honest - \
-         and without it the FK rebuild would run on every single open"
-    );
-    assert!(
-        LOWEST_GATED_MIGRATION == 2,
-        "this test's premise is that 1 is below every arm gate"
+        "without the stamp the FK rebuild would run on every single open"
     );
 }
 

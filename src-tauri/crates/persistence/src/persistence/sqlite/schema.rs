@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, DatabaseName};
 
 use crate::models::FEATURE_ID_STRIDE;
 
-use super::{Database, LOWEST_GATED_MIGRATION, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
+use super::{Database, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
 
 /// Columns of `speleo_link` that MUST survive every future SCHEMA_VERSION bump
 /// unchanged (name, declared type, null-ness). The carry-forward fence (#190)
@@ -1231,10 +1231,10 @@ impl Database {
         }
 
         // Everything past this point WRITES. An unstamped file whose row claims
-        // the current version (or newer) used to take one of the two returns
-        // above on that claim alone, so it reached no write at all - and a
-        // `.stalx` on write-protected media opened clean. `open_existing` asks
-        // for SQLITE_OPEN_READ_WRITE, but the unix VFS silently falls back to
+        // exactly the current version used to take the fast path on that claim
+        // alone, so it reached no write at all - and a `.stalx` on
+        // write-protected media opened clean. `open_existing` asks for
+        // SQLITE_OPEN_READ_WRITE, but the unix VFS silently falls back to
         // read-only rather than failing the open, so the refusal only arrives at
         // the first write: `ALTER TABLE` returns SQLITE_READONLY and `?`
         // propagates it out of `open_existing`, refusing the user their own
@@ -1243,13 +1243,22 @@ impl Database {
         // file - which is what master did here anyway - and the moment the file
         // is writable the chain runs.
         //
+        // `== SCHEMA_VERSION`, not `>=`. A row claiming the FUTURE does not
+        // belong here: its branch below drops the undo history precisely because
+        // no arm has sanitized those payloads, and bypassing that would let the
+        // load path restore pre-v17 entries this function classifies as unsafe to
+        // replay. Such a file reaches the DELETE and fails the open on read-only
+        // media - which is exactly what master did with it (master derived
+        // `current` from the row too, and hit the same DELETE), so nothing
+        // regresses.
+        //
         // Deliberately NOT extended to a file with a real stamp below
-        // SCHEMA_VERSION: that one already reached these writes and already
-        // failed this way, and opening it unmigrated would be worse than
-        // refusing it (a pre-v12 file read without the pitch flip shows
-        // inverted depths).
+        // SCHEMA_VERSION either: that one already reached these writes and
+        // already failed this way, and opening it unmigrated would be worse than
+        // refusing it (a pre-v12 file read without the pitch flip shows inverted
+        // depths).
         if claimed_only
-            && current >= SCHEMA_VERSION
+            && current == SCHEMA_VERSION
             && self.conn.is_readonly(DatabaseName::Main).unwrap_or(false)
         {
             tracing::warn!(
@@ -1400,25 +1409,28 @@ impl Database {
             self.drop_legacy_undo_history()?;
         }
 
-        // The stamp is a strong claim - "every arm above has been applied to this
-        // file" - so only write it when we can back it. Each arm is `current < N`,
-        // so a `current` this run took from the project row decided which arms to
-        // SKIP on an unverified number. Certifying off that would be worse than
-        // the bug this branch fixes: a genuinely pre-v12 file whose row lies about
-        // being current would be stamped current, the pitch flip would never run,
-        // and the `user_version == 0` evidence that something is off would be
-        // destroyed. Leave it unstamped instead and re-run the idempotent
-        // `migrate_schema` on every open - about 10 ms, for a file shape nothing
-        // this app writes.
+        // Stamp, with ONE exception: a row-derived version at or above
+        // SCHEMA_VERSION. That is the only shape where the row's word caused
+        // every version-gated arm to be skipped, so the stamp - which claims all
+        // of them have been applied - would certify work that never ran. A
+        // genuinely pre-v12 file whose row lies about being current would be
+        // sealed as current, the pitch flip would never run, and the
+        // `user_version == 0` evidence that something is off would be destroyed.
+        // It re-runs the idempotent `migrate_schema` on each open instead, about
+        // 10 ms, for a file shape nothing this app writes.
         //
-        // The exception is a row-derived version below the LOWEST arm gate, which
-        // skips nothing: the run really did apply everything, so the stamp is
-        // honest. This is not a micro-optimisation - a genuine pre-v2 file (no
-        // stamp, row says 1) reaches `rebuild_tables_with_foreign_keys`, and that
-        // rebuild recreates `shots` / `resolved_warnings` from a fixed DDL whose
-        // copy omits `uuid` and `shot_uuid`. Left unstamped it would run on EVERY
-        // open, wiping every shot UUID every time.
-        if !claimed_only || current < LOWEST_GATED_MIGRATION {
+        // Every OTHER row-derived version is stamped, exactly as master did.
+        // Withholding it there re-arms one-shot migrations: an unstamped file
+        // whose row says 12 re-derives 12 on every open, re-enters the
+        // `current < 13` arm, and `migrate_is_reference_to_kind` unconditionally
+        // re-inserts `pending_kind_classification` - which the load path is
+        // documented to honour ONCE, because re-running the classifier overwrites
+        // the user's own Jump/Reference choices. Ongoing corruption of real user
+        // data beats a hypothetical lying row. The same stamp is what keeps a
+        // genuine pre-v2 file (row says 1) from re-running
+        // `rebuild_tables_with_foreign_keys`, whose copy omits `shots.uuid`, on
+        // every single open.
+        if !(claimed_only && current >= SCHEMA_VERSION) {
             self.set_user_version(SCHEMA_VERSION)?;
             // Keep project-level schema_version in sync with PRAGMA user_version.
             // Inside the same guard: writing it while declining to stamp would
