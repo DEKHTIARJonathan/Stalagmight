@@ -133,6 +133,27 @@ export function GasPlanPanel() {
     useGasPlanStore.getState().syncSettingsOnlyGasFields(persistedGasConfig);
   }, [persistedGasConfig]);
 
+  // #480: with no RESOLVABLE zero datum, `Project::zero_datum_roots` (backend,
+  // pathfinding.rs) returns an empty root set, and the entrance origin (`origin === null`)
+  // walks from nothing - every station comes back unreachable with no explanation on screen.
+  // Checked against `stations` (the same positional list `zero_datum_roots`' own
+  // `station_index` is built from), not `project.zero_datums.length`: a datum whose station no
+  // longer resolves can still leave a stale entry in `zero_datums` while producing exactly the
+  // same degenerate field (the codebase already learned this the hard way for TML export
+  // anchoring - see `ExportControls.tsx`'s `tmlAllSectionsUnanchored`, #411). Surfaced here
+  // rather than inferred from the computed field so the warning is deterministic and shows up
+  // BEFORE the first fetch, not just after a round trip confirms it.
+  const entranceHasNoZeroDatum = useProjectStore((s) => {
+    const zeroDatums = s.project?.zero_datums ?? [];
+    return !zeroDatums.some((zd) =>
+      s.stations.some(
+        (st) =>
+          st.station_ref.section_id === zd.station_ref.section_id &&
+          st.station_ref.station_index === zd.station_ref.station_index
+      )
+    );
+  });
+
   // Swim-speed disk persist (#241, shared queue since the #317 review round): the in-memory
   // working config updates immediately on every keystroke; the disk write goes through
   // `queueGasConfigWrite` (trailing-debounced, merged, serialized against the rig editor's
@@ -367,6 +388,11 @@ export function GasPlanPanel() {
           >
             {t('gasPanel.entry.startFromEntrance')}
           </button>
+          {entranceHasNoZeroDatum && (
+            <p className="text-xs text-warning" data-testid="gas-entrance-no-zero-datum-hint">
+              {t('gasPanel.entry.noZeroDatumHint')}
+            </p>
+          )}
 
           <div className="pt-2 space-y-1">
             <p className="text-xs opacity-60" data-testid="gas-assumptions-summary">
@@ -427,6 +453,17 @@ export function GasPlanPanel() {
               {t('gasPanel.origin.reset')}
             </button>
           </div>
+          {origin === null && entranceHasNoZeroDatum && (
+            // #480: the entrance origin (`origin === null`), whether chosen via the entry
+            // CTA (`chooseEntrance` only sets `originChosen`, leaving `origin` at its null
+            // default) or restored by a loaded plan (`applyLoadedPlan`) - same degenerate-field
+            // cause as the entry card's hint above, and `origin` reads null either way, so this
+            // can't be told apart from a healthy entrance plan without checking the project
+            // directly.
+            <p className="text-xs text-warning" data-testid="gas-origin-no-zero-datum-warning">
+              {t('gasPanel.origin.noZeroDatumWarning')}
+            </p>
+          )}
           {/* #395: one-shot "Pick on map" - the next station click sets the origin instead of
               the endpoint. Escape or a second press disarms (see useKeyboardShortcuts). */}
           <button

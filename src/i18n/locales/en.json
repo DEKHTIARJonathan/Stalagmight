@@ -2624,7 +2624,8 @@
       "heading": "Where does this dive start?",
       "helper": "Click any station on the map, or use the entrance.",
       "startFromEntrance": "★ Start from entrance",
-      "adjustAssumptions": "Adjust assumptions"
+      "adjustAssumptions": "Adjust assumptions",
+      "noZeroDatumHint": "This project has no zero datum, so the entrance has no known location - starting here would show every station as unreachable. Set a zero datum, or click a station on the map to start there instead."
     },
     "origin": {
       "label": "Origin",
@@ -2634,7 +2635,8 @@
       "pickArmed": "Click a station to set the origin…",
       "hint": "Or click the ★, or right-click a station and choose \"Set as start point\".",
       "datumAria": "Start the plan from this zero datum",
-      "datumTooltip": "Zero datum - click to start the plan here"
+      "datumTooltip": "Zero datum - click to start the plan here",
+      "noZeroDatumWarning": "This project has no zero datum, so the entrance has no known location - every station will show as unreachable. Set a zero datum, or pick a station below to start there instead."
     },
     "route": {
       "label": "Route",

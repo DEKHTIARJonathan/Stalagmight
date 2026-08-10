@@ -836,6 +836,19 @@ describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
     useGasPlanStore.getState().reset();
     expect(useGasPlanStore.getState().hydrated).toBe(false);
   });
+
+  it('applyLoadedPlan with a null-origin snapshot restores the entrance origin (#480)', () => {
+    // A saved plan whose own origin was the entrance persists `origin: null` in its snapshot
+    // (the same value `chooseEntrance` leaves it at); loading it must answer the entry
+    // question the same way clicking "Start from entrance" does, not just carry the null
+    // through unexamined.
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    expect(snapshot.origin).toBeNull();
+    useGasPlanStore.getState().applyLoadedPlan(11, snapshot);
+    const s = useGasPlanStore.getState();
+    expect(s.originChosen).toBe(true);
+    expect(s.origin).toBeNull();
+  });
 });
 
 /**

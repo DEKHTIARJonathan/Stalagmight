@@ -28,6 +28,13 @@ const RIG: DpvRig = {
   range_reserve_fraction: 0.2,
 };
 
+/** A station a zero datum's `station_ref` can resolve against (#480: the entrance-no-warning
+ *  guard checks a zero datum's `station_ref` for a matching entry in `stations`, not
+ *  `zero_datums.length` - a dangling datum can leave a stale entry in the latter). */
+const RESOLVABLE_STATION_REF = { section_id: 1, station_index: 0 };
+/** A ref that never appears in `stations` - simulates a zero datum whose station was deleted. */
+const DANGLING_STATION_REF = { section_id: 99, station_index: 99 };
+
 /** A full GasReachField with a real turnaround (satisfies `hasRoute`), overridable per test. */
 function makeReachField(overrides: Partial<GasReachField> = {}): GasReachField {
   const origin = { section_id: 1, station_index: 0 };
@@ -88,6 +95,11 @@ beforeEach(async () => {
   });
   useProjectStore.setState({
     config: structuredClone(defaultConfig) as Config,
+    // A zero datum RESOLVABLE against `stations` by default: every existing test in this file
+    // exercises the "healthy" origin path, and the no-zero-datum / dangling-zero-datum cases
+    // (#480) get their own describe block below with their own project + stations state.
+    project: { zero_datums: [{ station_ref: RESOLVABLE_STATION_REF }] } as never,
+    stations: [{ station_ref: RESOLVABLE_STATION_REF }] as never,
     updateGasConfig: vi.fn(async () => ({ success: true, error: null, warnings: [], section_ids: [] })),
   });
 });
@@ -352,5 +364,107 @@ describe('GasPlanPanel entry card (#395)', () => {
     expect(useGasPlanStore.getState().originChosen).toBe(true);
     expect(screen.queryByTestId('gas-entry-card')).toBeNull();
     expect(screen.getByTestId('gas-origin-readout')).toBeInTheDocument();
+  });
+});
+
+/**
+ * #480: with no RESOLVABLE zero datum, `Project::zero_datum_roots` (backend, pathfinding.rs)
+ * returns an empty root set and the entrance origin (`origin === null`) walks from nowhere -
+ * every station comes back unreachable with nothing on screen to explain why. The CTA still
+ * works (blocking it would strand a diver who has not set a zero datum yet with no way to
+ * answer the entry question), but a warning must appear so the empty field is never silent;
+ * the same `origin === null` state, whether chosen via the CTA or restored by a loaded plan
+ * (`applyLoadedPlan`), needs its own warning once the entry card is gone.
+ *
+ * The guard checks a zero datum's `station_ref` against `stations` (the resolvable set), not
+ * `zero_datums.length`: a dangling datum (its station deleted) can leave a stale entry in the
+ * array while producing the same degenerate field - the codebase already learned this for TML
+ * export anchoring (`ExportControls.tsx`, #411).
+ */
+describe('GasPlanPanel entrance requires a zero datum (#480)', () => {
+  it('shows a hint but still lets "Start from entrance" through when the project has no zero datum', () => {
+    useGasPlanStore.setState({ originChosen: false, originPickArmed: false });
+    useProjectStore.setState({ project: { zero_datums: [] } as never, stations: [] as never });
+
+    render(<GasPlanPanel />);
+
+    const cta = screen.getByTestId('gas-start-entrance');
+    expect(cta).toBeEnabled();
+    expect(screen.getByTestId('gas-entrance-no-zero-datum-hint')).toBeInTheDocument();
+
+    fireEvent.click(cta);
+    expect(useGasPlanStore.getState().originChosen).toBe(true);
+  });
+
+  it('shows the hint when the only zero datum is dangling (its station no longer resolves)', () => {
+    useGasPlanStore.setState({ originChosen: false, originPickArmed: false });
+    useProjectStore.setState({
+      // One entry, so `zero_datums.length > 0` - the guard must not stop there.
+      project: { zero_datums: [{ station_ref: DANGLING_STATION_REF }] } as never,
+      stations: [{ station_ref: RESOLVABLE_STATION_REF }] as never,
+    });
+
+    render(<GasPlanPanel />);
+
+    expect(screen.getByTestId('gas-entrance-no-zero-datum-hint')).toBeInTheDocument();
+  });
+
+  it('shows no hint once a RESOLVABLE zero datum exists', () => {
+    useGasPlanStore.setState({ originChosen: false, originPickArmed: false });
+    useProjectStore.setState({
+      project: { zero_datums: [{ station_ref: RESOLVABLE_STATION_REF }] } as never,
+      stations: [{ station_ref: RESOLVABLE_STATION_REF }] as never,
+    });
+
+    render(<GasPlanPanel />);
+
+    expect(screen.getByTestId('gas-start-entrance')).toBeEnabled();
+    expect(screen.queryByTestId('gas-entrance-no-zero-datum-hint')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('gas-start-entrance'));
+    expect(useGasPlanStore.getState().originChosen).toBe(true);
+  });
+
+  it('warns on the entrance origin readout after clicking through with no zero datum (hint-to-warning handoff)', () => {
+    useGasPlanStore.setState({ originChosen: false, originPickArmed: false });
+    useProjectStore.setState({ project: { zero_datums: [] } as never, stations: [] as never });
+
+    render(<GasPlanPanel />);
+    fireEvent.click(screen.getByTestId('gas-start-entrance'));
+
+    expect(screen.getByTestId('gas-origin-no-zero-datum-warning')).toBeInTheDocument();
+  });
+
+  it('warns on the entrance origin readout when a loaded plan lands with no zero datum', () => {
+    useGasPlanStore.setState({ originChosen: true, origin: null });
+    useProjectStore.setState({ project: { zero_datums: [] } as never, stations: [] as never });
+
+    render(<GasPlanPanel />);
+
+    expect(screen.getByTestId('gas-origin-no-zero-datum-warning')).toBeInTheDocument();
+  });
+
+  it('does not warn on the entrance origin readout when a resolvable zero datum is set', () => {
+    useGasPlanStore.setState({ originChosen: true, origin: null });
+    useProjectStore.setState({
+      project: { zero_datums: [{ station_ref: RESOLVABLE_STATION_REF }] } as never,
+      stations: [{ station_ref: RESOLVABLE_STATION_REF }] as never,
+    });
+
+    render(<GasPlanPanel />);
+
+    expect(screen.queryByTestId('gas-origin-no-zero-datum-warning')).toBeNull();
+  });
+
+  it('does not warn on the origin readout once a real station origin is picked', () => {
+    useGasPlanStore.setState({
+      originChosen: true,
+      origin: { section_id: 1, station_index: 0 },
+    });
+    useProjectStore.setState({ project: { zero_datums: [] } as never, stations: [] as never });
+
+    render(<GasPlanPanel />);
+
+    expect(screen.queryByTestId('gas-origin-no-zero-datum-warning')).toBeNull();
   });
 });
