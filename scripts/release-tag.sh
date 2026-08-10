@@ -129,8 +129,15 @@ fi
 # changelog section wins here. That is the whole point: a check built on a second
 # model of the selection rule can agree with itself and still disagree with what
 # publishes.
+#
+# CHANGELOG is pinned rather than inherited. release-notes.sh takes
+# `${CHANGELOG:-...}` so a caller can point it at a fixture, which is how
+# test-release.sh exercises it - but here that override would aim the gate at
+# one file while CI publishes from the repository's own, and the stale-date
+# advisory below already reads the real one. An exported CHANGELOG would then
+# wave through a tag whose actual notes leave entries unannounced.
 NOTES_ERR="$SCRATCH/notes.err"
-if ! BODY="$("$SCRIPT_DIR/release-notes.sh" "$TAG" 2>"$NOTES_ERR")"; then
+if ! BODY="$(CHANGELOG="$PROJECT_ROOT/CHANGELOG.md" "$SCRIPT_DIR/release-notes.sh" "$TAG" 2>"$NOTES_ERR")"; then
   echo "Error: release-notes.sh failed for $TAG, so the published body is unknown." >&2
   cat "$NOTES_ERR" >&2
   echo "Nothing was tagged." >&2

@@ -515,6 +515,29 @@ else
   fail "--allow-unannounced did not override the refusal"
 fi
 
+echo "== case 15b: an inherited \$CHANGELOG cannot redirect the gate =="
+# release-notes.sh honours ${CHANGELOG:-...} so a fixture can be pointed at it -
+# which is how the cases below drive it. release-tag.sh must NOT inherit that:
+# CI publishes from the repository's own CHANGELOG.md, so an exported override
+# would gate on one file while a different one ships. Same unfolded-entry
+# fixture as case 15, plus a clean decoy in the environment.
+D=$(fresh_clone case15b)
+CUR=$(version_of "$D")
+printf '%s\n' \
+  '# Changelog' '' \
+  '## [Unreleased]' '' '- a late fix nobody folded in' '' \
+  "## [$CUR] - 2026-01-01" '' '- the notes as written' \
+  > "$D/CHANGELOG.md"
+git -C "$D" commit --quiet -am "leave an entry unfolded"
+printf '%s\n' '# Changelog' '' '## [Unreleased]' '' \
+  "## [$CUR] - 2026-01-01" '' '- decoy notes, nothing unfolded' > "$WORK/decoy.md"
+if CHANGELOG="$WORK/decoy.md" "$D/scripts/release-tag.sh" "v$CUR-rc1" >/dev/null 2>&1; then
+  fail "an exported \$CHANGELOG redirected the gate and the tag was created"
+else
+  pass "the gate read the repository's changelog, not the override"
+  refute "no tag created" has_tag "$D" "v$CUR-rc1"
+fi
+
 echo "== case 16: a malformed tag is refused =="
 D=$(fresh_clone case16)
 # Asserting the MESSAGE, not just a non-zero exit. These tags fail the version
