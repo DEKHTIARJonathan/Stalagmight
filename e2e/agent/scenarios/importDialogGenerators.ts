@@ -224,6 +224,9 @@ export const DATE_BOUNDARIES: readonly string[] = [
  * `section_offsets`' dust rule turns on, `'91,181'` is out of range on both
  * axes, and the RLO/PDF pair is a bidi override that reorders whatever a table
  * cell renders after it. The 512-character entry looks for a length clamp.
+ *
+ * Exactly ONE entry here parses (`'0,0'`), which is the whole reason
+ * `GPS_PASSABLE` exists - see its header.
  */
 export const GPS_HOSTILE: readonly string[] = [
   '',
@@ -237,6 +240,53 @@ export const GPS_HOSTILE: readonly string[] = [
   '‮abc مرحبا‬',
   'x'.repeat(512),
 ];
+
+/**
+ * GPS strings that PARSE, so the zero-datum screen can actually be confirmed.
+ *
+ * `zero-datum-config-confirm` is `disabled={!gpsCoords}`
+ * (`ZeroDatumConfigDialog.tsx`), and `gpsCoords` is set only by a `parseGps`
+ * that succeeded inside `handleGpsInputChange`. With a purely hostile corpus the
+ * confirm is disabled forever: the 130-cell corpus campaign spent 395 steps on
+ * that screen and fired `zdc:confirm` ZERO times, so the DMP wizard's whole
+ * zero-datum entry - the anchor import, the snap-fit, and every suggestion that
+ * follows it - was never once reached. The advancing move
+ * (`ADVANCE_MOVE['zero-datum-config']`) names the same disabled button, so the
+ * screen could not be force-advanced either and burned to the escape budget
+ * instead.
+ *
+ * Every entry below was verified against `src/utils/gps.ts`'s `parseGps` and is
+ * still a boundary rather than a nominal value: `'0,0'` is null island and the
+ * dust-rule zero, `'90,180'` is both axes at their limit, `'-0.0001,-0.0001'` is
+ * just past zero on the negative side, and the DMS entry takes a different
+ * parser branch from the DD ones.
+ */
+export const GPS_PASSABLE: readonly string[] = [
+  '0,0',
+  '90,180',
+  '-0.0001,-0.0001',
+  '20.4567,-87.0231',
+  '48.8583, 2.2944',
+  '-33.8688 151.2093',
+  '19.5876,-88.0412',
+  '20 12 34 N 87 27 24 W',
+];
+
+/**
+ * Share of zero-datum GPS draws taken from `GPS_PASSABLE`.
+ *
+ * A floor, not a target: the hostile half still contains `'0,0'`, so the
+ * effective share of draws that leave the confirm enabled is higher than this.
+ * Read at CALL time like every other knob, so a replay's restored environment
+ * reaches it, and clamped to `[0.5, 1]` - below a half the screen stops being
+ * reliably completable, which is the exact failure this constant was added to
+ * end.
+ */
+export function gpsPassableProbability(): number {
+  const raw = Number(process.env.STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P);
+  if (!Number.isFinite(raw)) return 0.6;
+  return Math.min(1, Math.max(0.5, raw));
+}
 
 /** Numeric strings a shot cell has to accept, clamp or reject without crashing. */
 export const CELL_BOUNDARIES: readonly string[] = [
@@ -990,12 +1040,21 @@ const ZERO_DATUM_CONFIG: Generator[] = [
     },
   },
   {
+    /**
+     * Type a GPS position. At least half the draws PARSE, so the confirm below
+     * is reachable - see `GPS_PASSABLE`.
+     *
+     * Two rng calls, always in the same order, so the share can be retuned
+     * without shifting which string a given draw lands on relative to the rest
+     * of the stream.
+     */
     name: 'zdc:gps',
     weight: 8,
     screens: ['zero-datum-config'],
     build: (env) => {
       if (!actionable(env.digest, 'zero-datum-gps-input')) return null;
-      const value = pickFrom(() => env.ctx.rng(), GPS_HOSTILE) as string;
+      const passable = env.ctx.rng() < gpsPassableProbability();
+      const value = pickFrom(() => env.ctx.rng(), passable ? GPS_PASSABLE : GPS_HOSTILE) as string;
       return type('zero-datum-gps-input', value, `gps=${JSON.stringify(value.slice(0, 24))}`);
     },
   },

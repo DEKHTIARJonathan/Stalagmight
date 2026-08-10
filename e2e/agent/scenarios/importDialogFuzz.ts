@@ -132,6 +132,7 @@
  *   STALAGMIGHT_FUZZ_IMPORT_INTERJECT_P         default 0.08
  *   STALAGMIGHT_FUZZ_IMPORT_AUX_INTERJECT_P     default 0.04 (wave-3 stream)
  *   STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS           default 12000
+ *   STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P      default 0.6, clamped to [0.5, 1]
  *   STALAGMIGHT_FUZZ_CORPUS_DIR                 optional private corpus root
  *   STALAGMIGHT_FUZZ_TRACE / _REPLAY            record / replay a trace
  *

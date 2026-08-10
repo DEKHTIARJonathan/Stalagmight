@@ -35,7 +35,14 @@ import {
   SELECT_TESTIDS,
   TESTID_INVENTORY,
 } from '../scenarios/importDialogModel';
-import { describeSource, enabledFamilies, GENERATORS } from '../scenarios/importDialogGenerators';
+import {
+  describeSource,
+  enabledFamilies,
+  GENERATORS,
+  GPS_HOSTILE,
+  GPS_PASSABLE,
+  gpsPassableProbability,
+} from '../scenarios/importDialogGenerators';
 import { corpusPathHash } from './fixtureCorpus';
 
 /**
@@ -315,6 +322,36 @@ describe('import fuzzer testid allowlists', () => {
       if (before === undefined) delete process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT;
       else process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT = before;
     }
+  });
+
+  it('keeps the zero-datum GPS draw passable at least half the time', () => {
+    // The floor is the whole point. `zero-datum-config-confirm` is
+    // `disabled={!gpsCoords}`, so a run whose GPS corpus never parses cannot
+    // complete the zero-datum screen at all - which is what the 130-cell corpus
+    // campaign measured (395 steps on the screen, zero `zdc:confirm`).
+    const before = process.env.STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P;
+    try {
+      delete process.env.STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P;
+      expect(gpsPassableProbability()).toBeGreaterThanOrEqual(0.5);
+      for (const [raw, want] of [
+        ['0', 0.5],
+        ['0.25', 0.5],
+        ['1', 1],
+        ['4', 1],
+        ['nonsense', 0.6],
+        ['0.75', 0.75],
+      ] as const) {
+        process.env.STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P = raw;
+        expect(gpsPassableProbability(), `raw=${raw}`).toBe(want);
+      }
+    } finally {
+      if (before === undefined) delete process.env.STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P;
+      else process.env.STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P = before;
+    }
+    // Both corpora stay non-empty: the passable half is an addition to the
+    // hostile one, not a replacement for it.
+    expect(GPS_PASSABLE.length).toBeGreaterThan(4);
+    expect(GPS_HOSTILE.length).toBeGreaterThan(4);
   });
 
   it('has a generator catalog with only positive weights', () => {
