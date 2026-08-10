@@ -58,6 +58,22 @@ pub fn split(s: Option<&str>) -> (Option<String>, Option<String>) {
     )
 }
 
+/// Remove every [`SHOT_MARKER`] from a decoded comment.
+///
+/// [`split`] only consumes the marker that classifies a line, because that is
+/// the only position where it carries meaning. A marker anywhere else is an
+/// invisible character with no semantics, and there is no way to type one - so
+/// it can only have arrived from a foreign writer, or from an earlier version of
+/// this importer that skipped the decode. Either way it must not reach the
+/// project: it is invisible in the UI and leaks verbatim into the CSV and JSON
+/// exports, neither of which sanitizes user text.
+///
+/// Applied at ingestion, never at export - re-marking on the way out is
+/// [`merge`]'s job, and stripping there would erase the encoding itself.
+pub fn strip_markers(s: &str) -> String {
+    s.replace(SHOT_MARKER, "")
+}
+
 fn non_empty(s: &str) -> Option<&str> {
     if s.is_empty() {
         None
@@ -168,6 +184,29 @@ mod tests {
         let m = merge(Some("  "), Some(" ")).unwrap();
         assert_eq!(m, format!("{M}  \n "));
         assert_eq!(split(Some(&m)), (Some("  ".into()), Some(" ".into())));
+    }
+
+    #[test]
+    fn strip_markers_removes_every_occurrence() {
+        // Leading, embedded and trailing - `split` only consumes the leading
+        // one, so ingestion needs this to finish the job (#483).
+        assert_eq!(
+            strip_markers(&format!("{M}a{M}b{M}")),
+            "ab",
+            "every marker must go, not just the classifying one"
+        );
+        assert_eq!(strip_markers("no markers here"), "no markers here");
+        assert_eq!(strip_markers(""), "");
+        // Newlines and other whitespace are content, not markers.
+        assert_eq!(strip_markers(&format!("a\n{M}b")), "a\nb");
+    }
+
+    #[test]
+    fn strip_markers_leaves_neighbouring_zero_width_chars_alone() {
+        // Only OUR marker is an encoding artefact. U+200C/U+200D are meaningful
+        // in real scripts and are not ours to delete here.
+        let body = "a\u{200C}b\u{200D}c";
+        assert_eq!(strip_markers(body), body);
     }
 
     #[test]

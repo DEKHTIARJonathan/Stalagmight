@@ -1578,32 +1578,49 @@ pub fn convert_tml_to_import_configs(
             warnings.push(w);
         }
 
-        // When comments_on_stations is true, peel station-portion lines out
-        // of each shot's Comment field via the ZWSP marker convention
-        // (see `models::comment_split`): unmarked lines go to the "to" station
-        // (shot_index + 1), marked lines stay on the shot. This handles both
-        // Stalagmight-authored .tml files (which mark shot lines) and bare
-        // Ariane-authored ones (no markers → everything routes to the
-        // station, matching how Ariane visually centers Comment text on
-        // the station).
+        // Every shot's Comment field is decoded through the ZWSP marker
+        // convention (see `models::comment_split`), on BOTH paths - the setting
+        // chooses where the decoded halves land, never whether to decode.
+        // Skipping the decode is what #483 was: the raw co-encoded field landed
+        // verbatim in the shot comment, invisible marker and all, the station
+        // half was silently lost, and the next export re-marked the
+        // already-marked text so no later import could tell the halves apart.
+        //
+        // - comments_on_stations: marked lines stay on the shot, unmarked lines
+        //   become the comment of the "to" station (shot_index + 1). This
+        //   handles both Stalagmight-authored .tml files (which mark shot
+        //   lines) and bare Ariane-authored ones (no markers → everything
+        //   routes to the station, matching how Ariane visually centers Comment
+        //   text on the station).
+        // - otherwise: both halves stay on the shot, rejoined in the order the
+        //   field carried them (shot lines, then station lines), so the text
+        //   the user saw in Ariane is what they get - minus the markers, which
+        //   are ours and never user content.
         let mut station_comments: Vec<(u32, String)> = Vec::new();
-        let shots: Vec<ShotData> = if comments_on_stations {
-            shot_data
-                .into_iter()
-                .enumerate()
-                .map(|(shot_idx, mut shot)| {
-                    let (shot_part, station_part) =
-                        crate::models::comment_split::split(shot.comment.as_deref());
+        let shots: Vec<ShotData> = shot_data
+            .into_iter()
+            .enumerate()
+            .map(|(shot_idx, mut shot)| {
+                let (shot_part, station_part) =
+                    crate::models::comment_split::split(shot.comment.as_deref());
+                let shot_part = shot_part.map(|s| crate::models::comment_split::strip_markers(&s));
+                let station_part =
+                    station_part.map(|s| crate::models::comment_split::strip_markers(&s));
+                if comments_on_stations {
                     shot.comment = shot_part;
                     if let Some(text) = station_part.filter(|s| !s.is_empty()) {
                         station_comments.push((shot_idx as u32 + 1, text));
                     }
-                    shot
-                })
-                .collect()
-        } else {
-            shot_data
-        };
+                } else {
+                    shot.comment = match (shot_part, station_part) {
+                        (None, None) => None,
+                        (Some(only), None) | (None, Some(only)) => Some(only),
+                        (Some(s), Some(st)) => Some(format!("{s}\n{st}")),
+                    };
+                }
+                shot
+            })
+            .collect();
 
         configs.push(ImportSectionConfig {
             reverse: false,
@@ -4634,5 +4651,139 @@ mod tests {
             project.station_merges.len(),
             project.sections.iter().map(|s| s.shots.len() + 1).sum::<usize>(),
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Comment co-encoding (#483): the marker is an on-disk encoding and must
+    // never reach the project, on EITHER setting.
+    // ------------------------------------------------------------------
+
+    /// One section, one shot, whose TML `<Comment>` carries `field`.
+    fn tml_with_shot_comment(field: Option<String>) -> TmlFile {
+        let mut shot = sample_tml_shot();
+        shot.comment = field;
+        TmlFile {
+            cave_name: "Test".to_string(),
+            unit: TmlUnit::Metric,
+            use_magnetic_azimuth: false,
+            first_start_absolute_elevation: 0.0,
+            unrecognized_unit: None,
+            parse_anomalies: None,
+            encoding_warning: None,
+            geo_coding: None,
+            sections: vec![TmlSection {
+                name: "S".to_string(),
+                shots: vec![shot],
+                surveyor: None,
+                date: None,
+                color: "#ff0000".to_string(),
+                is_branch_split: false,
+                start_ariane_id: 0,
+                end_ariane_id: 1,
+                start_depth: 0.0,
+            }],
+            closures: Vec::new(),
+        }
+    }
+
+    /// Import `field` with the given `comments_on_stations`, returning the one
+    /// shot's comment and the section's station comments.
+    fn import_comment(
+        field: Option<String>,
+        comments_on_stations: bool,
+    ) -> (Option<String>, Vec<(u32, String)>) {
+        let tml = tml_with_shot_comment(field);
+        let (configs, _, _) =
+            convert_tml_to_import_configs(&tml, false, comments_on_stations).unwrap();
+        let config = configs.into_iter().next().unwrap();
+        let comment = config.shots.into_iter().next().unwrap().comment;
+        (comment, config.station_comments)
+    }
+
+    /// The #483 headline: with comments kept on shots, the decode was skipped
+    /// entirely, so the raw co-encoded field landed verbatim - invisible marker
+    /// included - and the station half was silently destroyed.
+    #[test]
+    fn comments_on_shots_decodes_rather_than_leaking_the_raw_field() {
+        let field = crate::models::comment_split::merge(
+            Some("broken tape"),
+            Some("junction with main"),
+        );
+        let (comment, station_comments) = import_comment(field, false);
+
+        let comment = comment.expect("the shot must keep the comment text");
+        assert!(
+            !comment.contains(crate::models::comment_split::SHOT_MARKER),
+            "the ZWSP marker leaked into the project: {comment:?}"
+        );
+        // Both halves survive, in the order the field carried them - the user
+        // asked for comments on shots, so nothing is routed to a station.
+        assert_eq!(comment, "broken tape\njunction with main");
+        assert!(station_comments.is_empty());
+    }
+
+    /// The other half of the same call site, so a future edit cannot fix the
+    /// shots path by breaking the default one.
+    #[test]
+    fn comments_on_stations_still_partitions_the_field() {
+        let field = crate::models::comment_split::merge(
+            Some("broken tape"),
+            Some("junction with main"),
+        );
+        let (comment, station_comments) = import_comment(field, true);
+
+        assert_eq!(comment.as_deref(), Some("broken tape"));
+        // Station index is the shot's "to" station: shot 0 ends at station 1.
+        assert_eq!(
+            station_comments,
+            vec![(1, "junction with main".to_string())]
+        );
+    }
+
+    /// The corruption that made this P1 rather than cosmetic: a second
+    /// export/import cycle used to re-mark already-marked text, after which no
+    /// import could tell the halves apart. Decoding on ingestion makes the
+    /// shots path a fixed point.
+    #[test]
+    fn a_second_cycle_on_the_shots_path_is_stable() {
+        let field = crate::models::comment_split::merge(
+            Some("broken tape"),
+            Some("junction with main"),
+        );
+        let (first, _) = import_comment(field, false);
+
+        // Export again: the whole comment is now shot-side, so it is marked once.
+        let reexported = crate::models::comment_split::merge(first.as_deref(), None);
+        let (second, station_comments) = import_comment(reexported, false);
+
+        assert_eq!(second, first);
+        assert!(station_comments.is_empty());
+    }
+
+    /// A marker that is not line-leading has no meaning and cannot be typed, so
+    /// it is foreign junk - it must not ride into the project, where it is
+    /// invisible in the UI and leaks verbatim into CSV and JSON export.
+    #[test]
+    fn an_embedded_marker_never_reaches_the_project() {
+        let marker = crate::models::comment_split::SHOT_MARKER;
+        let field = Some(format!("note with{marker}embedded zwsp"));
+
+        for comments_on_stations in [false, true] {
+            let (comment, station_comments) = import_comment(field.clone(), comments_on_stations);
+            let text = comment
+                .or_else(|| station_comments.first().map(|(_, t)| t.clone()))
+                .expect("the text must land somewhere");
+            assert_eq!(text, "note withembedded zwsp");
+        }
+    }
+
+    /// An Ariane-authored file carries no markers at all. On the shots path the
+    /// text must stay on the shot - decoding must not start routing plain
+    /// comments to stations against the user's chosen setting.
+    #[test]
+    fn unmarked_ariane_text_stays_on_the_shot_when_comments_stay_on_shots() {
+        let (comment, station_comments) = import_comment(Some("muddy water".to_string()), false);
+        assert_eq!(comment.as_deref(), Some("muddy water"));
+        assert!(station_comments.is_empty());
     }
 }
