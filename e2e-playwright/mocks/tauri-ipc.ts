@@ -955,8 +955,21 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'set_surface_elevation': {
             // Entrance elevation (#465): set or (given null/undefined) clear.
+            // Real command returns a plain CommandResult (no `project` payload) -
+            // the frontend re-fetches via get_project_state's own round trip.
             if (!currentProject) {
               return { success: false, error: 'No project open' };
+            }
+            // Mirrors the backend's guard_mutation: a remote project without the
+            // write lock rejects with the EDIT_DISABLED coded failure. The mock
+            // has no held-lock state, so `projectIsRemote` (set via
+            // __MOCK_SET_PROJECT_IS_REMOTE__) is the closest read-only proxy -
+            // exercised by the elevation read-only-gate spec.
+            if (projectIsRemote) {
+              return {
+                success: false,
+                error: 'EDIT_DISABLED: Set entrance elevation is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.',
+              };
             }
             const elevation = args?.elevation;
             if (elevation !== null && elevation !== undefined && typeof elevation !== 'number') {
@@ -967,7 +980,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
             (currentProject as Record<string, unknown>).surface_elevation =
               typeof elevation === 'number' ? elevation : null;
-            return { success: true, project: currentProject };
+            return { success: true };
           }
 
           case 'create_project_full': {
