@@ -448,12 +448,13 @@ describe('surfaceImportFailure', () => {
     // import had just created - and fitted the map to it - BEFORE saying why.
     expect(ui.setView).not.toHaveBeenCalled();
     expect(ui.triggerFitToBounds).not.toHaveBeenCalled();
-    // A rejected import command is the user's file, not a Stalagmight defect
-    // (#447) - the report-a-bug hint is dropped.
+    // 'command' covers both a malformed source file AND internal/invariant
+    // failures (guard_mutation's read-only message, a poisoned command lock)
+    // that carry no error-kind to tell them apart (#447 review) - the hint
+    // stays on here; the file-corruption case is caught earlier, at parse.
     expect(ui.openDialog).toHaveBeenCalledWith('error', {
       title: 'Import Errors',
       message: 'Bad azimuth on shot 3',
-      hideReportHint: true,
     });
   });
 

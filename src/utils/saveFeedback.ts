@@ -301,13 +301,23 @@ export function surfaceImportFailure(
       // Report BEFORE anything moves: no setView, no fit-to-bounds.
       trackDialogComplete(dialogName);
       ui.closeDialog();
-      // A rejected import command is almost always the source file itself
-      // (corrupt/unsupported data), not an app defect - drop the bug-report
-      // hint that would otherwise invite one for a damaged user file (#447).
+      // Unlike 'empty', 'command' is NOT a safe class to blanket-hide the
+      // report-a-bug hint for (#447 review): execute_tml_import (and its
+      // Compass/Walls/GPX siblings) return this same CommandResult::failure
+      // shape for a malformed source file (`Failed to parse TML file: ...`)
+      // AND for internal/invariant failures with no file-fixable cause -
+      // `guard_mutation`'s "read-only, acquire the lock to edit" and
+      // `execute_tml_import_sections`'s "Failed to acquire command lock" (a
+      // poisoned mutex) among them (src-tauri/crates/core/src/core/state/
+      // command_import.rs, src-tauri/crates/core/src/core/state/app_state.rs
+      // `guard_mutation`). The backend attaches no error-kind/classification
+      // to distinguish them, so hiding by phase alone would hide the hint for
+      // a genuine bug too. Keep the hint here; the file case is instead
+      // caught before it ever reaches this router, at the parse step
+      // (`parseForImport` in openOrImport.ts).
       ui.openDialog('error', {
         title: i18n.t('dialogs.importFailure.commandTitle'),
         message,
-        hideReportHint: true,
       });
   }
 }
