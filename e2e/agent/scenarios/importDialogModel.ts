@@ -385,7 +385,18 @@ export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, readonly string[]>>
   'zero-datum-config': ['zero-datum-config-confirm'],
   'wiz-suggest': ['confirm-button'],
   'wiz-no-suggest': ['cancel-button'],
-  'wiz-manual': ['segment-place-button'],
+  // PLACE ON MAP first, then the footer's Place, then Skip.
+  //
+  // `segment-place-button` alone could not advance this screen. It is
+  // `disabled={!isSegmentPlacementValid}`, and that memo returns FALSE for the
+  // default mode `'manual'` - "must use Place on Map" is written into the
+  // branch - so on entry the footer primary is always off and the forced
+  // advance always missed. Measured: `gen:man:place` fired ZERO times over 130
+  // cells and 94 steps on this screen, and the walk left by burning to the
+  // escape budget instead. `segment-place-on-map-button` is the control the
+  // default mode actually offers, is never disabled, and starts the real map
+  // placement - which `map:click` and `map:escape` then finish.
+  'wiz-manual': ['segment-place-on-map-button', 'segment-place-button', 'segment-skip-button'],
   'wiz-done': ['cancel-button'],
   'wiz-error': ['retry-button'],
   'wiz-confirm': ['cancel-confirm-continue'],
