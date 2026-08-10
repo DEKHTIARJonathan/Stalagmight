@@ -208,11 +208,12 @@ macOS; a deliberately broken golden reds the runner with expected/observed.
 
 Still open from the phases: nightly workflow wiring, replay backfill,
 `docs/TESTING.md` + `docs/releasing.md` integration, J1-J5 field checklists,
-the discovery-loop automation (needs the Daniel sync - see question 5).
+the discovery-loop automation (needs a maintainer sync - see question 5).
 
 5. (new open question) **Who owns the scheduled discovery loop?** The fuzzers
    only run inside agent sessions today; a scheduled runner + auto-triage
-   overlaps work Daniel's agent already does manually. Sync before building.
+   overlaps a workflow another maintainer already drives manually. Sync
+   between maintainers before building.
 
 ## References
 
