@@ -640,8 +640,6 @@ mod tests {
                  the rows past it are never fetched"
             );
         }
-
-        no_production_caller_mints_its_own_history_budget();
     }
 
     /// [#473] No PRODUCTION code anywhere in this crate calls a history loader that mints
@@ -659,6 +657,41 @@ mod tests {
     /// boundary so test code may keep using them. Still weaker than a compile error - it
     /// cannot see the other crates - but it covers every file a history reader would
     /// plausibly be added to.
+    /// Does this `#[cfg(test)]` gate a `mod`, rather than a gated `use` or fn?
+    ///
+    /// `from` starts AT the attribute. Skips its own line, then any blank or attribute
+    /// lines, and answers on the first line that is neither. This crate puts `#[expect]`
+    /// lint waivers between the gate and the module, and those waivers are usually
+    /// MULTI-LINE, so the skip has to balance brackets rather than test for a `#[` prefix:
+    /// a waiver's continuation line (`clippy::unwrap_used,`) looks like ordinary code and
+    /// ended the scan early, which is what made a first version of this report every
+    /// `#[expect]`-waivered test module in the crate as production.
+    fn gates_a_module(from: &str) -> bool {
+        let bracket_delta = |line: &str| -> i32 {
+            let opens = i32::try_from(line.matches('[').count()).unwrap_or(0);
+            let closes = i32::try_from(line.matches(']').count()).unwrap_or(0);
+            opens - closes
+        };
+        let mut depth = 0_i32;
+        for line in from.lines().skip(1) {
+            if depth > 0 {
+                depth += bracket_delta(line);
+                continue;
+            }
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.starts_with("#[") {
+                depth += bracket_delta(line);
+                continue;
+            }
+            return trimmed.starts_with("mod ") || trimmed.starts_with("pub mod ");
+        }
+        false
+    }
+
+    #[test]
     fn no_production_caller_mints_its_own_history_budget() {
         // The trailing `(` is load-bearing: it is what separates these from the
         // budget-SHARING `_within(` variants, which share the same prefixes.
@@ -670,8 +703,26 @@ mod tests {
             "load_redo_stack_with_timestamps(",
             "load_redo_stack_with_timestamps_capped(",
         ];
+        // POSITIVE CONTROL, first, because everything below is a negative assertion and a
+        // negative assertion over stale needles passes forever while guarding nothing.
+        // These names live in another crate, so renaming one there is not a compile error
+        // here - it would just quietly retire this test. Pinning them against the defining
+        // source makes that rename fail loudly instead.
+        let defining_src = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../persistence/src/persistence/sqlite/undo.rs"
+        ));
+        for needle in BUDGET_MINTING {
+            assert!(
+                defining_src.contains(&format!("pub fn {needle}")),
+                "{needle} no longer names a loader in persistence/sqlite/undo.rs - this \
+                 test is guarding a symbol that does not exist"
+            );
+        }
+
         let mut offenders = Vec::new();
         let mut scanned = 0_usize;
+        let mut production_bytes = 0_usize;
         let mut stack = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")];
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(&dir).expect("read crate source dir") {
@@ -697,10 +748,24 @@ mod tests {
                     continue;
                 }
                 let text = std::fs::read_to_string(&path).expect("read source file");
-                // Production half only: everything from the first `#[cfg(test)]` onward is
-                // test code, which is allowed to use these.
-                let production = text.split("#[cfg(test)]").next().unwrap_or("");
+                // Cut at the test MODULE, not at the first `#[cfg(test)]` of any kind.
+                // Splitting on the bare attribute looks equivalent and is catastrophically
+                // not: a `#[cfg(test)] use ...;` at the top of a file ends the scan there.
+                // `commands.rs` has one on LINE 2 of 1425, so the whole `AppState` command
+                // surface - the likeliest place a new history read lands - was invisible,
+                // and `speleodb_push.rs` was cut at line 308 of 1159.
+                //
+                // The module is not always the NEXT line either: this crate's convention
+                // puts `#[expect(...)]` lint waivers between the gate and the `mod`, so the
+                // cut walks forward over any further attribute lines and requires a `mod`
+                // at the end of them. Anything else (a gated `use`, a gated fn) is not a
+                // module boundary and does not end the production region.
+                let production = text
+                    .match_indices("#[cfg(test)]")
+                    .find(|&(at, _)| gates_a_module(&text[at..]))
+                    .map_or(text.as_str(), |(at, _)| &text[..at]);
                 scanned += 1;
+                production_bytes += production.len();
                 for needle in BUDGET_MINTING {
                     if production.contains(needle) {
                         offenders.push(format!("{}: {needle}", path.display()));
@@ -709,6 +774,13 @@ mod tests {
             }
         }
         assert!(scanned > 50, "the walk must actually reach the sources");
+        // ...and actually reach their CONTENT. `scanned` counts files opened, so it stayed
+        // happy while the cut above was throwing away 99% of the bytes it was counting.
+        assert!(
+            production_bytes > 500_000,
+            "the walk retained only {production_bytes} production bytes across {scanned} \
+             files - the test-module cut is discarding real code"
+        );
         assert!(
             offenders.is_empty(),
             "production code must share the open's budget through the `_within` loaders \

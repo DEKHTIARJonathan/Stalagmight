@@ -246,11 +246,15 @@ export function useSpeleoActions(): SpeleoActions {
           ? await routeStartEditingResult(result, false, issuedFor)
           : null;
         if (routed && !routed.landed) return 'stale';
-        // [#473] `result === null` means the lock was released and NOTHING was swapped;
-        // the rest of the reconciliation is harmless there, but re-reading the
-        // discarded-history flag is not - it clears the user's dismissal, so a plain
-        // lock release brought back a banner they had dismissed.
-        if (!(await applySpeleoTreeReplacement(issuedFor, result !== null))) return 'stale';
+        // [#473] ALWAYS a tree replacement, whatever `result` is. Discard runs
+        // `speleodb_return_to_tip_discarding` - "replace the local copy with the server
+        // tip, throwing away whatever it held" - UNCONDITIONALLY, and only afterwards
+        // decides whether to hand the lock back (`speleodb_push.rs`). So a `null` result
+        // means "released AND swapped", not "nothing happened": gating on `result !== null`
+        // here skipped the discarded-history re-read on the very flow that replaced the
+        // bytes, which is silent loss of the banner in one direction and a stale banner
+        // over the new tip in the other.
+        if (!(await applySpeleoTreeReplacement(issuedFor, true))) return 'stale';
         if (!result) return 'released';
         return routed?.editing ? 'editing' : 'discarded_without_lock';
       } finally {

@@ -440,18 +440,49 @@ describe('useSpeleoActions - discard routes every StartEditingResult (#303)', ()
     const refreshProjectState = vi.fn(async () => {});
     const refreshLinkStatus = vi.fn(async () => {});
     const applyStartEditing = vi.fn();
+    const checkHistoryDiscarded = vi.fn(async () => {});
     useProjectStore.setState({
       loadProject,
       refreshProjectState,
       checkProjectIntegrity: vi.fn(async () => []),
+      checkHistoryDiscarded,
     });
     useSpeleoStore.setState({
       remoteProjectId: 'p1',
       applyStartEditing,
       refreshLinkStatus,
     });
-    return { loadProject, refreshProjectState, refreshLinkStatus, applyStartEditing };
+    return {
+      loadProject,
+      refreshProjectState,
+      refreshLinkStatus,
+      applyStartEditing,
+      checkHistoryDiscarded,
+    };
   };
+
+  /**
+   * [#473] A released discard still REPLACED the tree, so its history must be re-read.
+   *
+   * `speleodb_discard_changes` fast-forwards to the server tip - "throwing away whatever
+   * it held" - and only THEN decides whether to hand the lock back
+   * (`speleodb_push.rs::speleodb_discard_changes`). So a `null` result means "released
+   * AND swapped", and an earlier version of this call site read it as "nothing happened"
+   * and skipped the re-read on the one discard flow that actually changes the bytes:
+   * no banner when the tip's history is unreadable, and a stale banner from the discarded
+   * copy when it is fine.
+   */
+  it('re-reads the discarded-history flag on a released discard', async () => {
+    const { checkHistoryDiscarded } = setup();
+    invokeIpcMock.mockResolvedValue(null);
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.discardChanges(false);
+    });
+
+    expect(checkHistoryDiscarded).toHaveBeenCalled();
+  });
 
   it('distinguishes a released discard from a kept edit session', async () => {
     const { applyStartEditing } = setup();
