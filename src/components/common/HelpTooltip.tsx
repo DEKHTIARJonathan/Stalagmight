@@ -1,5 +1,6 @@
-import { useCallback, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 
 interface HelpTooltipProps {
   text: string;
@@ -14,9 +15,22 @@ interface HelpTooltipProps {
 
 /**
  * Small themed tooltip trigger used for inline "?" help affordances.
- * Shows on hover or keyboard focus, and Escape hides it while focused.
- * Clicking pins/unpins the tooltip independently of hover, so clicking while
- * already hovered never hides it (issue #532).
+ * Shows on hover or keyboard focus; Escape hides it and does not bubble to a
+ * host dialog's own Escape-to-close handler (#532).
+ *
+ * Click is a pin/unpin toggle, kept deterministic by treating the two clicks
+ * of a pair asymmetrically rather than as a plain `!isPinned` flip: pinning
+ * (going from unpinned to pinned) only ever ADDS visibility, so a click
+ * while merely hover-shown never hides it (the original #532 bug); unpinning
+ * (the second, deliberate "close" click) force-clears hover and focus too,
+ * not just the pin - a click's own pointer events fire a `mouseenter` first,
+ * so at the moment of that second click the pointer genuinely never left the
+ * trigger and a plain `setIsPinned(false)` would leave it open by hover
+ * alone. The trigger's `onFocus` also ignores focus that immediately follows
+ * its own `onPointerDown` (a plain mouse click also focuses a tabbable
+ * element), so clicking never leaves a stray "focused" state either. A
+ * pinned tooltip is dismissed by an outside pointerdown or Escape from
+ * anywhere, mirroring {@link MapAttribution}'s pinned panel.
  */
 export function HelpTooltip({
   text,
@@ -28,9 +42,11 @@ export function HelpTooltip({
   iconTestId,
   tooltipTestId,
 }: HelpTooltipProps) {
+  const { t } = useTranslation();
   const triggerRef = useRef<HTMLSpanElement>(null);
   const tooltipRef = useRef<HTMLSpanElement>(null);
   const tooltipId = useId();
+  const pointerDownRef = useRef(false);
   const [isHovered, setIsHovered] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
@@ -73,6 +89,18 @@ export function HelpTooltip({
     setPosition({ left, top, transform });
   }, []);
 
+  // Deterministic full close, used by every dismiss path (Escape, outside
+  // pointerdown, the second click of a pin/unpin pair). Forcing `isHovered`
+  // false too matters: a click's own pointer events fire a `mouseenter`
+  // first, so at the moment of the SECOND click the pointer genuinely never
+  // left the trigger and `isHovered` is still true - closing only `isPinned`
+  // would leave the tooltip open by hover alone.
+  const closeAll = useCallback(() => {
+    setIsHovered(false);
+    setIsFocused(false);
+    setIsPinned(false);
+  }, []);
+
   useLayoutEffect(() => {
     if (!isVisible) return;
 
@@ -89,11 +117,32 @@ export function HelpTooltip({
     };
   }, [isVisible, updatePosition]);
 
-  const hide = useCallback(() => {
-    setIsHovered(false);
-    setIsFocused(false);
-    setIsPinned(false);
-  }, []);
+  // A pinned tooltip has no trigger/hover/focus tie left to dismiss it, so it
+  // needs its own outside-dismiss: a pointerdown outside the trigger/tooltip,
+  // or Escape from anywhere. Scoped to only fire while pinned, and scoped to
+  // just these two events (not scroll/resize) so it doesn't fight the
+  // reposition-on-scroll effect above.
+  useEffect(() => {
+    if (!isPinned) return;
+
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (target && (triggerRef.current?.contains(target) || tooltipRef.current?.contains(target))) {
+        return;
+      }
+      closeAll();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeAll();
+    };
+
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isPinned, closeAll]);
 
   const tooltip =
     isVisible && typeof document !== 'undefined'
@@ -120,28 +169,57 @@ export function HelpTooltip({
     <span className={`inline-flex items-center ${className}`}>
       <span
         ref={triggerRef}
-        className={`inline-flex items-center justify-center w-4 h-4 rounded-full border border-border text-[10px] font-bold text-text-secondary cursor-help ${iconClassName}`}
-        aria-label={ariaLabel ?? text}
+        className={`inline-flex items-center justify-center w-4 h-4 rounded-full border border-border text-[10px] font-bold text-text-secondary cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-accent ${iconClassName}`}
+        aria-label={ariaLabel ?? t('common.actions.help')}
         aria-describedby={isVisible ? tooltipId : undefined}
         role="button"
         tabIndex={0}
         data-testid={iconTestId}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
-        onFocus={() => setIsFocused(true)}
-        onBlur={() => setIsFocused(false)}
+        onPointerDown={() => {
+          pointerDownRef.current = true;
+        }}
+        onFocus={() => {
+          // Skip focus triggered by the mousedown that precedes a click - only
+          // keyboard (Tab) focus should open the tooltip via `isFocused`; a
+          // click already gets its own affordance via `isPinned`.
+          if (pointerDownRef.current) return;
+          setIsFocused(true);
+        }}
+        onBlur={() => {
+          setIsFocused(false);
+          pointerDownRef.current = false;
+        }}
         onClick={() => {
-          // Pin/unpin independent of hover: clicking while already visible
-          // from hover must not hide it (issue #532).
-          setIsPinned((v) => !v);
+          pointerDownRef.current = false;
+          // Pinning (this element was NOT already pinned) only ever ADDS
+          // visibility, so a click while merely hover-shown never hides it
+          // (issue #532). Unpinning (it WAS already pinned - this is the
+          // deliberate "close" click) always fully closes, regardless of
+          // any hover/focus state still active at that instant.
+          if (isPinned) {
+            closeAll();
+          } else {
+            setIsPinned(true);
+          }
         }}
         onKeyDown={(e) => {
-          if (e.key === 'Escape' && isFocused) {
-            hide();
-            triggerRef.current?.blur();
-          } else if (e.key === 'Enter' || e.key === ' ') {
+          if (e.key === 'Escape') {
+            // A keydown only reaches a focused element, so this only fires
+            // while the trigger has focus. Stop it here so it can't bubble
+            // into a host dialog's own Escape-to-close handler.
             e.preventDefault();
-            setIsPinned((v) => !v);
+            e.stopPropagation();
+            closeAll();
+          } else if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (isPinned) {
+              closeAll();
+            } else {
+              setIsPinned(true);
+            }
           }
         }}
       >

@@ -156,7 +156,6 @@ export default function ZeroDatumSelectionDialog({
         <span>{t('dialogs.zeroDatumSelection.subtitle')}</span>
         <HelpTooltip
           text={t('dialogs.zeroDatumSelection.helpTooltip')}
-          ariaLabel={t('dialogs.zeroDatumSelection.helpTooltip')}
           className="mt-0.5 shrink-0"
           iconTestId="zero-datum-selection-help-icon"
           tooltipTestId="zero-datum-selection-help-tooltip"
