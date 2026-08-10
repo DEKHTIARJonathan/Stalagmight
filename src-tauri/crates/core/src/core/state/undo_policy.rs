@@ -686,22 +686,33 @@ mod tests {
                 depth += bracket_delta(line);
                 continue;
             }
-            return trimmed.starts_with("mod ") || trimmed.starts_with("pub mod ");
+            // An INLINE module (`mod tests {`) ends the production region. A DECLARATION
+            // (`mod adversarial_tests;`) does not: its body is a separate file the walk
+            // visits on its own, while the rest of THIS file is still production.
+            // `core/state/mod.rs` opens with fourteen such declarations and closes with
+            // `pub use app_state::AppState;` - treating the first one as the boundary
+            // discarded every production line after it, in the module root of the very
+            // directory this guard exists to watch.
+            let is_mod = trimmed.starts_with("mod ") || trimmed.starts_with("pub mod ");
+            return is_mod && !trimmed.trim_end().ends_with(';');
         }
         false
     }
 
     #[test]
     fn no_production_caller_mints_its_own_history_budget() {
-        // The trailing `(` is load-bearing: it is what separates these from the
-        // budget-SHARING `_within(` variants, which share the same prefixes.
+        // Leading `.` and trailing `(` are both load-bearing. The `(` separates these
+        // from the budget-SHARING `_within(` variants, which share the same prefixes; the
+        // `.` matches a CALL (`db.load_undo_stack(`) and not the `pub fn` that defines
+        // one, which the workspace-wide walk below otherwise reports against the
+        // persistence crate itself.
         const BUDGET_MINTING: [&str; 6] = [
-            "load_undo_stack(",
-            "load_undo_stack_capped(",
-            "load_undo_stack_with_timestamps(",
-            "load_undo_stack_with_timestamps_capped(",
-            "load_redo_stack_with_timestamps(",
-            "load_redo_stack_with_timestamps_capped(",
+            ".load_undo_stack(",
+            ".load_undo_stack_capped(",
+            ".load_undo_stack_with_timestamps(",
+            ".load_undo_stack_with_timestamps_capped(",
+            ".load_redo_stack_with_timestamps(",
+            ".load_redo_stack_with_timestamps_capped(",
         ];
         // POSITIVE CONTROL, first, because everything below is a negative assertion and a
         // negative assertion over stale needles passes forever while guarding nothing.
@@ -714,7 +725,7 @@ mod tests {
         ));
         for needle in BUDGET_MINTING {
             assert!(
-                defining_src.contains(&format!("pub fn {needle}")),
+                defining_src.contains(&format!("pub fn {}", needle.trim_start_matches('.'))),
                 "{needle} no longer names a loader in persistence/sqlite/undo.rs - this \
                  test is guarding a symbol that does not exist"
             );
@@ -723,7 +734,16 @@ mod tests {
         let mut offenders = Vec::new();
         let mut scanned = 0_usize;
         let mut production_bytes = 0_usize;
-        let mut stack = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut total_bytes = 0_usize;
+        // The WHOLE workspace, not this crate. Rooting at `CARGO_MANIFEST_DIR/src` covered
+        // `crates/core` alone, which left the entire Tauri command surface in
+        // `src-tauri/src/` unwatched - and that is where a new IPC command reading history
+        // would land. Two levels up is `src-tauri/`, whose `crates/*/src` and `src` are
+        // every Rust source that can reach these loaders.
+        let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let mut stack = vec![workspace.join("src"), workspace.join("crates")];
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(&dir).expect("read crate source dir") {
                 let path = entry.expect("dir entry").path();
@@ -739,6 +759,13 @@ mod tests {
                 // they are test code. Same set `scripts/check-rust-file-size.mjs` excludes,
                 // and leaving it out is not theoretical: it fired on `core/state/tests.rs`
                 // the first time this test ran.
+                // The loaders' OWN module delegates among them (`load_undo_stack` calls
+                // `self.load_undo_stack_capped`), which is the family's internal business,
+                // not a caller minting a stray budget. The positive control above already
+                // pins this file, so skipping it here costs no coverage.
+                if path.ends_with("persistence/sqlite/undo.rs") {
+                    continue;
+                }
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 if name == "tests.rs"
                     || name == "test_helpers.rs"
@@ -766,6 +793,7 @@ mod tests {
                     .map_or(text.as_str(), |(at, _)| &text[..at]);
                 scanned += 1;
                 production_bytes += production.len();
+                total_bytes += text.len();
                 for needle in BUDGET_MINTING {
                     if production.contains(needle) {
                         offenders.push(format!("{}: {needle}", path.display()));
@@ -774,11 +802,15 @@ mod tests {
             }
         }
         assert!(scanned > 50, "the walk must actually reach the sources");
-        // ...and actually reach their CONTENT. `scanned` counts files opened, so it stayed
-        // happy while the cut above was throwing away 99% of the bytes it was counting.
+        // ...and actually reach their CONTENT. `scanned` counts files OPENED, so it stayed
+        // happy while the cut was throwing away 99% of the bytes it was counting. A RATIO
+        // rather than a floor, because a floor is satisfied by whatever the tree happens
+        // to be big enough to leak: the first version asserted 500 KB while the real
+        // figure was ~1.6 MB, so a regression discarding two thirds of production would
+        // still have passed.
         assert!(
-            production_bytes > 500_000,
-            "the walk retained only {production_bytes} production bytes across {scanned} \
+            production_bytes * 10 > total_bytes * 6,
+            "the walk retained {production_bytes} of {total_bytes} bytes across {scanned} \
              files - the test-module cut is discarding real code"
         );
         assert!(

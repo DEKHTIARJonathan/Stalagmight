@@ -12,19 +12,21 @@ import { runTreeReplacement } from './projectTransition';
  * Reconcile every frontend store after the backend replaces the open survey tree in place.
  * Returns false when the request belongs to a project or login session that is no longer current.
  *
- * [#473] `treeReplaced` says whether the bytes on disk actually changed. Not every caller
- * of this seam replaces a tree: `discardChanges` calls it even when the backend returned
- * `null` (the lock was released and nothing was swapped), and the rest of the
- * reconciliation is harmless there. Re-reading the discarded-history flag is NOT
- * harmless, because it clears the user's dismissal - so on a plain lock release the
- * banner they dismissed came straight back.
+ * [#473] `treeReplaced` says whether the bytes on disk actually changed. Only then is the
+ * discarded-history flag re-read, because that re-read also clears the user's dismissal:
+ * doing it on a caller that swapped nothing would resurrect a banner they had dismissed
+ * for a project whose history is exactly as it was.
  *
- * REQUIRED, deliberately, with no default. A `= false` default reads like the safe
- * choice and is the opposite: it is unreachable today (every call site passes the
- * argument), so its only possible effect is to let a FUTURE call site omit it and
- * silently skip the re-read - which is the silent history loss this issue exists to
- * prevent, reintroduced with no type error to catch it. Making it required turns that
- * omission into a compile error instead.
+ * **Every current caller passes `true`** - the last one that did not,
+ * `discardChanges`, was wrong to: its backend fast-forwards to the server tip BEFORE
+ * deciding whether to release the lock, so even its `null` result means the tree moved.
+ * Determine this from the BACKEND verb, never from what the frontend result looks like.
+ *
+ * The parameter stays REQUIRED, with no default, precisely because it is currently
+ * constant. A `= false` default would read like the safe choice and be the opposite:
+ * unreachable today, so its only possible effect is to let a FUTURE caller omit it and
+ * silently skip the re-read - the silent history loss this issue exists to prevent,
+ * reintroduced with no type error to catch it.
  */
 export async function applySpeleoTreeReplacement(
   issuedFor: SpeleoProjectSessionIdentity | undefined,

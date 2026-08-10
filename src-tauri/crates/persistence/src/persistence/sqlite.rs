@@ -171,8 +171,9 @@ fn compress_json(json: &str) -> Vec<u8> {
 /// [#473] Hard ceiling on how many bytes ONE persisted history blob may inflate to.
 ///
 /// Binds BOTH blob shapes: the check sits above the gzip/legacy branch in
-/// [`decompress_json_under`], so a legacy plain-UTF-8 row is refused past ~85 MiB of text
-/// (the point where its 3x `from_utf8_lossy` worst case crosses this).
+/// [`decompress_json_under`], so a legacy plain-text row is bound by it too - at its REAL
+/// `from_utf8_lossy` output, which is the row's own length when it is valid UTF-8 and up
+/// to 3x only when it is not (see [`declared_inflated_size`]).
 ///
 /// **What this bounds is a single row's decompressed size.** The whole-load bound is
 /// [`MAX_HISTORY_LOAD_BYTES`], and the two are needed together: this one alone is what
@@ -276,7 +277,7 @@ const MAX_HISTORY_LOAD_BYTES: u64 = 1024 * 1024 * 1024;
 /// `decompress_history_rows_within`, which refuses a window before a byte is inflated.
 /// Given that pre-scan, `reserve` below is unreachable by construction: the pre-scan
 /// establishes `sum(declared) <= remaining`, every gzip row reserves exactly its own
-/// `declared`, and every legacy row reserves exactly its own `3 * len` contribution, so
+/// `declared`, and every legacy row reserves exactly its own `declared` too, so
 /// the running total can never exceed what was already checked. That is deliberate
 /// defense in depth, not redundancy to delete: it is what still bounds the load if a
 /// future caller reaches `decompress_json_under` without a pre-scan, and it is the only
@@ -377,6 +378,19 @@ fn declared_inflated_size(data: &[u8]) -> u64 {
             return u64::from(u32::from_le_bytes(isize_bytes));
         }
     }
+    // Legacy plain-text branch. `from_utf8_lossy` returns the input UNCHANGED when it is
+    // valid UTF-8 and only substitutes a 3-byte U+FFFD per invalid subsequence otherwise,
+    // so validity decides between an exact answer and a worst case - and the check is an
+    // O(n) scan with no allocation.
+    //
+    // Answering `3 * len` unconditionally was wrong in a way that only bit the legacy
+    // shape: the per-blob ceiling is compared against this number, so a perfectly valid
+    // 90 MB legacy row was refused for a 270 MB output it would never produce - an
+    // effective ceiling of 85 MiB where the constant says 256, and the whole stack
+    // discarded (with a data-loss banner) for a file this codebase itself wrote.
+    if std::str::from_utf8(data).is_ok() {
+        return data.len() as u64;
+    }
     (data.len() as u64).saturating_mul(3)
 }
 
@@ -396,11 +410,11 @@ fn decompress_json_under(data: &[u8], budget: &InflationBudget) -> Result<String
 
     // The per-blob ceiling FIRST, and above the branch rather than inside the gzip arm.
     // It used to sit below, which quietly exempted the legacy shape: `declared` there is
-    // `3 * len`, so a 341 MB non-gzip blob inflated to ~1 GiB - four times the constant
-    // whose own doc calls it a hard ceiling on ONE blob - bounded only by the load
-    // budget. The cost of binding it here is that a legacy row over ~85 MiB of text is now
-    // refused; no history this codebase ever wrote comes close, and one that does is not
-    // a row we produced.
+    // its `from_utf8_lossy` output, so a large non-gzip blob inflated past the constant
+    // whose own doc calls it a hard ceiling on ONE blob, bounded only by the load budget.
+    // Binding it here costs nothing legitimate: `declared_inflated_size` prices a valid
+    // legacy row at its true length, so only a row that really would exceed the ceiling
+    // is refused.
     if declared > MAX_DECOMPRESSED_BLOB_BYTES {
         anyhow::bail!(
             "history blob declares {declared} bytes, past the \
@@ -419,7 +433,7 @@ fn decompress_json_under(data: &[u8], budget: &InflationBudget) -> Result<String
     // reservation immediately and does not starve the rows behind it.
     //
     // `saturating_sub` on both refunds, and it is not defensive noise. `out.len()` cannot
-    // exceed `declared` today - the legacy branch's `declared` is `3 * len`, the exact
+    // exceed `declared` today - the legacy branch's `declared` is its exact
     // `from_utf8_lossy` worst case, and the gzip branch is hard-capped at `declared` by
     // `decompress_json_capped`. But `[profile.release]` sets no `overflow-checks`, so a
     // plain `-` that ever did underflow would wrap and hand `refund` ~2^64, leaving the

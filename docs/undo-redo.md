@@ -471,8 +471,8 @@ Mechanically, and in the order the checks actually fire:
      goes with it.
 
    The per-blob ceiling binds both branches - it is checked before they diverge - so a
-   legacy blob is refused past ~85 MiB of text, the point at which its 3x worst case
-   crosses 256 MiB.
+   legacy blob is bound by it at its REAL `from_utf8_lossy` output - the row's own length
+   when it is valid UTF-8, and up to 3x only when it is not.
 3. **The running `InflationBudget` is defense in depth, not the mechanism.** Given the
    pre-scan it is unreachable by construction - `sum(declared) <= remaining` is
    established before any row reserves its own `declared`. It is kept because it is what

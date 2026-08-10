@@ -69,8 +69,11 @@ test.describe('Discarded-history banner', () => {
     await expect(banner).toContainText('Edit history could not be read');
     await expect(banner).toContainText('survey data is unaffected');
     // No action button: there is nothing the user can do about it, and
-    // docs/notifications.md reserves actions for surfaces that offer a way out.
+    // docs/notifications.md reserves actions for surfaces that offer a way out. Assert
+    // WHICH button, not just how many - a count of 1 is equally satisfied by a "Repair"
+    // or "Reload" action replacing Dismiss, which is the policy this is meant to pin.
     await expect(banner.getByRole('button')).toHaveCount(1);
+    await expect(banner.getByTestId('history-discarded-dismiss-button')).toBeVisible();
   });
 
   test('dismisses, and a re-check does not resurrect it', async ({ page }) => {
