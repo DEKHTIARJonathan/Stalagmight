@@ -279,6 +279,10 @@ mod diagnostic_tests;
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::print_stdout,
+    // The permission-bit tests (#485) say on stderr when the OS declined to make
+    // the fixture read-only - root ignores mode bits, and CI's check job runs as
+    // root - so a pass there is not read as a pass of the guard.
+    clippy::print_stderr,
     clippy::float_cmp,
     clippy::panic
 )]
