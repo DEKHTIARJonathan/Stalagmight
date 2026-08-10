@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # release-version.sh - the version-file checks shared by the release scripts.
 #
 # Sourced, never executed. The caller must set PROJECT_ROOT before sourcing.

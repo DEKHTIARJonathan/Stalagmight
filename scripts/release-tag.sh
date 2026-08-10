@@ -35,6 +35,7 @@ set -euo pipefail
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib/release-version.sh
 . "$SCRIPT_DIR/lib/release-version.sh"
 

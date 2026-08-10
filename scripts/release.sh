@@ -19,6 +19,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 # lock_stanza_count, lock_version, require_one_match, version_pattern,
 # version_files_match - shared with release-tag.sh, which has to ask the same
 # question about the same four files.
+# shellcheck source-path=SCRIPTDIR
 # shellcheck source=lib/release-version.sh
 . "$SCRIPT_DIR/lib/release-version.sh"
 
