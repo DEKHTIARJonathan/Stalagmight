@@ -283,6 +283,24 @@ Examples:
   (`Shot::average_azimuth_true`). A section with no reference resolves to the
   project default, and a project with no default means "nothing recorded",
   correction 0 (#438).
+  - **Where the correction comes from, per importer.** Compass records the
+    survey's `DECLINATION` alone: a UTM grid convergence in the file is
+    reported as a warning and deliberately **not** applied, because the app's
+    world frame is true north while Compass's display frame is the grid. Walls
+    resolves `Decl=` or a derived declination, folds the grid convergence in
+    for a grid-relative survey, and forces the correction to 0 for a RECT
+    survey, whose Cartesian deltas must not be rotated at all. An Ariane
+    `.tml` reads the file's `useMagneticAzimuth` flag; a georeferenced file
+    carrying a survey date gets its declination from the bundled IGRF model,
+    evaluated at the **earliest dated section's** date rather than today, so
+    the same file always imports to the same geometry.
+  - **Exporting to a format with only one north** (`AzimuthExport::decide`).
+    If the sections disagree and every section's correction is on record,
+    every bearing is rotated to true north and the file declares true north.
+    If any section's correction is `Unknown`, nothing is rotated: the readings
+    go out exactly as measured, the file declares magnetic, and the export
+    reports that the declaration misdescribes the corrected sections. There is
+    no refusal path.
 - **Depth**: Positive values = below surface
 
 #### GPS-to-Local Coordinate Transformation
