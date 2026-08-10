@@ -317,14 +317,19 @@ fn depth_only_tml_round_trip_fabricates_no_inclination_depth_mismatch() {
     use crate::core::Command;
 
     // Five depth-only shots (Inclination 0.0, i.e. never sighted), each with
-    // a real, distinct depth change - the shape issue #482 reports.
+    // a real depth change steep enough to fabricate a mismatch under the old
+    // logic - the shape issue #482 reports. `tml_shot_xml_depth` hardcodes
+    // `Length` at 10.0, so every |dz| below stays under that (never taking
+    // the LENGTH_BELOW_DEPTH_CHANGE branch instead) while still exceeding
+    // the default 15-degree threshold (dz > 10*sin(15deg) =~ 2.59m). Chain
+    // starts from the START shot's hardcoded Depth=5.0.
     let shots = [
         tml_shot_xml_gps(0, -1, "START", "Main", 20.5, -87.3),
-        tml_shot_xml_depth(1, 0, "REAL", "Main", 5.0, -1.0),
-        tml_shot_xml_depth(2, 1, "REAL", "Main", 12.0, -1.0),
-        tml_shot_xml_depth(3, 2, "REAL", "Main", 8.0, -1.0),
-        tml_shot_xml_depth(4, 3, "REAL", "Main", 20.0, -1.0),
-        tml_shot_xml_depth(5, 4, "REAL", "Main", 15.0, -1.0),
+        tml_shot_xml_depth(1, 0, "REAL", "Main", 13.0, -1.0), // dz +8
+        tml_shot_xml_depth(2, 1, "REAL", "Main", 4.0, -1.0),  // dz -9
+        tml_shot_xml_depth(3, 2, "REAL", "Main", 11.0, -1.0), // dz +7
+        tml_shot_xml_depth(4, 3, "REAL", "Main", 3.0, -1.0),  // dz -8
+        tml_shot_xml_depth(5, 4, "REAL", "Main", 12.0, -1.0), // dz +9
     ]
     .join("\n");
 
@@ -384,5 +389,190 @@ fn depth_only_tml_round_trip_fabricates_no_inclination_depth_mismatch() {
         0,
         "a clean export/import round trip must not fabricate inclination-depth \
          mismatch warnings for a depth-only survey"
+    );
+}
+
+/// #482 deliberate residual loss (a), pinned as chosen behavior rather than
+/// left as an unexamined side effect: a shot with a GENUINELY recorded
+/// `Some(0.0)` pitch on a STEEP depth-only geometry is erased to `None` by
+/// one export/import round trip. `export::tml::pitch_to_inclination` writes
+/// both `None` and `Some(0.0)` as the same wire `0.0`
+/// (`export/tml.rs::pitch_to_inclination`), so the importer cannot recover
+/// which one it was; it resolves the ambiguity toward `None` specifically
+/// because the alternative - keeping `Some(0.0)` - would have re-fabricated
+/// #482's warning on every ordinary depth-only survey. The warning this
+/// erased `Some(0.0)` WOULD have produced (mismatch against a steep implied
+/// pitch) was never earnable back from a lossy wire `0.0` in the first
+/// place, so nothing observable is lost beyond the raw pitch value itself.
+#[test]
+fn a_genuinely_recorded_zero_pitch_on_a_steep_shot_is_erased_by_one_round_trip() {
+    use crate::core::state::AppState;
+    use crate::core::Command;
+    use crate::models::ShotData;
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Erasure Pin".to_string(),
+        location: None,
+    });
+    let create = state.execute(Command::CreateSection {
+        name: Some("Main".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#abcdef".to_string(),
+        direction: None,
+        shots: vec![ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 8.0, // implied ~53 deg, well past the 15 deg default threshold
+            pitch_in: Some(0.0),
+            pitch_out: Some(0.0),
+            ..Default::default()
+        }],
+    });
+    assert!(create.success, "section create failed: {:?}", create.error);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.sections[0].shots[0].pitch_in,
+        Some(0.0),
+        "the recorded reading survives until export"
+    );
+
+    let out_dir = tempfile::tempdir().unwrap();
+    let out_path = out_dir.path().join("erasure.tmlu");
+    crate::export::tml::export_tml(&project, &out_path).unwrap();
+    let round_tripped = parse_tml(&out_path).unwrap();
+    let (sections, closures, _) =
+        convert_tml_to_import_configs(&round_tripped, false, false).unwrap();
+
+    let state2 = AppState::new().unwrap();
+    state2.execute(Command::CreateProject {
+        name: "Erasure Pin Round Trip".to_string(),
+        location: None,
+    });
+    let result2 = state2.execute_tml_import_sections(
+        sections,
+        closures,
+        None,
+        Vec::new(),
+        Vec::new(),
+        crate::core::state::VirtualShotMode::Auto,
+        Some(round_tripped.first_start_absolute_elevation),
+    );
+    assert!(result2.success, "re-import failed: {:?}", result2.error);
+
+    let project2 = state2.get_project_state().unwrap();
+    assert_eq!(
+        project2.sections[0].shots[0].pitch_in, None,
+        "a genuinely-recorded 0deg pitch on a steep shot is erased, not \
+         preserved - this is the chosen tradeoff, not a bug"
+    );
+    assert_eq!(
+        inclination_depth_mismatch_count(&project2),
+        0,
+        "the erasure is exactly what keeps this shot from re-fabricating #482's warning"
+    );
+}
+
+/// #482 closure interaction: a depth-only TML import (steep shots, `pitch_in:
+/// None`) closed into a loop must not surface `INCLINATION_DEPTH_MISMATCH`
+/// afterward. The closure solve (`Project::apply_station_move_internal`,
+/// `models/project/closure.rs:265,290`) overwrites `pitch_in`/`pitch_out`
+/// with `Some(pitch)` computed from the shot's OWN post-adjust geometry on
+/// every shot it touches, so a touched shot's recorded and implied pitch
+/// agree exactly regardless of what `pitch_in` held before (`None` or
+/// otherwise); an untouched shot keeps `None`, which the validator already
+/// treats as nothing to cross-check. If this assertion fails, that is a
+/// genuine design question (a closure-adjusted shot disagreeing with its own
+/// freshly-written pitch) - report it, do not tune the threshold to hide it.
+#[test]
+fn depth_only_shots_closed_into_a_loop_do_not_fabricate_a_mismatch() {
+    use crate::core::state::{AppState, VirtualShotMode};
+    use crate::core::Command;
+    use crate::models::{ClosureStrategy, ShotData, StationRef};
+
+    let shots = [
+        tml_shot_xml_gps(0, -1, "START", "Main", 20.5, -87.3),
+        tml_shot_xml_depth(1, 0, "REAL", "Main", 13.0, -1.0), // dz +8
+        tml_shot_xml_depth(2, 1, "REAL", "Main", 4.0, -1.0),  // dz -9
+        tml_shot_xml_depth(3, 2, "REAL", "Main", 11.0, -1.0), // dz +7
+    ]
+    .join("\n");
+    let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 100.0, &shots));
+    let (sections, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Closure Interaction".to_string(),
+        location: None,
+    });
+    let import_result = state.execute_tml_import_sections(
+        sections,
+        closures,
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+        Some(tml.first_start_absolute_elevation),
+    );
+    assert!(
+        import_result.success,
+        "import failed: {:?}",
+        import_result.error
+    );
+    let main_id = state.get_project_state().unwrap().sections[0].id;
+    assert!(
+        state.get_project_state().unwrap().sections[0]
+            .shots
+            .iter()
+            .any(|s| s.pitch_in.is_none()),
+        "fixture must actually exercise the None-pitch shape #482 fixed"
+    );
+
+    // A short bridging section, left with pitch_in/out at their None default
+    // so it cannot itself contribute a mismatch independent of the closure.
+    let bridge_id = state
+        .execute(Command::CreateSection {
+            name: Some("Bridge".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: None,
+            shots: vec![ShotData {
+                azimuth_in: 270.0,
+                azimuth_out: 270.0,
+                length: 5.0,
+                depth_in: 100.0,
+                depth_out: 100.0,
+                ..Default::default()
+            }],
+        })
+        .section_id
+        .unwrap();
+
+    // Merge one end of the bridge to the tail of the imported chain, leaving
+    // the other end - and the imported chain's own start - as the loop's two
+    // loose ends for CreateLoopClosure to tie together.
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(main_id, 3),
+        station_b: StationRef::new(bridge_id, 0),
+    });
+    let closure = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(main_id, 0),
+        station_b: StationRef::new(bridge_id, 1),
+        closure_strategy: ClosureStrategy::default(),
+    });
+    assert!(closure.success, "loop closure failed: {:?}", closure.error);
+
+    let project = state.get_project_state().unwrap();
+    let count = inclination_depth_mismatch_count(&project);
+    assert_eq!(
+        count, 0,
+        "a closure-adjusted depth-only loop must not surface \
+         INCLINATION_DEPTH_MISMATCH - if this fires, it is a real finding, \
+         not something to paper over"
     );
 }
