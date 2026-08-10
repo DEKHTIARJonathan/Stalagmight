@@ -25,6 +25,7 @@
  * tests use.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { useState } from 'react';
 
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
@@ -58,11 +59,55 @@ vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel: (s: unknown) => unknown) => sel({ project: null, config: null }),
 }));
 
+// A faithful-enough stand-in for DialogWrapper's own dirty guard (see
+// DialogWrapper.tsx's `requestClose`/`showConfirm`), so the tests below
+// exercise the real wiring - Cancel calling `requestClose`, not `onCancel`
+// directly - rather than asserting against a mock that cannot fail.
 export const mockDialogWrapperSpy = vi.fn();
 vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ children, ...props }: { children: React.ReactNode; [k: string]: unknown }) => {
-    mockDialogWrapperSpy(props);
-    return <div>{children}</div>;
+  DialogWrapper: ({
+    children,
+    isDirty,
+    onClose,
+    ...props
+  }: {
+    children: React.ReactNode | ((p: { requestClose: () => void }) => React.ReactNode);
+    isDirty?: boolean;
+    onClose: () => void;
+    [k: string]: unknown;
+  }) => {
+    mockDialogWrapperSpy({ isDirty, onClose, ...props });
+    const [showConfirm, setShowConfirm] = useState(false);
+    const requestClose = () => {
+      if (isDirty) setShowConfirm(true);
+      else onClose();
+    };
+    return (
+      <div>
+        {typeof children === 'function' ? children({ requestClose }) : children}
+        {showConfirm && (
+          <div>
+            <button
+              type="button"
+              data-testid="dirty-dialog-keep-editing"
+              onClick={() => setShowConfirm(false)}
+            >
+              Keep editing
+            </button>
+            <button
+              type="button"
+              data-testid="dirty-dialog-discard"
+              onClick={() => {
+                setShowConfirm(false);
+                onClose();
+              }}
+            >
+              Discard
+            </button>
+          </div>
+        )}
+      </div>
+    );
   },
 }));
 
@@ -533,6 +578,144 @@ describe('ZeroDatumConfigDialog dirty guard', () => {
     renderDialog();
     pickStation(PICK);
     expect(lastIsDirty()).toBe(false);
+  });
+});
+
+/**
+ * Cancel and Back must route through the SAME guard `isDirty` feeds - a dirty
+ * flag that only ever reaches a spied-on prop and never gates an exit is not
+ * a guard. Every "confirm pending" case below is paired with the accepted
+ * discard, so a stub that skips straight to the callback (or one that never
+ * calls it at all) fails one half of the pair.
+ */
+describe('ZeroDatumConfigDialog Cancel/Back dirty guard', () => {
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function makeDirty() {
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '2' } });
+  }
+
+  it('Cancel calls onCancel immediately when clean', () => {
+    const onCancel = vi.fn();
+    render(
+      <ZeroDatumConfigDialog
+        dmpFile={dmpFile()}
+        selectionConfig={selectionConfig}
+        sectionIndex={0}
+        filePath="/tmp/anchor.dmp"
+        onCancel={onCancel}
+        onBack={vi.fn()}
+        onConfirm={onConfirm}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('zero-datum-config-cancel'));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('Cancel does NOT call onCancel while dirty until the discard confirm is accepted', () => {
+    const onCancel = vi.fn();
+    render(
+      <ZeroDatumConfigDialog
+        dmpFile={dmpFile()}
+        selectionConfig={selectionConfig}
+        sectionIndex={0}
+        filePath="/tmp/anchor.dmp"
+        onCancel={onCancel}
+        onBack={vi.fn()}
+        onConfirm={onConfirm}
+      />,
+    );
+    makeDirty();
+    fireEvent.click(screen.getByTestId('zero-datum-config-cancel'));
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByTestId('dirty-dialog-discard')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('dirty-dialog-discard'));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('Cancel is cancellable: "keep editing" leaves onCancel uncalled', () => {
+    const onCancel = vi.fn();
+    render(
+      <ZeroDatumConfigDialog
+        dmpFile={dmpFile()}
+        selectionConfig={selectionConfig}
+        sectionIndex={0}
+        filePath="/tmp/anchor.dmp"
+        onCancel={onCancel}
+        onBack={vi.fn()}
+        onConfirm={onConfirm}
+      />,
+    );
+    makeDirty();
+    fireEvent.click(screen.getByTestId('zero-datum-config-cancel'));
+    fireEvent.click(screen.getByTestId('dirty-dialog-keep-editing'));
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it('Back calls onBack immediately when clean', () => {
+    const onBack = vi.fn();
+    render(
+      <ZeroDatumConfigDialog
+        dmpFile={dmpFile()}
+        selectionConfig={selectionConfig}
+        sectionIndex={0}
+        filePath="/tmp/anchor.dmp"
+        onCancel={vi.fn()}
+        onBack={onBack}
+        onConfirm={onConfirm}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('zero-datum-config-back'));
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('Back does NOT call onBack while dirty until its own discard confirm is accepted', () => {
+    // NOTE for whoever integrates Package A's state-preserving Back: this is
+    // the "small isolated hunk" the coordinator asked to flag - if Back no
+    // longer discards anything, this confirm (and this test) can go.
+    const onBack = vi.fn();
+    render(
+      <ZeroDatumConfigDialog
+        dmpFile={dmpFile()}
+        selectionConfig={selectionConfig}
+        sectionIndex={0}
+        filePath="/tmp/anchor.dmp"
+        onCancel={vi.fn()}
+        onBack={onBack}
+        onConfirm={onConfirm}
+      />,
+    );
+    makeDirty();
+    fireEvent.click(screen.getByTestId('zero-datum-config-back'));
+    expect(onBack).not.toHaveBeenCalled();
+    expect(screen.getByTestId('zero-datum-config-back-confirm-discard')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('zero-datum-config-back-confirm-discard'));
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('Back is cancellable: dismissing its confirm leaves onBack uncalled', () => {
+    const onBack = vi.fn();
+    render(
+      <ZeroDatumConfigDialog
+        dmpFile={dmpFile()}
+        selectionConfig={selectionConfig}
+        sectionIndex={0}
+        filePath="/tmp/anchor.dmp"
+        onCancel={vi.fn()}
+        onBack={onBack}
+        onConfirm={onConfirm}
+      />,
+    );
+    makeDirty();
+    fireEvent.click(screen.getByTestId('zero-datum-config-back'));
+    fireEvent.click(screen.getByTestId('zero-datum-config-back-confirm-cancel'));
+    expect(onBack).not.toHaveBeenCalled();
   });
 });
 

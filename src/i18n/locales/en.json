@@ -1610,7 +1610,7 @@
       "subtitle": "A zero datum ties one station to a real-world GPS position, so this section will establish the GPS reference point for this project. All other sections will be positioned relative to this one.",
       "helpTooltip": "The zero datum is the one station whose GPS coordinates you supply directly. Every other station's position is computed relative to it, so its section becomes the anchor for the whole survey.",
       "skip": "Skip Zero Datum",
-      "skipCost": "Without a zero datum, the survey will have no GPS anchor and every section will land unpositioned until you set one later.",
+      "skipCost": "Without a zero datum the survey has no real-world GPS anchor; you can still place sections and set a datum later.",
       "shotCount": "{{count}} shots",
       "totalLength": "{{length}} total"
     },
@@ -1623,6 +1623,10 @@
       "gpsPlaceholder": "e.g. 48.8584, 2.2945",
       "gpsEmptyHint": "Enter coordinates to set the zero datum - Confirm stays disabled until it parses.",
       "transposedWarning": "Latitude and longitude may be swapped - check the format.",
+      "backConfirm": {
+        "message": "You have unsaved changes. Going back will discard them.",
+        "discard": "Discard and Go Back"
+      },
       "confirm": "Confirm Zero Datum",
       "metadataHeading": "Section Metadata",
       "shotsHeading": "Shot Data"

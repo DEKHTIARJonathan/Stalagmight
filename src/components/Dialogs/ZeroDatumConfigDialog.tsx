@@ -264,16 +264,21 @@ export default function ZeroDatumConfigDialog({
   const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
-  // Metadata state
+  // Metadata state. Each field keeps an initial-value ref alongside it, so the
+  // dirty guard (#F9) can tell "touched" from "still what the file/defaults
+  // gave it" without re-deriving the same expression twice.
   const initialNameRef = useRef(section?.name ?? '');
-  const [name, setName] = useState(section?.name ?? '');
-  const [surveyor, setSurveyor] = useState(selectionConfig.defaultSurveyor || '');
-  const [date, setDate] = useState(
-    selectionConfig.defaultDate ?? section?.date?.split(/[T ]/)[0] ?? ''
-  );
-  const [color, setColor] = useState(sectionPalette[colorIndex % sectionPalette.length] ?? '#4ecdc4');
-  const [direction, setDirection] = useState<'in' | 'out'>(section?.direction === 'out' ? 'out' : 'in');
-  const [reverse, setReverse] = useState(false);
+  const [name, setName] = useState(initialNameRef.current);
+  const initialSurveyorRef = useRef(selectionConfig.defaultSurveyor || '');
+  const [surveyor, setSurveyor] = useState(initialSurveyorRef.current);
+  const initialDateRef = useRef(selectionConfig.defaultDate ?? section?.date?.split(/[T ]/)[0] ?? '');
+  const [date, setDate] = useState(initialDateRef.current);
+  const initialColorRef = useRef(sectionPalette[colorIndex % sectionPalette.length] ?? '#4ecdc4');
+  const [color, setColor] = useState(initialColorRef.current);
+  const initialDirectionRef = useRef<'in' | 'out'>(section?.direction === 'out' ? 'out' : 'in');
+  const [direction, setDirection] = useState(initialDirectionRef.current);
+  const initialReverseRef = useRef(false);
+  const [reverse, setReverse] = useState(initialReverseRef.current);
 
   // Station count = counted shots + 1. The dropdown, the preview, the payload
   // and the pick all count by `isCounted` - one predicate, one station space.
@@ -315,9 +320,32 @@ export default function ZeroDatumConfigDialog({
     return looksTransposed(gpsCoords.latitude, gpsCoords.longitude);
   }, [gpsCoords]);
 
-  // Dirty guard (#F9): GPS text entered, the section renamed, or a shot
-  // edited/inserted/deleted - anything ESC would otherwise discard silently.
-  const isDirty = gpsInput.trim() !== '' || name !== initialNameRef.current || shotsDirty;
+  // Dirty guard (#F9): GPS text entered, the section renamed, a metadata
+  // field touched, or a shot edited/inserted/deleted - anything ESC (or
+  // Cancel/Back) would otherwise discard silently.
+  const isDirty =
+    gpsInput.trim() !== '' ||
+    name !== initialNameRef.current ||
+    surveyor !== initialSurveyorRef.current ||
+    date !== initialDateRef.current ||
+    color !== initialColorRef.current ||
+    direction !== initialDirectionRef.current ||
+    reverse !== initialReverseRef.current ||
+    shotsDirty;
+
+  // Back has no DialogWrapper-level guard (that machinery only ever discards
+  // via `onClose`/`onCancel`), so it gets its own small, self-contained
+  // confirm here. NOTE for integration: Package A is making Back
+  // state-preserving in App.tsx; if that lands, this confirm - which still
+  // frames Back as a discard - may need to be dropped or reworded.
+  const [backConfirmPending, setBackConfirmPending] = useState(false);
+  const handleBackClick = useCallback(() => {
+    if (isDirty) {
+      setBackConfirmPending(true);
+    } else {
+      onBack();
+    }
+  }, [isDirty, onBack]);
 
   // When dropdown hovers an option, show it on the map; when dropdown closes
   // without selecting, the reducer reverts to the committed station.
@@ -438,6 +466,8 @@ export default function ZeroDatumConfigDialog({
       closeOnBackdropClick={false}
       data-testid="zero-datum-config-dialog"
     >
+      {({ requestClose }) => (
+      <>
       {/* Scrollable content area */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Left column: Preview (fixed) */}
@@ -601,10 +631,10 @@ export default function ZeroDatumConfigDialog({
       {/* Footer - always visible */}
       <div className="px-4 py-3 border-t border-border flex justify-between items-center shrink-0">
         <div className="flex gap-2">
-          <Button variant="secondary" onClick={onCancel} data-testid="zero-datum-config-cancel">
+          <Button variant="secondary" onClick={requestClose} data-testid="zero-datum-config-cancel">
             {t('common.actions.cancel')}
           </Button>
-          <Button variant="secondary" onClick={onBack} data-testid="zero-datum-config-back">
+          <Button variant="secondary" onClick={handleBackClick} data-testid="zero-datum-config-back">
             {t('common.actions.back')}
           </Button>
         </div>
@@ -617,6 +647,46 @@ export default function ZeroDatumConfigDialog({
           {t('dialogs.zeroDatumConfig.confirm')}
         </Button>
       </div>
+
+      {/* Small, self-contained Back-discard confirm - see the `isDirty`
+          comment above for why this cannot reuse DialogWrapper's own. */}
+      {backConfirmPending && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center"
+          data-testid="zero-datum-config-back-confirm"
+        >
+          <div
+            className="absolute inset-0 bg-overlay"
+            onClick={() => setBackConfirmPending(false)}
+            data-testid="zero-datum-config-back-confirm-backdrop"
+          />
+          <div className="relative bg-panel border border-border rounded-lg shadow-xl max-w-sm w-full mx-4">
+            <div className="p-4 space-y-4">
+              <p>{t('dialogs.zeroDatumConfig.backConfirm.message')}</p>
+              <div className="flex justify-end gap-2 pt-4 border-t border-border">
+                <Button
+                  onClick={() => setBackConfirmPending(false)}
+                  data-testid="zero-datum-config-back-confirm-cancel"
+                >
+                  {t('common.actions.cancel')}
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    setBackConfirmPending(false);
+                    onBack();
+                  }}
+                  data-testid="zero-datum-config-back-confirm-discard"
+                >
+                  {t('dialogs.zeroDatumConfig.backConfirm.discard')}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      </>
+      )}
     </DialogWrapper>
   );
 }
