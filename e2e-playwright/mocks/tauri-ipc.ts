@@ -1307,6 +1307,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 sections: Array<{
                   id: number; name?: string | null; surveyor?: string | null;
                   date?: string | null; color?: string; direction?: string; quality?: number;
+                  // The section's north reference (#438); undefined until an
+                  // importer declares one.
+                  azimuth_reference?: unknown | null;
                   shots?: Array<{
                     id: number; azimuth_in?: number; azimuth_out?: number;
                     length?: number; depth_in?: number; depth_out?: number;
@@ -1326,6 +1329,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 validation?: Record<string, number>;
                 // Entrance elevation (#431); undefined until an import sets it.
                 surface_elevation?: number | null;
+                // The project-level north reference (#438); undefined until one
+                // is declared.
+                default_azimuth_reference?: unknown | null;
               };
               stations: Array<{
                 station_ref: { section_id: number; station_index: number };
@@ -1404,6 +1410,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // The band this section's shot ids actually live in - a flat
                 // cursor here would advertise an id the backend could never mint.
                 next_shot_id: mockShotId(section.id as number, shot_count),
+                // This section's own north reference (#438); `null` inherits the
+                // project default above, which is what a section that declares
+                // nothing carries on disk.
+                azimuth_reference: section.azimuth_reference ?? null,
               });
             }
 
@@ -1440,8 +1450,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // `EXPECTED_VERSION` in `src/utils/loadProjectBinary.ts`; the
               // binaryFormatVersion tripwire pins the other two to each other.
               // Bumped from 3 to 4 when Ariane collaboration mode was removed:
-              // the header no longer carries a `collab` field.
-              version: 4,
+              // the header no longer carries a `collab` field; 4 to 5 for the
+              // #438 north references (a project-level default plus one per
+              // section header).
+              version: 5,
               loading_id: jsonResult.loadingId,
               // Added to the envelope at v3 alongside the ShotKind bits
               // (`load_binary.rs`): the decoder reads it unvalidated, so omitting
@@ -1494,6 +1506,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // `null` (unknown) - what a project that never imported one
                 // has on disk.
                 surface_elevation: jsonResult.project.surface_elevation ?? null,
+                // The project-level north reference (#438), same provenance as
+                // the two above. `null` is "nothing recorded", which is what a
+                // project that never declared one carries - and what every
+                // section that declares none inherits.
+                default_azimuth_reference:
+                  jsonResult.project.default_azimuth_reference ?? null,
               },
               shot_count: totalShots,
               shots_floats: shotsFloats,
