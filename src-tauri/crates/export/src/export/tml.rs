@@ -26,8 +26,8 @@ use quick_xml::Writer;
 
 use crate::models::comment_split;
 use crate::models::{
-    normalize_azimuth, AzimuthReference, NorthReference, Project, Section, SectionId, Shot,
-    StationRef,
+    normalize_azimuth, AzimuthReference, CorrectionSource, NorthReference, Project, Section,
+    SectionId, Shot, StationRef,
 };
 
 // ============================================================================
@@ -642,10 +642,27 @@ fn remint_duplicate_uuids(shots: &mut [ExportShot]) {
 /// the readings, flag true), they agree on true north (write them, flag false),
 /// or they disagree - and then the only honest single-flag document is one where
 /// every bearing has been rotated into true north on the way out.
+///
+/// ## An UNKNOWN correction is not a competing declaration
+///
+/// [`CorrectionSource::Unknown`] means "no correction is on record", not "a
+/// correction of exactly zero" - it is what a `.dmp` and a georeference-less
+/// `.tml` get, because the device is a compass and nothing in the file says how
+/// far off north it read. A section like that is raw magnetic, which is exactly
+/// what `useMagneticAzimuth=true` says, so it constrains the document to be
+/// magnetic and otherwise votes on nothing.
+///
+/// Counting it as "correction 0" instead made the common case mixed: import an
+/// IGRF-corrected `.tml` alongside `.dmp` files from the same cave and every
+/// bearing in the export would be rewritten and the file declared true north -
+/// baking OUR zero into the `.dmp` sections permanently, and asserting about
+/// them the one thing we know is false. Handing Ariane the readings and letting
+/// it apply its own declination is both the honest document and the stable one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AzimuthExport {
-    /// Every section's stored readings are magnetic and share one correction:
-    /// emit them untouched and let Ariane apply its own declination.
+    /// Every DECLARED section is magnetic with one correction, and any
+    /// undeclared section is raw magnetic too: emit the readings untouched and
+    /// let Ariane apply its own declination.
     Magnetic,
     /// Every section is already true north: emit untouched, flag false.
     TrueAsStored,
@@ -656,22 +673,30 @@ enum AzimuthExport {
 
 impl AzimuthExport {
     fn decide(project: &Project) -> Self {
-        let mut references = project
-            .sections
-            .iter()
-            .filter(|section| !section.shots.is_empty())
-            .map(|section| project.azimuth_reference_for(section));
+        let references = || {
+            project
+                .sections
+                .iter()
+                .filter(|section| !section.shots.is_empty())
+                .map(|section| project.azimuth_reference_for(section))
+        };
 
-        // No survey to describe: keep the historical declaration, which is also
-        // what an unreferenced project means.
-        let Some(first) = references.next() else {
+        // Raw magnetic readings with nothing declared about them. They cannot
+        // make a document mixed, but they can only ride in a magnetic one.
+        let undeclared_magnetic = references()
+            .any(|r| r.source == CorrectionSource::Unknown && r.north == NorthReference::Magnetic);
+        let mut declared = references().filter(|r| r.source != CorrectionSource::Unknown);
+
+        // Nothing declared at all - every existing project, and the historical
+        // declaration this must keep producing.
+        let Some(first) = declared.next() else {
             return AzimuthExport::Magnetic;
         };
         // Corrections come from the same file-level source, so this is an
         // identity test, not a tolerance: the epsilon only keeps a last-bit
         // difference from routing an otherwise uniform project down the
         // rewrite-every-azimuth path.
-        let uniform = references.all(|r| {
+        let uniform = declared.all(|r| {
             r.north == first.north
                 && (r.applied_correction() - first.applied_correction()).abs() < 1e-12
         });
@@ -679,6 +704,9 @@ impl AzimuthExport {
             return AzimuthExport::MixedToTrue;
         }
         match first.north {
+            // A true-north declaration and a raw magnetic section cannot share
+            // one flag: whichever it names is a false claim about the other.
+            NorthReference::True if undeclared_magnetic => AzimuthExport::MixedToTrue,
             NorthReference::True => AzimuthExport::TrueAsStored,
             NorthReference::Magnetic => AzimuthExport::Magnetic,
             // Grid bearings are neither: declaring them magnetic would have

@@ -301,6 +301,149 @@ fn a_mixed_project_exports_true_north_bearings_and_leaves_the_project_alone() {
     );
 }
 
+/// The case the fixture corpus is made of: one cave imported from a
+/// georeference-carrying `.tml` (declared, IGRF) plus `.dmp` files from the same
+/// cave (raw magnetic, nothing declared).
+///
+/// Counting the undeclared sections as "correction 0" made this MIXED, which
+/// rewrote every bearing in the export and declared the whole file true north -
+/// asserting about the `.dmp` sections the one thing known to be false. The
+/// document stays magnetic, and the readings stay the readings.
+#[test]
+fn undeclared_magnetic_sections_do_not_make_a_declared_one_mixed() {
+    let mut project = Project::new("naharon".to_string(), None);
+    let declared = project
+        .add_section(SectionData {
+            name: Some("From the .tml".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ffffff".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot(30.0, 10.0)],
+        })
+        .id;
+    let undeclared = project
+        .add_section(SectionData {
+            name: Some("From a .dmp".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ffffff".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot(200.0, 10.0)],
+        })
+        .id;
+    project.get_section_mut(declared).unwrap().azimuth_reference = Some(
+        AzimuthReference::magnetic(-2.13, CorrectionSource::IgrfAuto { epoch_year: 2025 }),
+    );
+    project
+        .get_section_mut(undeclared)
+        .unwrap()
+        .azimuth_reference = Some(AzimuthReference::magnetic(0.0, CorrectionSource::Unknown));
+    project.ensure_shot_uuids();
+
+    let xml = exported_xml(&project);
+    assert!(
+        xml.contains("<useMagneticAzimuth>true</useMagneticAzimuth>"),
+        "an undeclared magnetic section must not push the document off magnetic"
+    );
+    let azimuths = azimuths_in(&xml);
+    assert!(
+        azimuths.contains(&30.0) && azimuths.contains(&200.0),
+        "both sections' readings must leave verbatim: {azimuths:?}"
+    );
+}
+
+/// The other side of that rule: a section that DOES declare true north cannot
+/// share a flag with a raw magnetic one, so the document is converted.
+#[test]
+fn a_true_north_declaration_beside_a_raw_magnetic_section_is_still_mixed() {
+    let mut project = Project::new("mixed conventions".to_string(), None);
+    let true_north = project
+        .add_section(SectionData {
+            name: Some("True".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ffffff".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot(30.0, 10.0)],
+        })
+        .id;
+    let undeclared = project
+        .add_section(SectionData {
+            name: Some("Raw magnetic".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ffffff".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot(200.0, 10.0)],
+        })
+        .id;
+    project
+        .get_section_mut(true_north)
+        .unwrap()
+        .azimuth_reference = Some(AzimuthReference::true_north(CorrectionSource::FileDeclared));
+    project
+        .get_section_mut(undeclared)
+        .unwrap()
+        .azimuth_reference = Some(AzimuthReference::magnetic(0.0, CorrectionSource::Unknown));
+    project.ensure_shot_uuids();
+
+    let xml = exported_xml(&project);
+    assert!(
+        xml.contains("<useMagneticAzimuth>false</useMagneticAzimuth>"),
+        "a true-north declaration cannot be published as magnetic"
+    );
+}
+
+/// Two DECLARED corrections that disagree are the case the mixed path is for.
+#[test]
+fn two_different_declared_corrections_are_mixed() {
+    let mut project = Project::new("two declinations".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ffffff".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot(30.0, 10.0)],
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ffffff".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot(30.0, 10.0)],
+        })
+        .id;
+    project.get_section_mut(a).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
+        5.0,
+        CorrectionSource::FileDeclared,
+    ));
+    project.get_section_mut(b).unwrap().azimuth_reference = Some(AzimuthReference::magnetic(
+        -3.0,
+        CorrectionSource::FileDeclared,
+    ));
+    project.ensure_shot_uuids();
+
+    let xml = exported_xml(&project);
+    assert!(xml.contains("<useMagneticAzimuth>false</useMagneticAzimuth>"));
+    let azimuths = azimuths_in(&xml);
+    assert!(
+        azimuths.contains(&35.0) && azimuths.contains(&27.0),
+        "each section's own correction should be applied: {azimuths:?}"
+    );
+}
+
 /// A project with no references at all is the historical case, and it has to
 /// keep producing the historical document.
 #[test]
