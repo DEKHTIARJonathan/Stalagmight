@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/coverage';
 import { setupMockedPage, openNewProjectDialog, createProject, closeProjectViaMenu } from './helpers/app';
+import { setIpcOverrides } from './helpers/ipcOverrides';
 
 test.describe('Project CRUD Operations', () => {
   test.beforeEach(async ({ page }) => {
@@ -53,15 +54,9 @@ test.describe('Project CRUD Operations', () => {
     });
 
     test('should not autosave untouched project when backing out', async ({ page }) => {
-      await page.evaluate(() => {
-        const overrides = (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
-          | Record<string, unknown>
-          | undefined;
-        (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ = {
-          ...(overrides ?? {}),
-          // Untouched new projects should close without any implicit save.
-          save_project: { __throw: 'save_project should not be called when backing out of untouched project' },
-        };
+      // Untouched new projects should close without any implicit save.
+      await setIpcOverrides(page, {
+        save_project: { __throw: 'save_project should not be called when backing out of untouched project' },
       });
 
       await createProject(page, 'Untouched Project');
@@ -74,16 +69,10 @@ test.describe('Project CRUD Operations', () => {
     });
 
     test('should create with "Save immediately" without calling save_project', async ({ page }) => {
-      await page.evaluate(() => {
-        const overrides = (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
-          | Record<string, unknown>
-          | undefined;
-        (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ = {
-          ...(overrides ?? {}),
-          // Save-now flow should create directly at the selected path.
-          // If save_project is still called, this test fails.
-          save_project: { __throw: 'save_project should not be called for Save immediately on create' },
-        };
+      // Save-now flow should create directly at the selected path.
+      // If save_project is still called, this test fails.
+      await setIpcOverrides(page, {
+        save_project: { __throw: 'save_project should not be called for Save immediately on create' },
       });
 
       await openNewProjectDialog(page);

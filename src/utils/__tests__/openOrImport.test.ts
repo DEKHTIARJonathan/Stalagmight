@@ -134,6 +134,30 @@ describe('routeOpenedFile', () => {
     // No dialog handed off; the parse bailed → source cleared in finally.
     expect(peekProjectActionSource()).toBeUndefined();
   });
+
+  it('does not leak the full path in the unsupported-file message for a path ending in a separator', async () => {
+    await routeOpenedFile('/Users/someone/caves/');
+    expect(useUIStore.getState().activeDialog).toBe('error');
+    expect(String(useUIStore.getState().dialogData.message)).not.toContain('/');
+  });
+});
+
+describe('routeOpenedFile - allow: "project-only" (#450 security)', () => {
+  it('refuses a non-.stalx recents entry and starts no import flow', async () => {
+    await routeOpenedFile('/x/evil.dat', 'Open Failed', { allow: 'project-only' });
+    expect(useUIStore.getState().activeDialog).toBe('error');
+    expect(String(useUIStore.getState().dialogData.message)).toContain('Unsupported file type');
+    expect(loadProject).not.toHaveBeenCalled();
+    expect(importDmp).not.toHaveBeenCalled();
+    expect(parseGpx).not.toHaveBeenCalled();
+    expect(peekProjectActionSource()).toBeUndefined();
+  });
+
+  it('still opens a .stalx recents entry normally', async () => {
+    await routeOpenedFile('/cave/project.stalx', 'Open Failed', { allow: 'project-only' });
+    expect(loadProject).toHaveBeenCalledWith('/cave/project.stalx');
+    expect(useUIStore.getState().activeDialog).not.toBe('error');
+  });
 });
 
 describe('routeOpenedFile - read-only-map import guard (#243)', () => {

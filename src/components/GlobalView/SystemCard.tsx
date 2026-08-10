@@ -1,13 +1,11 @@
 import { type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useProjectStore } from '../../store/projectStore';
 import {
   formatDate as formatDateIntl,
   formatNumber,
   formatRelativeTime,
 } from '../../i18n/format';
 import { ElidedPath, Tooltip } from '../common';
-import { setProjectActionSource } from '../../utils/telemetry';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
 import {
   SpeleoRecentInfo,
@@ -31,6 +29,14 @@ interface SystemCardProps {
   onSelect?: (ctrlKey: boolean) => void;
   /** Called on right-click to show context menu */
   onContextMenu?: (e: MouseEvent) => void;
+  /**
+   * Called on double-click to open the project. Wired to GlobalView's
+   * `handleOpenFromList` (matching `RemoteSystemCard`'s `onOpen`), which sets
+   * the 'recent-list' telemetry source and routes through the shared
+   * open/import router's `allow: 'project-only'` gate - so this component owns
+   * no routing or attribution of its own.
+   */
+  onOpen?: (filePath: string) => void;
 }
 
 export default function SystemCard({
@@ -44,10 +50,10 @@ export default function SystemCard({
   speleoLock,
   onSelect,
   onContextMenu,
+  onOpen,
 }: SystemCardProps) {
   const { t } = useTranslation();
   const { formatLength } = useProjectStatFormatters();
-  const { loadProject } = useProjectStore();
   const testId = systemCardTestId(filePath);
 
   const handleClick = (e: MouseEvent) => {
@@ -58,11 +64,11 @@ export default function SystemCard({
     }
   };
 
-  const handleDoubleClick = async () => {
-    // Double click opens the project via store.loadProject
-    // loadProject handles view switching internally
-    setProjectActionSource('recent-list');
-    await loadProject(filePath);
+  const handleDoubleClick = () => {
+    // Delegates to GlobalView's handleOpenFromList (via onOpen), which owns
+    // the telemetry attribution and the shared open/import router - see the
+    // onOpen prop doc above for why routing doesn't live in this component.
+    onOpen?.(filePath);
   };
 
   const handleContextMenu = (e: MouseEvent) => {

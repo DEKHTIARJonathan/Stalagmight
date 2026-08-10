@@ -1,6 +1,7 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 import { setupMockedPage, createProject as createProjectViaApp, openAppMenu } from './helpers/app';
+import { setIpcOverrides, clearIpcOverrideKeys } from './helpers/ipcOverrides';
 
 /**
  * Error Handling E2E Tests
@@ -21,39 +22,6 @@ async function createProject(page: Page, name: string): Promise<void> {
   await page.getByTestId('new-project-name-input').fill(name);
   await page.getByTestId('new-project-create-button').click();
   await expect(page.getByTestId('map-canvas')).toBeVisible({ timeout: 10000 });
-}
-
-async function setIpcOverrides(page: Page, overrides: Record<string, unknown>): Promise<void> {
-  await page.evaluate((nextOverrides) => {
-    const current =
-      (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
-        | Record<string, unknown>
-        | undefined;
-    (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ = {
-      ...(current ?? {}),
-      ...nextOverrides,
-    };
-  }, overrides);
-}
-
-async function clearIpcOverrideKeys(page: Page, commands: string[]): Promise<void> {
-  await page.evaluate((keys) => {
-    const current =
-      (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
-        | Record<string, unknown>
-        | undefined;
-    if (!current) {
-      return;
-    }
-
-    for (const key of keys) {
-      delete current[key];
-    }
-
-    (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ = {
-      ...current,
-    };
-  }, commands);
 }
 
 /**

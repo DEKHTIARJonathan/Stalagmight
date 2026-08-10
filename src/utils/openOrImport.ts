@@ -41,6 +41,17 @@ import { TOAST_KEYS } from './toastKeys';
 import i18n from '../i18n';
 
 /**
+ * Filename to show in the "Unsupported file type" dialog. A path ending in a
+ * separator (e.g. a directory dropped by mistake) makes `extractFilename`
+ * return '' - falling back to the full `path` in that case would print the
+ * absolute path (home dir, username) into a dialog, so trailing separators
+ * are stripped first and there is no path fallback.
+ */
+function unsupportedFileDisplayName(path: string): string {
+  return extractFilename(path.replace(/[/\\]+$/, ''));
+}
+
+/**
  * Open the "import as new project?" confirm dialog (#391) for a new-project-only
  * format (GPX / Ariane / Compass / Walls) picked while a project is already
  * open. Replaces the old close-first dead end (`IMPORT_SURVEY_CLOSE_FIRST`):
@@ -119,11 +130,23 @@ function importFlowOwnsScreen(ui: ReturnType<typeof useUIStore.getState>): boole
  *   when it re-routes the same path after the user confirmed swapping out a
  *   clean, already-open project: skips that same confirm on this second pass,
  *   so confirming doesn't ask again.
+ * @param opts.allow  Restricts which extensions this call may route. `'project-
+ *   only'` refuses everything but `.stalx` with the same unsupported-file
+ *   dialog used for an unrecognized extension. Recents entries are read from
+ *   persisted config (a hand-edited or legacy entry could carry any extension),
+ *   so every recents open call site passes this - it must never reach the six
+ *   import parsers, which the OS-launch route (`launch.rs` `LAUNCHABLE_EXTENSIONS`)
+ *   also restricts to `.stalx`/`.tml`/`.tmlu`. Unset (the default) keeps the
+ *   general router's full dispatch for the picker, drag-drop, and Ctrl+O/Ctrl+I.
  */
 export async function routeOpenedFile(
   path: string,
   errorTitle = 'Open Failed',
-  opts?: { residualReadOnlyToast?: boolean; swapConfirmed?: boolean },
+  opts?: {
+    residualReadOnlyToast?: boolean;
+    swapConfirmed?: boolean;
+    allow?: 'project-only';
+  },
 ): Promise<void> {
   const lowerPath = path.toLowerCase();
   const store = useProjectStore.getState();
@@ -139,6 +162,14 @@ export async function routeOpenedFile(
   let handedOff = false;
 
   try {
+    if (opts?.allow === 'project-only' && !lowerPath.endsWith('.stalx')) {
+      ui.openDialog('error', {
+        title: errorTitle,
+        message: `Unsupported file type: ${unsupportedFileDisplayName(path)}`,
+      });
+      return;
+    }
+
     // One import at a time (#411). Drag-drop routes unconditionally - the drop
     // listener has no modal check (Ctrl+O/Ctrl+I do: useKeyboardShortcuts returns
     // early for every non-Escape key while a dialog is open) - so a second file
@@ -358,7 +389,7 @@ export async function routeOpenedFile(
       // arbitrary files chosen via an "All Files" filter to the DMP parser).
       ui.openDialog('error', {
         title: errorTitle,
-        message: `Unsupported file type: ${extractFilename(path) || path}`,
+        message: `Unsupported file type: ${unsupportedFileDisplayName(path)}`,
       });
     }
   } catch (err) {

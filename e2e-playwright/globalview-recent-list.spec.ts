@@ -1,5 +1,6 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
+import { setIpcOverrides } from './helpers/ipcOverrides';
 import {
   missingSystemCardRemoveTestId,
   missingSystemCardTestId,
@@ -121,8 +122,46 @@ test.describe('GlobalView Recent Projects - search, table view, missing files', 
   test('double-clicking a table row opens the project', async ({ page }) => {
     await page.getByTestId('recent-density-table').click();
     await page.getByTestId(systemRowTestId(GAMMA)).dblclick();
-    // Loading overlay/single-system view appears once a project opens.
-    await expect(page.getByTestId('single-system-view').or(page.getByTestId('global-view'))).toBeVisible();
+    // Asserted alone, not `.or(global-view)`: global-view is already visible
+    // before the dblclick, so an `.or()` here would pass even with the open
+    // routing deleted.
+    await expect(page.getByTestId('single-system-view')).toBeVisible();
+  });
+
+  // #450: a recents card must route its open through the same open/import
+  // router as every other .stalx entry point (Ctrl+O, drag-drop, OS file
+  // association), not call loadProject directly. These pin the observable
+  // behavior: a successful open, and an identical failure surface (the
+  // loading-error overlay from error-handling.spec.ts's "File Open Errors"
+  // suite) rather than any bespoke recents-only error path.
+  test.describe('recents card open routing (#450)', () => {
+    test('double-clicking a card opens the project', async ({ page }) => {
+      // switchToListTab's beforeEach already lands us on the grid (card) view.
+      // Asserted alone (see the table-row test above for why `.or(global-view)`
+      // would be unfailable here).
+      await page.getByTestId(systemCardTestId(GAMMA)).dblclick();
+      await expect(page.getByTestId('single-system-view')).toBeVisible();
+    });
+
+    test('a missing/moved file surfaces the loading-error overlay, like any other open entry point', async ({ page }) => {
+      const message = 'File not found: the specified file does not exist';
+      await setIpcOverrides(page, {
+        load_project_full: { __throw: message },
+        load_project: { __throw: message },
+      });
+
+      const loadingError = page.getByTestId('loading-progress');
+      await page.getByTestId(systemCardTestId(GAMMA)).dblclick();
+
+      await expect(loadingError).toBeVisible({ timeout: 10000 });
+      await expect(loadingError).toContainText(message);
+
+      await loadingError.getByRole('button', { name: 'Dismiss' }).click();
+      await expect(loadingError).toBeHidden({ timeout: 10000 });
+      // GlobalView stays functional on the start page - the failed open didn't
+      // corrupt the recents list.
+      await expect(page.getByTestId(systemCardTestId(ALPHA))).toBeVisible();
+    });
   });
 
   test('surfaces a missing recent file with a remove action', async ({ page }) => {
