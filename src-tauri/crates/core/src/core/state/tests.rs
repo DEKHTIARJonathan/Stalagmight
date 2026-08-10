@@ -243,6 +243,48 @@ fn test_merge_projects_surface_elevation_disagreeing_first_wins_with_warning() {
     assert!(result.warnings[0].message.contains("150.00"));
 }
 
+/// The tolerance is strictly-greater-than, not greater-or-equal: a difference
+/// of EXACTLY 0.005 m must read as agreement, matching the `{:.2}` rounding
+/// the warning message itself uses (both would print "100.00 m" against
+/// "100.00 m", so a warning at the boundary would name no visible disagreement).
+#[test]
+fn test_merge_projects_surface_elevation_tolerance_boundary_is_exclusive() {
+    let (merged, result) = merge_two_surface_elevations(Some(100.0), Some(100.005));
+    assert_eq!(merged.surface_elevation, Some(100.0));
+    assert!(
+        result.warnings.is_empty(),
+        "a 0.005 m difference is AT the tolerance, not beyond it, and must not warn: {:?}",
+        result.warnings
+    );
+}
+
+/// A non-finite incoming elevation (never produced by a real Ariane import,
+/// but not provably unreachable upstream) must not be adopted as the merged
+/// value, and must not silently swallow the no-clobber warning either - it is
+/// simply skipped, as if that source had no elevation at all.
+#[test]
+fn test_merge_projects_surface_elevation_non_finite_is_skipped() {
+    let (merged, result) = merge_two_surface_elevations(Some(f64::NAN), Some(100.0));
+    assert_eq!(
+        merged.surface_elevation,
+        Some(100.0),
+        "a NaN first source must not poison the merged elevation"
+    );
+    assert!(result.warnings.is_empty());
+
+    let (merged, result) = merge_two_surface_elevations(Some(100.0), Some(f64::NAN));
+    assert_eq!(
+        merged.surface_elevation,
+        Some(100.0),
+        "a NaN later source must not be adopted or compared"
+    );
+    assert!(
+        result.warnings.is_empty(),
+        "a skipped NaN source must not produce a mismatch warning: {:?}",
+        result.warnings
+    );
+}
+
 #[test]
 fn test_start_new_load_cancels_previous_and_clear_is_identity_safe() {
     let state = AppState::new().unwrap();
@@ -2906,39 +2948,6 @@ fn restore_snapshot_into_rebuilds_transient_caches() {
 /// (issue #413, finding 25). `serde_json`'s `float_roundtrip` feature is what
 /// makes the parse exact, and this test is the guard on that feature staying on.
 #[test]
-fn restore_snapshot_carries_current_surface_elevation_over_a_legacy_blob() {
-    // A snapshot persisted by a build predating #431/#448 has no
-    // "surface_elevation" key at all, so serde's #[serde(default)] would
-    // otherwise silently restore it to None. Mirrors the `validation`
-    // legacy-carry-over immediately above `restore_snapshot_into`.
-    let mut project = Project::new("Legacy".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
-    let mut legacy_json = serde_json::to_value(&project).unwrap();
-    legacy_json
-        .as_object_mut()
-        .unwrap()
-        .remove("surface_elevation");
-    let snapshot = serde_json::to_string(&legacy_json).unwrap();
-    assert!(
-        !snapshot.contains("\"surface_elevation\":"),
-        "precondition: the fixture blob must look pre-#431/#448"
-    );
-
-    let mut slot = Some(project.clone());
-    slot.as_mut().unwrap().surface_elevation = Some(123.5);
-    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
-
-    assert_eq!(
-        slot.unwrap().surface_elevation,
-        Some(123.5),
-        "restoring a legacy snapshot must carry the CURRENT surface_elevation forward, not drop it to None"
-    );
-}
-
-#[test]
 fn a_snapshot_restore_is_bit_exact() {
     // Doubles whose shortest round-trip decimal the best-effort parser gets
     // wrong. `pitch_out` is the one issue #413 hit; the others are on the same
@@ -2989,6 +2998,71 @@ fn a_snapshot_restore_is_bit_exact() {
         after.sections[0].shots[0].length.to_bits(),
         length.to_bits(),
         "restoring a snapshot changed length in its last bits"
+    );
+}
+
+/// A snapshot persisted by a build predating #431/#448 has no
+/// "surface_elevation" key at all, so serde's #[serde(default)] would
+/// otherwise silently restore it to None. Mirrors the `validation`
+/// legacy-carry-over immediately above `restore_snapshot_into`.
+#[test]
+fn restore_snapshot_carries_current_surface_elevation_over_a_legacy_blob() {
+    let mut project = Project::new("Legacy".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+    let mut legacy_json = serde_json::to_value(&project).unwrap();
+    legacy_json
+        .as_object_mut()
+        .unwrap()
+        .remove("surface_elevation");
+    let snapshot = serde_json::to_string(&legacy_json).unwrap();
+    assert!(
+        !snapshot.contains("\"surface_elevation\":"),
+        "precondition: the fixture blob must look pre-#431/#448"
+    );
+
+    let mut slot = Some(project.clone());
+    slot.as_mut().unwrap().surface_elevation = Some(123.5);
+    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
+
+    assert_eq!(
+        slot.unwrap().surface_elevation,
+        Some(123.5),
+        "restoring a legacy snapshot must carry the CURRENT surface_elevation forward, not drop it to None"
+    );
+}
+
+/// The inverse of the legacy-carry-over above: a MODERN snapshot that
+/// genuinely serializes `"surface_elevation":null` (an explicit clear, not an
+/// absent key) must restore `None`, not the pre-undo project's `Some` value.
+/// `surface_elevation` has no `skip_serializing_if`, so this is safe today -
+/// but nothing guarded it, and the legacy-carry-over above reads similar
+/// enough on a diff to invite a regression that carries the current value
+/// forward unconditionally.
+#[test]
+fn restore_snapshot_clears_surface_elevation_when_the_modern_snapshot_says_none() {
+    let mut project = Project::new("Cleared".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+    project.surface_elevation = None;
+    let snapshot = AppState::serialize_project_snapshot(&project).unwrap();
+    assert!(
+        snapshot.contains("\"surface_elevation\":null"),
+        "precondition: a modern snapshot must serialize the explicit null, not omit the key: {snapshot}"
+    );
+
+    let mut slot = Some(project);
+    slot.as_mut().unwrap().surface_elevation = Some(123.5);
+    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
+
+    assert_eq!(
+        slot.unwrap().surface_elevation,
+        None,
+        "a modern snapshot's explicit null must clear surface_elevation, not carry the pre-undo value forward"
     );
 }
 
