@@ -48,8 +48,10 @@ export function useLoadingProgress() {
         const currentState = useProjectStore.getState().loading;
         // event.payload comes from a Tauri `listen` JSON event, so
         // `loadingId` arrives as a plain JS number even though the ts-rs
-        // type says `bigint` (that's only accurate for the binary/IPC
-        // result path). Normalize here so every comparison and store write
+        // type says `bigint`. Only the binary result path (loadProjectBinary)
+        // actually delivers a JS bigint - a JSON `invoke()` result (e.g.
+        // CreateProjectFullResult) lies about the type the same way this
+        // event does. Normalize here so every comparison and store write
         // below uses bigint consistently - see issue #486.
         const rawLoadingId = event.payload.loadingId;
         const eventLoadingId =

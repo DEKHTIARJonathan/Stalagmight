@@ -84,17 +84,33 @@ describe('useLoadingProgress - event loadingId normalization (#486)', () => {
     expect(useProjectStore.getState().loading.loadingId).toBe(2n);
   });
 
-  it('still rejects a genuinely stale event id', async () => {
-    useProjectStore.setState((s) => ({ loading: { ...s.loading, loadingId: 2n } }));
+  it('rejects a genuinely stale event id, then accepts a matching one (positive control)', async () => {
+    // Seed a known, non-default overallProgress so an unchanged value is
+    // unambiguous - `.not.toBe(99)` alone would also pass if the listener
+    // never registered at all. The second event is a positive control: it
+    // proves the listener IS wired up and DOES apply a matching id, so the
+    // first assertion's "unchanged" reading isn't a false negative.
+    useProjectStore.setState((s) => ({
+      loading: { ...s.loading, loadingId: 2n, overallProgress: 7 },
+    }));
     render(<Harness />);
     await Promise.resolve();
 
     await emitProgress(1, { phaseIndex: 3, overallPercent: 99 });
+    expect(useProjectStore.getState().loading.overallProgress).toBe(7);
 
-    expect(useProjectStore.getState().loading.overallProgress).not.toBe(99);
+    await emitProgress(2, { phaseIndex: 3, overallPercent: 99 });
+    expect(useProjectStore.getState().loading.overallProgress).toBe(99);
   });
 
   it('stores the event loadingId as a bigint, not a JSON number', async () => {
+    // Seed the store's OWN loadingId (rather than leaving it at the initial
+    // 0n "awaiting handshake" state) so this exercises the equality branch
+    // directly, not the module-global `lastSeenBackendLoadingId` tracker used
+    // only while awaiting the first event - that counter is never reset
+    // between tests in this file, so a 0n-seeded assertion would silently
+    // depend on every earlier test's emitted ids staying below this one.
+    useProjectStore.setState((s) => ({ loading: { ...s.loading, loadingId: 5n } }));
     render(<Harness />);
     await Promise.resolve();
 

@@ -864,6 +864,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       loading: {
         ...state.loading,
         ...progress,
+        // ts-rs declares every wire loadingId as `bigint`, but neither a JSON
+        // `invoke()` result (e.g. CreateProjectFullResult) nor a `listen()`
+        // event actually delivers a JS bigint - both decode it as a plain
+        // number regardless of the type. Coerce here, at the single write
+        // path every caller (createProject, useLoadingProgress, the E2E
+        // simulateLoadingProgress hook) goes through, so the store never
+        // holds a loadingId that later fails a `bigint === bigint` compare
+        // (#486).
+        ...(progress.loadingId !== undefined ? { loadingId: BigInt(progress.loadingId) } : {}),
         lastEventTime: Date.now(),
       },
     })),
