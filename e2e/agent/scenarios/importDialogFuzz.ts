@@ -161,6 +161,7 @@
  *   STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS           default 12000
  *   STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P      default 0.6, clamped to [0.5, 1]
  *   STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P        default 0.3; 0 = fixture always
+ *   STALAGMIGHT_FUZZ_IMPORT_FORCE_STATIONS      default on; 0 = fixture's own
  *   STALAGMIGHT_FUZZ_CORPUS_DIR                 optional corpus root
  *   STALAGMIGHT_FUZZ_CORPUS_DRAW_P              default 0.25; 1 = corpus only
  *   STALAGMIGHT_FUZZ_TRACE / _REPLAY            record / replay a trace
@@ -470,6 +471,18 @@ function noProjectEpisodeProbability(): number {
   return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : NO_PROJECT_EPISODE_P;
 }
 
+/**
+ * Should each episode make the survey's stations visible before it starts?
+ *
+ * Default ON. `0` restores the old behaviour - the fixture's own saved display
+ * settings - which is what a run WOULD want if it were fuzzing the display
+ * toggles themselves rather than the import flows. See `ensureStationsVisible`
+ * for what a hidden-station fixture does to the placement surface.
+ */
+function forceStationsVisible(): boolean {
+  return process.env.STALAGMIGHT_FUZZ_IMPORT_FORCE_STATIONS !== '0';
+}
+
 // ---------------------------------------------------------------------------
 // Knobs. Read at CALL time, never frozen at import: a replay restores the
 // recording's environment AFTER this module is loaded (see scenario-run.ts).
@@ -556,6 +569,13 @@ const INCOMPLETE_GUARDED_MOVES: ReadonlySet<string> = new Set([
   'confirm-button',
   'skip-button',
   'segment-place-button',
+  // The guard's FOURTH call site, and the one that was missed:
+  // `handlePlaceOnMapClick` opens with the same `if (refuseIncompleteShots())
+  // return;` before it hands off to `handleStartSegmentPlacement`. It is also
+  // the busiest - it is what `ADVANCE_MOVE['wiz-manual']` reaches for first - so
+  // leaving it out meant the refusal that stops most flows was the one nothing
+  // watched.
+  'segment-place-on-map-button',
 ]);
 
 /** `TOAST_KEYS.DMP_WIZARD_INCOMPLETE` - the key, which is i18n-independent. */
@@ -1609,12 +1629,53 @@ export const importDialogFuzz: Scenario = {
     const replaySteps = replay ? replay.steps : null;
     let replayAt = 0;
 
+    /**
+     * Make the survey's stations visible, because the placement surface needs
+     * them.
+     *
+     * `MapCanvas` runs an effect that cancels an active placement the moment
+     * `showStations` is false - `handlePlacementCancel()` fires the placement's
+     * own `onCancel`, which in the DMP wizard's case re-opens the wizard. A
+     * fixture whose SAVED display settings hide stations therefore turns the
+     * whole manual-placement surface into a loop: the wizard auto-starts a
+     * placement, the effect cancels it before a click can land, the wizard comes
+     * back, and the Place-on-Map button it offers does nothing.
+     *
+     * Measured on `naharon.stalx`, whose `display_settings` carry
+     * `showStations=false`: 955 place-on-map clicks across one campaign phase
+     * produced ONE sampled `map-placement` frame, and every inert click came
+     * back with the placement-hint toast up and the wizard visible again.
+     *
+     * Toggled here rather than worked around, because a hidden-station project
+     * is a legitimate state a user can save and this is the state the SURFACE
+     * needs, not a bug being hidden: the app behaviour that makes the button
+     * inert is reported separately and is not patched by this scenario.
+     */
+    const ensureStationsVisible = async (): Promise<boolean> => {
+      const read = async (): Promise<boolean> =>
+        ctx.eval<boolean>(
+          'return !!(window.__E2E_TEST__ && window.__E2E_TEST__.uiStore ' +
+            '&& window.__E2E_TEST__.uiStore.getState().showStations);',
+        );
+      if (await read()) return true;
+      // `toggleDisplay` is a toggle, not a setter, so this is read-then-flip.
+      await ctx.callAction('ui', 'toggleDisplay', ['showStations']).catch(() => undefined);
+      return read();
+    };
+
     /** The episode loop. Extracted so `forceClean` can wrap it in a finally. */
     const runEpisodes = async (): Promise<void> => {
     for (let episode = 0; episode < iterations; episode += 1) {
       await loadFixtureWithoutUndoHistory(ctx, fixture);
       if (!(await disableAutoSave(ctx))) {
         throw new Error('could not turn auto-save off; a timer firing mid-run would change unmodelled state');
+      }
+      if (forceStationsVisible() && !(await ensureStationsVisible())) {
+        throw new Error(
+          'could not make stations visible; every map placement would be cancelled the instant it started ' +
+            '(MapCanvas cancels placement mode whenever showStations is false), and the wizard would offer an ' +
+            'inert Place-on-Map button for the whole run',
+        );
       }
       // E2: the fixture this episode starts from must itself be sound, or every
       // integrity verdict inside it is measured from a broken floor.
@@ -1939,6 +2000,41 @@ export const importDialogFuzz: Scenario = {
           // move RAISED, because the key is deduped and one from two moves ago
           // would otherwise blame whatever came next. A confirm that was allowed
           // through never raises it, so the arming cannot fire on the happy path.
+          // DIAGNOSTIC, not an assertion: a commit played while the warning was
+          // ALREADY up. `showToast` dedups on the key, so a second refusal
+          // re-raises nothing and `incompleteRefused` below cannot see it - which
+          // is how a wizard stuck behind one cleared cell reads as a quiet walk
+          // rather than as a flow that can no longer commit anything.
+          if (wizardCommit && outcome.performed && incompleteBefore) {
+            ctx.metric(`wizardCommitBlocked:${move.testid}`);
+          }
+          // A place-on-map that did NOT start a placement. Every other outcome of
+          // that button is a placement (`startPlacementMode`) or a re-opened
+          // wizard, so this counts the two early returns in
+          // `handlePlaceOnMapClick` / `handleStartSegmentPlacement`: the
+          // incomplete-shot guard, and a missing segment or anchor.
+          if (
+            move.kind === 'ui' &&
+            move.testid === 'segment-place-on-map-button' &&
+            outcome.performed &&
+            !digest.placement &&
+            digest.screen === screenBefore
+          ) {
+            // WHY it was inert, from the toasts the click left behind. The
+            // placement-hint toast is the LAST statement of the success path in
+            // `startSegmentPlacement`, so seeing it means the placement really
+            // did start and something cancelled it before the next observation -
+            // a very different fault from the two silent early returns, which
+            // leave no toast at all. That distinction is what identified the
+            // `showStations` cancel loop, and it is worth keeping.
+            ctx.metric(
+              digest.toast.includes('dmp-manual-placement-hint')
+                ? 'placeOnMapInert:startedThenCancelled'
+                : digest.toast.includes(TOAST_INCOMPLETE)
+                  ? 'placeOnMapInert:incompleteShots'
+                  : 'placeOnMapInert:silentEarlyReturn',
+            );
+          }
           if (wizardCommit && outcome.performed && !incompleteBefore && digest.toast.includes(TOAST_INCOMPLETE)) {
             ctx.metric('incompleteRefused');
             if (sectionsBefore >= 0 && digest.sections !== sectionsBefore) {
