@@ -302,7 +302,7 @@ surface is present:
 | Surface in diff | Run |
 |---|---|
 | always | `pnpm lint:no-em-dash:test && pnpm lint:no-em-dash` · `pnpm lint:private-leaks:test && pnpm lint:private-leaks` |
-| `src-tauri/` | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` · `pnpm lint:rust-file-size:test && pnpm lint:rust-file-size` · `TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets` |
+| `src-tauri/` | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` **and** `for m in src-tauri/crates/*/Cargo.toml; do cargo fmt --manifest-path "$m" --check; done` · `pnpm lint:rust-file-size:test && pnpm lint:rust-file-size` · `TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --workspace --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets` |
 | `src/` | `pnpm tsc --noEmit` · `pnpm lint:ts-file-size:test && pnpm lint:ts-file-size` · `pnpm lint:readonly-gates:test && pnpm lint:readonly-gates` |
 | `e2e-playwright/` **or** `playwright.config.ts` | `pnpm typecheck:playwright` · `pnpm test:mock-contract` · `pnpm lint:e2e-parallel` · `pnpm lint:pw-timing:test` |
 
@@ -312,6 +312,18 @@ clippy line verbatim.** A bare `cargo clippy` is not the gate: without
 `--features telemetry --all-targets` it misses what CI checks, and *with* the feature
 but without `TELEMETRY_ENDPOINT` set, `src-tauri/build.rs` fails the build script - so
 you report the gate red for a reason that has nothing to do with the diff.
+
+⚠ **`--workspace` and the fmt LOOP are both load-bearing since the crate split
+(#492), and omitting either reports green on code neither command read.**
+`src-tauri/Cargo.toml` is a real package that also happens to be the workspace root,
+so a cargo command aimed at it defaults to **that package alone** and silently skips
+all of `src-tauri/crates/*`. `cargo clippy --workspace` (`ci.yml:185`) is what CI
+runs. Formatting has no `--workspace`, which is why CI runs the root check **and**
+then loops over every member manifest (`ci.yml:75-80`) - rustfmt reads only the
+crate it is pointed at, so a member's formatting violation passes the root check and
+reds CI. Both halves have been observed doing exactly that: a gate run without them
+passed a diff whose only changes were in two member crates, one of which was
+misformatted.
 
 ⚠ **This table is deliberately NOT the whole merge gate, and "gates green" must not be
 reported as if it were.** The `check` job also runs `cargo test --features telemetry`,

@@ -129,12 +129,20 @@ same build lock.
 | Diff surface | Gates |
 |---|---|
 | Always | `pnpm lint:no-em-dash:test && pnpm lint:no-em-dash`; `pnpm lint:private-leaks:test && pnpm lint:private-leaks` |
-| `src-tauri/` | `cargo fmt --manifest-path src-tauri/Cargo.toml --check`; `pnpm lint:rust-file-size:test && pnpm lint:rust-file-size`; `TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets` |
+| `src-tauri/` | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` and `for m in src-tauri/crates/*/Cargo.toml; do cargo fmt --manifest-path "$m" --check; done`; `pnpm lint:rust-file-size:test && pnpm lint:rust-file-size`; `TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --workspace --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets` |
 | `src/` | `pnpm tsc --noEmit`; `pnpm lint:ts-file-size:test && pnpm lint:ts-file-size`; `pnpm lint:readonly-gates:test && pnpm lint:readonly-gates` |
 | `e2e-playwright/` or `playwright.config.ts` | `pnpm typecheck:playwright`; `pnpm test:mock-contract`; `pnpm lint:e2e-parallel`; `pnpm lint:pw-timing:test` |
 
 Use the repository-pinned pnpm through Corepack when the shell does not already
 resolve the pinned version.
+
+`--workspace` and the fmt loop are both load-bearing since the crate split (#492).
+`src-tauri/Cargo.toml` is a real package that also happens to be the workspace root,
+so a cargo command aimed at it defaults to that package alone and silently skips all
+of `src-tauri/crates/*`. `cargo clippy --workspace` is what CI runs (`ci.yml:185`).
+Formatting has no `--workspace`, so CI runs the root check and then loops over every
+member manifest (`ci.yml:75-80`) - rustfmt reads only the crate it is pointed at, so
+a member's formatting violation passes the root check and reds CI.
 
 A failing gate is a must-fix finding. Report which gates ran and which surfaces made
 other gates irrelevant. These pre-flight gates are not the complete merge suite:
