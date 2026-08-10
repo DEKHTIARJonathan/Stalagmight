@@ -283,6 +283,17 @@ pub fn decorate_receipt(
         .unwrap_or_default();
     receipt.sections_found = sections_found;
     receipt.unit_conversion = unit_conversion;
+    // Same treatment as `file_name` above, and for the same reason: this is the
+    // IMPORTED SECTION'S name (`ImportSectionConfig::name`), which for every
+    // importer traces straight back to file content - a `.dat`/`.srv`/`.dmp`/
+    // `.tml` section or survey label - and it renders verbatim in the receipt
+    // dialog (F12c). Unsanitized, a hostile file could smuggle a bidi override
+    // or an unbounded string into that dialog the same way an unsanitized
+    // `file_name` could.
+    receipt.zero_datum_created = receipt
+        .zero_datum_created
+        .take()
+        .map(|name| sanitize_display_text(&name, MAX_FILE_NAME_LEN));
     // Converter warnings go FIRST, ahead of the execute-phase ones. They are
     // whole-file statements - an unrecognized unit, a section dropped entirely -
     // and there is a handful of them at most, while the execute phase can emit
@@ -1468,6 +1479,47 @@ mod tests {
             info: Vec::new(),
             zero_datum_created: None,
         }
+    }
+
+    /// `zero_datum_created` (F12c) traces to file content (an
+    /// `ImportSectionConfig::name`) exactly like `file_name` does, and renders
+    /// verbatim in the receipt dialog - `decorate_receipt` must run it through
+    /// the same `sanitize_display_text` guard: strip the bidi override so it
+    /// cannot visually reorder the dialog line around it, and clamp to
+    /// `MAX_FILE_NAME_LEN` so a hostile file can't inflate the IPC payload.
+    #[test]
+    fn decorate_receipt_sanitizes_and_clamps_zero_datum_created() {
+        let poisoned = format!("A\u{202e}B{}", "x".repeat(10_000));
+        let mut result = CommandResult::success().with_import_receipt(ImportReceipt {
+            zero_datum_created: Some(poisoned),
+            ..blank_receipt()
+        });
+
+        decorate_receipt(
+            &mut result,
+            "mNemo DMP",
+            std::path::Path::new("/tmp/cave.dmp"),
+            1,
+            None,
+            Vec::new(),
+        );
+
+        let receipt = result
+            .import_receipt
+            .expect("receipt must survive decoration");
+        let name = receipt
+            .zero_datum_created
+            .expect("field must still be Some after sanitizing");
+        assert!(
+            !name.contains('\u{202e}'),
+            "bidi override must be stripped: {name:?}"
+        );
+        assert_eq!(
+            name.chars().count(),
+            MAX_FILE_NAME_LEN,
+            "must clamp to MAX_FILE_NAME_LEN chars, got {}",
+            name.chars().count()
+        );
     }
 
     /// A hostile/malformed import file can produce an unbounded number of

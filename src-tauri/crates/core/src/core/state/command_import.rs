@@ -669,8 +669,13 @@ impl AppState {
         let mut batch_commands: Vec<Command> = Vec::new();
         // Name of the first section placed via `ImportPlacement::ZeroDatum`
         // (F12c): a GPS-anchored zero datum is a structural fact about the
-        // import worth a receipt line, not just a trace log.
+        // import worth a receipt line, not just a trace log. `zero_datum_count`
+        // tracks how many such placements this import made - a batch import
+        // (e.g. a multi-fixed-station TML/Compass file) can create more than
+        // one, and naming only the first without saying so would read as a
+        // claim of completeness the receipt doesn't back up.
         let mut zero_datum_created: Option<String> = None;
+        let mut zero_datum_count: u32 = 0;
 
         // Defer per-merge cascades during the placement loop. Each
         // `merge_stations` / `set_zero_datum` call would otherwise run a
@@ -902,6 +907,7 @@ impl AppState {
                         ));
                     }
                     all_warnings.extend(result.warnings);
+                    zero_datum_count += 1;
                     if zero_datum_created.is_none() {
                         zero_datum_created = Some(
                             config
@@ -1281,6 +1287,15 @@ impl AppState {
                 if closures_dropped == 1 { "was" } else { "were" }
             ));
         }
+        // "and N more": naming only the FIRST zero-datum section without saying
+        // so would read as a claim that it was the only one this import made.
+        let zero_datum_created = zero_datum_created.map(|name| {
+            if zero_datum_count > 1 {
+                format!("{name} (and {} more)", zero_datum_count - 1)
+            } else {
+                name
+            }
+        });
         let mut receipt = crate::core::command::ImportReceipt {
             source_format: String::new(),
             file_name: String::new(),

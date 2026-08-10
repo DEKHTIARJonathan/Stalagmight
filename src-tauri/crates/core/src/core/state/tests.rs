@@ -8126,6 +8126,52 @@ fn zero_datum_import_placement_sets_receipt_zero_datum_created() {
 }
 
 #[test]
+fn multiple_zero_datum_placements_name_the_first_and_count_the_rest() {
+    // F12c/item-9: a batch that creates more than one zero datum must not
+    // let naming only the first one read as a claim of completeness.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "T".to_string(),
+        location: None,
+    });
+
+    let make = |name: &str, station_index: u32| ImportSectionConfig {
+        reverse: false,
+        section_index: 0,
+        name: Some(name.to_string()),
+        surveyor: None,
+        date: None,
+        color: "#333333".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(5.0)],
+        station_comments: Vec::new(),
+        placement: ImportPlacement::ZeroDatum {
+            coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+            station_index,
+        },
+        azimuth_reference: None,
+    };
+
+    let r = state.execute_import_sections(
+        vec![make("First Anchor", 0), make("Second Anchor", 0)],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(r.success, "{:?}", r.error);
+
+    let receipt = r.import_receipt.expect("import must carry a receipt");
+    assert_eq!(
+        receipt.zero_datum_created.as_deref(),
+        Some("First Anchor (and 1 more)"),
+        "must name the first section and count the rest, not claim completeness"
+    );
+}
+
+#[test]
 fn import_with_no_zero_datum_placement_leaves_receipt_field_none() {
     // Negative case for F12c: an ordinary Origin-placed import must not claim
     // a zero datum was created.
