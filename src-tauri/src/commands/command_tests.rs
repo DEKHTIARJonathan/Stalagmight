@@ -2877,9 +2877,12 @@ fn test_delete_project_unlinks_a_dangling_symlink() {
 /// Deleting a SYMLINK to the open project removes the link and NOTHING else: the
 /// referent's `.stalx`, its session and its recents row all survive.
 ///
-/// The removal never follows that last hop - `trash::delete`, its `fs::remove_file`
-/// fallback and the deterministic `cfg(test)` `fs::remove_file` all remove the LINK -
-/// so applying referent identity here reported a destruction that had not happened:
+/// The removal never follows that last hop: the deterministic `cfg(test)`
+/// `fs::remove_file` this test drives removes the LINK. `trash::delete` and its
+/// `fs::remove_file` fallback are believed to behave the same, but no test config
+/// can reach that real arm BY DESIGN (see `send_to_trash`'s doc comment in
+/// `core::state::recent_projects`), so that belief is unverified from tests.
+/// Applying referent identity here would report a destruction that had not happened:
 /// the link vanished, and with it the user's open session and the recents row for a
 /// project whose file was still sitting on disk, all under a `success: true`. Identity
 /// is therefore EXACT-PATH when the final component is a symlink.
