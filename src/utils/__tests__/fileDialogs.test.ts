@@ -246,6 +246,12 @@ describe('isDroppableFilePath', () => {
     expect(isDroppableFilePath('/cave/notes.xyz')).toBe(false);
   });
 
+  it('rejects a filename that merely CONTAINS the extension with no leading dot', () => {
+    // Pins the `.${ext}` match in isDroppableFilePath/endsWith: a bare
+    // "mystalx" filename must not be mistaken for a ".stalx" suffix.
+    expect(isDroppableFilePath('/cave/mystalx')).toBe(false);
+  });
+
   it('respects a narrower extension list when provided', () => {
     expect(isDroppableFilePath('/cave/project.stalx', [DMP_EXTENSION])).toBe(false);
   });
