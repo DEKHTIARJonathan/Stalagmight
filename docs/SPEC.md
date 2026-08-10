@@ -938,9 +938,6 @@ After selecting sections, the workflow continues into zero-datum setup (if neede
 │                                                                  │
 │  ┌─ Placement ───────────────────────────────────────────────────┐│
 │  │ (●) At Origin (0,0)                                          ││
-│  │ (○) GPS Coordinates                                          ││
-│  │     Latitude: [________] Longitude: [________]               ││
-│  │     Zero Datum Station: [First ▼]                            ││
 │  │ (○) From Existing Station                                    ││
 │  │     Connect [Section ▼] Station [# ▼] → [Start/End ▼]       ││
 │  │ (○) Manual Placement                                         ││
@@ -969,11 +966,13 @@ After selecting sections, the workflow continues into zero-datum setup (if neede
   - Subtle separator line below stats
 - Parameters panel: name, surveyor (inherited), date, color, direction
 - Interactive preview with pan/zoom and click-to-select-station
-- 4 exclusive placement modes:
+- 3 exclusive placement modes:
   - **Origin**: Place at (0,0) - first section default
-  - **GPS**: Enter coordinates, select zero datum station
   - **From Existing**: Merge with existing section's station
   - **Manual**: Click on map to position
+  - GPS placement is not a mode here: if the import needs a zero datum, it is
+    set beforehand via the separate section-selection and configuration
+    dialogs (§7.10)
 - Shot table with:
   - Azimuth as single column (shows average, edits set both in/out)
   - Warning column (⚠) for azimuth/pitch discrepancies
@@ -1231,10 +1230,8 @@ Shown when creating a loop closure between two **connected** stations.
 
 1. User clicks [New Project]
 2. Dialog: Enter name, optional location description
-3. Optional: Enter GPS coordinates (creates zero datum station)
-4. Project created, opens in Single System View
-5. If GPS provided: Single station with golden star visible
-6. User can now import sections or add manually
+3. Project created, opens in Single System View
+4. User can now import sections or add manually
 
 ### 7.3 Importing DMP File (Wizard Flow)
 
@@ -1247,25 +1244,36 @@ Shown when creating a loop closure between two **connected** stations.
    - Default date
 4. User selects which sections to import (checkboxes)
 5. If file hash matches previous import, warning shown
-6. User clicks [Continue] to proceed to Step 2
+6. User clicks [Continue] to proceed
+
+**Step 1b: Zero Datum Setup (ZeroDatumSelectionDialog / ZeroDatumConfigDialog)**
+
+Runs only if the project has no zero datum yet:
+
+7. ZeroDatumSelectionDialog shows the selected sections as cards; user picks
+   the one that should carry the datum, or clicks Skip (positions everything
+   at the origin, unanchored, until a datum is set later - see §7.10)
+8. Picking a section opens ZeroDatumConfigDialog: choose the station, enter
+   its GPS coordinates, and optionally edit the section's metadata and shots
+9. Confirm creates the section with its GPS-derived position and proceeds to
+   the connection wizard for the remaining sections
 
 **Step 2: Connection + Placement Wizard (DmpNewImportDialog)**
 
-7. Step 2 dialog opens with first selected section
-8. User configures each section:
-   - Edit metadata (name, surveyor, date, color, direction)
-   - Review/edit shot data in table
-   - Azimuth shown as average; editing sets both in/out
-   - Warning icons for azimuth/pitch discrepancies
-9. User selects placement mode (exclusive):
-   - **Origin**: Place at (0,0) - default for first section
-   - **GPS**: Enter coordinates, select zero datum station
-   - **From Existing**: Merge with existing section's station
-   - **Manual**: Click on map to position
-10. User clicks [Place Section]
-11. Section created in backend immediately
-12. User navigates to next section or clicks [Done]
-13. Each placed section is auto-saved
+10. Step 2 dialog opens with the next selected section
+11. User configures each section:
+    - Edit metadata (name, surveyor, date, color, direction)
+    - Review/edit shot data in table
+    - Azimuth shown as average; editing sets both in/out
+    - Warning icons for azimuth/pitch discrepancies
+12. User selects placement mode (exclusive):
+    - **Origin**: Place at (0,0) - default for first section
+    - **From Existing**: Merge with existing section's station
+    - **Manual**: Click on map to position
+13. User clicks [Place Section]
+14. Section created in backend immediately
+15. User navigates to next section or clicks [Done]
+16. Each placed section is auto-saved
 
 **Undo/Redo within Import:**
 - Local undo/redo tracks changes within the dialog
@@ -1387,17 +1395,23 @@ The zero datum establishes the coordinate system origin and enables GPS-accurate
 2. GPS Coordinates dialog appears:
    - Enter latitude (degrees, -90 to 90)
    - Enter longitude (degrees, -180 to 180)
-   - Optionally enter depth reference (meters below surface)
 3. Click "Set Zero Datum"
 4. Station marked with golden star icon
 5. Map auto-zooms to fit survey in new position
 6. All section offsets are recalculated
 
+A depth-reference input (meters below surface, alongside lat/lon) is not yet
+built anywhere in this flow; it is tracked as an enhancement in #524.
+
 **Setting Zero Datum during Import:**
-1. In Step 2 of DMP import, select "GPS Coordinates" placement mode
-2. Enter latitude and longitude
-3. Select which station to designate as zero datum
-4. Section is positioned using GPS-to-local transformation
+1. If the project has no zero datum yet, the DMP wizard opens
+   ZeroDatumSelectionDialog after section selection: pick which selected
+   section should carry the datum, or Skip to position everything at the
+   origin and set a datum later (see §7.3 Step 1b)
+2. Picking a section opens ZeroDatumConfigDialog: choose the station and
+   enter its GPS coordinates
+3. Confirm positions that section using the GPS-to-local transformation; the
+   rest of the import continues through the normal connection wizard
 
 **What Happens Internally:**
 1. GPS coordinates (WGS84) are stored with the station
