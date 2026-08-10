@@ -15136,3 +15136,114 @@ fn ariane_elevation_or_absent_matches_the_real_epsilon_boundary() {
     assert_eq!(ariane_elevation_or_absent(123.5), Some(123.5));
     assert_eq!(ariane_elevation_or_absent(-7.25), Some(-7.25));
 }
+
+/// A leaf shot sequence with enough distinct shots (>= 3 free) to qualify as
+/// an orphan leaf candidate, repeated identically so a placement match against
+/// it scores near-perfect.
+fn orphan_leaf_shots() -> Vec<ShotData> {
+    vec![
+        shot(45.0, 45.0, 10.0, 1.0, 2.0),
+        shot(90.0, 90.0, 8.0, 2.0, 1.0),
+        shot(135.0, 135.0, 6.0, 0.0, 0.0),
+        shot(180.0, 180.0, 4.0, 1.0, 1.0),
+    ]
+}
+
+#[test]
+fn suggest_orphan_placements_finds_intra_import_suggestion_on_first_import() {
+    // #446: a first import into an EMPTY project used to suggest nothing even
+    // when the imported file contained both an anchored component and a
+    // floating (unanchored) one - `orphan_components` was computed only over
+    // PRE-EXISTING sections, and a first import has none. It must now
+    // consider the whole post-import project, so the floating section
+    // becomes a placement candidate against the anchored one from the SAME
+    // import.
+    let mut project = Project::new("FirstImport".to_string(), None);
+    let anchored = project
+        .add_section(SectionData {
+            shots: orphan_leaf_shots(),
+            ..Default::default()
+        })
+        .id;
+    let floating = project
+        .add_section(SectionData {
+            shots: orphan_leaf_shots(),
+            ..Default::default()
+        })
+        .id;
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(anchored, 0).into(),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+
+    let suggestions = project.suggest_orphan_placements(
+        &[anchored, floating],
+        &crate::config::PlacementSuggestionConfig::default(),
+    );
+
+    assert!(
+        !suggestions.is_empty(),
+        "a floating component imported alongside an anchored one in the same \
+         file must get at least one placement suggestion (#446)"
+    );
+    assert!(
+        suggestions.iter().all(|s| s.orphan_section_id == floating),
+        "the only orphan in this project is the floating section: {suggestions:?}"
+    );
+}
+
+#[test]
+fn suggest_orphan_placements_never_pairs_a_pre_existing_orphan_with_a_pre_existing_anchor() {
+    // #446: a pre-existing floating component that had its chance against its
+    // own import must not start getting matched against a pre-existing
+    // anchored section just because SOME LATER, unrelated import happens.
+    // `target_sections` is built from `newly_imported_section_ids` alone, so
+    // a pre-existing anchor can never be a suggestion target - this pins that
+    // invariant with shot-identical fixtures a broken guard WOULD match.
+    let mut project = Project::new("LaterImport".to_string(), None);
+    let pre_anchor = project
+        .add_section(SectionData {
+            shots: orphan_leaf_shots(),
+            ..Default::default()
+        })
+        .id;
+    let pre_orphan = project
+        .add_section(SectionData {
+            shots: orphan_leaf_shots(),
+            ..Default::default()
+        })
+        .id;
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(pre_anchor, 0).into(),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+
+    // A later, unrelated import: unrelated shot shape, no bearing on the pre-
+    // existing pair above.
+    let new_section = project
+        .add_section(SectionData {
+            shots: vec![shot(200.0, 200.0, 20.0, 3.0, 3.0)],
+            ..Default::default()
+        })
+        .id;
+
+    let suggestions = project.suggest_orphan_placements(
+        &[new_section],
+        &crate::config::PlacementSuggestionConfig::default(),
+    );
+
+    assert!(
+        suggestions
+            .iter()
+            .all(|s| s.target_section_id != pre_anchor),
+        "a pre-existing anchor must never be a suggestion target - only \
+         newly imported sections can (#446): {suggestions:?}"
+    );
+    assert!(
+        suggestions
+            .iter()
+            .all(|s| s.orphan_section_id != pre_orphan),
+        "the pre-existing orphan must not be re-suggested on an unrelated \
+         later import (#446): {suggestions:?}"
+    );
+}

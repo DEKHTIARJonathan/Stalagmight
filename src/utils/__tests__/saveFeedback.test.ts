@@ -34,6 +34,7 @@ const receiptFixture = (warnings: string[] = []): ImportReceipt => ({
   closures_created: 0,
   unit_conversion: null,
   warnings,
+  info: [],
 });
 
 describe('surfaceSaveFailure', () => {
@@ -278,6 +279,24 @@ describe('presentImportReceipt (#411/#420)', () => {
 
     expect(ui.openDialog).not.toHaveBeenCalled();
     expect(ui.showToast).toHaveBeenCalledTimes(1);
+  });
+
+  it('an info line does not promote a warning-free receipt from toast to dialog (#446)', () => {
+    const ui = mockUi();
+    const withInfo: ImportReceipt = {
+      ...receiptFixture(),
+      info: ['1 section is not connected to a zero datum'],
+    };
+
+    presentImportReceipt(withInfo, ui);
+
+    expect(ui.openDialog).not.toHaveBeenCalled();
+    expect(ui.showToast).toHaveBeenCalledTimes(1);
+    expect(ui.showToast).toHaveBeenCalledWith(
+      expect.stringContaining('1 section is not connected to a zero datum'),
+      'import-receipt',
+      'success',
+    );
   });
 });
 

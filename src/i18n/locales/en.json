@@ -1243,6 +1243,8 @@
       "shots_other": "{{count}} shots",
       "loops_one": "{{count}} loop reconstructed",
       "loops_other": "{{count}} loops reconstructed",
+      "unanchoredInfo_one": "{{count}} section is not connected to a zero datum",
+      "unanchoredInfo_other": "{{count}} sections are not connected to a zero datum",
       "toast": "{{source}} import: {{summary}}",
       "viewDetails": "View details",
       "hideDetails": "Hide details",

@@ -8,7 +8,11 @@ import { useSpeleoStore } from './store/speleoStore';
 import { useGasPlanStore, selectIsPlanDirty } from './store/gasPlanStore';
 import { useShallow } from 'zustand/react/shallow';
 import { invokeIpc, getErrorMessage } from './utils/ipc';
-import { surfaceSaveFailure, completeImportToSingleView } from './utils/saveFeedback';
+import {
+  surfaceSaveFailure,
+  completeImportToSingleView,
+  finishImportWithoutOrphanSuggestions,
+} from './utils/saveFeedback';
 import { extractFilename } from './utils/path';
 import { routeOpenedFile } from './utils/openOrImport';
 import { useLaunchWithFile } from './utils/launchWithFile';
@@ -747,6 +751,13 @@ function App() {
             if (!(await useProjectStore.getState().saveAfterImport())) {
               return;
             }
+            const importUi = {
+              closeDialog,
+              setView,
+              triggerFitToBounds,
+              openDialog,
+              showToast: useUIStore.getState().showToast,
+            };
             if (newSectionIds?.length) {
               try {
                 const suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
@@ -758,6 +769,8 @@ function App() {
                   openDialog('orphan-placement', { suggestions, receipt });
                   return;
                 }
+                await finishImportWithoutOrphanSuggestions('dmp-import-new', importUi, receipt);
+                return;
               } catch {
                 // Non-fatal: proceed without orphan detection
               }
@@ -771,13 +784,7 @@ function App() {
             // been fixed for exactly that reason: `OrphanPlacementDialog.finish`
             // clears it explicitly and points at #435 for this duplication.
             // Runs AFTER `saveAfterImport` above, which reads the context.
-            completeImportToSingleView('dmp-import-new', {
-              closeDialog,
-              setView,
-              triggerFitToBounds,
-              openDialog,
-              showToast: useUIStore.getState().showToast,
-            }, receipt);
+            completeImportToSingleView('dmp-import-new', importUi, receipt);
           }}
         />
       ) : null}

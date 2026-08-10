@@ -395,6 +395,7 @@ describe('useOpenRemoteProject (#218)', () => {
       '2 excluded shots in the remote file were not imported',
       '1 section had no shots after filtering and was dropped',
     ],
+    info: [],
   };
 
   const adoptReplying = (result: Record<string, unknown>) => {

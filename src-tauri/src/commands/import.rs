@@ -696,6 +696,15 @@ pub fn suggest_orphan_placements(
     )
 }
 
+/// Count sections not connected to a zero datum, across the whole project.
+/// Used by the import dialogs to add an info line to the import receipt when
+/// the orphan-placement pass produced no suggestions (#446).
+#[tauri::command]
+pub fn count_unanchored_sections(state: State<'_, AppState>) -> Result<u32, String> {
+    let project = state.get_project_state().ok_or("No project open")?;
+    Ok(project.count_unanchored_sections())
+}
+
 /// Parse a Walls `.WPJ`/`.SRV` file and return preview data for the import dialog.
 #[tauri::command]
 pub fn parse_walls(path: PathBuf) -> Result<WallsFile, String> {
@@ -843,6 +852,7 @@ mod receipt_tests {
             closures_created: 1,
             unit_conversion: None,
             warnings: Vec::new(),
+            info: Vec::new(),
         })
     }
 

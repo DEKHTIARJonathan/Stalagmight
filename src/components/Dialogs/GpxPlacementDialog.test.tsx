@@ -48,6 +48,7 @@ const RECEIPT: ImportReceipt = {
   closures_created: 0,
   unit_conversion: null,
   warnings: [],
+  info: [],
 };
 
 const ok = (warnings: ValidationWarning[], import_receipt?: ImportReceipt): CommandResult =>

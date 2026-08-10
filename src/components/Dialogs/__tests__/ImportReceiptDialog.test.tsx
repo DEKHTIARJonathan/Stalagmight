@@ -53,6 +53,7 @@ const baseReceipt = (overrides: Partial<ImportReceipt> = {}): ImportReceipt => (
   closures_created: 0,
   unit_conversion: null,
   warnings: [],
+  info: [],
   ...overrides,
 });
 

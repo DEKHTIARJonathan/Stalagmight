@@ -52,6 +52,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.take_unrecognised_shot_kinds",
     "command.take_pending_launch_files",
     "command.compute_gas_reach_field",
+    "command.count_unanchored_sections",
     "command.create_loop_closure",
     "command.create_project_full",
     "command.create_section",
@@ -1102,7 +1103,8 @@ mod tests {
         //       action.toggle.{showMemoryStats,showMapStats,showZoomStats} = 734.
         //   + 1 entrance elevation became editable in Project Settings (#465):
         //       command.set_surface_elevation = 735.
-        assert_eq!(EVENT_NAMES.len(), 735);
+        //   + 1 command.count_unanchored_sections (#446) = 736.
+        assert_eq!(EVENT_NAMES.len(), 736);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

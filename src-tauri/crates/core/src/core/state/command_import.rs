@@ -1236,6 +1236,7 @@ impl AppState {
             closures_created,
             unit_conversion: None,
             warnings: receipt_warnings,
+            info: Vec::new(),
         };
         receipt.cap_warnings();
 

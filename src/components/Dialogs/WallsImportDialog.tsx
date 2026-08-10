@@ -12,6 +12,7 @@ import { setSource } from '../../utils/telemetry';
 import {
   completeImportToSingleView,
   finalizeDeferredSaveWarnings,
+  finishImportWithoutOrphanSuggestions,
   surfaceImportFailure,
 } from '../../utils/saveFeedback';
 
@@ -203,6 +204,8 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
           openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
           return;
         }
+        await finishImportWithoutOrphanSuggestions('walls-import', importUi, result.import_receipt);
+        return;
       } catch {
         // Non-fatal: proceed without orphan detection
       }

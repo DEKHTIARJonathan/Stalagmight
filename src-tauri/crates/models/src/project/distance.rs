@@ -877,9 +877,13 @@ impl Project {
             suggest_placements, ExistingSection, OrphanPlacementSuggestion,
         };
 
-        let new_set: HashSet<SectionId> = newly_imported_section_ids.iter().copied().collect();
-
-        // 1. Build all connected components (via merges only)
+        // 1. Build all connected components (via merges only), over the WHOLE
+        // post-import project - not just pre-existing sections - so a first
+        // import into an empty project can suggest an unanchored component
+        // against an anchored one from the SAME import (#446). Suggestion
+        // targets stay newly-imported-only (built below), so a pre-existing
+        // orphan is never re-suggested against a pre-existing anchor: only
+        // "orphan vs. newly imported" pairs are ever produced.
         let mut visited: HashSet<SectionId> = HashSet::new();
         let mut components: Vec<HashSet<SectionId>> = Vec::new();
 
@@ -894,16 +898,11 @@ impl Project {
             components.push(component);
         }
 
-        // 2. Filter to orphan components: no datum AND no newly-imported member
+        // 2. Filter to orphan components: no datum (an empty component -
+        // impossible here - is treated as non-orphan).
         let orphan_components: Vec<&HashSet<SectionId>> = components
             .iter()
             .filter(|comp| {
-                // Skip if any member is newly imported
-                if comp.iter().any(|sid| new_set.contains(sid)) {
-                    return false;
-                }
-                // Skip if component has a datum (an empty component - impossible
-                // here - is treated as non-orphan).
                 let Some(&any_member) = comp.iter().next() else {
                     return false;
                 };
@@ -954,8 +953,19 @@ impl Project {
 
         let mut suggestions: Vec<OrphanPlacementSuggestion> = Vec::new();
 
-        // 4. For each orphan component, find leaf candidates
+        // 4. For each orphan component, find leaf candidates. Targets that are
+        // themselves members of this orphan component are excluded - they are
+        // already connected to the leaf via the merges that make up this very
+        // component, so matching against them would be a self-suggestion.
         for component in &orphan_components {
+            let component_targets: Vec<ExistingSection> = target_sections
+                .iter()
+                .filter(|t| !component.contains(&t.id))
+                .cloned()
+                .collect();
+            if component_targets.is_empty() {
+                continue;
+            }
             for &section_id in *component {
                 let section = match self.get_section(section_id) {
                     Some(s) => s,
@@ -1044,7 +1054,7 @@ impl Project {
 
                     // 5. Run suggest_placements for this leaf against target sections
                     let placement_suggestions =
-                        suggest_placements(&leaf_shots, &target_sections, ps_config);
+                        suggest_placements(&leaf_shots, &component_targets, ps_config);
 
                     for ps in placement_suggestions {
                         // Only keep matches from the terminal end (import station 0).
@@ -1078,5 +1088,32 @@ impl Project {
         suggestions.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
 
         suggestions
+    }
+
+    /// Count sections not connected to a zero datum (directly or through
+    /// merges), across the whole project. Used to add an info line to the
+    /// import receipt when an import leaves unanchored data and the
+    /// placement-suggestion pass could not offer anything to fix it (#446).
+    pub fn count_unanchored_sections(&self) -> u32 {
+        let mut visited: HashSet<SectionId> = HashSet::new();
+        let mut count = 0u32;
+
+        for section in &self.sections {
+            if visited.contains(&section.id) {
+                continue;
+            }
+            let component = self.get_merged_section_ids(section.id);
+            for &sid in &component {
+                visited.insert(sid);
+            }
+            let Some(&any_member) = component.iter().next() else {
+                continue;
+            };
+            if !self.rigid_group_has_datum(any_member) {
+                count += component.len() as u32;
+            }
+        }
+
+        count
     }
 }

@@ -2,7 +2,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { classifySaveError, type SaveErrorKind } from './saveErrors';
 import { trackDialogComplete } from './telemetry';
-import { getErrorMessage } from './ipc';
+import { getErrorMessage, invokeIpc } from './ipc';
 import i18n from '../i18n';
 import { importReceiptSummaryParts, isEmptyImportReceipt } from './importReceipt';
 import { TOAST_KEYS } from './toastKeys';
@@ -148,6 +148,44 @@ export function presentImportReceipt(
     TOAST_KEYS.IMPORT_RECEIPT,
     'success',
   );
+}
+
+/**
+ * Finish an import after the orphan-placement pass produced no suggestions.
+ * If the import still left sections unanchored, appends the "N sections are
+ * not connected to a zero datum" notice to the receipt as an INFO line
+ * (#446) before running the normal exit sequence - an info line, not a
+ * warning, so it rides `presentImportReceipt`'s existing routing rather than
+ * promoting an otherwise clean receipt from toast to dialog. Non-fatal: if
+ * the check itself fails, the import still finishes, just without the line.
+ */
+export async function finishImportWithoutOrphanSuggestions(
+  dialogName: string,
+  ui: ImportDialogUi,
+  receipt?: ImportReceipt,
+): Promise<void> {
+  let finalReceipt = receipt;
+  if (receipt) {
+    try {
+      const unanchoredCount = await invokeIpc<number>(
+        'count_unanchored_sections',
+        {},
+        { purpose: 'check for unanchored sections after import' },
+      );
+      if (unanchoredCount > 0) {
+        finalReceipt = {
+          ...receipt,
+          info: [
+            ...receipt.info,
+            i18n.t('dialogs.importReceipt.unanchoredInfo', { count: unanchoredCount }),
+          ],
+        };
+      }
+    } catch {
+      // Non-fatal: proceed without the info line.
+    }
+  }
+  completeImportToSingleView(dialogName, ui, finalReceipt);
 }
 
 /**

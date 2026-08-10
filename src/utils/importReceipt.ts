@@ -28,6 +28,7 @@ export function aggregateImportReceipts(receipts: ImportReceipt[]): ImportReceip
       closures_created: acc.closures_created + r.closures_created,
       unit_conversion: acc.unit_conversion ?? r.unit_conversion,
       warnings: [...acc.warnings, ...r.warnings],
+      info: [...acc.info, ...r.info],
     }),
     first,
   );
@@ -36,9 +37,13 @@ export function aggregateImportReceipts(receipts: ImportReceipt[]): ImportReceip
 /**
  * The three "what landed" facts shared by the receipt dialog and the receipt
  * toast (docs/notifications.md): sections imported, shots imported, and loops
- * reconstructed (only when the receipt actually requested a closure). `t` is
- * either the component `useTranslation()` hook's `t`, or `i18n.t` directly
- * when called outside React (the toast path in `saveFeedback.ts`).
+ * reconstructed (only when the receipt actually requested a closure), plus
+ * any `info` notice lines (#446 - e.g. "N sections are not connected to a
+ * zero datum"). `info` rides the same summary as these facts rather than a
+ * `warnings`-style tier, so it never promotes a warning-free receipt from
+ * toast to dialog (`presentImportReceipt`). `t` is either the component
+ * `useTranslation()` hook's `t`, or `i18n.t` directly when called outside
+ * React (the toast path in `saveFeedback.ts`).
  */
 export function importReceiptSummaryParts(receipt: ImportReceipt, t: TFunction): string[] {
   return [
@@ -47,6 +52,7 @@ export function importReceiptSummaryParts(receipt: ImportReceipt, t: TFunction):
     ...(receipt.closures_requested > 0
       ? [t('dialogs.importReceipt.loops', { count: receipt.closures_created })]
       : []),
+    ...receipt.info,
   ];
 }
 

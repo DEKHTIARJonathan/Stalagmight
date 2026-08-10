@@ -6,6 +6,7 @@ import { invokeIpc } from '../../utils/ipc';
 import {
   completeImportToSingleView,
   finalizeDeferredSaveWarnings,
+  finishImportWithoutOrphanSuggestions,
   surfaceImportFailure,
 } from '../../utils/saveFeedback';
 import { extractFilename } from '../../utils/path';
@@ -97,6 +98,8 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
             openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
             return;
           }
+          await finishImportWithoutOrphanSuggestions('compass-import', importUi, result.import_receipt);
+          return;
         } catch {
           // Non-fatal: proceed without orphan detection
         }
