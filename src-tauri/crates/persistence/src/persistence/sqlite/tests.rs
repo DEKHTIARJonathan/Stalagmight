@@ -4686,6 +4686,53 @@ fn a_failed_inflate_does_not_leak_its_reservation() {
     );
 }
 
+/// [#473] ...and a stack that fails PART WAY refunds every row that already decoded.
+///
+/// The single-blob case above was never the whole story: a load decodes many rows, and
+/// one bad row late in the stack propagates out with the earlier rows' bytes still
+/// charged. Those `String`s are dropped - the caller substitutes `Vec::new()` - so the
+/// charge is a lie, and an expensive one, because the budget is SHARED with the other
+/// stack of the same open: a clean redo stack would be refused for memory that is
+/// already free. Enough rows to span several decompression batches, so both the
+/// whole-earlier-batch and partial-failing-batch cases are covered.
+#[test]
+fn a_stack_that_fails_part_way_refunds_the_rows_that_already_decoded() {
+    use super::undo::decompress_history_rows_within;
+
+    let budget = InflationBudget::new(1024 * 1024);
+    let before = budget.remaining();
+
+    let good = |seq: i64| {
+        (
+            seq,
+            compress_json(&"a".repeat(4096)),
+            compress_json(&"b".repeat(4096)),
+            None,
+        )
+    };
+    // Truncated mid-stream, but its trailer still declares a small size - so it passes
+    // the window pre-scan and fails during inflation, which is the only shape that
+    // reaches the partial-decode path at all.
+    let mut corrupt = compress_json(&"c".repeat(4096));
+    let trailer = corrupt.split_off(corrupt.len() - 8);
+    corrupt.truncate(corrupt.len() / 2);
+    corrupt.extend_from_slice(&trailer);
+
+    let mut rows: Vec<_> = (0..8).map(good).collect();
+    rows.push((8, corrupt.clone(), corrupt, None));
+
+    let err = decompress_history_rows_within(rows, "undo", &budget).unwrap_err();
+    assert!(
+        !format!("{err:#}").contains("load budget"),
+        "the failure must come from the corrupt row, not from running out of budget"
+    );
+    assert_eq!(
+        budget.remaining(),
+        before,
+        "a stack that fails charges nothing - the rows it did decode are dropped"
+    );
+}
+
 #[test]
 fn two_dangling_station_offsets_in_one_section_save_without_pk_collision() {
     // Regression for the save crash (review finding #7): two dangling station

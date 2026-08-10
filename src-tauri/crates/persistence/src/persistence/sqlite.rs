@@ -454,10 +454,10 @@ fn decompress_json_under(data: &[u8], budget: &InflationBudget) -> Result<String
     }
 
     budget.reserve(declared)?;
-    // Refund on the failure path too, not just on success. Today every caller aborts the
-    // whole load on the first error, so a leaked reservation is invisible - but "skip the
-    // bad row and keep the rest" is a live proposal for this exact loader, and under it a
-    // leak would drain the budget permanently and refuse honest rows behind it.
+    // Refund on the failure path too, not just on success: THIS blob's reservation goes
+    // back when it fails to inflate. That is only half of "a failed load charges nothing"
+    // - the rows that already decoded still hold their bytes, and releasing those is
+    // `decompress_history_rows_within`'s job at the point it propagates the error.
     match decompress_json_capped(data, declared) {
         Ok(out) => {
             budget.refund(declared.saturating_sub(out.len() as u64));

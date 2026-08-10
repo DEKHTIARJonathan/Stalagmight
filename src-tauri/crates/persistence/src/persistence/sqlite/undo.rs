@@ -66,6 +66,22 @@ pub(super) fn decompress_history_rows_within(
         );
     }
 
+    // A FAILED stack charges nothing. Rows decoded before the failure - whole earlier
+    // batches, plus whichever blobs of the failing batch got through - hold their bytes
+    // against the budget, and every one of them is dropped when this returns `Err`: the
+    // caller substitutes `Vec::new()` and none of those `String`s survives. Leaving them
+    // charged would be an accounting lie with a user-visible cost, because the budget is
+    // shared with the OTHER stack of the same open: one bad row late in a large undo
+    // history would refuse a perfectly good redo stack for memory that is already free.
+    //
+    // `remaining` above is the high-water mark to restore. That subtraction is exact
+    // rather than approximate because nothing else can be spending this budget at the
+    // point we return: the two stacks of an open load sequentially, and `thread::scope`
+    // has joined every decompression thread before `decoded` is inspected.
+    let restore_on_failure = |budget: &InflationBudget| {
+        budget.refund(remaining.saturating_sub(budget.remaining()));
+    };
+
     let mut entries = Vec::with_capacity(raw.len());
     for batch in raw.chunks(rows_per_decompress_batch()) {
         let decoded: Result<Vec<_>> = std::thread::scope(|scope| {
@@ -90,7 +106,14 @@ pub(super) fn decompress_history_rows_within(
                 })
                 .collect()
         });
-        entries.extend(decoded?);
+        match decoded {
+            Ok(rows) => entries.extend(rows),
+            Err(e) => {
+                drop(entries);
+                restore_on_failure(budget);
+                return Err(e);
+            }
+        }
     }
     Ok(entries)
 }
