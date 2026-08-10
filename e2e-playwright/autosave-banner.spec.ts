@@ -1,5 +1,6 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage, createProject, createSectionViaStore } from './helpers/app';
+import { setIpcOverrides, clearIpcOverrideKeys } from './helpers/ipcOverrides';
 
 /**
  * E2E for the autosave-failure banner (docs/notifications.md: a failing
@@ -7,28 +8,6 @@ import { setupMockedPage, createProject, createSectionViaStore } from './helpers
  * not a toast). The debounced autosave hook is just `saveProject(path?, true)`,
  * so the specs drive that store call directly and assert the surface.
  */
-
-async function setIpcOverrides(page: Page, overrides: Record<string, unknown>): Promise<void> {
-  await page.evaluate((nextOverrides) => {
-    const current = (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
-      | Record<string, unknown>
-      | undefined;
-    (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ = {
-      ...(current ?? {}),
-      ...nextOverrides,
-    };
-  }, overrides);
-}
-
-async function clearIpcOverrideKeys(page: Page, commands: string[]): Promise<void> {
-  await page.evaluate((keys) => {
-    const current = (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
-      | Record<string, unknown>
-      | undefined;
-    if (!current) return;
-    for (const key of keys) delete current[key];
-  }, commands);
-}
 
 /**
  * PR #460 gates the banner on dirtiness (`saveProject`'s `isAutosave &&
