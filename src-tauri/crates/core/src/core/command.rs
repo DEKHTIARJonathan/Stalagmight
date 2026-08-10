@@ -247,7 +247,15 @@ pub use crate::models::{sanitize_display_text, ImportReceipt};
 /// The most of a file-controlled name worth keeping in the receipt. A dialog title
 /// line, not a path: longer than any real survey filename, shorter than anything that
 /// can push the rest of the title off the screen.
-const MAX_FILE_NAME_LEN: usize = 120;
+///
+/// `pub(crate)` so `command_import.rs` can sanitize `zero_datum_created` at the
+/// point it is born (see there): the DMP wizard's `import_sections` IPC command
+/// never calls `decorate_receipt` (it only overwrites `source_format`/
+/// `file_name`/`sections_found` directly), so sanitizing solely in
+/// `decorate_receipt` left that route's `zero_datum_created` - a raw
+/// `ImportSectionConfig::name`, i.e. file-controlled DMP section-label text -
+/// unsanitized end to end.
+pub(crate) const MAX_FILE_NAME_LEN: usize = 120;
 
 /// Fill in the importer-specific fields of the base `ImportReceipt` that
 /// `execute_import_sections` already attached (source/section counts, unit

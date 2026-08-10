@@ -909,12 +909,24 @@ impl AppState {
                     all_warnings.extend(result.warnings);
                     zero_datum_count += 1;
                     if zero_datum_created.is_none() {
-                        zero_datum_created = Some(
-                            config
+                        // Sanitized HERE, where the raw file-controlled name is
+                        // born, not only in `decorate_receipt`: the DMP
+                        // wizard's `import_sections` IPC command never calls
+                        // `decorate_receipt` (it overwrites source_format/
+                        // file_name/sections_found directly), so that route's
+                        // receipt would otherwise carry a raw
+                        // `ImportSectionConfig::name` straight from the parsed
+                        // file end to end. `sanitize_display_text` is
+                        // idempotent (filter then clamp), so decorate_receipt
+                        // sanitizing this value again for the routes that DO
+                        // call it is a harmless no-op, not a second transform.
+                        zero_datum_created = Some(crate::models::sanitize_display_text(
+                            &config
                                 .name
                                 .clone()
                                 .unwrap_or_else(|| format!("Section {}", idx + 1)),
-                        );
+                            crate::core::command::MAX_FILE_NAME_LEN,
+                        ));
                     }
                     batch_commands.push(Command::SetZeroDatum {
                         station_ref,
