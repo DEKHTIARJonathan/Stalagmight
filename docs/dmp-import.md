@@ -70,10 +70,13 @@ so suppressing it strands the reopened instance in `init` - and it would pin the
 anchor to the first pass's GPS/name/shot edits, which is what the user pressed
 Back to change.
 
-The carry is ONE HOP. `ZeroDatumConfigDialog`'s own Back reopens
-`zero-datum-selection` without it, and `openDialog` replaces `dialogData`
-wholesale (`uiStore.ts`), so stepping back twice does start blank. Deliberate:
-the second step back is a change of anchor SECTION, which invalidates the
+The carry survives `ZeroDatumConfigDialog`'s own Back too (#534): it relays
+`previousZeroDatumConfig` into `zero-datum-selection`'s `dialogData`, and
+`onSelectSection` re-attaches it to the reopened `zero-datum-config` ONLY when
+the re-picked section matches the carried config's `sectionIndex`. A different
+section pick starts blank, and so does stepping back a THIRD time to
+`dmp-selection` - `openDialog` replaces `dialogData` wholesale (`uiStore.ts`),
+and that step is a change of anchor SECTION either way, which invalidates the
 station pick and the shot edits anyway.
 
 The withdrawal is ONE `execute_batch` of `delete_section` - one undo entry for

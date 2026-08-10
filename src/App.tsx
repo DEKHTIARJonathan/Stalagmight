@@ -823,11 +823,17 @@ function App() {
             });
           }}
           onSelectSection={(sectionIndex) => {
+            // Re-seed the carry (#534) only when the re-picked section matches
+            // the one the carried config was entered for - a different pick
+            // means the name/shots/etc. answered a different question, so
+            // starting fresh is correct.
+            const carried = dialogData.previousZeroDatumConfig as ZeroDatumConfigResult | undefined;
             openDialog('zero-datum-config', {
               dmpFile: dialogData.dmpFile,
               filePath: dialogData.filePath,
               selectionConfig: dialogData.selectionConfig,
               zeroDatumSectionIndex: sectionIndex,
+              previousZeroDatumConfig: carried?.sectionIndex === sectionIndex ? carried : undefined,
             });
           }}
         />
@@ -838,15 +844,22 @@ function App() {
           selectionConfig={dialogData.selectionConfig as DmpSelectionConfig}
           sectionIndex={dialogData.zeroDatumSectionIndex as number}
           filePath={dialogData.filePath as string}
-          // Only the wizard's Back handler above sets this; a first visit has
-          // no previous answers and the dialog falls back to its defaults.
+          // Set by the wizard's Back handler above (one hop), OR relayed
+          // through zero-datum-selection's own Back/forward pass when the
+          // same section is re-picked (#534). A first visit, or a different
+          // section pick, has no previous answers and the dialog falls back
+          // to its defaults.
           initialConfig={dialogData.previousZeroDatumConfig as ZeroDatumConfigResult | undefined}
           onCancel={closeDialog}
           onBack={() => {
+            // Carry the entered config back through the selection step (#534)
+            // so a same-section forward pass re-seeds it; onSelectSection
+            // below drops it if the user picks a different section.
             openDialog('zero-datum-selection', {
               dmpFile: dialogData.dmpFile,
               filePath: dialogData.filePath,
               selectionConfig: dialogData.selectionConfig,
+              previousZeroDatumConfig: dialogData.previousZeroDatumConfig,
             });
           }}
           onConfirm={(result) => {

@@ -430,12 +430,12 @@ export default function ZeroDatumConfigDialog({
 
   // Back has no DialogWrapper-level guard (that machinery only ever discards
   // via `onClose`/`onCancel`), so it gets its own small, self-contained confirm
-  // here. Still a discard after #394 F10, which was checked rather than assumed:
-  // the WIZARD's Back carries this dialog's config forward (App.tsx passes
-  // `previousZeroDatumConfig`), but THIS Back reopens 'zero-datum-selection'
-  // with no carry, and the forward path from there
-  // (`ZeroDatumSelectionDialog.onSelectSection`) passes none either - so
-  // everything typed since the dialog opened really is lost.
+  // here. This guard still matters after #534: App.tsx relays this dialog's
+  // OPENING config (`previousZeroDatumConfig`) through 'zero-datum-selection'
+  // and back, so an untouched reopened dialog now returns to exactly what it
+  // had - but any typing done in THIS visit, past that carried baseline, is
+  // still what `isDirty` guards, because the carry only replays the baseline,
+  // never picks up mid-visit edits.
   const [backConfirmPending, setBackConfirmPending] = useState(false);
   const handleBackClick = useCallback(() => {
     if (isDirty) {
