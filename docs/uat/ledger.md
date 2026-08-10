@@ -19,3 +19,4 @@ See `docs/plans/2026-08-06_uat-framework.md` (#466) for the framework design.
 ## Runs
 
 - 2026-08-10 journeys@eb386925 (darwin-arm64): **PASS** - 3 journeys ([record](runs/2026-08-10T1743-eb386925.jsonl))
+- 2026-08-10 journeys@32e20ae5 (darwin-arm64): **PASS** - 3 journeys ([record](runs/2026-08-10T205405-32e20ae5.jsonl))
