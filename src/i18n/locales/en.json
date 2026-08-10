@@ -1288,6 +1288,7 @@
         "walls": "Importing from Walls survey:"
       },
       "summary": {
+        "separator": " - ",
         "sections_one": "{{count}} section",
         "sections_other": "{{count}} sections",
         "shots_one": "{{count}} shot",
