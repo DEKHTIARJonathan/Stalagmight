@@ -52,6 +52,37 @@
  *     or the step budget runs out (`STALAGMIGHT_FUZZ_IMPORT_MAX_FLOW_STEPS`,
  *     default 140 - exhausting the cap is a METRIC, not a failure)
  *
+ * ## Why `screen:orphan-placement` is zero, and what would change it
+ *
+ * Not a coverage gap. `App.tsx`'s DMP `onComplete` asks for orphan placements
+ * only `if (newSectionIds?.length)`, and on any flow that used MAP PLACEMENT
+ * that array is empty by the time it is read:
+ *
+ *   - `importPlacedSegmentNow` imports the placed segment and pushes its ids
+ *     into `importedSectionIdsRef` (`DmpNewImportDialog.tsx`);
+ *   - when the queue empties, `handlePlacementComplete` calls
+ *     `openPlacementDialog([], ...)`, which re-opens `dmp-import-new` and
+ *     therefore REMOUNTS the dialog;
+ *   - `SavedManualPlacingState` carries twelve fields and neither
+ *     `importedSectionIds` nor `importedReceipts`, and both refs initialise to
+ *     `[]` on the new instance;
+ *   - the restored instance finishes and calls `onComplete([], <empty receipt>)`.
+ *
+ * So the one import that reliably CREATES an orphan - a segment dropped on the
+ * map, merged to nothing, in a component with no datum - is the one import that
+ * can never report one. Verified by hand against a live app: two DMP files whose
+ * sections share geometry, the first placed far from anything, the second
+ * imported after it. The dialog did not open, and asking the backend the same
+ * question `App.tsx` asks, with the same ids, returned ONE high-confidence
+ * suggestion (4 matched shots, score 1.42, direction reverse). The data was
+ * there; the frontend did not ask.
+ *
+ * This scenario deliberately does NOT work around it. `unanchoredComponents:*`
+ * measures the precondition so the two failures stay distinguishable, and the
+ * day the call site is fixed `screen:orphan-placement` should start moving on
+ * its own - the fuzzer already produces the state it needs (106 of 291 flows in
+ * the o1 phase left an unanchored component behind).
+ *
  * ## `wiz-no-suggest` is a transition, not a screen
  *
  * `wizard-no-suggestions` reads like the "nothing could be placed
