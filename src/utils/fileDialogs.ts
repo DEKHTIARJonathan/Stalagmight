@@ -121,34 +121,6 @@ export function isDroppableFilePath(path: string, extensions: readonly string[] 
   return extensions.some((ext) => lowerPath.endsWith(`.${ext}`));
 }
 
-export function tmlOpenFilters() {
-  return [
-    { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
-    { name: 'All Files', extensions: ['*'] },
-  ];
-}
-
-export function compassOpenFilters() {
-  return [
-    { name: 'Compass Survey', extensions: COMPASS_EXTENSIONS },
-    { name: 'All Files', extensions: ['*'] },
-  ];
-}
-
-export function wallsOpenFilters() {
-  return [
-    { name: 'Walls Survey', extensions: WALLS_EXTENSIONS },
-    { name: 'All Files', extensions: ['*'] },
-  ];
-}
-
-export function gpxOpenFilters() {
-  return [
-    { name: 'GPX Files', extensions: [GPX_EXTENSION] },
-    { name: 'All Files', extensions: ['*'] },
-  ];
-}
-
 /**
  * Filters for the unified "Open / Import" picker: every file the app can open
  * (native `.stalx` projects) or import (DMP / Ariane / Compass / Walls / GPX).
