@@ -187,19 +187,33 @@ impl Database {
 
     /// Flip the SpeleoDB dirty bit and refresh `last_edit_at` in a SINGLE targeted
     /// `UPDATE`, without loading + re-serialising the whole link. Returns `true` when
-    /// a remote-link row was updated (`false` = local-only project: no row → no-op).
+    /// a remote-link row was updated (`false` = local-only project: no row, or no
+    /// `speleo_link` table at all - both are a no-op).
     ///
     /// Hot path: called on EVERY accepted remote edit, so it avoids the per-edit
     /// `SELECT` + `CREATE TABLE IF NOT EXISTS` + full upsert that load+save did (#197
-    /// review). The `speleo_link` table always exists post-open (schema init/migrate),
-    /// and this never touches `base_commit_sha`/`endpoint`/`project_id`, so it cannot
-    /// disturb the BASE-advance invariant or the immutable hand-off identity.
+    /// review): the common (linked) case is exactly one `UPDATE`, zero added cost.
+    /// Schema init/migrate is supposed to guarantee `speleo_link` exists, but in
+    /// practice a never-linked DB can be missing it (#484), so `table_exists` is
+    /// consulted ONLY after the `UPDATE` fails, to tell that once-per-session missing
+    /// table apart from a genuinely unexpected persistence error - the former is a
+    /// silent no-op (and no more per-edit WARN log noise), the latter still
+    /// propagates. This never touches `base_commit_sha`/`endpoint`/`project_id`, so it
+    /// cannot disturb the BASE-advance invariant or the immutable hand-off identity.
     pub fn touch_speleo_link_dirty(&self, last_edit_at: &str) -> Result<bool> {
-        let rows = self.conn.execute(
+        match self.conn.execute(
             "UPDATE speleo_link SET has_unpushed_edits = 1, last_edit_at = ?1 WHERE id = 1",
             params![last_edit_at],
-        )?;
-        Ok(rows > 0)
+        ) {
+            Ok(rows) => Ok(rows > 0),
+            Err(e) => {
+                if self.table_exists("speleo_link")? {
+                    Err(e.into())
+                } else {
+                    Ok(false)
+                }
+            }
+        }
     }
 
     /// Change the per-project undo policy and record the change as forward work in one

@@ -5074,6 +5074,53 @@ fn touch_speleo_link_dirty_is_targeted_and_locality_aware() {
     );
 }
 
+/// #484: a never-linked DB missing the `speleo_link` table entirely (not just an
+/// empty one) must be a silent no-op, not an `Err` that `mark_remote_dirty` logs at
+/// WARN on every single mutating command. Constructs a bare connection with no
+/// schema at all, so `UPDATE speleo_link ...` would fail with "no such table" if the
+/// `table_exists` guard were removed.
+#[test]
+fn touch_speleo_link_dirty_on_missing_table_is_a_silent_no_op() {
+    let conn = Connection::open_in_memory().unwrap();
+    let db = Database { conn };
+
+    let result = db.touch_speleo_link_dirty("2026-08-10T00:00:00+00:00");
+    assert!(
+        result.is_ok(),
+        "missing speleo_link table must not surface as an error: {result:?}"
+    );
+    assert!(
+        !result.unwrap(),
+        "missing table is a no-op, same as a local-only project's absent row"
+    );
+}
+
+/// #484 follow-up: the missing-table guard must not widen into swallowing every
+/// error. With `speleo_link` PRESENT but the connection opened read-only, the
+/// `UPDATE` fails for a real reason (`SQLITE_READONLY`), `table_exists` reports
+/// `true`, and the error must still propagate so `mark_remote_dirty` logs its WARN.
+#[test]
+fn touch_speleo_link_dirty_on_a_real_error_still_propagates() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("readonly.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("RO".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&sample_speleo_link(Some("base-sha"), false)))
+            .unwrap();
+    }
+
+    let conn =
+        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let db = Database { conn };
+    let result = db.touch_speleo_link_dirty("2026-08-10T00:00:00+00:00");
+    assert!(
+        result.is_err(),
+        "a real persistence error on a present table must not be swallowed: {result:?}"
+    );
+}
+
 #[test]
 fn undo_mode_forward_edit_is_one_atomic_metadata_change() {
     let temp = TempDir::new().unwrap();
