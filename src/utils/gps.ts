@@ -90,10 +90,12 @@ function normalizeGpsWhitespace(input: string): string {
 
 /**
  * Latitude beyond this is treated as "extreme" for the transposition heuristic
- * below - most survey sites sit well inside it, so a value past it is more
- * likely a longitude that landed in the latitude slot.
+ * below. A lower threshold (60) false-positives on real diving/caving
+ * latitudes - Iceland (~64.25 N), Norway (~66 N), Sweden (~63 N) all sit past
+ * it - so this stays high enough that only near-polar or clearly-a-longitude
+ * values trip it.
  */
-const TRANSPOSITION_LAT_THRESHOLD = 60;
+const TRANSPOSITION_LAT_THRESHOLD = 75;
 
 /**
  * Soft (non-blocking) heuristic: does this lat/lon pair look like the two
@@ -103,6 +105,9 @@ const TRANSPOSITION_LAT_THRESHOLD = 60;
  * longitude also past the threshold) does not trip it.
  */
 export function looksTransposed(lat: number, lon: number): boolean {
+  // Belt-and-suspenders, not load-bearing: NaN never satisfies either
+  // comparison below either, so this guard cannot be observed by a test -
+  // it documents intent (never fire on invalid input) rather than changing it.
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
   const givenLatExtreme = Math.abs(lat) > TRANSPOSITION_LAT_THRESHOLD;
   const swappedLatPlausible = Math.abs(lon) <= TRANSPOSITION_LAT_THRESHOLD;

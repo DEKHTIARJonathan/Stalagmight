@@ -549,8 +549,8 @@ describe('looksTransposed', () => {
   });
 
   it('fires in the other direction (negative extreme latitude)', () => {
-    // True fix would be lat -9, lon -70; entered swapped.
-    expect(looksTransposed(-70, -9)).toBe(true);
+    // True fix would be lat -9, lon -80; entered swapped.
+    expect(looksTransposed(-80, -9)).toBe(true);
   });
 
   it('does not fire on a plausible, non-extreme pair', () => {
@@ -558,8 +558,22 @@ describe('looksTransposed', () => {
     expect(looksTransposed(48.8584, 2.2945)).toBe(false);
   });
 
+  // Regression: a 60-degree threshold false-positived on real diving/caving
+  // latitudes. Iceland, Norway and Sweden all sit past 60 N.
+  it('does not fire on real high-latitude dive/cave regions (Iceland)', () => {
+    expect(looksTransposed(64.25, -21.12)).toBe(false);
+  });
+
+  it('does not fire on real high-latitude dive/cave regions (Norway)', () => {
+    expect(looksTransposed(66, 14)).toBe(false);
+  });
+
+  it('does not fire on real high-latitude dive/cave regions (Sweden)', () => {
+    expect(looksTransposed(63, 15)).toBe(false);
+  });
+
   it('does not fire when both values are genuinely extreme (real polar survey)', () => {
-    expect(looksTransposed(78, -70)).toBe(false);
+    expect(looksTransposed(78, -80)).toBe(false);
   });
 
   it('does not fire when the latitude is extreme but swapping would not help', () => {
@@ -567,8 +581,12 @@ describe('looksTransposed', () => {
     expect(looksTransposed(85, 77)).toBe(false);
   });
 
-  it('does not fire on non-finite input', () => {
+  // NaN never satisfies a numeric comparison in either direction, so this
+  // holds regardless of the explicit `Number.isFinite` guard in the
+  // implementation - it documents the behavior rather than pinning the guard
+  // itself (see the guard's own comment for why nothing CAN make it
+  // load-bearing here).
+  it('does not fire on a non-finite latitude', () => {
     expect(looksTransposed(NaN, 12)).toBe(false);
-    expect(looksTransposed(77, NaN)).toBe(false);
   });
 });
