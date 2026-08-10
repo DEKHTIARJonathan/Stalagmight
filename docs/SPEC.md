@@ -1251,8 +1251,9 @@ Shown when creating a loop closure between two **connected** stations.
 Runs only if the project has no zero datum yet:
 
 7. ZeroDatumSelectionDialog shows the selected sections as cards; user picks
-   the one that should carry the datum, or clicks Skip (positions everything
-   at the origin, unanchored, until a datum is set later - see §7.10)
+   the one that should carry the datum, or clicks Skip - sections still get
+   placed in Step 2 below, just with no real-world GPS anchor until a datum
+   is set later (see §7.10)
 8. Picking a section opens ZeroDatumConfigDialog: choose the station, enter
    its GPS coordinates, and optionally edit the section's metadata and shots
 9. Confirm creates the section with its GPS-derived position and proceeds to
@@ -1406,8 +1407,10 @@ built anywhere in this flow; it is tracked as an enhancement in #524.
 **Setting Zero Datum during Import:**
 1. If the project has no zero datum yet, the DMP wizard opens
    ZeroDatumSelectionDialog after section selection: pick which selected
-   section should carry the datum, or Skip to position everything at the
-   origin and set a datum later (see §7.3 Step 1b)
+   section should carry the datum, or Skip - sections still get placed
+   (Origin/From Existing/Manual, per section, in the connection wizard) but
+   the survey has no real-world GPS anchor until a datum is set later (see
+   §7.3 Step 1b)
 2. Picking a section opens ZeroDatumConfigDialog: choose the station and
    enter its GPS coordinates
 3. Confirm positions that section using the GPS-to-local transformation; the
