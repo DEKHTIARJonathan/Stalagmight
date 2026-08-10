@@ -96,6 +96,18 @@ evidence: `docs/plans/2026-08-05_macos-agent-harness.md`):
 - **Input is synthetic.** The plugin dispatches JS events in the webview
   (`isTrusted: false`). Everything testid-driven works; native menu
   accelerators do not - `press_keys` with `Meta` returns a `caveat` saying so.
+- **`type_text` always writes through React's controlled-input path.** The
+  driver's `setValue()` on this route sets the DOM value directly without
+  real per-keystroke events, so a naive landed-value check passes while
+  React's onChange never fires; `type_text` instead runs an in-page script
+  (`e2e/agent/lib/reactInput.ts`) that writes through the prototype value
+  setter and dispatches a synthetic `input`/`change` event, which React does
+  see (#531).
+- **`press_keys(['Escape'])` gets a synthetic fallback on this route.** The
+  native WebDriver key action lands on the window, not the webview's focused
+  element, so Escape is otherwise dropped silently; darwin targets also
+  dispatch a `KeyboardEvent('keydown'/'keyup', {key: 'Escape'})` on
+  `document.activeElement` (#531).
 - **Screenshots are DOM-only.** The plugin rasterizes the DOM, so canvas/WebGL
   (the survey map) is blank; the `screenshot` result carries `domOnly: true`.
 - **Teardown is pidfile-based.** tauri-wd SIGKILLs the wrapper on

@@ -35,6 +35,7 @@ import {
   targetSelector,
 } from '../lib/controls';
 import { mapFeatureClick } from '../lib/mapControls';
+import { REACT_SAFE_SET_VALUE_SCRIPT, SYNTHETIC_ESCAPE_KEYDOWN_SCRIPT } from '../lib/reactInput';
 
 const STORE_NAMES = ['ui', 'project', 'globalView', 'gasPlan', 'speleo', 'export', 'network'] as const;
 
@@ -466,35 +467,19 @@ define(
           if (selector) {
             const el = b.$(selector);
             await el.waitForDisplayed({ timeout: 5000 });
-            if (args.clear) await el.clearValue();
-            await el.setValue(args.text);
-            // WebKitWebDriver can coalesce rapid repeated keystrokes ("8000"
-            // arriving as "800"), silently corrupting input. Verify the value
-            // landed; on mismatch fall back to a synthetic paste through the
-            // native value setter + input event (React-compatible).
-            const landed = (await el.getValue().catch(() => null)) as string | null;
-            if (typeof landed === 'string') {
-              verified = landed === args.text;
-              if (!verified) {
-                method = 'paste';
-                await evalInApp(
-                  b,
-                  `
-                  const el = document.querySelector(args[0]);
-                  if (!el) return false;
-                  const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-                  const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-                  setter.call(el, args[1]);
-                  el.dispatchEvent(new Event('input', { bubbles: true }));
-                  el.dispatchEvent(new Event('change', { bubbles: true }));
-                  return true;
-                `,
-                  [selector, args.text],
-                );
-                const after = (await el.getValue().catch(() => null)) as string | null;
-                verified = after === args.text;
-              }
-            }
+            // Always deliver through the React-safe setter (#531): WebKitWebDriver's
+            // el.setValue() writes the DOM value directly without dispatching real
+            // per-keystroke events, so a plain landed-value check passes while
+            // React's controlled-input state (and onChange) never updates. Doing
+            // this as one in-page script also sidesteps the driver's separate
+            // keystroke-coalescing corruption on rapid repeated characters.
+            method = 'paste';
+            const outcome = await evalInApp<{ ok: boolean; verified?: boolean } | null>(
+              b,
+              REACT_SAFE_SET_VALUE_SCRIPT,
+              [selector, args.text, !!args.clear],
+            ).catch(() => null);
+            verified = outcome?.ok ? (outcome.verified ?? null) : false;
           } else {
             await b.keys(args.text.split(''));
           }
@@ -514,6 +499,14 @@ define('press_keys', 'Press a sequence of WebDriver keys (e.g. ["Control","z"]).
     args,
     async () => {
       await session.exclusive(() => session.browser.keys(args.keys));
+      // darwin: the native WebDriver key action on this route lands on the
+      // window rather than the webview's focused element, so 'Escape' is
+      // dropped entirely (#531). Fall back to a synthetic KeyboardEvent on
+      // document.activeElement - the native path was tried above and (per
+      // #531) delivers nothing for Escape here, so this cannot double-fire.
+      if (isDarwinTarget() && args.keys.includes('Escape')) {
+        await session.exclusive(() => evalInApp(session.browser, SYNTHETIC_ESCAPE_KEYDOWN_SCRIPT));
+      }
       // darwin: keys are synthetic KeyboardEvents in the webview, so Meta chords
       // never reach the native menu - a "passed" Cmd shortcut here proves only
       // the DOM handler. No silent remap to Control: the app may bind both, and
