@@ -124,11 +124,21 @@ file's `useMagneticAzimuth` becomes the section's declared north reference:
 |-----------|-----------------|------------|
 | `useMagneticAzimuth=false` | `north: true`, `source: file` | 0 |
 | `true` + `<GeoCoding>`, date in the IGRF range | `north: magnetic`, `source: igrf` with the epoch | the modelled declination at the file's lat/lon on its earliest survey date |
-| `true`, no georeference (or a date outside the model) | `north: magnetic`, `source: unknown` | 0, with a receipt line saying the bearings are uncorrected magnetic |
+| `true`, no georeference, or no survey date | `north: magnetic`, `source: unknown` | 0. No receipt line: nothing was degraded and there is nothing to act on. An UNDATED file asks the model nothing rather than substituting today, so the same file imports the same way on any two days |
+| `true`, georeferenced AND dated, but the model cannot serve that date | `north: magnetic`, `source: unknown` | 0, with a receipt line naming the date it could not serve |
 
 The correction is applied when geometry is computed, never written into a shot,
-so a re-export hands Ariane back the numbers the file carried. Every case above
-states itself in the import receipt.
+so a re-export hands Ariane back the numbers the file carried.
+
+**Compass and Walls: the grid convergence is reported, not applied.** Both
+formats subtract a meridian convergence because their own output is
+grid-relative. Stalagmight's world frame is TRUE north - `gps_to_local` returns
+true-north ENU (`models/geo.rs:79-81`) and every georeferencing path places
+datums against it - so a survey walked in grid bearings would sit at an angle to
+its own GPS. The section correction is therefore the declination alone, and a
+file that declares a convergence gets a receipt line saying it was dropped.
+Bearings then differ from that app's grid-relative display by the convergence
+angle, typically well under a degree.
 
 ## Limitations
 

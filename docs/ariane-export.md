@@ -44,11 +44,14 @@ every bearing and declaring true north about readings known to be magnetic.
 |---------|----------------------|------------------|
 | Nothing declared, or every declared section magnetic with one correction | `true` | exactly as stored - Ariane applies its own declination |
 | Every section true north | `false` | exactly as stored |
-| Declared corrections disagree, a true-north declaration sits beside a raw magnetic section, or any section is grid-referenced | `false` | each section's correction applied, so the document is uniformly true north |
+| Declared corrections disagree, or any section is grid-referenced, AND every section has a correction on record | `false` | each section's correction applied, so the document is uniformly true north |
+| Any of those, but at least one section has NO correction on record | `true` | as stored, with an export note: a section whose offset from true north is unknown cannot be rotated into true north, so the rewrite is refused rather than shipping an unrotated bearing under a true-north flag |
 
 The third case is the only one that changes a number on the way out, and it
-changes only the FILE: the project keeps its measured readings. It is logged
-(`tracing::warn`) because the TML export command returns no receipt.
+changes only the FILE: the project keeps its measured readings. The third and
+fourth both raise a toast on the export (the command returns a stable note code
+per `AzimuthExport::note_code`, the copy is the frontend's) and log the long
+form.
 
 **Round-trip cost of that third case.** Re-importing such a file reads the
 rotated bearings as measured true-north ones, so the per-section corrections are
