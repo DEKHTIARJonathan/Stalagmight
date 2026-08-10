@@ -101,7 +101,7 @@ An absent or recognised `<unit>` (empty, `m`, `metric`, `ft`, `imperial`) is han
 
 ### Entrance elevation's zero-is-absent convention
 
-Ariane encodes "no entrance elevation recorded" as `firstStartAbsoluteElevation = 0.0` rather than an absent field, so import treats an exact `0.0` as "not recorded" and anything else, however small, as a real value. This is format-forced, not a Stalagmight choice: a genuine entrance at exactly 0.0 m above mean sea level is not representable and will read back as unset. The convention lives in `crate::models::ariane_elevation_or_absent` and is shared by import, SpeleoDB pull-adoption and export (which writes `0.0` back out for an unset `Project::surface_elevation`, so the round trip is consistent).
+Ariane encodes "no entrance elevation recorded" as `firstStartAbsoluteElevation = 0.0` rather than an absent field, so import treats an exact `0.0` as "not recorded" and anything else, however small, as a real value. This is format-forced, not a Stalagmight choice: a genuine entrance at exactly 0.0 m above mean sea level is not representable and will read back as unset. The convention lives in `crate::models::ariane_elevation_or_absent`, called by import and SpeleoDB pull-adoption; export mirrors it independently (it writes `0.0` back out for an unset `Project::surface_elevation` via its own `unwrap_or(0.0)`, rather than calling the helper), so the round trip is consistent.
 
 ## Azimuth Semantics
 
