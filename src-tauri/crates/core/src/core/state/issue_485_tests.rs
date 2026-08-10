@@ -19,20 +19,29 @@ use crate::persistence::Database;
 
 const IGNORED_CODE: &str = "SHORT_SHOT";
 
+/// Two shots that cannot cast a vote in the v12 pitch-flip migration, spelled
+/// out rather than left to `Default`.
+///
+/// `migrate_pitch_to_down_convention` only reads shots with a non-NULL
+/// `pitch_in`/`pitch_out`, and only tallies those whose depth change exceeds
+/// 0.05 m; a flipped section then has `invalidate_pre_pitch_flip_state` clear
+/// `INCLINATION_DEPTH_MISMATCH` dismissals on it. The stamped control below runs
+/// with `current = 7`, which reaches that arm, so the fixture must be provably
+/// unflippable or the assertion could be measuring the flip instead of the save.
+/// Both guards are pinned here: no pitch at all, and no depth change.
 fn synthetic_project() -> Project {
+    let unflippable = |length: f64| ShotData {
+        length,
+        pitch_in: None,
+        pitch_out: None,
+        depth_in: 10.0,
+        depth_out: 10.0,
+        ..Default::default()
+    };
     let mut project = Project::new("Legacy".to_string(), None);
     project.add_section(SectionData {
         color: "#abcdef".to_string(),
-        shots: vec![
-            ShotData {
-                length: 5.0,
-                ..Default::default()
-            },
-            ShotData {
-                length: 7.0,
-                ..Default::default()
-            },
-        ],
+        shots: vec![unflippable(5.0), unflippable(7.0)],
         ..Default::default()
     });
     project
@@ -113,7 +122,17 @@ fn ignores_survive_a_save_through_a_database_that_never_ran_the_v8_migration() {
     assert!(opened.success, "open failed: {:?}", opened.error);
 
     // Opening it is what must repair the schema, on the very handle the save
-    // then reads through.
+    // then reads through - so assert the v8 backfill HERE, before the save. The
+    // same assertion after the save would prove nothing: the carry-over upgrades
+    // a NULL-uuid row to its shot's UUID itself (project_io.rs, the `None` arm of
+    // the remap), so a post-save `shot_uuid` is `Some` either way.
+    let live = state.load_resolved_warnings().unwrap();
+    assert_eq!(live.len(), 1, "the open must not lose the legacy ignore");
+    assert!(
+        live[0].shot_uuid.is_some(),
+        "the v8 migration must have run and backfilled the legacy row's shot UUID"
+    );
+
     let saved = state.save_project(Some(path.clone()));
     assert!(saved.success, "save failed: {:?}", saved.error);
 
@@ -127,14 +146,19 @@ fn ignores_survive_a_save_through_a_database_that_never_ran_the_v8_migration() {
         "the ignore must survive a save through an unstamped pre-v8 file"
     );
     assert_eq!(rows[0].warning_code, IGNORED_CODE);
-    assert!(
-        rows[0].shot_uuid.is_some(),
-        "the v8 migration must have run and re-keyed the legacy row to its shot's UUID"
+    assert_eq!(
+        rows[0].shot_uuid, live[0].shot_uuid,
+        "and must still name the same shot"
     );
 }
 
 /// The ordinary legacy shape - a stamped pre-v8 file - already worked. Pinned so
 /// the fix above cannot be "corrected" into skipping the normal upgrade path.
+///
+/// `current = 7` reaches the v12 arm, so this also exercises the pitch flip; the
+/// fixture is deliberately unflippable (see `synthetic_project`) and the ignore
+/// carries `SHORT_SHOT`, not the `INCLINATION_DEPTH_MISMATCH` code that
+/// `invalidate_pre_pitch_flip_state` clears.
 #[test]
 fn ignores_survive_a_save_through_a_stamped_pre_v8_file() {
     let _cfg = crate::test_helpers::isolated_config();

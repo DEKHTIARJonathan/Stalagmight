@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, DatabaseName};
 
 use crate::models::FEATURE_ID_STRIDE;
 
-use super::{Database, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
+use super::{Database, LOWEST_GATED_MIGRATION, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
 
 /// Columns of `speleo_link` that MUST survive every future SCHEMA_VERSION bump
 /// unchanged (name, declared type, null-ness). The carry-forward fence (#190)
@@ -1186,9 +1186,32 @@ impl Database {
                 current = project_version;
             }
         }
-        if current > SCHEMA_VERSION {
+        // Did the version we are about to act on come from the row rather than
+        // the stamp? Everything below that must not be decided on an unverified
+        // claim keys off this.
+        let claimed_only = stamped == 0 && current > 0;
+
+        // Fast path: already current.  migrate_schema() scans pragma
+        // table_info() for every conditional column add on every open,
+        // which previously cost ~10 ms per project load even when no
+        // migration was needed.
+        //
+        // Gated on `stamped`, NOT `current` (#485). A file whose `user_version` is
+        // 0 while its project row claims the current version used to take this
+        // return, so `migrate_schema` never ran on it - on ANY connection, ever,
+        // because nothing here stamps `user_version` either, and the next open
+        // repeats the same skip. The v8 `resolved_warnings.shot_uuid` ALTER is one
+        // of the columns that then stays missing, and the save path's
+        // "carry resolved warnings across save" read fails with
+        // `no such column: shot_uuid` - dropping every "Ignore" the user had
+        // recorded.
+        if stamped == SCHEMA_VERSION {
+            return Ok(());
+        }
+
+        if stamped > SCHEMA_VERSION {
             tracing::warn!(
-                current = current,
+                current = stamped,
                 expected = SCHEMA_VERSION,
                 "Database schema version is newer than this app"
             );
@@ -1207,27 +1230,58 @@ impl Database {
             return Ok(());
         }
 
-        // Fast path: already current.  migrate_schema() scans pragma
-        // table_info() for every conditional column add on every open,
-        // which previously cost ~10 ms per project load even when no
-        // migration was needed.
+        // Everything past this point WRITES. An unstamped file whose row claims
+        // the current version (or newer) used to take one of the two returns
+        // above on that claim alone, so it reached no write at all - and a
+        // `.stalx` on write-protected media opened clean. `open_existing` asks
+        // for SQLITE_OPEN_READ_WRITE, but the unix VFS silently falls back to
+        // read-only rather than failing the open, so the refusal only arrives at
+        // the first write: `ALTER TABLE` returns SQLITE_READONLY and `?`
+        // propagates it out of `open_existing`, refusing the user their own
+        // project. Degrade instead, exactly as before #485: warn, skip the
+        // chain, open the file. Ignores may still drop on a Save As off such a
+        // file - which is what master did here anyway - and the moment the file
+        // is writable the chain runs.
         //
-        // Gated on `stamped`, NOT `current` (#485). A file whose `user_version` is
-        // 0 while its project row claims the current version used to take this
-        // return, so `migrate_schema` never ran on it - on ANY connection, ever,
-        // because nothing here stamps `user_version` either, and the next open
-        // repeats the same skip. The v8 `resolved_warnings.shot_uuid` ALTER is one
-        // of the columns that then stays missing, and the save path's
-        // "carry resolved warnings across save" read fails with
-        // `no such column: shot_uuid` - dropping every "Ignore" the user had
-        // recorded. `migrate_schema` is idempotent (every step is an IF NOT EXISTS
-        // or a pragma_table_info-guarded ALTER), and the tail below stamps
-        // `user_version`, so such a file pays the ~10 ms scan exactly once and
-        // every later open takes this fast path.
-        if stamped == SCHEMA_VERSION {
+        // Deliberately NOT extended to a file with a real stamp below
+        // SCHEMA_VERSION: that one already reached these writes and already
+        // failed this way, and opening it unmigrated would be worse than
+        // refusing it (a pre-v12 file read without the pitch flip shows
+        // inverted depths).
+        if claimed_only
+            && current >= SCHEMA_VERSION
+            && self.conn.is_readonly(DatabaseName::Main).unwrap_or(false)
+        {
+            tracing::warn!(
+                claimed = current,
+                expected = SCHEMA_VERSION,
+                purpose = "open a project on write-protected media",
+                "Database carries no schema stamp and cannot be written; opening it without \
+                 running migrations"
+            );
             return Ok(());
         }
 
+        if current > SCHEMA_VERSION {
+            // Only reachable with `claimed_only`: a real stamp above
+            // SCHEMA_VERSION returned above. The row's word is enough to skip
+            // every version-gated arm (they are all `current < N`, so none run)
+            // and to drop the history those arms exist to sanitize - but NOT to
+            // skip `migrate_schema`, which is idempotent and adds only columns
+            // and tables this build needs to read the file at all. Returning
+            // here instead is how the #485 shape survived one branch earlier:
+            // permanently, since nothing stamps afterwards either.
+            tracing::warn!(
+                claimed = current,
+                expected = SCHEMA_VERSION,
+                "Unstamped database whose project row claims a version newer than this app"
+            );
+            self.drop_legacy_undo_history()?;
+        }
+
+        // `migrate_schema` is idempotent - every step is a CREATE IF NOT EXISTS
+        // or a pragma_table_info-guarded ALTER - so it is safe to reach on every
+        // open of a file we decline to stamp below.
         self.migrate_schema()?;
         if current < 2 {
             self.rebuild_tables_with_foreign_keys()?;
@@ -1345,12 +1399,37 @@ impl Database {
             // option is the one v7, v13, v15 and v16 all took.
             self.drop_legacy_undo_history()?;
         }
-        self.set_user_version(SCHEMA_VERSION)?;
-        // Keep project-level schema_version in sync with PRAGMA user_version.
-        let _ = self.conn.execute(
-            "UPDATE project SET schema_version = ?1",
-            params![SCHEMA_VERSION],
-        );
+
+        // The stamp is a strong claim - "every arm above has been applied to this
+        // file" - so only write it when we can back it. Each arm is `current < N`,
+        // so a `current` this run took from the project row decided which arms to
+        // SKIP on an unverified number. Certifying off that would be worse than
+        // the bug this branch fixes: a genuinely pre-v12 file whose row lies about
+        // being current would be stamped current, the pitch flip would never run,
+        // and the `user_version == 0` evidence that something is off would be
+        // destroyed. Leave it unstamped instead and re-run the idempotent
+        // `migrate_schema` on every open - about 10 ms, for a file shape nothing
+        // this app writes.
+        //
+        // The exception is a row-derived version below the LOWEST arm gate, which
+        // skips nothing: the run really did apply everything, so the stamp is
+        // honest. This is not a micro-optimisation - a genuine pre-v2 file (no
+        // stamp, row says 1) reaches `rebuild_tables_with_foreign_keys`, and that
+        // rebuild recreates `shots` / `resolved_warnings` from a fixed DDL whose
+        // copy omits `uuid` and `shot_uuid`. Left unstamped it would run on EVERY
+        // open, wiping every shot UUID every time.
+        if !claimed_only || current < LOWEST_GATED_MIGRATION {
+            self.set_user_version(SCHEMA_VERSION)?;
+            // Keep project-level schema_version in sync with PRAGMA user_version.
+            // Inside the same guard: writing it while declining to stamp would
+            // overwrite the very claim the next open reads to pick its arms - a
+            // row of 7 clobbered to 18 stops the v12..v17 arms running ever
+            // again, on a file we just said we could not vouch for.
+            let _ = self.conn.execute(
+                "UPDATE project SET schema_version = ?1",
+                params![SCHEMA_VERSION],
+            );
+        }
 
         Ok(())
     }

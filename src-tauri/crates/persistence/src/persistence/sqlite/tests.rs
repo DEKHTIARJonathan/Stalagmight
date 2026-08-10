@@ -162,7 +162,218 @@ fn a_project_row_claiming_the_current_version_cannot_skip_the_migration_chain() 
     // ...and the read the save path performs must now work at all.
     db.load_resolved_warnings()
         .expect("load_resolved_warnings must not fail with `no such column: shot_uuid`");
-    // The chain is stamped afterwards, so the ~10 ms scan is paid exactly once.
+    // ...but the file is NOT certified on the way out. `current` came from the
+    // row, so the arms above it were skipped on an unverified number: stamping
+    // would permanently certify a file whose data may genuinely be pre-v12 with
+    // a lying row, and would destroy the `user_version == 0` evidence that
+    // something is off. The idempotent rescan on each open is the accepted cost.
+    let stamped: i64 = db
+        .conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        stamped, 0,
+        "a row-derived version must not earn the stamp that claims every arm ran"
+    );
+}
+
+/// [#485] The same shape, one branch earlier: the future-version bail.
+///
+/// It also ran on the row-derived version, so an unstamped file whose project
+/// row claims 99 returned having run neither `migrate_schema` nor the stamp -
+/// permanently, since the next open repeats the decision. The row's word is
+/// enough to skip the version-gated arms and to drop the history they exist to
+/// sanitize; it is not enough to skip the idempotent column adds this build
+/// needs to read the file at all.
+#[test]
+fn an_unstamped_file_whose_project_row_claims_the_future_still_gains_shot_uuid() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("from_the_future.stalx");
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Future".to_string(), None))
+            .unwrap();
+        db.conn
+            .execute_batch(
+                "DROP TABLE resolved_warnings;
+                 CREATE TABLE resolved_warnings (
+                    id INTEGER PRIMARY KEY,
+                    section_id INTEGER NOT NULL,
+                    shot_id INTEGER NOT NULL,
+                    warning_code TEXT NOT NULL,
+                    resolved_at TEXT NOT NULL,
+                    resolved_comment TEXT,
+                    UNIQUE(section_id, shot_id, warning_code),
+                    FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+                 );
+                 UPDATE project SET schema_version = 99;
+                 PRAGMA user_version = 0;",
+            )
+            .unwrap();
+    }
+
+    let db = Database::open_existing(&path).expect("a file claiming the future still opens");
+
+    let has_column: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('resolved_warnings') WHERE name='shot_uuid'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        has_column, 1,
+        "the idempotent column adds must run even when the row claims the future"
+    );
+    let stamped: i64 = db
+        .conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(stamped, 0, "a claim from the future certifies nothing");
+    let claimed: i64 = db
+        .conn
+        .query_row("SELECT schema_version FROM project LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        claimed, 99,
+        "the claim itself must survive: the next open reads it to pick its arms"
+    );
+}
+
+/// A REAL stamp above `SCHEMA_VERSION` is unchanged by #485: run nothing, drop
+/// the history no arm has sanitized, return. Pinned because the branch above it
+/// now falls through, and the two must not be collapsed.
+#[test]
+fn a_genuinely_stamped_future_file_still_runs_no_migration() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("stamped_future.stalx");
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Future".to_string(), None))
+            .unwrap();
+        db.conn
+            .execute_batch(
+                "DROP TABLE resolved_warnings;
+                 CREATE TABLE resolved_warnings (
+                    id INTEGER PRIMARY KEY,
+                    section_id INTEGER NOT NULL,
+                    shot_id INTEGER NOT NULL,
+                    warning_code TEXT NOT NULL,
+                    resolved_at TEXT NOT NULL,
+                    resolved_comment TEXT,
+                    UNIQUE(section_id, shot_id, warning_code),
+                    FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+                 );
+                 PRAGMA user_version = 99;",
+            )
+            .unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    let has_column: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('resolved_warnings') WHERE name='shot_uuid'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        has_column, 0,
+        "a file this build has never heard of runs no migration on its own stamp"
+    );
+    let stamped: i64 = db
+        .conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(stamped, 99, "and is not downgraded");
+}
+
+/// [#485] A `.stalx` on write-protected media must still OPEN.
+///
+/// `open_existing` asks for `SQLITE_OPEN_READ_WRITE`, but the unix VFS falls
+/// back to read-only instead of failing the open, so the refusal only lands on
+/// the first write - here the v8 `ALTER TABLE`, which returns SQLITE_READONLY
+/// and propagates straight out of `open_existing`. This file class reached no
+/// write at all before #485, so refusing it now would be a regression that costs
+/// the user their project rather than an ignore.
+#[test]
+#[cfg(unix)]
+fn an_unwritable_unstamped_file_still_opens_without_running_the_chain() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("readonly.stalx");
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("ReadOnly".to_string(), None))
+            .unwrap();
+        db.conn
+            .execute_batch(
+                "DROP TABLE resolved_warnings;
+                 CREATE TABLE resolved_warnings (
+                    id INTEGER PRIMARY KEY,
+                    section_id INTEGER NOT NULL,
+                    shot_id INTEGER NOT NULL,
+                    warning_code TEXT NOT NULL,
+                    resolved_at TEXT NOT NULL,
+                    resolved_comment TEXT,
+                    UNIQUE(section_id, shot_id, warning_code),
+                    FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+                 );
+                 PRAGMA user_version = 0;",
+            )
+            .unwrap();
+    }
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+    let opened = Database::open_existing(&path);
+    // Restore before asserting so a failure cannot leave TempDir unable to clean up.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let db = opened.expect("a write-protected project must still open");
+
+    // Degraded, exactly as before #485: the column is still missing, and the
+    // save-path read still fails. That is the documented cost of opening it.
+    let has_column: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('resolved_warnings') WHERE name='shot_uuid'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_column, 0, "nothing was written to a read-only file");
+}
+
+/// [#485] The carve-out that keeps the no-stamp rule from becoming a much worse
+/// bug than the one it fixes.
+///
+/// A genuine pre-v2 file has no stamp and a project row saying 1, so its version
+/// is row-derived - but 1 is below every arm gate, so the run skips nothing and
+/// the stamp it earns is honest. It has to be written: `current < 2` reaches
+/// `rebuild_tables_with_foreign_keys`, whose copy omits `shots.uuid`, so an
+/// unstamped file would rebuild on EVERY open and wipe every shot UUID each time.
+#[test]
+fn a_pre_v2_file_is_stamped_so_the_fk_rebuild_runs_once() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("pre_v2.stalx");
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Ancient".to_string(), None))
+            .unwrap();
+        db.conn
+            .execute_batch("UPDATE project SET schema_version = 1; PRAGMA user_version = 0;")
+            .unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
     let stamped: i64 = db
         .conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -170,7 +381,12 @@ fn a_project_row_claiming_the_current_version_cannot_skip_the_migration_chain() 
     assert_eq!(
         stamped,
         i64::from(SCHEMA_VERSION),
-        "the completed chain must stamp user_version, or every open re-scans"
+        "a version below LOWEST_GATED_MIGRATION skips no arm, so the stamp is honest - \
+         and without it the FK rebuild would run on every single open"
+    );
+    assert!(
+        LOWEST_GATED_MIGRATION == 2,
+        "this test's premise is that 1 is below every arm gate"
     );
 }
 
