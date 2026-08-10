@@ -1203,7 +1203,8 @@
         "label": "Entrance elevation",
         "help": "Elevation above sea level where the entrance is located. Leave empty if unknown.",
         "aria": "Entrance elevation",
-        "notRecorded": "Not recorded"
+        "notRecorded": "Not recorded",
+        "readOnlyReason": "Entrance elevation cannot be edited in this read-only view."
       }
     },
     "unsaved": {

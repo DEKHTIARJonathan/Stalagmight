@@ -15,7 +15,7 @@ import { defaultConfig, type Config } from '../../types/config';
 import { isValidationConfigValid } from '../../utils/validation';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
-import { convertLength, convertLengthToMeters } from '../../utils/formatStats';
+import { convertLength, convertLengthToMeters, clampPrecision } from '../../utils/formatStats';
 
 // A compiler-checked subset of SettingsCategory, so these tabs can never drift
 // from the shared id helpers they are paired with.
@@ -87,18 +87,27 @@ export function ProjectSettingsDialog() {
   const elevationUnit = globalConfig?.units.depth ?? defaultConfig.units.depth;
   const elevationPrecision = globalConfig?.units.decimal_precision.depth ?? defaultConfig.units.decimal_precision.depth;
   const [elevationDraft, setElevationDraft] = useState('');
+  // The draft AS SEEDED from the project, so Save can compare strings rather
+  // than re-parsing + re-converting the (possibly display-rounded) draft back
+  // to meters: comparing against the stored meters value with a tolerance
+  // made an UNTOUCHED Save rewrite the elevation whenever the display
+  // precision was coarser than the stored value (e.g. 1234.56 at precision 1)
+  // or the unit conversion round-trip didn't land exactly (any feet project).
+  const [elevationInitialDraft, setElevationInitialDraft] = useState('');
   useEffect(() => {
     const meters = project?.surface_elevation ?? null;
-    setElevationDraft(
+    const seeded =
       meters === null || meters === undefined
         ? ''
-        : convertLength(meters, elevationUnit).toFixed(Math.max(0, Math.min(6, elevationPrecision))),
-    );
+        : convertLength(meters, elevationUnit).toFixed(clampPrecision(elevationPrecision));
+    setElevationDraft(seeded);
+    setElevationInitialDraft(seeded);
   }, [project?.surface_elevation, elevationUnit, elevationPrecision]);
   const elevationParsed = elevationDraft.trim() === '' ? null : Number(elevationDraft);
   // Empty clears to None; anything else must parse to a finite number - a
   // non-finite / unparsable draft blocks Save rather than silently rounding.
   const elevationValid = elevationParsed === null || Number.isFinite(elevationParsed);
+  const elevationDraftChanged = elevationDraft !== elevationInitialDraft;
 
   // ValidationSettings is built against a full Config; wrap the project's
   // validation in a synthetic config and funnel its onChange back into local
@@ -115,13 +124,16 @@ export function ProjectSettingsDialog() {
   // Gate on the values directly (robust even if the Validation tab was never
   // opened), plus the live component check while it is mounted.
   const validationValid = isValidationConfigValid(validation);
+  // Read-only mode blocks ONLY the elevation write (see the field's own
+  // `disabled={editingBlocked}` below): folding it into `canSave` would block
+  // the whole dialog - name + validation thresholds - in closure-adjusted/Plan/
+  // Export views, where those saves are allowed and the backend accepts them.
   const canSave =
     !!project &&
     trimmedName.length > 0 &&
     validationValid &&
     !hasValidationError &&
     elevationValid &&
-    !editingBlocked &&
     !saving;
 
   const handleSave = useCallback(async () => {
@@ -131,7 +143,6 @@ export function ProjectSettingsDialog() {
       !isValidationConfigValid(validation) ||
       hasValidationError ||
       !elevationValid ||
-      editingBlocked ||
       saving
     )
       return;
@@ -152,17 +163,17 @@ export function ProjectSettingsDialog() {
         return;
       }
     }
-    // Same no-op guard as above, in meters (the storage unit) so a converted
-    // round-trip that lands within floating-point noise doesn't push a
-    // misleading undo entry / dirty flag for an unchanged value.
-    const elevationMeters =
-      elevationParsed === null ? null : convertLengthToMeters(elevationParsed, elevationUnit);
-    const currentElevation = project.surface_elevation ?? null;
-    const elevationChanged =
-      elevationMeters === null
-        ? currentElevation !== null
-        : currentElevation === null || Math.abs(elevationMeters - currentElevation) > 1e-9;
-    if (elevationChanged) {
+    // Compare the DRAFT STRING against what it was seeded with, not the
+    // re-parsed/re-converted value against the stored meters: the draft is
+    // rounded to display precision and unit-converted, so re-converting it
+    // back to meters for an untouched field can land a hair off the stored
+    // value (feet round-trip, or a stored value finer than display
+    // precision) and would otherwise push a spurious write/undo entry.
+    // Read-only mode blocks only this write (see the input's own
+    // `disabled={editingBlocked}`) - name/validation above are still allowed.
+    if (elevationDraftChanged && !editingBlocked) {
+      const elevationMeters =
+        elevationParsed === null ? null : convertLengthToMeters(elevationParsed, elevationUnit);
       const result = await setSurfaceElevation(elevationMeters);
       if (!result.success) {
         setSaving(false);
@@ -176,6 +187,7 @@ export function ProjectSettingsDialog() {
     trimmedName,
     hasValidationError,
     elevationValid,
+    elevationDraftChanged,
     editingBlocked,
     elevationParsed,
     elevationUnit,
@@ -265,6 +277,7 @@ export function ProjectSettingsDialog() {
                           placeholder={t('dialogs.projectSettings.elevation.notRecorded')}
                           className="w-32 px-2 py-1 bg-background border border-border rounded text-sm disabled:opacity-60"
                           aria-label={t('dialogs.projectSettings.elevation.aria')}
+                          title={editingBlocked ? t('dialogs.projectSettings.elevation.readOnlyReason') : undefined}
                           data-testid="project-settings-elevation"
                         />
                         <span className="text-xs text-text-secondary">

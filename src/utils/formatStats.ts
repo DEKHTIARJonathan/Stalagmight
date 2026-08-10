@@ -47,7 +47,7 @@ export function convertLengthToMeters(value: number, unit: LengthUnit): number {
 /**
  * Clamp precision to valid range for toFixed().
  */
-function clampPrecision(precision: number): number {
+export function clampPrecision(precision: number): number {
   return clamp(Math.floor(precision) || 0, 0, MAX_DECIMAL_PRECISION);
 }
 
