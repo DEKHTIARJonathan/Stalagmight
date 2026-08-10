@@ -178,6 +178,17 @@ export interface SavedManualPlacingState {
   earlyImported?: Array<[number, number]>;
   /** DMP indices of a segment just placed that needs immediate import on dialog restore. */
   pendingSegmentImport?: number[];
+  /**
+   * Every `import_receipt` this wizard run has banked so far (#487).
+   *
+   * The run's receipts live in a component ref, and manual map placement closes
+   * this dialog and reopens a fresh instance - so without carrying them here the
+   * reopened instance completes the import with an empty list, which aggregates
+   * to `undefined` and silently suppresses the receipt the other import paths
+   * all show. Optional because a state saved by an older build (or a test) has
+   * none; absent reads as "nothing banked yet".
+   */
+  importedReceipts?: ImportReceipt[];
   /** DMP indices of segments the user chose to discard ("Do not place"). */
   discardedIndices?: number[];
 }
@@ -989,7 +1000,14 @@ export default function DmpNewImportDialog({
   // late/pending) into one #391 summary for the whole wizard run, keyed by
   // constant file-level provenance (source label/name/total sections) spread
   // into every call below.
-  const importedReceiptsRef = useRef<ImportReceipt[]>([]);
+  //
+  // Seeded from the saved state (#487): manual map placement CLOSES this dialog
+  // (`handleStartSegmentPlacement`) and reopens a fresh instance afterwards, so
+  // every receipt banked before the handoff dies with the old instance's refs
+  // unless it rides `SavedManualPlacingState`. That is the whole run's receipts,
+  // not a subset - the reopened instance completes the wizard, and an empty list
+  // there aggregates to `undefined`, which App.tsx reads as "nothing to show".
+  const importedReceiptsRef = useRef<ImportReceipt[]>([...(saved?.importedReceipts ?? [])]);
   const dmpFilePath = (useUIStore.getState().dialogData as Record<string, unknown>).filePath as string | undefined;
   const dmpProvenance = {
     sourceLabel: 'mNemo DMP',
@@ -2318,7 +2336,11 @@ export default function DmpNewImportDialog({
     }
 
     trackDialogComplete('dmp-import-new');
-    onComplete(importedSectionIdsRef.current);
+    // With the receipt, like the other three completion sites (#487). This one
+    // is reached after the zero-datum import has already banked one - a
+    // single-selected-section file, or a selection with nothing left to
+    // suggest - so dropping it silenced the receipt for those imports too.
+    onComplete(importedSectionIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, isImporting, isCalculating]);
 
@@ -3080,6 +3102,10 @@ export default function DmpNewImportDialog({
       if (result.section_ids.length > 0) {
         importedSectionIdsRef.current.push(...result.section_ids);
       }
+      // Banked BEFORE the refresh below deliberately: if that throws, the catch
+      // in the placement callback reopens with the same queue and the retry
+      // banks a second receipt - which is the honest count, because the backend
+      // did import twice. Moving this after the await would under-report.
       if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
 
       await refreshProjectState();
@@ -3146,6 +3172,10 @@ export default function DmpNewImportDialog({
       existingShotUpdates: [...existingShotUpdatesRef.current],
       earlyImported: Array.from(earlyImportedRef.current.entries()),
       discardedIndices: Array.from(discardedIndicesRef.current),
+      // Read live, not captured: the segment import that precedes the reopen
+      // (`importPlacedSegmentNow`) banks its receipt into this ref first, and
+      // this builder runs inside the placement callback, after it.
+      importedReceipts: [...importedReceiptsRef.current],
     });
 
     const openPlacementDialog = (
