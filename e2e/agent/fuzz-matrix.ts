@@ -50,6 +50,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { checkBuildFreshness } from './lib/build';
 import { agentBuildMode } from '../lib/env';
+import { failureDetail } from './lib/fuzzMatrixReport';
 import {
   BASE_PORT,
   INHERITED_ENV_BLOCKLIST,
@@ -67,7 +68,6 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const TSX_BIN = path.join(repoRoot, 'node_modules', '.bin', 'tsx');
 const CHILD_SCRIPT = path.join('e2e', 'agent', 'scenario-run.ts');
 const CHILD_TIMEOUT_MS = 20 * 60 * 1000;
-const TAIL_LINES = 15;
 /**
  * Metrics that are per-run MAXIMA, not counters: merging them across the matrix
  * takes the max. Everything else is a tally (`op:createShot`, `mutations`,
@@ -88,10 +88,11 @@ interface RunResult {
   durationMs: number;
   metrics: Record<string, number>;
   // FAIL only: the error's first line, the scenario's own `reproduce:` line
-  // verbatim, and the last TAIL_LINES of output for a crash with no FAIL line.
+  // verbatim, and everything else worth keeping - see `lib/fuzzMatrixReport.ts`,
+  // which owns what "worth keeping" means and why the choice matters.
   headline: string;
   reproduce: string;
-  tail: string;
+  detail: string;
 }
 
 function bail(message: string): never {
@@ -206,7 +207,7 @@ function runOne(
         metrics: passLine ? parseMetrics(passLine) : {},
         headline,
         reproduce: passed ? '' : (allLines.find((line) => line.trim().startsWith('reproduce:')) ?? '').trim(),
-        tail: passed ? '' : allLines.filter((line) => line.trim()).slice(-TAIL_LINES).join('\n'),
+        detail: passed ? '' : failureDetail({ outLines, allLines }),
       });
     };
     child.on('error', (err: Error) => finish(null, null, err));
@@ -256,8 +257,16 @@ function printReport(results: RunResult[], opts: Options, wallMs: number): void 
         `${failure.fixture} seed=${failure.seed}${failure.axis ? ` ${axisLabel(failure.axis)}` : ''}: ` +
           `${failure.reproduce || `(no reproduce line) ${prefix} pnpm agent:scenario ${opts.scenario} --seed ${failure.seed}`}\n`,
       );
-      if (!failure.reproduce && failure.tail) {
-        process.stdout.write(`${failure.tail.split('\n').map((l) => `    | ${l}`).join('\n')}\n`);
+      // ALWAYS, not just when there is no repro line. A matrix cell's child
+      // process and its session are gone by the time anyone reads this, so a
+      // payload that is not printed here is destroyed - and the earlier
+      // condition dropped it for precisely the failures that HAD one, since
+      // every oracle failure carries a `reproduce:` line and only a bare crash
+      // does not. Two reds of the 130-cell corpus campaign had to be diagnosed
+      // from their solo-retry logs for that reason, and one - a first-run-only
+      // S4 - could not be diagnosed at all.
+      if (failure.detail) {
+        process.stdout.write(`${failure.detail.split('\n').map((l) => `    | ${l}`).join('\n')}\n`);
       }
     }
   }
