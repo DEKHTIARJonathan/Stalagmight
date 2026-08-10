@@ -72,11 +72,35 @@ fresh_clone() {
   # Detach at the exact commit under test rather than trusting which branch the
   # clone checked out, which works the same on a branch and in CI's detached HEAD.
   git -C "$dir" checkout --quiet --detach "$sha"
-  # Test the script as it exists on disk, not as last committed, so this is
-  # useful while iterating on it too. Committed in the clone so the cases can
-  # assert on a clean tree without seeing this copy as a modification.
-  cp "$PROJECT_ROOT/scripts/release.sh" "$dir/scripts/release.sh"
-  git -C "$dir" add scripts/release.sh
+  # Drop the inherited tags, so every case's tag state is one the case built.
+  # A clone carries the real history's tags, and the release-tag.sh cases derive
+  # their tag from the clone's OWN current version - which is exactly the version
+  # whose candidates the repo already has. Without this, those cases refuse with
+  # "tag already exists" and pass for a reason they are not testing, or abort the
+  # run outright when a case tries to create one.
+  local tags
+  tags="$(git -C "$dir" tag -l)"
+  if [ -n "$tags" ]; then
+    # Deliberate word splitting: tag names carry no spaces.
+    # shellcheck disable=SC2086
+    git -C "$dir" tag -d $tags >/dev/null
+  fi
+  # Test the scripts as they exist on disk, not as last committed, so this is
+  # useful while iterating on them too. Committed in the clone so the cases can
+  # assert on a clean tree without seeing these copies as modifications.
+  #
+  # All four, not just release.sh: the two entry points now share
+  # lib/release-version.sh, and release-tag.sh shells out to release-notes.sh for
+  # the body it gates on. Copying only some of them would test an on-disk script
+  # against its committed collaborators - which passes right up until the change
+  # under test is in the part that was not copied.
+  mkdir -p "$dir/scripts/lib"
+  cp "$PROJECT_ROOT/scripts/release.sh"            "$dir/scripts/release.sh"
+  cp "$PROJECT_ROOT/scripts/release-tag.sh"        "$dir/scripts/release-tag.sh"
+  cp "$PROJECT_ROOT/scripts/release-notes.sh"      "$dir/scripts/release-notes.sh"
+  cp "$PROJECT_ROOT/scripts/lib/release-version.sh" "$dir/scripts/lib/release-version.sh"
+  git -C "$dir" add scripts/release.sh scripts/release-tag.sh \
+    scripts/release-notes.sh scripts/lib/release-version.sh
   # Pin the changelog these cases run against instead of inheriting the live one.
   # release.sh refuses an empty `## [Unreleased]` - case 5 asserts that refusal is
   # correct - so cutting a release, which empties that section by moving it under
@@ -308,6 +332,215 @@ else
   assert "message names the shape problem" \
     bash -c 'printf "%s" "$1" | grep -q "shape is not what the rewrite assumes"' _ "$out"
   assert "tree untouched" tree_clean "$D"
+fi
+
+# --- release-tag.sh: the second flow, tagging a tree that is already bumped ---
+#
+# Every case below was previously "the operator remembers", which is how four
+# fixes shipped unannounced between v0.5.0-rc1 and rc2 (#406). A refusal case
+# asserts three things every time: it failed, it said why, and it left no tag -
+# the last because a script that refuses loudly and tags anyway is the worst
+# outcome available.
+
+echo "== case 11: bump then tag a candidate, the two-script flow end to end =="
+D=$(fresh_clone case11)
+if "$D/scripts/release.sh" 5.5.5 --no-edit --no-tag >/dev/null 2>&1 \
+  && out=$("$D/scripts/release-tag.sh" v5.5.5-rc1 2>&1); then
+  assert "candidate tag created"  has_tag "$D" v5.5.5-rc1
+  # Annotated, not lightweight: release.sh annotates, and `git describe` and the
+  # release UI both treat the two differently.
+  assert "the tag is annotated" \
+    bash -c '[ "$(git -C "$1" cat-file -t v5.5.5-rc1)" = tag ]' _ "$D"
+  assert "the body is shown before tagging" \
+    bash -c 'printf "%s" "$1" | grep -q "fixture entry"' _ "$out"
+  assert "the preview carries the candidate banner" \
+    bash -c 'printf "%s" "$1" | grep -q "Release candidate for 5.5.5"' _ "$out"
+  # Pushing starts a paid three-platform build and, for a bare vX.Y.Z, publishes
+  # as Latest. The script stops at the local tag and says what comes next.
+  assert "it says how to push rather than pushing" \
+    bash -c 'printf "%s" "$1" | grep -q "git push origin v5.5.5-rc1"' _ "$out"
+  assert "tree clean" tree_clean "$D"
+else
+  fail "the bump-then-tag flow exited non-zero"
+fi
+
+echo "== case 12: a tag whose version the tree does not carry is refused =="
+# The gate the manual flow never had. Cutting v9.9.9-rc1 from a tree still at
+# 0.5.0 would build Stalagmight_0.5.0_* artifacts under a tag promising 9.9.9.
+D=$(fresh_clone case12)
+if out=$("$D/scripts/release-tag.sh" v9.9.9-rc1 2>&1); then
+  fail "tagged a version the version files do not carry"
+else
+  pass "refused a tag the version files do not match"
+  assert "message names the mismatch" \
+    bash -c 'printf "%s" "$1" | grep -q "version files do not match the tag"' _ "$out"
+  assert "message names the bump that would fix it" \
+    bash -c 'printf "%s" "$1" | grep -q "release.sh 9.9.9"' _ "$out"
+  refute "no tag created" has_tag "$D" v9.9.9-rc1
+  assert "tree untouched" tree_clean "$D"
+fi
+
+echo "== case 12b: a drifted Cargo.lock is caught here too, not just at bump time =="
+# The lock is the version file nothing fails on (#352): it is not built with
+# --locked, so a wrong value is invisible until someone reads it. release.sh
+# refuses to bump past a drifted lock; tagging has to refuse for the same reason,
+# or the whole check is bypassed by taking the other flow.
+D=$(fresh_clone case12b)
+CUR=$(version_of "$D")
+set_lock_version "$D" 0.0.1
+git -C "$D" commit --quiet -am "desync Cargo.lock"
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" 2>&1); then
+  fail "tagged a tree whose Cargo.lock disagreed with the tag"
+else
+  pass "refused a drifted Cargo.lock"
+  assert "message names the lock" \
+    bash -c 'printf "%s" "$1" | grep -q "Cargo.lock records stalagmight at .0.0.1."' _ "$out"
+  refute "no tag created" has_tag "$D" "v$CUR-rc1"
+fi
+
+echo "== case 13: an existing tag is refused rather than moved =="
+D=$(fresh_clone case13)
+CUR=$(version_of "$D")
+git -C "$D" tag "v$CUR-rc1"
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" 2>&1); then
+  fail "accepted a tag that already exists"
+else
+  pass "refused an existing tag"
+  assert "message says candidates are kept, not recycled" \
+    bash -c 'printf "%s" "$1" | grep -q "Cut the next number"' _ "$out"
+fi
+
+echo "== case 14: a dirty tree is refused =="
+# A tag names a commit, so uncommitted work is not in the release - including
+# changelog edits, which would make the notes on disk differ from the notes that
+# publish. release.sh tolerates a dirty CHANGELOG.md because it is about to
+# commit it; here there is no commit, so the exemption would be a hole.
+D=$(fresh_clone case14)
+CUR=$(version_of "$D")
+printf '\n- an uncommitted note\n' >> "$D/CHANGELOG.md"
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" 2>&1); then
+  fail "tagged a dirty tree"
+else
+  pass "refused a dirty tree"
+  assert "message names the uncommitted changes" \
+    bash -c 'printf "%s" "$1" | grep -q "uncommitted changes"' _ "$out"
+  refute "no tag created" has_tag "$D" "v$CUR-rc1"
+fi
+
+echo "== case 15: entries left under [Unreleased] refuse the tag =="
+# The #406 headline. Once '## [X.Y.Z]' exists - the state every candidate after
+# the first is cut from - release-notes.sh stops reading [Unreleased], so entries
+# left there ship in the binary and are named nowhere. It always warned; nothing
+# called it before the tag existed.
+D=$(fresh_clone case15)
+CUR=$(version_of "$D")
+printf '%s\n' \
+  '# Changelog' '' \
+  '## [Unreleased]' '' '- a late fix nobody folded in' '' \
+  "## [$CUR] - 2026-01-01" '' '- the notes as written' \
+  > "$D/CHANGELOG.md"
+git -C "$D" commit --quiet -am "leave an entry unfolded"
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" 2>&1); then
+  fail "tagged with entries left under [Unreleased]"
+else
+  pass "refused entries left under [Unreleased]"
+  assert "message says what would go unpublished" \
+    bash -c 'printf "%s" "$1" | grep -q "will NOT be published"' _ "$out"
+  assert "message says how to fix it" \
+    bash -c 'printf "%s" "$1" | grep -q "Fold those entries"' _ "$out"
+  assert "message names the override" \
+    bash -c 'printf "%s" "$1" | grep -q -- "--allow-unannounced"' _ "$out"
+  refute "no tag created" has_tag "$D" "v$CUR-rc1"
+fi
+# Shipping them unmentioned is a legitimate choice - a late fix nobody wants to
+# announce - but it has to be said out loud.
+if "$D/scripts/release-tag.sh" "v$CUR-rc1" --allow-unannounced >/dev/null 2>&1; then
+  assert "--allow-unannounced tags anyway" has_tag "$D" "v$CUR-rc1"
+else
+  fail "--allow-unannounced did not override the refusal"
+fi
+
+echo "== case 16: a malformed tag is refused =="
+D=$(fresh_clone case16)
+for bad in "0.5.0" "v0.5" "v0.5.0.1" "release-1"; do
+  refute "refused '$bad'" \
+    bash -c '"$1" "$2" >/dev/null 2>&1' _ "$D/scripts/release-tag.sh" "$bad"
+done
+assert "tree untouched" tree_clean "$D"
+
+echo "== case 17: --dry-run shows the body and creates no tag =="
+D=$(fresh_clone case17)
+CUR=$(version_of "$D")
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" --dry-run 2>&1); then
+  assert "the body is rendered" \
+    bash -c 'printf "%s" "$1" | grep -q "fixture entry"' _ "$out"
+  assert "it says it would tag" \
+    bash -c 'printf "%s" "$1" | grep -q "\[dry-run\] Would tag"' _ "$out"
+  refute "no tag created" has_tag "$D" "v$CUR-rc1"
+  assert "tree untouched" tree_clean "$D"
+else
+  fail "--dry-run exited non-zero on a taggable tree"
+fi
+
+echo "== case 18: a changelog with no notes at all is refused =="
+# release-notes.sh falls back to the bare string "Release vX.Y.Z" when it finds
+# no section. That publishes an announcement whose entire content is the version
+# number already in the title.
+D=$(fresh_clone case18)
+CUR=$(version_of "$D")
+printf '# Changelog\n\n## [Unreleased]\n' > "$D/CHANGELOG.md"
+git -C "$D" commit --quiet -am "empty the changelog"
+if out=$("$D/scripts/release-tag.sh" "v$CUR" 2>&1); then
+  fail "tagged a release with no notes"
+else
+  pass "refused a release with no notes"
+  assert "message names the empty sections" \
+    bash -c 'printf "%s" "$1" | grep -q "has no notes for"' _ "$out"
+  refute "no tag created" has_tag "$D" "v$CUR"
+fi
+
+echo "== case 19: a final tag reports what it cannot check for you =="
+# Two advisories, both notes rather than gates: a release cut without any
+# candidate is legitimate, and so is publishing a section dated earlier than
+# today - but both are invisible unless something says so, and the date is
+# published verbatim.
+D=$(fresh_clone case19)
+CUR=$(version_of "$D")
+printf '%s\n' \
+  '# Changelog' '' '## [Unreleased]' '' \
+  "## [$CUR] - 2026-01-01" '' '- the notes as written' \
+  > "$D/CHANGELOG.md"
+git -C "$D" commit --quiet -am "fold the changelog"
+if out=$("$D/scripts/release-tag.sh" "v$CUR" --dry-run 2>&1); then
+  assert "notes that no candidate was ever cut" \
+    bash -c 'printf "%s" "$1" | grep -q "never cut as a candidate"' _ "$out"
+  assert "notes the stale changelog date" \
+    bash -c 'printf "%s" "$1" | grep -q "but today is"' _ "$out"
+  assert "says it publishes as Latest" \
+    bash -c 'printf "%s" "$1" | grep -q "published as Latest"' _ "$out"
+  refute "a final tag gets no candidate banner" \
+    bash -c 'printf "%s" "$1" | grep -q "Release candidate for"' _ "$out"
+else
+  fail "a foldable final tag was refused"
+fi
+# The same advisories must NOT fire on a candidate: it is a candidate, so asking
+# why no candidate exists is noise, and the ship date is not settled yet.
+D=$(fresh_clone case19b)
+CUR=$(version_of "$D")
+printf '%s\n' \
+  '# Changelog' '' '## [Unreleased]' '' \
+  "## [$CUR] - 2026-01-01" '' '- the notes as written' \
+  > "$D/CHANGELOG.md"
+git -C "$D" commit --quiet -am "fold the changelog"
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" --dry-run 2>&1); then
+  refute "a candidate is not nagged about candidates" \
+    bash -c 'printf "%s" "$1" | grep -q "never cut as a candidate"' _ "$out"
+  refute "a candidate is not nagged about the date" \
+    bash -c 'printf "%s" "$1" | grep -q "but today is"' _ "$out"
+  assert "a candidate says it is a pre-release" \
+    bash -c 'printf "%s" "$1" | grep -q "pre-release"' _ "$out"
+else
+  fail "a candidate dry-run was refused"
 fi
 
 echo "== release-notes.sh =="
