@@ -148,13 +148,31 @@ Parsed but dropped:
   shot's depth change, so reading every wire `0.0` back as `Some(0.0)` turned a
   clean round trip of a depth-only survey into a wall of fabricated
   `INCLINATION_DEPTH_MISMATCH` warnings ([#482](https://github.com/Stalagmight/Stalagmight/issues/482)).
-  The importer (`parsers::tml::normalize_tml_shot`) resolves the ambiguity with
-  the shot's own depth change as a tiebreaker: a wire `0.0` paired with a real
-  depth change (beyond the same rounding epsilon the validator itself treats
-  as noise, `DEPTH_ROUNDING_EPSILON_M`) imports as `None`; a wire `0.0` with
-  no real depth change stays `Some(0.0)`, since a genuinely level measured
-  shot is indistinguishable from an unsighted one at that point and the
-  ambiguity is harmless either way.
+
+  The importer (`parsers::tml::tml_pitch_in`) gates on the REAL condition
+  rather than a proxy: it computes what the shot's own length and depth
+  change imply the inclination should have been
+  (`stalagmight_models::shot::implied_pitch_deg` - the SAME computation
+  `core::validation` uses for its cross-check, extracted to one shared
+  helper so the two cannot drift) and compares that against
+  `DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD`, the `ValidationConfig` default
+  (not the user's live, editable config - the import mapping must be
+  deterministic). A wire `0.0` whose implied pitch would have exceeded the
+  threshold imports as `None`; one whose implied pitch is under the
+  threshold - a near-level shot, where a recorded `Some(0.0)` would not have
+  been flagged anyway - keeps `Some(0.0)`.
+
+  Two losses are the deliberate, accepted cost of this rule, not bugs:
+  - A GENUINELY recorded `Some(0.0)` pitch on a STEEP shot is erased to
+    `None` by one round trip. The wire cannot tell it apart from an absent
+    reading, and the mismatch warning it would have produced was never
+    earnable back from a lossy `0.0` in the first place (pinned by
+    `a_genuinely_recorded_zero_pitch_on_a_steep_shot_is_erased_by_one_round_trip`
+    in `core/state/import_pipeline_tests.rs`).
+  - Corrupt geometry - a wire `0.0` paired with a genuinely wrong depth or
+    length that implies a steep pitch - imports silently, with no warning.
+    No import-side rule can recover that warning without re-fabricating
+    #482's false positives for every ordinary depth-only survey.
 
 - **Leading and trailing whitespace is trimmed off every text field.** The reader does
   `e.unescape()?.trim()` on every shot element's text (`parsers/tml/mod.rs:398`), which is what
