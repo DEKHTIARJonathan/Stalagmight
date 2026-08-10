@@ -876,10 +876,16 @@ await page.waitForSelector('[data-testid="import-section-dialog"]');
 opens the native file picker, which the mock answers with
 `/mock/test-survey.dmp`, and the app then routes by extension into
 `DmpSelectionDialog`. That is why `openDmpSelectionDialog(page)` presses
-`Control+i` and then waits for `dmp-selection-dialog`. Two consequences: the
-shortcut is a no-op when editing is blocked (read-only map / Plan or Export mode
-/ locked remote project), and it never opens `ImportDialog` (manual section
-creation) - use the store for that.
+`Control+i` and then waits for `dmp-selection-dialog`. Three consequences:
+
+- It never opens `ImportDialog` (manual section creation) - use the store.
+- With a project open the picker is `.dmp`-only (#508); with none open it is the
+  full unified picker. The mock returns its fixed path either way, so a spec
+  cannot tell the two apart - assert filter choice in vitest, not here.
+- It still opens the picker when editing is blocked (read-only map / Plan or
+  Export mode / locked remote project). The rejection happens after the pick, in
+  `routeOpenedFile`: an `import-blocked` prompt for the causes a click can fix,
+  an error dialog for a missing SpeleoDB write lock.
 
 Closing:
 
