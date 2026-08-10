@@ -145,12 +145,20 @@ export interface ImportReceiptWithUnanchoredCount extends ImportReceipt {
  *    5-9s and its one-line budget (docs/notifications.md) has no room for it
  *    without truncating the summary - so it rides the modal instead of being
  *    dropped or getting a second, second-class surface.
+ *  - `zero_datum_created` is set (F12c): same reasoning as `unit_conversion`
+ *    - naming the GPS-anchored section is a fact the toast's one-line budget
+ *    has no room for, so it rides the modal too.
  */
 export function presentImportReceipt(
   receipt: ImportReceiptWithUnanchoredCount,
   ui: Pick<ImportDialogUi, 'openDialog' | 'showToast'>,
 ): void {
-  if (receipt.warnings.length > 0 || isEmptyImportReceipt(receipt) || receipt.unit_conversion != null) {
+  if (
+    receipt.warnings.length > 0 ||
+    isEmptyImportReceipt(receipt) ||
+    receipt.unit_conversion != null ||
+    receipt.zero_datum_created != null
+  ) {
     ui.openDialog('import-receipt', { receipt });
     return;
   }

@@ -377,6 +377,9 @@ impl AppState {
         // Apply shot updates to existing sections FIRST (overlap interpolation).
         // This must happen before placing new sections so that FromExisting placements
         // compute station positions using the updated (interpolated) shot data.
+        // Populated below when the doubly-anchored guard (F12b) skips shots, so
+        // the receipt can surface what was silently kept in the trace logs.
+        let mut doubly_anchored_shot_count: u32 = 0;
         if !existing_shot_updates.is_empty() {
             tracing::info!(
                 count = existing_shot_updates.len(),
@@ -502,6 +505,11 @@ impl AppState {
                     // (Connection-based constraints are handled post-update
                     //  by adjusting only the affected section's offset.)
                 }
+
+                doubly_anchored_shot_count = existing_shot_updates
+                    .iter()
+                    .filter(|u| blocked_sections.contains(&u.section_id))
+                    .count() as u32;
 
                 // Record anchor station positions BEFORE applying updates.
                 // For each affected section that has a zero datum, we need to keep
@@ -659,6 +667,15 @@ impl AppState {
         let mut all_warnings = Vec::new();
         // Collect commands for the undo entry description
         let mut batch_commands: Vec<Command> = Vec::new();
+        // Name of the first section placed via `ImportPlacement::ZeroDatum`
+        // (F12c): a GPS-anchored zero datum is a structural fact about the
+        // import worth a receipt line, not just a trace log. `zero_datum_count`
+        // tracks how many such placements this import made - a batch import
+        // (e.g. a multi-fixed-station TML/Compass file) can create more than
+        // one, and naming only the first without saying so would read as a
+        // claim of completeness the receipt doesn't back up.
+        let mut zero_datum_created: Option<String> = None;
+        let mut zero_datum_count: u32 = 0;
 
         // Defer per-merge cascades during the placement loop. Each
         // `merge_stations` / `set_zero_datum` call would otherwise run a
@@ -890,6 +907,27 @@ impl AppState {
                         ));
                     }
                     all_warnings.extend(result.warnings);
+                    zero_datum_count += 1;
+                    if zero_datum_created.is_none() {
+                        // Sanitized HERE, where the raw file-controlled name is
+                        // born, not only in `decorate_receipt`: the DMP
+                        // wizard's `import_sections` IPC command never calls
+                        // `decorate_receipt` (it overwrites source_format/
+                        // file_name/sections_found directly), so that route's
+                        // receipt would otherwise carry a raw
+                        // `ImportSectionConfig::name` straight from the parsed
+                        // file end to end. `sanitize_display_text` is
+                        // idempotent (filter then clamp), so decorate_receipt
+                        // sanitizing this value again for the routes that DO
+                        // call it is a harmless no-op, not a second transform.
+                        zero_datum_created = Some(crate::models::sanitize_display_text(
+                            &config
+                                .name
+                                .clone()
+                                .unwrap_or_else(|| format!("Section {}", idx + 1)),
+                            crate::core::command::MAX_FILE_NAME_LEN,
+                        ));
+                    }
                     batch_commands.push(Command::SetZeroDatum {
                         station_ref,
                         coordinates: *coordinates,
@@ -1245,6 +1283,14 @@ impl AppState {
         if let Some(warning) = surface_elevation_warning {
             receipt_warnings.push(warning);
         }
+        if doubly_anchored_shot_count > 0 {
+            receipt_warnings.push(format!(
+                "{doubly_anchored_shot_count} shot{} kept {} position{}: section anchored on both sides",
+                if doubly_anchored_shot_count == 1 { "" } else { "s" },
+                if doubly_anchored_shot_count == 1 { "its" } else { "their" },
+                if doubly_anchored_shot_count == 1 { "" } else { "s" },
+            ));
+        }
         let closures_dropped = closures_skipped + closures_failed;
         if closures_dropped > 0 {
             receipt_warnings.push(format!(
@@ -1253,6 +1299,15 @@ impl AppState {
                 if closures_dropped == 1 { "was" } else { "were" }
             ));
         }
+        // "and N more": naming only the FIRST zero-datum section without saying
+        // so would read as a claim that it was the only one this import made.
+        let zero_datum_created = zero_datum_created.map(|name| {
+            if zero_datum_count > 1 {
+                format!("{name} (and {} more)", zero_datum_count - 1)
+            } else {
+                name
+            }
+        });
         let mut receipt = crate::core::command::ImportReceipt {
             source_format: String::new(),
             file_name: String::new(),
@@ -1264,6 +1319,7 @@ impl AppState {
             unit_conversion: None,
             warnings: receipt_warnings,
             info: Vec::new(),
+            zero_datum_created,
         };
         receipt.cap_warnings();
 

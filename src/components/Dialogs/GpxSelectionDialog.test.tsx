@@ -42,6 +42,7 @@ const RECEIPT: ImportReceipt = {
   unit_conversion: null,
   warnings: [],
   info: [],
+  zero_datum_created: null,
 };
 
 // Synthetic: nothing landed at all. Not a shape a waypoints-only GPX import

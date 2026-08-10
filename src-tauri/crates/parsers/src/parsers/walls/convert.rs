@@ -114,6 +114,18 @@ pub(crate) fn is_importable_shot(v: &WallsVector, include_splays: bool) -> bool 
 }
 
 /// Build the import-dialog preview from parsed data.
+/// Survey count and whether any survey used feet, without building the full
+/// [`WallsFile`] preview. `execute_walls_import` needs only these two
+/// scalars to fill in the receipt (#393 item 1); the full preview also runs
+/// `resolve_anchors` and builds a `WallsSurveySummary` per survey, work an
+/// import that already parsed and converted the file has no use for.
+pub fn preview_scalars(parsed: &ParsedWalls) -> (u32, bool) {
+    (
+        parsed.surveys.len() as u32,
+        parsed.surveys.iter().any(|s| s.used_feet),
+    )
+}
+
 pub fn build_preview(parsed: &ParsedWalls) -> WallsFile {
     // Count shots the import would ACTUALLY produce under the default options
     // (splays excluded), not the raw vector count - otherwise the preview

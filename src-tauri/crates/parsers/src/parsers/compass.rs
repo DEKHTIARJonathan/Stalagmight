@@ -416,16 +416,13 @@ fn parse_dat(path: &Path) -> Result<ParsedCompass> {
 }
 
 /// Build the import-dialog preview from parsed data.
-pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
-    let shot_count = parsed
-        .surveys
-        .iter()
-        .map(|s| s.survey.shots.len())
-        .sum::<usize>() as u32;
-    let has_backsights = parsed
-        .surveys
-        .iter()
-        .any(|s| s.survey.parameters.format_parameters.has_backsights());
+/// Survey count and the collapsed length-unit label, without building the
+/// full [`CompassFile`] preview. `execute_compass_import` needs only these
+/// two scalars to fill in the receipt (#393 item 1); the full preview also
+/// builds a `CompassSurveySummary` per survey and clones the parser's
+/// warnings, work an import that already parsed and converted the file has
+/// no use for.
+pub fn preview_scalars(parsed: &ParsedCompass) -> (u32, Option<String>) {
     // Collapse per-survey length units to a single project-wide label.
     // Compass `D` (decimal feet) → "feet"; `M` → "meters".  Multi-survey
     // files where the unit isn't uniform get "mixed" so the dialog can
@@ -450,6 +447,20 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
             }
         }
     };
+    (parsed.surveys.len() as u32, length_unit)
+}
+
+pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
+    let shot_count = parsed
+        .surveys
+        .iter()
+        .map(|s| s.survey.shots.len())
+        .sum::<usize>() as u32;
+    let has_backsights = parsed
+        .surveys
+        .iter()
+        .any(|s| s.survey.parameters.format_parameters.has_backsights());
+    let (survey_count, length_unit) = preview_scalars(parsed);
     let surveys = parsed
         .surveys
         .iter()
@@ -465,7 +476,7 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
         .collect();
     CompassFile {
         cave_name: parsed.cave_name.clone(),
-        survey_count: parsed.surveys.len() as u32,
+        survey_count,
         shot_count,
         has_backsights,
         datum: parsed.datum.map(|d| format!("{d:?}")),
@@ -1801,6 +1812,30 @@ mod tests {
         assert!(included_configs
             .iter()
             .any(|c| c.shots.iter().any(|s| s.kind.is_virtual())));
+    }
+
+    /// #393 item 1: `execute_compass_import` now reads `(survey_count,
+    /// length_unit)` from `preview_scalars` instead of running the full
+    /// `build_preview` a second time. This pins that `preview_scalars` never
+    /// drifts from what `build_preview` itself reports for the same parse -
+    /// an edit to `build_preview`'s survey-count or length-unit logic that
+    /// forgot to update `preview_scalars` (or vice versa) fails here, not
+    /// silently in the receipt.
+    #[test]
+    fn preview_scalars_matches_build_preview_survey_count_and_length_unit() {
+        for name in ["simple.dat", "backsight_grads.dat", "multi_trip.dat"] {
+            let parsed = parse_compass(&fixture(name)).unwrap();
+            let (survey_count, length_unit) = preview_scalars(&parsed);
+            let preview = build_preview(&parsed);
+            assert_eq!(
+                survey_count, preview.survey_count,
+                "{name}: survey_count must match build_preview"
+            );
+            assert_eq!(
+                length_unit, preview.length_unit,
+                "{name}: length_unit must match build_preview"
+            );
+        }
     }
 
     #[test]

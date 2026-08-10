@@ -236,6 +236,25 @@ export async function routeOpenedFile(
       return;
     }
 
+    // Any OTHER dialog also owns the screen and must not be silently replaced -
+    // a dropped (or OS-launched, or recents-opened) file used to call
+    // loadProject/openDialog straight over settings, an error dialog, or a
+    // pending unsaved-changes prompt, because `importFlowOwnsScreen` above only
+    // recognizes the import wizard's OWN dialogs. Mirrors
+    // `useKeyboardShortcuts`' `activeDialog && event.key !== 'Escape'` gate,
+    // which already refuses Ctrl+O/Ctrl+I the same way.
+    //
+    // The one deliberate exception is `swapConfirmed`: `LaunchOpenConfirmDialog`
+    // re-routes the SAME path through here while `launch-open-confirm` is still
+    // the active dialog (its own handleConfirm routes BEFORE closing, to keep
+    // the dialog slot - and `screenBusy()` - occupied for the whole flow; see
+    // there). Every other dialog that re-enters this router closes itself
+    // first, so `activeDialog` is already null by the time it calls back in.
+    if (ui.activeDialog && !opts?.swapConfirmed) {
+      ui.showToast(i18n.t('importGate.inProgress'), TOAST_KEYS.IMPORT_IN_PROGRESS, 'warning');
+      return;
+    }
+
     // `importContext` tells `saveAfterImport` whether the completion handlers must
     // write the .stalx (a brand-new project's initial save is deferred) or only mark
     // dirty. It has no auto-reset, so a value left behind by a previous flow -

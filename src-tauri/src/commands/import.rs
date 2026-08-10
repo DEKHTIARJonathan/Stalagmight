@@ -484,9 +484,8 @@ pub fn execute_compass_import(
         "Converted Compass to import configs, executing import"
     );
 
-    let preview = crate::parsers::compass::build_preview(&parsed);
-    let sections_found = preview.survey_count;
-    let unit_conversion = compass_unit_conversion_note(preview.length_unit.as_deref());
+    let (sections_found, length_unit) = crate::parsers::compass::preview_scalars(&parsed);
+    let unit_conversion = compass_unit_conversion_note(length_unit.as_deref());
 
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
     let mut result = state.execute_import_sections(
@@ -829,9 +828,8 @@ pub fn execute_walls_import(
         "Converted Walls to import configs, executing import"
     );
 
-    let preview = crate::parsers::walls::build_preview(&parsed);
-    let sections_found = preview.survey_count;
-    let unit_conversion = walls_unit_conversion_note(preview.any_feet_units);
+    let (sections_found, any_feet_units) = crate::parsers::walls::preview_scalars(&parsed);
+    let unit_conversion = walls_unit_conversion_note(any_feet_units);
 
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
     let mut result = state.execute_import_sections(
@@ -886,6 +884,7 @@ mod receipt_tests {
             unit_conversion: None,
             warnings: Vec::new(),
             info: Vec::new(),
+            zero_datum_created: None,
         })
     }
 

@@ -1247,6 +1247,7 @@
       "unanchoredInfo_other": "{{count}} sections are not connected to a zero datum",
       "unanchoredInfoShort_one": "{{count}} section unanchored",
       "unanchoredInfoShort_other": "{{count}} sections unanchored",
+      "zeroDatumCreated": "Zero datum created on \"{{section}}\"",
       "toast": "{{source}} import: {{summary}}",
       "viewDetails": "View details",
       "hideDetails": "Hide details",

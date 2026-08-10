@@ -305,6 +305,26 @@ describe('ToastStack - capacity fitted to the window', () => {
     expect(toasts()).toHaveLength(2);
   });
 
+  it('shrinks the capacity budget when a bottom offset is registered (F8)', () => {
+    // A tall window (2000px) alone fits all five ("caps at five in a tall
+    // window" above pins that at zero offset). Registering a 1900px offset
+    // (mimicking a tall dialog footer) leaves only 100px of real headroom
+    // above the raised anchor, 20% of which is 20px - room for none of the
+    // 60px toasts, clamped to the MIN_VISIBLE_TOASTS floor of 2. If the
+    // offset were applied only to the anchor's position and not subtracted
+    // from the capacity budget, this would still read 5.
+    setViewportHeight(2000);
+    render(<ToastStack />);
+    useUIStore.getState().registerToastBottomOffset('test-owner', 1900);
+    for (let i = 0; i < 5; i += 1) push(`m${i}`, `k${i}`);
+    advance(300);
+
+    expect(useUIStore.getState().toastCapacity).toBe(2);
+    expect(toasts()).toHaveLength(2);
+
+    useUIStore.getState().unregisterToastBottomOffset('test-owner');
+  });
+
   it('re-fits on resize, evicting what no longer has room', () => {
     render(<ToastStack />);
     for (let i = 0; i < 5; i += 1) push(`m${i}`, `k${i}`);

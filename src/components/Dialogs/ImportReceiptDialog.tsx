@@ -69,6 +69,11 @@ export default function ImportReceiptDialog() {
           {receipt.unit_conversion != null && (
             <li data-testid="import-receipt-unit-conversion">{receipt.unit_conversion}</li>
           )}
+          {receipt.zero_datum_created != null && (
+            <li data-testid="import-receipt-zero-datum-created">
+              {t('dialogs.importReceipt.zeroDatumCreated', { section: receipt.zero_datum_created })}
+            </li>
+          )}
         </ul>
 
         {visibleWarnings.length > 0 && (

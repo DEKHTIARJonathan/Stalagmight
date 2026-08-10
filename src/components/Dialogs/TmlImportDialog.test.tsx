@@ -78,6 +78,7 @@ const EMPTY_RECEIPT: ImportReceipt = {
   unit_conversion: null,
   warnings: ['2 sections had no shots after filtering and were dropped'],
   info: [],
+  zero_datum_created: null,
 };
 
 /**

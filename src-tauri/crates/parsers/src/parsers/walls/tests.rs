@@ -639,6 +639,49 @@ fn wpj_tree_status_inheritance_and_resolution() {
     assert!(preview.has_georeference);
 }
 
+/// #393 item 1: `execute_walls_import` now reads `(survey_count,
+/// any_feet_units)` from `preview_scalars` instead of running the full
+/// `build_preview` a second time. This pins that `preview_scalars` never
+/// drifts from what `build_preview` itself reports for the same parse - an
+/// edit to `build_preview`'s survey-count or feet-units logic that forgot to
+/// update `preview_scalars` (or vice versa) fails here, not silently in the
+/// receipt.
+#[test]
+fn preview_scalars_matches_build_preview_survey_count_and_feet_units() {
+    let dir = temp_dir("wpj-preview-scalars");
+    std::fs::write(
+        dir.join("SURV1.SRV"),
+        "#UNITS meters ORDER=DA Tape=SS\nA B 10 90 5 5\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("SURV2.SRV"),
+        "#UNITS feet ORDER=DA Tape=SS\nC D 30 45 5 5\n",
+    )
+    .unwrap();
+    let wpj = ";WALLS Project File\n\
+         .BOOK Test Project\n.NAME TESTPROJ\n.STATUS 1051139\n\
+         .SURVEY First Survey\n.NAME SURV1\n.STATUS 8\n\
+         .SURVEY Second Survey\n.NAME SURV2\n.STATUS 8\n\
+         .ENDBOOK\n";
+    let wpj_path = dir.join("Test.wpj");
+    std::fs::write(&wpj_path, wpj).unwrap();
+
+    let parsed = parse_walls(&wpj_path).unwrap();
+    let (survey_count, any_feet_units) = preview_scalars(&parsed);
+    let preview = build_preview(&parsed);
+    assert_eq!(
+        survey_count, preview.survey_count,
+        "survey_count must match build_preview"
+    );
+    assert_eq!(
+        any_feet_units, preview.any_feet_units,
+        "any_feet_units must match build_preview"
+    );
+    // Precondition: the fixture actually mixes units, so this is not vacuous.
+    assert!(any_feet_units);
+}
+
 #[test]
 fn ref_line_decodes_lat_long() {
     let r =
