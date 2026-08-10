@@ -1096,6 +1096,40 @@ const ZERO_DATUM_CONFIG: Generator[] = [
   },
   {
     /**
+     * UNBLOCK the confirm: type a GPS that parses, but only while the confirm is
+     * present and DISABLED.
+     *
+     * The passable share alone is not enough on its own. `zero-datum-config` has
+     * a 125-weight pool (the shot table and the metadata form are both mounted
+     * on it), so `zdc:gps` is about 6% of draws - and a visit is 8 steps before
+     * the walk force-advances and 16 before it escapes. Measured on a pre-flight
+     * cell: 17 steps on the screen, no GPS typed, `forcedAdvanceUnavailable`
+     * eight times. The screen's ONLY exit forward is gated on a field, so the
+     * walk needs a move that aims at the gate rather than at the screen.
+     *
+     * Aimed with `presentButOff`, so it cannot fire once the confirm is enabled
+     * and cannot dilute anything else. `zdc:gps` keeps the hostile corpus and
+     * keeps its own weight: the point is to reach what is BEHIND the screen as
+     * well as to hammer the screen.
+     *
+     * The weight is high for the same structural reason, not for taste: a visit
+     * is 8 steps before the walk force-advances, and every step spent before the
+     * gate opens is a step the forced advance cannot use. At 20 of a ~145 pool
+     * the gate opens inside about four steps; the generator then stops building
+     * and costs nothing but a redraw.
+     */
+    name: 'zdc:gps-unblock',
+    weight: 20,
+    screens: ['zero-datum-config'],
+    build: (env) => {
+      if (!presentButOff(env.digest, 'zero-datum-config-confirm')) return null;
+      if (!actionable(env.digest, 'zero-datum-gps-input')) return null;
+      const value = pickFrom(() => env.ctx.rng(), GPS_PASSABLE) as string;
+      return type('zero-datum-gps-input', value, `gps (unblock)=${JSON.stringify(value.slice(0, 24))}`);
+    },
+  },
+  {
+    /**
      * Type a GPS position. At least half the draws PARSE, so the confirm below
      * is reachable - see `GPS_PASSABLE`.
      *
