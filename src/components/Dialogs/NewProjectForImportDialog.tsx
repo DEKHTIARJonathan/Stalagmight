@@ -217,9 +217,10 @@ export default function NewProjectForImportDialog() {
           <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
             <div className="font-medium mb-1">{t('dialogs.newProjectForImport.importingFrom.dmp')}</div>
             <div className="text-text-secondary">
-              {t('dialogs.newProjectForImport.summary.dmp', {
-                sections: dmpFile.sections.length,
-                shots: dmpFile.sections.reduce(
+              {t('dialogs.newProjectForImport.summary.sections', { count: dmpFile.sections.length })}
+              {' - '}
+              {t('dialogs.newProjectForImport.summary.shots', {
+                count: dmpFile.sections.reduce(
                   (acc, s) => acc + s.shots.filter((sh) => sh.shot_type === 'Standard').length,
                   0
                 ),
@@ -231,11 +232,10 @@ export default function NewProjectForImportDialog() {
           <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
             <div className="font-medium mb-1">{t('dialogs.newProjectForImport.importingFrom.tml')}</div>
             <div className="text-text-secondary">
-              {t('dialogs.newProjectForImport.summary.tml', {
-                sections: tmlStats.totalSections,
-                shots: tmlStats.totalShots,
-                caveName: tmlFile.cave_name ? ` - ${tmlFile.cave_name}` : '',
-              })}
+              {t('dialogs.newProjectForImport.summary.sections', { count: tmlStats.totalSections })}
+              {' - '}
+              {t('dialogs.newProjectForImport.summary.shots', { count: tmlStats.totalShots })}
+              {tmlFile.cave_name ? ` - ${tmlFile.cave_name}` : ''}
             </div>
           </div>
         )}
@@ -243,12 +243,12 @@ export default function NewProjectForImportDialog() {
           <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
             <div className="font-medium mb-1">{t('dialogs.newProjectForImport.importingFrom.gpx')}</div>
             <div className="text-text-secondary">
-              {t('dialogs.newProjectForImport.summary.gpx', {
-                waypoints: gpxFile.waypoints.length,
-                tracks: gpxFile.tracks.length,
-                routes: gpxFile.routes.length,
-                name: gpxFile.name ? ` - ${gpxFile.name}` : '',
-              })}
+              {t('dialogs.newProjectForImport.summary.waypoints', { count: gpxFile.waypoints.length })}
+              {' - '}
+              {t('dialogs.newProjectForImport.summary.tracks', { count: gpxFile.tracks.length })}
+              {' - '}
+              {t('dialogs.newProjectForImport.summary.routes', { count: gpxFile.routes.length })}
+              {gpxFile.name ? ` - ${gpxFile.name}` : ''}
             </div>
           </div>
         )}
@@ -256,11 +256,10 @@ export default function NewProjectForImportDialog() {
           <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
             <div className="font-medium mb-1">{t('dialogs.newProjectForImport.importingFrom.compass')}</div>
             <div className="text-text-secondary">
-              {t('dialogs.newProjectForImport.summary.compass', {
-                surveys: compassFile.survey_count,
-                shots: compassFile.shot_count,
-                caveName: compassFile.cave_name ? ` - ${compassFile.cave_name}` : '',
-              })}
+              {t('dialogs.newProjectForImport.summary.surveys', { count: compassFile.survey_count })}
+              {' - '}
+              {t('dialogs.newProjectForImport.summary.shots', { count: compassFile.shot_count })}
+              {compassFile.cave_name ? ` - ${compassFile.cave_name}` : ''}
             </div>
           </div>
         )}
@@ -268,11 +267,10 @@ export default function NewProjectForImportDialog() {
           <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
             <div className="font-medium mb-1">{t('dialogs.newProjectForImport.importingFrom.walls')}</div>
             <div className="text-text-secondary">
-              {t('dialogs.newProjectForImport.summary.walls', {
-                surveys: wallsFile.resolved_survey_count,
-                shots: wallsFile.shot_count,
-                projectName: wallsFile.project_name ? ` - ${wallsFile.project_name}` : '',
-              })}
+              {t('dialogs.newProjectForImport.summary.surveys', { count: wallsFile.resolved_survey_count })}
+              {' - '}
+              {t('dialogs.newProjectForImport.summary.shots', { count: wallsFile.shot_count })}
+              {wallsFile.project_name ? ` - ${wallsFile.project_name}` : ''}
             </div>
           </div>
         )}

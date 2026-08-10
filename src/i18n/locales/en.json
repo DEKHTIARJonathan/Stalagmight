@@ -1288,11 +1288,18 @@
         "walls": "Importing from Walls survey:"
       },
       "summary": {
-        "dmp": "{{sections}} sections - {{shots}} shots",
-        "tml": "{{sections}} sections - {{shots}} shots{{caveName}}",
-        "gpx": "{{waypoints}} waypoints - {{tracks}} tracks - {{routes}} routes{{name}}",
-        "compass": "{{surveys}} surveys - {{shots}} shots{{caveName}}",
-        "walls": "{{surveys}} surveys - {{shots}} shots{{projectName}}"
+        "sections_one": "{{count}} section",
+        "sections_other": "{{count}} sections",
+        "shots_one": "{{count}} shot",
+        "shots_other": "{{count}} shots",
+        "waypoints_one": "{{count}} waypoint",
+        "waypoints_other": "{{count}} waypoints",
+        "tracks_one": "{{count}} track",
+        "tracks_other": "{{count}} tracks",
+        "routes_one": "{{count}} route",
+        "routes_other": "{{count}} routes",
+        "surveys_one": "{{count}} survey",
+        "surveys_other": "{{count}} surveys"
       },
       "oneWayPromise": "This converts {{fileName}} into a new Stalagmight project - your original file is never modified.",
       "nameLabel": "Project Name *",
