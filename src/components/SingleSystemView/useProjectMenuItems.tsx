@@ -17,7 +17,7 @@ import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { SpeleoBadgedIcon } from '../common/SpeleoBadgedIcon';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
-import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuGroup, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
+import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
 import type { AppMenuItem } from '../common/AppMenu';
 import {
   SaveIcon,
@@ -159,10 +159,13 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         onClick: () => { void saveAndClose(); },
       },
       { id: 'project-menu-sep-2', label: '', separator: true },
-      // One door (#407): the shared Import group - same unified picker as Open,
-      // no editingBlocked disable (non-DMP imports close-and-create, .stalx is a
-      // plain open; the router rejects exactly the additive DMP case).
-      importMenuGroup(t),
+      // Import means "add mNemo data to THIS project" (#508), so it offers a
+      // .dmp-only picker - the one format that is additive to an open project.
+      // Switching projects stays on the Open row above, which keeps the full
+      // unified picker and its replacement guards. No editingBlocked disable:
+      // the router rejects exactly the additive DMP case, with a tailored
+      // message naming the read-only cause.
+      importMenuItem(t),
       {
         id: 'toolbar-export-button',
         label: t('common.actions.export'),

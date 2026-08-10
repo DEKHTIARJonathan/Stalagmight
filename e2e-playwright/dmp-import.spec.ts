@@ -6,7 +6,7 @@ import {
   proceedToDmpSectionConfig,
   createSectionViaStore,
   ensureDmpNewImportDialogVisible,
-  openImportFromMenu,
+  openOrImportFromMenu,
 } from './helpers/app';
 
 /**
@@ -343,10 +343,11 @@ test.describe('DMP Import Dialog', () => {
     // We're on the home screen (GlobalView) with no project open
     await expect(page.getByTestId('global-view')).toBeVisible();
 
-    // Start import from GlobalView. With recent projects present (default
-    // mock), the per-format import buttons live in the hamburger menu's
-    // Import submenu rather than as empty-state cards.
-    await openImportFromMenu(page, 'global-import-dmp-button');
+    // Start the import from GlobalView. With recent projects present (default
+    // mock) there is no empty-state drop card, so the door is the hamburger's
+    // "Open / Import" row - the only one on this screen since #508, and the one
+    // that routes a .dmp into the new-project chain.
+    await openOrImportFromMenu(page);
 
     // Should show NewProjectForImportDialog
     await page.waitForSelector('[data-testid="new-project-for-import-dialog"]', { timeout: 5000 });

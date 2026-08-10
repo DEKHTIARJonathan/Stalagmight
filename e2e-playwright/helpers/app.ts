@@ -253,11 +253,14 @@ export async function openDebugFromMenu(page: Page): Promise<void> {
   await page.getByTestId('global-debug-button').click();
 }
 
-/** Open the hamburger Import submenu and click a specific import item. */
-export async function openImportFromMenu(page: Page, itemTestId: string): Promise<void> {
+/**
+ * Click the recents-screen hamburger's "Open / Import" row - the single door to
+ * every openable and importable format there (#508 removed the separate Import
+ * group, which offered the same picker).
+ */
+export async function openOrImportFromMenu(page: Page): Promise<void> {
   await openAppMenu(page);
-  await page.getByTestId('global-import-menu-button').click();
-  await page.getByTestId(itemTestId).click();
+  await page.getByTestId('global-open-project-button').click();
 }
 
 /**

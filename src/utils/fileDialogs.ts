@@ -139,6 +139,26 @@ export function openOrImportFilters() {
   ];
 }
 
+/**
+ * Filters for the IN-PROJECT "Import" picker (#508): `.dmp` only.
+ *
+ * With a project open, "import" means one thing - add mNemo data to THIS
+ * project. Every other importable format is new-project-only: picking one only
+ * ever leads to the "close this project and import as a new one?" prompt, which
+ * is the Open row's job, not Import's. So the in-project Import doors (hamburger
+ * row, toolbar button, Ctrl+I) narrow to the one format that is genuinely
+ * additive, and Open keeps `openOrImportFilters` for everything else.
+ *
+ * This is a picker-side affordance only: `routeOpenedFile` keeps its full
+ * extension dispatch, so drag-drop and the OS file-launch channel are unchanged
+ * (and a `.dmp` reaching the router with no project open still seeds a new one).
+ * No 'All Files' entry - it would hand arbitrary files to the DMP branch, which
+ * is exactly what the unsupported-file dialog exists to prevent.
+ */
+export function dmpImportFilters() {
+  return [{ name: 'mNemo DMP', extensions: [DMP_EXTENSION] }];
+}
+
 export function exportSaveFilters(label: string, extension: string) {
   const normalizedExt = extension.startsWith('.') ? extension.slice(1) : extension;
   return [{ name: label, extensions: [normalizedExt] }];

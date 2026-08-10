@@ -1,13 +1,13 @@
 /**
- * Import item gating for useProjectMenuItems - one door (#407): the "Import"
- * hamburger row is NEVER disabled, in any read-only state. The pre-#407
- * `disabled: editingBlocked` gate (#275) was picker-side and over-broad once
- * the row offers the unified filter set: a `.stalx` open and an
- * import-as-new-project are legal while editing is blocked, and the one case
- * that is not - additive DMP into the open project - is rejected by
- * routeOpenedFile's read-only guard with a cause-specific message (pinned in
- * openOrImport.test.ts). These pins keep a picker-side disable from quietly
- * coming back.
+ * Import item gating for useProjectMenuItems: the in-project "Import" hamburger
+ * row is NEVER disabled, in any read-only state. The pre-#407
+ * `disabled: editingBlocked` gate (#275) was picker-side and in the wrong
+ * layer - the additive DMP-into-open-project case it meant to stop is rejected
+ * by routeOpenedFile's read-only guard, with a cause-specific message and (for
+ * the causes one click can fix) an offer to switch and continue, none of which
+ * a greyed-out row can say (pinned in openOrImport.test.ts). Narrowing the row
+ * to `.dmp` (#508) does not revive the gate: the guard still owns that call.
+ * These pins keep a picker-side disable from quietly coming back.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
@@ -36,13 +36,13 @@ const READ_ONLY_LINK: SpeleoLinkState = {
   serverError: null,
 };
 
-function importItem(): { disabled?: boolean; submenu?: unknown[] } | undefined {
+function importItem(): { disabled?: boolean; onClick?: unknown } | undefined {
   const { result } = renderHook(() =>
     useProjectMenuItems({ onSave: async () => ({ success: true }) }),
   );
   return result.current.find(
     (it) => (it as { id?: string }).id === 'global-import-menu-button',
-  ) as { disabled?: boolean; submenu?: unknown[] } | undefined;
+  ) as { disabled?: boolean; onClick?: unknown } | undefined;
 }
 
 beforeEach(() => {
@@ -51,13 +51,13 @@ beforeEach(() => {
   useSpeleoStore.setState({ link: null, projectLinkKind: 'local', session: null });
 });
 
-// Asserts PRESENCE (submenu row rendered) as well as no `disabled` flag in
-// every state: `importItem()?.disabled` alone would also pass if a regression
-// conditionally OMITTED the group in blocked states - the same picker-side
-// gate class these pins exist to block, just in a stronger form.
+// Asserts PRESENCE (the row is rendered and clickable) as well as no `disabled`
+// flag in every state: `importItem()?.disabled` alone would also pass if a
+// regression conditionally OMITTED the row in blocked states - the same
+// picker-side gate class these pins exist to block, just in a stronger form.
 function expectImportItemAvailable(): void {
   const item = importItem();
-  expect(item?.submenu).toHaveLength(1);
+  expect(typeof item?.onClick).toBe('function');
   expect(item?.disabled).toBeUndefined();
 }
 
