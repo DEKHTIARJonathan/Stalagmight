@@ -20928,6 +20928,99 @@ fn test_track_imported_file_no_project_fails() {
     assert!(!state.track_imported_file("hash".to_string()).success);
 }
 
+/// Withdrawing an import forgets its dedup bookkeeping, in the SAME undo entry
+/// as the deletes (#394).
+///
+/// `execute_import_sections` records the file hash and each section's content
+/// hash so a re-import is recognised as a duplicate, and `delete_section` does
+/// not touch them - `cleanup_section_references` walks merges, closures,
+/// offsets, comments and datums, nothing else. So removing the sections used to
+/// leave the project claiming the file was already imported while none of it
+/// remained, and the DMP selection dialog DESELECTS what it believes is a
+/// duplicate: the obvious retry silently offered nothing to import.
+#[test]
+fn a_withdrawal_forgets_the_import_tracking_and_undo_restores_it() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Withdraw".to_string(),
+        location: None,
+    });
+
+    let section_id = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    state.track_imported_file("file-hash".to_string());
+    state.track_section_hashes(vec!["sec-a".to_string(), "sec-b".to_string()]);
+    assert!(state.check_duplicate_import("file-hash").unwrap());
+
+    // The withdrawal: delete the section AND forget what it was tracked as.
+    let withdrawn = state.execute(Command::Batch {
+        commands: vec![
+            Command::DeleteSection { section_id },
+            Command::UntrackImport {
+                file_hashes: vec!["file-hash".to_string()],
+                section_hashes: vec!["sec-a".to_string()],
+            },
+        ],
+    });
+    assert!(withdrawn.success, "withdrawal: {:?}", withdrawn.error);
+
+    assert!(
+        !state.check_duplicate_import("file-hash").unwrap(),
+        "the file must stop counting as imported once its sections are gone"
+    );
+    assert_eq!(
+        state
+            .check_section_hashes(&["sec-a".to_string(), "sec-b".to_string()])
+            .unwrap(),
+        vec![false, true],
+        "only the named section hash is forgotten; an untouched one stays"
+    );
+
+    // ONE undo brings back the sections AND their tracking - both live on
+    // `Project`, so the batch's snapshot pair covers them together.
+    assert!(state.undo().success);
+    assert_eq!(state.get_project_state().unwrap().sections.len(), 1);
+    assert!(
+        state.check_duplicate_import("file-hash").unwrap(),
+        "undoing the withdrawal must restore the duplicate flag with the sections"
+    );
+    assert_eq!(
+        state.check_section_hashes(&["sec-a".to_string()]).unwrap(),
+        vec![true]
+    );
+}
+
+/// Untracking a hash nobody tracked is a no-op, not a failure: the wizard names
+/// what its own run SENT to `import_sections`, and whether each hash is still
+/// tracked is not something it can know. A failure here would roll back the
+/// whole withdrawal batch.
+#[test]
+fn untracking_an_unknown_hash_succeeds() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Withdraw".to_string(),
+        location: None,
+    });
+
+    let result = state.execute(Command::Batch {
+        commands: vec![Command::UntrackImport {
+            file_hashes: vec!["never-seen".to_string()],
+            section_hashes: vec!["nor-this".to_string()],
+        }],
+    });
+
+    assert!(result.success, "{:?}", result.error);
+}
+
 // === Undo-after-restart end-to-end test ===
 
 #[test]

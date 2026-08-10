@@ -1396,6 +1396,7 @@
       "cancelKeepAndClose": "Keep and close",
       "cancelContinueEditing": "Continue editing",
       "removeImportedFailed": "Could not remove the imported sections.",
+      "removeImportedSaveFailed": "The sections were removed, but the project could not be saved, so the file on disk still contains them. Try again, or save the project from the main window.",
       "removeImportedWrongProject": "Could not remove the imported sections: a different project is now open. Close this wizard and remove them from the project they were imported into.",
       "mergeStation": "Merge at",
       "sectionSettings": "Section Settings",

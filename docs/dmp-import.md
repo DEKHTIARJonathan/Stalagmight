@@ -99,7 +99,19 @@ test:
   save (`finalize_deferred_import`) and the file would otherwise keep the
   sections that were just removed. Importing into an EXISTING project it only
   marks dirty, exactly as `saveAfterImport` does, so unrelated pending edits are
-  not committed behind the user's back.
+  not committed behind the user's back. That save is NOT best-effort: a failed
+  write keeps the wizard open with the reason, and the next Remove click retries
+  the SAVE (there are no sections left to delete by then), because closing is
+  what makes the removal final from the user's side.
+* **Forgetful.** `Command::UntrackImport` rides the same batch. `import_sections`
+  records the file hash and each section's content hash for duplicate detection,
+  and deleting a section does not touch them - so without this the project still
+  claims the file was imported while none of it remains, and `DmpSelectionDialog`
+  auto-DESELECTS every section it believes is a duplicate: the obvious retry
+  offers nothing to import. In the batch, so one undo restores the sections and
+  their tracking together. Only the hashes this run sent are forgotten; the file
+  hash is per-file, so a file also imported in an earlier session loses its
+  file-level duplicate flag (its per-section flags stand).
 
 Two residues, both deliberate:
 

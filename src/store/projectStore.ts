@@ -516,6 +516,50 @@ export function projectSwitched(before: string | null, after: string | null): bo
 /** What every seam returns for a request whose project changed out from under it. */
 const PROJECT_CHANGED = 'The project changed before this action could run.';
 
+/** The commands that funnel through the backend's `finalize_deferred_import`. */
+const IMPORT_COMMANDS = new Set([
+  'import_sections',
+  'execute_tml_import',
+  'execute_compass_import',
+  'execute_walls_import',
+  'execute_gpx_import',
+]);
+
+/**
+ * Learn, from a successful import, that this project's DEFERRED first save is
+ * resolved - the file exists now.
+ *
+ * `finalize_deferred_import` (`commands/import.rs`) writes the `.stalx` on the
+ * first import into a project created with `deferInitialSave`, for EVERY import
+ * command. Only the DMP route ever told the store, because only it goes on to
+ * call `saveAfterImport`; the TML/Compass/Walls/GPX dialogs finish through
+ * `completeImportToSingleView`, which touches no save state at all. That left
+ * `databaseOpen` false over a file that exists, and it is exactly the flag the
+ * DB-backed surfaces read (`WarningResolution`'s resolve actions,
+ * `DivePlanBar`'s plan persistence), so they stayed disabled for the rest of the
+ * session.
+ *
+ * Two warnings mean the file is NOT usable, and both leave the flag alone:
+ *  - `SYSTEM` - the deferred save's own failure ("Imported, but could not save
+ *    the new project to disk"), which is how that path reports itself.
+ *  - `DATABASE_NOT_REOPENED` - written, but the handle could not be reopened;
+ *    `saveProject` already refuses to open the gate on it, for the same reason.
+ *
+ * Any other `SYSTEM` warning costs a false negative only - the flag stays as it
+ * was, which is the direction that cannot enable a surface over a missing file.
+ */
+function noteImportResolvedDeferredSave(
+  command: string,
+  result: CommandResult,
+  set: (partial: Partial<ProjectStore>) => void,
+): void {
+  if (!IMPORT_COMMANDS.has(command)) return;
+  const unusable = (result.warnings ?? []).some(
+    (w) => w.code === 'SYSTEM' || w.code === 'DATABASE_NOT_REOPENED',
+  );
+  if (!unusable) set({ databaseOpen: true });
+}
+
 /**
  * Serialises frontend mutations, so their aftermath applies in ISSUE order (#24).
  *
@@ -643,6 +687,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           applyReverseAftermath(composeReverseTransforms(result.reversed_sections, get().project?.sections ?? []));
         }
         set({ isDirty: true });
+        noteImportResolvedDeferredSave(command, result, set);
         // #204: mirror the backend's mark_remote_dirty so the SpeleoDB action shell
         // knows there are un-pushed edits (drives the button's push&release-with-
         // comment flow). No-op for a local project (no link).

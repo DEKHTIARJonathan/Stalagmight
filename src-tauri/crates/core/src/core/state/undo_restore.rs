@@ -154,6 +154,14 @@ impl AppState {
                 offset,
             } => self.move_station(*station_ref, *offset),
             Command::Batch { commands } => self.execute_batch(commands.clone(), false),
+            // Reachable through a Batch, which runs its sub-commands here (#394):
+            // the DMP wizard's withdrawal deletes its sections and forgets their
+            // import tracking in ONE batch. Without this arm the catch-all below
+            // would fail that sub-command and roll the whole withdrawal back.
+            Command::UntrackImport {
+                file_hashes,
+                section_hashes,
+            } => self.untrack_import(file_hashes, section_hashes),
             _ => CommandResult::failure("Command cannot be executed in undo context".to_string()),
         }
     }

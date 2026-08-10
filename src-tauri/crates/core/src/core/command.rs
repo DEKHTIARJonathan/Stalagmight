@@ -177,6 +177,26 @@ pub enum Command {
         swap: bool,
     },
 
+    /// Forget import-dedup bookkeeping for an import that was WITHDRAWN (#394).
+    ///
+    /// `execute_import_sections` records the file hash and each section's content
+    /// hash so a later re-import can be recognised as a duplicate, and deleting
+    /// the sections does not touch those lists (`cleanup_section_references`
+    /// walks merges, closures, offsets, comments and datums - nothing else). So
+    /// the DMP wizard's "Cancel, remove what was imported" left the project
+    /// claiming the file was already imported while none of it remained, and the
+    /// selection dialog silently DESELECTED every section on the next attempt.
+    ///
+    /// Batched with the deletes it belongs to, so one undo restores the sections
+    /// and their tracking together - the snapshot pair covers both, since both
+    /// live on `Project`.
+    UntrackImport {
+        /// File-level hashes to forget (`Project::imported_file_hashes`).
+        file_hashes: Vec<String>,
+        /// Section content hashes to forget (`Project::imported_section_hashes`).
+        section_hashes: Vec<String>,
+    },
+
     // Batch commands
     Batch {
         commands: Vec<Command>,
@@ -590,6 +610,8 @@ impl Command {
             | Command::MoveComment { .. }
             | Command::RepairIntegrity
             | Command::UpdateProjectSettings
+            // Import-dedup bookkeeping is a set of hashes; it moves no station.
+            | Command::UntrackImport { .. }
             | Command::SetSurfaceElevation => false,
             Command::UpdateShot { updates, .. } => updates.touches_geometry(),
             Command::Batch { commands } => commands.iter().any(Command::affects_geometry),
@@ -796,6 +818,9 @@ impl Command {
                     source_paths.len(),
                     output_name
                 )
+            }
+            Command::UntrackImport { section_hashes, .. } => {
+                format!("Forget {} imported sections", section_hashes.len())
             }
             Command::RepairIntegrity => "Repair integrity".to_string(),
             Command::UpdateProjectSettings => "Update project settings".to_string(),
@@ -1053,11 +1078,18 @@ mod tests {
             (Command::RepairIntegrity, false),
             (Command::UpdateProjectSettings, false),
             (Command::SetSurfaceElevation, false),
+            (
+                Command::UntrackImport {
+                    file_hashes: Vec::new(),
+                    section_hashes: Vec::new(),
+                },
+                false,
+            ),
         ];
 
         assert_eq!(
             cases.len(),
-            29,
+            30,
             "add every new Command variant to this table"
         );
         for (command, expected) in cases {

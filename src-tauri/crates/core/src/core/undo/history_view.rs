@@ -75,6 +75,7 @@ fn get_command_type(command: &Command) -> String {
         Command::MoveStation { .. } => "move_station".to_string(),
         Command::MoveComment { .. } => "move_comment".to_string(),
         Command::Batch { .. } => "batch".to_string(),
+        Command::UntrackImport { .. } => "untrack_import".to_string(),
         Command::MergeProjects { .. } => "merge_projects".to_string(),
         Command::RepairIntegrity => "repair_integrity".to_string(),
         Command::UpdateProjectSettings => "update_project_settings".to_string(),

@@ -106,12 +106,15 @@ const dmpSection = (name: string) => ({
 
 const dmpFile = { version: 1, sections: [dmpSection('A'), dmpSection('B')] } as unknown as DmpFile;
 
+// Hashes present, because the withdrawal has to forget exactly these (#394
+// review claim 3): the section hashes are the SELECTED sections' - what this run
+// sent to `import_sections` and therefore what it caused to be tracked.
 const selectionConfig = (selected: number[]): DmpSelectionConfig => ({
   selectedIndices: new Set(selected),
   defaultSurveyor: 'S',
   defaultDate: null,
-  fileHash: null,
-  sectionHashes: [],
+  fileHash: 'file-hash',
+  sectionHashes: ['hash_A', 'hash_B'],
 });
 
 const savedState = (overrides: Partial<SavedManualPlacingState>): SavedManualPlacingState => ({
@@ -153,6 +156,8 @@ let batches: Array<Array<{ type: string; section_id?: number }>> = [];
 let ipcOrder: string[] = [];
 /** What `execute_batch` should answer with, for the refusal case. */
 let batchResult: { success: boolean; error?: string } = { success: true };
+/** Same, for the write-through save that follows a successful batch. */
+let saveResult: { success: boolean; error?: string } = { success: true };
 
 /** A promise the test resolves by hand, to hold one IPC call open. */
 function deferred(): { promise: Promise<void>; release: () => void } {
@@ -202,6 +207,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     batches = [];
     ipcOrder = [];
     batchResult = { success: true };
+    saveResult = { success: true };
     gates = new Map();
     outstandingReleases = [];
     invokeIpcMock.mockReset();
@@ -228,7 +234,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
         }
         return { success: true, warnings: [] };
       }
-      if (cmd === 'save_project') return { success: true, warnings: [] };
+      if (cmd === 'save_project') return { ...saveResult, warnings: [] };
       return null;
     });
     useUIStore.setState({
@@ -351,6 +357,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
       [
         { type: 'delete_section', section_id: 7 },
         { type: 'delete_section', section_id: 8 },
+        { type: 'untrack_import', file_hashes: ['file-hash'], section_hashes: ['hash_A', 'hash_B'] },
       ],
     ]);
     // A withdrawn run completes nothing, so nothing is summarised for it either.
@@ -403,7 +410,12 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     fireEvent.click(screen.getByTestId('cancel-remove-button'));
 
     await waitFor(() => expect(onCancel).toHaveBeenCalled());
-    expect(batches).toEqual([[{ type: 'delete_section', section_id: 7 }]]);
+    expect(batches).toEqual([
+      [
+        { type: 'delete_section', section_id: 7 },
+        { type: 'untrack_import', file_hashes: ['file-hash'], section_hashes: ['hash_A', 'hash_B'] },
+      ],
+    ]);
     expect(projectSectionIds).toEqual([]);
   });
 
@@ -554,6 +566,81 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     await waitFor(() => expect(onCancel).toHaveBeenCalled());
     // AFTER the batch, not before: the save has to capture the withdrawal.
     expect(ipcOrder.indexOf('save_project')).toBeGreaterThan(ipcOrder.indexOf('execute_batch'));
+  });
+
+  /**
+   * The save is not best-effort. Closing here is what makes the removal final
+   * from the user's side, so a `.stalx` that still holds the sections while the
+   * project no longer does is the F2 shape one layer out - and the user would
+   * have no idea. The wizard stays open with the reason instead.
+   *
+   * Injection: ignore `saved.success` (the original `await saveProject()`) and
+   * the wizard closes over a stale file.
+   */
+  it('stays open when the write-through save fails, and a retry re-attempts it', async () => {
+    useUIStore.setState({ importContext: 'new-project' });
+    saveResult = { success: false, error: 'FS_PERMISSION: folder is read-only' };
+    projectSectionIds = [7];
+    const onCancel = vi.fn();
+    renderWizard(
+      savedState({
+        segmentQueue: [[1]],
+        segmentAnchor: { sectionIndex: 1, stationIndex: 0 },
+        importedSectionIds: [7],
+      }),
+      { onCancel, selected: [0, 1] },
+    );
+
+    fireEvent.click(screen.getByTestId('cancel-button'));
+    fireEvent.click(screen.getByTestId('cancel-remove-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('wizard-error')).toHaveTextContent('FS_PERMISSION'),
+    );
+    expect(onCancel).not.toHaveBeenCalled();
+    // The delete DID land - this is a disk failure, not a backend refusal.
+    expect(projectSectionIds).toEqual([]);
+
+    // The retry has no sections left to delete, so it must retry the SAVE
+    // rather than find an empty list and close over the stale file.
+    saveResult = { success: true };
+    const savesBefore = ipcOrder.filter((c) => c === 'save_project').length;
+    fireEvent.click(screen.getByTestId('cancel-remove-button'));
+    await waitFor(() => expect(onCancel).toHaveBeenCalled());
+    expect(ipcOrder.filter((c) => c === 'save_project').length).toBe(savesBefore + 1);
+  });
+
+  /**
+   * #394 review claim 3. `execute_import_sections` records the file hash and each
+   * section's content hash, and `delete_section` does not touch them - so without
+   * this the project still claims the file was imported while none of it remains,
+   * and `DmpSelectionDialog` auto-DESELECTS every section it thinks is a
+   * duplicate. The forget rides the same batch, so one undo restores sections and
+   * tracking together.
+   *
+   * Injection: drop the `untrack_import` entry and the batch carries deletes only.
+   */
+  it('forgets the import-dedup hashes in the same batch as the deletes', async () => {
+    projectSectionIds = [7];
+    const onCancel = vi.fn();
+    renderWizard(
+      savedState({
+        segmentQueue: [[1]],
+        segmentAnchor: { sectionIndex: 1, stationIndex: 0 },
+        importedSectionIds: [7],
+      }),
+      { onCancel, selected: [0, 1] },
+    );
+
+    fireEvent.click(screen.getByTestId('cancel-button'));
+    fireEvent.click(screen.getByTestId('cancel-remove-button'));
+
+    await waitFor(() => expect(onCancel).toHaveBeenCalled());
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toEqual([
+      { type: 'delete_section', section_id: 7 },
+      { type: 'untrack_import', file_hashes: ['file-hash'], section_hashes: ['hash_A', 'hash_B'] },
+    ]);
   });
 
   /**

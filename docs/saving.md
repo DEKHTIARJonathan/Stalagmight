@@ -4,6 +4,18 @@
 
 Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. Saves are triggered manually (Ctrl+S), automatically via a frontend debounced timer, or by the first import into a new project whose initial save was deferred (`finalize_deferred_import` in `src-tauri/src/commands/import.rs`). A failed deferred-import save degrades to a successful import carrying a warning, never a hard failure, so the imported data stays in memory under the close-guard. The save pipeline is optimized to return quickly by deferring non-critical work to background threads and avoiding unnecessary recomputation.
 
+Every import-into-new-project flow now creates its project deferred, so the
+`.stalx` appears on the first import rather than at the moment the name is typed
+(#394 F14) - a wizard abandoned before then leaves no empty file and no Recent
+Projects entry. Because that write happens on the BACKEND, the frontend has to be
+told: `noteImportResolvedDeferredSave` (`projectStore.ts`) flips `databaseOpen`
+after any successful import command unless the result carries the deferred save's
+own `SYSTEM` failure or `DATABASE_NOT_REOPENED`. Without it only the DMP route
+knew - it goes on to call `saveAfterImport` - and the TML/Compass/Walls/GPX
+dialogs, which finish through `completeImportToSingleView`, left the DB-backed
+surfaces (warning resolution, dive-plan persistence) disabled over a file that
+existed.
+
 ## Schema version and pre-release files
 
 The `.stalx` schema version lives in `SCHEMA_VERSION` (`persistence/sqlite.rs`);

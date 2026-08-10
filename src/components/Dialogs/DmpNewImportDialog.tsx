@@ -3445,10 +3445,18 @@ export default function DmpNewImportDialog({
   const withdrawInFlightRef = useRef(false);
   const [withdrawInFlight, setWithdrawInFlight] = useState(false);
 
-  /** Remove every section this wizard run imported, as ONE undoable step.
-   *  Returns false (leaving the accumulators untouched) if it refused or the
-   *  backend did, so the caller can keep the wizard open on a visible error
-   *  instead of closing over a project it failed to clean up. */
+  /** The removal landed in memory but is not yet on disk. Survives a failed
+   *  save so a second Remove click RETRIES THE SAVE instead of finding an empty
+   *  id list, returning true, and closing over the stale file it just refused to
+   *  close over. */
+  const withdrawalNeedsSaveRef = useRef(false);
+
+  /** Remove every section this wizard run imported, as ONE undoable step, and
+   *  leave the result on disk.
+   *  Returns false (leaving the accumulators untouched) if it refused, the
+   *  backend did, or the follow-up save did, so the caller can keep the wizard
+   *  open on a visible error instead of closing over a project it failed to
+   *  clean up. */
   const withdrawImportedSections = useCallback(async (): Promise<boolean> => {
     if (withdrawInFlightRef.current) return false;
     // DEDUPLICATED: this accumulator is seeded from the saved state AND appended
@@ -3457,7 +3465,7 @@ export default function DmpNewImportDialog({
     // fails with "not found", which rolls the WHOLE batch back - the withdrawal
     // would remove nothing at all and report an error for it.
     const sectionIds = [...new Set(importedSectionIdsRef.current)];
-    if (sectionIds.length === 0) return true;
+    if (sectionIds.length === 0 && !withdrawalNeedsSaveRef.current) return true;
     // Section ids are small per-project integers, so a withdrawal aimed at a
     // project that is no longer open would delete same-numbered sections in
     // whatever replaced it - and every id would RESOLVE, so nothing downstream
@@ -3473,13 +3481,84 @@ export default function DmpNewImportDialog({
     setWithdrawInFlight(true);
     setIsImporting(true);
     try {
-      const result = await executeBatch(
-        sectionIds.map((sectionId) => ({ type: 'delete_section', section_id: sectionId }) as const),
-      );
-      if (!result.success) {
-        setError(result.error ?? t('dialogs.dmpNewImport.removeImportedFailed'));
-        return false;
+      if (sectionIds.length > 0) {
+        const fileHashes = selectionConfig.fileHash ? [selectionConfig.fileHash] : [];
+        const sectionHashes = selectionConfig.sectionHashes ?? [];
+        const result = await executeBatch([
+          ...sectionIds.map((sectionId) => ({ type: 'delete_section', section_id: sectionId }) as const),
+          // In the SAME batch, and that is the point of batching it: deleting a
+          // section does not touch the import-dedup hashes `import_sections`
+          // recorded (they are project-level bookkeeping, not references), so
+          // without this the project still claims this file was imported while
+          // none of it remains - and `DmpSelectionDialog` DESELECTS every section
+          // it believes is a duplicate, so the obvious retry silently offers
+          // nothing to import. One batch, so one undo restores the sections and
+          // their tracking together.
+          //
+          // Only the hashes THIS run sent to `import_sections`: `sectionHashes`
+          // holds the selected sections alone (duplicates were auto-deselected
+          // before the wizard opened), so an earlier session's tracking is out of
+          // reach. The file hash is coarser - one per file - so a file imported
+          // in an earlier session too loses its file-level duplicate flag. That
+          // is the intended direction: after a withdrawal the user may well want
+          // to re-import it, and the per-section flags still stand.
+          ...(fileHashes.length > 0 || sectionHashes.length > 0
+            ? [{
+                type: 'untrack_import',
+                file_hashes: fileHashes,
+                section_hashes: sectionHashes,
+              } as const]
+            : []),
+        ]);
+        if (!result.success) {
+          setError(result.error ?? t('dialogs.dmpNewImport.removeImportedFailed'));
+          return false;
+        }
+
+        // DIFFED, not cleared: an import that resolved while the batch was in
+        // flight has pushed an id the batch never named, and that section is
+        // still in the project. Wiping the list would drop it from tracking
+        // while it survives on disk - the very shape F2 exists to prevent. (The
+        // handlers refuse to start a withdrawal mid-import, so this is the
+        // second line of defence, not the first.)
+        const removed = new Set(sectionIds);
+        importedSectionIdsRef.current = importedSectionIdsRef.current.filter((id) => !removed.has(id));
+        for (const dmpIndex of [...earlyImportedRef.current.keys()]) {
+          const sectionId = earlyImportedRef.current.get(dmpIndex);
+          if (sectionId != null && removed.has(sectionId)) earlyImportedRef.current.delete(dmpIndex);
+        }
+        // Receipts are per-`import_sections` CALL and carry no section id, so
+        // they cannot be diffed - only safe to drop once nothing survives.
+        if (importedSectionIdsRef.current.length === 0) importedReceiptsRef.current = [];
+
+        // #394 F14. The eager anchor import already RESOLVED this project's
+        // deferred first save (`finalize_deferred_import`), so the file on disk
+        // still holds the sections just withdrawn. It has to be written through.
+        //
+        // Gated as `saveAfterImport` gates its own save, for its reason:
+        // importing INTO AN EXISTING project the user may have unrelated pending
+        // edits, and committing those behind their back is not this action's to
+        // do. There the withdrawal leaves the project dirty and autosave / the
+        // close guard carry it, as for any other edit.
+        withdrawalNeedsSaveRef.current = useUIStore.getState().importContext === 'new-project';
       }
+
+      // The save is NOT best-effort: closing here is what makes the removal
+      // final from the user's side, and a `.stalx` still holding the sections
+      // they chose to remove is the exact F2 shape one layer out. So a failed
+      // write keeps the wizard open with the reason on screen, and
+      // `withdrawalNeedsSaveRef` makes the next Remove click retry the SAVE -
+      // without it the retry would find an empty id list, return true, and close
+      // over the very file the first attempt refused to close over.
+      if (withdrawalNeedsSaveRef.current) {
+        const saved = await useProjectStore.getState().saveProject();
+        if (!saved.success) {
+          setError(saved.error ?? t('dialogs.dmpNewImport.removeImportedSaveFailed'));
+          return false;
+        }
+        withdrawalNeedsSaveRef.current = false;
+      }
+      return true;
     } catch (e) {
       setError(importErrorMessage(e));
       return false;
@@ -3488,40 +3567,7 @@ export default function DmpNewImportDialog({
       setWithdrawInFlight(false);
       setIsImporting(false);
     }
-    // DIFFED, not cleared: an import that resolved while the batch was in flight
-    // has pushed an id the batch never named, and that section is still in the
-    // project. Wiping the list would drop it from tracking while it survives on
-    // disk - the very shape F2 exists to prevent. (The handlers refuse to start
-    // a withdrawal mid-import, so this is the second line of defence, not the
-    // first.)
-    const removed = new Set(sectionIds);
-    importedSectionIdsRef.current = importedSectionIdsRef.current.filter((id) => !removed.has(id));
-    for (const dmpIndex of [...earlyImportedRef.current.keys()]) {
-      const sectionId = earlyImportedRef.current.get(dmpIndex);
-      if (sectionId != null && removed.has(sectionId)) earlyImportedRef.current.delete(dmpIndex);
-    }
-    // Receipts are per-`import_sections` CALL and carry no section id, so they
-    // cannot be diffed - they are only safe to drop once nothing survives.
-    if (importedSectionIdsRef.current.length === 0) importedReceiptsRef.current = [];
-
-    // #394 F14. The eager anchor import already RESOLVED this project's deferred
-    // first save (`finalize_deferred_import`), so the file on disk still holds
-    // the sections just withdrawn. Write the withdrawn state through, so disk
-    // matches memory. The file itself stays where the user asked for it - this
-    // never unlinks anything (and see docs/dmp-import.md for the residue).
-    //
-    // Gated exactly as `saveAfterImport` gates its own save, for its reason:
-    // importing INTO AN EXISTING project, the user may have unrelated pending
-    // edits, and committing those behind their back is not this action's to do.
-    // There the withdrawal leaves the project dirty and autosave / the close
-    // guard carry it, as for any other edit.
-    if (useUIStore.getState().importContext === 'new-project') {
-      // Deliberately not fatal: the sections are gone from the project either
-      // way, and `saveProject` raises its own permission/integrity surfaces.
-      await useProjectStore.getState().saveProject();
-    }
-    return true;
-  }, [executeBatch, t]);
+  }, [executeBatch, selectionConfig.fileHash, selectionConfig.sectionHashes, t]);
 
   /** How many sections the pending confirmation is talking about. Snapshotted
    *  into state when the confirmation opens: the live count lives in a ref, and

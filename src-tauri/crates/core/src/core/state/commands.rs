@@ -70,6 +70,7 @@ impl AppState {
             | MoveStation { .. }
             | MoveComment { .. }
             | Batch { .. }
+            | UntrackImport { .. }
             | RepairIntegrity
             | UpdateProjectSettings
             | SetSurfaceElevation => false,
@@ -168,6 +169,8 @@ impl AppState {
             | MoveComment { .. }
             | RepairIntegrity
             | UpdateProjectSettings
+            // Import-dedup bookkeeping: a set of hashes, referenced by nothing.
+            | UntrackImport { .. }
             | SetSurfaceElevation => SAFE_REFS,
 
             // Remove an entity / renumber stations: can dangle refs AND strand a
@@ -788,6 +791,10 @@ impl AppState {
             // Never routed here: repair is applied via `repair_project_integrity`,
             // which records its own snapshot-pair undo entry. Present only for match
             // exhaustiveness.
+            Command::UntrackImport {
+                file_hashes,
+                section_hashes,
+            } => self.untrack_import(file_hashes, section_hashes),
             Command::RepairIntegrity => CommandResult::failure(
                 "RepairIntegrity is applied via repair_project_integrity, not execute()"
                     .to_string(),
@@ -1013,8 +1020,11 @@ impl AppState {
                 // it all-or-nothing rollback and a single undo entry, instead of
                 // N commands that can strand the project half-reversed.
                 | Command::ReverseSection { .. }
-                // Withdrawing an abandoned import is one user action too (#394).
+                // Withdrawing an abandoned import is one user action too (#394) -
+                // the deletes and the dedup bookkeeping that describes them have
+                // to come back together, so both are batchable.
                 | Command::DeleteSection { .. }
+                | Command::UntrackImport { .. }
         )
     }
 
