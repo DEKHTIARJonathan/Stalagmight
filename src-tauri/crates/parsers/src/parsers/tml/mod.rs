@@ -20,11 +20,14 @@ use crate::models::shot::implied_pitch_deg;
 use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig, ShotData, ShotKind};
 
 mod decode;
+mod linearize;
 // `test-support` (never on in production builds) keeps these fixture builders
 // compiled for the root crate's tests, which can no longer see a dependency's
 // `#[cfg(test)]` items now that the parsers live in their own crate.
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_helpers;
+
+use linearize::{join_contiguous_chains, linearize_section};
 
 // ============================================================================
 // IPC-visible types
@@ -883,323 +886,24 @@ fn build_sections(mut raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosu
         sections.extend(linearized);
     }
 
+    // Sew the cuts back up where the file's own topology allows it: a chain that
+    // starts exactly where another ends is the same passage under a new name
+    // (#412). Must run BEFORE extract_closures, which keys closures on
+    // (section index, station index) and would otherwise index the pre-merge
+    // fragments.
+    //
+    // The join matches a chain's start against another chain's end BY SHOT ID,
+    // so it needs to know whether this file's ids are actually unique - a
+    // duplicate id would splice an unrelated chain onto the wrong parent.
+    let joins = join_contiguous_chains(&mut sections, count_duplicate_shot_ids(&raw_shots));
+    if joins > 0 {
+        tracing::debug!(joins, "Joined contiguous TML chains");
+    }
+
     // Extract closures: find CLOSURE shots and map to section:station indices
     let closures = extract_closures(&sections, &shot_by_id);
 
     (sections, closures)
-}
-
-/// Linearize a group of shots belonging to one section name.
-/// Splits into multiple sub-sections if branching is detected.
-fn linearize_section(
-    section_name: &str,
-    shots: &[&RawShot],
-    successors: &HashMap<i64, Vec<i64>>,
-    all_shots: &HashMap<i64, &RawShot>,
-) -> Vec<TmlSection> {
-    if shots.is_empty() {
-        return Vec::new();
-    }
-
-    let shot_ids: std::collections::HashSet<i64> = shots.iter().map(|s| s.id).collect();
-    let shot_by_id: HashMap<i64, &RawShot> = shots.iter().map(|s| (s.id, *s)).collect();
-
-    // Preserve deterministic chain selection by ranking shots in encounter order.
-    let order_rank: HashMap<i64, usize> =
-        shots.iter().enumerate().map(|(i, s)| (s.id, i)).collect();
-    let rank_key = |id: &i64| (order_rank.get(id).copied().unwrap_or(usize::MAX), *id);
-
-    // Successors constrained to this section, sorted deterministically.
-    let mut in_section_successors: HashMap<i64, Vec<i64>> = HashMap::new();
-    for shot in shots {
-        let mut succs: Vec<i64> = successors
-            .get(&shot.id)
-            .into_iter()
-            .flatten()
-            .copied()
-            .filter(|id| shot_ids.contains(id))
-            .collect();
-        succs.sort_by_key(&rank_key);
-        succs.dedup();
-        in_section_successors.insert(shot.id, succs);
-    }
-
-    // Find chain roots: shots whose from_id is not in this section's shot set.
-    let mut roots: Vec<i64> = shots
-        .iter()
-        .filter(|s| !shot_ids.contains(&s.from_id))
-        .map(|s| s.id)
-        .collect();
-    roots.sort_by_key(&rank_key);
-
-    let needs_split = roots.len() > 1 || has_branching_within(shots, successors);
-    let mut visited: std::collections::HashSet<i64> = std::collections::HashSet::new();
-    let mut pending_starts = std::collections::VecDeque::new();
-    let mut chains: Vec<Vec<i64>> = Vec::new();
-
-    // Walk natural roots first.
-    for root_id in roots {
-        let chain = collect_linear_chain(
-            root_id,
-            &shot_ids,
-            &in_section_successors,
-            &mut visited,
-            &mut pending_starts,
-        );
-        if !chain.is_empty() {
-            chains.push(chain);
-        }
-    }
-
-    // Then walk branch starts discovered while traversing roots.
-    while let Some(start_id) = pending_starts.pop_front() {
-        let chain = collect_linear_chain(
-            start_id,
-            &shot_ids,
-            &in_section_successors,
-            &mut visited,
-            &mut pending_starts,
-        );
-        if !chain.is_empty() {
-            chains.push(chain);
-        }
-    }
-
-    // Guard pass for malformed/disconnected graphs:
-    // backtrack through in-section parents to find an upstream start.
-    let mut unvisited_ids: Vec<i64> = shots
-        .iter()
-        .map(|s| s.id)
-        .filter(|id| !visited.contains(id))
-        .collect();
-    unvisited_ids.sort_by_key(&rank_key);
-
-    for shot_id in unvisited_ids {
-        if visited.contains(&shot_id) {
-            continue;
-        }
-
-        let mut start = shot_id;
-        let mut seen_backtrack = std::collections::HashSet::new();
-        loop {
-            if !seen_backtrack.insert(start) {
-                tracing::warn!(
-                    section = section_name,
-                    shot_id = start,
-                    "Cycle detected while finding branch start; using cycle member as start"
-                );
-                break;
-            }
-
-            let Some(current) = shot_by_id.get(&start) else {
-                tracing::warn!(
-                    section = section_name,
-                    shot_id = start,
-                    "Shot missing while finding branch start; using current node as start"
-                );
-                break;
-            };
-
-            let parent_id = current.from_id;
-            if !shot_ids.contains(&parent_id) || visited.contains(&parent_id) {
-                break;
-            }
-            start = parent_id;
-        }
-
-        let chain = collect_linear_chain(
-            start,
-            &shot_ids,
-            &in_section_successors,
-            &mut visited,
-            &mut pending_starts,
-        );
-        if !chain.is_empty() {
-            chains.push(chain);
-        }
-
-        while let Some(extra_start) = pending_starts.pop_front() {
-            let extra_chain = collect_linear_chain(
-                extra_start,
-                &shot_ids,
-                &in_section_successors,
-                &mut visited,
-                &mut pending_starts,
-            );
-            if !extra_chain.is_empty() {
-                chains.push(extra_chain);
-            }
-        }
-    }
-
-    // Last-resort guard: ensure every shot is emitted exactly once.
-    let mut still_unvisited: Vec<i64> = shots
-        .iter()
-        .map(|s| s.id)
-        .filter(|id| !visited.contains(id))
-        .collect();
-    still_unvisited.sort_by_key(&rank_key);
-    for shot_id in still_unvisited {
-        let chain = collect_linear_chain(
-            shot_id,
-            &shot_ids,
-            &in_section_successors,
-            &mut visited,
-            &mut pending_starts,
-        );
-        if !chain.is_empty() {
-            tracing::warn!(
-                section = section_name,
-                shot_id,
-                "Recovered unvisited shot via final guard pass"
-            );
-            chains.push(chain);
-        }
-    }
-
-    let mut result = Vec::new();
-    for chain_ids in chains {
-        let mut chain = Vec::with_capacity(chain_ids.len());
-        for shot_id in chain_ids {
-            if let Some(shot) = shot_by_id.get(&shot_id) {
-                chain.push((*shot).clone());
-            } else {
-                tracing::warn!(
-                    section = section_name,
-                    shot_id,
-                    "Skipping missing shot while building linearized section"
-                );
-            }
-        }
-
-        if chain.is_empty() {
-            continue;
-        }
-
-        let has_prior_chains = !result.is_empty();
-        let branch_number = result.len() + 1;
-        let name = if needs_split || has_prior_chains {
-            format!("{section_name} (branch {branch_number})")
-        } else {
-            section_name.to_string()
-        };
-        let is_branch_split = needs_split || has_prior_chains;
-
-        let first_shot = &chain[0];
-        let last_shot = &chain[chain.len() - 1];
-        let surveyor = first_shot.explorer.clone();
-        let date = first_shot.date;
-        let color = first_shot.color.clone();
-
-        let tml_shots: Vec<TmlShot> = chain
-            .iter()
-            .map(|s| TmlShot {
-                id: s.id,
-                uuid: s.uuid.clone(),
-                from_id: s.from_id,
-                shot_type: s.shot_type,
-                azimuth: s.azimuth,
-                length: s.length,
-                depth: s.depth,
-                depth_in: s.depth_in,
-                inclination: s.inclination,
-                left: s.left,
-                right: s.right,
-                up: s.up,
-                down: s.down,
-                comment: s.comment.clone(),
-                explorer: s.explorer.clone(),
-                date: s.date,
-                color: s.color.clone(),
-                excluded: s.excluded,
-                latitude: s.latitude,
-                longitude: s.longitude,
-                closure_to_id: s.closure_to_id,
-                section: s.section.clone(),
-            })
-            .collect();
-
-        // Look up the parent shot's cumulative depth for correct rebasing.
-        // If from_id points to a shot (START or REAL/VIRTUAL), use its depth.
-        let start_depth = all_shots
-            .get(&first_shot.from_id)
-            .map_or(0.0, |parent| parent.depth);
-
-        result.push(TmlSection {
-            name,
-            start_ariane_id: first_shot.from_id,
-            end_ariane_id: last_shot.id,
-            shots: tml_shots,
-            surveyor,
-            date,
-            color,
-            is_branch_split,
-            start_depth,
-        });
-    }
-
-    result
-}
-
-/// Walk a single linear chain, queueing extra branch starts when a node has
-/// multiple unvisited successors within the same section.
-fn collect_linear_chain(
-    start_id: i64,
-    shot_ids: &std::collections::HashSet<i64>,
-    in_section_successors: &HashMap<i64, Vec<i64>>,
-    visited: &mut std::collections::HashSet<i64>,
-    pending_starts: &mut std::collections::VecDeque<i64>,
-) -> Vec<i64> {
-    if !shot_ids.contains(&start_id) || visited.contains(&start_id) {
-        return Vec::new();
-    }
-
-    let mut chain = Vec::new();
-    let mut current = start_id;
-
-    loop {
-        if !visited.insert(current) {
-            break;
-        }
-        chain.push(current);
-
-        let Some(successors) = in_section_successors.get(&current) else {
-            break;
-        };
-
-        let mut unvisited_successors = successors
-            .iter()
-            .copied()
-            .filter(|id| !visited.contains(id))
-            .collect::<Vec<_>>();
-
-        if unvisited_successors.is_empty() {
-            break;
-        }
-
-        let next_id = unvisited_successors.remove(0);
-        for extra in unvisited_successors {
-            pending_starts.push_back(extra);
-        }
-
-        current = next_id;
-    }
-
-    chain
-}
-
-/// Check if any shot in the group has multiple successors within the same group.
-fn has_branching_within(shots: &[&RawShot], successors: &HashMap<i64, Vec<i64>>) -> bool {
-    let shot_ids: std::collections::HashSet<i64> = shots.iter().map(|s| s.id).collect();
-    for shot in shots {
-        if let Some(succs) = successors.get(&shot.id) {
-            let in_section = succs.iter().filter(|id| shot_ids.contains(id)).count();
-            if in_section > 1 {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 /// Extract closure information from CLOSURE-type shots.
@@ -1761,6 +1465,30 @@ pub fn convert_tml_to_import_configs(
     Ok((configs, import_closures, warnings))
 }
 
+/// A config's name with a TRAILING `" (branch N)"` removed, or unchanged.
+///
+/// The suffix has to be at the END, and `N` has to be digits. A merged run is
+/// named `"A + B"` (#412) and either part can itself be a branch, giving
+/// `"A (branch 2) + B"` - a plain `rfind` would strip from the middle and
+/// rename that config to `"A"`, silently dropping the fact that it also holds
+/// B. A file-supplied name containing the literal `" (branch "` is likewise
+/// left alone unless it really ends in a branch number.
+fn branch_base(name: &str) -> &str {
+    let suffix = " (branch ";
+    let Some(pos) = name.rfind(suffix) else {
+        return name;
+    };
+    let inner = &name[pos + suffix.len()..];
+    let Some(number) = inner.strip_suffix(')') else {
+        return name;
+    };
+    if !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()) {
+        &name[..pos]
+    } else {
+        name
+    }
+}
+
 /// Simplify branch-suffixed names when only one branch of a group survives.
 ///
 /// During linearization, sections that branch get names like "Foo (branch 1)",
@@ -1769,16 +1497,12 @@ pub fn convert_tml_to_import_configs(
 /// a given base name, strip the suffix so it's just "Foo".
 fn simplify_lone_branch_names(configs: &mut [ImportSectionConfig]) {
     // Count how many configs share each base name (name without " (branch N)")
-    let re_suffix = " (branch ";
     let mut base_counts: HashMap<String, u32> = HashMap::new();
     for c in configs.iter() {
         let name = c.name.as_deref().unwrap_or("");
-        let base = if let Some(pos) = name.rfind(re_suffix) {
-            &name[..pos]
-        } else {
-            name
-        };
-        *base_counts.entry(base.to_string()).or_insert(0) += 1;
+        *base_counts
+            .entry(branch_base(name).to_string())
+            .or_insert(0) += 1;
     }
 
     // Rename lone survivors
@@ -1787,11 +1511,9 @@ fn simplify_lone_branch_names(configs: &mut [ImportSectionConfig]) {
             Some(n) => n,
             None => continue,
         };
-        if let Some(pos) = name.rfind(re_suffix) {
-            let base = &name[..pos];
-            if base_counts.get(base).copied() == Some(1) {
-                c.name = Some(base.to_string());
-            }
+        let base = branch_base(name);
+        if base.len() != name.len() && base_counts.get(base).copied() == Some(1) {
+            c.name = Some(base.to_string());
         }
     }
 }
@@ -3240,7 +2962,11 @@ mod tests {
         // Should split into 2 branches
         assert!(sections.len() >= 2);
         assert!(sections.iter().all(|s| s.is_branch_split));
-        assert!(sections[0].name.contains("branch"));
+        // Mainline naming rule (#412): the chain the continuation heuristic
+        // keeps walking retains the section's own name; only the deferred
+        // side chains get "(branch N)" suffixes.
+        assert_eq!(sections[0].name, "Section 1");
+        assert!(sections[1].name.contains("branch"));
     }
 
     #[test]
@@ -3300,6 +3026,333 @@ mod tests {
         assert_eq!(chain_6_ids, vec![6, 7, 8], "expected preserved 6→7→8 chain");
         assert_eq!(sections[sec_6].start_ariane_id, 2);
         assert_eq!(sections[sec_5].start_ariane_id, 3);
+    }
+
+    /// #412: a short side stub written FIRST in the file must not steal the
+    /// mainline. Greatest total downstream length picks the continuation.
+    #[test]
+    fn branch_continuation_longest_downstream_wins() {
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml_az_len(1, 0, "Section 1", 90.0, 10.0),
+                // Two-shot side stub, written before the continuation.
+                tml_shot_xml_az_len(10, 1, "Section 1", 0.0, 2.0),
+                tml_shot_xml_az_len(11, 10, "Section 1", 0.0, 2.0),
+                // The continuation: far more downstream length.
+                tml_shot_xml_az_len(2, 1, "Section 1", 90.0, 10.0),
+                tml_shot_xml_az_len(3, 2, "Section 1", 90.0, 10.0),
+                tml_shot_xml_az_len(4, 3, "Section 1", 90.0, 10.0),
+            ]
+            .join("\n"),
+        );
+
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
+        let (sections, _) = build_sections(raw_shots);
+
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].name, "Section 1");
+        let mainline_ids: Vec<i64> = sections[0].shots.iter().map(|s| s.id).collect();
+        assert_eq!(
+            mainline_ids,
+            vec![1, 2, 3, 4],
+            "mainline must continue past the stub"
+        );
+        assert_eq!(sections[1].name, "Section 1 (branch 2)");
+        let stub_ids: Vec<i64> = sections[1].shots.iter().map(|s| s.id).collect();
+        assert_eq!(stub_ids, vec![10, 11]);
+    }
+
+    /// #412: when both branches carry comparable downstream length (within
+    /// 20% of the longest), azimuth continuity decides - the successor whose
+    /// heading is closest to the incoming shot's continues, even when it is
+    /// written later in the file and has higher ids.
+    #[test]
+    fn branch_continuation_azimuth_tie_break() {
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml_az_len(1, 0, "Section 1", 90.0, 10.0),
+                // Written first, slightly longer (20 vs 18: comparable),
+                // but turns 60 degrees off the incoming heading.
+                tml_shot_xml_az_len(5, 1, "Section 1", 150.0, 10.0),
+                tml_shot_xml_az_len(6, 5, "Section 1", 150.0, 10.0),
+                // Written later, higher ids, but holds the heading.
+                tml_shot_xml_az_len(7, 1, "Section 1", 92.0, 9.0),
+                tml_shot_xml_az_len(8, 7, "Section 1", 92.0, 9.0),
+            ]
+            .join("\n"),
+        );
+
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
+        let (sections, _) = build_sections(raw_shots);
+
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].name, "Section 1");
+        let mainline_ids: Vec<i64> = sections[0].shots.iter().map(|s| s.id).collect();
+        assert_eq!(
+            mainline_ids,
+            vec![1, 7, 8],
+            "azimuth continuity must pick the continuation"
+        );
+        let side_ids: Vec<i64> = sections[1].shots.iter().map(|s| s.id).collect();
+        assert_eq!(side_ids, vec![5, 6]);
+    }
+
+    /// #412 shape: a long mainline with side stubs written before each
+    /// continuation. File order used to cut the mainline at every T; the
+    /// downstream-length rule must keep one long mainline plus N stubs.
+    #[test]
+    fn branch_continuation_mainline_with_many_ts() {
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml_az_len(1, 0, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(2, 1, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(3, 2, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(20, 3, "Main", 0.0, 2.0),
+                tml_shot_xml_az_len(21, 20, "Main", 0.0, 2.0),
+                tml_shot_xml_az_len(4, 3, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(5, 4, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(6, 5, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(30, 6, "Main", 180.0, 2.0),
+                tml_shot_xml_az_len(31, 30, "Main", 180.0, 2.0),
+                tml_shot_xml_az_len(7, 6, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(8, 7, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(40, 8, "Main", 0.0, 2.0),
+                tml_shot_xml_az_len(41, 40, "Main", 0.0, 2.0),
+                tml_shot_xml_az_len(9, 8, "Main", 90.0, 10.0),
+            ]
+            .join("\n"),
+        );
+
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
+        let (sections, _) = build_sections(raw_shots);
+
+        assert_eq!(sections.len(), 4, "one mainline + three stubs");
+        assert_eq!(sections[0].name, "Main");
+        let mainline_ids: Vec<i64> = sections[0].shots.iter().map(|s| s.id).collect();
+        assert_eq!(
+            mainline_ids,
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9],
+            "the mainline must survive every T uncut"
+        );
+        for section in &sections[1..] {
+            assert!(
+                section.name.contains("(branch "),
+                "stub name: {}",
+                section.name
+            );
+            assert_eq!(section.shots.len(), 2, "each stub is two shots");
+        }
+    }
+
+    /// Same file, same sections: the continuation choice must not depend on
+    /// anything with unstable iteration order.
+    #[test]
+    fn branch_continuation_is_deterministic() {
+        let shots = [
+            tml_shot_xml(0, -1, "START", "Start"),
+            tml_shot_xml_az_len(1, 0, "Section 1", 90.0, 10.0),
+            tml_shot_xml_az_len(10, 1, "Section 1", 0.0, 2.0),
+            tml_shot_xml_az_len(2, 1, "Section 1", 92.0, 9.0),
+            tml_shot_xml_az_len(3, 2, "Section 1", 88.0, 9.0),
+            tml_shot_xml_az_len(20, 2, "Section 1", 150.0, 10.0),
+            tml_shot_xml_az_len(21, 20, "Section 1", 150.0, 10.0),
+        ]
+        .join("\n");
+        let xml = wrap_xml(&shots);
+
+        let fingerprint = |tml: &TmlFile| -> String {
+            tml.sections
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{}|{}|{:?}\n",
+                        s.name,
+                        s.start_ariane_id,
+                        s.shots.iter().map(|shot| shot.id).collect::<Vec<_>>()
+                    )
+                })
+                .collect()
+        };
+
+        // Hard-coded, not just self-consistent: repeating the same parse proves
+        // stability, but a rule that changed which successor continues the
+        // mainline would be stably WRONG and still pass. At shot 2 the walk
+        // takes 20 (20.0 m downstream) over 3 (9.0 m), and the two deferred
+        // chains keep the mid-chain parents that make them unjoinable.
+        const EXPECTED: &str = "Section 1|0|[1, 2, 20, 21]\n\
+                                Section 1 (branch 2)|1|[10]\n\
+                                Section 1 (branch 3)|2|[3]\n";
+
+        let first = fingerprint(&parse_synthetic_tmlu(&xml));
+        assert_eq!(
+            first, EXPECTED,
+            "the continuation rule picked a new mainline"
+        );
+        for _ in 0..5 {
+            assert_eq!(
+                fingerprint(&parse_synthetic_tmlu(&xml)),
+                first,
+                "section list must be byte-identical on every parse"
+            );
+        }
+    }
+
+    /// A section with several roots gives its own name to the LONGEST root,
+    /// not to whichever root the file happened to write first (#412).
+    ///
+    /// `choose_continuation` only decides junctions inside a chain; the roots
+    /// themselves were walked in file order, so an entrance stub written first
+    /// took the section's name and the real mainline was demoted to
+    /// "(branch 2)" - the same file-order bias the continuation rule exists to
+    /// remove, one level up.
+    #[test]
+    fn the_longest_root_keeps_the_section_name() {
+        let shots = [
+            // Written first, but a dead-end stub.
+            tml_shot_xml_az_len(1, -1, "Sump", 90.0, 2.0),
+            // Written second, and the actual passage.
+            tml_shot_xml_az_len(2, -1, "Sump", 90.0, 30.0),
+            tml_shot_xml_az_len(3, 2, "Sump", 90.0, 30.0),
+            tml_shot_xml_az_len(4, 3, "Sump", 90.0, 30.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        let named: Vec<(&str, Vec<i64>)> = tml
+            .sections
+            .iter()
+            .map(|s| (s.name.as_str(), s.shots.iter().map(|sh| sh.id).collect()))
+            .collect();
+        assert_eq!(
+            named,
+            vec![("Sump", vec![2, 3, 4]), ("Sump (branch 2)", vec![1]),],
+            "the 90 m root is the mainline; the 2 m stub is the branch"
+        );
+    }
+
+    /// A CLOSURE shot must never win a junction away from real survey (#412).
+    ///
+    /// Closures are loop markers that `convert_shots_to_shot_data` filters out
+    /// of the import, and our own exporter gives them the vertical gap between
+    /// the nodes they tie, so their `Length` is not always zero. Letting that
+    /// length into the continuation choice makes the mainline "continue" into
+    /// an edge that then vanishes: the run stops dead at the junction and the
+    /// real continuation is demoted to a branch.
+    #[test]
+    fn a_closure_edge_never_takes_the_junction_from_real_survey() {
+        let closure_xml = |id: i64, from_id: i64, length: f64| {
+            format!(
+                r"<SurveyData>
+    <ID>{id}</ID>
+    <FromID>{from_id}</FromID>
+    <ClosureToID>1</ClosureToID>
+    <Type>CLOSURE</Type>
+    <Section>Main</Section>
+    <Azimut>90.0</Azimut>
+    <Length>{length}</Length>
+    <Depth>5.0</Depth>
+    <DepthIn>-1.0</DepthIn>
+    <Inclination>0.0</Inclination>
+    <Left>0.0</Left>
+    <Right>0.0</Right>
+    <Up>0.0</Up>
+    <Down>0.0</Down>
+    <Comment></Comment>
+    <Explorer>Tester</Explorer>
+    <Date>2024-06-15</Date>
+    <Color>0x8f6112ff</Color>
+    <Excluded>false</Excluded>
+    <Latitude>0.0</Latitude>
+    <Longitude>0.0</Longitude>
+</SurveyData>"
+            )
+        };
+        let long_closure = closure_xml(4, 2, 500.0);
+        let shots = [
+            tml_shot_xml_az_len(1, -1, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(2, 1, "Main", 90.0, 10.0),
+            // The real continuation, far shorter than the closure's 500 m.
+            tml_shot_xml_az_len(3, 2, "Main", 90.0, 10.0),
+            long_closure.to_owned(),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        let mainline = tml
+            .sections
+            .iter()
+            .find(|s| s.name == "Main")
+            .expect("the mainline keeps the section name");
+        assert!(
+            mainline.shots.iter().any(|s| s.id == 3),
+            "the real continuation must stay on the mainline; got {:?}",
+            mainline.shots.iter().map(|s| s.id).collect::<Vec<_>>()
+        );
+
+        // And the run the user actually imports is not truncated at the junction.
+        let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("convert");
+        assert_eq!(configs.len(), 1, "a closure must not fragment the section");
+        assert_eq!(
+            configs[0].shots.len(),
+            3,
+            "all three real shots import as one run"
+        );
+
+        // Zero-weighting the closure's length is not on its own enough. When
+        // the real continuation ALSO has no downstream length - a zero-length
+        // station marker - both candidates survive elimination and the choice
+        // falls through to azimuth, where a straight-ahead closure beats a real
+        // shot that turns. Only refusing closures as candidates covers this.
+        let degenerate = [
+            tml_shot_xml_az_len(1, -1, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(2, 1, "Main", 90.0, 10.0),
+            // Real, but zero length and turning hard away from the heading.
+            tml_shot_xml_az_len(3, 2, "Main", 180.0, 0.0),
+            closure_xml(4, 2, 0.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&degenerate));
+        let mainline = tml
+            .sections
+            .iter()
+            .find(|s| s.name == "Main")
+            .expect("the mainline keeps the section name");
+        assert!(
+            mainline.shots.iter().any(|s| s.id == 3),
+            "a closure must not win on azimuth either; got {:?}",
+            mainline.shots.iter().map(|s| s.id).collect::<Vec<_>>()
+        );
+
+        // Nor may a closure's length reach the choice INDIRECTLY, by inflating
+        // a real ancestor's downstream total. Here both candidates at shot 1
+        // are real, so refusing closures as candidates does nothing: only
+        // giving the closure zero weight keeps the 200 m branch ahead of the
+        // 5 m one that happens to carry a 500 m loop marker.
+        let inflated = [
+            tml_shot_xml_az_len(1, -1, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(2, 1, "Main", 90.0, 5.0),
+            closure_xml(5, 2, 500.0),
+            tml_shot_xml_az_len(3, 1, "Main", 180.0, 100.0),
+            tml_shot_xml_az_len(4, 3, "Main", 180.0, 100.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&inflated));
+        let mainline = tml
+            .sections
+            .iter()
+            .find(|s| s.name == "Main")
+            .expect("the mainline keeps the section name");
+        assert_eq!(
+            mainline.shots.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![1, 3, 4],
+            "the 200 m real branch is the mainline, not the 5 m one with a closure on it"
+        );
     }
 
     #[test]
@@ -3586,8 +3639,20 @@ mod tests {
     // Multi-section topology
     // -------------------------------------------------------------------
 
+    /// Two declared sections running in SERIES are one linear passage, so they
+    /// import as one config (#412).
+    ///
+    /// This is the whole of the cross-section join: B's first shot hangs off
+    /// A's LAST shot, so B's station 0 already IS A's final station and one
+    /// polyline holds both. The names are not thrown away - the merged run is
+    /// called "Section A + Section B", because nothing else in an
+    /// `ImportSectionConfig` can carry the fact that the surveyor named these
+    /// separately.
+    ///
+    /// A file whose sections branch instead of running in series is untouched;
+    /// `test_branch_leftovers_preserve_parent_child_topology` covers that.
     #[test]
-    fn test_multi_section_topology() {
+    fn sections_running_in_series_import_as_one_named_run() {
         let xml = wrap_xml(
             &[
                 tml_shot_xml(0, -1, "START", "Start"),
@@ -3603,17 +3668,35 @@ mod tests {
             parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, _) = build_sections(raw_shots);
 
-        assert_eq!(sections.len(), 2);
-        assert_eq!(sections[0].name, "Section A");
-        assert_eq!(sections[0].shots.len(), 2);
-        assert_eq!(sections[1].name, "Section B");
-        assert_eq!(sections[1].shots.len(), 2);
+        assert_eq!(sections.len(), 1, "series sections join into one run");
+        assert_eq!(sections[0].name, "Section A + Section B");
+        assert_eq!(
+            sections[0].shots.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4],
+            "the join keeps file order, so the run stays a valid import sequence"
+        );
+        assert_eq!(
+            sections[0].start_ariane_id, 0,
+            "the merged run still starts where the parent chain did"
+        );
+        assert_eq!(
+            sections[0].end_ariane_id, 4,
+            "and ends where the absorbed chain did"
+        );
     }
 
     // -------------------------------------------------------------------
     // Import config conversion
     // -------------------------------------------------------------------
 
+    /// Cross-section `FromImporting` placement, on a section that BRANCHES off
+    /// mid-chain.
+    ///
+    /// Section B hangs off shot 1, which is mid-Section-A, so the two stay
+    /// separate configs and the topology has to be carried by placement - the
+    /// case this test exists for. (Were B parented on A's LAST shot the two
+    /// would join into one run instead; see
+    /// `sections_running_in_series_import_as_one_named_run`.)
     #[test]
     fn test_convert_to_import_configs() {
         let xml = wrap_xml(
@@ -3621,7 +3704,7 @@ mod tests {
                 tml_shot_xml(0, -1, "START", "Start"),
                 tml_shot_xml(1, 0, "REAL", "Section A"),
                 tml_shot_xml(2, 1, "REAL", "Section A"),
-                tml_shot_xml(3, 2, "REAL", "Section B"),
+                tml_shot_xml(3, 1, "REAL", "Section B"),
             ]
             .join("\n"),
         );
@@ -3652,8 +3735,8 @@ mod tests {
         assert_eq!(configs[0].section_index, 0);
 
         // Second section → FromImporting (linked via topology)
-        // Section B's first shot (ID=3) has FromID=2, which is the 2nd shot in Section A.
-        // Shot ID=2 is at import shot index 1, so it ends at station 2.
+        // Section B's first shot (ID=3) has FromID=1, the 1st shot in Section A.
+        // Shot ID=1 is at import shot index 0, so it ends at station 1.
         match &configs[1].placement {
             ImportPlacement::FromImporting {
                 import_station,
@@ -3666,8 +3749,8 @@ mod tests {
                 );
                 assert_eq!(*target_section_index, 0, "should link to section 0");
                 assert_eq!(
-                    *target_station_index, 2,
-                    "should link to station 2 (end of shot ID=2)"
+                    *target_station_index, 1,
+                    "should link to station 1 (end of shot ID=1)"
                 );
             }
             other => panic!("Expected FromImporting, got {:?}", other),
@@ -4952,5 +5035,960 @@ mod tests {
         let (comment, station_comments) = import_comment(Some("muddy water".to_string()), false);
         assert_eq!(comment.as_deref(), Some("muddy water"));
         assert!(station_comments.is_empty());
+    }
+
+    /// Why each emitted chain starts where it does (#412).
+    ///
+    /// The point of the split is that only ONE of these classes could ever be
+    /// merged away into a neighbouring config: a chain whose parent shot is the
+    /// LAST shot of the chain that contains it. Every other class attaches
+    /// mid-chain, and a `models::Section` is a strictly linear polyline
+    /// (`Section::shots` is consumed positionally; every cross-reference into a
+    /// section is a single `station_index`), so a mid-chain attachment has no
+    /// representation inside one config.
+    #[derive(Default, Debug, PartialEq, Eq)]
+    struct ChainOrigins {
+        /// Parent is a START shot, so there is no parent chain at all.
+        entrance_root: usize,
+        /// Parent shot is in a DIFFERENT declared section.
+        cross_section_root: usize,
+        /// Parent shot is in the same declared section AND ends its chain -
+        /// the only in-section merge a linear config could express.
+        in_section_parent_is_chain_end: usize,
+        /// Parent shot is in the same declared section but sits mid-chain.
+        in_section_parent_mid_chain: usize,
+        /// Of `cross_section_root`, those whose parent ends its chain.
+        cross_root_at_parent_chain_end: usize,
+        /// Chains that share a start station with an earlier chain: a "V" that
+        /// one reversed-then-concatenated linear run could express.
+        sibling_v_merge_savings: usize,
+        /// Of `cross_root_at_parent_chain_end`, those whose surveyor, date and
+        /// colour all match the chain they would be appended to. A config
+        /// carries ONE of each, so merging a mismatched pair silently
+        /// reattributes one leg's trip metadata to the other's.
+        cross_root_at_chain_end_metadata_match: usize,
+        /// Same guard for the sibling-V pairs.
+        sibling_v_metadata_match: usize,
+    }
+
+    fn classify_chain_origins(tml: &TmlFile) -> ChainOrigins {
+        let base_of = |n: &str| match n.rfind(" (branch ") {
+            Some(i) if n.ends_with(')') => n[..i].to_string(),
+            _ => n.to_string(),
+        };
+        let mut shot_section: HashMap<i64, String> = HashMap::new();
+        let mut ends_a_chain: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        let mut chains_per_start: HashMap<i64, usize> = HashMap::new();
+        // Which chain ENDS at a given shot id, so a candidate can be compared
+        // against the exact chain it would be appended to.
+        let mut chain_ending_at: HashMap<i64, usize> = HashMap::new();
+        let mut chains_by_start: HashMap<i64, Vec<usize>> = HashMap::new();
+        for (idx, section) in tml.sections.iter().enumerate() {
+            for shot in &section.shots {
+                shot_section.insert(shot.id, shot.section.clone());
+            }
+            if let Some(last) = section.shots.last() {
+                ends_a_chain.insert(last.id);
+                chain_ending_at.insert(last.id, idx);
+            }
+            *chains_per_start.entry(section.start_ariane_id).or_insert(0) += 1;
+            chains_by_start
+                .entry(section.start_ariane_id)
+                .or_default()
+                .push(idx);
+        }
+        let trip_metadata_matches = |a: usize, b: usize| {
+            let (x, y) = (&tml.sections[a], &tml.sections[b]);
+            x.surveyor == y.surveyor && x.date == y.date && x.color == y.color
+        };
+
+        let mut out = ChainOrigins {
+            sibling_v_merge_savings: chains_per_start
+                .values()
+                .filter(|&&n| n >= 2)
+                .sum::<usize>()
+                - chains_per_start.values().filter(|&&n| n >= 2).count(),
+            ..ChainOrigins::default()
+        };
+        for (idx, section) in tml.sections.iter().enumerate() {
+            let parent_ends_chain = ends_a_chain.contains(&section.start_ariane_id);
+            match shot_section.get(&section.start_ariane_id) {
+                None => out.entrance_root += 1,
+                Some(parent_section) if *parent_section != base_of(&section.name) => {
+                    out.cross_section_root += 1;
+                    if parent_ends_chain {
+                        out.cross_root_at_parent_chain_end += 1;
+                        if chain_ending_at
+                            .get(&section.start_ariane_id)
+                            .is_some_and(|&parent| trip_metadata_matches(parent, idx))
+                        {
+                            out.cross_root_at_chain_end_metadata_match += 1;
+                        }
+                    }
+                }
+                Some(_) if parent_ends_chain => out.in_section_parent_is_chain_end += 1,
+                Some(_) => out.in_section_parent_mid_chain += 1,
+            }
+        }
+
+        // Sibling-V pairs that also agree on trip metadata.
+        let mut starts: Vec<&i64> = chains_by_start.keys().collect();
+        starts.sort_unstable();
+        for start in starts {
+            let group = &chains_by_start[start];
+            if group.len() < 2 {
+                continue;
+            }
+            let head = group[0];
+            out.sibling_v_metadata_match += group[1..]
+                .iter()
+                .filter(|&&other| trip_metadata_matches(head, other))
+                .count();
+        }
+        out
+    }
+
+    /// The structural reason #412 cannot be fixed by merging deferred branch
+    /// chains back into their parent's config.
+    ///
+    /// Synthetic multi-root, multi-T topology, entirely in-code:
+    ///
+    /// ```text
+    ///   section "Main":   1 -> 2 -> 3 -> 4 -> 5      (mainline, from entrance)
+    ///                          |         `-> 8 -> 9  (T at 4)
+    ///                          `-> 6 -> 7            (T at 2)
+    ///   section "Side":  10 -> 11                    (root parented into Main)
+    /// ```
+    ///
+    /// The continuation rule sends the walk through the LONGER downstream leg
+    /// at each T, so shot 2 and shot 4 both stay mid-mainline. That is not an
+    /// accident of this fixture: `collect_linear_chain` only defers a successor
+    /// when it continues into a sibling of that successor, so the junction shot
+    /// always has a chain step after it. Hence, for EVERY deferred chain, the
+    /// parent shot is mid-chain - and a config is a linear polyline, so there
+    /// is nowhere in the parent config to put it.
+    ///
+    /// This test fails the moment that stops being true, which is exactly when
+    /// a contiguous re-join becomes implementable.
+    #[test]
+    fn every_deferred_branch_attaches_mid_chain_so_no_config_can_absorb_it() {
+        let shots = [
+            tml_shot_xml_az_len(1, -1, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(2, 1, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(3, 2, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(4, 3, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(5, 4, "Main", 90.0, 40.0),
+            tml_shot_xml_az_len(6, 2, "Main", 180.0, 5.0),
+            tml_shot_xml_az_len(7, 6, "Main", 180.0, 5.0),
+            tml_shot_xml_az_len(8, 4, "Main", 0.0, 5.0),
+            tml_shot_xml_az_len(9, 8, "Main", 0.0, 5.0),
+            tml_shot_xml_az_len(10, 3, "Side", 270.0, 8.0),
+            tml_shot_xml_az_len(11, 10, "Side", 270.0, 8.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        let origins = classify_chain_origins(&tml);
+        assert_eq!(
+            origins.in_section_parent_is_chain_end, 0,
+            "a deferred in-section branch never attaches at a chain END, so the \
+             'merge into the parent chain's config' rule has zero candidates; \
+             origins were {origins:?}"
+        );
+        assert_eq!(
+            origins.in_section_parent_mid_chain, 2,
+            "both Ts (at shot 2 and shot 4) defer a chain that hangs off a \
+             mid-mainline shot; origins were {origins:?}"
+        );
+        assert_eq!(
+            origins.cross_section_root, 1,
+            "\"Side\" is parented into \"Main\", the boundary #412 leaves alone"
+        );
+
+        // The mainline really did survive both junctions: that is what the
+        // continuation heuristic buys, and it is what keeps the parent shot
+        // mid-chain rather than at a chain end.
+        let mainline = tml
+            .sections
+            .iter()
+            .find(|s| s.name == "Main")
+            .expect("the mainline keeps the section's own name");
+        assert_eq!(
+            mainline.shots.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5],
+            "the walk takes the longest downstream leg at each T"
+        );
+
+        // Every shot is emitted exactly once across the fragments, and the
+        // fragment count is exactly the linear-chain count - there is no
+        // representation that could make it smaller without changing
+        // `models::Section` from a polyline into a tree.
+        let mut ids: Vec<i64> = tml
+            .sections
+            .iter()
+            .flat_map(|s| &s.shots)
+            .map(|s| s.id)
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (1..=11).collect::<Vec<_>>());
+        assert_eq!(tml.sections.len(), 4, "Main + 2 deferred Ts + Side");
+    }
+
+    /// The contiguous join drops the fragment count by exactly the chains that
+    /// run in SERIES, and leaves every mid-chain branch alone (#412).
+    ///
+    /// Synthetic multi-root, multi-T topology, entirely in-code:
+    ///
+    /// ```text
+    ///   "Trunk":  1 -> 2 -> 3         mainline, from the entrance
+    ///                  `-> 6 -> 7     T at 2: deferred, parent is MID-chain
+    ///   "Deep":   4 -> 5              parent is 3, Trunk's LAST shot -> JOINS
+    ///   "Stub":   8 -> 9              parent is 2, MID-Trunk -> stays split
+    /// ```
+    ///
+    /// So 4 chains become 3, and the one that merged is the only one whose
+    /// parent ended a chain. A closure spanning the join proves the endpoints
+    /// are re-indexed against the MERGED run rather than the pre-merge
+    /// fragments.
+    #[test]
+    fn the_join_absorbs_series_chains_and_only_those() {
+        let closure_5_to_7 = r"<SurveyData>
+    <ID>10</ID>
+    <FromID>5</FromID>
+    <ClosureToID>7</ClosureToID>
+    <Type>CLOSURE</Type>
+    <Section>Deep</Section>
+    <Azimut>0.0</Azimut>
+    <Length>0.0</Length>
+    <Depth>5.0</Depth>
+    <DepthIn>-1.0</DepthIn>
+    <Inclination>0.0</Inclination>
+    <Left>0.0</Left>
+    <Right>0.0</Right>
+    <Up>0.0</Up>
+    <Down>0.0</Down>
+    <Comment></Comment>
+    <Explorer>Tester</Explorer>
+    <Date>2024-06-15</Date>
+    <Color>0x8f6112ff</Color>
+    <Excluded>false</Excluded>
+    <Latitude>0.0</Latitude>
+    <Longitude>0.0</Longitude>
+</SurveyData>"
+            .to_owned();
+        let shots = [
+            tml_shot_xml_az_len(1, -1, "Trunk", 90.0, 10.0),
+            tml_shot_xml_az_len(2, 1, "Trunk", 90.0, 10.0),
+            // Longer downstream than shot 6, so the mainline continues here and
+            // shot 2 stays mid-chain.
+            tml_shot_xml_az_len(3, 2, "Trunk", 90.0, 40.0),
+            tml_shot_xml_az_len(4, 3, "Deep", 90.0, 10.0),
+            tml_shot_xml_az_len(5, 4, "Deep", 90.0, 10.0),
+            tml_shot_xml_az_len(6, 2, "Trunk", 180.0, 5.0),
+            tml_shot_xml_az_len(7, 6, "Trunk", 180.0, 5.0),
+            tml_shot_xml_az_len(8, 2, "Stub", 270.0, 5.0),
+            tml_shot_xml_az_len(9, 8, "Stub", 270.0, 5.0),
+            closure_5_to_7,
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        let names: Vec<&str> = tml.sections.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["Trunk + Deep", "Trunk (branch 2)", "Stub"],
+            "only the series chain is absorbed, and it says so in the name"
+        );
+
+        let merged = &tml.sections[0];
+        assert_eq!(
+            merged
+                .shots
+                .iter()
+                .filter(|s| s.shot_type != TmlShotType::Closure)
+                .map(|s| s.id)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5],
+            "the merged run is one strictly linear import sequence, in file order"
+        );
+        assert_eq!(merged.start_ariane_id, -1, "still starts where Trunk did");
+        assert_eq!(merged.end_ariane_id, 10, "and ends where Deep did");
+
+        // Nothing was lost or duplicated by the join, and every emitted run is
+        // still a polyline - the invariant every consumer of a TmlSection
+        // assumes and nothing else in the pipeline checks.
+        let mut ids: Vec<i64> = tml
+            .sections
+            .iter()
+            .flat_map(|s| &s.shots)
+            .map(|s| s.id)
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (1..=10).collect::<Vec<_>>());
+        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+
+        // The one remaining candidate class is gone: nothing else runs in
+        // series, so a second pass would find nothing to do.
+        let origins = classify_chain_origins(&tml);
+        assert_eq!(
+            origins.cross_root_at_parent_chain_end, 0,
+            "the join is a fixed point; origins were {origins:?}"
+        );
+
+        // Closure endpoints index the MERGED run. Shot 5 is the 5th importable
+        // shot of section 0, so it ends at station 5 - a number that only comes
+        // out right if the merge happened before the closure was resolved.
+        let (configs, closures, _) =
+            convert_tml_to_import_configs(&tml, false, false).expect("convert");
+        assert_eq!(configs.len(), 3);
+        assert_eq!(
+            configs[0].shots.len(),
+            5,
+            "the CLOSURE shot is not imported"
+        );
+        assert_eq!(closures.len(), 1);
+        assert_eq!(
+            (
+                closures[0].from_section_index,
+                closures[0].from_station_index
+            ),
+            (0, 5),
+            "the closure's near end is re-indexed against the merged run"
+        );
+        assert_eq!(
+            (closures[0].to_section_index, closures[0].to_station_index),
+            (1, 2),
+            "and its far end still points at the untouched branch"
+        );
+    }
+
+    /// Section names and shot ids for the join-refusal fixtures: "A" is a
+    /// two-shot chain from the entrance, "B" continues from A's LAST shot.
+    /// Every refusal test below is this same shape with one thing changed, so
+    /// what the test is about is the difference and nothing else.
+    fn series_a_b(a_tail: TripShot<'_>, b_head: TripShot<'_>) -> TmlFile {
+        let shots = [
+            TripShot {
+                id: 1,
+                from_id: -1,
+                section: "A",
+                depth: 5.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            a_tail.xml(),
+            b_head.xml(),
+            TripShot {
+                id: 4,
+                from_id: 3,
+                section: "B",
+                depth: 12.0,
+                ..TripShot::default()
+            }
+            .xml(),
+        ]
+        .join("\n");
+        parse_synthetic_tmlu(&wrap_xml(&shots))
+    }
+
+    fn section_names(tml: &TmlFile) -> Vec<&str> {
+        tml.sections.iter().map(|s| s.name.as_str()).collect()
+    }
+
+    /// The seam has to be a station the import actually keeps.
+    ///
+    /// `convert_shots_to_shot_data` drops CLOSURE shots and excluded ones with
+    /// the same filter, so joining onto an EXCLUDED tail would resolve the
+    /// absorbed leg's first `depth_in` from the previous SURVIVING station -
+    /// translating the whole leg - and the result would change with the
+    /// include-excluded toggle, which section splitting must be invariant to.
+    #[test]
+    fn the_join_refuses_a_seam_the_import_would_filter_out() {
+        let tml = series_a_b(
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "A",
+                excluded: true,
+                depth: 9.0,
+                ..TripShot::default()
+            },
+            // DepthIn -1 means "derive from the previous station", which is
+            // exactly the value the seam would corrupt.
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "B",
+                depth: 11.0,
+                depth_in: -1.0,
+                ..TripShot::default()
+            },
+        );
+
+        assert_eq!(
+            section_names(&tml),
+            vec!["A", "B"],
+            "an excluded tail is not a station, so it is not a seam"
+        );
+
+        let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("convert");
+        assert_eq!(configs.len(), 2);
+        // B's first shot derives its depth from the EXCLUDED shot 2 (9.0) via
+        // start_depth, not from shot 1 (5.0) which is what a join through the
+        // excluded seam would have left behind.
+        assert!(
+            (configs[1].shots[0].depth_in - 9.0).abs() < f64::EPSILON,
+            "the absorbed leg must not be translated; got {}",
+            configs[1].shots[0].depth_in
+        );
+    }
+
+    /// A config carries ONE surveyor, date and colour, so absorbing a chain
+    /// surveyed by someone else on another day would silently reattribute it.
+    #[test]
+    fn the_join_refuses_chains_from_a_different_trip() {
+        let tml = series_a_b(
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "A",
+                depth: 9.0,
+                ..TripShot::default()
+            },
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "B",
+                explorer: "Somebody Else",
+                date: "2025-02-02",
+                depth: 11.0,
+                ..TripShot::default()
+            },
+        );
+
+        assert_eq!(
+            section_names(&tml),
+            vec!["A", "B"],
+            "different trip metadata must not be merged away"
+        );
+        assert_eq!(tml.sections[1].surveyor.as_deref(), Some("Somebody Else"));
+    }
+
+    /// With duplicate shot ids in the file, a chain END no longer names a
+    /// unique parent, so an unrelated chain could splice onto the wrong one.
+    /// Joining is disabled wholesale rather than guessing.
+    #[test]
+    fn the_join_is_disabled_when_the_file_reuses_shot_ids() {
+        let shots = [
+            TripShot {
+                id: 1,
+                from_id: -1,
+                section: "A",
+                depth: 5.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "A",
+                depth: 9.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "B",
+                depth: 11.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 4,
+                from_id: 3,
+                section: "B",
+                depth: 12.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            // The reused id is deliberately OFF the A/B seam: without the
+            // guard, A and B still join happily, so this fixture isolates the
+            // guard rather than some incidental effect of the duplicate on the
+            // topology index.
+            TripShot {
+                id: 9,
+                from_id: -1,
+                section: "C",
+                depth: 3.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 9,
+                from_id: -1,
+                section: "D",
+                depth: 3.0,
+                ..TripShot::default()
+            }
+            .xml(),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        assert_eq!(
+            tml.parse_anomalies.map(|a| a.duplicate_shot_ids),
+            Some(1),
+            "the fixture must actually trip the duplicate-id tally"
+        );
+        assert!(
+            !section_names(&tml).iter().any(|n| n.contains(" + ")),
+            "no join may happen on a file with reused ids; got {:?}",
+            section_names(&tml)
+        );
+    }
+
+    /// A refused join hands the child back as a fresh RUN ROOT, so the child
+    /// still performs its own legal joins downstream.
+    ///
+    /// Chain A -> B -> C, where A/B repeat a UUID but B/C do not. Backing off
+    /// A/B must not also cost B/C: the child re-enters as a root and absorbs C.
+    /// Previously the child was left marked as somebody's tail, so the main
+    /// pass skipped it and a trailing sweep emitted it - and C with it - as
+    /// separate singletons, logged as a cycle neither was part of.
+    ///
+    /// This also covers the only way a config now attaches to the LAST station
+    /// of another: a chain that WOULD have joined and backed off.
+    #[test]
+    fn a_refused_join_still_lets_the_child_absorb_its_own_tail() {
+        const SHARED: &str = "bebebebe-0000-4000-8000-000000000001";
+        let shots = [
+            TripShot {
+                id: 1,
+                from_id: -1,
+                section: "A",
+                uuid: Some(SHARED),
+                depth: 5.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "A",
+                depth: 9.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            // Same UUID as shot 1: legal across sections, so A/B backs off.
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "B",
+                uuid: Some(SHARED),
+                depth: 11.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 4,
+                from_id: 3,
+                section: "B",
+                depth: 12.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 5,
+                from_id: 4,
+                section: "C",
+                depth: 14.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 6,
+                from_id: 5,
+                section: "C",
+                depth: 16.0,
+                ..TripShot::default()
+            }
+            .xml(),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        assert_eq!(
+            section_names(&tml),
+            vec!["A", "B + C"],
+            "the backed-off chain re-enters as a root and keeps its own tail"
+        );
+        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+
+        let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("convert");
+        assert_eq!(configs.len(), 2);
+        assert!(
+            matches!(configs[0].placement, ImportPlacement::Origin),
+            "the file's first chain still anchors the import"
+        );
+        // A has two shots, so its LAST station is 2 - the placement shape that
+        // only a refused join can produce.
+        match &configs[1].placement {
+            ImportPlacement::FromImporting {
+                import_station,
+                target_section_index,
+                target_station_index,
+            } => {
+                assert_eq!(
+                    (
+                        *import_station,
+                        *target_section_index,
+                        *target_station_index
+                    ),
+                    (0, 0, 2),
+                    "B attaches at A's final station"
+                );
+            }
+            other => panic!("expected FromImporting, got {other:?}"),
+        }
+    }
+
+    /// A merged name is bounded and sanitised, and the branch-suffix stripper
+    /// does not eat half of one.
+    ///
+    /// Section names come from the file, so an attacker-controlled name can be
+    /// arbitrarily long and can carry control characters; three of them
+    /// concatenated flows to the wizard's fragment list and to log lines. And
+    /// `simplify_lone_branch_names` used to `rfind(" (branch ")` anywhere in
+    /// the name, so `"A (branch 2) + B"` collapsed to `"A"` - quietly losing
+    /// the fact that the config also holds B.
+    #[test]
+    fn merged_names_are_bounded_and_survive_branch_simplification() {
+        assert_eq!(branch_base("Foo (branch 2)"), "Foo");
+        assert_eq!(
+            branch_base("Foo (branch 2) + Bar"),
+            "Foo (branch 2) + Bar",
+            "a merged name keeps every part it holds"
+        );
+        assert_eq!(
+            branch_base("Sump (branch note)"),
+            "Sump (branch note)",
+            "only a real trailing branch NUMBER is a suffix"
+        );
+        assert_eq!(branch_base("Plain"), "Plain");
+
+        // Five sections in series under long, control-character-bearing names.
+        let long = "N".repeat(400);
+        let shots: Vec<String> = (1..=5)
+            .map(|i| {
+                TripShot {
+                    id: i,
+                    from_id: if i == 1 { -1 } else { i - 1 },
+                    section: &format!("{long}\u{7}{i}"),
+                    depth: 5.0 * f64::from(u32::try_from(i).unwrap_or(0)),
+                    ..TripShot::default()
+                }
+                .xml()
+            })
+            .collect();
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots.join("\n")));
+
+        assert_eq!(tml.sections.len(), 1, "all five run in series");
+        let name = &tml.sections[0].name;
+        assert!(
+            !name.chars().any(char::is_control),
+            "control characters must not reach a merged label"
+        );
+        assert!(
+            name.chars().count() <= 203,
+            "merged name is capped; got {} chars",
+            name.chars().count()
+        );
+        assert!(
+            name.ends_with("..."),
+            "an over-long merged name is truncated visibly; got {name:?}"
+        );
+    }
+
+    /// The series join must not manufacture a duplicate shot UUID.
+    ///
+    /// Ariane shot ids are unique per SECTION, not per file, so two shots in
+    /// different sections may legally carry the same `<UUID>` (#423) - there is
+    /// a core test, `the_same_uuid_in_two_sections_of_one_file_is_left_alone`,
+    /// that requires exactly that to survive an import. Joining those two
+    /// sections would turn the legal repeat into a duplicate WITHIN one
+    /// section, and `ensure_unique_shot_uuids` keeps the FIRST and re-mints the
+    /// second - changing the identity of a shot that had one from the file and
+    /// moving every station cross-reference anchored on it.
+    ///
+    /// So the join yields: the two chains stay separate even though they run in
+    /// series. Fewer fragments is not worth a silently re-minted identity.
+    #[test]
+    fn the_join_backs_off_rather_than_duplicate_a_shot_uuid() {
+        const SHARED: &str = "bebebebe-0000-4000-8000-000000000001";
+        let with_uuid = |id: i64, from_id: i64, section: &str, uuid: &str| {
+            format!(
+                r"<SurveyData>
+    <ID>{id}</ID>
+    <FromID>{from_id}</FromID>
+    <UUID>{uuid}</UUID>
+    <ClosureToID>-1</ClosureToID>
+    <Type>REAL</Type>
+    <Section>{section}</Section>
+    <Azimut>90.0</Azimut>
+    <Length>10.0</Length>
+    <Depth>5.0</Depth>
+    <DepthIn>-1.0</DepthIn>
+    <Inclination>0.0</Inclination>
+    <Left>0.0</Left>
+    <Right>0.0</Right>
+    <Up>0.0</Up>
+    <Down>0.0</Down>
+    <Comment></Comment>
+    <Explorer>Tester</Explorer>
+    <Date>2024-06-15</Date>
+    <Color>0x8f6112ff</Color>
+    <Excluded>false</Excluded>
+    <Latitude>0.0</Latitude>
+    <Longitude>0.0</Longitude>
+</SurveyData>"
+            )
+        };
+
+        // Series topology: shot 3's parent is shot 2, the last shot of "A".
+        // Without the UUID clash these two WOULD join.
+        let clashing = [
+            with_uuid(1, -1, "A", SHARED),
+            tml_shot_xml_az_len(2, 1, "A", 90.0, 10.0),
+            with_uuid(3, 2, "B", SHARED),
+            tml_shot_xml_az_len(4, 3, "B", 90.0, 10.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&clashing));
+        assert_eq!(
+            tml.sections
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["A", "B"],
+            "a cross-section UUID repeat is legal, so the join must back off"
+        );
+
+        // The identical topology with distinct UUIDs still joins, so the guard
+        // is the UUID clash and not the shape of the fixture.
+        let distinct = [
+            with_uuid(1, -1, "A", SHARED),
+            tml_shot_xml_az_len(2, 1, "A", 90.0, 10.0),
+            with_uuid(3, 2, "B", "bebebebe-0000-4000-8000-000000000002"),
+            tml_shot_xml_az_len(4, 3, "B", 90.0, 10.0),
+        ]
+        .join("\n");
+        let joined = parse_synthetic_tmlu(&wrap_xml(&distinct));
+        assert_eq!(
+            joined
+                .sections
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["A + B"],
+            "with no clash the same shape joins"
+        );
+    }
+
+    /// Re-joining must not silently break the two things every emitted config
+    /// carries besides its shots: the closure indices and the depth rebase.
+    ///
+    /// Locks them against the topology above, so a future merge attempt that
+    /// moves shots between configs has to keep both correct.
+    #[test]
+    fn closures_and_depth_rebasing_are_keyed_to_the_emitting_fragment() {
+        let shots = [
+            tml_shot_xml_az_len(1, -1, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(2, 1, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(3, 2, "Main", 90.0, 40.0),
+            tml_shot_xml_az_len(4, 2, "Main", 180.0, 5.0),
+            // A closure from the deferred branch's tip back to the mainline.
+            format!(
+                r"<SurveyData>
+    <ID>5</ID>
+    <FromID>4</FromID>
+    <ClosureToID>3</ClosureToID>
+    <Type>CLOSURE</Type>
+    <Section>Main</Section>
+    <Azimut>0.0</Azimut>
+    <Length>0.0</Length>
+    <Depth>5.0</Depth>
+    <DepthIn>-1.0</DepthIn>
+    <Inclination>0.0</Inclination>
+    <Left>0.0</Left>
+    <Right>0.0</Right>
+    <Up>0.0</Up>
+    <Down>0.0</Down>
+    <Comment></Comment>
+    <Explorer>Tester</Explorer>
+    <Date>2024-06-15</Date>
+    <Color>0x8f6112ff</Color>
+    <Excluded>false</Excluded>
+    <Latitude>0.0</Latitude>
+    <Longitude>0.0</Longitude>
+</SurveyData>"
+            ),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        let branch = tml
+            .sections
+            .iter()
+            .find(|s| s.name != "Main")
+            .expect("the T defers one branch");
+        assert_eq!(
+            branch.start_ariane_id, 2,
+            "the branch records the mid-mainline shot it hangs off"
+        );
+        assert_eq!(
+            branch.start_depth, 5.0,
+            "start_depth rebases onto the PARENT shot's cumulative depth, not 0"
+        );
+
+        let (configs, closures, _) =
+            convert_tml_to_import_configs(&tml, false, false).expect("convert");
+        assert_eq!(configs.len(), 2, "mainline + the deferred branch");
+        assert_eq!(closures.len(), 1, "the CLOSURE shot resolves to both ends");
+        let closure = &closures[0];
+        // Mainline is [1, 2, 3]; shot 3 is its 3rd importable shot, so it ends
+        // at station 3. The branch is [4]; shot 4 ends at its station 1. Exact
+        // pairs, not merely "different": a closure that resolved to the right
+        // sections and the wrong stations would pass an inequality check.
+        assert_eq!(
+            (closure.from_section_index, closure.from_station_index),
+            (1, 1),
+            "the closure's near end is the branch tip"
+        );
+        assert_eq!(
+            (closure.to_section_index, closure.to_station_index),
+            (0, 3),
+            "and its far end is the mainline station it ties back to"
+        );
+    }
+
+    /// #412 regression bounds against the committed Naharon TML.
+    ///
+    /// The env-gated harness below measures whatever file you point it at; this
+    /// pins the numbers for one that ships with the repo, so a change that
+    /// re-fragments the importer fails in CI rather than in somebody's import.
+    ///
+    /// The bounds are one-sided on purpose - fewer, longer fragments may always
+    /// pass - so a later merge class can only make them easier to meet. The
+    /// fixture is committed (e2e/fixtures/naharon_sources/), so a missing file
+    /// is a hard failure, not a silent skip: a skip here would make the test
+    /// unfailable exactly when it matters.
+    ///
+    /// The numbers are set from what this file ACTUALLY produces, and they are
+    /// deliberately thin: the metadata gate on the join (a chain is only
+    /// absorbed when it agrees on surveyor, date and colour) leaves this file
+    /// with one join, so the margin over the un-joined baseline is exactly one
+    /// config and one shot of median. Both bounds still flip if the join is
+    /// removed - un-joined this file is 18 configs with a median of 13 - which
+    /// is what makes them worth asserting. The two <=2-shot stubs are chains a
+    /// same-trip file would have absorbed and this one may not, so they are
+    /// bounded rather than forbidden.
+    #[test]
+    fn the_naharon_tml_imports_as_few_long_fragments() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../e2e/fixtures/naharon_sources/2025-12-09_23h05_naharon_resurvey.tml");
+        assert!(
+            path.exists(),
+            "committed fixture is missing: {}",
+            path.display()
+        );
+
+        let tml = parse_tml(&path).expect("the committed fixture parses");
+        let (configs, _, _) =
+            convert_tml_to_import_configs(&tml, false, false).expect("and converts");
+
+        let mut sizes: Vec<usize> = configs.iter().map(|c| c.shots.len()).collect();
+        sizes.sort_unstable();
+        let median = sizes.get(sizes.len() / 2).copied().unwrap_or(0);
+        let short = sizes.iter().filter(|&&n| n <= 2).count();
+
+        assert!(
+            configs.len() <= 17,
+            "the file's 14 declared names should not explode into fragments; got {} configs (sizes {sizes:?})",
+            configs.len()
+        );
+        assert!(
+            median >= 14,
+            "the median fragment should be a usable run, not a stub; got {median} (sizes {sizes:?})"
+        );
+        assert!(
+            short <= 2,
+            "a fragment of <=2 shots is the #412 complaint itself, and this file \
+             should not grow more of them; got {short} (sizes {sizes:?})"
+        );
+
+        // Whatever the counts, every emitted run must still be a polyline.
+        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+    }
+
+    /// Baseline harness for #412: how many linear sections the importer
+    /// produces from a real file, and how small the fragments are.
+    ///
+    /// Run with:
+    ///   TML_MEASURE_PATH=/path/to/file.tml cargo test measure_tml_fragmentation -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn measure_tml_fragmentation() {
+        let Ok(path_str) = std::env::var("TML_MEASURE_PATH") else {
+            eprintln!("Skipping: TML_MEASURE_PATH not set");
+            return;
+        };
+        let path = Path::new(&path_str);
+        let tml = parse_tml(path).expect("parse");
+        let file_names: std::collections::BTreeSet<String> = tml
+            .sections
+            .iter()
+            .map(|s| {
+                let n = s.name.as_str();
+                match n.rfind(" (branch ") {
+                    Some(i) if n.ends_with(')') => n[..i].to_string(),
+                    _ => n.to_string(),
+                }
+            })
+            .collect();
+        let origins = classify_chain_origins(&tml);
+        eprintln!(
+            "ORIGIN sections={} entrance_root={} cross_section_root={} \
+             in_section_parent_is_chain_end={} in_section_parent_mid_chain={} \
+             cross_root_at_parent_chain_end={} sibling_v_merge_savings={} \
+             cross_root_at_chain_end_metadata_match={} sibling_v_metadata_match={}",
+            tml.sections.len(),
+            origins.entrance_root,
+            origins.cross_section_root,
+            origins.in_section_parent_is_chain_end,
+            origins.in_section_parent_mid_chain,
+            origins.cross_root_at_parent_chain_end,
+            origins.sibling_v_merge_savings,
+            origins.cross_root_at_chain_end_metadata_match,
+            origins.sibling_v_metadata_match,
+        );
+
+        let (configs, closures, warnings) =
+            convert_tml_to_import_configs(&tml, false, false).expect("convert");
+        let mut sizes: Vec<usize> = configs.iter().map(|c| c.shots.len()).collect();
+        sizes.sort_unstable();
+        let tiny = sizes.iter().filter(|&&n| n <= 2).count();
+        eprintln!(
+            "FRAG {}: file_section_names={} configs={} closures={} warnings={} shots_min={} shots_median={} shots_max={} fragments_le2={}",
+            path_str,
+            file_names.len(),
+            configs.len(),
+            closures.len(),
+            warnings.len(),
+            sizes.first().copied().unwrap_or(0),
+            sizes.get(sizes.len() / 2).copied().unwrap_or(0),
+            sizes.last().copied().unwrap_or(0),
+            tiny,
+        );
     }
 }
