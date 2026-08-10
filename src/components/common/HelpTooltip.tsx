@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 interface HelpTooltipProps {
@@ -14,7 +14,9 @@ interface HelpTooltipProps {
 
 /**
  * Small themed tooltip trigger used for inline "?" help affordances.
- * Hover-only behavior keeps interaction simple and consistent with existing UX.
+ * Shows on hover or keyboard focus, and Escape hides it while focused.
+ * Clicking pins/unpins the tooltip independently of hover, so clicking while
+ * already hovered never hides it (issue #532).
  */
 export function HelpTooltip({
   text,
@@ -28,7 +30,11 @@ export function HelpTooltip({
 }: HelpTooltipProps) {
   const triggerRef = useRef<HTMLSpanElement>(null);
   const tooltipRef = useRef<HTMLSpanElement>(null);
+  const tooltipId = useId();
   const [isHovered, setIsHovered] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const [isPinned, setIsPinned] = useState(false);
+  const isVisible = isHovered || isFocused || isPinned;
   const [position, setPosition] = useState({
     left: 0,
     top: 0,
@@ -68,7 +74,7 @@ export function HelpTooltip({
   }, []);
 
   useLayoutEffect(() => {
-    if (!isHovered) return;
+    if (!isVisible) return;
 
     const rafId = requestAnimationFrame(updatePosition);
     const reposition = () => updatePosition();
@@ -81,13 +87,20 @@ export function HelpTooltip({
       window.removeEventListener('resize', reposition);
       window.removeEventListener('scroll', reposition, true);
     };
-  }, [isHovered, updatePosition]);
+  }, [isVisible, updatePosition]);
+
+  const hide = useCallback(() => {
+    setIsHovered(false);
+    setIsFocused(false);
+    setIsPinned(false);
+  }, []);
 
   const tooltip =
-    isHovered && typeof document !== 'undefined'
+    isVisible && typeof document !== 'undefined'
       ? createPortal(
           <span
             ref={tooltipRef}
+            id={tooltipId}
             className={`pointer-events-none fixed z-[10000] max-w-72 rounded border border-border bg-panel-90 px-3 py-2 text-sm leading-snug text-text-primary shadow-lg whitespace-pre-line ${tooltipClassName}`}
             style={{
               left: `${position.left}px`,
@@ -109,11 +122,28 @@ export function HelpTooltip({
         ref={triggerRef}
         className={`inline-flex items-center justify-center w-4 h-4 rounded-full border border-border text-[10px] font-bold text-text-secondary cursor-help ${iconClassName}`}
         aria-label={ariaLabel ?? text}
-        role="img"
+        aria-describedby={isVisible ? tooltipId : undefined}
+        role="button"
+        tabIndex={0}
         data-testid={iconTestId}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
-        onClick={() => setIsHovered((v) => !v)}
+        onFocus={() => setIsFocused(true)}
+        onBlur={() => setIsFocused(false)}
+        onClick={() => {
+          // Pin/unpin independent of hover: clicking while already visible
+          // from hover must not hide it (issue #532).
+          setIsPinned((v) => !v);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' && isFocused) {
+            hide();
+            triggerRef.current?.blur();
+          } else if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setIsPinned((v) => !v);
+          }
+        }}
       >
         {icon}
       </span>

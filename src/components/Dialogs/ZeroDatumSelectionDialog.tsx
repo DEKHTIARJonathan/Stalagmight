@@ -192,7 +192,7 @@ export default function ZeroDatumSelectionDialog({
         </div>
       </div>
 
-      <div className="flex justify-between pt-3 border-t border-border mt-1 shrink-0">
+      <div className="flex items-center justify-between pt-3 border-t border-border mt-1 shrink-0">
         <div className="flex gap-2">
           <Button variant="secondary" onClick={onCancel} data-testid="zero-datum-selection-cancel">
             {t('common.actions.cancel')}
