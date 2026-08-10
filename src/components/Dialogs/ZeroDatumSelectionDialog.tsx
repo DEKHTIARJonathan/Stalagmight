@@ -2,6 +2,7 @@ import { useMemo, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
+import { HelpTooltip } from '../common/HelpTooltip';
 import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
 import { formatLength } from '../../utils/formatStats';
@@ -148,10 +149,18 @@ export default function ZeroDatumSelectionDialog({
       size="4xl"
       overflow="hidden"
       bodyClassName="flex-1 flex flex-col p-4 min-h-0"
+      closeOnBackdropClick={false}
       data-testid="zero-datum-selection-dialog"
     >
-      <p className="text-sm text-text-secondary mb-2 px-1 shrink-0">
-        {t('dialogs.zeroDatumSelection.subtitle')}
+      <p className="text-sm text-text-secondary mb-2 px-1 shrink-0 flex items-start gap-1.5">
+        <span>{t('dialogs.zeroDatumSelection.subtitle')}</span>
+        <HelpTooltip
+          text={t('dialogs.zeroDatumSelection.helpTooltip')}
+          ariaLabel={t('dialogs.zeroDatumSelection.helpTooltip')}
+          className="mt-0.5 shrink-0"
+          iconTestId="zero-datum-selection-help-icon"
+          tooltipTestId="zero-datum-selection-help-tooltip"
+        />
       </p>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
@@ -192,9 +201,14 @@ export default function ZeroDatumSelectionDialog({
             {t('common.actions.back')}
           </Button>
         </div>
-        <Button variant="primary" onClick={onSkip} data-testid="zero-datum-selection-skip">
-          {t('dialogs.zeroDatumSelection.skip')}
-        </Button>
+        <div className="flex flex-col items-end gap-1">
+          <Button variant="secondary" onClick={onSkip} data-testid="zero-datum-selection-skip">
+            {t('dialogs.zeroDatumSelection.skip')}
+          </Button>
+          <span className="text-xs text-text-secondary" data-testid="zero-datum-selection-skip-cost">
+            {t('dialogs.zeroDatumSelection.skipCost')}
+          </span>
+        </div>
       </div>
     </DialogWrapper>
   );
