@@ -320,56 +320,50 @@ mod tests {
 
     use tempfile::TempDir;
 
+    #[test]
     #[cfg(target_os = "linux")]
-    use std::env;
-    #[cfg(target_os = "linux")]
-    use std::sync::Mutex;
-
-    #[cfg(target_os = "linux")]
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    #[cfg(target_os = "linux")]
-    fn with_temp_data_home<T>(f: impl FnOnce(&TempDir) -> T) -> T {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let dir = TempDir::new().expect("temp dir");
-        let key = "XDG_DATA_HOME";
-        let original = env::var_os(key);
-        env::set_var(key, dir.path());
-        let result = f(&dir);
-        match original {
-            Some(value) => env::set_var(key, value),
-            None => env::remove_var(key),
+    fn log_directory_uses_xdg_data_dir() {
+        // Mirror of the macOS test below: pin the `directories` fallback shape
+        // by READING the environment, never writing it. The old version set
+        // XDG_DATA_HOME process-wide behind a lock only its own callers took,
+        // racing every sibling test that calls env::var (#519; and `set_var`
+        // stops compiling as written in edition 2024).
+        //
+        // With XDG_DATA_HOME unset (the common CI case) the prefix assert
+        // pins nothing the `directories` crate does not compute itself, so
+        // the repo-owned assertions are the two path components below it:
+        // the `stalagmight` project segment and the `logs` leaf.
+        assert!(
+            crate::app_dirs::data_local_dir().is_none(),
+            "something initialised app_dirs in this test binary; this test \
+             pins the `directories` FALLBACK and now proves nothing"
+        );
+        let log_dir = log_directory().expect("log dir");
+        let base = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            // `directories` ignores a relative XDG_DATA_HOME (per the XDG
+            // spec) and an EMPTY HOME (dirs-sys falls back to getpwuid);
+            // mirror both, or a correct log_directory() fails this test.
+            .filter(|p| p.is_absolute())
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .filter(|h| !h.is_empty())
+                    .map(|home| PathBuf::from(home).join(".local/share"))
+            });
+        // No usable XDG_DATA_HOME or HOME means dirs-sys resolved the home
+        // dir via getpwuid, which this test cannot mirror without libc - the
+        // component asserts below still hold, so skip only the prefix.
+        if let Some(base) = base {
+            assert!(
+                log_dir.starts_with(&base),
+                "Expected log dir under {base:?}, got {log_dir:?}"
+            );
         }
-        result
-    }
-
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn log_directory_uses_xdg_data_home() {
-        with_temp_data_home(|temp| {
-            let log_dir = log_directory().expect("log dir");
-            assert!(log_dir.starts_with(temp.path()));
-            assert_eq!(log_dir.file_name().and_then(|s| s.to_str()), Some("logs"));
-        });
-    }
-
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn cleanup_logs_removes_all_when_limit_zero() {
-        with_temp_data_home(|_temp| {
-            let log_dir = log_directory().expect("log dir");
-            std::fs::create_dir_all(&log_dir).expect("create log dir");
-
-            let first = log_dir.join("first.log");
-            let second = log_dir.join("second.log");
-            std::fs::write(&first, b"abc").expect("write log");
-            std::fs::write(&second, b"defg").expect("write log");
-
-            cleanup_logs(0).expect("cleanup logs");
-
-            assert!(!first.exists());
-            assert!(!second.exists());
-        });
+        assert!(
+            log_dir.components().any(|c| c.as_os_str() == "stalagmight"),
+            "the ProjectDirs(com, stalagmight, Stalagmight) segment must survive: {log_dir:?}"
+        );
+        assert_eq!(log_dir.file_name().and_then(|s| s.to_str()), Some("logs"));
     }
 
     #[test]

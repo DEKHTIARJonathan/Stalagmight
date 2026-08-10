@@ -131,5 +131,5 @@ The `e2e` feature is gated behind a Cargo feature flag (`[features] e2e = [...]`
 | npm SSL certificate errors | Homebrew's source-built OpenSSL lacks CA bundle | `mac-setup.sh` sets `npm config set cafile` to Homebrew's `ca-certificates` bundle |
 | DMG bundling hangs over SSH | Tauri's DMG bundler uses AppleScript (needs Finder GUI) | `mac-build.sh` sets `CI=true` which skips the AppleScript step |
 | macOS `ulimit -n 256` | Default is too low for the Rust test suite | `mac-build.sh` raises to 4096 (falls back to 1024) |
-| `directories` crate ignores XDG on macOS | Hardcodes `~/Library/Application Support/` regardless of `XDG_CONFIG_HOME` | 3 config/logging tests are gated to `#[cfg(target_os = "linux")]` |
+| `directories` crate ignores XDG on macOS | Hardcodes `~/Library/Application Support/` regardless of `XDG_CONFIG_HOME` | The XDG-dependent config/logging tests are gated to `#[cfg(target_os = "linux")]` |
 | `pnpm --dir` broken for `exec` | `--dir` flag doesn't propagate to subcommands | Scripts use subshell `(cd $DIR && pnpm ...)` instead |

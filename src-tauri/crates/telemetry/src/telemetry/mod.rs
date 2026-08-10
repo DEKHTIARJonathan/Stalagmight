@@ -297,15 +297,12 @@ fn buffer_to_disk(payload: &TelemetryPayload) {
 /// Split out from `buffer_to_disk` so a test can exercise the write against a
 /// directory it owns (#510). On Linux, resolving the real buffer dir falls
 /// through to `directories`, which reads `XDG_DATA_HOME` **at call time** - and
-/// the logging tests in this same binary flip that variable process-wide, so a
-/// test that resolved it once to write and again to read could straddle the
-/// change and read a different (or since-deleted) directory. Taking the
-/// directory as an argument keeps this test out of that entirely, and out of the
-/// developer's own buffer.
-///
-/// That is scoped to this test, NOT a retirement of the hazard: the logging
-/// tests still mutate the environment process-wide while other tests in the same
-/// binary read it, which is a data race in its own right - see #519.
+/// the logging tests in this same binary used to flip that variable
+/// process-wide (retired with #519), so a test that resolved it once to write
+/// and again to read could straddle the change and read a different (or
+/// since-deleted) directory. Taking the directory as an argument keeps this
+/// test out of the ambient environment entirely, and out of the developer's
+/// own buffer.
 ///
 /// Every failure is deliberately swallowed: buffering is the best-effort retry
 /// path for telemetry that has already failed to send, so it must never surface
@@ -614,9 +611,9 @@ mod tests {
     ///
     /// Writes into a directory this test owns. It used to resolve the real
     /// buffer dir - which on Linux reads `XDG_DATA_HOME` at call time, once to
-    /// write and again to read - while the logging tests flip that variable
-    /// process-wide, so the two resolutions could disagree and the read hit a
-    /// directory that did not exist (#510). It also deleted every `.json` in the
+    /// write and again to read - while the logging tests then flipped that
+    /// variable process-wide (retired with #519), so the two resolutions could
+    /// disagree and the read hit a directory that did not exist (#510). It also deleted every `.json` in the
     /// developer's own telemetry buffer as "cleanup"; the `TempDir` handles that.
     ///
     /// One payload, so it says nothing about what two writes in the same
