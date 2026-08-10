@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useReducer } from 'react';
+import { useState, useCallback, useMemo, useReducer, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
 import { blankEditableShot } from '../common/editableShot';
@@ -10,7 +10,7 @@ import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
-import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
+import { parseGps, detectFormat, looksTransposed, looksTransposedRawDD, type GpsFormat } from '../../utils/gps';
 import { formatFixed } from '../../i18n/format';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -97,6 +97,9 @@ interface ShotEditState {
   /** Identity for the next blank row; never reused, so rows stay distinct
    *  however many one gesture adds. */
   nextTempId: number;
+  /** Set once a shot row is edited, inserted or deleted - feeds the dirty
+   *  guard (#F9). A hover/pick alone does not change the payload. */
+  dirty: boolean;
 }
 
 type ShotEditAction =
@@ -133,18 +136,21 @@ function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEdit
       // cleared to blank.
       const was = isCounted(current);
       const now = isCounted(updated);
-      if (was === now) return { ...state, shots };
+      if (was === now) return { ...state, shots, dirty: true };
       const delta = now ? 1 : -1;
-      return withPick(
-        state,
-        shots,
-        reanchorStation(
-          state.stationIndex,
-          survivorsBefore(state.shots, action.index),
-          delta,
-          state.shots.filter(isCounted).length + delta,
+      return {
+        ...withPick(
+          state,
+          shots,
+          reanchorStation(
+            state.stationIndex,
+            survivorsBefore(state.shots, action.index),
+            delta,
+            state.shots.filter(isCounted).length + delta,
+          ),
         ),
-      );
+        dirty: true,
+      };
     }
     case 'insert': {
       const n = Math.max(1, action.count);
@@ -165,6 +171,7 @@ function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEdit
           reanchorStation(state.stationIndex, survivorsBefore(state.shots, at), 0, counted),
         ),
         nextTempId: state.nextTempId + n,
+        dirty: true,
       };
     }
     case 'delete': {
@@ -178,16 +185,19 @@ function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEdit
       // every target moved the anchor a station upstream.
       const counted = state.shots.filter(isCounted).length;
       const countedGone = targets.filter((i) => isCounted(state.shots[i])).length;
-      return withPick(
-        state,
-        shots,
-        reanchorAfterRunDelete(
-          state.stationIndex,
-          survivorsBefore(state.shots, Math.min(...targets)),
-          countedGone,
-          counted - countedGone,
+      return {
+        ...withPick(
+          state,
+          shots,
+          reanchorAfterRunDelete(
+            state.stationIndex,
+            survivorsBefore(state.shots, Math.min(...targets)),
+            countedGone,
+            counted - countedGone,
+          ),
         ),
-      );
+        dirty: true,
+      };
     }
     case 'pick':
       return withPick(state, state.shots, action.index);
@@ -225,10 +235,15 @@ function initialShotEditState({
       stationIndex: initialConfig.stationIndex,
       previewStationIndex: initialConfig.stationIndex,
       nextTempId: Math.max(shots.length, highestTempId) + 1,
+      // NOT dirty. Carried rows are what this dialog OPENED with, so re-showing
+      // them is not an edit - only `edit`/`insert`/`delete` set the flag. A
+      // `true` here would make every reopened dialog prompt about discarding
+      // changes the user has not made yet.
+      dirty: false,
     };
   }
   const shots = section ? convertToEditableShots(section.shots) : [];
-  return { shots, stationIndex: 0, previewStationIndex: 0, nextTempId: shots.length + 1 };
+  return { shots, stationIndex: 0, previewStationIndex: 0, nextTempId: shots.length + 1, dirty: false };
 }
 
 interface ZeroDatumConfigDialogProps {
@@ -282,11 +297,16 @@ export default function ZeroDatumConfigDialog({
 
   // The shots and the station pick, in one reducer - see `shotEditReducer` for
   // why they cannot be separate pieces of state.
-  const [{ shots, stationIndex, previewStationIndex }, dispatch] = useReducer(
+  const [{ shots, stationIndex, previewStationIndex, dirty: shotsDirty }, dispatch] = useReducer(
     shotEditReducer,
     { section, initialConfig },
     initialShotEditState,
   );
+  // The reducer's OWN initial pick, captured once - not hardcoded to 0. That
+  // carry has now landed (#394 F10): on a re-entry this is
+  // `initialConfig.stationIndex`, so a restored non-zero pick does not read as
+  // a user change.
+  const initialStationIndexRef = useRef(stationIndex);
 
   // GPS input state. Re-entered as DECIMAL DEGREES whatever the user originally
   // typed: `gps` is the already-parsed pair, and the source text (a UTM grid
@@ -294,32 +314,49 @@ export default function ZeroDatumConfigDialog({
   // rather than through `formatGpsCoordinates`, because this string has to PARSE
   // again on the next confirm and that formatter is locale-aware - a comma
   // decimal separator would not round-trip through `parseDD`.
-  const [gpsInput, setGpsInput] = useState(
+  //
+  // The ref is the dirty guard's baseline: '' on a first visit, the carried pair
+  // on a re-entry. `useState` reads it so the displayed value and the baseline
+  // cannot drift.
+  const initialGpsInputRef = useRef(
     initialConfig ? `${initialConfig.gps.latitude}, ${initialConfig.gps.longitude}` : ''
   );
+  const [gpsInput, setGpsInput] = useState(initialGpsInputRef.current);
   const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(initialConfig?.gps ?? null);
   const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(initialConfig ? 'DD' : null);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
-  // Metadata state. A field the user CLEARED last time stays cleared, so each
-  // branch is chosen by whether there is a previous visit at all - `??` per
-  // field would resurrect the file/selection default under an emptied one.
-  const [name, setName] = useState(initialConfig?.metadata.name ?? section?.name ?? '');
-  const [surveyor, setSurveyor] = useState(
+  // Metadata state. Each field keeps an initial-value ref alongside it, so the
+  // dirty guard (#F9) can tell "touched" from "still what the dialog opened
+  // with" without re-deriving the same expression twice - and on a re-entry
+  // (#394 F10) what it opened with is the CARRIED value, not the file default,
+  // or every reopened dialog would report itself dirty on arrival.
+  //
+  // A field the user CLEARED last time stays cleared, so each branch is chosen
+  // by whether there is a previous visit at all - `??` per field would
+  // resurrect the file/selection default under an emptied one.
+  const initialNameRef = useRef(initialConfig?.metadata.name ?? section?.name ?? '');
+  const [name, setName] = useState(initialNameRef.current);
+  const initialSurveyorRef = useRef(
     initialConfig ? (initialConfig.metadata.surveyor ?? '') : (selectionConfig.defaultSurveyor || '')
   );
-  const [date, setDate] = useState(
+  const [surveyor, setSurveyor] = useState(initialSurveyorRef.current);
+  const initialDateRef = useRef(
     initialConfig
       ? (initialConfig.metadata.date ?? '')
       : (selectionConfig.defaultDate ?? section?.date?.split(/[T ]/)[0] ?? '')
   );
-  const [color, setColor] = useState(
+  const [date, setDate] = useState(initialDateRef.current);
+  const initialColorRef = useRef(
     initialConfig?.metadata.color ?? sectionPalette[colorIndex % sectionPalette.length] ?? '#4ecdc4'
   );
-  const [direction, setDirection] = useState<'in' | 'out'>(
+  const [color, setColor] = useState(initialColorRef.current);
+  const initialDirectionRef = useRef<'in' | 'out'>(
     initialConfig?.metadata.direction ?? (section?.direction === 'out' ? 'out' : 'in')
   );
-  const [reverse, setReverse] = useState(initialConfig?.metadata.reverse ?? false);
+  const [direction, setDirection] = useState(initialDirectionRef.current);
+  const initialReverseRef = useRef(initialConfig?.metadata.reverse ?? false);
+  const [reverse, setReverse] = useState(initialReverseRef.current);
 
   // Station count = counted shots + 1. The dropdown, the preview, the payload
   // and the pick all count by `isCounted` - one predicate, one station space.
@@ -352,6 +389,79 @@ export default function ZeroDatumConfigDialog({
     if (!gpsCoords) return null;
     return { latitude: gpsCoords.latitude, longitude: gpsCoords.longitude };
   }, [gpsCoords]);
+
+  // Soft (non-blocking) heuristic (#F7): a plausibly-valid pair that still
+  // looks like the fields were swapped. Coexists with `gpsError` - never
+  // replaces it, and never blocks Confirm. Falls back to the raw-pair variant
+  // when parsing FAILED (`gpsCoords` is null): a swapped "120, 45" never
+  // produces coordinates to run the coords-based check on, so without this
+  // branch it got only the generic range error and no swap hint at all.
+  const gpsTransposedWarning = useMemo(() => {
+    if (gpsCoords) return looksTransposed(gpsCoords.latitude, gpsCoords.longitude);
+    if (gpsError) return looksTransposedRawDD(gpsInput);
+    return false;
+  }, [gpsCoords, gpsError, gpsInput]);
+
+  // Dirty guard (#F9): GPS text entered, the section renamed, a metadata
+  // field touched, the zero-datum STATION PICK changed, or a shot
+  // edited/inserted/deleted - anything ESC (or Cancel/Back) would otherwise
+  // discard silently. `stationIndex` is sent in the confirm payload just like
+  // the rest, so a pick the user actually changed is losable intent too - a
+  // pick that only MOVED because of a shot edit is already covered by
+  // `shotsDirty` (the reducer marks that itself), so this only fires for a
+  // pick made with no accompanying edit.
+  //
+  // Every term compares against what the dialog OPENED with, which on a re-entry
+  // (#394 F10) is the carried value. The GPS term especially: `!== ''` would
+  // make every reopened dialog dirty on arrival, and both this guard and
+  // DialogWrapper's "Unsaved Changes" would fire over zero edits. With an empty
+  // baseline it reduces to exactly `gpsInput.trim() !== ''`, so first-visit
+  // behaviour (including its tolerance of whitespace-only input) is unchanged.
+  const isDirty =
+    gpsInput.trim() !== initialGpsInputRef.current.trim() ||
+    name !== initialNameRef.current ||
+    surveyor !== initialSurveyorRef.current ||
+    date !== initialDateRef.current ||
+    color !== initialColorRef.current ||
+    direction !== initialDirectionRef.current ||
+    reverse !== initialReverseRef.current ||
+    stationIndex !== initialStationIndexRef.current ||
+    shotsDirty;
+
+  // Back has no DialogWrapper-level guard (that machinery only ever discards
+  // via `onClose`/`onCancel`), so it gets its own small, self-contained confirm
+  // here. Still a discard after #394 F10, which was checked rather than assumed:
+  // the WIZARD's Back carries this dialog's config forward (App.tsx passes
+  // `previousZeroDatumConfig`), but THIS Back reopens 'zero-datum-selection'
+  // with no carry, and the forward path from there
+  // (`ZeroDatumSelectionDialog.onSelectSection`) passes none either - so
+  // everything typed since the dialog opened really is lost.
+  const [backConfirmPending, setBackConfirmPending] = useState(false);
+  const handleBackClick = useCallback(() => {
+    if (isDirty) {
+      setBackConfirmPending(true);
+    } else {
+      onBack();
+    }
+  }, [isDirty, onBack]);
+
+  // Intercept Escape ourselves while the Back confirm is open, so it dismisses
+  // ONLY that confirm - left alone, the keydown bubbles past this (unhandled)
+  // to DialogWrapper's own handler, which opens ITS "Unsaved Changes" overlay
+  // on top of this one (isDirty is still true; DialogWrapper has no idea this
+  // local confirm exists). Wrapping the render-prop output in a `display:
+  // contents` div (rather than a Fragment) is what gives this a DOM node to
+  // attach the listener to without disturbing the flex layout below.
+  const handleContentKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (backConfirmPending && (e.key === 'Escape' || e.key === 'Esc') && !e.repeat) {
+        e.preventDefault();
+        e.stopPropagation();
+        setBackConfirmPending(false);
+      }
+    },
+    [backConfirmPending],
+  );
 
   // When dropdown hovers an option, show it on the map; when dropdown closes
   // without selecting, the reducer reverts to the committed station.
@@ -462,6 +572,7 @@ export default function ZeroDatumConfigDialog({
     <DialogWrapper
       title={t('dialogs.zeroDatumConfig.title')}
       onClose={onCancel}
+      isDirty={isDirty}
       size={expanded ? 'fullscreen' : '5xl'}
       overflow="hidden"
       {...(expanded
@@ -471,6 +582,8 @@ export default function ZeroDatumConfigDialog({
       closeOnBackdropClick={false}
       data-testid="zero-datum-config-dialog"
     >
+      {({ requestClose }) => (
+      <div className="contents" onKeyDown={handleContentKeyDown}>
       {/* Scrollable content area */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Left column: Preview (fixed) */}
@@ -548,6 +661,11 @@ export default function ZeroDatumConfigDialog({
                   </span>
                 )}
               </div>
+              {!gpsInput.trim() && !gpsError && (
+                <div className="text-xs text-text-secondary pl-1" data-testid="zero-datum-gps-empty-hint">
+                  {t('dialogs.zeroDatumConfig.gpsEmptyHint')}
+                </div>
+              )}
               {gpsError && (
                 <div className="text-xs text-error pl-1" data-testid="zero-datum-gps-error">
                   {gpsError}
@@ -557,6 +675,11 @@ export default function ZeroDatumConfigDialog({
                 <div className="text-xs text-success pl-1" data-testid="zero-datum-gps-parsed">
                   Lat: {formatFixed(gpsCoords.latitude, undefined, precision.gps)}, Lon:{' '}
                   {formatFixed(gpsCoords.longitude, undefined, precision.gps)}
+                </div>
+              )}
+              {gpsTransposedWarning && (
+                <div className="text-xs text-warning pl-1" data-testid="zero-datum-gps-transposed-warning">
+                  {t('dialogs.zeroDatumConfig.transposedWarning')}
                 </div>
               )}
             </div>
@@ -624,10 +747,10 @@ export default function ZeroDatumConfigDialog({
       {/* Footer - always visible */}
       <div className="px-4 py-3 border-t border-border flex justify-between items-center shrink-0">
         <div className="flex gap-2">
-          <Button variant="secondary" onClick={onCancel} data-testid="zero-datum-config-cancel">
+          <Button variant="secondary" onClick={requestClose} data-testid="zero-datum-config-cancel">
             {t('common.actions.cancel')}
           </Button>
-          <Button variant="secondary" onClick={onBack} data-testid="zero-datum-config-back">
+          <Button variant="secondary" onClick={handleBackClick} data-testid="zero-datum-config-back">
             {t('common.actions.back')}
           </Button>
         </div>
@@ -640,6 +763,46 @@ export default function ZeroDatumConfigDialog({
           {t('dialogs.zeroDatumConfig.confirm')}
         </Button>
       </div>
+
+      {/* Small, self-contained Back-discard confirm - see the `isDirty`
+          comment above for why this cannot reuse DialogWrapper's own. */}
+      {backConfirmPending && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center"
+          data-testid="zero-datum-config-back-confirm"
+        >
+          <div
+            className="absolute inset-0 bg-overlay"
+            onClick={() => setBackConfirmPending(false)}
+            data-testid="zero-datum-config-back-confirm-backdrop"
+          />
+          <div className="relative bg-panel border border-border rounded-lg shadow-xl max-w-sm w-full mx-4">
+            <div className="p-4 space-y-4">
+              <p>{t('dialogs.zeroDatumConfig.backConfirm.message')}</p>
+              <div className="flex justify-end gap-2 pt-4 border-t border-border">
+                <Button
+                  onClick={() => setBackConfirmPending(false)}
+                  data-testid="zero-datum-config-back-confirm-cancel"
+                >
+                  {t('common.actions.cancel')}
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    setBackConfirmPending(false);
+                    onBack();
+                  }}
+                  data-testid="zero-datum-config-back-confirm-discard"
+                >
+                  {t('dialogs.zeroDatumConfig.backConfirm.discard')}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
+      )}
     </DialogWrapper>
   );
 }

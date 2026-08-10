@@ -73,6 +73,9 @@ const receipt = (): ImportReceipt => ({
   unit_conversion: null,
   warnings: [],
   info: [],
+  // #529's field. Null here: the withdrawal cases never assert on the datum
+  // line, and a receipt that claims one would only muddy what they do assert.
+  zero_datum_created: null,
 });
 
 // Fully synthetic, in the real `DmpShot` shape: `shot_type: 'Standard'` and a

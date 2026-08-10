@@ -245,6 +245,11 @@ export const TESTID_INVENTORY: readonly string[] = [
   'zero-datum-config-cancel',
   'zero-datum-config-back',
   'zero-datum-config-confirm',
+  // Back's own small discard confirm (#F9/dirty guard) - self-contained, not
+  // DialogWrapper's `dirty-dialog-*` overlay, so it needs its own ids here.
+  'zero-datum-config-back-confirm',
+  'zero-datum-config-back-confirm-cancel',
+  'zero-datum-config-back-confirm-discard',
   // --- wizard ---------------------------------------------------------------
   'dmp-new-import-dialog',
   'back-button',
@@ -269,9 +274,15 @@ export const TESTID_INVENTORY: readonly string[] = [
   'manual-import-section-select',
   'manual-import-station-select',
   // --- wizard confirm overlays ---------------------------------------------
+  // Three actions once the wizard has imported anything (#394): continue
+  // editing, close KEEPING what is in the project (`confirm-cancel-button`,
+  // which kept its id and its meaning), or remove it first
+  // (`cancel-remove-button`). Back offers no keep - the step it returns to
+  // re-imports from scratch - so `confirm-back-button` always withdraws.
   'cancel-confirm-dialog',
   'cancel-confirm-continue',
   'confirm-cancel-button',
+  'cancel-remove-button',
   'back-confirm-dialog',
   'back-confirm-continue',
   'confirm-back-button',
@@ -414,7 +425,13 @@ export const ESCAPE_PATH: Readonly<Record<ScreenId, readonly string[]>> = {
   'gpx-place': ['gpx-placement-cancel', 'key:Escape'],
   'export-modal': ['export-dialog-close', 'key:Escape'],
   'zero-datum-select': ['zero-datum-selection-cancel', 'key:Escape'],
-  'zero-datum-config': ['zero-datum-config-cancel', 'key:Escape'],
+  // `ZeroDatumConfigDialog` is `isDirty` whenever GPS text, a metadata field or
+  // a shot was touched, so Cancel/Escape may raise the discard overlay first -
+  // same shape as `dmp-select`/`tml-config`. `zero-datum-config-back-confirm-*`
+  // is deliberately NOT here: Escape dismisses that overlay in place (it does
+  // not leave the screen), so the next loop iteration re-evaluates from a
+  // clean read of this same route.
+  'zero-datum-config': ['dirty-dialog-discard', 'zero-datum-config-cancel', 'key:Escape'],
   'wiz-init': ['cancel-button', 'key:Escape'],
   'wiz-suggest': ['cancel-button', 'key:Escape'],
   'wiz-no-suggest': ['cancel-button', 'key:Escape'],
@@ -423,6 +440,15 @@ export const ESCAPE_PATH: Readonly<Record<ScreenId, readonly string[]>> = {
   'wiz-done': ['cancel-button', 'key:Escape'],
   'wiz-error': ['cancel-button', 'key:Escape'],
   'wiz-blank': ['cancel-button', 'key:Escape'],
+  // `confirm-cancel-button` first, and it still means "close, changing nothing
+  // in the project" after #394 - the removal is the separate
+  // `cancel-remove-button`, which the walk reaches through the generators
+  // rather than while trying to leave. Neither this overlay's buttons nor the
+  // wizard's own Cancel/Back are actionable while an import is in flight (they
+  // carry `disabled`, and the handlers refuse anyway, so a withdrawal can never
+  // snapshot a section list that is about to grow) - so an escape attempt
+  // during an import falls through to `key:Escape` and retries on the next
+  // loop, once the import has settled.
   'wiz-confirm': ['confirm-cancel-button', 'confirm-back-button', 'key:Escape'],
   'map-placement': ['key:Escape'],
   'new-project': ['dirty-dialog-discard', 'new-project-for-import-cancel', 'key:Escape'],

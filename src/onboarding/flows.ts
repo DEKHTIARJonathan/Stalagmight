@@ -202,6 +202,24 @@ const dmpSelectionFlow: OnboardingFlowDefinition = {
   ],
 };
 
+const zeroDatumSelectionFlow: OnboardingFlowDefinition = {
+  id: 'zero-datum-selection',
+  titleKey: 'onboarding.flows.dmpImport.title',
+  shouldStart: (context) =>
+    canShowDialogOnboarding(context) &&
+    context.activeDialog === 'zero-datum-selection',
+  steps: [
+    {
+      id: 'zero-datum-selection',
+      titleKey: 'onboarding.flows.dmpImport.steps.zeroDatumSelection.title',
+      descriptionKey: 'onboarding.flows.dmpImport.steps.zeroDatumSelection.description',
+      targetSelector: '[data-testid="zero-datum-selection-dialog"]',
+      placement: 'bottom',
+      interaction: 'locked',
+    },
+  ],
+};
+
 const zeroDatumConfigFlow: OnboardingFlowDefinition = {
   id: 'zero-datum-config',
   titleKey: 'onboarding.flows.dmpImport.title',
@@ -292,6 +310,7 @@ export const ONBOARDING_FLOWS: readonly OnboardingFlowDefinition[] = [
   placementModeFlow,
   workspaceFlow,
   dmpSelectionFlow,
+  zeroDatumSelectionFlow,
   zeroDatumConfigFlow,
   dmpSuggestedConnectionFlow,
   dmpSegmentPlacementFlow,

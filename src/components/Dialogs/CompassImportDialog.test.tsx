@@ -72,6 +72,7 @@ const EMPTY_RECEIPT: ImportReceipt = {
   unit_conversion: null,
   warnings: ['3 surveys had no shots after filtering and were dropped'],
   info: [],
+  zero_datum_created: null,
 };
 
 /**

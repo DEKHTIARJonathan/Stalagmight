@@ -7970,6 +7970,247 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
 }
 
 #[test]
+fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
+    // F12b: a section with zero datums on BOTH sides of a modified shot range
+    // is exactly the case the doubly-anchored guard exists for - the update
+    // must be silently kept (not applied) AND the receipt must say so, not
+    // just log it. The two zero datums are pushed directly onto the project
+    // (bypassing the command layer's "one zero datum per connected group"
+    // guard, which exists to stop a USER from creating this state through the
+    // UI) because the guard under test only cares about the raw
+    // `zero_datums` data, and this is the cheapest fixture that produces it.
+    use crate::models::ZeroDatum;
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "T".to_string(),
+        location: None,
+    });
+
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![
+                test_shot_data(5.0),
+                test_shot_data(5.0),
+                test_shot_data(5.0),
+                test_shot_data(5.0),
+            ],
+        })
+        .section_id
+        .unwrap();
+
+    let (mid_shot_id, orig_length) = {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        let key_front = project.key_for_ref(StationRef::new(a, 0)).unwrap();
+        let key_back = project.key_for_ref(StationRef::new(a, 4)).unwrap();
+        let gps = GpsCoordinates::new(10.0, 20.0, 0.0).unwrap();
+        project.zero_datums.push(ZeroDatum {
+            station_ref: key_front,
+            gps: gps.clone(),
+        });
+        project.zero_datums.push(ZeroDatum {
+            station_ref: key_back,
+            gps,
+        });
+        let shot = &project.sections[0].shots[1];
+        (shot.id, shot.length)
+    };
+
+    // A trivial carrier section: `execute_import_sections_inner` discards
+    // `existing_shot_updates` outright when `sections` is empty (the DMP
+    // wizard always sends updates alongside the sections they belong to).
+    let carrier = ImportSectionConfig {
+        reverse: false,
+        section_index: 0,
+        name: Some("Carrier".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#222222".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(1.0)],
+        station_comments: Vec::new(),
+        placement: ImportPlacement::Origin,
+        azimuth_reference: None,
+    };
+
+    let r = state.execute_import_sections(
+        vec![carrier],
+        Vec::new(),
+        None,
+        Vec::new(),
+        vec![crate::models::ExistingShotUpdate {
+            section_id: a,
+            shot_id: mid_shot_id,
+            updates: ShotUpdates {
+                length: Some(orig_length + 50.0),
+                ..Default::default()
+            },
+        }],
+        VirtualShotMode::Auto,
+    );
+    assert!(r.success, "{:?}", r.error);
+
+    let receipt = r.import_receipt.expect("import must carry a receipt");
+    assert!(
+        receipt
+            .warnings
+            .iter()
+            .any(|w| w.contains("anchored on both sides")),
+        "receipt warnings must name the doubly-anchored skip, got {:?}",
+        receipt.warnings
+    );
+
+    let after = state.get_project_state().unwrap();
+    let after_shot = after.sections[0]
+        .shots
+        .iter()
+        .find(|s| s.id == mid_shot_id)
+        .unwrap();
+    assert_eq!(
+        after_shot.length, orig_length,
+        "the doubly-anchored shot must keep its original length, not the update"
+    );
+}
+
+#[test]
+fn zero_datum_import_placement_sets_receipt_zero_datum_created() {
+    // F12c: a section placed via `ImportPlacement::ZeroDatum` must name itself
+    // on the receipt, not just in the trace logs.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "T".to_string(),
+        location: None,
+    });
+
+    let config = ImportSectionConfig {
+        reverse: false,
+        section_index: 0,
+        name: Some("GPS Anchor".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#333333".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(5.0)],
+        station_comments: Vec::new(),
+        placement: ImportPlacement::ZeroDatum {
+            coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+            station_index: 0,
+        },
+        azimuth_reference: None,
+    };
+
+    let r = state.execute_import_sections(
+        vec![config],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(r.success, "{:?}", r.error);
+
+    let receipt = r.import_receipt.expect("import must carry a receipt");
+    assert_eq!(
+        receipt.zero_datum_created.as_deref(),
+        Some("GPS Anchor"),
+        "receipt must name the section a zero datum was created on"
+    );
+}
+
+#[test]
+fn multiple_zero_datum_placements_name_the_first_and_count_the_rest() {
+    // F12c/item-9: a batch that creates more than one zero datum must not
+    // let naming only the first one read as a claim of completeness.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "T".to_string(),
+        location: None,
+    });
+
+    let make = |name: &str, station_index: u32| ImportSectionConfig {
+        reverse: false,
+        section_index: 0,
+        name: Some(name.to_string()),
+        surveyor: None,
+        date: None,
+        color: "#333333".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(5.0)],
+        station_comments: Vec::new(),
+        placement: ImportPlacement::ZeroDatum {
+            coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+            station_index,
+        },
+        azimuth_reference: None,
+    };
+
+    let r = state.execute_import_sections(
+        vec![make("First Anchor", 0), make("Second Anchor", 0)],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(r.success, "{:?}", r.error);
+
+    let receipt = r.import_receipt.expect("import must carry a receipt");
+    assert_eq!(
+        receipt.zero_datum_created.as_deref(),
+        Some("First Anchor (and 1 more)"),
+        "must name the first section and count the rest, not claim completeness"
+    );
+}
+
+#[test]
+fn import_with_no_zero_datum_placement_leaves_receipt_field_none() {
+    // Negative case for F12c: an ordinary Origin-placed import must not claim
+    // a zero datum was created.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "T".to_string(),
+        location: None,
+    });
+
+    let config = ImportSectionConfig {
+        reverse: false,
+        section_index: 0,
+        name: Some("Plain".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#444444".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(5.0)],
+        station_comments: Vec::new(),
+        placement: ImportPlacement::Origin,
+        azimuth_reference: None,
+    };
+
+    let r = state.execute_import_sections(
+        vec![config],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(r.success, "{:?}", r.error);
+
+    let receipt = r.import_receipt.expect("import must carry a receipt");
+    assert_eq!(receipt.zero_datum_created, None);
+}
+
+#[test]
 fn test_execute_delete_shot_command() {
     // Verify DeleteShot removes shot and maintains section integrity
     let state = AppState::new().unwrap();

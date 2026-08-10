@@ -32,6 +32,8 @@ export function aggregateImportReceipts(receipts: ImportReceipt[]): ImportReceip
       // replayed receipt can arrive without the field at all - nullish-safe
       // here for the same reason.
       info: [...(acc.info ?? []), ...(r.info ?? [])],
+      // First batch that created one wins, same rule as `unit_conversion`.
+      zero_datum_created: acc.zero_datum_created ?? r.zero_datum_created,
     }),
     first,
   );

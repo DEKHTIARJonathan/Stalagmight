@@ -54,6 +54,7 @@ const baseReceipt = (overrides: Partial<ImportReceipt> = {}): ImportReceipt => (
   unit_conversion: null,
   warnings: [],
   info: [],
+  zero_datum_created: null,
   ...overrides,
 });
 
@@ -98,6 +99,16 @@ describe('ImportReceiptDialog', () => {
     expect(screen.getByTestId('import-receipt-unit-conversion').textContent).toBe(
       'Lengths converted from feet to meters',
     );
+  });
+
+  it('shows the zero-datum-created line only when present, naming the section (F12c)', () => {
+    dialogData.receipt = baseReceipt();
+    const { rerender } = render(<ImportReceiptDialog />);
+    expect(screen.queryByTestId('import-receipt-zero-datum-created')).not.toBeInTheDocument();
+
+    dialogData.receipt = baseReceipt({ zero_datum_created: 'GPS Anchor' });
+    rerender(<ImportReceiptDialog />);
+    expect(screen.getByTestId('import-receipt-zero-datum-created').textContent).toContain('GPS Anchor');
   });
 
   it('renders the full info sentence in the summary, not just a short scale (#446)', () => {

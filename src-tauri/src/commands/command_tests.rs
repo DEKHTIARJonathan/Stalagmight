@@ -1753,6 +1753,76 @@ fn test_import_sections_provenance_params_decorate_receipt() {
     });
 }
 
+/// PR #529 Codex review: `import_sections` (the mNemo DMP wizard's actual IPC
+/// entry point) never calls `decorate_receipt` - it only overwrites
+/// source_format/file_name/sections_found directly (see above and
+/// `import::import_sections`). A `zero_datum_created` sanitized ONLY in
+/// `decorate_receipt` would therefore reach the frontend as a raw,
+/// file-controlled `ImportSectionConfig::name` through this exact command.
+/// Drives the real command with a hostile name (a bidi override + 10k chars)
+/// and asserts the receipt field arrives clean - proof this route, not just
+/// `decorate_receipt`'s callers, is sanitized.
+#[test]
+fn test_import_sections_sanitizes_hostile_zero_datum_section_name() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        state(&app).execute(Command::CreateProject {
+            name: "Test".to_string(),
+            location: None,
+        });
+
+        let hostile_name = format!("A\u{202e}B{}", "x".repeat(10_000));
+        let sections = vec![crate::models::ImportSectionConfig {
+            reverse: false,
+            section_index: 0,
+            name: Some(hostile_name),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot_data(5.0)],
+            station_comments: Vec::new(),
+            placement: crate::models::ImportPlacement::ZeroDatum {
+                coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+                station_index: 0,
+            },
+            azimuth_reference: None,
+        }];
+
+        let result = import::import_sections(
+            state(&app),
+            sections,
+            None,
+            None,
+            None,
+            None,
+            Some("mNemo DMP".to_string()),
+            Some("dive.dmp".to_string()),
+            Some(1),
+        );
+        assert_success(&result);
+
+        let receipt = result
+            .import_receipt
+            .as_ref()
+            .expect("import must attach an import receipt");
+        let name = receipt
+            .zero_datum_created
+            .as_ref()
+            .expect("field must still be Some after sanitizing");
+        assert!(
+            !name.contains('\u{202e}'),
+            "bidi override must be stripped: {name:?}"
+        );
+        assert!(
+            name.chars().count() <= 120,
+            "must clamp to MAX_FILE_NAME_LEN chars, got {}",
+            name.chars().count()
+        );
+    });
+}
+
 #[test]
 fn test_import_sections_without_provenance_params_leaves_receipt_defaults() {
     with_config_lock(|| {

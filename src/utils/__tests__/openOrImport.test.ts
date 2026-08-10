@@ -411,9 +411,36 @@ describe('routeOpenedFile - import context (#411)', () => {
     expect(saveProject).toHaveBeenCalledTimes(1);
   });
 
-  it('still routes when a NON-import dialog owns the screen', async () => {
+  // Was "still routes when a NON-import dialog owns the screen" - that let a
+  // dropped (or OS-launched, or recents-opened) file call loadProject/openDialog
+  // straight over settings, an error dialog, or a pending unsaved-changes
+  // prompt, because `importFlowOwnsScreen` only recognizes the import wizard's
+  // OWN dialogs. Now mirrors `useKeyboardShortcuts`' `activeDialog && key !==
+  // 'Escape'` gate: ANY dialog refuses a new route, with the toast the
+  // in-flight-import case already used.
+  it('refuses to route while a non-import dialog (e.g. settings) owns the screen', async () => {
+    useUIStore.setState({ activeDialog: 'settings', dialogData: {} });
+    await routeOpenedFile('/cave/track.tml');
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'import-in-progress', 'warning');
+    expect(useUIStore.getState().activeDialog).toBe('settings');
+    expect(useUIStore.getState().importContext).toBeNull();
+  });
+
+  it('refuses to route while an error dialog owns the screen', async () => {
     useUIStore.setState({ activeDialog: 'error', dialogData: {} });
     await routeOpenedFile('/cave/track.tml');
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'import-in-progress', 'warning');
+    expect(useUIStore.getState().activeDialog).toBe('error');
+    expect(parseTml).not.toHaveBeenCalled();
+  });
+
+  // The one deliberate exception: LaunchOpenConfirmDialog re-routes the SAME
+  // path through here while `launch-open-confirm` is still the active dialog
+  // (routes BEFORE closing itself, to keep the dialog slot occupied for the
+  // whole flow).
+  it('still routes with swapConfirmed while launch-open-confirm owns the screen', async () => {
+    useUIStore.setState({ activeDialog: 'launch-open-confirm', dialogData: {} });
+    await routeOpenedFile('/cave/track.tml', 'Open Failed', { swapConfirmed: true });
     expect(showToast).not.toHaveBeenCalled();
     expect(useUIStore.getState().activeDialog).toBe('new-project-for-import');
     expect(useUIStore.getState().importContext).toBe('new-project');

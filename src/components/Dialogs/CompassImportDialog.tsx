@@ -14,6 +14,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { CompassFile, OrphanPlacementSuggestion } from '../../types/commands';
 import { setSource } from '../../utils/telemetry';
+import { importButtonLabel } from '../../utils/importButtonLabel';
 
 interface CompassImportDialogProps {
   compassFile: CompassFile;
@@ -248,7 +249,13 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
             onClick={handleImport}
             disabled={isImporting || !hashChecked}
           >
-            {isImporting ? t('dialogs.compassImport.importing') : t('dialogs.compassImport.import')}
+            {importButtonLabel(t, {
+              isImporting,
+              hashChecked,
+              importingKey: 'dialogs.compassImport.importing',
+              checkingKey: 'dialogs.compassImport.checkingDuplicates',
+              defaultKey: 'dialogs.compassImport.import',
+            })}
           </Button>
         </div>
       </div>

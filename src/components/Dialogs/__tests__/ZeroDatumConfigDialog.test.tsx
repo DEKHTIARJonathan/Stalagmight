@@ -25,6 +25,7 @@
  * tests use.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { useState } from 'react';
 
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
@@ -58,8 +59,56 @@ vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel: (s: unknown) => unknown) => sel({ project: null, config: null }),
 }));
 
+// A faithful-enough stand-in for DialogWrapper's own dirty guard (see
+// DialogWrapper.tsx's `requestClose`/`showConfirm`), so the tests below
+// exercise the real wiring - Cancel calling `requestClose`, not `onCancel`
+// directly - rather than asserting against a mock that cannot fail.
+export const mockDialogWrapperSpy = vi.fn();
 vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogWrapper: ({
+    children,
+    isDirty,
+    onClose,
+    ...props
+  }: {
+    children: React.ReactNode | ((p: { requestClose: () => void }) => React.ReactNode);
+    isDirty?: boolean;
+    onClose: () => void;
+    [k: string]: unknown;
+  }) => {
+    mockDialogWrapperSpy({ isDirty, onClose, ...props });
+    const [showConfirm, setShowConfirm] = useState(false);
+    const requestClose = () => {
+      if (isDirty) setShowConfirm(true);
+      else onClose();
+    };
+    return (
+      <div>
+        {typeof children === 'function' ? children({ requestClose }) : children}
+        {showConfirm && (
+          <div>
+            <button
+              type="button"
+              data-testid="dirty-dialog-keep-editing"
+              onClick={() => setShowConfirm(false)}
+            >
+              Keep editing
+            </button>
+            <button
+              type="button"
+              data-testid="dirty-dialog-discard"
+              onClick={() => {
+                setShowConfirm(false);
+                onClose();
+              }}
+            >
+              Discard
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  },
 }));
 
 // Date picker and colour swatches are irrelevant here and pull in more DOM.
@@ -470,5 +519,265 @@ describe('ZeroDatumConfigDialog pick inside a deleted run', () => {
     pickStation(1);
     deleteRowRange(4, 6);
     expect(confirmedStationIndex()).toBe(1);
+  });
+});
+
+/**
+ * The dirty guard (#F9): DialogWrapper's own confirm-on-close only fires when
+ * `isDirty` is true, so a stub that always passes `true` (or always `false`)
+ * would either nag on an untouched dialog or silently drop a filled-in one -
+ * every case below pairs "still clean" with "now dirty" so a constant answer
+ * fails at least one.
+ */
+describe('ZeroDatumConfigDialog dirty guard', () => {
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function lastIsDirty(): boolean {
+    const calls = mockDialogWrapperSpy.mock.calls;
+    const last = calls[calls.length - 1]?.[0] as { isDirty?: boolean } | undefined;
+    return Boolean(last?.isDirty);
+  }
+
+  it('starts clean', () => {
+    renderDialog();
+    expect(lastIsDirty()).toBe(false);
+  });
+
+  it('goes dirty when GPS text is entered', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '2' } });
+    expect(lastIsDirty()).toBe(true);
+  });
+
+  it('returns to clean when the GPS text is cleared back out', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '2' } });
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '' } });
+    expect(lastIsDirty()).toBe(false);
+  });
+
+  it('goes dirty when the section is renamed', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('section-name-input'), { target: { value: 'New Name' } });
+    expect(lastIsDirty()).toBe(true);
+  });
+
+  it('goes dirty on a shot-table edit', () => {
+    renderDialog();
+    deleteRow(0);
+    expect(lastIsDirty()).toBe(true);
+  });
+
+  it('stays clean when the pick matches the initial (station 0, unchanged)', () => {
+    // `stationIndex` starts at 0; re-picking the same station is not a change
+    // to the confirm payload, so it must not arm the guard. Not routed
+    // through the shared `pickStation` helper: with 0 already selected, the
+    // dropdown's own closed-state label and the freshly opened option both
+    // read "Station 0", so the option is picked by role instead of text.
+    renderDialog();
+    fireEvent.click(screen.getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'Station 0' }));
+    expect(lastIsDirty()).toBe(false);
+  });
+
+  it('goes dirty on a changed pick - stationIndex IS sent in the confirm payload', () => {
+    renderDialog();
+    pickStation(PICK);
+    expect(lastIsDirty()).toBe(true);
+  });
+});
+
+/**
+ * Cancel and Back must route through the SAME guard `isDirty` feeds - a dirty
+ * flag that only ever reaches a spied-on prop and never gates an exit is not
+ * a guard. Every "confirm pending" case below is paired with the accepted
+ * discard, so a stub that skips straight to the callback (or one that never
+ * calls it at all) fails one half of the pair.
+ */
+describe('ZeroDatumConfigDialog Cancel/Back dirty guard', () => {
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function makeDirty() {
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '2' } });
+  }
+
+  it('Cancel calls onCancel immediately when clean', () => {
+    const onCancel = vi.fn();
+    render(
+      <ZeroDatumConfigDialog
+        dmpFile={dmpFile()}
+        selectionConfig={selectionConfig}
+        sectionIndex={0}
+        filePath="/tmp/anchor.dmp"
+        onCancel={onCancel}
+        onBack={vi.fn()}
+        onConfirm={onConfirm}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('zero-datum-config-cancel'));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('Cancel does NOT call onCancel while dirty until the discard confirm is accepted', () => {
+    const onCancel = vi.fn();
+    render(
+      <ZeroDatumConfigDialog
+        dmpFile={dmpFile()}
+        selectionConfig={selectionConfig}
+        sectionIndex={0}
+        filePath="/tmp/anchor.dmp"
+        onCancel={onCancel}
+        onBack={vi.fn()}
+        onConfirm={onConfirm}
+      />,
+    );
+    makeDirty();
+    fireEvent.click(screen.getByTestId('zero-datum-config-cancel'));
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByTestId('dirty-dialog-discard')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('dirty-dialog-discard'));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('Cancel is cancellable: "keep editing" leaves onCancel uncalled', () => {
+    const onCancel = vi.fn();
+    render(
+      <ZeroDatumConfigDialog
+        dmpFile={dmpFile()}
+        selectionConfig={selectionConfig}
+        sectionIndex={0}
+        filePath="/tmp/anchor.dmp"
+        onCancel={onCancel}
+        onBack={vi.fn()}
+        onConfirm={onConfirm}
+      />,
+    );
+    makeDirty();
+    fireEvent.click(screen.getByTestId('zero-datum-config-cancel'));
+    fireEvent.click(screen.getByTestId('dirty-dialog-keep-editing'));
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it('Back calls onBack immediately when clean', () => {
+    const onBack = vi.fn();
+    render(
+      <ZeroDatumConfigDialog
+        dmpFile={dmpFile()}
+        selectionConfig={selectionConfig}
+        sectionIndex={0}
+        filePath="/tmp/anchor.dmp"
+        onCancel={vi.fn()}
+        onBack={onBack}
+        onConfirm={onConfirm}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('zero-datum-config-back'));
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('Back does NOT call onBack while dirty until its own discard confirm is accepted', () => {
+    // NOTE for whoever integrates Package A's state-preserving Back: this is
+    // the "small isolated hunk" the coordinator asked to flag - if Back no
+    // longer discards anything, this confirm (and this test) can go.
+    const onBack = vi.fn();
+    render(
+      <ZeroDatumConfigDialog
+        dmpFile={dmpFile()}
+        selectionConfig={selectionConfig}
+        sectionIndex={0}
+        filePath="/tmp/anchor.dmp"
+        onCancel={vi.fn()}
+        onBack={onBack}
+        onConfirm={onConfirm}
+      />,
+    );
+    makeDirty();
+    fireEvent.click(screen.getByTestId('zero-datum-config-back'));
+    expect(onBack).not.toHaveBeenCalled();
+    expect(screen.getByTestId('zero-datum-config-back-confirm-discard')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('zero-datum-config-back-confirm-discard'));
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('Back is cancellable: dismissing its confirm leaves onBack uncalled', () => {
+    const onBack = vi.fn();
+    render(
+      <ZeroDatumConfigDialog
+        dmpFile={dmpFile()}
+        selectionConfig={selectionConfig}
+        sectionIndex={0}
+        filePath="/tmp/anchor.dmp"
+        onCancel={vi.fn()}
+        onBack={onBack}
+        onConfirm={onConfirm}
+      />,
+    );
+    makeDirty();
+    fireEvent.click(screen.getByTestId('zero-datum-config-back'));
+    fireEvent.click(screen.getByTestId('zero-datum-config-back-confirm-cancel'));
+    expect(onBack).not.toHaveBeenCalled();
+  });
+});
+
+describe('ZeroDatumConfigDialog GPS hints', () => {
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows the empty-state hint before anything is typed', () => {
+    renderDialog();
+    expect(screen.getByTestId('zero-datum-gps-empty-hint')).toBeInTheDocument();
+  });
+
+  it('hides the empty-state hint once GPS text is entered', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '48.8584, 2.2945' } });
+    expect(screen.queryByTestId('zero-datum-gps-empty-hint')).not.toBeInTheDocument();
+  });
+
+  it('warns on a plausibly-transposed pair', () => {
+    renderDialog();
+    // True fix would be lat 12, lon 77 (Bengaluru); entered swapped.
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '77, 12' } });
+    expect(screen.getByTestId('zero-datum-gps-transposed-warning')).toBeInTheDocument();
+  });
+
+  it('does not warn on a plausible, non-extreme pair', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '48.8584, 2.2945' } });
+    expect(screen.queryByTestId('zero-datum-gps-transposed-warning')).not.toBeInTheDocument();
+  });
+
+  it('does not block Confirm - the warning is advisory only', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '77, 12' } });
+    expect(screen.getByTestId('zero-datum-gps-transposed-warning')).toBeInTheDocument();
+    expect(screen.getByTestId('zero-datum-config-confirm')).not.toBeDisabled();
+  });
+
+  it('shows the swap hint ALONGSIDE the range error when the first field is an impossible latitude', () => {
+    // Regression: 120 fails `parseDD`'s range check before any GpsCoordinates
+    // exist, so the coords-based check alone never ran and the hint was
+    // silently absent next to the error.
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '120, 45' } });
+    expect(screen.getByTestId('zero-datum-gps-error')).toBeInTheDocument();
+    expect(screen.getByTestId('zero-datum-gps-transposed-warning')).toBeInTheDocument();
   });
 });

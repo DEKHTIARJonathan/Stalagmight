@@ -1247,6 +1247,7 @@
       "unanchoredInfo_other": "{{count}} sections are not connected to a zero datum",
       "unanchoredInfoShort_one": "{{count}} section unanchored",
       "unanchoredInfoShort_other": "{{count}} sections unanchored",
+      "zeroDatumCreated": "Zero datum created on \"{{section}}\"",
       "toast": "{{source}} import: {{summary}}",
       "viewDetails": "View details",
       "hideDetails": "Hide details",
@@ -1466,7 +1467,8 @@
       },
       "cancel": "Cancel",
       "import": "Import",
-      "importing": "Importing..."
+      "importing": "Importing...",
+      "checkingDuplicates": "Checking for duplicates..."
     },
     "wallsImport": {
       "title": "Import Walls Survey",
@@ -1510,7 +1512,8 @@
       },
       "cancel": "Cancel",
       "import": "Import",
-      "importing": "Importing..."
+      "importing": "Importing...",
+      "checkingDuplicates": "Checking for duplicates..."
     },
     "gpxSelection": {
       "title": "Import GPX File",
@@ -1545,6 +1548,7 @@
       "cancel": "Cancel",
       "import": "Import",
       "importing": "Importing...",
+      "checkingDuplicates": "Checking for duplicates...",
       "continue": "Continue"
     },
     "dmpSelection": {
@@ -1614,8 +1618,10 @@
     },
     "zeroDatumSelection": {
       "title": "Select Zero Datum Section",
-      "subtitle": "Choose which section will establish the GPS reference point for this project. All other sections will be positioned relative to this one.",
+      "subtitle": "A zero datum ties one station to a real-world GPS position, so this section will establish the GPS reference point for this project. All other sections will be positioned relative to this one.",
+      "helpTooltip": "The zero datum is the one station whose GPS coordinates you supply directly. Every other station's position is computed relative to it, so its section becomes the anchor for the whole survey.",
       "skip": "Skip Zero Datum",
+      "skipCost": "Without a zero datum the survey has no real-world GPS anchor; you can still place sections and set a datum later.",
       "shotCount": "{{count}} shots",
       "totalLength": "{{length}} total"
     },
@@ -1625,7 +1631,13 @@
       "zeroDatumDescription": "Choose which station is the fixed reference point (zero datum) and enter its GPS coordinates.",
       "stationLabel": "Zero datum station",
       "gpsLabel": "GPS coordinates",
-      "gpsPlaceholder": "48.8584, 2.2945",
+      "gpsPlaceholder": "e.g. 48.8584, 2.2945",
+      "gpsEmptyHint": "Enter coordinates to set the zero datum - Confirm stays disabled until it parses.",
+      "transposedWarning": "Latitude and longitude may be swapped - check the format.",
+      "backConfirm": {
+        "message": "You have unsaved changes. Going back will discard them.",
+        "discard": "Discard and Go Back"
+      },
       "confirm": "Confirm Zero Datum",
       "metadataHeading": "Section Metadata",
       "shotsHeading": "Shot Data"
@@ -2981,6 +2993,10 @@
           "selection": {
             "title": "Choose Sections",
             "description": "Pick which DMP sections to import. Single-shot sections are deselected by default. Surveyor and date defaults above apply to everything you select."
+          },
+          "zeroDatumSelection": {
+            "title": "Pick the Anchor Section",
+            "description": "A zero datum ties one station to a real-world GPS position, so every other section can be placed relative to it. Pick the section that should carry it, or skip to position everything manually and set it later."
           },
           "zeroDatum": {
             "title": "GPS Anchor",

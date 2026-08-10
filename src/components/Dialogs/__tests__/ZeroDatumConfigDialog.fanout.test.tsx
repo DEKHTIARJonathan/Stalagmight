@@ -29,7 +29,11 @@ vi.mock('react-i18next', async (importOriginal) => ({
 vi.mock('maplibre-gl', () => ({ default: {} }));
 vi.mock('../SectionPreview', () => ({ default: () => null }));
 vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogWrapper: ({
+    children,
+  }: {
+    children: React.ReactNode | ((p: { requestClose: () => void }) => React.ReactNode);
+  }) => <div>{typeof children === 'function' ? children({ requestClose: () => {} }) : children}</div>,
 }));
 vi.mock('../../common/SectionMetadataForm', () => ({ SectionMetadataForm: () => null }));
 

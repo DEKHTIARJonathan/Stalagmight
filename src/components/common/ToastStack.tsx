@@ -308,6 +308,11 @@ export function ToastStack() {
   const toasts = useUIStore((s) => s.toasts);
   const dismissToast = useUIStore((s) => s.dismissToast);
   const setToastCapacity = useUIStore((s) => s.setToastCapacity);
+  // F8: the largest clearance any mounted owner has registered (e.g. the DMP
+  // wizard's footer), added on top of the default `bottom-6` anchor so a
+  // lingering toast never covers it. 0 when nothing has registered.
+  const toastBottomOffsets = useUIStore((s) => s.toastBottomOffsets);
+  const bottomOffsetPx = Math.max(0, ...Object.values(toastBottomOffsets));
   const reducedMotion = usePrefersReducedMotion();
   const viewportHeight = useViewportHeight();
 
@@ -615,7 +620,18 @@ export function ToastStack() {
   // given up. `setToastCapacity` is a no-op when the number has not moved, so
   // reporting on every render cannot loop.
   useEffect(() => {
-    setToastCapacity(fitToastCapacity(viewportHeight, [...liveHeights].reverse()));
+    // F8: the stack's bottom anchor sits at `24 + bottomOffsetPx` px above the
+    // window's bottom edge (see the container's `style.bottom` below), so the
+    // headroom actually available for the column is `viewportHeight -
+    // bottomOffsetPx`, not the raw window height - budgeting against the full
+    // height let a full 5-toast stack overflow off the TOP of a short viewport
+    // once a registered offset had already eaten into the room from the
+    // bottom. `viewportHeight - bottomOffsetPx` (not `viewportHeight -
+    // footerRect.top`): `bottomOffsetPx` is the exact quantity already driving
+    // the anchor position below, so reusing it keeps position and capacity
+    // answering the same question from the same number, and the registry only
+    // ever stores a clearance height, not an owner's absolute screen position.
+    setToastCapacity(fitToastCapacity(viewportHeight - bottomOffsetPx, [...liveHeights].reverse()));
   });
 
   /**
@@ -729,8 +745,12 @@ export function ToastStack() {
           // alive indefinitely by re-arming the dwell on every leave. Only the
           // dismiss buttons opt back in; the pause is hit-tested against this box
           // instead of relying on pointer events it no longer receives.
-          className="absolute bottom-6 left-6 pointer-events-none"
-          style={{ height: stackHeight || undefined, width: stackWidth || undefined }}
+          className="absolute left-6 pointer-events-none"
+          style={{
+            bottom: 24 + bottomOffsetPx,
+            height: stackHeight || undefined,
+            width: stackWidth || undefined,
+          }}
           ref={stackRef}
           onFocusCapture={beginFocus}
           onBlurCapture={endFocus}

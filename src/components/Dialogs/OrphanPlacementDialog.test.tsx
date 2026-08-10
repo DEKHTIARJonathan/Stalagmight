@@ -127,6 +127,7 @@ describe('OrphanPlacementDialog - receipt surface routing (#411/#420)', () => {
     unit_conversion: null,
     warnings: [],
     info: [],
+    zero_datum_created: null,
   };
 
   let openDialog: ReturnType<typeof vi.fn>;

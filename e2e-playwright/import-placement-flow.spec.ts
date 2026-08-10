@@ -365,6 +365,47 @@ test.describe('Import Placement Flow', () => {
     await expect(page.getByTestId('wizard-manual-placing')).toBeVisible({ timeout: 10000 });
   });
 
+  // F8: the manual-placement hint toast fires just before this dialog closes
+  // for map placement, and can still be dwelling when Escape reopens it - at
+  // the default 1280x720 viewport the toast's bottom-left corner used to sit
+  // on top of the wizard's Cancel/Back footer row.
+  test('manual-placement hint toast clears the reopened wizard footer', async ({ page }) => {
+    await openDmpWizard(page);
+    await openManualPlacing(page);
+
+    await page.getByTestId('segment-mode-manual').click();
+    await page.getByTestId('segment-place-on-map-button').click();
+
+    const hintToast = page.locator('[data-toast-key="dmp-manual-placement-hint"]').last();
+    await expect(hintToast).toBeVisible({ timeout: 10000 });
+
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
+
+    // Re-trigger the SAME toast key right after the dialog reopens: `showToast`
+    // refreshes a live toast of the same key in place, resetting its dwell
+    // clock. This pins the "both on screen at once" precondition deterministically
+    // instead of racing the toast's real ~6.5s dwell+fade against a slow CI
+    // machine, where the earlier version of this test silently asserted
+    // nothing once the toast had expired.
+    await page.evaluate(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: { uiStore?: { getState: () => { showToast: (m: string, k: string, kind: string) => void } } };
+      }).__E2E_TEST__;
+      if (!e2e?.uiStore) throw new Error('E2E UI store unavailable');
+      e2e.uiStore.getState().showToast('placement hint', 'dmp-manual-placement-hint', 'info');
+    });
+
+    await expect(hintToast).toBeVisible({ timeout: 10000 });
+    const toastBox = await hintToast.boundingBox();
+    const footerBox = await page.getByTestId('dmp-import-dialog-footer').boundingBox();
+    expect(toastBox).not.toBeNull();
+    expect(footerBox).not.toBeNull();
+    if (toastBox && footerBox) {
+      expect(toastBox.y + toastBox.height).toBeLessThanOrEqual(footerBox.y + 1);
+    }
+  });
+
   test('skip action in suggestion phase still reaches manual placing', async ({ page }) => {
     await openDmpWizard(page);
 

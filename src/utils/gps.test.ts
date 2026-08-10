@@ -17,6 +17,8 @@ import {
   detectFormat,
   validateCoordinates,
   formatGpsCoordinates,
+  looksTransposed,
+  looksTransposedRawDD,
   type GpsParseResult,
   type GpsParseError,
 } from './gps';
@@ -533,5 +535,102 @@ describe('formatGpsCoordinates', () => {
     // UTM/MGRS/PlusCodes formatting not implemented, falls back to DD
     const result = formatGpsCoordinates(coords, 'UTM');
     expect(result).toContain('48.8584');
+  });
+});
+
+describe('looksTransposed', () => {
+  // Injection check: a stub that always returns `false` would still pass a
+  // suite that only asserts "does not fire on plausible input" - every test
+  // below pairs a firing case with a structurally close non-firing one, so a
+  // constant-false (or constant-true) implementation fails at least one.
+
+  it('fires when the given latitude is extreme and the longitude reads as a plausible latitude', () => {
+    // True fix would be lat 12, lon 77 (Bengaluru); entered swapped.
+    expect(looksTransposed(77, 12)).toBe(true);
+  });
+
+  it('fires in the other direction (negative extreme latitude)', () => {
+    // True fix would be lat -9, lon -80; entered swapped.
+    expect(looksTransposed(-80, -9)).toBe(true);
+  });
+
+  it('does not fire on a plausible, non-extreme pair', () => {
+    // Paris: neither value is past the threshold.
+    expect(looksTransposed(48.8584, 2.2945)).toBe(false);
+  });
+
+  // Regression: a 60-degree threshold false-positived on real diving/caving
+  // latitudes. Iceland, Norway and Sweden all sit past 60 N.
+  it('does not fire on real high-latitude dive/cave regions (Iceland)', () => {
+    expect(looksTransposed(64.25, -21.12)).toBe(false);
+  });
+
+  it('does not fire on real high-latitude dive/cave regions (Norway)', () => {
+    expect(looksTransposed(66, 14)).toBe(false);
+  });
+
+  it('does not fire on real high-latitude dive/cave regions (Sweden)', () => {
+    expect(looksTransposed(63, 15)).toBe(false);
+  });
+
+  it('does not fire when both values are genuinely extreme (real polar survey)', () => {
+    expect(looksTransposed(78, -80)).toBe(false);
+  });
+
+  it('does not fire when the latitude is extreme but swapping would not help', () => {
+    // Swapped longitude (77) is itself past the threshold - not a plausible latitude either.
+    expect(looksTransposed(85, 77)).toBe(false);
+  });
+
+  // NaN never satisfies a numeric comparison in either direction, so this
+  // holds regardless of the explicit `Number.isFinite` guard in the
+  // implementation - it documents the behavior rather than pinning the guard
+  // itself (see the guard's own comment for why nothing CAN make it
+  // load-bearing here).
+  it('does not fire on a non-finite latitude', () => {
+    expect(looksTransposed(NaN, 12)).toBe(false);
+  });
+});
+
+describe('looksTransposedRawDD', () => {
+  // Regression: `parseDD("120, 45")` rejects 120 as an impossible latitude
+  // before any `GpsCoordinates` exist, so the coords-based `looksTransposed`
+  // never runs and the swap hint silently never showed up next to the range
+  // error. This is the raw-input path that fills that gap.
+
+  it('fires on a swapped pair where the first field is an impossible latitude', () => {
+    // 120 cannot be a latitude at all; swapped (45, 120) is a valid DD pair.
+    expect(looksTransposedRawDD('120, 45')).toBe(true);
+  });
+
+  it('fires on the same shape space-separated', () => {
+    expect(looksTransposedRawDD('120 45')).toBe(true);
+  });
+
+  it('fires just past the boundary too (95, 45) - a swap genuinely fixes it', () => {
+    // Deliberately not carved out: 95 is exactly as impossible a latitude as
+    // 120 is, and swapping produces a DD pair `parseDD` would accept either
+    // way - there is no principled reason to withhold the hint here.
+    expect(looksTransposedRawDD('95, 45')).toBe(true);
+  });
+
+  it('does not fire when the first field is already a valid latitude', () => {
+    expect(looksTransposedRawDD('48.8584, 2.2945')).toBe(false);
+  });
+
+  it('does not fire when swapping would not fix it either (both fields impossible)', () => {
+    // 200 is not a valid latitude NOR a valid longitude, so swapping leaves a
+    // pair `parseDD` would still reject - nothing for the hint to promise.
+    expect(looksTransposedRawDD('200, 45')).toBe(false);
+  });
+
+  it('does not fire on input that is not bare DD shape', () => {
+    // DMS-with-symbols input fails the same `parseDD` regex this mirrors, so
+    // it must not be misread as a DD pair either.
+    expect(looksTransposedRawDD('48°51\'30"N 2°17\'40"E')).toBe(false);
+  });
+
+  it('does not fire on empty input', () => {
+    expect(looksTransposedRawDD('')).toBe(false);
   });
 });
