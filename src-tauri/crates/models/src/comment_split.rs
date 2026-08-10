@@ -65,8 +65,16 @@ pub fn split(s: Option<&str>) -> (Option<String>, Option<String>) {
 /// invisible character with no semantics, and there is no way to type one - so
 /// it can only have arrived from a foreign writer, or from an earlier version of
 /// this importer that skipped the decode. Either way it must not reach the
-/// project: it is invisible in the UI and leaks verbatim into the CSV and JSON
-/// exports, neither of which sanitizes user text.
+/// project: it is invisible in the UI, and it survives export - `escape_csv`
+/// (`export/csv.rs`) quotes delimiters and defuses formula injection but passes
+/// zero-width text through untouched, and the JSON writer emits the comment
+/// verbatim.
+///
+/// This removes the marker and nothing else. The wider hostile-character class
+/// that `export/dive_profile.rs` refuses on the way out - bidi overrides, line
+/// and paragraph separators, C0 controls - is NOT handled here: it arrives from
+/// every importer, not just this encoding, and sanitizing it belongs at a
+/// boundary all of them share.
 ///
 /// Applied at ingestion, never at export - re-marking on the way out is
 /// [`merge`]'s job, and stripping there would erase the encoding itself.

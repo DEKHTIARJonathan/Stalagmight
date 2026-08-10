@@ -1592,31 +1592,39 @@ pub fn convert_tml_to_import_configs(
         //   lines) and bare Ariane-authored ones (no markers → everything
         //   routes to the station, matching how Ariane visually centers Comment
         //   text on the station).
-        // - otherwise: both halves stay on the shot, rejoined in the order the
-        //   field carried them (shot lines, then station lines), so the text
-        //   the user saw in Ariane is what they get - minus the markers, which
-        //   are ours and never user content.
+        // - otherwise: every line stays on the shot, in the order the field
+        //   wrote them, with only the markers removed. Deliberately NOT a
+        //   `split` and rejoin: `split` partitions into two groups (see its
+        //   `interleaved_lines_partition` test), so rejoining would reorder a
+        //   field whose marked and unmarked lines interleave - which is what an
+        //   Ariane user produces by typing a note above our marked text. Their
+        //   lines are their own; reordering them can change what they mean.
         let mut station_comments: Vec<(u32, String)> = Vec::new();
         let shots: Vec<ShotData> = shot_data
             .into_iter()
             .enumerate()
             .map(|(shot_idx, mut shot)| {
-                let (shot_part, station_part) =
-                    crate::models::comment_split::split(shot.comment.as_deref());
-                let shot_part = shot_part.map(|s| crate::models::comment_split::strip_markers(&s));
-                let station_part =
-                    station_part.map(|s| crate::models::comment_split::strip_markers(&s));
                 if comments_on_stations {
-                    shot.comment = shot_part;
-                    if let Some(text) = station_part.filter(|s| !s.is_empty()) {
+                    let (shot_part, station_part) =
+                        crate::models::comment_split::split(shot.comment.as_deref());
+                    // A field of nothing but a marker decodes to an empty
+                    // string, which is not the same as "no comment" to anything
+                    // asking whether a shot HAS one.
+                    shot.comment = shot_part
+                        .map(|s| crate::models::comment_split::strip_markers(&s))
+                        .filter(|s| !s.is_empty());
+                    if let Some(text) = station_part
+                        .map(|s| crate::models::comment_split::strip_markers(&s))
+                        .filter(|s| !s.is_empty())
+                    {
                         station_comments.push((shot_idx as u32 + 1, text));
                     }
                 } else {
-                    shot.comment = match (shot_part, station_part) {
-                        (None, None) => None,
-                        (Some(only), None) | (None, Some(only)) => Some(only),
-                        (Some(s), Some(st)) => Some(format!("{s}\n{st}")),
-                    };
+                    shot.comment = shot
+                        .comment
+                        .as_deref()
+                        .map(crate::models::comment_split::strip_markers)
+                        .filter(|s| !s.is_empty());
                 }
                 shot
             })
@@ -4705,10 +4713,8 @@ mod tests {
     /// included - and the station half was silently destroyed.
     #[test]
     fn comments_on_shots_decodes_rather_than_leaking_the_raw_field() {
-        let field = crate::models::comment_split::merge(
-            Some("broken tape"),
-            Some("junction with main"),
-        );
+        let field =
+            crate::models::comment_split::merge(Some("broken tape"), Some("junction with main"));
         let (comment, station_comments) = import_comment(field, false);
 
         let comment = comment.expect("the shot must keep the comment text");
@@ -4726,10 +4732,8 @@ mod tests {
     /// shots path by breaking the default one.
     #[test]
     fn comments_on_stations_still_partitions_the_field() {
-        let field = crate::models::comment_split::merge(
-            Some("broken tape"),
-            Some("junction with main"),
-        );
+        let field =
+            crate::models::comment_split::merge(Some("broken tape"), Some("junction with main"));
         let (comment, station_comments) = import_comment(field, true);
 
         assert_eq!(comment.as_deref(), Some("broken tape"));
@@ -4744,10 +4748,42 @@ mod tests {
     /// export/import cycle used to re-mark already-marked text, after which no
     /// import could tell the halves apart. Decoding on ingestion makes the
     /// shots path a fixed point.
+    /// An Ariane user typing a note ABOVE our marked text produces a field
+    /// whose marked and unmarked lines interleave. Their line order is theirs -
+    /// partitioning the field into groups would silently rewrite it.
+    #[test]
+    fn interleaved_lines_keep_their_order_on_the_shots_path() {
+        let marker = crate::models::comment_split::SHOT_MARKER;
+        let field = Some(format!("sump at 40 m\n{marker}do not pass\nsilt below"));
+        let (comment, station_comments) = import_comment(field, false);
+
+        assert_eq!(
+            comment.as_deref(),
+            Some("sump at 40 m\ndo not pass\nsilt below")
+        );
+        assert!(station_comments.is_empty());
+    }
+
+    /// A field carrying nothing but a marker decodes to an empty string, which
+    /// is not the same as having no comment at all.
+    #[test]
+    fn a_marker_only_field_yields_no_comment_rather_than_an_empty_one() {
+        let field = Some(crate::models::comment_split::SHOT_MARKER.to_string());
+        for comments_on_stations in [false, true] {
+            let (comment, station_comments) = import_comment(field.clone(), comments_on_stations);
+            assert_eq!(comment, None);
+            assert!(station_comments.is_empty());
+        }
+    }
+
     #[test]
     fn a_second_cycle_on_the_shots_path_is_stable() {
+        let marker = crate::models::comment_split::SHOT_MARKER;
+        // The shot half carries an EMBEDDED marker too, so this test also reds
+        // if the strip is dropped - decoding alone would leave that one behind
+        // and the second cycle would not match the first.
         let field = crate::models::comment_split::merge(
-            Some("broken tape"),
+            Some(&format!("broken{marker} tape")),
             Some("junction with main"),
         );
         let (first, _) = import_comment(field, false);
