@@ -1325,9 +1325,18 @@ export const importDialogFuzz: Scenario = {
         const testid = route.find((candidate) => digest.live[candidate] === 2);
         if (testid !== undefined) {
           ctx.metric('forcedAdvance');
+          // Per screen as well as in total. The aggregate said 135 forced
+          // advances and 435 unavailable ones over the corpus campaign and
+          // could not say WHERE, which is what hid two screens whose advancing
+          // control is disabled by default: `zero-datum-config`'s confirm needs
+          // a GPS that parses, and `wiz-manual`'s needed a placement mode the
+          // walk had not chosen yet. Both read as "the walk is slow" until the
+          // counter was split.
+          ctx.metric(`forcedAdvance:${digest.screen}`);
           return { kind: 'ui', testid, label: `FORCED advance on ${digest.screen}` };
         }
         ctx.metric('forcedAdvanceUnavailable');
+        ctx.metric(`forcedAdvanceUnavailable:${digest.screen}`);
       }
       // Interjections come off their OWN stream, so adding one later does not
       // shift the trajectory every existing repro line depends on. Wave 3's
@@ -1366,6 +1375,13 @@ export const importDialogFuzz: Scenario = {
         const move = generator.build(genEnv(digest));
         if (move === null) continue;
         ctx.metric(`gen:${generator.name}`);
+        // A generator legal on ONE screen is already attributed by its name; one
+        // legal on several is not, and the shot-table and metadata families are
+        // shared by `zero-datum-config`, `wiz-suggest` and `wiz-manual`. The
+        // corpus campaign could only apportion their 226 firings by the ratio of
+        // screen samples, which is an estimate presented as a measurement. This
+        // is the measurement.
+        if (generator.screens.length > 1) ctx.metric(`gen@${digest.screen}:${generator.name}`);
         if (move.kind === 'openFile') fileSeq += 1;
         return move;
       }
