@@ -12,10 +12,10 @@
  *   EVIDENCE for the verdict record. Checkpoints never gate - store and disk
  *   state do (no pixel-golden flakiness).
  *
- * Journeys must not hardcode expectations derived from the CONTENT of local
- * fixtures (`e2e/fixtures/` is user-managed and never committed): derive the
- * expected values at runtime (e.g. from `parseTml`) or from data the journey
- * itself constructs.
+ * Journeys must not hardcode expectations derived from the CONTENT of
+ * fixtures (`e2e/fixtures/` is a mix of tracked files and user-managed ones,
+ * and either can change under a journey): derive the expected values at
+ * runtime (e.g. from `parseTml`) or from data the journey itself constructs.
  */
 import * as fs from 'fs';
 import * as path from 'path';
