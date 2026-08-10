@@ -3,8 +3,9 @@ import type { Journey } from './framework';
 import { importTml } from './importTml';
 import { saveReopen } from './saveReopen';
 import { exportTmlRoundtrip } from './exportTmlRoundtrip';
+import { newProjectFromDmp } from './newProjectFromDmp';
 
-const JOURNEYS: Journey[] = [importTml, saveReopen, exportTmlRoundtrip];
+const JOURNEYS: Journey[] = [importTml, saveReopen, exportTmlRoundtrip, newProjectFromDmp];
 
 const REGISTRY: Record<string, Journey> = Object.fromEntries(JOURNEYS.map((j) => [j.name, j]));
 
