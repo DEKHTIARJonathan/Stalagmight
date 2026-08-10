@@ -48,7 +48,7 @@ describe('onboarding flow gating', () => {
     const consumed = { ...baseContext, orientationConsumed: true };
     expect(flow(ORIENTATION_FLOW_ID).shouldStart(consumed)).toBe(false);
 
-    for (const id of ['dmp-selection', 'zero-datum-config'] as const) {
+    for (const id of ['dmp-selection', 'zero-datum-selection', 'zero-datum-config'] as const) {
       expect(flow(id).shouldStart({ ...consumed, activeDialog: id })).toBe(true);
     }
     expect(

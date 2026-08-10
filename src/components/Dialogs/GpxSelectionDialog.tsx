@@ -353,13 +353,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
               onClick={handleContinue}
               disabled={!hashChecked || !hasSelection}
             >
-              {importButtonLabel(t, {
-                isImporting: false,
-                hashChecked,
-                importingKey: 'dialogs.gpxSelection.continue',
-                checkingKey: 'dialogs.gpxSelection.checkingDuplicates',
-                defaultKey: 'dialogs.gpxSelection.continue',
-              })}
+              {hashChecked ? t('dialogs.gpxSelection.continue') : t('dialogs.gpxSelection.checkingDuplicates')}
             </Button>
           )}
         </div>
