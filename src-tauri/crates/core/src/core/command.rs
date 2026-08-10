@@ -888,7 +888,7 @@ mod tests {
 
         assert_eq!(
             variants.len(),
-            29,
+            30,
             "Command's variant set changed. A removal leaves persisted undo \
              history unloadable at that entry and holed either side of it - keep \
              the tag deserializable, or bump SCHEMA_VERSION and call \
