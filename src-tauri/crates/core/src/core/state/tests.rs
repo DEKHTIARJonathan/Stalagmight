@@ -18484,6 +18484,72 @@ fn test_batch_partial_failure_rolls_back() {
     );
 }
 
+/// Withdrawing an abandoned import (#394) removes N sections as ONE undo entry.
+///
+/// The DMP wizard imports eagerly - the zero-datum anchor lands on mount, each
+/// reachable segment as it is placed - so "Cancel, and remove what was already
+/// imported" names a whole list. Deleting them one command at a time would leave
+/// the user N undo steps to walk back through, so `DeleteSection` is batch-allowed
+/// and the frontend sends one `execute_batch`. The undo has to bring back ALL of
+/// them, not the last one.
+#[test]
+fn batched_section_deletes_are_one_undo_entry() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Withdraw".to_string(),
+        location: None,
+    });
+
+    let make = |name: &str| {
+        state
+            .execute(Command::CreateSection {
+                name: Some(name.to_string()),
+                surveyor: None,
+                date: None,
+                color: "#ff0000".to_string(),
+                direction: None,
+                shots: vec![test_shot_data(5.0)],
+            })
+            .section_id
+            .unwrap()
+    };
+    let a = make("A");
+    let b = make("B");
+    let c = make("C");
+    assert_eq!(state.get_project_state().unwrap().sections.len(), 3);
+
+    let removed = state.execute(Command::Batch {
+        commands: vec![
+            Command::DeleteSection { section_id: a },
+            Command::DeleteSection { section_id: b },
+        ],
+    });
+    assert!(removed.success, "batched delete: {:?}", removed.error);
+    let after: Vec<_> = state
+        .get_project_state()
+        .unwrap()
+        .sections
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(after, vec![c], "both named sections should be gone");
+
+    // ONE undo entry, not two: a single undo restores both.
+    assert!(state.undo().success);
+    let restored: Vec<_> = state
+        .get_project_state()
+        .unwrap()
+        .sections
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(
+        restored,
+        vec![a, b, c],
+        "one undo must restore every section the batch removed"
+    );
+}
+
 /// A batch that adds two zero datums places the SECOND against the origin the
 /// FIRST one established, not against wherever the survey happened to sit when
 /// the batch started.

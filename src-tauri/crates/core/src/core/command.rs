@@ -380,7 +380,9 @@ pub struct CommandResult {
     ///   batch reversed an even number of times, because such a batch leaves the
     ///   numbering exactly as it found it and there is nothing to mirror. At most
     ///   one entry per section, and `shot_count` is unambiguous because a batch
-    ///   cannot change it (`is_batch_allowed` admits no shot create/delete).
+    ///   cannot change a SURVIVING section's shot count (`is_batch_allowed` admits
+    ///   no shot create/delete; the `DeleteSection` it does admit removes the whole
+    ///   section, which is then dropped from this report entirely).
     /// * From `undo_to` / `redo_to`, this is an ORDERED PER-STEP LOG: one entry
     ///   per reversing step, in the order the steps ran, repeats intact. It is
     ///   deliberately NOT parity-reduced, because `shot_count` can differ between
@@ -615,9 +617,11 @@ impl Command {
     ///
     /// Parity is associative and commutative, so reducing sub-lists and then the
     /// concatenation gives the same answer as reducing once - nested batches are
-    /// safe. Within a batch the shot count `N` cannot change (`is_batch_allowed`
-    /// admits no `CreateShot`/`DeleteShot`/`DeleteSection`; `merge_stations` only
-    /// records relations and `move_segment` only offsets), so a section reversed
+    /// safe. Within a batch a SURVIVING section's shot count `N` cannot change
+    /// (`is_batch_allowed` admits no `CreateShot`/`DeleteShot`; `merge_stations`
+    /// only records relations and `move_segment` only offsets; the `DeleteSection`
+    /// it admits takes the whole section, and `settle_reversed_sections` drops a
+    /// section that is gone), so a section reversed
     /// twice is not renumbered AT ALL: it must be neither reported nor fixed up.
     /// Reporting it would be actively wrong, because the two fix-ups
     /// `settle_reversed_sections` runs are applied once per list entry against one
