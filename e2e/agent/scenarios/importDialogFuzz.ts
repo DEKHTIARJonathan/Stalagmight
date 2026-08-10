@@ -1027,10 +1027,33 @@ export const importDialogFuzz: Scenario = {
 
     // ---- per-step oracles ------------------------------------------------
 
+    /**
+     * Moves for which a NEWLY raised error dialog is still the previous exempt
+     * move's, not this one's.
+     *
+     * An exempt move hands a file to a parser and returns; the parse resolves on
+     * its own schedule, and the error dialog it raises can land after the move's
+     * settle loop has already reported a stable, dialog-free screen - the settle
+     * marker cannot see a promise. S4 then blames whatever move happened to be
+     * next. Measured, on the corpus campaign's seed-70 cell: `import via
+     * toolbar-import-button` (a `.dmp` with no valid sections) came back at
+     * `idle`, and "Import Failed / No valid sections found in DMP file" was
+     * reported against the mode-switch interjection that followed it.
+     *
+     * One move of grace, because that is the whole observed lag and every extra
+     * move is real coverage given away: S4's other half - an error dialog left
+     * UP exempting every later move - is already conceded by the
+     * `screenBefore !== 'error'` clause, and this is the same concession for the
+     * instant the dialog arrives.
+     */
+    const ERROR_GRACE_MOVES = 1;
+    let errorGrace = 0;
+
     const stepOracles = async (
       move: FuzzMove,
       digest: ImportScreenDigest,
       screenBefore: ScreenId,
+      performed: boolean,
     ): Promise<void> => {
       if (digest.boundary) {
         fail('S2 ERROR BOUNDARY: the React tree crashed', `  after: ${move.label}`);
@@ -1064,12 +1087,21 @@ export const importDialogFuzz: Scenario = {
       // Measured, on the seed-2 matrix cell: `import via router` produced "No
       // valid sections found in DMP file", which is the app reporting a problem
       // properly, and the NEXT interjection was reported as the defect.
-      if (digest.screen === 'error' && screenBefore !== 'error' && !mayRaiseError(move)) {
-        fail(
-          'S4 UNEXPECTED ERROR DIALOG: a move with no business failing raised one',
-          `  after: ${move.label}\n  error: ${digest.err ?? '(no text)'}`,
-        );
+      const exemptNow = mayRaiseError(move);
+      if (digest.screen === 'error' && screenBefore !== 'error' && !exemptNow) {
+        if (errorGrace > 0) {
+          // The previous exempt move's parse landing late - see ERROR_GRACE_MOVES.
+          ctx.metric('s4LateErrorCarried');
+        } else {
+          fail(
+            'S4 UNEXPECTED ERROR DIALOG: a move with no business failing raised one',
+            `  after: ${move.label}\n  error: ${digest.err ?? '(no text)'}`,
+          );
+        }
       }
+      // Counted AFTER the check, so an exempt move's own error does not spend
+      // the grace it is granting.
+      errorGrace = exemptNow && performed ? ERROR_GRACE_MOVES : Math.max(0, errorGrace - 1);
       if (digest.screen !== 'idle' && !WEDGE_EXEMPT_SCREENS.has(digest.screen) && actionableCount(digest) === 0) {
         fail(
           `S5 WEDGE on "${digest.screen}": no actionable control anywhere in the inventory`,
@@ -1173,7 +1205,7 @@ export const importDialogFuzz: Scenario = {
         const screenBefore = digest.screen;
         const outcome = await execute(move, true);
         digest = outcome.digest;
-        await stepOracles(move, digest, screenBefore);
+        await stepOracles(move, digest, screenBefore, outcome.performed);
       }
       if (isEscaped(digest.screen, digest.placement)) return digest;
       fail(
@@ -1530,7 +1562,7 @@ export const importDialogFuzz: Scenario = {
         const afterMove = async (move: FuzzMove, outcome: Executed): Promise<void> => {
           const screenBefore = digest.screen;
           digest = outcome.digest;
-          await stepOracles(move, digest, screenBefore);
+          await stepOracles(move, digest, screenBefore, outcome.performed);
           if (move.kind === 'undo' || move.kind === 'redo' || move.kind === 'save') historyTouched = true;
           if (move.kind === 'closeProject') historyTouched = true;
           // The export modal is not an import screen, so opening it must not
