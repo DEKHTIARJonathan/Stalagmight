@@ -192,21 +192,28 @@ impl Database {
     ///
     /// Hot path: called on EVERY accepted remote edit, so it avoids the per-edit
     /// `SELECT` + `CREATE TABLE IF NOT EXISTS` + full upsert that load+save did (#197
-    /// review). Schema init/migrate is supposed to guarantee `speleo_link` exists, but
-    /// in practice a never-linked DB can be missing it (#484), so the `table_exists`
-    /// check keeps this a true no-op instead of an `UPDATE` against a missing table
-    /// (and the WARN-per-edit log noise that came with it). This never touches
-    /// `base_commit_sha`/`endpoint`/`project_id`, so it cannot disturb the BASE-advance
-    /// invariant or the immutable hand-off identity.
+    /// review): the common (linked) case is exactly one `UPDATE`, zero added cost.
+    /// Schema init/migrate is supposed to guarantee `speleo_link` exists, but in
+    /// practice a never-linked DB can be missing it (#484), so `table_exists` is
+    /// consulted ONLY after the `UPDATE` fails, to tell that once-per-session missing
+    /// table apart from a genuinely unexpected persistence error - the former is a
+    /// silent no-op (and no more per-edit WARN log noise), the latter still
+    /// propagates. This never touches `base_commit_sha`/`endpoint`/`project_id`, so it
+    /// cannot disturb the BASE-advance invariant or the immutable hand-off identity.
     pub fn touch_speleo_link_dirty(&self, last_edit_at: &str) -> Result<bool> {
-        if !self.table_exists("speleo_link")? {
-            return Ok(false);
-        }
-        let rows = self.conn.execute(
+        match self.conn.execute(
             "UPDATE speleo_link SET has_unpushed_edits = 1, last_edit_at = ?1 WHERE id = 1",
             params![last_edit_at],
-        )?;
-        Ok(rows > 0)
+        ) {
+            Ok(rows) => Ok(rows > 0),
+            Err(e) => {
+                if self.table_exists("speleo_link")? {
+                    Err(e.into())
+                } else {
+                    Ok(false)
+                }
+            }
+        }
     }
 
     /// Change the per-project undo policy and record the change as forward work in one
