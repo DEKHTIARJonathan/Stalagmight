@@ -482,6 +482,106 @@ mod tests {
         squatted
     }
 
+    /// Diagnosis for the post-unblock asserts, which failed once on CI and
+    /// never since, nor locally (#522).
+    ///
+    /// After the squat is lifted, the retry can miss its disk write two ways -
+    /// the retry short-circuited on the in-memory guard (the real bug these
+    /// tests catch), or the unblocked save failed again for an environmental
+    /// reason. (A third theory, "the write landed where `Config::load` does not
+    /// read", is impossible here: `Config::config_path()` returns
+    /// `config_path_override().join("config.toml")`, the same path the save
+    /// writes, so save and load cannot diverge in this test.)
+    ///
+    /// An empty config dir alone cannot tell the two real causes apart. What
+    /// discriminates them is the file `Config::load` reads: present with the
+    /// stale value = the retry short-circuited without writing (cause 1);
+    /// absent = the retry attempted the write and it failed again (cause 2).
+    /// So this prints the load path AND that file's contents, not just a dir
+    /// listing. Total by construction - it must never panic and replace the
+    /// assertion message it is meant to enrich.
+    fn config_state_for_diagnosis() -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+
+        match crate::config::Config::config_path() {
+            Ok(path) => {
+                let _ = write!(out, "Config::load reads {}", path.display());
+                match std::fs::read_to_string(&path) {
+                    Ok(body) => {
+                        let _ = write!(out, " (present, {} bytes):\n{body}", body.len());
+                    }
+                    Err(e) => {
+                        let _ = write!(out, " (unreadable: {e})");
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = write!(out, "Config::config_path() errored: {e}");
+            }
+        }
+
+        let Some(dir) = crate::test_helpers::config_path_override() else {
+            out.push_str("; no config override active");
+            return out;
+        };
+        match std::fs::read_dir(&dir) {
+            Ok(entries) => {
+                let contents: Vec<String> = entries
+                    .map(|entry| match entry {
+                        Ok(e) => {
+                            let name = e.file_name().to_string_lossy().into_owned();
+                            match e.metadata() {
+                                Ok(m) if m.is_file() => format!("{name} ({}B)", m.len()),
+                                Ok(_) => format!("{name} (non-file)"),
+                                Err(err) => format!("{name} (metadata: {err})"),
+                            }
+                        }
+                        Err(err) => format!("<entry error: {err}>"),
+                    })
+                    .collect();
+                let _ = write!(out, "; {} holds [{}]", dir.display(), contents.join(", "));
+            }
+            Err(e) => {
+                let _ = write!(out, "; {} unreadable: {e}", dir.display());
+            }
+        }
+        out
+    }
+
+    /// The diagnostic runs only when an assertion fails, so nothing else would
+    /// notice it silently breaking. This exercises both of its discriminating
+    /// branches - a present config file and an absent one - so a regression in
+    /// the helper reds here rather than during the next flake it is meant to
+    /// explain.
+    #[test]
+    fn config_state_for_diagnosis_discriminates_present_from_absent() {
+        crate::test_helpers::with_isolated_config(|| {
+            // Absent: no config.toml written yet (cause-2 shape).
+            let absent = config_state_for_diagnosis();
+            assert!(
+                absent.contains("config.toml"),
+                "names the load path even when the file is absent: {absent}"
+            );
+            assert!(
+                absent.contains("unreadable") || absent.contains("holds ["),
+                "reports the absent file and the dir listing: {absent}"
+            );
+
+            // Present: a real save lands a config.toml (cause-1 shape).
+            let state = AppState::new().expect("state");
+            state.speleodb_persist_keychain_belief(Some(crate::speleodb::auth::account_key(
+                "https://sdb.example",
+                "u@x",
+            )));
+            let present = config_state_for_diagnosis();
+            assert!(
+                present.contains("present"),
+                "a written config.toml is reported present with its contents: {present}"
+            );
+        });
+    }
+
     #[test]
     fn a_keychain_record_that_could_not_be_saved_is_retried_not_swallowed() {
         // Both writers here mutate the in-memory config, then save, then guard the
@@ -516,7 +616,8 @@ mod tests {
             assert!(
                 saved.speleodb.keychain_has_token,
                 "the retry has to re-attempt the disk write, not short-circuit on the \
-                 value the failed attempt left behind"
+                 value the failed attempt left behind - {}",
+                config_state_for_diagnosis()
             );
             assert_eq!(
                 saved.speleodb.keychain_token_account, held,
@@ -551,7 +652,8 @@ mod tests {
                     .speleodb
                     .keychain_declined,
                 "the retry has to re-attempt the disk write, not short-circuit on the \
-                 value the failed attempt left behind"
+                 value the failed attempt left behind - {}",
+                config_state_for_diagnosis()
             );
         });
     }
