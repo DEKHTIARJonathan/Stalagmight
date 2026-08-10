@@ -48,5 +48,13 @@ describe('hamburger import doors (#508)', () => {
     );
     (open?.onClick as () => void)();
     expect(pickAndRouteMock).toHaveBeenCalledWith(openOrImportFilters(), 'Open Failed');
+    // Literal set, for the same reason the Import row pins one: comparing
+    // against the helper passes vacuously if the helper SHRINKS, which is the
+    // regression that would quietly make a format unopenable app-wide.
+    const [filters] = pickAndRouteMock.mock.calls[0]!;
+    const exts = new Set((filters as Array<{ extensions: string[] }>).flatMap((f) => f.extensions));
+    for (const ext of ['stalx', 'dmp', 'tml', 'tmlu', 'mak', 'dat', 'wpj', 'srv', 'gpx']) {
+      expect(exts).toContain(ext);
+    }
   });
 });

@@ -135,7 +135,10 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   open_file: 'Open',
   save: 'Save',
   save_as: 'Save As',
-  import_dmp: 'Import survey data',
+  // Matches the visible Import button and menu row. Deliberately not
+  // "...survey data": with a project open the action takes `.dmp` only (#508),
+  // and this one label is shown in both contexts.
+  import_dmp: 'Import',
   export: 'Export',
   quit: 'Quit',
 };

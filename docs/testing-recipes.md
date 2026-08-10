@@ -817,7 +817,7 @@ Use these instead of `waitForTimeout`. All from `helpers/app.ts`:
 
 `helpers/app.ts` also has seeding helpers (`createSectionViaStore`,
 `seedProjectWithSections`), menu navigation (`openAppMenu`,
-`openSettingsFromMenu`, `openImportFromMenu`), the DMP wizard drivers
+`openSettingsFromMenu`, `openOrImportFromMenu`), the DMP wizard drivers
 (`openDmpSelectionDialog`, `proceedToDmpImportWizard`, `placeAllSections`), and
 canvas readback (`getDrawnGeometry`, `getStationScreenPositions`,
 `readCanvasPixel`, `countCanvasInk`). Read the file before writing a new

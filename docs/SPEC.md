@@ -2420,7 +2420,7 @@ not live co-editing), and floating/dockable panels.
 | Undo | Ctrl+Z |
 | Redo | Ctrl+Y / Ctrl+Shift+Z |
 | Save | Ctrl+S |
-| Import mNemo data (.dmp) | Ctrl+I (configurable) |
+| Import | Ctrl+I (configurable) |
 | Export | Ctrl+E (configurable) |
 | Delete Selected | Delete / Backspace |
 | Select All | Ctrl+A |
