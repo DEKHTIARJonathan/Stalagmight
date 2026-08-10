@@ -547,8 +547,9 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           </div>
         )}
 
-        {/* Footer */}
-        <div className="flex justify-end gap-2 pt-4 border-t border-border">
+        {/* Footer - sticky at the bottom of the scrolling body so the primary
+            action stays reachable without scrolling past the section table. */}
+        <div className="sticky -bottom-4 -mx-4 -mb-4 flex justify-end gap-2 px-4 py-4 mt-4 border-t border-border bg-panel">
           <Button onClick={handleCancel} disabled={isImporting} data-testid="tml-import-cancel">
             {t('dialogs.tmlImport.cancel')}
           </Button>

@@ -237,8 +237,8 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
           {t('dialogs.compassImport.options.includeExcluded')}
         </label>
 
-        {/* Footer */}
-        <div className="flex justify-end gap-2 pt-4 border-t border-border">
+        {/* Footer - sticky at the bottom of the scrolling body (mirrors TmlImportDialog). */}
+        <div className="sticky -bottom-4 -mx-4 -mb-4 flex justify-end gap-2 px-4 py-4 mt-4 border-t border-border bg-panel">
           <Button onClick={closeDialog} data-testid="compass-import-cancel">{t('dialogs.compassImport.cancel')}</Button>
           <Button
             data-primary-action=""
