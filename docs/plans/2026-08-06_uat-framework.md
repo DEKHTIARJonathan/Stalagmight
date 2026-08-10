@@ -1,7 +1,7 @@
 # UAT framework: journey tier, replay corpus, and verdict ledger (#466)
 
-Status: DESIGN - no implementation yet. Open questions at the bottom need maintainer
-answers before Phase 3.
+Status: MVP LANDED 2026-08-10 (see the revision note at the bottom); the rest is
+design. Open questions at the bottom need maintainer answers before Phase 3.
 
 ## Why
 
@@ -178,6 +178,41 @@ maintainer. Revisit a Windows runner only if RC cadence exceeds monthly.
    only? (Corpus growth rate vs maintenance.)
 4. Windows RC checklist: is a per-RC ~30-minute manual sweep an accepted standing
    commitment, or should a Windows runner be budgeted sooner?
+
+## Revision 2026-08-10: fuzz-wave deltas + MVP status
+
+The #455/#458/#463/#464 fuzzing programme landed between design and
+implementation and changes this plan in four ways:
+
+1. **Journeys reuse the persistence-oracle stack instead of building one.**
+   `canonicalProjectSnapshot` (`e2e/agent/lib/fuzzOracleCore.ts`) and the
+   diff/attribution machinery (`e2e/agent/lib/projectSnapshot.ts`, incl.
+   `SAVE_HEALING_MUTATIONS` / `RELOAD_RESOLVED_GEOMETRY`) are exactly the
+   planned persistence round-trip oracle. Phase 2 shrank accordingly.
+2. **Fuzz-found bugs keep their pinned seed/trace replays** (Rust
+   `open_undo_bugs_tests.rs`, TS `--trace` replay); the committed replay corpus
+   in `e2e/agent/replays/` is for INTERACTIVELY-found bugs only.
+3. **Nightly should also budget the three strict TS fuzz scenarios**
+   (undo-redo, import-dialog, export-roundtrip) - strict since #463, so any
+   finding is red. This is a Phase 3 line item, not new framework work.
+4. **`docs/TESTING.md` owes a fuzz tier entry** (L1 PR gate + L3 on-demand);
+   the canonical tier doc currently omits the highest-yield channel.
+
+MVP landed (this branch): `e2e/agent/journeys/` (framework + `import-tml`,
+`save-reopen-identity`, `export-tml-roundtrip`), `pnpm agent:journeys` runner
+(fails on any failed check or error/fatal sweep finding; `--ledger` appends
+`docs/uat/ledger.md` + a JSONL record in `docs/uat/runs/`), and
+`docs/uat/checklists/release-candidate.md` (macOS + the codified #410/#429
+Windows sweep). Verified: 3/3 journeys green against the real built app on
+macOS; a deliberately broken golden reds the runner with expected/observed.
+
+Still open from the phases: nightly workflow wiring, replay backfill,
+`docs/TESTING.md` + `docs/releasing.md` integration, J1-J5 field checklists,
+the discovery-loop automation (needs the Daniel sync - see question 5).
+
+5. (new open question) **Who owns the scheduled discovery loop?** The fuzzers
+   only run inside agent sessions today; a scheduled runner + auto-triage
+   overlaps work Daniel's agent already does manually. Sync before building.
 
 ## References
 
