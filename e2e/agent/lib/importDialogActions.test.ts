@@ -262,6 +262,35 @@ describe('import fuzzer testid allowlists', () => {
     expect(uncovered).toEqual([]);
   });
 
+  it('has a generator for every literal the bridge will click', async () => {
+    // The third direction of the contract, and the one that was missing.
+    // Allowlisted-and-observable is not enough: a control no generator ever
+    // names is one the fuzzer cannot reach, so it is dead surface that reads as
+    // covered. `shot-editor-context-clear`, `shot-editor-expand` and
+    // `dirty-dialog-keep-editing` all sat in both lists for a whole wave and
+    // were never once clicked.
+    //
+    // Scanned as "does the CODE mention this id at all", not as a `click('x')`
+    // call shape: a third of the catalog picks its target out of a local array
+    // (`orphan:choose`, `blocked:choose`, the two gpx footer primaries) and a
+    // call-shape scan reports every one of those as unreachable. Comments are
+    // stripped first, so a name that survives only in prose does not count.
+    const text = (await generatorSource())
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+    const named = new Set([
+      ...[...text.matchAll(/'([a-z0-9-]{3,60})'/g)].map((match) => match[1] as string),
+      ...templateTargets(text).map(sampleFrom),
+      ...Object.values(ADVANCE_MOVE).flatMap((route) => [...(route ?? [])]),
+      ...Object.values(ESCAPE_PATH).flatMap((route) => [...route]),
+    ]);
+    const unreachable = [...CLICKABLE_TESTIDS].filter((id) => !named.has(id));
+    // No exceptions. Every clickable id is either drawn by a generator or named
+    // by the model as an advance or an escape; `telemetry-opt-in-no` qualifies
+    // through `first-run`'s entry in both tables.
+    expect(unreachable.sort()).toEqual([]);
+  });
+
   it('has a generator catalog whose screens are all escapable', () => {
     const screens = new Set(GENERATORS.flatMap((generator) => [...generator.screens]));
     expect(screens.size).toBeGreaterThan(8);

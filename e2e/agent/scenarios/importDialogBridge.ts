@@ -178,6 +178,11 @@ export const CLICKABLE_TESTIDS: ReadonlySet<string> = new Set([
   'shot-editor-context-clear',
   'shot-editor-context-fill-down',
   'shot-editor-context-copy',
+  // CUT is a copy plus a clear, and it is the grid mutation with the most to say
+  // about the wizard's frozen rows: `GridContextMenu` renders it
+  // unconditionally, so a selection made entirely of overlap-frozen shots can be
+  // aimed at it exactly like `delete-rows` can.
+  'shot-editor-context-cut',
   'shot-editor-context-paste',
   // new project for import
   'new-project-for-import-cancel',

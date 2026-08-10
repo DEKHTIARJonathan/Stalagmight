@@ -1485,6 +1485,27 @@ const SHOT_TABLE: Generator[] = [
     build: (env) => (env.digest.rows > 0 ? click('shot-editor-context-paste', 'paste into grid') : null),
   },
   {
+    /**
+     * Blank the selected cells in place.
+     *
+     * The one grid mutation that can leave a row PRESENT but incomplete, which
+     * is what `refuseIncompleteShots` refuses a confirm on
+     * (`DmpNewImportDialog.tsx`): every other mutator either fills a cell or
+     * removes the row. Allowlisted since wave 2 and, until now, never driven.
+     */
+    name: 'grid:clear',
+    weight: 5,
+    screens: SHOT_TABLE_SCREENS,
+    build: (env) => (env.digest.rows > 0 ? click('shot-editor-context-clear', 'clear grid selection') : null),
+  },
+  {
+    /** Copy AND clear in one gesture - the other half of the clipboard pair. */
+    name: 'grid:cut',
+    weight: 4,
+    screens: SHOT_TABLE_SCREENS,
+    build: (env) => (env.digest.rows > 0 ? click('shot-editor-context-cut', 'cut grid selection') : null),
+  },
+  {
     name: 'grid:fill-down',
     weight: 2,
     screens: SHOT_TABLE_SCREENS,
@@ -1513,6 +1534,42 @@ const SHOT_TABLE: Generator[] = [
       const last = lengths[lengths.length - 1] as [number, string];
       return click(`shot-editor-cell-${last[0]}-length`, `open trailing row ${last[0]} (append)`, true);
     },
+  },
+  {
+    /**
+     * Grow and shrink the table band.
+     *
+     * `shot-editor-expand` only renders where the HOST passes `onToggleExpand`,
+     * and of the import screens that is `ZeroDatumConfigDialog` alone - the DMP
+     * wizard owns its own layout and does not. Scoped accordingly rather than
+     * offered on all three shot-table screens, where it would be a permanent
+     * skip. Allowlisted since wave 2 and never driven until now.
+     */
+    name: 'grid:expand',
+    weight: 3,
+    screens: ['zero-datum-config'],
+    build: (env) => (actionable(env.digest, 'shot-editor-expand') ? click('shot-editor-expand', 'toggle table size') : null),
+  },
+];
+
+/**
+ * `DialogWrapper`'s discard-confirm overlay.
+ *
+ * An ESCAPE always plays `dirty-dialog-discard` - it is trying to leave - so the
+ * other button was allowlisted and never clicked. Keeping editing is the branch
+ * that puts the walk BACK into a dirty dialog it had already asked to close,
+ * which is the state the overlay exists to protect and the one nothing has
+ * exercised.
+ */
+const DIRTY_OVERLAY: Generator[] = [
+  {
+    name: 'dirty:keep-editing',
+    weight: 5,
+    screens: ['dmp-select', 'tml-config', 'new-project'],
+    build: (env) =>
+      actionable(env.digest, 'dirty-dialog-keep-editing')
+        ? click('dirty-dialog-keep-editing', 'keep editing (discard overlay)')
+        : null,
   },
 ];
 
@@ -1727,6 +1784,7 @@ export const GENERATORS: readonly Generator[] = [
   ...METADATA,
   ...WIZARD_MANUAL,
   ...SHOT_TABLE,
+  ...DIRTY_OVERLAY,
   ...PLACEMENT,
   ...TERMINALS,
   ...NEW_PROJECT,

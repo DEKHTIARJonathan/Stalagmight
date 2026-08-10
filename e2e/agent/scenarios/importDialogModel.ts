@@ -309,6 +309,7 @@ export const TESTID_INVENTORY: readonly string[] = [
   'shot-editor-context-clear',
   'shot-editor-context-fill-down',
   'shot-editor-context-copy',
+  'shot-editor-context-cut',
   'shot-editor-context-paste',
   // --- new project for import ----------------------------------------------
   'new-project-for-import-dialog',
