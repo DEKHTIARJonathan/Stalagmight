@@ -52,6 +52,19 @@ function unsupportedFileDisplayName(path: string): string {
 }
 
 /**
+ * Default project name for a new-project import: prefer the cave name the
+ * file itself carries (what NewProjectForImportDialog shows immediately
+ * above the name field) over the filename, so "Naharon.tml" imports as
+ * "Naharon" rather than as the filename. Falls back to `fallback` (the
+ * filename-derived default) when the file carries no cave name, mirroring
+ * the Walls branch's existing `project_name || filename` precedent.
+ */
+function projectNameFromCaveOrFile(caveName: string | null | undefined, fallback: string): string {
+  const trimmed = caveName?.trim();
+  return trimmed || fallback;
+}
+
+/**
  * Open the "import as new project?" confirm dialog (#391) for a new-project-only
  * format (GPX / Ariane / Compass / Walls) picked while a project is already
  * open. Replaces the old close-first dead end (`IMPORT_SURVEY_CLOSE_FIRST`):
@@ -325,7 +338,10 @@ export async function routeOpenedFile(
       ui.openDialog('new-project-for-import', {
         tmlFile,
         filePath: path,
-        defaultName: extractFilename(path, /\.tmlu?$/i) || 'Imported',
+        defaultName: projectNameFromCaveOrFile(
+          tmlFile.cave_name,
+          extractFilename(path, /\.tmlu?$/i) || 'Imported',
+        ),
         importType: 'tml',
       });
       handedOff = true;
@@ -393,9 +409,14 @@ export async function routeOpenedFile(
       });
     }
   } catch (err) {
+    // Reaching here means a parser (parseTml/parseGpx/parseCompass/parseWalls/
+    // importDmp) rejected - almost always a malformed or unreadable user file,
+    // not an app defect - so the "report this as a bug" hint would send a
+    // damaged-file report where none is warranted (#447).
     useUIStore.getState().openDialog('error', {
       title: errorTitle,
       message: getErrorMessage(err, 'Failed to open file'),
+      hideReportHint: true,
     });
   } finally {
     if (!handedOff) clearProjectActionSource();

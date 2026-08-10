@@ -448,9 +448,12 @@ describe('surfaceImportFailure', () => {
     // import had just created - and fitted the map to it - BEFORE saying why.
     expect(ui.setView).not.toHaveBeenCalled();
     expect(ui.triggerFitToBounds).not.toHaveBeenCalled();
+    // A rejected import command is the user's file, not a Stalagmight defect
+    // (#447) - the report-a-bug hint is dropped.
     expect(ui.openDialog).toHaveBeenCalledWith('error', {
       title: 'Import Errors',
       message: 'Bad azimuth on shot 3',
+      hideReportHint: true,
     });
   });
 
@@ -478,9 +481,12 @@ describe('surfaceImportFailure', () => {
 
     expect(ui.closeDialog).toHaveBeenCalled();
     expect(ui.setView).not.toHaveBeenCalled();
+    // Nothing surviving the chosen options is the user's toggles, not a defect
+    // (#447) - the report-a-bug hint is dropped.
     expect(ui.openDialog).toHaveBeenCalledWith('error', {
       title: 'Nothing imported',
       message: 'No survey shots were found to import.',
+      hideReportHint: true,
     });
   });
 });

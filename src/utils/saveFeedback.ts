@@ -289,18 +289,25 @@ export function surfaceImportFailure(
     case 'empty':
       trackDialogComplete(dialogName);
       ui.closeDialog();
+      // Nothing survived the chosen options - the user's file/toggles, not a
+      // Stalagmight defect, so the report-a-bug hint would be wrong advice (#447).
       ui.openDialog('error', {
         title: i18n.t('dialogs.importFailure.emptyTitle'),
         message,
+        hideReportHint: true,
       });
       return;
     case 'command':
       // Report BEFORE anything moves: no setView, no fit-to-bounds.
       trackDialogComplete(dialogName);
       ui.closeDialog();
+      // A rejected import command is almost always the source file itself
+      // (corrupt/unsupported data), not an app defect - drop the bug-report
+      // hint that would otherwise invite one for a damaged user file (#447).
       ui.openDialog('error', {
         title: i18n.t('dialogs.importFailure.commandTitle'),
         message,
+        hideReportHint: true,
       });
   }
 }
