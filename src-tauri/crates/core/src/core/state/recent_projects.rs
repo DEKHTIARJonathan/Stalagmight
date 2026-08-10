@@ -578,7 +578,12 @@ impl AppState {
 /// excludes the `trash` crate) skip all of that and take the deterministic
 /// `fs::remove_file` directly, so `cargo test` neither pollutes the developer's
 /// real Trash nor depends on a trash directory existing on a headless CI runner.
-#[cfg(all(not(test), not(target_os = "android")))]
+/// The gate is `test-support` as well as `cfg(test)`: a dependent crate's tests
+/// (the app crate's `command_tests`) compile this crate WITHOUT `cfg(test)`, and
+/// on macOS the real `trash::delete` drives Finder via AppleScript - every fresh
+/// test binary then raises a focus-stealing TCC consent prompt on the developer's
+/// machine.
+#[cfg(all(not(test), not(feature = "test-support"), not(target_os = "android")))]
 fn send_to_trash(path: &Path) -> Result<(), String> {
     match trash::delete(path) {
         Ok(()) => Ok(()),
@@ -592,12 +597,12 @@ fn send_to_trash(path: &Path) -> Result<(), String> {
 // dependency is gated off `target_os = "android"` in Cargo.toml), so fall straight
 // through to a permanent remove. The app ships desktop-only; this just keeps the
 // Android `cdylib` target compiling.
-#[cfg(all(not(test), target_os = "android"))]
+#[cfg(all(not(test), not(feature = "test-support"), target_os = "android"))]
 fn send_to_trash(path: &Path) -> Result<(), String> {
     std::fs::remove_file(path).map_err(|e| e.to_string())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn send_to_trash(path: &Path) -> Result<(), String> {
     std::fs::remove_file(path).map_err(|e| e.to_string())
 }
