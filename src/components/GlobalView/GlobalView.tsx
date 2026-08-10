@@ -17,6 +17,7 @@ import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import { setProjectActionSource } from '../../utils/telemetry';
 import { routeOpenedFile } from '../../utils/openOrImport';
+import { openRecentEntry } from './openRecentEntry';
 import { PROJECT_EXTENSION, IMPORT_EXTENSIONS } from '../../utils/fileDialogs';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
@@ -294,25 +295,43 @@ export default function GlobalView() {
   }, [multiSelectedIds]);
 
   // Handle project open (double-click on map, list row, context menu, or from
-  // metadata panel). Routed through the shared open/import router (#450) - the
-  // same guards (SpeleoDB hand-back, unsaved-changes, swap confirm) that gate
-  // every other .stalx entry point (Ctrl+O, drag-drop, OS file association)
-  // now also gate a recents open, rather than relying on the layout invariant
-  // that GlobalView never renders with a project open.
+  // metadata panel). Routed through the shared open/import router (#450) for
+  // consistency and defense-in-depth - the SpeleoDB hand-back / unsaved-
+  // changes / swap-confirm guards it applies are currently unreachable here
+  // (both setView('global') callers, useProject.ts and UnsavedChangesDialog.tsx,
+  // already close the project first, so GlobalView never renders with one
+  // open), but sharing the router also gets recents the `allow: 'project-only'`
+  // extension gate below for free, which IS load-bearing: a persisted recents
+  // entry is untrusted input and must not reach the import parsers.
+  //
+  // Two recents-adjacent opens deliberately stay outside this path:
+  // - handleRetryLoading (below) re-drives `loadProject` directly on the SAME
+  //   path a previous call already routed and validated; re-routing would gate
+  //   nothing new.
+  // - handlePublishToSpeleoDb (below) calls `loadProject` via an injected
+  //   callback so the publish flow can await the load before opening its own
+  //   dialog; the router's dialogs would fight that sequencing.
   const handleProjectOpen = useCallback(async (filePath: string) => {
-    await routeOpenedFile(filePath);
+    // Recents entries come from persisted config (a hand-edited or legacy
+    // entry could carry any extension), so this restricts routing to `.stalx`
+    // - it must not reach the import parsers, mirroring the OS-launch route's
+    // `LAUNCHABLE_EXTENSIONS` allowlist (launch.rs). Every recents open call
+    // site (map, list/table, context menu, keyboard shortcut) funnels through
+    // this one function, so the gate lives here rather than at each call site.
+    await routeOpenedFile(filePath, 'Open Failed', { allow: 'project-only' });
   }, []);
 
   // Source-tagged open variants for telemetry attribution (the recent list vs
   // the recent map are distinct entry points feeding the same loadProject).
+  // Delegates to `openRecentEntry` (attributes, THEN routes with the
+  // `.stalx`-only gate) rather than duplicating that ordering here - see
+  // openRecentEntry.ts.
   const handleOpenFromList = useCallback((filePath: string) => {
-    setProjectActionSource('recent-list');
-    return handleProjectOpen(filePath);
-  }, [handleProjectOpen]);
+    return openRecentEntry(filePath, 'recent-list');
+  }, []);
   const handleOpenFromMap = useCallback((filePath: string) => {
-    setProjectActionSource('recent-map');
-    return handleProjectOpen(filePath);
-  }, [handleProjectOpen]);
+    return openRecentEntry(filePath, 'recent-map');
+  }, []);
 
   // Handle cancel during loading
   const handleCancelLoading = useCallback(async () => {
@@ -995,6 +1014,7 @@ export default function GlobalView() {
                         speleoLock={resolveSpeleoLock(item.project, remoteLocks, speleoEmail, remoteProjects, localStates)}
                         onSelect={(ctrlKey) => handleProjectSelect(item.filePath, ctrlKey)}
                         onContextMenu={(e) => handleContextMenu(e, item.filePath)}
+                        onOpen={handleOpenFromList}
                       />
                     ) : item.kind === 'remote' ? (
                       <RemoteSystemCard

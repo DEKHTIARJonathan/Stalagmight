@@ -1,28 +1,39 @@
 /**
- * #450: recents cards must route opens through the shared open/import router
- * (`routeOpenedFile`) instead of calling `store.loadProject` directly, so the
- * same guards (SpeleoDB hand-back, unsaved-changes, swap confirm) that gate
- * every other `.stalx` entry point also gate a recents open.
+ * #450: a recents card delegates opening to its `onOpen` prop (wired to
+ * GlobalView's `handleOpenFromList` / `openRecentEntry`, which owns the
+ * telemetry attribution and the `.stalx`-only routing gate - see
+ * openRecentEntry.test.ts) rather than routing or attributing itself.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
-
-const routeOpenedFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('../../../utils/openOrImport', () => ({
-  routeOpenedFile: routeOpenedFileMock,
-}));
 
 import SystemCard from '../SystemCard';
 import { systemCardTestId } from '../../../utils/testId';
 
 const FILE_PATH = '/projects/cave-alpha.stalx';
 
-beforeEach(() => {
-  routeOpenedFileMock.mockClear();
-});
+describe('SystemCard - onOpen delegation (#450)', () => {
+  it('calls onOpen with the card path on double-click', () => {
+    const onOpen = vi.fn();
+    const { getByTestId } = render(
+      <SystemCard
+        name="Alpha"
+        location={null}
+        filePath={FILE_PATH}
+        modifiedAt="2026-07-26T00:00:00Z"
+        sectionCount={3}
+        totalLength={120}
+        onOpen={onOpen}
+      />,
+    );
 
-describe('SystemCard - open router (#450)', () => {
-  it('routes a double-click through routeOpenedFile with the card path', () => {
+    fireEvent.doubleClick(getByTestId(systemCardTestId(FILE_PATH)));
+
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledWith(FILE_PATH);
+  });
+
+  it('does not throw when double-clicked with no onOpen prop', () => {
     const { getByTestId } = render(
       <SystemCard
         name="Alpha"
@@ -34,9 +45,6 @@ describe('SystemCard - open router (#450)', () => {
       />,
     );
 
-    fireEvent.doubleClick(getByTestId(systemCardTestId(FILE_PATH)));
-
-    expect(routeOpenedFileMock).toHaveBeenCalledTimes(1);
-    expect(routeOpenedFileMock).toHaveBeenCalledWith(FILE_PATH);
+    expect(() => fireEvent.doubleClick(getByTestId(systemCardTestId(FILE_PATH)))).not.toThrow();
   });
 });
