@@ -1100,7 +1100,9 @@ mod tests {
         //   + 3 the hamburger menu's Debug submenu split the single showDevStats
         //       overlay toggle into four independent ones:
         //       action.toggle.{showMemoryStats,showMapStats,showZoomStats} = 734.
-        assert_eq!(EVENT_NAMES.len(), 734);
+        //   + 1 entrance elevation became editable in Project Settings (#465):
+        //       command.set_surface_elevation = 735.
+        assert_eq!(EVENT_NAMES.len(), 735);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
