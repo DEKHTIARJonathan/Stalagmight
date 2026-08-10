@@ -31,8 +31,7 @@ fn imperial_elevation_328_084_ft_lands_as_100_m_in_the_project() {
         name: "Elevation Units".to_string(),
         location: None,
     });
-    let elevation = (tml.first_start_absolute_elevation.abs() > f64::EPSILON)
-        .then_some(tml.first_start_absolute_elevation);
+    let elevation = crate::models::ariane_elevation_or_absent(tml.first_start_absolute_elevation);
     let result = state.execute_tml_import_sections(
         sections,
         closures,
@@ -71,8 +70,7 @@ fn entrance_elevation_round_trips_through_import_and_export() {
         name: "Round Trip".to_string(),
         location: None,
     });
-    let elevation = (tml.first_start_absolute_elevation.abs() > f64::EPSILON)
-        .then_some(tml.first_start_absolute_elevation);
+    let elevation = crate::models::ariane_elevation_or_absent(tml.first_start_absolute_elevation);
     let result = state.execute_tml_import_sections(
         sections,
         closures,
