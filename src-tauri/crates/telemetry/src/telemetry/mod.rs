@@ -23,7 +23,7 @@ use std::fs;
 #[cfg(feature = "telemetry")]
 use std::io::{Read, Write};
 #[cfg(feature = "telemetry")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(feature = "telemetry")]
 use std::sync::{Arc, Mutex};
 #[cfg(feature = "telemetry")]
@@ -289,7 +289,26 @@ fn buffer_to_disk(payload: &TelemetryPayload) {
     let Some(dir) = telemetry_buffer_dir() else {
         return;
     };
-    let _ = fs::create_dir_all(&dir);
+    buffer_payload_in(&dir, payload);
+}
+
+/// Write one payload into `dir` as `<unix-millis>.json`, creating `dir` first.
+///
+/// Split out from `buffer_to_disk` so a test can exercise the write against a
+/// directory it owns (#510). Resolving the real buffer dir goes through
+/// `directories`, which reads `XDG_DATA_HOME` **at call time** - and the logging
+/// tests in this same binary flip that variable process-wide, so a test that
+/// resolved it once to write and again to read could straddle the change and
+/// read a different (or since-deleted) directory. Taking the directory as an
+/// argument removes the shared state from the test rather than serializing
+/// against it, and keeps `cargo test` out of the developer's own buffer.
+///
+/// Every failure is deliberately swallowed: buffering is the best-effort retry
+/// path for telemetry that has already failed to send, so it must never surface
+/// as an error.
+#[cfg(feature = "telemetry")]
+fn buffer_payload_in(dir: &Path, payload: &TelemetryPayload) {
+    let _ = fs::create_dir_all(dir);
 
     let filename = format!(
         "{}.json",
@@ -433,6 +452,7 @@ pub fn is_feature_enabled() -> bool {
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn track_increments_counter() {
@@ -574,8 +594,21 @@ mod tests {
         assert_eq!(decoded.session_id, payload.session_id);
     }
 
+    /// The buffered file is the retry input `send_buffered` reads back, so this
+    /// asserts the round trip rather than just that a file appeared: a write
+    /// that produced unparseable or truncated JSON would leave the offline
+    /// retry path silently dead.
+    ///
+    /// Writes into a directory this test owns. It used to resolve the real
+    /// buffer dir - which reads `XDG_DATA_HOME` at call time, once to write and
+    /// again to read - while the logging tests flip that variable process-wide,
+    /// so the two resolutions could disagree and the read hit a directory that
+    /// did not exist (#510). It also deleted every `.json` in the developer's
+    /// own telemetry buffer as "cleanup"; the `TempDir` now handles that.
     #[test]
-    fn buffer_to_disk_and_cleanup() {
+    fn buffer_to_disk_writes_a_payload_that_reads_back() {
+        let temp = TempDir::new().expect("temp dir");
+        let dir = temp.path().join("telemetry-buffer");
         let payload = TelemetryPayload {
             v: 1,
             app_version: "0.1.0".to_string(),
@@ -586,20 +619,19 @@ mod tests {
             events: HashMap::new(),
         };
 
-        buffer_to_disk(&payload);
+        // The directory does not exist yet - creating it is part of the contract.
+        buffer_payload_in(&dir, &payload);
 
-        let dir = telemetry_buffer_dir().unwrap();
         let files: Vec<_> = fs::read_dir(&dir)
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(Result::ok)
             .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
             .collect();
 
-        assert!(!files.is_empty());
-
-        // Clean up
-        for f in files {
-            let _ = fs::remove_file(f.path());
-        }
+        assert_eq!(files.len(), 1, "one payload in, one file out");
+        let written = fs::read_to_string(files[0].path()).unwrap();
+        let round_tripped: TelemetryPayload = serde_json::from_str(&written).unwrap();
+        assert_eq!(round_tripped.session_id, payload.session_id);
+        assert_eq!(round_tripped.duration_secs, payload.duration_secs);
     }
 }
