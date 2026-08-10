@@ -26,7 +26,7 @@ use super::normalize_azimuth;
 /// What a section's stored azimuths are measured against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, TS)]
 #[serde(rename_all = "lowercase")]
-#[ts(export, rename_all = "lowercase")]
+#[ts(export, export_to = "../../bindings/", rename_all = "lowercase")]
 pub enum NorthReference {
     /// Compass readings, uncorrected. The default, because it is what every
     /// instrument produces and what a file that says nothing implies.
@@ -66,7 +66,7 @@ impl NorthReference {
 /// number and a later policy change knows what it is allowed to recompute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, TS)]
 #[serde(rename_all = "snake_case")]
-#[ts(export, rename_all = "snake_case")]
+#[ts(export, export_to = "../../bindings/", rename_all = "snake_case")]
 pub enum CorrectionSource {
     /// No correction is on record. Geometry is uncorrected and the UI should
     /// say so rather than implying a verified zero.
@@ -120,7 +120,7 @@ impl CorrectionSource {
 /// value into the per-shot accessor, so the whole cost of the correction is one
 /// addition per shot.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[ts(export, export_to = "../../bindings/")]
 pub struct AzimuthReference {
     /// What the stored numbers are measured against. Descriptive: the UI reads
     /// it, geometry does not. [`Self::correction`] is what rotates a bearing.
