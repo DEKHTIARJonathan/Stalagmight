@@ -129,6 +129,7 @@
  *   STALAGMIGHT_FUZZ_IMPORT_FLOWS_PER_EPISODE   default 3
  *   STALAGMIGHT_FUZZ_IMPORT_MAX_FLOW_STEPS      default 140
  *   STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P         default 0.2
+ *   STALAGMIGHT_FUZZ_IMPORT_SUGGESTIVE_P        default 0.5 (well-formed .dmp)
  *   STALAGMIGHT_FUZZ_IMPORT_INTERJECT_P         default 0.08
  *   STALAGMIGHT_FUZZ_IMPORT_AUX_INTERJECT_P     default 0.04 (wave-3 stream)
  *   STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS           default 12000
@@ -720,7 +721,13 @@ export const importDialogFuzz: Scenario = {
      * because a corpus is optional by design.
      */
     const sourceOnDisk = (source: FileSource): string | null => {
-      if (source.origin === 'gen') return materialize(source.spec, source.rel);
+      if (source.origin === 'gen') {
+        // Counted here rather than at draw time: `drawFileSource` is called for
+        // candidates the 8-attempt loop may discard, and a generator that
+        // recorded a metric would count files that were never written.
+        if (source.shape !== undefined) ctx.metric(`file:shape:${source.shape}`);
+        return materialize(source.spec, source.rel);
+      }
       if (source.origin === 'fixture') return ctx.fixturePath(source.name);
       if (source.origin === 'corpus') {
         const entry = corpusEntryFor(source.corpusRel);

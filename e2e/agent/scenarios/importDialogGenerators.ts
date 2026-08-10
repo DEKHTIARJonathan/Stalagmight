@@ -49,6 +49,7 @@ import {
   HOSTILE_COMMENTS,
   SURVEY_FORMAT_FAMILIES,
   randomSurveyFileSpec,
+  suggestiveDmpSpec,
   type GeneratedFileSpec,
   type Rng,
   type SurveyFileFormat,
@@ -64,8 +65,15 @@ import { OVERLAP_MODES, VIRTUAL_SHOT_MODES, type ScreenId } from './importDialog
 
 /** Where an input file comes from. */
 export type FileSource =
-  /** Built here from a spec; the SPEC travels in the trace, never the bytes. */
-  | { origin: 'gen'; spec: GeneratedFileSpec; rel: string }
+  /**
+   * Built here from a spec; the SPEC travels in the trace, never the bytes.
+   *
+   * `shape` names the non-default generator the spec came out of, so a run can
+   * COUNT them (`file:shape:*`) and a label can say which one a flow used. Not
+   * part of the recorded step: a replay re-renders from the spec itself, which
+   * already carries everything the shape decided.
+   */
+  | { origin: 'gen'; spec: GeneratedFileSpec; rel: string; shape?: 'suggestive' }
   /** A tracked fixture, materialized by `ctx.fixturePath` under `fixtures/`. */
   | { origin: 'fixture'; name: string; rel: string }
   /**
@@ -344,6 +352,21 @@ export function malformedProbability(): number {
   return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.2;
 }
 
+/**
+ * Share of well-formed `.dmp` draws built as a SUGGESTION-BEARING file.
+ *
+ * `suggestiveDmpSpec` is the only generated shape whose sections overlap each
+ * other closely enough for `suggest_all_import_placements` to return anything,
+ * and therefore the only one that reaches `wiz-suggest` at all without a corpus
+ * or a tracked fixture - see that function's header for the measurement.
+ * Applies to the well-formed branch only: a corrupted file is drawn to break the
+ * parser, and a corrupted overlap is just a file that does not parse.
+ */
+export function suggestiveProbability(): number {
+  const raw = Number(process.env.STALAGMIGHT_FUZZ_IMPORT_SUGGESTIVE_P);
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
+}
+
 /** Share of drawn files taken from the private corpus, when one is configured. */
 export const CORPUS_DRAW_P = 0.25;
 /** Share of DMP draws taken from a tracked fixture. */
@@ -413,6 +436,13 @@ export function drawFileSource(env: GenEnv): FileSource {
 
   const malformed = rng() < malformedProbability();
   const profile = malformed ? 'malformed' : 'valid';
+  // Drawn BEFORE the ordinary spec so the suggestive branch does not consume a
+  // whole `randomSurveyFileSpec` it then throws away.
+  if (!malformed && format === 'dmp' && rng() < suggestiveProbability()) {
+    const dmp = suggestiveDmpSpec(rng);
+    const spec: GeneratedFileSpec = { format: 'dmp', name: `fuzz-${env.fileSeq}-suggestive.dmp`, profile: 'valid', dmp };
+    return { origin: 'gen', spec, rel: `${env.filesRel}/${spec.name}`, shape: 'suggestive' };
+  }
   const clean = randomSurveyFileSpec(rng, profile, format);
   let spec: GeneratedFileSpec = { ...clean, name: `fuzz-${env.fileSeq}.${format}` };
   if (malformed) {
@@ -427,7 +457,10 @@ export function drawFileSource(env: GenEnv): FileSource {
 
 /** How a source is named in a log line, a metric key or a failure payload. */
 export function describeSource(source: FileSource): string {
-  if (source.origin === 'gen') return `${source.spec.profile} ${source.spec.format}`;
+  if (source.origin === 'gen') {
+    const shape = source.shape === undefined ? '' : ` (${source.shape})`;
+    return `${source.spec.profile} ${source.spec.format}${shape}`;
+  }
   if (source.origin === 'fixture') return `fixture ${source.name}`;
   if (source.origin === 'corpus') return `corpus #${source.id}`;
   return `disk ${source.rel}`;

@@ -27,6 +27,7 @@ import {
   randomSurveyFileSpec,
   randomTmlSpec,
   renderSurveyFile,
+  suggestiveDmpSpec,
 } from './surveyFileSpecs';
 import { dmpFileBytes, endOfSectionBytes, escapeXmlText, writeTmluXml } from './surveyFileWriters';
 
@@ -107,6 +108,228 @@ describe('randomDmpSpec (valid)', () => {
       spec.sections.some((section) => section.sameContentAs !== undefined),
     );
     expect(clones.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The suggester's per-shot rule, mirrored.
+ *
+ * A MIRROR of `compute_sequence_shot_score` + `max_sequence_length_error`
+ * (`crates/models/src/placement_suggest.rs`) against `PlacementSuggestionConfig`
+ * defaults, not an import of them - the Rust is not reachable from vitest, and
+ * the property under test is exactly "the generated overlap stays inside those
+ * numbers". If the product ever retunes them this mirror goes stale, and the
+ * failure mode is the honest one: this test keeps passing while the scenario
+ * stops finding suggestions, which the campaign's `screen:wiz-suggest` counter
+ * is what actually watches. The mirror is here to catch the generator drifting,
+ * which is the far likelier direction.
+ */
+const PS = {
+  azimuthSigma: 18,
+  lengthSigma: 0.8,
+  depthSigma: 0.35,
+  azimuthWeight: 0.35,
+  lengthWeight: 0.25,
+  depthInWeight: 0.2,
+  depthOutWeight: 0.2,
+  minShotScore: 0.15,
+  minAggregateScore: 0.45,
+  maxReferenceShots: 5,
+  maxAzimuthErrorFull: 25,
+  maxDepthError: 0.3,
+  seqLengthBase: 0.03,
+  seqLengthStep: 0.02,
+  seqLengthMax: 0.11,
+  lengthFloor: 0.4,
+} as const;
+
+/** What the suggester actually compares: azimuth, length and the two depths. */
+interface MatchShot {
+  azimuth: number;
+  length: number;
+  depthIn: number;
+  depthOut: number;
+}
+
+/** `DmpShotSpec` in its pre-scaled integers -> the parsed values, as `parse_shot` scales them. */
+function toMatchShot(shot: { headingIn: number; headingOut: number; length: number; depthIn: number; depthOut: number }): MatchShot {
+  // The generator writes `headingIn === headingOut`, so `average_azimuth_of`
+  // reduces to the heading itself.
+  return {
+    azimuth: shot.headingIn / 10,
+    length: shot.length / 100,
+    depthIn: shot.depthIn / 100,
+    depthOut: shot.depthOut / 100,
+  };
+}
+
+function reversedShot(shot: MatchShot): MatchShot {
+  return {
+    azimuth: (shot.azimuth + 180) % 360,
+    length: shot.length,
+    depthIn: shot.depthOut,
+    depthOut: shot.depthIn,
+  };
+}
+
+function angularDifference(a: number, b: number): number {
+  const diff = ((a - b) % 360 + 360) % 360;
+  return diff > 180 ? 360 - diff : diff;
+}
+
+function gaussian(error: number, sigma: number): number {
+  return Math.exp(-((error / sigma) ** 2));
+}
+
+function sequenceShotScore(importShot: MatchShot, existing: MatchShot, matchedCount: number): number {
+  const azError = angularDifference(importShot.azimuth, existing.azimuth);
+  const lenError = Math.abs(importShot.length - existing.length);
+  const depthInError = Math.abs(importShot.depthIn - existing.depthIn);
+  const depthOutError = Math.abs(importShot.depthOut - existing.depthOut);
+  const fraction = Math.min(
+    PS.seqLengthMax,
+    PS.seqLengthBase + PS.seqLengthStep * Math.max(0, matchedCount - 1),
+  );
+  const maxLenError = Math.max(fraction * existing.length, PS.lengthFloor);
+  if (
+    azError > PS.maxAzimuthErrorFull ||
+    depthInError > PS.maxDepthError ||
+    depthOutError > PS.maxDepthError ||
+    lenError > maxLenError
+  ) {
+    return 0;
+  }
+  return (
+    PS.azimuthWeight * gaussian(azError, PS.azimuthSigma) +
+    PS.lengthWeight * gaussian(lenError, PS.lengthSigma) +
+    PS.depthInWeight * gaussian(depthInError, PS.depthSigma) +
+    PS.depthOutWeight * gaussian(depthOutError, PS.depthSigma)
+  );
+}
+
+/** `oriented_existing_shots`: forward from `start`, or backwards-and-flipped to it. */
+function orientedTarget(target: readonly MatchShot[], start: number, reverse: boolean): MatchShot[] {
+  return reverse
+    ? target.slice(0, start + 1).reverse().map(reversedShot)
+    : target.slice(start);
+}
+
+/**
+ * The best in-order run this leaf makes against `target`, as
+ * (matched shots, aggregate score). A straight walk rather than the product's
+ * DP: the generated overlap is a contiguous copy, so the DP's gap handling has
+ * nothing to find that this does not.
+ */
+function bestRun(leaf: readonly MatchShot[], target: readonly MatchShot[]): { matched: number; score: number } {
+  let best = { matched: 0, score: 0 };
+  for (let start = 0; start < target.length; start++) {
+    for (const reverse of [false, true]) {
+      const oriented = orientedTarget(target, start, reverse);
+      let sum = 0;
+      let count = 0;
+      for (let i = 0; i < leaf.length && i < oriented.length; i++) {
+        const score = sequenceShotScore(leaf[i]!, oriented[i]!, PS.maxReferenceShots);
+        if (score < PS.minShotScore) break;
+        sum += score;
+        count += 1;
+        const mean = sum / count;
+        if (count > best.matched || (count === best.matched && mean > best.score)) {
+          best = { matched: count, score: mean };
+        }
+      }
+    }
+  }
+  return best;
+}
+
+describe('suggestiveDmpSpec', () => {
+  it('never lets a shot record terminate its own section', () => {
+    for (const seed of SEEDS) {
+      const spec = suggestiveDmpSpec(mulberry32(seed));
+      expect(countSections(dmpFileBytes(spec), spec.version)).toBe(spec.sections.length);
+    }
+  });
+
+  it('stays inside every range parse_section validates', () => {
+    for (const seed of SEEDS) {
+      const spec = suggestiveDmpSpec(mulberry32(seed));
+      expect([3, 4, 5]).toContain(spec.version);
+      expect(spec.sections.length).toBeGreaterThanOrEqual(2);
+      for (const section of spec.sections) {
+        expect(section.year).toBeGreaterThanOrEqual(0);
+        expect(section.year).toBeLessThanOrEqual(99);
+        expect(section.month).toBeGreaterThanOrEqual(1);
+        expect(section.month).toBeLessThanOrEqual(12);
+        expect(section.day).toBeGreaterThanOrEqual(1);
+        expect(section.day).toBeLessThanOrEqual(28);
+        expect(section.hour).toBeLessThanOrEqual(23);
+        expect(section.minute).toBeLessThanOrEqual(59);
+        expect(section.direction).toBe(0);
+        for (const shot of section.shots) {
+          // Standard only: it is the one type the wizard counts when it sizes
+          // the merge-offset list.
+          expect(shot.shotType).toBe(2);
+          expect(shot.length).not.toBe(0);
+          expect(shot.markerIndex).not.toBe(0);
+          expect(shot.headingIn).toBeGreaterThanOrEqual(0);
+          expect(shot.headingIn).toBeLessThan(3600);
+          // The horizontal projection has to be real, or the placed geometry
+          // disagrees with the numbers the match was made on.
+          expect(Math.abs(shot.depthOut - shot.depthIn)).toBeLessThan(shot.length);
+        }
+      }
+    }
+  });
+
+  it('gives every replay section a run the suggester would accept', () => {
+    for (const seed of SEEDS) {
+      const spec = suggestiveDmpSpec(mulberry32(seed));
+      const anchor = spec.sections[0]!.shots.map(toMatchShot);
+      for (let index = 1; index < spec.sections.length; index++) {
+        const shots = spec.sections[index]!.shots.map(toMatchShot);
+        const maxRef = Math.min(PS.maxReferenceShots, shots.length);
+        // The two leaves `suggest_placements` builds: the first N in natural
+        // order (station 0) and the last N reversed (station N).
+        const fromZero = shots.slice(0, maxRef);
+        const fromN = shots.slice(shots.length - maxRef).reverse().map(reversedShot);
+        const best = [bestRun(fromZero, anchor), bestRun(fromN, anchor)].sort(
+          (a, b) => b.matched - a.matched || b.score - a.score,
+        )[0]!;
+        expect(best.matched, `seed ${seed} section ${index}: matched shots`).toBeGreaterThanOrEqual(2);
+        expect(best.score, `seed ${seed} section ${index}: aggregate`).toBeGreaterThan(PS.minAggregateScore);
+      }
+    }
+  });
+
+  it('repeats the motif inside the anchor, so a replay has more than one home', () => {
+    // The alternatives list is filtered to suggestions sharing
+    // `importSectionIndex`, so a replay section has to match its anchor in TWO
+    // places or the list is always empty and its tie-break never runs.
+    for (const seed of SEEDS) {
+      const spec = suggestiveDmpSpec(mulberry32(seed));
+      const anchor = spec.sections[0]!.shots.map(toMatchShot);
+      const replay = spec.sections[1]!.shots.map(toMatchShot);
+      const leaf = replay.slice(0, Math.min(PS.maxReferenceShots, replay.length));
+      let homes = 0;
+      for (let start = 0; start < anchor.length; start++) {
+        const oriented = orientedTarget(anchor, start, false);
+        let count = 0;
+        for (let i = 0; i < leaf.length && i < oriented.length; i++) {
+          if (sequenceShotScore(leaf[i]!, oriented[i]!, PS.maxReferenceShots) < PS.minShotScore) break;
+          count += 1;
+        }
+        if (count >= 2) homes += 1;
+      }
+      expect(homes, `seed ${seed}: distinct anchor runs the replay fits`).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it('is deterministic for a seed', () => {
+    for (const seed of SEEDS.slice(0, 20)) {
+      expect(JSON.stringify(suggestiveDmpSpec(mulberry32(seed)))).toBe(
+        JSON.stringify(suggestiveDmpSpec(mulberry32(seed))),
+      );
+    }
   });
 });
 

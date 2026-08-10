@@ -368,6 +368,237 @@ export function randomDmpSpec(rng: Rng, profile: SpecProfile = 'valid'): DmpSpec
 }
 
 // ---------------------------------------------------------------------------
+// DMP, shaped so the placement suggester finds something
+// ---------------------------------------------------------------------------
+
+/**
+ * A DMP whose sections OVERLAP each other, so `suggest_all_import_placements`
+ * returns a non-empty pool.
+ *
+ * ## Why this exists
+ *
+ * `randomDmpSpec` draws every shot independently, and the suggester
+ * (`models/src/placement_suggest.rs`) matches shot-for-shot inside hard cutoffs:
+ * 25 degrees of azimuth, `max(3% of length, 0.4 m)` of length, 0.30 m of depth
+ * per measurement point, with a 0.45 aggregate-score floor. Two independently
+ * random sections clear none of that, so the pool comes back empty,
+ * `pickFromPool` returns false, and the wizard falls straight through
+ * `wizard-no-suggestions` into `manual_placing`. Measured over a 130-cell
+ * campaign: 47 steps on `wiz-suggest` against 13,781 total, ZERO clicks on an
+ * alternative, and not one confirmed overlap - so the merge-station picker, the
+ * overlap modes, `applyAllOverlapTreatments` and the `ExistingShotUpdate` path
+ * behind them were never exercised at all.
+ *
+ * ## The shape
+ *
+ * One ANCHOR section carries a MOTIF - a short run of shots - and carries it
+ * TWICE, separated by filler. Every other section replays that motif with jitter
+ * that stays well inside the cutoffs above:
+ *
+ *   anchor  [lead] MOTIF [middle] MOTIF' [tail]
+ *   head    MOTIF(jitter) [tail turning away]      <- matches from station 0
+ *   tail    [lead turning in] MOTIF(jitter)        <- matches from station N
+ *   tie     MOTIF(coarser jitter) [tail]           <- a second, lower-scoring
+ *                                                     candidate for the same run
+ *
+ * Each of those is a leaf the suggester actually tries: it builds reference
+ * shots from the first `max_reference_shots` in natural order AND from the last
+ * `max_reference_shots` reversed, then sweeps every start index in the target
+ * both forward and reverse. The `head` section exercises the first leaf, `tail`
+ * the second (which arrives as a `Reverse` match), and the anchor's REPEATED
+ * motif is what makes the same import section match in two places - which is
+ * the only way `alternatives` is ever non-empty, since the wizard filters it to
+ * suggestions sharing `importSectionIndex`.
+ *
+ * ## Field choices that are not arbitrary
+ *
+ * `direction` is pinned to 0 (In) rather than drawn: it is section metadata that
+ * the wizard's own reverse checkbox can still flip, and pinning it keeps the
+ * motif's meaning stable across the four sections. Every shot is `Standard`
+ * (type 2), because that is the only type the wizard counts when it sizes the
+ * merge-offset list. Lengths stay in 3..9 m and depth steps under a metre, so
+ * `|depth_out - depth_in| < length` always holds and the horizontal projection
+ * is real. Filler and tails turn 90 degrees away and descend, so a replayed
+ * section leaves the anchor's corridor instead of running back across it and
+ * losing the suggestion to the crossing-clearance guard.
+ *
+ * The zero-run invariant in this module's header is kept the same way
+ * `randomDmpShot` keeps it: `length` and `markerIndex` are never zero, and
+ * depths start above zero too.
+ */
+const SUGGESTIVE_SECTION_KINDS = ['head', 'tail', 'tie'] as const;
+
+/** Jitter, in the DMP's own pre-scaled integer units, per replay kind. */
+const SUGGESTIVE_JITTER: Readonly<
+  Record<(typeof SUGGESTIVE_SECTION_KINDS)[number], { heading: number; length: number; depth: number }>
+> = {
+  // 1.5 deg / 6 cm / 4 cm - a near-exact replay, which scores close to 1.0.
+  head: { heading: 15, length: 6, depth: 4 },
+  tail: { heading: 15, length: 6, depth: 4 },
+  // 3.0 deg / 14 cm / 8 cm - still inside every cutoff, but a visibly worse
+  // score, so the tie section ranks BELOW the head one instead of alongside it.
+  tie: { heading: 30, length: 14, depth: 8 },
+};
+
+/** A motif shot, in the units `DmpShotSpec` stores. */
+interface MotifShot {
+  heading: number;
+  length: number;
+  depthIn: number;
+  depthOut: number;
+}
+
+function motifRun(rng: Rng, count: number, heading0: number, headingStep: number, depth0: number): MotifShot[] {
+  const out: MotifShot[] = [];
+  let heading = heading0;
+  let depth = depth0;
+  for (let i = 0; i < count; i++) {
+    const length = randInt(rng, 300, 900);
+    // Under a metre of depth change per shot, and never more than a third of
+    // the slope length, so the horizontal projection stays comfortably real.
+    const step = randInt(rng, -60, 90);
+    const next = Math.max(20, Math.min(3800, depth + step));
+    out.push({ heading, length, depthIn: depth, depthOut: next });
+    depth = next;
+    heading = (heading + headingStep + 3600) % 3600;
+  }
+  return out;
+}
+
+/** Turn a motif shot into a `DmpShotSpec`, optionally jittered. */
+function motifShotSpec(rng: Rng, shot: MotifShot, jitter: { heading: number; length: number; depth: number }): DmpShotSpec {
+  const wobble = (amp: number): number => (amp === 0 ? 0 : randInt(rng, -amp, amp));
+  const heading = ((shot.heading + wobble(jitter.heading)) % 3600 + 3600) % 3600;
+  const length = Math.max(50, shot.length + wobble(jitter.length));
+  const depthIn = Math.max(0, shot.depthIn + wobble(jitter.depth));
+  const depthOut = Math.max(0, shot.depthOut + wobble(jitter.depth));
+  // Pitch is not part of the match (the suggester reads azimuth, length and the
+  // two depths), but an inconsistent one would make the rendered geometry
+  // disagree with the numbers the match was made on.
+  const dz = (depthOut - depthIn) / 100;
+  const slope = Math.max(0.01, length / 100);
+  const ratio = Math.max(-1, Math.min(1, dz / slope));
+  const pitch = Math.round((Math.asin(ratio) * 180) / Math.PI * 10);
+  return {
+    shotType: 2,
+    headingIn: heading,
+    headingOut: heading,
+    length,
+    depthIn,
+    depthOut,
+    pitchIn: pitch,
+    pitchOut: pitch,
+    left: randInt(rng, 0, 300),
+    right: randInt(rng, 0, 300),
+    up: randInt(rng, 0, 300),
+    down: randInt(rng, 0, 300),
+    temperature: randInt(rng, 40, 300),
+    hour: randInt(rng, 0, 23),
+    minute: randInt(rng, 0, 59),
+    second: randInt(rng, 0, 59),
+    markerIndex: randInt(rng, 1, 9),
+  };
+}
+
+/**
+ * Filler that leaves the anchor's corridor: 90 degrees off and descending, so a
+ * replayed section's non-overlapping part does not run back across the anchor
+ * and lose the suggestion to `placement_crossing_clearance_ok`.
+ */
+function turnAwayRun(rng: Rng, count: number, fromHeading: number, depth0: number): MotifShot[] {
+  return motifRun(rng, count, (fromHeading + 900) % 3600, randInt(rng, -40, 40), depth0 + randInt(rng, 100, 400));
+}
+
+/**
+ * Filler that turns away and comes BACK to `toDepth`.
+ *
+ * The suggester compares ABSOLUTE `depth_in`/`depth_out` inside 0.30 m, so the
+ * anchor's second copy of the motif has to sit at the same depths as the first
+ * or it is not a repeat at all. This is the loop that gets it back there.
+ */
+function bridgeRun(rng: Rng, count: number, fromHeading: number, fromDepth: number, toDepth: number): MotifShot[] {
+  const out: MotifShot[] = [];
+  let heading = (fromHeading + 900) % 3600;
+  let depth = fromDepth;
+  for (let i = 0; i < count; i++) {
+    const next = Math.round(fromDepth + ((toDepth - fromDepth) * (i + 1)) / count);
+    // Long enough that the depth change is a small fraction of the slope, and
+    // long enough to carry the trace clear of the corridor it just left.
+    const length = Math.max(400, Math.abs(next - depth) * 3 + randInt(rng, 400, 900));
+    out.push({ heading, length, depthIn: depth, depthOut: next });
+    depth = next;
+    heading = (heading + randInt(rng, -300, 300) + 3600) % 3600;
+  }
+  return out;
+}
+
+function suggestiveSection(
+  rng: Rng,
+  name: DmpSectionSpec['name'],
+  shots: readonly MotifShot[],
+  jitter: { heading: number; length: number; depth: number },
+): DmpSectionSpec {
+  return {
+    name,
+    direction: 0,
+    year: randInt(rng, 20, 26),
+    month: randInt(rng, 1, 12),
+    day: randInt(rng, 1, 28),
+    hour: randInt(rng, 0, 23),
+    minute: randInt(rng, 0, 59),
+    shots: shots.map((shot) => motifShotSpec(rng, shot, jitter)),
+  };
+}
+
+export function suggestiveDmpSpec(rng: Rng): DmpSpec {
+  const version = pick(rng, [5, 5, 5, 4, 4, 3]);
+  const motifLength = randInt(rng, 3, 5);
+  const heading0 = randInt(rng, 0, 3599);
+  const headingStep = randInt(rng, -120, 120);
+  const depth0 = randInt(rng, 50, 900);
+  const motif = motifRun(rng, motifLength, heading0, headingStep, depth0);
+  const zero = { heading: 0, length: 0, depth: 0 };
+  const lastHeading = motif[motif.length - 1]!.heading;
+  const lastDepth = motif[motif.length - 1]!.depthOut;
+
+  // The anchor: motif, a loop that comes back to the motif's own starting depth,
+  // then the SAME motif again. The repeat is exact on purpose - it is what gives
+  // a replaying section two equally good candidate placements, which is the only
+  // way the wizard's alternatives list is ever non-empty (it filters to
+  // suggestions sharing `importSectionIndex`) and the only way its tie-break is
+  // ever exercised.
+  const anchorShots: MotifShot[] = [
+    ...motif,
+    ...bridgeRun(rng, randInt(rng, 2, 3), lastHeading, lastDepth, depth0),
+    ...motif,
+  ];
+
+  const letter = (index: number): string => `A${String.fromCharCode(65 + (index % 26))}${index % 10}`;
+  const sections: DmpSectionSpec[] = [suggestiveSection(rng, letter(0), anchorShots, zero)];
+
+  // Two or three replays, always including `head` so the station-0 leaf is
+  // always exercised; the rest are drawn so a seed does not always produce the
+  // same four-section file.
+  const kinds: (typeof SUGGESTIVE_SECTION_KINDS)[number][] = ['head'];
+  if (chance(rng, 0.75)) kinds.push('tail');
+  if (chance(rng, 0.6)) kinds.push('tie');
+
+  for (const kind of kinds) {
+    const jitter = SUGGESTIVE_JITTER[kind];
+    const replay = motif;
+    const shots =
+      kind === 'tail'
+        ? [...turnAwayRun(rng, randInt(rng, 1, 2), heading0, depth0), ...replay]
+        : [...replay, ...turnAwayRun(rng, randInt(rng, 1, 2), lastHeading, lastDepth)];
+    sections.push(suggestiveSection(rng, letter(sections.length), shots, jitter));
+  }
+
+  const spec: DmpSpec = { version, sections };
+  if (chance(rng, 0.5)) spec.signedTokens = true;
+  return spec;
+}
+
+// ---------------------------------------------------------------------------
 // TML / TMLU
 // ---------------------------------------------------------------------------
 
