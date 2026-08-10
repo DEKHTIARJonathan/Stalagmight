@@ -3391,6 +3391,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   shotId: command.shot_id,
                   updates: command.updates,
                 }) as typeof result;
+              } else if (command?.type === 'delete_section') {
+                // Withdrawing an abandoned import (#394) removes N sections in
+                // ONE batch, so the batch has to replay it or a cancelled DMP
+                // import would look like it kept everything.
+                result = mockHandler('delete_section', {
+                  sectionId: command.section_id,
+                }) as typeof result;
               } else if (command?.type === 'reverse_section') {
                 // Multi-section reverse (#24) is batched so it is atomic and
                 // costs one undo, so the batch has to replay it too.

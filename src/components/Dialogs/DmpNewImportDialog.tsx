@@ -793,6 +793,7 @@ export default function DmpNewImportDialog({
 
   // Store selectors
   const importSections = useProjectStore((s) => s.importSections);
+  const executeBatch = useProjectStore((s) => s.executeBatch);
   const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
   const config = useProjectStore((s) => s.config);
   const updateConfig = useProjectStore((s) => s.updateConfig);
@@ -3372,22 +3373,99 @@ export default function DmpNewImportDialog({
     handleStartSegmentPlacement,
   ]);
 
-  // Cancel/Back
+  // ─── Cancel / Back ────────────────────────────────────────────────────────
+  //
+  // This wizard imports EAGERLY - the zero-datum anchor lands in the project on
+  // mount, and each reachable segment as it is placed, because the map has to
+  // render what it is placing. So by the time either exit is reached the project
+  // may already hold sections the user never agreed to keep, and neither exit
+  // used to say so: the gate asked only about `connections` (client-side records
+  // that have imported nothing), so cancelling right after the zero-datum import
+  // closed silently and left the section behind (#394 F2).
+  //
+  // Both exits therefore offer to WITHDRAW what was imported, and the withdrawal
+  // is one batched `delete_section` - one undo entry for one user action, not N.
+
+  /** Remove every section this wizard run imported, as ONE undoable step.
+   *  Returns false (leaving the refs untouched) if the backend refused, so the
+   *  caller can keep the wizard open on a visible error instead of closing over
+   *  a project it failed to clean up. */
+  const withdrawImportedSections = useCallback(async (): Promise<boolean> => {
+    const sectionIds = [...importedSectionIdsRef.current];
+    if (sectionIds.length === 0) return true;
+    setIsImporting(true);
+    try {
+      const result = await executeBatch(
+        sectionIds.map((sectionId) => ({ type: 'delete_section', section_id: sectionId }) as const),
+      );
+      if (!result.success) {
+        setError(result.error ?? t('dialogs.dmpNewImport.removeImportedFailed'));
+        return false;
+      }
+    } catch (e) {
+      setError(importErrorMessage(e));
+      return false;
+    } finally {
+      setIsImporting(false);
+    }
+    // The run's accumulators describe sections that no longer exist. Clearing
+    // them is what keeps a later completion from handing App.tsx dead ids for
+    // orphan placement, and from summarising an import that was withdrawn.
+    importedSectionIdsRef.current = [];
+    importedReceiptsRef.current = [];
+    earlyImportedRef.current.clear();
+    return true;
+  }, [executeBatch, t]);
+
+  /** How many sections the pending confirmation is talking about. Snapshotted
+   *  into state when the confirmation opens: the live count lives in a ref, and
+   *  a ref does not re-render the copy that quotes it. */
+  const [pendingWithdrawCount, setPendingWithdrawCount] = useState(0);
+
   const handleCancel = useCallback(() => {
-    if (connections.length > 0) {
+    const importedCount = importedSectionIdsRef.current.length;
+    if (connections.length > 0 || importedCount > 0) {
+      setPendingWithdrawCount(importedCount);
       setShowCancelConfirm(true);
     } else {
       onCancel();
     }
   }, [connections.length, onCancel]);
 
+  /** Close the wizard, first removing what it imported. */
+  const handleCancelWithRemoval = useCallback(async () => {
+    if (!(await withdrawImportedSections())) return;
+    setShowCancelConfirm(false);
+    onCancel();
+  }, [withdrawImportedSections, onCancel]);
+
   const handleBack = useCallback(() => {
-    if (connections.length > 0) {
+    const importedCount = importedSectionIdsRef.current.length;
+    if (connections.length > 0 || importedCount > 0) {
+      setPendingWithdrawCount(importedCount);
       setShowBackConfirm(true);
     } else {
       onBack();
     }
   }, [connections.length, onBack]);
+
+  /**
+   * Back re-enters the flow at a step BEFORE anything was imported (zero-datum
+   * config, or the section selection), and the forward pass re-imports from
+   * scratch - the anchor on mount, then the whole suggest/early-import pipeline.
+   * So Back has to withdraw first, or the second pass duplicates every section
+   * the first one created (#394 F1). Carrying "already imported, don't redo it"
+   * across instead cannot work: the mount effect that imports the anchor is the
+   * same one that fires `suggest_all_import_placements`, so suppressing it
+   * strands the reopened wizard in `init` with nothing to do - and it would also
+   * pin the anchor to the GPS/name/shot edits of the FIRST pass, which is
+   * exactly what the user pressed Back to change.
+   */
+  const handleBackWithRemoval = useCallback(async () => {
+    if (!(await withdrawImportedSections())) return;
+    setShowBackConfirm(false);
+    onBack();
+  }, [withdrawImportedSections, onBack]);
 
   // Confidence helpers
   const confidenceColors: Record<string, string> = {
@@ -4167,7 +4245,11 @@ export default function DmpNewImportDialog({
         </div>
       </div>
 
-      {/* Cancel confirmation */}
+      {/* Cancel confirmation. Three actions once anything has been imported -
+          the exit is no longer just "close a dialog", it decides what happens to
+          sections that are already in the project. `confirm-cancel-button` keeps
+          its id and its meaning (close, change nothing on disk); the removal is
+          the new, additional action. */}
       <AlertDialog
         open={showCancelConfirm}
         title={t('dialogs.dmpNewImport.cancelWizard')}
@@ -4176,22 +4258,41 @@ export default function DmpNewImportDialog({
         actions={
           <>
             <Button onClick={() => setShowCancelConfirm(false)} className={importSecondaryButtonClass} data-testid="cancel-confirm-continue">
-              {t('common.actions.continue')}
+              {pendingWithdrawCount > 0
+                ? t('dialogs.dmpNewImport.cancelContinueEditing')
+                : t('common.actions.continue')}
             </Button>
-            <Button variant="danger" onClick={onCancel} data-testid="confirm-cancel-button">
-              {t('common.actions.cancel')}
+            <Button
+              onClick={onCancel}
+              className={importSecondaryButtonClass}
+              data-testid="confirm-cancel-button"
+            >
+              {pendingWithdrawCount > 0
+                ? t('dialogs.dmpNewImport.cancelKeepAndClose')
+                : t('common.actions.cancel')}
             </Button>
+            {pendingWithdrawCount > 0 && (
+              <Button
+                variant="danger"
+                disabled={isImporting}
+                onClick={() => { void handleCancelWithRemoval(); }}
+                data-testid="cancel-remove-button"
+              >
+                {t('dialogs.dmpNewImport.cancelRemoveAndClose')}
+              </Button>
+            )}
           </>
         }
       >
-        <p>
-          {connections.length > 0
-            ? t('dialogs.dmpNewImport.cancelWizardMessage')
+        <p data-testid="cancel-confirm-message">
+          {pendingWithdrawCount > 0
+            ? t('dialogs.dmpNewImport.cancelWizardMessage', { count: pendingWithdrawCount })
             : t('dialogs.dmpNewImport.cancelWizardNoImports')}
         </p>
       </AlertDialog>
 
-      {/* Back confirmation */}
+      {/* Back confirmation. No "keep" here: the step Back returns to re-imports
+          from scratch on the way forward, so keeping would duplicate. */}
       <AlertDialog
         open={showBackConfirm}
         title={t('dialogs.dmpNewImport.backWizard')}
@@ -4202,13 +4303,24 @@ export default function DmpNewImportDialog({
             <Button onClick={() => setShowBackConfirm(false)} className={importSecondaryButtonClass} data-testid="back-confirm-continue">
               {t('common.actions.continue')}
             </Button>
-            <Button variant="danger" onClick={onBack} data-testid="confirm-back-button">
-              {t('common.actions.back')}
+            <Button
+              variant="danger"
+              disabled={isImporting}
+              onClick={() => { void handleBackWithRemoval(); }}
+              data-testid="confirm-back-button"
+            >
+              {pendingWithdrawCount > 0
+                ? t('dialogs.dmpNewImport.backRemoveAndGo')
+                : t('common.actions.back')}
             </Button>
           </>
         }
       >
-        <p>{t('dialogs.dmpNewImport.backWizardMessage')}</p>
+        <p data-testid="back-confirm-message">
+          {pendingWithdrawCount > 0
+            ? t('dialogs.dmpNewImport.backWizardMessage', { count: pendingWithdrawCount })
+            : t('dialogs.dmpNewImport.backWizardNoImports')}
+        </p>
       </AlertDialog>
     </DialogWrapper>
   );
