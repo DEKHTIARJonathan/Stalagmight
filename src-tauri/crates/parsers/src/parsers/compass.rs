@@ -501,8 +501,9 @@ struct SurveyCtx {
     /// Replaces the old `declination` / `convergence_angle` pair, which
     /// `shot_geometry` folded into every azimuth. The readings now land in the
     /// project exactly as the file recorded them and this rides on the section.
-    /// The correction is still `declination - convergence`, so a Compass project
-    /// renders exactly where it did before.
+    /// The correction is the declination ALONE: the UTM grid convergence is
+    /// reported as a warning instead of being folded in, because geometry is
+    /// drawn in true north and Compass's own display frame is the grid.
     azimuth_reference: AzimuthReference,
     length_to_m: f64,
     apply_corrections: bool,

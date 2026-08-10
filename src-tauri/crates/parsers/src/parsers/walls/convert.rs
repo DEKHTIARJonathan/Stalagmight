@@ -237,8 +237,10 @@ pub fn convert_walls_to_import_configs(
         is_reference: bool,
         lrud_is_to: bool,
         /// Degrees to ADD to this vector's stored (measured) azimuth to reach
-        /// the frame Walls itself draws in - declination minus grid convergence
-        /// (#438). Kept per VECTOR because Walls declares both per entry:
+        /// TRUE north, which is the frame geometry is drawn in: the declination
+        /// ALONE (#438). A grid convergence is reported rather than folded in -
+        /// see where this is computed for why.
+        /// Kept per VECTOR because Walls declares both per entry:
         /// `Decl=`/`Grid=` can change mid-survey and a RECT vector takes no
         /// declination at all.
         azimuth_correction: f64,
@@ -281,10 +283,11 @@ pub fn convert_walls_to_import_configs(
             } else {
                 v.to.clone()
             };
-            // Finalize azimuth: + declination - convergence (grid-relative).
-            // Convergence is the `.REF` grid convergence (when grid-relative)
-            // plus any explicit `#Units Grid=` the survey set; both rotate true
-            // north to grid north and so are subtracted from the azimuth.
+            // The grid convergence, computed ONLY so it can be reported below:
+            // the `.REF` convergence (when grid-relative) plus any explicit
+            // `#Units Grid=` the survey set. Both rotate true north to grid
+            // north, which is exactly why they are not applied here - see the
+            // correction below.
             let convergence = if v.grid_relative {
                 survey_georef.as_ref().map(|r| r.convergence).unwrap_or(0.0)
             } else {

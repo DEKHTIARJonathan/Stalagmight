@@ -287,20 +287,24 @@ Examples:
     survey's `DECLINATION` alone: a UTM grid convergence in the file is
     reported as a warning and deliberately **not** applied, because the app's
     world frame is true north while Compass's display frame is the grid. Walls
-    resolves `Decl=` or a derived declination, folds the grid convergence in
-    for a grid-relative survey, and forces the correction to 0 for a RECT
-    survey, whose Cartesian deltas must not be rotated at all. An Ariane
-    `.tml` reads the file's `useMagneticAzimuth` flag; a georeferenced file
-    carrying a survey date gets its declination from the bundled IGRF model,
-    evaluated at the **earliest dated section's** date rather than today, so
-    the same file always imports to the same geometry.
+    does the same: it resolves `Decl=` or a derived declination and warns about
+    a `.REF` or `#Units Grid=` convergence without applying it. The one Walls
+    difference is per **vector**, not per survey - a RECT vector's bearing is
+    already true north in the file's Cartesian frame, so it takes no
+    declination at all and its correction is 0. An Ariane `.tml` reads the
+    file's `useMagneticAzimuth` flag; a georeferenced file carrying a survey
+    date gets its declination from the bundled IGRF model, evaluated at the
+    **earliest dated section's** date rather than today, so the same file
+    always imports to the same geometry.
   - **Exporting to a format with only one north** (`AzimuthExport::decide`).
-    If the sections disagree and every section's correction is on record,
-    every bearing is rotated to true north and the file declares true north.
-    If any section's correction is `Unknown`, nothing is rotated: the readings
-    go out exactly as measured, the file declares magnetic, and the export
-    reports that the declaration misdescribes the corrected sections. There is
-    no refusal path.
+    Every bearing is rewritten to true north when the sections do not all
+    agree, or when they agree on grid north - but only if every section's
+    correction is on record. If any one is `Unknown`, nothing is rotated: the
+    readings go out exactly as measured and the file declares magnetic. That
+    declaration is reported as misdescribing whichever sections did carry a
+    correction, except where the declared sections were uniformly magnetic, in
+    which case it is simply true and nothing is reported. There is no refusal
+    path.
 - **Depth**: Positive values = below surface
 
 #### GPS-to-Local Coordinate Transformation
