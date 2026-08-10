@@ -7,8 +7,13 @@ then the human items no workflow can do.
 
 ## 0. Automated prerequisites (any platform)
 
-- [ ] `pnpm agent:journeys -- --ledger` is green at the RC commit.
-- [ ] `pnpm agent:scenarios` is green at the RC commit.
+The harness drives the DEBUG binary by default - an RC sign-off must drive the
+release build: pass `--release` (journeys) or set `STALAGMIGHT_AGENT_RELEASE=1`
+(scenarios).
+
+- [ ] `pnpm agent:journeys -- --release --ledger` is green at the RC commit.
+- [ ] `STALAGMIGHT_AGENT_RELEASE=1 pnpm agent:scenarios` is green at the RC
+      commit.
 - [ ] The 7 unique-coverage legacy WDIO specs (`e2e/legacy/README.md` lists
       them) have run at the RC commit: `./scripts/wdio.sh`.
 

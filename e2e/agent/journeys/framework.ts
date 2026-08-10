@@ -72,10 +72,17 @@ export function makeJourneyContext(
     },
     async checkpoint(name) {
       if (!shotsDir) return;
-      fs.mkdirSync(shotsDir, { recursive: true });
-      const file = path.join(shotsDir, `${name}.png`);
-      await target.exclusive(() => target.browser.saveScreenshot(file));
-      base.log(`checkpoint ${name} -> ${file}`);
+      // Checkpoints are evidence and must NEVER gate: a screenshot failure
+      // (WebDriver backend quirk, platform permission) is logged, not thrown -
+      // letting it escape would abort a behaviorally passing journey.
+      try {
+        fs.mkdirSync(shotsDir, { recursive: true });
+        const file = path.join(shotsDir, `${name}.png`);
+        await target.exclusive(() => target.browser.saveScreenshot(file));
+        base.log(`checkpoint ${name} -> ${file}`);
+      } catch (err) {
+        base.log(`checkpoint ${name} FAILED (non-gating): ${err instanceof Error ? err.message : String(err)}`);
+      }
     },
   };
 }

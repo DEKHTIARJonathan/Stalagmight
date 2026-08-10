@@ -17,7 +17,6 @@ import {
   describeDiffs,
   shotSetDelta,
   describeShotSetDelta,
-  SAVE_HEALING_MUTATIONS,
   RELOAD_RESOLVED_GEOMETRY,
 } from '../lib/projectSnapshot';
 
@@ -67,7 +66,12 @@ export const saveReopen: Journey = {
 
     if (savedSnapshot !== restoredSnapshot) {
       const diffs = diffSnapshots(savedSnapshot, restoredSnapshot, 12);
-      const { unknown } = classifyDiffs(diffs, [...SAVE_HEALING_MUTATIONS, ...RELOAD_RESOLVED_GEOMETRY]);
+      // ONLY the reload re-solve family is attributable here. The snapshot was
+      // taken AFTER the save, so every save-time heal is already in the
+      // expected state - allowing SAVE_HEALING_MUTATIONS across the reopen
+      // would absorb exactly the divergence this comparison exists to catch
+      // (e.g. a reload minting a uuid the saved file did not carry).
+      const { unknown } = classifyDiffs(diffs, RELOAD_RESOLVED_GEOMETRY);
       ctx.expect('reopened state matches the saved snapshot (documented reload re-solve excepted)',
         unknown.length === 0, `\n${describeDiffs(unknown)}`);
     } else {

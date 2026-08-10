@@ -10,6 +10,7 @@
  *   pnpm agent:journeys -- --ledger     # additionally append docs/uat/ledger.md
  *                                       # and write the run record to docs/uat/runs/
  *   pnpm agent:journeys -- --only save-reopen-identity
+ *   pnpm agent:journeys -- --release    # drive the RELEASE binary (RC checklist runs)
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -46,14 +47,16 @@ function gitSha(): string {
   }
 }
 
-function parseArgs(argv: string[]): { only: string | null; ledger: boolean } {
+function parseArgs(argv: string[]): { only: string | null; ledger: boolean; release: boolean } {
   let only: string | null = null;
   let ledger = false;
+  let release = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--ledger') ledger = true;
+    else if (argv[i] === '--release') release = true;
     else if (argv[i] === '--only') only = argv[++i] ?? null;
   }
-  return { only, ledger };
+  return { only, ledger, release };
 }
 
 /**
@@ -75,8 +78,12 @@ function sanitizeForLedger(record: RunRecord): RunRecord {
       checks: j.checks.map((c) =>
         c.detail !== undefined ? { ...c, detail: scrubText(c.detail) } : c,
       ),
+      // ALLOWLIST, not a spread: Finding carries a free-form `detail` (crash
+      // marker text, error-boundary dumps, leftover-temp paths) that must
+      // never reach the committed record.
       sweepFindings: j.sweepFindings.map((f) => ({
-        ...f,
+        severity: f.severity,
+        kind: f.kind,
         message: `<scrubbed - see the session run.jsonl>`,
       })),
     })),
@@ -105,7 +112,11 @@ function writeLedger(record: RunRecord): void {
 }
 
 async function main(): Promise<void> {
-  const { only, ledger } = parseArgs(process.argv.slice(2));
+  const { only, ledger, release } = parseArgs(process.argv.slice(2));
+  // Same contract as scenario-run.ts: the flag is sugar for the env var the
+  // session layer reads. RC checklist runs MUST pass it - the default is the
+  // debug binary, which is not the artifact a release signs off.
+  if (release) process.env.STALAGMIGHT_AGENT_RELEASE = '1';
   const names = only ? [only] : listJourneys();
   for (const name of names) {
     if (!getJourney(name)) {
