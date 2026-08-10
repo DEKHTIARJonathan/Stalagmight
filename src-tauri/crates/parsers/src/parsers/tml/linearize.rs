@@ -683,17 +683,41 @@ const COMPARABLE_LENGTH_RATIO: f64 = 0.8;
 ///    which is what keeps a stub from stealing a straight-ahead junction.
 /// 3. Break ties on ascending shot id.
 ///
+/// A CLOSURE successor is considered only when there is no real one. Closures
+/// are loop markers the import drops unconditionally, so a closure that won a
+/// junction left the run stopping dead there while the real continuation was
+/// demoted to a branch. When a closure IS the only successor it still
+/// continues the chain, which keeps it inline instead of spawning a chain that
+/// would be dropped as empty at import.
+///
 /// Deterministic by construction: `candidates` arrives in the section's
-/// sorted encounter order (never HashMap iteration order), the downstream
-/// lengths are fixed-order IEEE 754 sums of parsed values (see
-/// `downstream_lengths`), and step 2 compares with `f64::total_cmp`, which is
-/// a total order on every run and platform.
+/// sorted encounter order (never HashMap iteration order), the partition below
+/// preserves that order, the downstream lengths are fixed-order IEEE 754 sums
+/// of parsed values (see `downstream_lengths`), and step 2 compares with
+/// `f64::total_cmp`, which is a total order on every run and platform.
 fn choose_continuation(
     current_id: i64,
     candidates: &[i64],
     downstream: &HashMap<i64, f64>,
     shot_by_id: &HashMap<i64, &RawShot>,
 ) -> i64 {
+    if candidates.len() == 1 {
+        return candidates[0];
+    }
+
+    let is_closure = |id: i64| {
+        shot_by_id
+            .get(&id)
+            .is_some_and(|s| s.shot_type == TmlShotType::Closure)
+    };
+    let real: Vec<i64> = candidates
+        .iter()
+        .copied()
+        .filter(|&id| !is_closure(id))
+        .collect();
+    // Real survey always outranks a loop marker; fall back to the closures
+    // only when the junction offers nothing else.
+    let candidates: &[i64] = if real.is_empty() { candidates } else { &real };
     if candidates.len() == 1 {
         return candidates[0];
     }
@@ -752,10 +776,15 @@ fn choose_continuation(
 /// accumulation order is fixed and the result is identical across runs and
 /// platforms (IEEE 754 arithmetic is deterministic given a fixed order).
 ///
-/// Excluded and CLOSURE shots count toward the length: segmentation reflects
-/// the topology the file declares, and the excluded-shots import toggle
-/// (applied downstream of section building) must not change how sections
-/// split.
+/// EXCLUDED shots count toward the length: segmentation must reflect the
+/// topology the file declares, and the excluded-shots import toggle (applied
+/// downstream of section building) must not change how sections split.
+///
+/// CLOSURE shots contribute 0. That is not the same call: their removal is
+/// unconditional, not toggle-controlled, so zero-weighting them cannot make
+/// splitting depend on an import option. Counting them made a junction's
+/// ancestor look longer than the survey it actually holds, and could hand the
+/// mainline to an edge that then disappeared.
 ///
 /// This sums over PATHS, not over distinct shots. Where the section's graph
 /// rejoins - a diamond, i.e. a loop closed inside one section - the shared
@@ -795,7 +824,18 @@ fn downstream_lengths(
                     stack.push((child, 0));
                 }
             } else {
-                let own = shot_by_id.get(&id).map_or(0.0, |s| s.length);
+                // A CLOSURE shot is a loop marker, not passage: it is filtered
+                // out of the import unconditionally, so its tape reading must
+                // not make an ancestor look longer than the survey it holds.
+                // (Our own exporter writes the vertical gap between the two
+                // nodes it ties, so this is routinely non-zero.)
+                let own = shot_by_id.get(&id).map_or(0.0, |s| {
+                    if s.shot_type == TmlShotType::Closure {
+                        0.0
+                    } else {
+                        s.length
+                    }
+                });
                 let total = own
                     + succs
                         .iter()

@@ -3192,6 +3192,125 @@ mod tests {
         );
     }
 
+    /// A CLOSURE shot must never win a junction away from real survey (#412).
+    ///
+    /// Closures are loop markers that `convert_shots_to_shot_data` filters out
+    /// of the import, and our own exporter gives them the vertical gap between
+    /// the nodes they tie, so their `Length` is not always zero. Letting that
+    /// length into the continuation choice makes the mainline "continue" into
+    /// an edge that then vanishes: the run stops dead at the junction and the
+    /// real continuation is demoted to a branch.
+    #[test]
+    fn a_closure_edge_never_takes_the_junction_from_real_survey() {
+        let closure_xml = |id: i64, from_id: i64, length: f64| {
+            format!(
+                r"<SurveyData>
+    <ID>{id}</ID>
+    <FromID>{from_id}</FromID>
+    <ClosureToID>1</ClosureToID>
+    <Type>CLOSURE</Type>
+    <Section>Main</Section>
+    <Azimut>90.0</Azimut>
+    <Length>{length}</Length>
+    <Depth>5.0</Depth>
+    <DepthIn>-1.0</DepthIn>
+    <Inclination>0.0</Inclination>
+    <Left>0.0</Left>
+    <Right>0.0</Right>
+    <Up>0.0</Up>
+    <Down>0.0</Down>
+    <Comment></Comment>
+    <Explorer>Tester</Explorer>
+    <Date>2024-06-15</Date>
+    <Color>0x8f6112ff</Color>
+    <Excluded>false</Excluded>
+    <Latitude>0.0</Latitude>
+    <Longitude>0.0</Longitude>
+</SurveyData>"
+            )
+        };
+        let long_closure = closure_xml(4, 2, 500.0);
+        let shots = [
+            tml_shot_xml_az_len(1, -1, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(2, 1, "Main", 90.0, 10.0),
+            // The real continuation, far shorter than the closure's 500 m.
+            tml_shot_xml_az_len(3, 2, "Main", 90.0, 10.0),
+            long_closure.to_owned(),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        let mainline = tml
+            .sections
+            .iter()
+            .find(|s| s.name == "Main")
+            .expect("the mainline keeps the section name");
+        assert!(
+            mainline.shots.iter().any(|s| s.id == 3),
+            "the real continuation must stay on the mainline; got {:?}",
+            mainline.shots.iter().map(|s| s.id).collect::<Vec<_>>()
+        );
+
+        // And the run the user actually imports is not truncated at the junction.
+        let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("convert");
+        assert_eq!(configs.len(), 1, "a closure must not fragment the section");
+        assert_eq!(
+            configs[0].shots.len(),
+            3,
+            "all three real shots import as one run"
+        );
+
+        // Zero-weighting the closure's length is not on its own enough. When
+        // the real continuation ALSO has no downstream length - a zero-length
+        // station marker - both candidates survive elimination and the choice
+        // falls through to azimuth, where a straight-ahead closure beats a real
+        // shot that turns. Only refusing closures as candidates covers this.
+        let degenerate = [
+            tml_shot_xml_az_len(1, -1, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(2, 1, "Main", 90.0, 10.0),
+            // Real, but zero length and turning hard away from the heading.
+            tml_shot_xml_az_len(3, 2, "Main", 180.0, 0.0),
+            closure_xml(4, 2, 0.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&degenerate));
+        let mainline = tml
+            .sections
+            .iter()
+            .find(|s| s.name == "Main")
+            .expect("the mainline keeps the section name");
+        assert!(
+            mainline.shots.iter().any(|s| s.id == 3),
+            "a closure must not win on azimuth either; got {:?}",
+            mainline.shots.iter().map(|s| s.id).collect::<Vec<_>>()
+        );
+
+        // Nor may a closure's length reach the choice INDIRECTLY, by inflating
+        // a real ancestor's downstream total. Here both candidates at shot 1
+        // are real, so refusing closures as candidates does nothing: only
+        // giving the closure zero weight keeps the 200 m branch ahead of the
+        // 5 m one that happens to carry a 500 m loop marker.
+        let inflated = [
+            tml_shot_xml_az_len(1, -1, "Main", 90.0, 10.0),
+            tml_shot_xml_az_len(2, 1, "Main", 90.0, 5.0),
+            closure_xml(5, 2, 500.0),
+            tml_shot_xml_az_len(3, 1, "Main", 180.0, 100.0),
+            tml_shot_xml_az_len(4, 3, "Main", 180.0, 100.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&inflated));
+        let mainline = tml
+            .sections
+            .iter()
+            .find(|s| s.name == "Main")
+            .expect("the mainline keeps the section name");
+        assert_eq!(
+            mainline.shots.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![1, 3, 4],
+            "the 200 m real branch is the mainline, not the 5 m one with a closure on it"
+        );
+    }
+
     #[test]
     fn test_malformed_cycle_and_self_loop_are_guarded() {
         // Malformed graph with a 2<->3 cycle and a self-loop at 4.
