@@ -46,7 +46,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{normalize_azimuth, AzimuthReference, SectionId, Shot, ShotData, StationKey, StationRef};
+use crate::{
+    normalize_azimuth, AzimuthReference, SectionId, Shot, ShotData, StationKey, StationRef,
+};
 
 use super::Project;
 

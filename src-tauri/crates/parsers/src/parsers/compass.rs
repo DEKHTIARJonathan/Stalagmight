@@ -2490,7 +2490,6 @@ mod tests {
         );
     }
 
-
     /// [`synthetic_survey_record`] with a declared declination, so the #438
     /// contract has something to bite on. Kept as its own `format!` rather than
     /// a parameter there: every other caller wants the zero that helper writes.

@@ -3269,7 +3269,7 @@ mod tests {
             "the real datum must be stored AFTER the dangling one"
         );
 
-        let shots = build_export_shots(&project, TmlProfile::User);
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
         let starts: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "START").collect();
         assert_eq!(starts.len(), 2, "each detached gallery is its own entrance");
         for start in &starts {
@@ -5587,7 +5587,8 @@ mod tests {
         shapes
             .into_iter()
             .map(|(label, project, reversed)| {
-                let shots = build_export_shots(&project, TmlProfile::User);
+                let shots =
+                    build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
                 assert_eq!(
                     reversed_leg_shot_count(&shots),
                     reversed,
@@ -5613,7 +5614,8 @@ mod tests {
             let expected = project_uuids(&project);
             assert!(!expected.is_empty(), "{label}: fixture has no uuids");
 
-            let shots = build_export_shots(&project, TmlProfile::User);
+            let shots =
+                build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
             let emitted: HashSet<String> = shots.iter().filter_map(|s| s.uuid.clone()).collect();
             assert_eq!(emitted, expected, "{label}: emitted uuids != project uuids");
 
@@ -5642,7 +5644,8 @@ mod tests {
     #[test]
     fn a_reversed_leg_is_a_shots_only_appearance_so_nothing_is_reminted() {
         for (label, project) in reversal_shapes() {
-            let shots = build_export_shots(&project, TmlProfile::User);
+            let shots =
+                build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
             let mut seen: HashMap<String, usize> = HashMap::new();
             for shot in &shots {
                 if let Some(uuid) = &shot.uuid {

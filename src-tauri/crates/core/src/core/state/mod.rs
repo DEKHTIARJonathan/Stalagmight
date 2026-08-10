@@ -41,6 +41,15 @@ mod warnings;
 #[cfg(test)]
 mod adversarial_tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod azimuth_reference_tests;
+#[cfg(test)]
 mod concurrency_tests;
 #[cfg(test)]
 mod crash_property_tests;

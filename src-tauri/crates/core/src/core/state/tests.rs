@@ -18065,6 +18065,7 @@ fn test_execute_import_sections_zero_datum_placement_at_non_origin_station() {
             coordinates: gps,
             station_index: 1,
         },
+        azimuth_reference: None,
     }];
 
     let result = state.execute_import_sections(
