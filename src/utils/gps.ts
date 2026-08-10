@@ -89,6 +89,60 @@ function normalizeGpsWhitespace(input: string): string {
 }
 
 /**
+ * Latitude beyond this is treated as "extreme" for the transposition heuristic
+ * below. A lower threshold (60) false-positives on real diving/caving
+ * latitudes - Iceland (~64.25 N), Norway (~66 N), Sweden (~63 N) all sit past
+ * it - so this stays high enough that only near-polar or clearly-a-longitude
+ * values trip it.
+ */
+const TRANSPOSITION_LAT_THRESHOLD = 75;
+
+/**
+ * Soft (non-blocking) heuristic: does this lat/lon pair look like the two
+ * values were swapped? Fires only when the given latitude is implausibly
+ * extreme AND the longitude would read as a plausible latitude if the two
+ * were swapped - a real polar survey (both values genuinely extreme, or the
+ * longitude also past the threshold) does not trip it.
+ */
+export function looksTransposed(lat: number, lon: number): boolean {
+  // Belt-and-suspenders, not load-bearing: NaN never satisfies either
+  // comparison below either, so this guard cannot be observed by a test -
+  // it documents intent (never fire on invalid input) rather than changing it.
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+  const givenLatExtreme = Math.abs(lat) > TRANSPOSITION_LAT_THRESHOLD;
+  const swappedLatPlausible = Math.abs(lon) <= TRANSPOSITION_LAT_THRESHOLD;
+  return givenLatExtreme && swappedLatPlausible;
+}
+
+/**
+ * `looksTransposed`'s raw-pair sibling, for input that FAILED to parse - so
+ * `parseDD` already rejected it with a range error and there is no
+ * `GpsCoordinates` to run the coords-based check on. Without this, a swapped
+ * "120, 45" (120 is not a latitude at all) got only the generic range error
+ * and never the swap hint, because the hint was computed downstream of a
+ * successful parse that this input can never produce.
+ *
+ * Deliberately narrow: matches only the same bare `lat, lon` / `lat lon`
+ * shape `parseDD` accepts (no DMS/UTM/etc - a failed parse of one of those
+ * needs a different fix, not a swap hint), and fires only when the first
+ * number is an outright IMPOSSIBLE latitude (past +/-90, not merely
+ * `looksTransposed`'s softer "extreme") that swapping would actually resolve
+ * both ways - both `parseDD` would have accepted the swapped order too.
+ */
+export function looksTransposedRawDD(input: string): boolean {
+  const trimmed = normalizeGpsWhitespace(input);
+  const match = trimmed.match(/^(-?\d+\.?\d*)[,\s]+(-?\d+\.?\d*)$/);
+  if (!match || match[1] === undefined || match[2] === undefined) return false;
+  const lat = parseFloat(match[1]);
+  const lon = parseFloat(match[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+  const givenLatImpossible = Math.abs(lat) > LAT_MAX;
+  const swappedLatPlausible = Math.abs(lon) <= LAT_MAX;
+  const swappedLonPlausible = Math.abs(lat) <= LON_MAX;
+  return givenLatImpossible && swappedLatPlausible && swappedLonPlausible;
+}
+
+/**
  * Validate latitude and longitude values.
  */
 export function validateCoordinates(lat: number, lon: number): GpsValidationResult {

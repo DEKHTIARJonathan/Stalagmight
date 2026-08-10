@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useReducer } from 'react';
+import { useState, useCallback, useMemo, useReducer, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
 import { blankEditableShot } from '../common/editableShot';
@@ -10,7 +10,7 @@ import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
-import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
+import { parseGps, detectFormat, looksTransposed, looksTransposedRawDD, type GpsFormat } from '../../utils/gps';
 import { formatFixed } from '../../i18n/format';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -97,6 +97,9 @@ interface ShotEditState {
   /** Identity for the next blank row; never reused, so rows stay distinct
    *  however many one gesture adds. */
   nextTempId: number;
+  /** Set once a shot row is edited, inserted or deleted - feeds the dirty
+   *  guard (#F9). A hover/pick alone does not change the payload. */
+  dirty: boolean;
 }
 
 type ShotEditAction =
@@ -133,18 +136,21 @@ function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEdit
       // cleared to blank.
       const was = isCounted(current);
       const now = isCounted(updated);
-      if (was === now) return { ...state, shots };
+      if (was === now) return { ...state, shots, dirty: true };
       const delta = now ? 1 : -1;
-      return withPick(
-        state,
-        shots,
-        reanchorStation(
-          state.stationIndex,
-          survivorsBefore(state.shots, action.index),
-          delta,
-          state.shots.filter(isCounted).length + delta,
+      return {
+        ...withPick(
+          state,
+          shots,
+          reanchorStation(
+            state.stationIndex,
+            survivorsBefore(state.shots, action.index),
+            delta,
+            state.shots.filter(isCounted).length + delta,
+          ),
         ),
-      );
+        dirty: true,
+      };
     }
     case 'insert': {
       const n = Math.max(1, action.count);
@@ -165,6 +171,7 @@ function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEdit
           reanchorStation(state.stationIndex, survivorsBefore(state.shots, at), 0, counted),
         ),
         nextTempId: state.nextTempId + n,
+        dirty: true,
       };
     }
     case 'delete': {
@@ -178,16 +185,19 @@ function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEdit
       // every target moved the anchor a station upstream.
       const counted = state.shots.filter(isCounted).length;
       const countedGone = targets.filter((i) => isCounted(state.shots[i])).length;
-      return withPick(
-        state,
-        shots,
-        reanchorAfterRunDelete(
-          state.stationIndex,
-          survivorsBefore(state.shots, Math.min(...targets)),
-          countedGone,
-          counted - countedGone,
+      return {
+        ...withPick(
+          state,
+          shots,
+          reanchorAfterRunDelete(
+            state.stationIndex,
+            survivorsBefore(state.shots, Math.min(...targets)),
+            countedGone,
+            counted - countedGone,
+          ),
         ),
-      );
+        dirty: true,
+      };
     }
     case 'pick':
       return withPick(state, state.shots, action.index);
@@ -199,7 +209,7 @@ function shotEditReducer(state: ShotEditState, action: ShotEditAction): ShotEdit
 /** Rows straight from the file, the pick at the head, temp ids past the last row. */
 function initialShotEditState(section: DmpSection | undefined): ShotEditState {
   const shots = section ? convertToEditableShots(section.shots) : [];
-  return { shots, stationIndex: 0, previewStationIndex: 0, nextTempId: shots.length + 1 };
+  return { shots, stationIndex: 0, previewStationIndex: 0, nextTempId: shots.length + 1, dirty: false };
 }
 
 interface ZeroDatumConfigDialogProps {
@@ -242,11 +252,15 @@ export default function ZeroDatumConfigDialog({
 
   // The shots and the station pick, in one reducer - see `shotEditReducer` for
   // why they cannot be separate pieces of state.
-  const [{ shots, stationIndex, previewStationIndex }, dispatch] = useReducer(
+  const [{ shots, stationIndex, previewStationIndex, dirty: shotsDirty }, dispatch] = useReducer(
     shotEditReducer,
     section,
     initialShotEditState,
   );
+  // The reducer's OWN initial pick, captured once - not hardcoded to 0, so
+  // this stays correct if a future initial-config carry (Package A) seeds a
+  // non-default station.
+  const initialStationIndexRef = useRef(stationIndex);
 
   // GPS input state
   const [gpsInput, setGpsInput] = useState('');
@@ -254,15 +268,21 @@ export default function ZeroDatumConfigDialog({
   const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
-  // Metadata state
-  const [name, setName] = useState(section?.name ?? '');
-  const [surveyor, setSurveyor] = useState(selectionConfig.defaultSurveyor || '');
-  const [date, setDate] = useState(
-    selectionConfig.defaultDate ?? section?.date?.split(/[T ]/)[0] ?? ''
-  );
-  const [color, setColor] = useState(sectionPalette[colorIndex % sectionPalette.length] ?? '#4ecdc4');
-  const [direction, setDirection] = useState<'in' | 'out'>(section?.direction === 'out' ? 'out' : 'in');
-  const [reverse, setReverse] = useState(false);
+  // Metadata state. Each field keeps an initial-value ref alongside it, so the
+  // dirty guard (#F9) can tell "touched" from "still what the file/defaults
+  // gave it" without re-deriving the same expression twice.
+  const initialNameRef = useRef(section?.name ?? '');
+  const [name, setName] = useState(initialNameRef.current);
+  const initialSurveyorRef = useRef(selectionConfig.defaultSurveyor || '');
+  const [surveyor, setSurveyor] = useState(initialSurveyorRef.current);
+  const initialDateRef = useRef(selectionConfig.defaultDate ?? section?.date?.split(/[T ]/)[0] ?? '');
+  const [date, setDate] = useState(initialDateRef.current);
+  const initialColorRef = useRef(sectionPalette[colorIndex % sectionPalette.length] ?? '#4ecdc4');
+  const [color, setColor] = useState(initialColorRef.current);
+  const initialDirectionRef = useRef<'in' | 'out'>(section?.direction === 'out' ? 'out' : 'in');
+  const [direction, setDirection] = useState(initialDirectionRef.current);
+  const initialReverseRef = useRef(false);
+  const [reverse, setReverse] = useState(initialReverseRef.current);
 
   // Station count = counted shots + 1. The dropdown, the preview, the payload
   // and the pick all count by `isCounted` - one predicate, one station space.
@@ -295,6 +315,69 @@ export default function ZeroDatumConfigDialog({
     if (!gpsCoords) return null;
     return { latitude: gpsCoords.latitude, longitude: gpsCoords.longitude };
   }, [gpsCoords]);
+
+  // Soft (non-blocking) heuristic (#F7): a plausibly-valid pair that still
+  // looks like the fields were swapped. Coexists with `gpsError` - never
+  // replaces it, and never blocks Confirm. Falls back to the raw-pair variant
+  // when parsing FAILED (`gpsCoords` is null): a swapped "120, 45" never
+  // produces coordinates to run the coords-based check on, so without this
+  // branch it got only the generic range error and no swap hint at all.
+  const gpsTransposedWarning = useMemo(() => {
+    if (gpsCoords) return looksTransposed(gpsCoords.latitude, gpsCoords.longitude);
+    if (gpsError) return looksTransposedRawDD(gpsInput);
+    return false;
+  }, [gpsCoords, gpsError, gpsInput]);
+
+  // Dirty guard (#F9): GPS text entered, the section renamed, a metadata
+  // field touched, the zero-datum STATION PICK changed, or a shot
+  // edited/inserted/deleted - anything ESC (or Cancel/Back) would otherwise
+  // discard silently. `stationIndex` is sent in the confirm payload just like
+  // the rest, so a pick the user actually changed is losable intent too - a
+  // pick that only MOVED because of a shot edit is already covered by
+  // `shotsDirty` (the reducer marks that itself), so this only fires for a
+  // pick made with no accompanying edit.
+  const isDirty =
+    gpsInput.trim() !== '' ||
+    name !== initialNameRef.current ||
+    surveyor !== initialSurveyorRef.current ||
+    date !== initialDateRef.current ||
+    color !== initialColorRef.current ||
+    direction !== initialDirectionRef.current ||
+    reverse !== initialReverseRef.current ||
+    stationIndex !== initialStationIndexRef.current ||
+    shotsDirty;
+
+  // Back has no DialogWrapper-level guard (that machinery only ever discards
+  // via `onClose`/`onCancel`), so it gets its own small, self-contained
+  // confirm here. NOTE for integration: Package A is making Back
+  // state-preserving in App.tsx; if that lands, this confirm - which still
+  // frames Back as a discard - may need to be dropped or reworded.
+  const [backConfirmPending, setBackConfirmPending] = useState(false);
+  const handleBackClick = useCallback(() => {
+    if (isDirty) {
+      setBackConfirmPending(true);
+    } else {
+      onBack();
+    }
+  }, [isDirty, onBack]);
+
+  // Intercept Escape ourselves while the Back confirm is open, so it dismisses
+  // ONLY that confirm - left alone, the keydown bubbles past this (unhandled)
+  // to DialogWrapper's own handler, which opens ITS "Unsaved Changes" overlay
+  // on top of this one (isDirty is still true; DialogWrapper has no idea this
+  // local confirm exists). Wrapping the render-prop output in a `display:
+  // contents` div (rather than a Fragment) is what gives this a DOM node to
+  // attach the listener to without disturbing the flex layout below.
+  const handleContentKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (backConfirmPending && (e.key === 'Escape' || e.key === 'Esc') && !e.repeat) {
+        e.preventDefault();
+        e.stopPropagation();
+        setBackConfirmPending(false);
+      }
+    },
+    [backConfirmPending],
+  );
 
   // When dropdown hovers an option, show it on the map; when dropdown closes
   // without selecting, the reducer reverts to the committed station.
@@ -405,6 +488,7 @@ export default function ZeroDatumConfigDialog({
     <DialogWrapper
       title={t('dialogs.zeroDatumConfig.title')}
       onClose={onCancel}
+      isDirty={isDirty}
       size={expanded ? 'fullscreen' : '5xl'}
       overflow="hidden"
       {...(expanded
@@ -414,6 +498,8 @@ export default function ZeroDatumConfigDialog({
       closeOnBackdropClick={false}
       data-testid="zero-datum-config-dialog"
     >
+      {({ requestClose }) => (
+      <div className="contents" onKeyDown={handleContentKeyDown}>
       {/* Scrollable content area */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Left column: Preview (fixed) */}
@@ -491,6 +577,11 @@ export default function ZeroDatumConfigDialog({
                   </span>
                 )}
               </div>
+              {!gpsInput.trim() && !gpsError && (
+                <div className="text-xs text-text-secondary pl-1" data-testid="zero-datum-gps-empty-hint">
+                  {t('dialogs.zeroDatumConfig.gpsEmptyHint')}
+                </div>
+              )}
               {gpsError && (
                 <div className="text-xs text-error pl-1" data-testid="zero-datum-gps-error">
                   {gpsError}
@@ -500,6 +591,11 @@ export default function ZeroDatumConfigDialog({
                 <div className="text-xs text-success pl-1" data-testid="zero-datum-gps-parsed">
                   Lat: {formatFixed(gpsCoords.latitude, undefined, precision.gps)}, Lon:{' '}
                   {formatFixed(gpsCoords.longitude, undefined, precision.gps)}
+                </div>
+              )}
+              {gpsTransposedWarning && (
+                <div className="text-xs text-warning pl-1" data-testid="zero-datum-gps-transposed-warning">
+                  {t('dialogs.zeroDatumConfig.transposedWarning')}
                 </div>
               )}
             </div>
@@ -567,10 +663,10 @@ export default function ZeroDatumConfigDialog({
       {/* Footer - always visible */}
       <div className="px-4 py-3 border-t border-border flex justify-between items-center shrink-0">
         <div className="flex gap-2">
-          <Button variant="secondary" onClick={onCancel} data-testid="zero-datum-config-cancel">
+          <Button variant="secondary" onClick={requestClose} data-testid="zero-datum-config-cancel">
             {t('common.actions.cancel')}
           </Button>
-          <Button variant="secondary" onClick={onBack} data-testid="zero-datum-config-back">
+          <Button variant="secondary" onClick={handleBackClick} data-testid="zero-datum-config-back">
             {t('common.actions.back')}
           </Button>
         </div>
@@ -583,6 +679,46 @@ export default function ZeroDatumConfigDialog({
           {t('dialogs.zeroDatumConfig.confirm')}
         </Button>
       </div>
+
+      {/* Small, self-contained Back-discard confirm - see the `isDirty`
+          comment above for why this cannot reuse DialogWrapper's own. */}
+      {backConfirmPending && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center"
+          data-testid="zero-datum-config-back-confirm"
+        >
+          <div
+            className="absolute inset-0 bg-overlay"
+            onClick={() => setBackConfirmPending(false)}
+            data-testid="zero-datum-config-back-confirm-backdrop"
+          />
+          <div className="relative bg-panel border border-border rounded-lg shadow-xl max-w-sm w-full mx-4">
+            <div className="p-4 space-y-4">
+              <p>{t('dialogs.zeroDatumConfig.backConfirm.message')}</p>
+              <div className="flex justify-end gap-2 pt-4 border-t border-border">
+                <Button
+                  onClick={() => setBackConfirmPending(false)}
+                  data-testid="zero-datum-config-back-confirm-cancel"
+                >
+                  {t('common.actions.cancel')}
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    setBackConfirmPending(false);
+                    onBack();
+                  }}
+                  data-testid="zero-datum-config-back-confirm-discard"
+                >
+                  {t('dialogs.zeroDatumConfig.backConfirm.discard')}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
+      )}
     </DialogWrapper>
   );
 }

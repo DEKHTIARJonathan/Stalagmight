@@ -245,6 +245,11 @@ export const TESTID_INVENTORY: readonly string[] = [
   'zero-datum-config-cancel',
   'zero-datum-config-back',
   'zero-datum-config-confirm',
+  // Back's own small discard confirm (#F9/dirty guard) - self-contained, not
+  // DialogWrapper's `dirty-dialog-*` overlay, so it needs its own ids here.
+  'zero-datum-config-back-confirm',
+  'zero-datum-config-back-confirm-cancel',
+  'zero-datum-config-back-confirm-discard',
   // --- wizard ---------------------------------------------------------------
   'dmp-new-import-dialog',
   'back-button',
@@ -414,7 +419,13 @@ export const ESCAPE_PATH: Readonly<Record<ScreenId, readonly string[]>> = {
   'gpx-place': ['gpx-placement-cancel', 'key:Escape'],
   'export-modal': ['export-dialog-close', 'key:Escape'],
   'zero-datum-select': ['zero-datum-selection-cancel', 'key:Escape'],
-  'zero-datum-config': ['zero-datum-config-cancel', 'key:Escape'],
+  // `ZeroDatumConfigDialog` is `isDirty` whenever GPS text, a metadata field or
+  // a shot was touched, so Cancel/Escape may raise the discard overlay first -
+  // same shape as `dmp-select`/`tml-config`. `zero-datum-config-back-confirm-*`
+  // is deliberately NOT here: Escape dismisses that overlay in place (it does
+  // not leave the screen), so the next loop iteration re-evaluates from a
+  // clean read of this same route.
+  'zero-datum-config': ['dirty-dialog-discard', 'zero-datum-config-cancel', 'key:Escape'],
   'wiz-init': ['cancel-button', 'key:Escape'],
   'wiz-suggest': ['cancel-button', 'key:Escape'],
   'wiz-no-suggest': ['cancel-button', 'key:Escape'],
