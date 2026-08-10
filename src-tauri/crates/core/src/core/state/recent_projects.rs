@@ -147,9 +147,11 @@ impl AppState {
         // - `<dir>/link.stalx` -> `<real>/project.stalx`. The final component is the
         //   link, and the removal acts on that directory ENTRY rather than on what it
         //   points at: `fs::remove_file` (the trash fallback, and the deterministic path
-        //   under `cfg(test)`) unlinks the LINK, and handing a symlink to the platform
-        //   trash likewise relocates the link. The referent survives either way, so
-        //   referent identity here would report a destruction that did not happen.
+        //   under `cfg(test)`) unlinks the LINK; `trash::delete` is believed to behave
+        //   the same for a symlink, but no test config can reach that real arm BY
+        //   DESIGN (see the `send_to_trash` doc comment below), so it is unverified
+        //   from tests. The referent survives either way, so referent identity here
+        //   would report a destruction that did not happen.
         // - `<linkdir>/project.stalx` where `linkdir` -> `<realdir>`. The final
         //   component is an ordinary file and the removal really does destroy
         //   `<realdir>/project.stalx`, so referent identity is not just safe but
@@ -574,32 +576,65 @@ impl AppState {
 /// we fall back to a permanent `fs::remove_file` so the delete still happens - the
 /// user asked for a real delete, and the OS provides recovery only where it can.
 ///
-/// Test builds (and the Android `cdylib` target, which has no desktop trash and
-/// excludes the `trash` crate) skip all of that and take the deterministic
-/// `fs::remove_file` directly, so `cargo test` neither pollutes the developer's
-/// real Trash nor depends on a trash directory existing on a headless CI runner.
-#[cfg(all(not(test), not(target_os = "android")))]
+/// Test builds skip all of that and take the deterministic `fs::remove_file`
+/// directly, so `cargo test` neither pollutes the developer's real Trash nor
+/// depends on a trash directory existing on a headless CI runner; the Android
+/// `cdylib` target does the same in production, since it has no desktop trash
+/// and excludes the `trash` crate. Test builds still COMPILE the `trash` crate -
+/// only the call to it is skipped.
+///
+/// The gate is `test-support` as well as `cfg(test)`: a dependent crate's tests
+/// (the app crate's `command_tests`) compile this crate WITHOUT `cfg(test)`, and
+/// on macOS the `trash` crate's `delete` can raise a per-binary Automation
+/// consent prompt (observed as focus-stealing TCC dialogs during test runs).
+/// The gate is unconditional across all platforms, not just macOS: headless CI
+/// runners and deterministic test output matter everywhere `trash::delete`
+/// would otherwise touch a real, environment-dependent trash implementation.
+///
+/// `test-support` is further gated on `debug_assertions`: a release build
+/// (`debug_assertions` off) that somehow still has `test-support` enabled has
+/// NO arm here at all and fails to compile, rather than silently taking the
+/// deterministic-delete stub in a shipped binary. That configuration -
+/// release-profile with `test-support` - is deliberately uninhabited; the
+/// only way to reach it is a mis-wired dependency edge that pulls a dev/test
+/// feature into a release build, and that should be a compile error, not a
+/// behavior change.
+#[cfg(all(not(test), not(feature = "test-support"), not(target_os = "android")))]
 fn send_to_trash(path: &Path) -> Result<(), String> {
-    match trash::delete(path) {
-        Ok(()) => Ok(()),
-        Err(trash_err) => std::fs::remove_file(path).map_err(|fs_err| {
-            format!("trash failed ({trash_err}); permanent delete also failed ({fs_err})")
-        }),
-    }
+    after_trash_attempt(trash::delete(path), path)
 }
 
 // Android has no desktop trash and the `trash` crate isn't built there (the
 // dependency is gated off `target_os = "android"` in Cargo.toml), so fall straight
 // through to a permanent remove. The app ships desktop-only; this just keeps the
 // Android `cdylib` target compiling.
-#[cfg(all(not(test), target_os = "android"))]
+#[cfg(all(not(test), not(feature = "test-support"), target_os = "android"))]
 fn send_to_trash(path: &Path) -> Result<(), String> {
     std::fs::remove_file(path).map_err(|e| e.to_string())
 }
 
-#[cfg(test)]
+#[cfg(any(test, all(feature = "test-support", debug_assertions)))]
 fn send_to_trash(path: &Path) -> Result<(), String> {
     std::fs::remove_file(path).map_err(|e| e.to_string())
+}
+
+/// Turns the result of a platform trash attempt into this module's `Result`,
+/// falling back to a permanent `fs::remove_file` when the trash could not take
+/// the file. Split out of [`send_to_trash`]'s real (desktop, non-test) arm so
+/// the fallback branch and its message format stay covered by a unit test even
+/// though that arm itself never runs in a test build.
+///
+/// Compiled in test builds (for the unit tests below) and in the real desktop
+/// production arm (where it is actually called); not compiled anywhere else, so
+/// it is never dead code.
+#[cfg(any(test, all(not(feature = "test-support"), not(target_os = "android"))))]
+fn after_trash_attempt(result: Result<(), trash::Error>, path: &Path) -> Result<(), String> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(trash_err) => std::fs::remove_file(path).map_err(|fs_err| {
+            format!("trash failed ({trash_err}); permanent delete also failed ({fs_err})")
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -608,7 +643,68 @@ fn send_to_trash(path: &Path) -> Result<(), String> {
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
-    use super::AppState;
+    use super::{after_trash_attempt, AppState};
+
+    /// The stub arm covers the happy path everywhere; this re-covers
+    /// `after_trash_attempt`'s pass-through of a successful trash call, since
+    /// the real `send_to_trash` arm that calls it never runs in a test build.
+    #[test]
+    fn after_trash_attempt_passes_through_success() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let path = temp.path().join("unused.stalx");
+        assert_eq!(after_trash_attempt(Ok(()), &path), Ok(()));
+    }
+
+    /// When the platform trash fails, the fallback permanently removes the
+    /// file and still reports success - this is the branch the production
+    /// `send_to_trash` arm exercises but no test config compiles it (see the
+    /// arm's doc comment), so it is covered here directly.
+    #[test]
+    fn after_trash_attempt_falls_back_to_remove_file_on_trash_error() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let path = temp.path().join("project.stalx");
+        std::fs::write(&path, b"fallback should remove this").expect("seed the file");
+
+        let trash_err = trash::Error::Unknown {
+            description: "synthetic trash failure".to_string(),
+        };
+        let result = after_trash_attempt(Err(trash_err), &path);
+
+        assert_eq!(result, Ok(()));
+        assert!(
+            !path.exists(),
+            "the fallback must have permanently removed the file"
+        );
+    }
+
+    /// When the platform trash AND the fallback both fail, the error message
+    /// pins the "trash failed" prefix and includes both underlying errors -
+    /// the format the frontend surfaces to the user.
+    #[test]
+    fn after_trash_attempt_reports_both_errors_when_fallback_also_fails() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let path = temp.path().join("missing.stalx");
+        assert!(!path.exists(), "precondition: nothing to remove");
+
+        let trash_err = trash::Error::Unknown {
+            description: "synthetic trash failure".to_string(),
+        };
+        let result = after_trash_attempt(Err(trash_err), &path);
+
+        let err = result.expect_err("both the trash call and the fallback failed");
+        assert!(
+            err.starts_with("trash failed ("),
+            "message must be prefixed with 'trash failed (': {err}"
+        );
+        assert!(
+            err.contains("synthetic trash failure"),
+            "message must include the trash error text: {err}"
+        );
+        assert!(
+            err.contains("permanent delete also failed"),
+            "message must include the fs::remove_file error: {err}"
+        );
+    }
 
     /// A path the app cannot STAT is not an absent path, and reading it as one
     /// was destructive-by-report. `Path::exists` and `is_ok_and` both flatten an
