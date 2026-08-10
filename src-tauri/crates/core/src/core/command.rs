@@ -204,6 +204,10 @@ pub enum Command {
     /// own snapshot-pair undo entry; this variant only LABELS that entry and is
     /// never run through `execute()`.
     UpdateProjectSettings,
+    /// Entrance elevation edit (#465). Like UpdateProjectSettings, applied via
+    /// `set_surface_elevation` which records its own snapshot-pair undo entry;
+    /// this variant only LABELS that entry and is never run through `execute()`.
+    SetSurfaceElevation,
 }
 
 /// Coded-failure prefix for a mutation rejected because the open project is a
@@ -583,7 +587,8 @@ impl Command {
             | Command::SetStationComment { .. }
             | Command::MoveComment { .. }
             | Command::RepairIntegrity
-            | Command::UpdateProjectSettings => false,
+            | Command::UpdateProjectSettings
+            | Command::SetSurfaceElevation => false,
             Command::UpdateShot { updates, .. } => updates.touches_geometry(),
             Command::Batch { commands } => commands.iter().any(Command::affects_geometry),
             Command::CreateSection { .. }
@@ -790,6 +795,7 @@ impl Command {
             }
             Command::RepairIntegrity => "Repair integrity".to_string(),
             Command::UpdateProjectSettings => "Update project settings".to_string(),
+            Command::SetSurfaceElevation => "Set entrance elevation".to_string(),
         }
     }
 }
@@ -853,7 +859,7 @@ mod tests {
 
         assert_eq!(
             variants.len(),
-            28,
+            29,
             "Command's variant set changed. A removal leaves persisted undo \
              history unloadable at that entry and holed either side of it - keep \
              the tag deserializable, or bump SCHEMA_VERSION and call \
@@ -1042,11 +1048,12 @@ mod tests {
             ),
             (Command::RepairIntegrity, false),
             (Command::UpdateProjectSettings, false),
+            (Command::SetSurfaceElevation, false),
         ];
 
         assert_eq!(
             cases.len(),
-            28,
+            29,
             "add every new Command variant to this table"
         );
         for (command, expected) in cases {

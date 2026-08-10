@@ -522,6 +522,8 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.get_along_line_distance",
     // Per-project settings: validation thresholds stored in the .stalx (#57).
     "command.update_project_settings",
+    // Entrance elevation edit, project settings dialog (#465).
+    "command.set_surface_elevation",
     // Project Settings dialog (#57).
     "action.dialog.project-settings",
     "dialog-cancel.project-settings",

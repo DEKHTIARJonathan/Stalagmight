@@ -1767,6 +1767,7 @@ pub fn run() {
             commands::dive_plan::plan_refs_for_anchors,
             // Project commands
             commands::project::update_project_settings,
+            commands::project::set_surface_elevation,
             commands::project::save_project,
             commands::project::close_project,
             commands::project::take_unrecognised_shot_kinds,

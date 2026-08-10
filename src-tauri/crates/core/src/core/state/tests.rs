@@ -22828,6 +22828,7 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "redo_to",
     // direct-lock bypass methods
     "update_project_settings",
+    "set_surface_elevation",
     "repair_open_project_integrity",
     "execute_delete_shot_and_split",
     "execute_delete_shot_range_split",
@@ -22850,7 +22851,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
     // guard_mutation AND add its name to MUTATION_ENTRYPOINTS + a call below.
     assert_eq!(
         MUTATION_ENTRYPOINTS.len(),
-        24,
+        25,
         "update both the routing and this list when adding a mutation entry"
     );
 
@@ -22956,6 +22957,10 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
         assert_disabled(
             "update_project_settings",
             &state.update_project_settings("Renamed".to_string(), state.get_config().validation),
+        );
+        assert_disabled(
+            "set_surface_elevation",
+            &state.set_surface_elevation(Some(12.0)),
         );
         // repair returns IntegrityRepairResult (no coded failure surface) →
         // changed == false (D-B5).

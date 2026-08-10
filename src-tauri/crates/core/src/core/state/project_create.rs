@@ -231,6 +231,59 @@ impl AppState {
         CommandResult::success()
     }
 
+    /// Set (or clear) the project's entrance elevation in meters (#465).
+    /// Persisted into the .stalx on the next save. `None` clears a previously
+    /// recorded value back to "not recorded" - the only recovery path for the
+    /// TML import's no-clobber rule (#431) locking in a wrong first value.
+    ///
+    /// Undoable via a snapshot pair, mirroring `update_project_settings`: its
+    /// own undo entry keeps an unrelated undo from silently reverting this edit.
+    pub fn set_surface_elevation(&self, elevation: Option<f64>) -> CommandResult {
+        // Reject non-finite input at the boundary (NaN/Infinity have no useful
+        // meaning as an elevation and would corrupt export/display downstream).
+        if let Some(value) = elevation {
+            if !value.is_finite() {
+                return CommandResult::failure("Elevation must be a finite number".to_string());
+            }
+        }
+        // Serialize against execute()/undo()/redo(), same rationale as
+        // update_project_settings.
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return CommandResult::failure("Failed to acquire command lock".to_string());
+        };
+        if let Err(f) = self.guard_mutation("Set entrance elevation") {
+            return f;
+        }
+        let before_snapshot = self.capture_project_snapshot().ok();
+        {
+            let mut guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            let Some(project) = guard.as_mut() else {
+                return CommandResult::failure("No project open".to_string());
+            };
+            if project.surface_elevation == elevation {
+                return CommandResult::success();
+            }
+            project.surface_elevation = elevation;
+            project.touch();
+        }
+        if let Some(before_json) = before_snapshot {
+            if let Ok(after_json) = self.capture_project_snapshot() {
+                if before_json != after_json {
+                    self.push_snapshot_undo(
+                        crate::core::Command::SetSurfaceElevation,
+                        before_json,
+                        after_json,
+                    );
+                    self.mark_remote_forward_edit();
+                }
+            }
+        }
+        CommandResult::success()
+    }
+
     /// Create a new project with full progress reporting.
     /// This is the main implementation used by create_project_full command.
     ///
@@ -633,6 +686,124 @@ mod tests {
         let parent = result.parent().expect("default path should have parent");
         assert!(parent.exists(), "default app directory should exist");
         assert_eq!(parent.file_name().unwrap().to_str().unwrap(), "stalagmight");
+    }
+
+    #[test]
+    fn set_surface_elevation_sets_clears_and_rejects_non_finite() {
+        let state = AppState::new().unwrap();
+        assert!(
+            state
+                .create_project("Elevation Test".to_string(), None)
+                .success
+        );
+
+        // Not recorded by default.
+        assert_eq!(
+            state
+                .project
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .surface_elevation,
+            None
+        );
+
+        // Set a value.
+        let set = state.set_surface_elevation(Some(42.5));
+        assert!(set.success, "{:?}", set.error);
+        assert_eq!(
+            state
+                .project
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .surface_elevation,
+            Some(42.5)
+        );
+
+        // Clear back to None.
+        let clear = state.set_surface_elevation(None);
+        assert!(clear.success, "{:?}", clear.error);
+        assert_eq!(
+            state
+                .project
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .surface_elevation,
+            None
+        );
+
+        // Reject non-finite input at the boundary.
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let result = state.set_surface_elevation(Some(bad));
+            assert!(!result.success, "expected {bad} to be rejected");
+            assert_eq!(
+                state
+                    .project
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .surface_elevation,
+                None,
+                "a rejected value must not be stored"
+            );
+        }
+    }
+
+    #[test]
+    fn set_surface_elevation_undo_restores_prior_value() {
+        let state = AppState::new().unwrap();
+        assert!(
+            state
+                .create_project("Elevation Undo Test".to_string(), None)
+                .success
+        );
+
+        assert!(state.set_surface_elevation(Some(10.0)).success);
+        assert!(state.set_surface_elevation(Some(20.0)).success);
+        assert_eq!(
+            state
+                .project
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .surface_elevation,
+            Some(20.0)
+        );
+
+        let undo = state.undo();
+        assert!(undo.success, "{:?}", undo.error);
+        assert_eq!(
+            state
+                .project
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .surface_elevation,
+            Some(10.0),
+            "undo must restore the prior elevation"
+        );
+
+        let redo = state.redo();
+        assert!(redo.success, "{:?}", redo.error);
+        assert_eq!(
+            state
+                .project
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .surface_elevation,
+            Some(20.0),
+            "redo must reapply the edit"
+        );
     }
 
     #[test]
