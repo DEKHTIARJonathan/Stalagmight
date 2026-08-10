@@ -263,6 +263,13 @@ impl AppState {
             let Some(project) = guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
+            // No-op guard: this compares raw METERS, so it only catches a caller
+            // that resent the exact stored value. The UI's own draft-string
+            // comparison (ProjectSettingsDialog) is what actually keeps an
+            // untouched, unit-converted/display-rounded field from reaching here
+            // as a "changed" call in the first place - any future caller that
+            // skips that comparison inherits the same spurious-dirty risk this
+            // guard alone cannot close.
             if project.surface_elevation == elevation {
                 return CommandResult::success();
             }
