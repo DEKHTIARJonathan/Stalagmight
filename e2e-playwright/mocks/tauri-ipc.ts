@@ -953,6 +953,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true, project: currentProject };
           }
 
+          case 'set_surface_elevation': {
+            // Entrance elevation (#465): set or (given null/undefined) clear.
+            if (!currentProject) {
+              return { success: false, error: 'No project open' };
+            }
+            const elevation = args?.elevation;
+            if (elevation !== null && elevation !== undefined && typeof elevation !== 'number') {
+              return { success: false, error: 'Elevation must be a finite number' };
+            }
+            if (typeof elevation === 'number' && !Number.isFinite(elevation)) {
+              return { success: false, error: 'Elevation must be a finite number' };
+            }
+            (currentProject as Record<string, unknown>).surface_elevation =
+              typeof elevation === 'number' ? elevation : null;
+            return { success: true, project: currentProject };
+          }
+
           case 'create_project_full': {
             // Consolidated create_project_full command for loading progress feature
             const name = (args?.name as string) ?? 'Untitled Project';

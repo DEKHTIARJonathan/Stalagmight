@@ -442,6 +442,8 @@ export interface ProjectStore extends ProjectConfigActions {
   executeWallsImport: (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean, selectedSurveys?: number[] | null) => Promise<CommandResult>;
   // Per-project settings (#57): name + validation thresholds, stored in the .stalx
   updateProjectSettings: (name: string, validation: Config['validation']) => Promise<CommandResult>;
+  /** Set (or, given `null`, clear) the entrance elevation in meters (#465). */
+  setSurfaceElevation: (elevation: number | null) => Promise<CommandResult>;
   /** Rename a recent project's display name by path (project need not be open). */
   setProjectNameForPath: (path: string, name: string) => Promise<CommandResult>;
   parseGpx: (path: string) => Promise<GpxFile>;
@@ -2256,6 +2258,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       'update_project_settings',
       { name, validation },
       { purpose: 'update per-project settings' }
+    );
+  },
+
+  setSurfaceElevation: async (elevation: number | null) => {
+    return executeCommand(
+      'set_surface_elevation',
+      { elevation },
+      { purpose: 'set entrance elevation' }
     );
   },
 

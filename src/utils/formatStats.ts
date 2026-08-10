@@ -32,8 +32,16 @@ function getUnitSuffix(unit: LengthUnit): string {
 /**
  * Convert meters to the target unit.
  */
-function convertLength(meters: number, unit: LengthUnit): number {
+export function convertLength(meters: number, unit: LengthUnit): number {
   return unit === 'feet' ? meters * FEET_PER_METER : meters;
+}
+
+/**
+ * Convert a value in the given unit back to meters (the inverse of
+ * `convertLength`), for round-tripping a unit-aware editable field.
+ */
+export function convertLengthToMeters(value: number, unit: LengthUnit): number {
+  return unit === 'feet' ? value / FEET_PER_METER : value;
 }
 
 /**
