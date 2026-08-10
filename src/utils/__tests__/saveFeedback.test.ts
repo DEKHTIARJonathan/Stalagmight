@@ -47,6 +47,7 @@ const receiptFixture = (warnings: string[] = []): ImportReceipt => ({
   unit_conversion: null,
   warnings,
   info: [],
+  zero_datum_created: null,
 });
 
 describe('surfaceSaveFailure', () => {

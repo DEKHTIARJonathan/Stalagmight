@@ -1466,6 +1466,7 @@ mod tests {
             unit_conversion: None,
             warnings: Vec::new(),
             info: Vec::new(),
+            zero_datum_created: None,
         }
     }
 

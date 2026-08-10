@@ -61,6 +61,7 @@ const receipt = (overrides: Partial<ImportReceipt> = {}): ImportReceipt => ({
   unit_conversion: null,
   warnings: [],
   info: [],
+  zero_datum_created: null,
   ...overrides,
 });
 

@@ -32,6 +32,11 @@ pub struct ImportReceipt {
     /// receipt.
     #[serde(default)]
     pub info: Vec<String>,
+    /// Name of the section a zero datum was created on during this import
+    /// (F12c), or `None` if no zero datum was created. `#[serde(default)]`
+    /// for the same replay/cache back-compat reason as `info`.
+    #[serde(default)]
+    pub zero_datum_created: Option<String>,
 }
 
 /// Make a file-controlled string fit to cross IPC and be rendered as UI text: drop
@@ -74,6 +79,7 @@ impl ImportReceipt {
             unit_conversion: None,
             warnings: Vec::new(),
             info: Vec::new(),
+            zero_datum_created: None,
         }
     }
 
