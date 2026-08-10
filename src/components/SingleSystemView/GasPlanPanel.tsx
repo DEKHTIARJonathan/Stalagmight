@@ -133,6 +133,14 @@ export function GasPlanPanel() {
     useGasPlanStore.getState().syncSettingsOnlyGasFields(persistedGasConfig);
   }, [persistedGasConfig]);
 
+  // #480: with no zero datum set, `Project::zero_datum_roots` (backend) returns an empty root
+  // set, and the entrance origin (`origin === null`) walks from nothing - every station comes
+  // back unreachable with no explanation on screen. Surfaced here rather than inferred from the
+  // computed field so the warning is deterministic and shows up BEFORE the first fetch, not just
+  // after a round trip confirms it.
+  const hasZeroDatum = useProjectStore((s) => (s.project?.zero_datums.length ?? 0) > 0);
+  const entranceHasNoZeroDatum = !hasZeroDatum;
+
   // Swim-speed disk persist (#241, shared queue since the #317 review round): the in-memory
   // working config updates immediately on every keystroke; the disk write goes through
   // `queueGasConfigWrite` (trailing-debounced, merged, serialized against the rig editor's
@@ -361,12 +369,19 @@ export function GasPlanPanel() {
           <p className="text-xs opacity-70">{t('gasPanel.entry.helper')}</p>
           <button
             type="button"
-            className="w-full text-sm px-3 py-2 rounded border border-accent bg-accent/10 hover:bg-accent/20"
+            className="w-full text-sm px-3 py-2 rounded border border-accent bg-accent/10 hover:bg-accent/20 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-accent/10"
             onClick={chooseEntrance}
+            disabled={entranceHasNoZeroDatum}
+            aria-disabled={entranceHasNoZeroDatum}
             data-testid="gas-start-entrance"
           >
             {t('gasPanel.entry.startFromEntrance')}
           </button>
+          {entranceHasNoZeroDatum && (
+            <p className="text-xs text-warning" data-testid="gas-entrance-no-zero-datum-hint">
+              {t('gasPanel.entry.noZeroDatumHint')}
+            </p>
+          )}
 
           <div className="pt-2 space-y-1">
             <p className="text-xs opacity-60" data-testid="gas-assumptions-summary">
@@ -427,6 +442,16 @@ export function GasPlanPanel() {
               {t('gasPanel.origin.reset')}
             </button>
           </div>
+          {origin === null && entranceHasNoZeroDatum && (
+            // #480: the same degenerate-field cause as the entry card's disabled CTA, but reached
+            // here via a loaded plan whose saved origin was the entrance (`applyLoadedPlan` in
+            // gasPlanStore) landing in a project with no zero datum - `origin` reads null either
+            // way, so this can't be told apart from a healthy entrance plan without checking the
+            // project directly.
+            <p className="text-xs text-warning" data-testid="gas-origin-no-zero-datum-warning">
+              {t('gasPanel.origin.noZeroDatumWarning')}
+            </p>
+          )}
           {/* #395: one-shot "Pick on map" - the next station click sets the origin instead of
               the endpoint. Escape or a second press disarms (see useKeyboardShortcuts). */}
           <button

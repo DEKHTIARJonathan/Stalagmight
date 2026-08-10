@@ -88,6 +88,10 @@ beforeEach(async () => {
   });
   useProjectStore.setState({
     config: structuredClone(defaultConfig) as Config,
+    // A zero datum by default: every existing test in this file exercises the "healthy" origin
+    // path, and the no-zero-datum case (#480) gets its own describe block below with its own
+    // project state.
+    project: { zero_datums: [{}] } as never,
     updateGasConfig: vi.fn(async () => ({ success: true, error: null, warnings: [], section_ids: [] })),
   });
 });
@@ -352,5 +356,73 @@ describe('GasPlanPanel entry card (#395)', () => {
     expect(useGasPlanStore.getState().originChosen).toBe(true);
     expect(screen.queryByTestId('gas-entry-card')).toBeNull();
     expect(screen.getByTestId('gas-origin-readout')).toBeInTheDocument();
+  });
+});
+
+/**
+ * #480: with no zero datum set, `Project::zero_datum_roots` (backend) returns an empty root set
+ * and the entrance origin (`origin === null`) walks from nowhere - every station comes back
+ * unreachable with nothing on screen to explain why. The CTA must not silently walk into that;
+ * the same `origin === null` state reached via a loaded entrance-origin plan needs its own
+ * warning, since by then the entry card is gone.
+ */
+describe('GasPlanPanel entrance requires a zero datum (#480)', () => {
+  it('disables "Start from entrance" and shows a hint when the project has no zero datum', () => {
+    useGasPlanStore.setState({ originChosen: false, originPickArmed: false });
+    useProjectStore.setState({ project: { zero_datums: [] } as never });
+
+    render(<GasPlanPanel />);
+
+    const cta = screen.getByTestId('gas-start-entrance');
+    expect(cta).toBeDisabled();
+    expect(screen.getByTestId('gas-entrance-no-zero-datum-hint')).toBeInTheDocument();
+
+    // A disabled button's click handler never fires - the CTA cannot silently walk into the
+    // degenerate field.
+    fireEvent.click(cta);
+    expect(useGasPlanStore.getState().originChosen).toBe(false);
+  });
+
+  it('enables "Start from entrance" with no hint once a zero datum exists', () => {
+    useGasPlanStore.setState({ originChosen: false, originPickArmed: false });
+    useProjectStore.setState({ project: { zero_datums: [{}] } as never });
+
+    render(<GasPlanPanel />);
+
+    expect(screen.getByTestId('gas-start-entrance')).toBeEnabled();
+    expect(screen.queryByTestId('gas-entrance-no-zero-datum-hint')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('gas-start-entrance'));
+    expect(useGasPlanStore.getState().originChosen).toBe(true);
+  });
+
+  it('warns on the entrance origin readout when a loaded plan lands with no zero datum', () => {
+    useGasPlanStore.setState({ originChosen: true, origin: null });
+    useProjectStore.setState({ project: { zero_datums: [] } as never });
+
+    render(<GasPlanPanel />);
+
+    expect(screen.getByTestId('gas-origin-no-zero-datum-warning')).toBeInTheDocument();
+  });
+
+  it('does not warn on the entrance origin readout when a zero datum is set', () => {
+    useGasPlanStore.setState({ originChosen: true, origin: null });
+    useProjectStore.setState({ project: { zero_datums: [{}] } as never });
+
+    render(<GasPlanPanel />);
+
+    expect(screen.queryByTestId('gas-origin-no-zero-datum-warning')).toBeNull();
+  });
+
+  it('does not warn on the origin readout once a real station origin is picked', () => {
+    useGasPlanStore.setState({
+      originChosen: true,
+      origin: { section_id: 1, station_index: 0 },
+    });
+    useProjectStore.setState({ project: { zero_datums: [] } as never });
+
+    render(<GasPlanPanel />);
+
+    expect(screen.queryByTestId('gas-origin-no-zero-datum-warning')).toBeNull();
   });
 });
