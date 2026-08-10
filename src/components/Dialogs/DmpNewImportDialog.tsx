@@ -189,6 +189,21 @@ export interface SavedManualPlacingState {
    * none; absent reads as "nothing banked yet".
    */
   importedReceipts?: ImportReceipt[];
+  /**
+   * Every project `section_id` this wizard run has created so far (#487
+   * residue 2).
+   *
+   * Same carry, same reason, as `importedReceipts` above - and the same
+   * consequence when it is missing: the reopened instance completes with an
+   * empty list, App.tsx's `if (newSectionIds?.length)` is false, and
+   * `suggest_orphan_placements` is never called. So the manual-placement route
+   * silently skipped orphan detection that the direct route always ran.
+   *
+   * It is also what `withdrawImportedSections` needs to be able to undo a run
+   * that crossed the handoff. Optional for the same reason: an older saved
+   * state (or a test) has none, and absent reads as "nothing imported yet".
+   */
+  importedSectionIds?: number[];
   /** DMP indices of segments the user chose to discard ("Do not place"). */
   discardedIndices?: number[];
 }
@@ -995,8 +1010,12 @@ export default function DmpNewImportDialog({
   // Prevent re-entering early-import transition before state updates land.
   const transitionToPlacingInFlightRef = useRef(false);
 
-  // Accumulate all section IDs created during import for post-import orphan detection
-  const importedSectionIdsRef = useRef<number[]>([]);
+  // Accumulate all section IDs created during import for post-import orphan
+  // detection - seeded from the saved state for the same reason the receipts
+  // below are, and with a sharper failure when it is not: an empty list here
+  // reaches App.tsx as "this import created nothing", which skips
+  // `suggest_orphan_placements` altogether.
+  const importedSectionIdsRef = useRef<number[]>([...(saved?.importedSectionIds ?? [])]);
   // Accumulate the import_receipt from each import_sections call (early/segment/
   // late/pending) into one #391 summary for the whole wizard run, keyed by
   // constant file-level provenance (source label/name/total sections) spread
@@ -3177,6 +3196,9 @@ export default function DmpNewImportDialog({
       // (`importPlacedSegmentNow`) banks its receipt into this ref first, and
       // this builder runs inside the placement callback, after it.
       importedReceipts: [...importedReceiptsRef.current],
+      // Same liveness requirement, same call: that import also banks the
+      // section ids the reopened instance must complete with.
+      importedSectionIds: [...importedSectionIdsRef.current],
     });
 
     const openPlacementDialog = (

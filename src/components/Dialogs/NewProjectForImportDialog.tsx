@@ -150,10 +150,23 @@ export default function NewProjectForImportDialog() {
       // Re-arm it after the project is created so the import is attributed to the
       // same entry point as create_project_full (the import command clears it).
       const importSource = peekProjectActionSource();
+      // `deferInitialSave` unconditionally (#394 F14): this dialog is a STEP in
+      // an import flow, not the New Project command, and the import that
+      // justifies the project has not run yet. Writing the `.stalx` here made a
+      // wizard the user then cancelled leave an empty project file behind, plus
+      // a Recent Projects entry pointing at it. Deferring reserves the path and
+      // writes nothing; `finalize_deferred_import` resolves the save the moment
+      // the first import lands (and `saveAfterImport` completes it), so the file
+      // and the recents entry appear exactly when there is something in them.
+      // Without this flag the store infers `deferred = !savePath`, so only the
+      // "pick a location later" branch was ever safe.
       const result = await createProject(
         name.trim(),
         projectLocation.trim() || undefined,
-        savePath.trim() ? { savePath: ensureExtension(savePath.trim(), PROJECT_EXTENSION) } : undefined
+        {
+          ...(savePath.trim() ? { savePath: ensureExtension(savePath.trim(), PROJECT_EXTENSION) } : {}),
+          deferInitialSave: true,
+        }
       );
 
       if (result.success) {

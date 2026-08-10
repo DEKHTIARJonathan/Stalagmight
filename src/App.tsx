@@ -729,12 +729,20 @@ function App() {
           onCancel={closeDialog}
           onBack={() => {
             if (dialogData.zeroDatumConfig) {
-              // Came through zero datum flow - go back to zero datum config
+              // Came through zero datum flow - go back to zero datum config.
+              //
+              // The config the user already entered rides along (#394 F10): the
+              // wizard withdrew what it imported before calling this, so the
+              // forward pass re-imports the anchor from scratch, and asking for
+              // the GPS/name/shot edits a second time is the difference between
+              // "step back and adjust one field" and "start over". Consumed by
+              // ZeroDatumConfigDialog as its initial values.
               openDialog('zero-datum-config', {
                 dmpFile: dialogData.dmpFile,
                 filePath: dialogData.filePath,
                 selectionConfig: dialogData.selectionConfig,
                 zeroDatumSectionIndex: (dialogData.zeroDatumConfig as ZeroDatumConfigResult).sectionIndex,
+                previousZeroDatumConfig: dialogData.zeroDatumConfig,
               });
             } else {
               openDialog('dmp-selection', {
