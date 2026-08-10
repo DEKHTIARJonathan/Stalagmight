@@ -32,6 +32,7 @@ import type { Station } from './ipc/Station';
 import type { StationRef } from './ipc/StationRef';
 import type { ClosureRef } from './ipc/ClosureRef';
 import type { GpsCoordinates } from './ipc/GpsCoordinates';
+import type { AzimuthReference } from './ipc/AzimuthReference';
 import type { SurveyDirection } from './ipc/SurveyDirection';
 
 /** Section metadata kept as small structured objects. ~14k items for
@@ -50,6 +51,8 @@ export interface SectionMetadata {
   direction: SurveyDirection;
   quality: number;
   next_shot_id: number;
+  /** This section's north reference (#438); `null` inherits the project's. */
+  azimuth_reference?: AzimuthReference | null;
   /** Offset into the flat shot arrays where this section's shots start. */
   shotOffset: number;
   /** Number of shots in this section (== section.shots.length pre-SoA). */

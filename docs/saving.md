@@ -4,6 +4,16 @@
 
 Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. Saves are triggered manually (Ctrl+S), automatically via a frontend debounced timer, or by the first import into a new project whose initial save was deferred (`finalize_deferred_import` in `src-tauri/src/commands/import.rs`). A failed deferred-import save degrades to a successful import carrying a warning, never a hard failure, so the imported data stays in memory under the close-guard. The save pipeline is optimized to return quickly by deferring non-critical work to background threads and avoiding unnecessary recomputation.
 
+## Schema version and pre-release files
+
+The `.stalx` schema version lives in `SCHEMA_VERSION` (`persistence/sqlite.rs`);
+opening an older file runs the migration chain in `ensure_schema_version`.
+
+**`.stalx` files written before the first release are test artifacts, and no
+migration path is provided for them.** Migrations exist for the shapes that ship;
+a pre-release file that a bump cannot read is expected to be re-imported from its
+source survey, not repaired.
+
 ## Save Pipeline
 
 ### Backend (`save_project` in `project_io.rs`)

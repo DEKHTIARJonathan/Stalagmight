@@ -1667,6 +1667,7 @@ fn test_import_sections_persists_deferred_new_project() {
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
+            azimuth_reference: None,
         }];
         let result = import::import_sections(
             state(&app),
@@ -1727,6 +1728,7 @@ fn test_import_sections_provenance_params_decorate_receipt() {
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
+            azimuth_reference: None,
         }];
 
         let result = import::import_sections(
@@ -1772,6 +1774,7 @@ fn test_import_sections_without_provenance_params_leaves_receipt_defaults() {
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
+            azimuth_reference: None,
         }];
 
         let result = import::import_sections(
@@ -1935,6 +1938,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
+            azimuth_reference: None,
         }];
         let result = import::import_sections(
             state(&app),
@@ -2060,6 +2064,7 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
+            azimuth_reference: None,
         }];
         let result = import::import_sections(
             state(&app),
@@ -2132,6 +2137,7 @@ fn test_import_sections_deferred_save_generic_open_failure_is_not_a_denial() {
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
+            azimuth_reference: None,
         }];
         let result = import::import_sections(
             state(&app),
@@ -4066,7 +4072,7 @@ fn test_text_exports_refuse_to_overwrite_the_plnx_sibling() {
     for res in [
         export::export_csv(state(&app), plnx.clone()),
         export::export_json(state(&app), plnx.clone()),
-        export::export_tml(state(&app), plnx.clone()),
+        export::export_tml(state(&app), plnx.clone()).map(|_| ()),
     ] {
         assert!(res.is_err(), "text export must refuse the .plnx sibling");
         assert!(
@@ -4092,7 +4098,7 @@ fn test_text_exports_refuse_to_overwrite_open_project_file() {
     for res in [
         export::export_csv(state(&app), saved_path.clone()),
         export::export_json(state(&app), saved_path.clone()),
-        export::export_tml(state(&app), saved_path.clone()),
+        export::export_tml(state(&app), saved_path.clone()).map(|_| ()),
     ] {
         assert!(
             res.is_err(),

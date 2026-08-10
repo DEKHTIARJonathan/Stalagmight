@@ -6,8 +6,8 @@ use std::str::FromStr;
 use ts_rs::TS;
 
 use super::{
-    Coordinates, GpsCoordinates, Shot, ShotData, ShotId, ShotKind, ShotUpdates, StationRef,
-    FEATURE_ID_STRIDE,
+    AzimuthReference, Coordinates, GpsCoordinates, Shot, ShotData, ShotId, ShotKind, ShotUpdates,
+    StationRef, FEATURE_ID_STRIDE,
 };
 
 /// Unique identifier for a section
@@ -99,6 +99,27 @@ pub struct Section {
     /// direction. `None` for a single-shot section, which has no second shot to face away from.
     #[serde(default)]
     pub gauge_neighbour_uuid: Option<String>,
+    /// How this section's stored azimuths relate to true north (#438).
+    ///
+    /// `None` = inherit [`Project::default_azimuth_reference`], which is itself
+    /// `None` on every project that predates this field - and an absent
+    /// reference means [`AzimuthReference::default`], "nothing recorded", whose
+    /// correction is 0. So the field is additive in the strong sense: a project
+    /// that never saw it computes exactly the geometry it always did.
+    ///
+    /// It lives on the SECTION, not the project, because that is the finest
+    /// granularity the source formats have: one Compass file can declare a
+    /// different declination per survey and can switch mode mid-file, and a
+    /// project routinely mixes an Ariane import (magnetic) with a Compass one.
+    ///
+    /// [`Project::default_azimuth_reference`]: crate::models::Project::default_azimuth_reference
+    ///
+    /// `#[ts(optional)]`, like every other additive field the frontend does not
+    /// construct: the payload always carries it, but a TS `Section` literal
+    /// built before #438 stays valid.
+    #[serde(default)]
+    #[ts(optional)]
+    pub azimuth_reference: Option<AzimuthReference>,
 }
 
 /// Everything about a section that [`SectionData`] cannot carry: the identity of
@@ -130,6 +151,13 @@ pub struct SectionIdentity {
     pub gauge_shot_uuid: Option<String>,
     #[serde(default)]
     pub gauge_neighbour_uuid: Option<String>,
+    /// The section's north reference (#438). [`SectionData`] cannot carry it, so
+    /// without this an undo that re-creates a section would silently drop the
+    /// declination and rotate that section by it. `None` on a legacy entry means
+    /// "inherit the project default", which is what a restored section would
+    /// have had anyway before the field existed.
+    #[serde(default)]
+    pub azimuth_reference: Option<AzimuthReference>,
 }
 
 impl SectionIdentity {
@@ -140,6 +168,7 @@ impl SectionIdentity {
             reverse_parity: section.reverse_parity,
             gauge_shot_uuid: section.gauge_shot_uuid.clone(),
             gauge_neighbour_uuid: section.gauge_neighbour_uuid.clone(),
+            azimuth_reference: section.azimuth_reference,
         }
     }
 }
@@ -301,6 +330,18 @@ pub struct ImportSectionConfig {
     /// would silently rewrite measurements.
     #[serde(default)]
     pub reverse: bool,
+    /// The north reference this section's readings were taken against (#438),
+    /// as declared by the source file. `None` - what the frontend wizards send,
+    /// since none of them asks the user - leaves the section inheriting the
+    /// project default, i.e. no correction.
+    ///
+    /// It rides on the CONFIG rather than on `SectionData` because it is
+    /// per-section provenance the importer knows and the create shape does not
+    /// carry; `execute_import_sections` writes it onto the section as soon as
+    /// the section exists.
+    #[serde(default)]
+    #[ts(optional)]
+    pub azimuth_reference: Option<AzimuthReference>,
 }
 
 /// Update to apply to an existing section's shot during batch import.
@@ -408,6 +449,7 @@ impl Section {
             reverse_parity: false,
             gauge_shot_uuid: None,
             gauge_neighbour_uuid: None,
+            azimuth_reference: None,
         };
 
         // Per-section UUID uniqueness, enforced where a `Vec<ShotData>` becomes
@@ -499,6 +541,7 @@ impl Section {
         section
             .gauge_neighbour_uuid
             .clone_from(&identity.gauge_neighbour_uuid);
+        section.azimuth_reference = identity.azimuth_reference;
         section
     }
 

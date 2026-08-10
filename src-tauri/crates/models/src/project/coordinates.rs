@@ -122,6 +122,8 @@ impl Project {
             .copied()
             .unwrap_or((0.0, 0.0));
         let mut coords = Coordinates::new(offset_x, offset_y, 0.0);
+        // Per-section constant (#438): resolved once, added per shot.
+        let azimuth_reference = self.azimuth_reference_for(section);
 
         // Walk through shots to reach the station (X, Y only)
         for i in 0..station_ref.station_index as usize {
@@ -129,7 +131,7 @@ impl Project {
                 return None;
             }
             let shot = &section.shots[i];
-            let azimuth_rad = shot.average_azimuth().to_radians();
+            let azimuth_rad = shot.average_azimuth_true_rad(azimuth_reference);
             let horizontal = shot.horizontal_length();
             let dx = horizontal * azimuth_rad.sin();
             let dy = horizontal * azimuth_rad.cos();
@@ -165,9 +167,10 @@ impl Project {
             .copied()
             .unwrap_or((0.0, 0.0));
         let (mut x, mut y) = (offset_x, offset_y);
+        let azimuth_reference = self.azimuth_reference_for(section);
         for i in 0..station_ref.station_index as usize {
             let shot = section.shots.get(i)?;
-            let azimuth_rad = shot.average_azimuth().to_radians();
+            let azimuth_rad = shot.average_azimuth_true_rad(azimuth_reference);
             let horizontal = shot.horizontal_length();
             x += horizontal * azimuth_rad.sin();
             y += horizontal * azimuth_rad.cos();
@@ -279,10 +282,11 @@ impl Project {
                 .copied()
                 .unwrap_or((0.0, 0.0));
             let mut cur = (offset_x, offset_y);
+            let azimuth_reference = self.azimuth_reference_for(section);
             for idx in 0..=section.shots.len() {
                 if idx > 0 {
                     let shot = &section.shots[idx - 1];
-                    let az = shot.average_azimuth().to_radians();
+                    let az = shot.average_azimuth_true_rad(azimuth_reference);
                     let h = shot.horizontal_length();
                     cur.0 += h * az.sin();
                     cur.1 += h * az.cos();
@@ -639,8 +643,9 @@ impl Project {
             }
 
             // Compute subsequent stations from shots (X, Y walk; Z from pre-computed depths)
+            let azimuth_reference = self.azimuth_reference_for(section);
             for (i, shot) in section.shots.iter().enumerate() {
-                let azimuth_rad = shot.average_azimuth().to_radians();
+                let azimuth_rad = shot.average_azimuth_true_rad(azimuth_reference);
                 let horizontal_length = shot.horizontal_length();
 
                 // Compute new X, Y position

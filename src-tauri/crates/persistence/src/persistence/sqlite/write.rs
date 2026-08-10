@@ -67,7 +67,7 @@ impl Database {
         // Save sections and shots
         for section in &project.sections {
             tx.execute(
-                "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, reverse_parity, gauge_shot_uuid, gauge_neighbour_uuid, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, reverse_parity, gauge_shot_uuid, gauge_neighbour_uuid, azimuth_north, azimuth_correction, azimuth_source, azimuth_epoch_year, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     section.id,
                     section.name,
@@ -79,6 +79,19 @@ impl Database {
                     i64::from(section.reverse_parity),
                     section.gauge_shot_uuid.as_deref(),
                     section.gauge_neighbour_uuid.as_deref(),
+                    // All four NULL together mean "no reference recorded" (#438),
+                    // which reads back as `None` - inherit the project default.
+                    section.azimuth_reference.map(|r| r.north.as_str()),
+                    // `applied_correction`, not the raw field: what is stored has
+                    // to be the rotation geometry APPLIED, or a project saved
+                    // with a non-finite correction (which applies as 0) reloads
+                    // as a NaN column and the read path's repair is the only
+                    // thing between it and the walk.
+                    section.azimuth_reference.map(|r| r.applied_correction()),
+                    section.azimuth_reference.map(|r| r.source.as_str()),
+                    section
+                        .azimuth_reference
+                        .and_then(|r| r.source.epoch_year()),
                     Utc::now().to_rfc3339()
                 ],
             )?;
@@ -335,6 +348,24 @@ impl Database {
             None => {
                 tx.execute(
                     "DELETE FROM project_settings WHERE key = 'surface_elevation'",
+                    [],
+                )?;
+            }
+        }
+
+        // Project-level default north reference (#438), same key/value table.
+        // Absent rather than a sentinel for the same reason `surface_elevation`
+        // is: a project that never declared one must round-trip unchanged.
+        match project.default_azimuth_reference {
+            Some(reference) => {
+                tx.execute(
+                    "INSERT OR REPLACE INTO project_settings (key, value) VALUES ('default_azimuth_reference', ?1)",
+                    params![serde_json::to_string(&reference)?],
+                )?;
+            }
+            None => {
+                tx.execute(
+                    "DELETE FROM project_settings WHERE key = 'default_azimuth_reference'",
                     [],
                 )?;
             }

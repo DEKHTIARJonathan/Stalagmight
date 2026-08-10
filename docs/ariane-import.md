@@ -115,6 +115,31 @@ Ariane has one azimuth field per shot (`Azimut` / `AZ`). Stalagmight duplicates 
 | Import command | `src-tauri/src/commands/import.rs` | IPC handler, deduplication, undo support |
 | Import dialog | `src/components/Dialogs/TmlImportDialog.tsx` | Preview, import options, progress, failure/cancel handling |
 
+## Azimuth convention (#438)
+
+Azimuths are copied **verbatim** - no per-shot arithmetic at import - and the
+file's `useMagneticAzimuth` becomes the section's declared north reference:
+
+| File says | Section records | Correction |
+|-----------|-----------------|------------|
+| `useMagneticAzimuth=false` | `north: true`, `source: file` | 0 |
+| `true` + `<GeoCoding>`, date in the IGRF range | `north: magnetic`, `source: igrf` with the epoch | the modelled declination at the file's lat/lon on its earliest survey date |
+| `true`, no georeference, or no survey date | `north: magnetic`, `source: unknown` | 0. No receipt line: nothing was degraded and there is nothing to act on. An UNDATED file asks the model nothing rather than substituting today, so the same file imports the same way on any two days |
+| `true`, georeferenced AND dated, but the model cannot serve that date | `north: magnetic`, `source: unknown` | 0, with a receipt line naming the date it could not serve |
+
+The correction is applied when geometry is computed, never written into a shot,
+so a re-export hands Ariane back the numbers the file carried.
+
+**Compass and Walls: the grid convergence is reported, not applied.** Both
+formats subtract a meridian convergence because their own output is
+grid-relative. Stalagmight's world frame is TRUE north - `gps_to_local` returns
+true-north ENU (`models/geo.rs:79-81`) and every georeferencing path places
+datums against it - so a survey walked in grid bearings would sit at an angle to
+its own GPS. The section correction is therefore the declination alone, and a
+file that declares a convergence gets a receipt line saying it was dropped.
+Bearings then differ from that app's grid-relative display by the convergence
+angle, typically well under a degree.
+
 ## Limitations
 
 **Entrance elevation round-trips, subject to the zero-is-absent convention above.** `firstStartAbsoluteElevation` is imported into `Project::surface_elevation` (+up from mean sea level, project-level rather than per-entrance) and read back by TML export; it does not feed the geometry - the zero datum's `depth_reference` (+down from the surface) is what positions stations ([#431](https://github.com/Stalagmight/Stalagmight/issues/431)).
@@ -130,8 +155,6 @@ Parsed but dropped:
   the same foreign uuid - which is why the export path re-mints document-level duplicates
   (`export/tml.rs::remint_duplicate_uuids`). A uuid whose shape is rejected costs THAT SHOT its
   foreign identity and nothing else.
-
-- **Declination is never applied.** The `useMagneticAzimuth` flag is parsed onto `TmlFile` and read by nobody: a magnetic file's azimuths are imported as-is, with no declination correction and no warning that one may be needed.
 - **A `0.0` LRUD field is read as UNMEASURED, per field.** `lrud_opt`
   (`parsers/tml/mod.rs:1908-1914`) maps any of `Left`/`Right`/`Up`/`Down` whose
   `abs()` is under `f64::EPSILON` to `None`, independently of the other three - so

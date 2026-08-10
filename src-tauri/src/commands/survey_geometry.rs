@@ -443,7 +443,8 @@ mod tests {
         assert!((geom_shot.from[0]).abs() < 1e-9);
         assert!((geom_shot.from[1]).abs() < 1e-9);
 
-        let (east, north) = Project::shot_displacement(&shot);
+        let (east, north) =
+            Project::shot_displacement(&shot, crate::models::AzimuthReference::default());
         let (lng, lat) = local_to_gps(east, north, &gps).unwrap();
         assert!((geom_shot.to[0] - lng).abs() < 1e-6);
         assert!((geom_shot.to[1] - lat).abs() < 1e-6);

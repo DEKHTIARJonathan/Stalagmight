@@ -8,6 +8,7 @@
  * rewrite here (rather than inline in DmpNewImportDialog) gives both paths one
  * implementation and makes it unit-testable without mounting the wizard.
  */
+import type { AzimuthReference } from '../types/ipc/AzimuthReference';
 import type { ImportPlacement, ImportSectionConfig } from '../types/commands';
 import { isEmittedShot } from '../components/common/emittedShots';
 import type { ShotData } from '../types/project';
@@ -16,6 +17,29 @@ import type { VirtualConnection } from './segmentContext';
 import type { SectionEditState } from './batchImportHelpers';
 import { editableShotToShotData } from './shotConversion';
 import { mirrorPlacementForReverse, targetShotCountForMirror } from './reversePlacement';
+
+/**
+ * The north reference every mNemo section gets (#438).
+ *
+ * The device is a compass: its headings are MAGNETIC, and the `.dmp` format
+ * carries neither a declination nor a georeference, so there is no number to
+ * record - `unknown` says exactly that, and leaves the geometry uncorrected
+ * (correction 0), which is what the DMP importer has always produced. Declaring
+ * it rather than leaving the field out is load-bearing in one place and
+ * documentation in the other. It is load-bearing on the SUGGESTION payload
+ * (`ImportSectionForSuggestion.azimuthReference`): the matcher scores incoming
+ * bearings against existing sections', and without it the backend falls back to
+ * the project default, so a DMP section matched against an existing Compass
+ * section would be compared across that section's declination. On the import
+ * CONFIG it currently resolves to the same value the default would, and is sent
+ * anyway so the section records what it IS rather than inheriting whatever the
+ * project later declares.
+ */
+export const DMP_AZIMUTH_REFERENCE: AzimuthReference = {
+  north: 'magnetic',
+  correction: 0,
+  source: 'unknown',
+};
 
 /**
  * Rewrite a placement's indices for reverse, on both sides of a connection.
@@ -99,5 +123,6 @@ export function buildZeroDatumSectionConfig(config: ZeroDatumConfigResult): Impo
     placement: mirrorPlacementForReverse(placement, reverse, backendShots.length, null),
     station_comments: [],
     reverse,
+    azimuth_reference: DMP_AZIMUTH_REFERENCE,
   };
 }

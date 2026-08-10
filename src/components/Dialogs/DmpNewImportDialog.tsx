@@ -22,7 +22,11 @@ import { Select, type SelectOption } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
-import { buildZeroDatumSectionConfig, finalizePlacementForReverse } from '../../utils/importSectionConfig';
+import {
+  buildZeroDatumSectionConfig,
+  DMP_AZIMUTH_REFERENCE,
+  finalizePlacementForReverse,
+} from '../../utils/importSectionConfig';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
@@ -686,6 +690,9 @@ export function buildBatchImport(
         placement: finalPlacement,
         station_comments: [],
         reverse: reverseValue,
+        // The mNemo measures magnetic; nothing in the file declares a
+        // declination (#438).
+        azimuth_reference: DMP_AZIMUTH_REFERENCE,
       };
 
       emittedPosition.set(idx, configs.length);
@@ -2023,6 +2030,14 @@ export default function DmpNewImportDialog({
           index: idx,
           name: section.name,
           shots: shotData,
+          // Scored in the frame these readings are actually in (#438). Without
+          // it the backend falls back to the project default, and a DMP section
+          // would be matched against an existing Compass section across a
+          // declination - a real overlap scoring as a mismatch.
+          // camelCase here, snake_case on `ImportSectionConfig`: the two IPC
+          // structs differ in their serde rename, and the generated types are
+          // the authority.
+          azimuthReference: DMP_AZIMUTH_REFERENCE,
         });
       }
 

@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use anyhow::Result;
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 
+use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource, NorthReference};
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
@@ -223,6 +224,16 @@ pub fn convert_walls_to_import_configs(
         comment: Option<String>,
         is_reference: bool,
         lrud_is_to: bool,
+        /// Degrees to ADD to this vector's stored (measured) azimuth to reach
+        /// the frame Walls itself draws in - declination minus grid convergence
+        /// (#438). Kept per VECTOR because Walls declares both per entry:
+        /// `Decl=`/`Grid=` can change mid-survey and a RECT vector takes no
+        /// declination at all.
+        azimuth_correction: f64,
+        correction_source: CorrectionSource,
+        /// What this vector's stored reading IS: a compass reading, or the
+        /// already-true-north bearing a RECT vector's E/N components imply.
+        north: NorthReference,
     }
 
     let mut kept: Vec<KeptSurvey> = Vec::new();
@@ -270,17 +281,40 @@ pub fn convert_walls_to_import_configs(
             // RECT vectors already carry an absolute grid azimuth; magnetic
             // declination must NOT rotate Cartesian E/N/U deltas (only
             // convergence, via grid_relative, may apply).
-            let declination = if v.is_rect {
-                0.0
+            let (declination, correction_source) = if v.is_rect {
+                (0.0, CorrectionSource::FileDeclared)
             } else {
                 resolve_declination(v, survey_georef, &mut warnings)
             };
-            let finalize = |a: Option<f64>| {
-                a.map(|x| (x + declination - convergence).rem_euclid(360.0))
-                    .unwrap_or(0.0)
+            // #438: the stored azimuth is the MEASURED one, and the correction
+            // recorded beside it is what reaches TRUE north - the declination
+            // alone.
+            //
+            // The grid convergence is deliberately NOT part of it. `correction`
+            // means "add this to reach true north", and the app's world frame is
+            // true north: `gps_to_local` returns true-north ENU
+            // (`models/geo.rs:79-81`) and every georeferencing path places datums
+            // with it. Walls subtracts convergence because its own output is
+            // grid-relative; drawing in that frame here would put the survey at
+            // an angle to its own GPS. A RECT vector's bearing is already a
+            // true-north one in the file's Cartesian frame, so it needs nothing.
+            let azimuth_correction = declination;
+            let north = if v.is_rect {
+                NorthReference::True
+            } else {
+                NorthReference::Magnetic
             };
-            let azimuth_in = finalize(v.azimuth_in);
-            let azimuth_out = finalize(v.azimuth_out);
+            if convergence.abs() > f64::EPSILON {
+                warnings.push(format!(
+                    "Shot {}->{}: the file applies a {convergence:.2} degree grid convergence. \
+                     Stalagmight draws in true north, so the convergence was NOT applied - only \
+                     the declination.",
+                    v.from, v.to
+                ));
+            }
+            let measured = |a: Option<f64>| a.map(|x| x.rem_euclid(360.0)).unwrap_or(0.0);
+            let azimuth_in = measured(v.azimuth_in);
+            let azimuth_out = measured(v.azimuth_out);
 
             // The model stores azimuth as a plain f64, so an omitted/unreadable
             // bearing collapses to 0° (due north). That is correct for a plumb
@@ -352,6 +386,9 @@ pub fn convert_walls_to_import_configs(
                 comment: v.comment.clone(),
                 is_reference: v.is_reference,
                 lrud_is_to: v.lrud_is_to,
+                azimuth_correction,
+                correction_source,
+                north,
             });
         }
         if kept_vectors.is_empty() {
@@ -383,6 +420,7 @@ pub fn convert_walls_to_import_configs(
         label: String,
         surveyor: Option<String>,
         date: Option<NaiveDate>,
+        azimuth_reference: AzimuthReference,
     }
     // The model has no zero-length shot (it can't place two stations at one
     // point as a leg), so a Walls zero-length coincident-station tie is nudged to
@@ -494,6 +532,74 @@ pub fn convert_walls_to_import_configs(
             } else {
                 survey.label.clone()
             };
+            // #438: one reference per section, so the chain's per-vector
+            // corrections have to agree. They do for every ordinary survey (one
+            // `Decl=`, one datum). When they do not - a `Decl=` changed
+            // mid-survey, or RECT vectors mixed with compass ones - no single
+            // constant can express the file, so this chain folds each shot's own
+            // correction into its readings and declares the result true north.
+            //
+            // That fallback is only honest because the per-vector correction is
+            // the one that reaches TRUE north (see where it is computed): the
+            // grid convergence is never folded in, so the rotated bearings are
+            // true-north bearings and the label is the truth about them. It is
+            // still lossy for the MEASURED reading, which is why it is
+            // announced.
+            //
+            // `shots` was built by pushing exactly one `ShotData` per element of
+            // `chain`, in order, and the zip below is only correct while that
+            // holds - a `continue` added to that loop would silently pair each
+            // shot with the wrong vector's correction from the skip onward.
+            debug_assert_eq!(
+                shots.len(),
+                chain.len(),
+                "one shot per chain vector: the correction zip below pairs them positionally"
+            );
+            let azimuth_reference = {
+                let mut declared = chain
+                    .iter()
+                    .map(|&idx| &survey.vectors[idx])
+                    .map(|v| (v.north, v.azimuth_correction, v.correction_source));
+                let first = declared.next();
+                let uniform = match first {
+                    Some((north, correction, _)) => declared
+                        .clone()
+                        .all(|(n, c, _)| n == north && (c - correction).abs() < 1e-9),
+                    None => true,
+                };
+                match first {
+                    Some((north, correction, source)) if uniform => {
+                        // The SOURCE has to agree too, and it is not part of the
+                        // uniformity test above because it does not change the
+                        // geometry - only what the UI may say about it and what
+                        // the export may recompute. Taking `chain[0]`'s over a
+                        // chain whose vectors disagree would attribute the whole
+                        // section to whichever entry happened to come first.
+                        let source = if declared.all(|(_, _, s)| s == source) {
+                            source
+                        } else {
+                            CorrectionSource::Unknown
+                        };
+                        AzimuthReference::from_parts(north, correction, source)
+                    }
+                    Some(_) => {
+                        for (shot, &idx) in shots.iter_mut().zip(chain.iter()) {
+                            let correction = survey.vectors[idx].azimuth_correction;
+                            shot.azimuth_in = (shot.azimuth_in + correction).rem_euclid(360.0);
+                            shot.azimuth_out = (shot.azimuth_out + correction).rem_euclid(360.0);
+                        }
+                        warnings.push(format!(
+                            "Section '{}': the shots declare more than one declination, which a \
+                             single section-level north reference cannot express. Each shot's own \
+                             correction was applied to its readings and the section is recorded \
+                             as true north.",
+                            label
+                        ));
+                        AzimuthReference::true_north(CorrectionSource::FileDeclared)
+                    }
+                    None => AzimuthReference::default(),
+                }
+            };
             chains.push(PendingChain {
                 section_index,
                 names,
@@ -502,6 +608,7 @@ pub fn convert_walls_to_import_configs(
                 label,
                 surveyor: survey.surveyor.clone(),
                 date: survey.date,
+                azimuth_reference,
             });
         }
     }
@@ -551,6 +658,7 @@ pub fn convert_walls_to_import_configs(
                 .clone()
                 .unwrap_or(ImportPlacement::Origin),
             station_comments: chain.station_comments.clone(),
+            azimuth_reference: Some(chain.azimuth_reference),
         });
     }
     topological_sort_configs(&mut configs);
@@ -565,25 +673,32 @@ pub fn convert_walls_to_import_configs(
     Ok((configs, closures, warnings))
 }
 
+/// The declination for one vector, and where the number came from (#438 - the
+/// provenance is recorded on the section so the UI can explain it).
 pub(crate) fn resolve_declination(
     v: &WallsVector,
     georef: &Option<WallsRef>,
     warnings: &mut Vec<String>,
-) -> f64 {
+) -> (f64, CorrectionSource) {
     // An explicit `Decl=` always wins - including an explicit `Decl=0`, which
     // declares the azimuths already true/grid and suppresses auto-derivation.
     if let Some(decl) = v.units_decl {
-        return decl;
+        return (decl, CorrectionSource::FileDeclared);
     }
     // Otherwise auto-derive from the IGRF model ONLY when the entry's
     // derive-declination flag is on AND a georeference + date are available.
     if !v.derive_decl {
-        return 0.0;
+        return (0.0, CorrectionSource::FileDeclared);
     }
     match (georef, v.date) {
         (Some(r), Some(date)) => {
             match crate::parsers::geo::igrf_declination(r.latitude, r.longitude, date) {
-                Ok(d) => d,
+                Ok(d) => (
+                    d,
+                    CorrectionSource::IgrfAuto {
+                        epoch_year: date.year(),
+                    },
+                ),
                 // The bundled IGRF model only spans 1900-2025; a survey dated
                 // outside that range (e.g. a current-year dive) would otherwise
                 // import with a silent 0° correction. Surface it instead.
@@ -595,11 +710,11 @@ pub(crate) fn resolve_declination(
                          (date/location outside the IGRF model range 1900-2025); using 0°.",
                         r.latitude, r.longitude
                     ));
-                    0.0
+                    (0.0, CorrectionSource::Unknown)
                 }
             }
         }
-        _ => 0.0,
+        _ => (0.0, CorrectionSource::Unknown),
     }
 }
 

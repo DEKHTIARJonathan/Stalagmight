@@ -12,7 +12,7 @@ use crate::models::placement_suggest::{
     suggest_all_placements, suggest_placements, CrossSectionSuggestion, ExistingSection,
     ImportSectionForSuggestion, OrphanPlacementSuggestion, PlacementSuggestion,
 };
-use crate::models::ShotData;
+use crate::models::{AzimuthReference, ShotData};
 use crate::parsers::compass::{CompassFile, CompassImportOptions};
 use crate::parsers::gpx::{GpxFile, GpxSectionPlacement};
 use crate::parsers::tml::TmlFile;
@@ -626,6 +626,11 @@ pub fn execute_gpx_import(
 pub fn suggest_import_placement(
     state: State<'_, AppState>,
     shots: Vec<ShotData>,
+    // `azimuth_reference` is what `shots` are measured against (#438). The
+    // caller has it on the `ImportSectionConfig` it is about to send; `None`
+    // falls back to the project default, which is only right when the importer
+    // declared nothing.
+    azimuth_reference: Option<AzimuthReference>,
 ) -> Result<Vec<PlacementSuggestion>, String> {
     let project = state.get_project_state().ok_or("No project open")?;
 
@@ -639,12 +644,19 @@ pub fn suggest_import_placement(
                 .clone()
                 .unwrap_or_else(|| format!("Section {}", s.id)),
             shots: s.shots.clone(),
+            azimuth_reference: project.azimuth_reference_for(s),
         })
         .collect();
 
     let config = state.get_config();
     Ok(suggest_placements(
         &shots,
+        // The section does not exist yet, so its reference is whatever the
+        // importer declared for it; the project default is the fallback (#438).
+        azimuth_reference
+            .map(AzimuthReference::sanitised)
+            .or(project.default_azimuth_reference)
+            .unwrap_or_default(),
         &existing_sections,
         &config.placement_suggestion,
     ))
@@ -668,14 +680,31 @@ pub fn suggest_all_import_placements(
                     .clone()
                     .unwrap_or_else(|| format!("Section {}", s.id)),
                 shots: s.shots.clone(),
+                azimuth_reference: project.azimuth_reference_for(s),
             })
             .collect(),
         None => Vec::new(),
     };
+    // Only the FALLBACK: each section carries its own reference and is scored
+    // in it (#438).
+    let fallback_reference = state
+        .get_project_state()
+        .and_then(|p| p.default_azimuth_reference)
+        .unwrap_or_default();
+    let import_sections: Vec<ImportSectionForSuggestion> = import_sections
+        .into_iter()
+        .map(|mut section| {
+            // Deserialized straight off the wire: re-impose the type's
+            // invariants before anything computes with it.
+            section.azimuth_reference = section.azimuth_reference.map(AzimuthReference::sanitised);
+            section
+        })
+        .collect();
 
     let config = state.get_config();
     Ok(suggest_all_placements(
         &import_sections,
+        fallback_reference,
         &existing_sections,
         &config.placement_suggestion,
     ))

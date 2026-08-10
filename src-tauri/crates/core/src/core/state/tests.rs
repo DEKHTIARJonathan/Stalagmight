@@ -212,6 +212,138 @@ fn merge_two_surface_elevations(
     (merged, result)
 }
 
+/// #438: a merged section keeps the north reference it was RESOLVED to in its
+/// own project, whether it declared one itself or inherited its project's
+/// default.
+///
+/// `SectionData` cannot carry the reference, so the copy in `project_merge`
+/// used to land on the merged project's default - which for a section that had
+/// a 10 degree declination means the passage is drawn, and exported, rotated by
+/// 10 degrees the moment it is merged. Both sources here are deliberately
+/// unlike the target: one declares per-section, the other relies on a project
+/// default that the merged project does not share.
+///
+/// Asserted end-to-end through the coordinate WALK, not just the stored field:
+/// the field being right is only interesting because the geometry follows it.
+#[test]
+fn test_merge_projects_carries_each_sections_resolved_azimuth_reference() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Due north, level, so the walked bearing IS the applied correction.
+    // `test_shot_data`'s 45/225 pair is deliberately antipodal (its circular
+    // mean resolves to 315) and would make the geometry assertion unreadable.
+    let due_north = |length: f64| ShotData {
+        azimuth_in: 0.0,
+        azimuth_out: 0.0,
+        length,
+        depth_in: 10.0,
+        depth_out: 10.0,
+        ..Default::default()
+    };
+
+    // A: declares the reference on the section itself.
+    let mut project_a = Project::new("A".to_string(), None);
+    let section_a = project_a
+        .add_section(SectionData {
+            name: Some("Declared".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: Some(SurveyDirection::In),
+            quality: 1.0,
+            shots: vec![due_north(10.0)],
+        })
+        .id;
+    project_a
+        .get_section_mut(section_a)
+        .unwrap()
+        .azimuth_reference = Some(crate::models::AzimuthReference::magnetic(
+        10.0,
+        crate::models::CorrectionSource::Manual,
+    ));
+
+    // B: says nothing per section and leans on its PROJECT default.
+    let mut project_b = Project::new("B".to_string(), None);
+    project_b.default_azimuth_reference = Some(crate::models::AzimuthReference::magnetic(
+        -4.0,
+        crate::models::CorrectionSource::FileDeclared,
+    ));
+    project_b.add_section(SectionData {
+        name: Some("Inherited".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: Some(SurveyDirection::Out),
+        quality: 1.0,
+        shots: vec![due_north(10.0)],
+    });
+
+    let source_a = temp_dir.path().join("a.stalx");
+    let source_b = temp_dir.path().join("b.stalx");
+    let mut db_a = Database::open(&source_a).unwrap();
+    db_a.save_project(&project_a).unwrap();
+    let mut db_b = Database::open(&source_b).unwrap();
+    db_b.save_project(&project_b).unwrap();
+    drop(db_a);
+    drop(db_b);
+
+    let state = AppState::new().unwrap();
+    let output_path = temp_dir.path().join("merged-output.stalx");
+    let result = state.execute(Command::MergeProjects {
+        source_paths: vec![source_a, source_b],
+        output_path: output_path.clone(),
+        output_name: "Merged".to_string(),
+        archive_originals: false,
+    });
+    assert!(result.success, "merge failed: {:?}", result.error);
+
+    let db = Database::open_existing(&output_path).unwrap();
+    let merged = db.load_project().unwrap();
+    assert_eq!(merged.sections.len(), 2, "both sections must survive");
+
+    let declared = merged
+        .sections
+        .iter()
+        .find(|s| s.name.as_deref() == Some("Declared"))
+        .expect("section A survives the merge");
+    let inherited = merged
+        .sections
+        .iter()
+        .find(|s| s.name.as_deref() == Some("Inherited"))
+        .expect("section B survives the merge");
+
+    assert!(
+        (merged.azimuth_reference_for(declared).applied_correction() - 10.0).abs() < 1e-9,
+        "a section that declared its own reference lost it: {:?}",
+        declared.azimuth_reference
+    );
+    assert!(
+        (merged.azimuth_reference_for(inherited).applied_correction() - (-4.0)).abs() < 1e-9,
+        "a section that inherited its source project's default lost it: {:?}",
+        inherited.azimuth_reference
+    );
+
+    // And the geometry follows: station 1 of each section sits on the CORRECTED
+    // bearing. The shots walk due north as measured, so the corrected heading is
+    // the correction itself.
+    for (section, correction) in [(declared, 10.0_f64), (inherited, -4.0_f64)] {
+        let coords = merged
+            .compute_station_raw_coords(StationRef::new(section.id, 1))
+            .expect("station coords");
+        let origin = merged
+            .compute_station_raw_coords(StationRef::new(section.id, 0))
+            .expect("station coords");
+        let bearing = (coords.x - origin.x)
+            .atan2(coords.y - origin.y)
+            .to_degrees();
+        assert!(
+            (bearing - correction).abs() < 1e-6,
+            "section {:?} walks at {bearing} degrees, expected {correction}",
+            section.name
+        );
+    }
+}
+
 #[test]
 fn test_merge_projects_surface_elevation_some_and_none() {
     let (merged, result) = merge_two_surface_elevations(Some(123.5), None);
@@ -7764,6 +7896,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
         shots: vec![test_shot_data(5.0), test_shot_data(6.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        azimuth_reference: None,
     };
     let r = state.execute_import_sections(
         vec![seed],
@@ -7793,6 +7926,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
         shots: vec![test_shot_data(3.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        azimuth_reference: None,
     };
     let r = state.execute_import_sections(
         vec![incoming],
@@ -17458,6 +17592,7 @@ fn test_execute_import_sections_origin_placement() {
             shots: vec![test_shot_data(5.0)],
             station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
+            azimuth_reference: None,
         },
         ImportSectionConfig {
             reverse: false,
@@ -17471,6 +17606,7 @@ fn test_execute_import_sections_origin_placement() {
             shots: vec![test_shot_data(3.0)],
             station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
+            azimuth_reference: None,
         },
     ];
 
@@ -17526,6 +17662,7 @@ fn test_execute_import_sections_unresolvable_closure_is_skipped_on_receipt() {
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        azimuth_reference: None,
     }];
 
     // section_index 99 never appears in `sections`, so `created_ids` never
@@ -17593,6 +17730,7 @@ fn imported_shot_kinds_survive_an_undo_redo_round_trip() {
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
         reverse: false,
+        azimuth_reference: None,
     }];
 
     let result = state.execute_import_sections(
@@ -17647,6 +17785,7 @@ fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
         reverse: false,
+        azimuth_reference: None,
     };
     let reference_shot = ShotData {
         kind: ShotKind::Reference,
@@ -17739,6 +17878,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        azimuth_reference: None,
     };
     let result = state.execute_import_sections(
         vec![seed],
@@ -17766,6 +17906,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
         shots: vec![test_shot_data(3.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        azimuth_reference: None,
     };
     let result = state.execute_import_sections(
         vec![poisoned],
@@ -17827,6 +17968,7 @@ fn test_execute_import_sections_from_importing_placement() {
             shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
             station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
+            azimuth_reference: None,
         },
         ImportSectionConfig {
             reverse: false,
@@ -17844,6 +17986,7 @@ fn test_execute_import_sections_from_importing_placement() {
                 target_section_index: 0,
                 target_station_index: 1,
             },
+            azimuth_reference: None,
         },
     ];
 
@@ -17898,6 +18041,7 @@ fn test_execute_import_sections_from_existing_placement() {
             import_station: 0,
             existing_station: StationRef::new(existing_id, 2),
         },
+        azimuth_reference: None,
     }];
 
     let result = state.execute_import_sections(
@@ -17944,6 +18088,7 @@ fn test_execute_import_sections_manual_with_offset() {
                 z: 0.0,
             }),
         },
+        azimuth_reference: None,
     }];
 
     let result = state.execute_import_sections(
@@ -17995,6 +18140,7 @@ fn test_execute_import_sections_zero_datum_placement() {
             coordinates: gps,
             station_index: 0,
         },
+        azimuth_reference: None,
     }];
 
     let result = state.execute_import_sections(
@@ -18051,6 +18197,7 @@ fn test_execute_import_sections_zero_datum_placement_at_non_origin_station() {
             coordinates: gps,
             station_index: 1,
         },
+        azimuth_reference: None,
     }];
 
     let result = state.execute_import_sections(
@@ -18116,6 +18263,7 @@ fn test_execute_import_sections_rollback_on_failure() {
             shots: vec![test_shot_data(5.0)],
             station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
+            azimuth_reference: None,
         },
         ImportSectionConfig {
             reverse: false,
@@ -18132,6 +18280,7 @@ fn test_execute_import_sections_rollback_on_failure() {
                 import_station: 0,
                 existing_station: StationRef::new(9999, 0), // nonexistent
             },
+            azimuth_reference: None,
         },
     ];
 
@@ -18194,6 +18343,7 @@ fn test_execute_import_sections_no_project() {
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        azimuth_reference: None,
     }];
 
     let result = state.execute_import_sections(
@@ -18243,6 +18393,7 @@ fn test_execute_import_sections_manual_snap_placement() {
             align_station_index: 0,
             snapped_to_station: StationRef::new(existing_id, 1),
         },
+        azimuth_reference: None,
     }];
 
     let result = state.execute_import_sections(
@@ -19222,6 +19373,7 @@ fn kb5_import_overlap_interpolation_integration() {
             shots: shots_002.clone(),
             station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
+            azimuth_reference: None,
         }],
         Vec::new(),
         None,
@@ -19338,6 +19490,7 @@ fn kb5_import_overlap_interpolation_integration() {
                 import_station: 105,
                 existing_station: StationRef::new(section_002_id, 182),
             },
+            azimuth_reference: None,
         }],
         Vec::new(),
         None,
@@ -23021,6 +23174,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                     shots: vec![test_shot_data(3.0)],
                     station_comments: Vec::new(),
                     placement: ImportPlacement::Origin,
+                    azimuth_reference: None,
                 }],
                 Vec::new(),
                 None,

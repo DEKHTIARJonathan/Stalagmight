@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use super::{
-    GpsBounds, LoopClosure, Section, SectionData, SectionId, SectionUpdates, ShotData, ShotId,
-    StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef, ZeroDatum,
+    AzimuthReference, GpsBounds, LoopClosure, Section, SectionData, SectionId, SectionUpdates,
+    ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef,
+    ZeroDatum,
 };
 use super::{LoopClosureWire, ZeroDatumWire};
 
@@ -308,6 +309,21 @@ pub struct Project {
     #[serde(default)]
     pub surface_elevation: Option<f64>,
 
+    /// The north reference a section inherits when it declares none (#438).
+    ///
+    /// `None` - the value on every project that predates the field, and on every
+    /// project whose sections all declare their own - resolves to
+    /// [`AzimuthReference::default`], "nothing recorded", correction 0. So this
+    /// being absent is exactly the pre-#438 geometry.
+    ///
+    /// The per-SECTION field is the authoritative one (the formats declare
+    /// declination per survey); this exists so a user-level "this project is
+    /// true north" policy has somewhere to live without touching sections that
+    /// carry a file-declared value of their own.
+    #[serde(default)]
+    #[ts(optional)]
+    pub default_azimuth_reference: Option<AzimuthReference>,
+
     /// Transient flag (NOT persisted) - when true,
     /// [`Self::cascade_connection_offsets`] returns immediately. Used by
     /// batch importers to skip the per-call O(N) cascade and run a
@@ -591,9 +607,9 @@ impl Serialize for ProjectIpc<'_> {
         let section_offsets: BTreeMap<SectionId, (f64, f64)> =
             p.section_offsets.iter().map(|(k, v)| (*k, *v)).collect();
         // Field set + order MUST stay in lockstep with the generated Project.ts
-        // (16 ts-exported fields). Adding a ts-exported field to `Project`
+        // (17 ts-exported fields). Adding a ts-exported field to `Project`
         // requires adding it here too, or it silently drops off the IPC payload.
-        let mut st = serializer.serialize_struct("Project", 16)?;
+        let mut st = serializer.serialize_struct("Project", 17)?;
         st.serialize_field("name", &p.name)?;
         st.serialize_field("location", &p.location)?;
         st.serialize_field("created_at", &p.created_at)?;
@@ -610,6 +626,7 @@ impl Serialize for ProjectIpc<'_> {
         st.serialize_field("next_closure_id", &p.next_closure_id)?;
         st.serialize_field("validation", &p.validation)?;
         st.serialize_field("surface_elevation", &p.surface_elevation)?;
+        st.serialize_field("default_azimuth_reference", &p.default_azimuth_reference)?;
         st.end()
     }
 }
@@ -648,6 +665,7 @@ impl Project {
             next_closure_id: 1,
             validation: crate::config::ValidationConfig::default(),
             surface_elevation: None,
+            default_azimuth_reference: None,
             cascade_deferred: false,
             section_index_cache: HashMap::new(),
             shot_uuid_index: HashMap::new(),
@@ -935,17 +953,60 @@ impl Project {
         self.station_merges.push(merge);
     }
 
-    /// Compute the (dx, dy) horizontal displacement of a shot from its data.
+    /// The north reference in force for `section` (#438): the section's own,
+    /// else the project default, else "nothing recorded" (correction 0).
     ///
-    /// Routed through [`ShotData::average_azimuth`] rather than re-deriving the
-    /// mean: this feeds the persisted `section_offsets` compensation that
+    /// THE single resolution point. Geometry calls it once per section and
+    /// passes the (`Copy`) result into the per-shot accessor, so the correction
+    /// costs one addition per shot and cannot disagree between two walks.
+    pub fn azimuth_reference_for(&self, section: &Section) -> AzimuthReference {
+        section
+            .azimuth_reference
+            .or(self.default_azimuth_reference)
+            .unwrap_or_default()
+    }
+
+    /// Every section's resolved reference, by id.
+    ///
+    /// For the paths that cannot hold a `&self` borrow while they work - the
+    /// closure solve and the least-squares update both walk `sections.iter_mut()`
+    /// - so that they still resolve through [`Self::azimuth_reference_for`]
+    /// instead of re-implementing the section-then-project fallback. The values
+    /// are `Copy` and the map is built once per solve.
+    pub(crate) fn azimuth_reference_map(&self) -> HashMap<SectionId, AzimuthReference> {
+        self.sections
+            .iter()
+            .map(|section| (section.id, self.azimuth_reference_for(section)))
+            .collect()
+    }
+
+    /// [`Self::azimuth_reference_for`] by id. A section id that does not resolve
+    /// falls back to the project default rather than erroring: the callers are
+    /// geometry paths that have already validated the id, and inventing a
+    /// correction for an unknown section is the one wrong answer.
+    pub fn azimuth_reference_for_id(&self, section_id: SectionId) -> AzimuthReference {
+        self.get_section(section_id)
+            .map(|section| self.azimuth_reference_for(section))
+            .unwrap_or_else(|| self.default_azimuth_reference.unwrap_or_default())
+    }
+
+    /// Compute the (dx, dy) horizontal displacement of a shot from its data,
+    /// in the same true-north frame the coordinate walk uses.
+    ///
+    /// Routed through [`ShotData::average_azimuth_true`] rather than re-deriving
+    /// the mean: this feeds the persisted `section_offsets` compensation that
     /// insert/prepend/delete apply, so a private copy that drifts from the
     /// coordinate walk moves the section by twice the shot vector and saves it.
     /// An inlined `%` copy did exactly that once `average_azimuth_of` moved to
     /// `rem_euclid` - the two disagreed by 180 degrees for readings more than
     /// 540 apart, which validation only warns about.
-    pub fn shot_displacement(data: &ShotData) -> (f64, f64) {
-        let az_rad = data.average_azimuth().to_radians();
+    ///
+    /// `reference` is why this takes an argument at all (#438): the compensation
+    /// has to cancel the vector the WALK produced, and the walk is corrected. A
+    /// caller that passes the default here while the section carries a
+    /// declination shifts that section by the difference on every insert.
+    pub fn shot_displacement(data: &ShotData, reference: AzimuthReference) -> (f64, f64) {
+        let az_rad = data.average_azimuth_true_rad(reference);
         let horizontal = data.horizontal_length();
         (horizontal * az_rad.sin(), horizontal * az_rad.cos())
     }
@@ -1413,8 +1474,9 @@ impl Project {
             let mut coords = Vec::with_capacity(section.shots.len() + 1);
             let (mut x, mut y) = (0.0_f64, 0.0_f64);
             coords.push((x, y));
+            let azimuth_reference = self.azimuth_reference_for(section);
             for shot in &section.shots {
-                let azimuth_rad = shot.average_azimuth().to_radians();
+                let azimuth_rad = shot.average_azimuth_true_rad(azimuth_reference);
                 let horizontal = shot.horizontal_length();
                 x += horizontal * azimuth_rad.sin();
                 y += horizontal * azimuth_rad.cos();

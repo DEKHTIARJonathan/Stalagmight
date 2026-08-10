@@ -129,6 +129,24 @@ impl AppState {
                 // (`export::tml::harden_for_speleodb`).
                 merged_project.add_section(section.to_section_data());
 
+                // #438: `SectionData` cannot carry the north reference, so the
+                // copy would land on the merged project's default - reverting a
+                // corrected section to identity and rendering (and exporting) it
+                // rotated by its own declination.
+                //
+                // The RESOLVED reference, from the section's OWN project: a
+                // section that inherited its source project's default has to
+                // keep that value here, where the default is a different one.
+                // Merging the defaults themselves would be the wrong question -
+                // two projects can hold different ones legitimately, and only
+                // the per-section answer is unambiguous - so every copied
+                // section carries its own and the merged project declares no
+                // default at all.
+                let resolved = source_project.azimuth_reference_for(section);
+                if let Some(copied) = merged_project.get_section_mut(new_section_id) {
+                    copied.azimuth_reference = Some(resolved);
+                }
+
                 // Record the mapping
                 section_id_map.insert((proj_idx, old_section_id), new_section_id);
             }

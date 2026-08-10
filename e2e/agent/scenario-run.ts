@@ -147,13 +147,19 @@ async function main(): Promise<void> {
 
   // Imported after the replay env is in place - see the comment above.
   const { getScenario, listScenarios, runScenario } = await import('./scenarios');
-  const { AppSession } = await import('./session');
+  // Through the platform factory, like every other runner. Naming `AppSession`
+  // here pinned this runner to the Linux backend, so on macOS every
+  // `agent:scenario` died as the 15 s "tauri-driver did not start listening"
+  // timeout that `createSession`'s own comment says was replaced by a named
+  // refusal in #422 - and the macOS backend it should pick (`MacSession`,
+  // tauri-wd) was unreachable from here.
+  const { createSession } = await import('./createSession');
   const { runSweep, newOracleState } = await import('./lib/oracles');
   if (!getScenario(args.name)) {
     throw new Error(`unknown scenario "${args.name}"; known: ${listScenarios().join(', ')}`);
   }
 
-  const session = new AppSession();
+  const session = createSession();
   const started = await session.start({ build: 'auto' });
   process.stdout.write(
     `session ${started.state} (${started.buildMode} build ${started.buildAction})\n`,

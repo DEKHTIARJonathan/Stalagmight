@@ -4,7 +4,7 @@ use ts_rs::TS;
 /// Unique identifier for a shot within a section
 pub type ShotId = u32;
 
-use super::{normalize_azimuth, SectionId, FEATURE_ID_STRIDE};
+use super::{normalize_azimuth, AzimuthReference, SectionId, FEATURE_ID_STRIDE};
 
 /// Convert a raw ShotId to a 1-indexed display position.
 ///
@@ -702,9 +702,34 @@ impl Shot {
         }
     }
 
-    /// Calculate the average azimuth from in and out readings
-    pub fn average_azimuth(&self) -> f64 {
+    /// The circular mean of the two readings **as measured** - the number the
+    /// source file carried, with no declination applied (#438).
+    ///
+    /// Named the long way on purpose. This is not the bearing geometry walks:
+    /// that is [`Self::average_azimuth_true`], which adds the section's
+    /// correction. Use this one only where the MEASUREMENT is what is wanted -
+    /// display of the raw reading, validation of the reading itself, an export
+    /// that has declared the file magnetic. A bare call in a geometry path is a
+    /// bug, which is what the name is for.
+    pub fn average_azimuth_measured(&self) -> f64 {
         average_azimuth_of(self.azimuth_in, self.azimuth_out)
+    }
+
+    /// The true-north bearing this shot walks, in degrees: the measured mean
+    /// plus the section's declination correction (#438).
+    ///
+    /// `reference` is the section's resolved [`AzimuthReference`] - get it from
+    /// [`Project::azimuth_reference_for`](crate::models::Project::azimuth_reference_for)
+    /// once per section, not once per shot.
+    pub fn average_azimuth_true(&self, reference: AzimuthReference) -> f64 {
+        reference.to_true(self.average_azimuth_measured())
+    }
+
+    /// [`Self::average_azimuth_true`] in radians - the form every geometry walk
+    /// wants, so that no call site has to remember both the correction and the
+    /// conversion.
+    pub fn average_azimuth_true_rad(&self, reference: AzimuthReference) -> f64 {
+        self.average_azimuth_true(reference).to_radians()
     }
 
     /// Horizontal projection of the shot length (meters).
@@ -778,11 +803,21 @@ impl ShotData {
         horizontal_length_from_slope(self.length, self.depth_out - self.depth_in)
     }
 
-    /// Circular mean of the two forward azimuth readings - the bearing geometry
-    /// actually walks. Mirrors [`Shot::average_azimuth`] for the pre-creation
-    /// form used by the importers.
-    pub fn average_azimuth(&self) -> f64 {
+    /// Circular mean of the two forward azimuth readings, AS MEASURED. Mirrors
+    /// [`Shot::average_azimuth_measured`] for the pre-creation form used by the
+    /// importers; see that method for why the raw form is named the long way.
+    pub fn average_azimuth_measured(&self) -> f64 {
         average_azimuth_of(self.azimuth_in, self.azimuth_out)
+    }
+
+    /// True-north bearing in degrees. Mirrors [`Shot::average_azimuth_true`].
+    pub fn average_azimuth_true(&self, reference: AzimuthReference) -> f64 {
+        reference.to_true(self.average_azimuth_measured())
+    }
+
+    /// True-north bearing in radians. Mirrors [`Shot::average_azimuth_true_rad`].
+    pub fn average_azimuth_true_rad(&self, reference: AzimuthReference) -> f64 {
+        self.average_azimuth_true(reference).to_radians()
     }
 }
 
@@ -1057,7 +1092,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let average = shot.average_azimuth();
+        let average = shot.average_azimuth_measured();
         assert!((average - 0.0).abs() < 1e-6);
     }
 
@@ -1154,7 +1189,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!((shot.average_azimuth() - 90.0).abs() < 1e-6);
+        assert!((shot.average_azimuth_measured() - 90.0).abs() < 1e-6);
     }
 
     #[test]
@@ -1169,7 +1204,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let avg = shot.average_azimuth();
+        let avg = shot.average_azimuth_measured();
         assert!(
             avg < 1.0 || avg > 359.0,
             "350-10 wrap should give ~0/360, got {avg}"
@@ -1188,7 +1223,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!((shot.average_azimuth() - 180.0).abs() < 1e-6);
+        assert!((shot.average_azimuth_measured() - 180.0).abs() < 1e-6);
     }
 
     #[test]
@@ -1203,7 +1238,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!((shot.average_azimuth() - 270.0).abs() < 1e-6);
+        assert!((shot.average_azimuth_measured() - 270.0).abs() < 1e-6);
     }
 
     /// The `rem_euclid` wrap is a CORRECTION, not a reinterpretation of stored data.

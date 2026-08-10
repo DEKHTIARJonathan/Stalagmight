@@ -65,6 +65,26 @@ fn export_format_impl(
     format: &str,
     export_fn: fn(&Project, &Path) -> Result<(), anyhow::Error>,
 ) -> Result<(), String> {
+    export_format_with_notes(state, path, format, move |project, path| {
+        export_fn(project, path).map(|()| Vec::new())
+    })
+    .map(|_| ())
+}
+
+/// [`export_format_impl`] for an exporter that has something to TELL the user
+/// about the document it just wrote (#438: the Ariane azimuth compromises).
+///
+/// Notes are not warnings and not errors: the export succeeded and the file is
+/// good. They exist because the export is the only moment the user is looking
+/// at this decision, and the alternative - a `tracing::warn` nobody reads - let
+/// a file go out claiming something about its bearings that the project does
+/// not say. The frontend raises one toast per note.
+fn export_format_with_notes(
+    state: &AppState,
+    path: PathBuf,
+    format: &str,
+    export_fn: impl FnOnce(&Project, &Path) -> Result<Vec<String>, anyhow::Error>,
+) -> Result<Vec<String>, String> {
     let project = state.get_project_state().ok_or_else(|| {
         tracing::warn!(
             path = ?path,
@@ -95,14 +115,15 @@ fn export_format_impl(
         "Exporting project to {}", format.to_uppercase()
     );
     match export_fn(&project, &path) {
-        Ok(()) => {
+        Ok(notes) => {
             tracing::info!(
                 path = ?path,
                 purpose = "export project for sharing",
                 format = format,
+                notes = notes.len(),
                 "{} export completed", format.to_uppercase()
             );
-            Ok(())
+            Ok(notes)
         }
         Err(e) => {
             tracing::error!(
@@ -137,14 +158,18 @@ pub(crate) fn export_json_impl(state: &AppState, path: PathBuf) -> Result<(), St
     export_format_impl(state, path, "json", crate::export::export_json)
 }
 
-/// Export project data to Ariane TML/TMLU
+/// Export project data to Ariane TML/TMLU.
+///
+/// Returns the export NOTES (#438): what the single-flag `.tml` format could
+/// not carry about this project's north references. Empty for an ordinary
+/// project; the frontend toasts each one.
 #[tauri::command]
-pub fn export_tml(state: State<AppState>, path: PathBuf) -> Result<(), String> {
+pub fn export_tml(state: State<AppState>, path: PathBuf) -> Result<Vec<String>, String> {
     export_tml_impl(state.inner(), path)
 }
 
-pub(crate) fn export_tml_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
-    export_format_impl(state, path, "tml", crate::export::export_tml)
+pub(crate) fn export_tml_impl(state: &AppState, path: PathBuf) -> Result<Vec<String>, String> {
+    export_format_with_notes(state, path, "tml", crate::export::export_tml)
 }
 
 /// Export map image with progress events via shared loading-progress infrastructure.

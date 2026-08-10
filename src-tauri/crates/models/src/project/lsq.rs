@@ -454,6 +454,7 @@ impl Project {
             };
             let sigma_len = config.base_sigma_length_m * quality;
             let sigma_az = config.base_sigma_azimuth_deg.to_radians() * quality;
+            let azimuth_reference = self.azimuth_reference_for(section);
 
             for (idx, shot) in section.shots.iter().enumerate() {
                 let station_i = StationRef::new(section.id, idx as u32);
@@ -470,8 +471,8 @@ impl Project {
                     continue;
                 }
 
-                let vec = Self::shot_vector_along(shot, true);
-                let az = shot.average_azimuth().to_radians();
+                let vec = Self::shot_vector_along(shot, true, azimuth_reference);
+                let az = shot.average_azimuth_true_rad(azimuth_reference);
                 let len = shot.length;
 
                 let sigma_dx =
@@ -739,11 +740,16 @@ impl Project {
         };
 
         // Update shots based on solved coordinates
+        let azimuth_references = self.azimuth_reference_map();
         for section in self
             .sections
             .iter_mut()
             .filter(|s| component.contains(&s.id))
         {
+            let azimuth_reference = azimuth_references
+                .get(&section.id)
+                .copied()
+                .unwrap_or_default();
             for idx in 0..section.shots.len() {
                 let station_i = StationRef::new(section.id, idx as u32);
                 let station_j = StationRef::new(section.id, (idx + 1) as u32);
@@ -801,7 +807,12 @@ impl Project {
                     .get_mut(idx)
                     .ok_or_else(|| "Shot not found for LSQ update".to_string())?;
                 // Only adjust horizontal geometry (azimuth + length); depths stay untouched.
-                Self::update_shot_horizontal_only(shot, base_j.x - base_i.x, base_j.y - base_i.y);
+                Self::update_shot_horizontal_only(
+                    shot,
+                    base_j.x - base_i.x,
+                    base_j.y - base_i.y,
+                    azimuth_reference,
+                );
             }
         }
 

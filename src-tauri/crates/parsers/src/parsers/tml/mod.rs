@@ -19,6 +19,9 @@ use crate::models::config::DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD;
 use crate::models::shot::implied_pitch_deg;
 use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig, ShotData, ShotKind};
 
+use azimuth::tml_azimuth_reference;
+
+mod azimuth;
 mod decode;
 mod linearize;
 // `test-support` (never on in production builds) keeps these fixture builders
@@ -1208,6 +1211,11 @@ pub fn convert_tml_to_import_configs(
         push_parse_anomaly_warnings(anomalies, &mut warnings);
     }
 
+    // #438: azimuths are copied VERBATIM - the fast path this convention was
+    // chosen for - and the file's `useMagneticAzimuth` becomes the section's
+    // declared north reference instead of arithmetic on every shot.
+    let azimuth_reference = tml_azimuth_reference(tml, &mut warnings);
+
     // Build a mapping from Ariane shot ID → (section_index, station_index)
     // to resolve topology connections between sections.
     //
@@ -1348,6 +1356,7 @@ pub fn convert_tml_to_import_configs(
             shots,
             placement,
             station_comments,
+            azimuth_reference: Some(azimuth_reference),
         });
     }
 
@@ -4702,8 +4711,15 @@ mod tests {
             let mut expected_x = 0.0_f64;
             let mut expected_y = 0.0_f64;
 
+            // Through the section's own reference, not the raw reading (#438).
+            // The two coincide for a fixture whose correction is zero, which is
+            // exactly why the raw form would rot: the day this oracle is pointed
+            // at a georeferenced file it would silently start comparing a
+            // magnetic walk against a corrected one and report the declination
+            // as a coordinate bug.
+            let azimuth_reference = project.azimuth_reference_for(section);
             for (i, shot) in section.shots.iter().enumerate() {
-                let azi_rad = shot.average_azimuth().to_radians();
+                let azi_rad = shot.average_azimuth_true_rad(azimuth_reference);
                 let h = shot.horizontal_length();
                 expected_x += h * azi_rad.sin();
                 expected_y += h * azi_rad.cos();

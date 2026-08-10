@@ -2268,6 +2268,7 @@ mod tests {
             id: 0,
             name: "002".to_string(),
             shots: existing_shots,
+            azimuth_reference: crate::models::AzimuthReference::default(),
         }];
 
         // Build import sections (all 5 from DMP, including 002)
@@ -2284,11 +2285,17 @@ mod tests {
                     .filter(|sh| sh.shot_type == DmpShotType::Standard)
                     .map(DmpShot::to_shot_data)
                     .collect(),
+                // The mNemo measures magnetic and declares no declination.
+                azimuth_reference: Some(stalagmight_models::AzimuthReference::magnetic(
+                    0.0,
+                    stalagmight_models::CorrectionSource::Unknown,
+                )),
             })
             .collect();
 
         let suggestions = suggest_all_placements(
             &import_sections,
+            crate::models::AzimuthReference::default(),
             &existing_sections,
             &crate::models::config::PlacementSuggestionConfig::default(),
         );
@@ -2485,6 +2492,7 @@ mod tests {
             id: 0,
             name: "002".to_string(),
             shots: existing_shots,
+            azimuth_reference: crate::models::AzimuthReference::default(),
         }];
         let import_sections: Vec<ImportSectionForSuggestion> = dmp
             .sections
@@ -2499,11 +2507,17 @@ mod tests {
                     .filter(|sh| sh.shot_type == DmpShotType::Standard)
                     .map(DmpShot::to_shot_data)
                     .collect(),
+                // The mNemo measures magnetic and declares no declination.
+                azimuth_reference: Some(stalagmight_models::AzimuthReference::magnetic(
+                    0.0,
+                    stalagmight_models::CorrectionSource::Unknown,
+                )),
             })
             .collect();
 
         let suggestions = suggest_all_placements(
             &import_sections,
+            crate::models::AzimuthReference::default(),
             &existing_sections,
             &crate::models::config::PlacementSuggestionConfig::default(),
         );
@@ -3162,7 +3176,7 @@ mod tests {
             azimuth_out: 0.0,
             ..data.clone()
         };
-        assert!((data.average_azimuth() - raw.average_azimuth()).abs() < 1e-9);
+        assert!((data.average_azimuth_measured() - raw.average_azimuth_measured()).abs() < 1e-9);
 
         // A negative reading wraps the same way.
         shot.heading_in = -30.0;

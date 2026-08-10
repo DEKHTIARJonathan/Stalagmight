@@ -56,6 +56,12 @@ export const TOAST_KEYS = {
    * do NOT go through `executeCommand`, so the catch-all never fires for them.
    */
   EXPORT_FAILED: 'export-failed',
+  /*
+   * One key for every #438 azimuth export note. They are mutually exclusive per
+   * export - `AzimuthExport::note_code` returns at most one - so a shared key is
+   * the right dedup unit: two exports in a row collapse into one line.
+   */
+  EXPORT_NOTE: 'export-note',
   WARNING_RESOLVE: 'warning-resolve',
   ZERO_DATUM_INCOMPLETE: 'zero-datum-incomplete',
 

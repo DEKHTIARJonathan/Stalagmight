@@ -25,8 +25,56 @@ The user chooses between the two formats in the save dialog's file-type filter.
 |----------------|-------------|-------|
 | `project.name` | `caveName` | |
 | Always `"m"` | `unit` | Export is always metric (internal model is metric) |
-| `true` | `useMagneticAzimuth` | Default |
+| Derived from the sections' north references | `useMagneticAzimuth` | See "Azimuth convention" below (#438) |
 | `project.surface_elevation` | `firstStartAbsoluteElevation` | 0.0 if unknown |
+
+### Azimuth convention (#438)
+
+The flag is file-level and the references are per section, so the exporter picks
+one of three shapes:
+
+Only a section that DECLARES something votes. A section whose correction source
+is `unknown` - every `.dmp`, and any `.tml` with no georeference - is raw
+magnetic with nothing on record; it constrains the document to be magnetic and
+otherwise abstains. Counting it as "correction 0" would make the ordinary case
+(a georeferenced `.tml` plus `.dmp` files from the same cave) mixed, rewriting
+every bearing and declaring true north about readings known to be magnetic.
+
+| Project | `useMagneticAzimuth` | Azimuths written |
+|---------|----------------------|------------------|
+| Nothing declared, or every declared section magnetic with one correction | `true` | exactly as stored - Ariane applies its own declination |
+| Every section true north | `false` | exactly as stored |
+| Declared corrections disagree, or any section is grid-referenced, AND every section has a correction on record | `false` | each section's correction applied, so the document is uniformly true north |
+| Any of those, but at least one section has NO correction on record | `true` | as stored, with an export note: a section whose offset from true north is unknown cannot be rotated into true north, so the rewrite is refused rather than shipping an unrotated bearing under a true-north flag |
+
+The third case is the only one that changes a number on the way out, and it
+changes only the FILE: the project keeps its measured readings. The third and
+fourth both raise a toast on the export (the command returns a stable note code
+per `AzimuthExport::note_code`, the copy is the frontend's) and log the long
+form.
+
+**Round-trip cost of that third case.** Re-importing such a file reads the
+rotated bearings as measured true-north ones, so the per-section corrections are
+gone and the export/re-import multiset of azimuths legitimately differs - the
+same class of documented lossiness as the LRUD zero/null collision below. The
+first two cases round-trip byte-identically.
+
+**What the first case cannot carry, and what that costs.** A magnetic document
+hands Ariane the measured readings and nothing else: the format has no field for
+our correction, so Ariane derives its own declination from the file's `START`
+GPS and applies that instead. Where our correction came from the same
+geomagnetic model (`source: igrf`) the two agree to within model revision and
+the survey lands where we draw it. Where it came from a hand-entered value - a
+Compass `DECLINATION:` the surveyor typed, or a manually set project reference -
+they need not agree, and the survey renders in Ariane rotated by
+(Ariane's IGRF - our correction): typically a degree or two, more where the
+entered value was stale or deliberately local. Nothing is lost from the project
+and nothing is wrong in the file; the two apps simply correct the same readings
+by different numbers. Accepted as the price of handing over measurements rather
+than a frame - the alternative, rotating every bearing so the file is
+self-contained, is the third case above and is lossy in the other direction. See
+the import side's [Azimuth convention](ariane-import.md#azimuth-convention-438)
+for where each correction comes from.
 
 ### Section-level fields
 

@@ -309,8 +309,9 @@ impl Project {
             return None;
         }
         // Compute displacement before data is consumed - the new shot shifts
-        // all stations after the insertion point.
-        let (dx, dy) = Self::shot_displacement(&data);
+        // all stations after the insertion point. In the section's own frame
+        // (#438), matching the walk this compensates.
+        let (dx, dy) = Self::shot_displacement(&data, self.azimuth_reference_for_id(section_id));
         let section = self.get_section_mut(section_id)?;
         let shot =
             section.insert_shot_after_with_id(after_shot_id, data, forced_id, forced_uuid)?;
@@ -368,7 +369,7 @@ impl Project {
         // Prepend (pos == 0): the new shot becomes the section's first shot and
         // every existing station shifts up by one; keep them in place by
         // back-shifting the offset.
-        let (dx, dy) = Self::shot_displacement(&data);
+        let (dx, dy) = Self::shot_displacement(&data, self.azimuth_reference_for_id(section_id));
         let section = self.get_section_mut(section_id)?;
         let shot =
             section.insert_shot_before_with_id(before_shot_id, data, forced_id, forced_uuid)?;
@@ -1466,7 +1467,10 @@ impl Project {
         //
         // The shift_blocked guard already prevents deletion when BOTH sides
         // are datum-anchored.
-        let (dx, dy) = Self::shot_displacement(&deleted_shot.to_shot_data());
+        let (dx, dy) = Self::shot_displacement(
+            &deleted_shot.to_shot_data(),
+            self.azimuth_reference_for_id(section_id),
+        );
 
         if pos == 0 {
             // First shot: station 0 removed, ALL remaining stations are "tail".

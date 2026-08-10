@@ -123,6 +123,11 @@ impl AppState {
             let total_dy = existing.1 + offset.y;
             let total_dz = existing.2 + offset.z;
 
+            // Resolved before the `&mut` borrow below: the geometry here is in
+            // world space, so every read adds this and every write-back removes
+            // it again (#438).
+            let azimuth_reference = project.azimuth_reference_for_id(station_ref.section_id);
+
             // Find the section containing this station (mutable)
             let Some(section) = project
                 .sections
@@ -143,7 +148,7 @@ impl AppState {
             let mut prev_update: Option<(f64, f64, f64, f64)> = None; // len, azi, depth_out, pitch
             if idx > 0 {
                 let shot = &section.shots[idx - 1];
-                let azi_rad = shot.average_azimuth().to_radians();
+                let azi_rad = shot.average_azimuth_true_rad(azimuth_reference);
                 let old_horizontal = shot.horizontal_length();
                 let old_dx = old_horizontal * azi_rad.sin();
                 let old_dy = old_horizontal * azi_rad.cos();
@@ -159,9 +164,11 @@ impl AppState {
                     );
                 }
                 let new_azi = if new_horizontal > 1e-9 {
-                    normalize_azimuth(new_dx.atan2(new_dy).to_degrees())
+                    // Solved in world space; stored as a measured reading (#438).
+                    azimuth_reference
+                        .to_measured(normalize_azimuth(new_dx.atan2(new_dy).to_degrees()))
                 } else {
-                    shot.average_azimuth()
+                    shot.average_azimuth_measured()
                 };
                 let pitch = new_dz.atan2(new_horizontal).to_degrees();
                 prev_update = Some((new_len, new_azi, new_depth_out, pitch));
@@ -169,7 +176,7 @@ impl AppState {
 
             let mut next_update: Option<(f64, f64, f64, f64)> = None; // len, azi, depth_in, pitch
             if let Some(shot) = section.shots.get(idx) {
-                let azi_rad = shot.average_azimuth().to_radians();
+                let azi_rad = shot.average_azimuth_true_rad(azimuth_reference);
                 let old_horizontal = shot.horizontal_length();
                 let old_dx = old_horizontal * azi_rad.sin();
                 let old_dy = old_horizontal * azi_rad.cos();
@@ -185,9 +192,11 @@ impl AppState {
                     );
                 }
                 let new_azi = if new_horizontal > 1e-9 {
-                    normalize_azimuth(new_dx.atan2(new_dy).to_degrees())
+                    // Solved in world space; stored as a measured reading (#438).
+                    azimuth_reference
+                        .to_measured(normalize_azimuth(new_dx.atan2(new_dy).to_degrees()))
                 } else {
-                    shot.average_azimuth()
+                    shot.average_azimuth_measured()
                 };
                 let pitch = new_dz.atan2(new_horizontal).to_degrees();
                 next_update = Some((new_len, new_azi, new_depth_in, pitch));

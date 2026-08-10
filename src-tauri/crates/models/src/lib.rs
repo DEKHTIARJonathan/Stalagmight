@@ -1,5 +1,8 @@
 pub mod angle;
 pub mod app_dirs;
+pub mod azimuth_reference;
+#[cfg(test)]
+mod azimuth_reference_tests;
 pub mod comment_split;
 pub mod config;
 pub mod dive_plan;
@@ -16,6 +19,7 @@ pub mod undo_mode;
 pub mod warning;
 
 pub use angle::*;
+pub use azimuth_reference::*;
 pub use dive_plan::*;
 pub use geo::*;
 pub use id_stride::*;

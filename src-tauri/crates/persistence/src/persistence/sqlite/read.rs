@@ -4,9 +4,9 @@ use rusqlite::{params, OptionalExtension};
 use std::collections::HashMap;
 
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, LoopClosure, MergeTopology, Project, Section, SectionData,
-    SectionId, Shot, ShotKind, StationKey, StationMerge, SurveyDirection, UnrecognisedShotKind,
-    ZeroDatum, FEATURE_ID_STRIDE,
+    AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
+    MergeTopology, NorthReference, Project, Section, SectionData, SectionId, Shot, ShotKind,
+    StationKey, StationMerge, SurveyDirection, UnrecognisedShotKind, ZeroDatum, FEATURE_ID_STRIDE,
 };
 
 use super::Database;
@@ -276,6 +276,18 @@ impl Database {
                 .map(|c| c > 0)
                 .unwrap_or(false);
 
+            // #438: same tolerance as `quality`/`reverse_parity` above - a
+            // read-only open skips the migration, so the columns can be absent.
+            let has_azimuth_columns: bool = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='azimuth_north'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+
             let quality_expr = if has_quality_column { "quality" } else { "1.0" };
             let parity_expr = if has_reverse_parity_column {
                 "reverse_parity"
@@ -287,9 +299,14 @@ impl Database {
             } else {
                 ("NULL", "NULL")
             };
+            let azimuth_exprs = if has_azimuth_columns {
+                "azimuth_north, azimuth_correction, azimuth_source, azimuth_epoch_year"
+            } else {
+                "NULL, NULL, NULL, NULL"
+            };
             let mut stmt = self.conn.prepare(&format!(
                 "SELECT id, name, surveyor, date, color, direction, {quality_expr}, {parity_expr}, \
-                 {gauge_expr}, {gauge_nb_expr} FROM sections ORDER BY id"
+                 {gauge_expr}, {gauge_nb_expr}, {azimuth_exprs} FROM sections ORDER BY id"
             ))?;
 
             let mut section_rows = Vec::new();
@@ -305,6 +322,10 @@ impl Database {
                     row.get::<_, i64>(7)? != 0,
                     row.get::<_, Option<String>>(8)?,
                     row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<f64>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, Option<i32>>(13)?,
                 ))
             })?;
             for row in rows {
@@ -326,6 +347,10 @@ impl Database {
                     reverse_parity,
                     gauge_shot_uuid,
                     gauge_neighbour_uuid,
+                    azimuth_north,
+                    azimuth_correction,
+                    azimuth_source,
+                    azimuth_epoch_year,
                 ) = section_row;
                 let date = date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
                 let direction = direction_str
@@ -347,10 +372,27 @@ impl Database {
                     shots: Vec::new(),
                 };
 
+                // #438: the reference exists only if the file actually recorded a
+                // north token. A NULL there is "nothing recorded" and stays
+                // `None` (inherit the project default), which is the pre-#438
+                // behaviour; `from_parts` re-imposes the type's invariants on
+                // whatever the other three columns hold.
+                let azimuth_reference = azimuth_north.map(|north| {
+                    AzimuthReference::from_parts(
+                        NorthReference::from_token(&north),
+                        azimuth_correction.unwrap_or(0.0),
+                        CorrectionSource::from_token(
+                            azimuth_source.as_deref().unwrap_or("unknown"),
+                            azimuth_epoch_year,
+                        ),
+                    )
+                });
+
                 let mut section = Section::new(id, section_data);
                 section.reverse_parity = reverse_parity;
                 section.gauge_shot_uuid = gauge_shot_uuid;
                 section.gauge_neighbour_uuid = gauge_neighbour_uuid;
+                section.azimuth_reference = azimuth_reference;
                 section_by_id.insert(id, sections.len());
                 next_section_id = next_section_id.max(id + 1);
                 sections.push(section);
@@ -599,6 +641,7 @@ impl Database {
         // Entrance elevation (#431). Unlike `validation`, a missing row has no
         // legacy-seeding fallback - `None` genuinely means "unknown".
         let surface_elevation = self.load_project_surface_elevation()?;
+        let default_azimuth_reference = self.load_project_default_azimuth_reference()?;
 
         // Pre-populate the section_id → index lookup so callers get
         // O(1) get_section without needing rebuild_section_index().
@@ -641,6 +684,7 @@ impl Database {
             next_closure_id,
             validation,
             surface_elevation,
+            default_azimuth_reference,
             cascade_deferred: false,
             section_index_cache,
             shot_uuid_index,
@@ -1201,6 +1245,36 @@ impl Database {
                 tracing::warn!(
                     raw = %s,
                     "stored surface_elevation is present but unparseable or non-finite; reading as unknown"
+                );
+            }
+            parsed
+        }))
+    }
+
+    /// Load the project-level default north reference (#438). A missing key -
+    /// no row, or no `project_settings` table at all - reads as `None`, which
+    /// resolves to a zero correction: exactly what every pre-#438 file means.
+    /// A row that does not parse is treated the same way and warned about,
+    /// rather than defaulting to some other rotation.
+    pub fn load_project_default_azimuth_reference(&self) -> Result<Option<AzimuthReference>> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'default_azimuth_reference'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        Ok(json.and_then(|s| {
+            let parsed = serde_json::from_str::<AzimuthReference>(&s).ok().map(|r| {
+                // Re-impose the type's invariants on a hand-edited row.
+                AzimuthReference::from_parts(r.north, r.correction, r.source)
+            });
+            if parsed.is_none() {
+                tracing::warn!(
+                    raw = %s,
+                    "stored default_azimuth_reference is present but unparseable; reading as none recorded"
                 );
             }
             parsed
