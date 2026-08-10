@@ -300,7 +300,14 @@ function App() {
     // toolbar / menu / keyboard paths all set their source. routeOpenedFile clears
     // it on every terminal/abandon path.
     setProjectActionSource('drag-drop');
-    await routeOpenedFile(filePath, 'Import Failed');
+    // 'Open Failed', not 'Import Failed': since F11 the drop route also covers
+    // a dropped `.stalx` (a plain OPEN, not an import). Most `.stalx` open
+    // failures are handled inside `loadProject` with their own dialog title,
+    // but an unexpected throw falls into `routeOpenedFile`'s own catch and
+    // uses this title - same neutral choice `launchWithFile.ts` already made
+    // for the OS-launch channel, which faces the identical dual-purpose
+    // ambiguity.
+    await routeOpenedFile(filePath, 'Open Failed');
   }, []);
 
   // Set up drag-drop event listener for importable files (DMP/TML/TMLU/Compass/GPX)
