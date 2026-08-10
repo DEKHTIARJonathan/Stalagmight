@@ -133,13 +133,26 @@ export function GasPlanPanel() {
     useGasPlanStore.getState().syncSettingsOnlyGasFields(persistedGasConfig);
   }, [persistedGasConfig]);
 
-  // #480: with no zero datum set, `Project::zero_datum_roots` (backend) returns an empty root
-  // set, and the entrance origin (`origin === null`) walks from nothing - every station comes
-  // back unreachable with no explanation on screen. Surfaced here rather than inferred from the
-  // computed field so the warning is deterministic and shows up BEFORE the first fetch, not just
-  // after a round trip confirms it.
-  const hasZeroDatum = useProjectStore((s) => (s.project?.zero_datums.length ?? 0) > 0);
-  const entranceHasNoZeroDatum = !hasZeroDatum;
+  // #480: with no RESOLVABLE zero datum, `Project::zero_datum_roots` (backend,
+  // pathfinding.rs) returns an empty root set, and the entrance origin (`origin === null`)
+  // walks from nothing - every station comes back unreachable with no explanation on screen.
+  // Checked against `stations` (the same positional list `zero_datum_roots`' own
+  // `station_index` is built from), not `project.zero_datums.length`: a datum whose station no
+  // longer resolves can still leave a stale entry in `zero_datums` while producing exactly the
+  // same degenerate field (the codebase already learned this the hard way for TML export
+  // anchoring - see `ExportControls.tsx`'s `tmlAllSectionsUnanchored`, #411). Surfaced here
+  // rather than inferred from the computed field so the warning is deterministic and shows up
+  // BEFORE the first fetch, not just after a round trip confirms it.
+  const entranceHasNoZeroDatum = useProjectStore((s) => {
+    const zeroDatums = s.project?.zero_datums ?? [];
+    return !zeroDatums.some((zd) =>
+      s.stations.some(
+        (st) =>
+          st.station_ref.section_id === zd.station_ref.section_id &&
+          st.station_ref.station_index === zd.station_ref.station_index
+      )
+    );
+  });
 
   // Swim-speed disk persist (#241, shared queue since the #317 review round): the in-memory
   // working config updates immediately on every keystroke; the disk write goes through
@@ -441,11 +454,12 @@ export function GasPlanPanel() {
             </button>
           </div>
           {origin === null && entranceHasNoZeroDatum && (
-            // #480: the same degenerate-field cause as the entry card's hint, but reached here
-            // via a loaded plan whose saved origin was the entrance (`applyLoadedPlan` in
-            // gasPlanStore) landing in a project with no zero datum - `origin` reads null either
-            // way, so this can't be told apart from a healthy entrance plan without checking the
-            // project directly.
+            // #480: the entrance origin (`origin === null`), whether chosen via the entry
+            // CTA (`chooseEntrance` only sets `originChosen`, leaving `origin` at its null
+            // default) or restored by a loaded plan (`applyLoadedPlan`) - same degenerate-field
+            // cause as the entry card's hint above, and `origin` reads null either way, so this
+            // can't be told apart from a healthy entrance plan without checking the project
+            // directly.
             <p className="text-xs text-warning" data-testid="gas-origin-no-zero-datum-warning">
               {t('gasPanel.origin.noZeroDatumWarning')}
             </p>
