@@ -154,6 +154,137 @@ fn test_merge_projects_archives_sources_and_adds_extension() {
     assert!(temp_dir.path().join("b.stalx.archived").exists());
 }
 
+/// Save two synthetic projects (with the given `surface_elevation`s) and merge
+/// them, returning the merged project and the merge's `CommandResult`.
+fn merge_two_surface_elevations(
+    elev_a: Option<f64>,
+    elev_b: Option<f64>,
+) -> (Project, CommandResult) {
+    let temp_dir = TempDir::new().unwrap();
+
+    let mut project_a = Project::new("A".to_string(), None);
+    project_a.surface_elevation = elev_a;
+    project_a.add_section(SectionData {
+        name: Some("Section A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: Some(SurveyDirection::In),
+        quality: 1.0,
+        shots: vec![test_shot_data(1.0)],
+    });
+
+    let mut project_b = Project::new("B".to_string(), None);
+    project_b.surface_elevation = elev_b;
+    project_b.add_section(SectionData {
+        name: Some("Section B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: Some(SurveyDirection::Out),
+        quality: 1.0,
+        shots: vec![test_shot_data(2.0)],
+    });
+
+    let source_a = temp_dir.path().join("a.stalx");
+    let source_b = temp_dir.path().join("b.stalx");
+
+    let mut db_a = Database::open(&source_a).unwrap();
+    db_a.save_project(&project_a).unwrap();
+    let mut db_b = Database::open(&source_b).unwrap();
+    db_b.save_project(&project_b).unwrap();
+    drop(db_a);
+    drop(db_b);
+
+    let state = AppState::new().unwrap();
+    let output_path = temp_dir.path().join("merged-output.stalx");
+
+    let result = state.execute(Command::MergeProjects {
+        source_paths: vec![source_a, source_b],
+        output_path: output_path.clone(),
+        output_name: "Merged".to_string(),
+        archive_originals: false,
+    });
+    assert!(result.success);
+
+    let db = Database::open_existing(&output_path).unwrap();
+    let merged = db.load_project().unwrap();
+    (merged, result)
+}
+
+#[test]
+fn test_merge_projects_surface_elevation_some_and_none() {
+    let (merged, result) = merge_two_surface_elevations(Some(123.5), None);
+    assert_eq!(merged.surface_elevation, Some(123.5));
+    assert!(result.warnings.is_empty());
+}
+
+#[test]
+fn test_merge_projects_surface_elevation_none_and_some() {
+    let (merged, result) = merge_two_surface_elevations(None, Some(-7.25));
+    assert_eq!(merged.surface_elevation, Some(-7.25));
+    assert!(result.warnings.is_empty());
+}
+
+#[test]
+fn test_merge_projects_surface_elevation_agreeing() {
+    let (merged, result) = merge_two_surface_elevations(Some(100.0), Some(100.002));
+    assert_eq!(merged.surface_elevation, Some(100.0));
+    assert!(result.warnings.is_empty());
+}
+
+#[test]
+fn test_merge_projects_surface_elevation_disagreeing_first_wins_with_warning() {
+    let (merged, result) = merge_two_surface_elevations(Some(100.0), Some(150.0));
+    assert_eq!(merged.surface_elevation, Some(100.0));
+    assert_eq!(result.warnings.len(), 1);
+    assert_eq!(result.warnings[0].code, "SURFACE_ELEVATION_MISMATCH");
+    assert!(result.warnings[0].message.contains("100.00"));
+    assert!(result.warnings[0].message.contains("150.00"));
+}
+
+/// The tolerance is strictly-greater-than, not greater-or-equal: a difference
+/// of EXACTLY 0.005 m must read as agreement, matching the `{:.2}` rounding
+/// the warning message itself uses (both would print "100.00 m" against
+/// "100.00 m", so a warning at the boundary would name no visible disagreement).
+#[test]
+fn test_merge_projects_surface_elevation_tolerance_boundary_is_exclusive() {
+    let (merged, result) = merge_two_surface_elevations(Some(100.0), Some(100.005));
+    assert_eq!(merged.surface_elevation, Some(100.0));
+    assert!(
+        result.warnings.is_empty(),
+        "a 0.005 m difference is AT the tolerance, not beyond it, and must not warn: {:?}",
+        result.warnings
+    );
+}
+
+/// A non-finite incoming elevation (never produced by a real Ariane import,
+/// but not provably unreachable upstream) must not be adopted as the merged
+/// value, and must not silently swallow the no-clobber warning either - it is
+/// simply skipped, as if that source had no elevation at all.
+#[test]
+fn test_merge_projects_surface_elevation_non_finite_is_skipped() {
+    let (merged, result) = merge_two_surface_elevations(Some(f64::NAN), Some(100.0));
+    assert_eq!(
+        merged.surface_elevation,
+        Some(100.0),
+        "a NaN first source must not poison the merged elevation"
+    );
+    assert!(result.warnings.is_empty());
+
+    let (merged, result) = merge_two_surface_elevations(Some(100.0), Some(f64::NAN));
+    assert_eq!(
+        merged.surface_elevation,
+        Some(100.0),
+        "a NaN later source must not be adopted or compared"
+    );
+    assert!(
+        result.warnings.is_empty(),
+        "a skipped NaN source must not produce a mismatch warning: {:?}",
+        result.warnings
+    );
+}
+
 #[test]
 fn test_start_new_load_cancels_previous_and_clear_is_identity_safe() {
     let state = AppState::new().unwrap();
@@ -2867,6 +2998,71 @@ fn a_snapshot_restore_is_bit_exact() {
         after.sections[0].shots[0].length.to_bits(),
         length.to_bits(),
         "restoring a snapshot changed length in its last bits"
+    );
+}
+
+/// A snapshot persisted by a build predating #431/#448 has no
+/// "surface_elevation" key at all, so serde's #[serde(default)] would
+/// otherwise silently restore it to None. Mirrors the `validation`
+/// legacy-carry-over immediately above `restore_snapshot_into`.
+#[test]
+fn restore_snapshot_carries_current_surface_elevation_over_a_legacy_blob() {
+    let mut project = Project::new("Legacy".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+    let mut legacy_json = serde_json::to_value(&project).unwrap();
+    legacy_json
+        .as_object_mut()
+        .unwrap()
+        .remove("surface_elevation");
+    let snapshot = serde_json::to_string(&legacy_json).unwrap();
+    assert!(
+        !snapshot.contains("\"surface_elevation\":"),
+        "precondition: the fixture blob must look pre-#431/#448"
+    );
+
+    let mut slot = Some(project.clone());
+    slot.as_mut().unwrap().surface_elevation = Some(123.5);
+    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
+
+    assert_eq!(
+        slot.unwrap().surface_elevation,
+        Some(123.5),
+        "restoring a legacy snapshot must carry the CURRENT surface_elevation forward, not drop it to None"
+    );
+}
+
+/// The inverse of the legacy-carry-over above: a MODERN snapshot that
+/// genuinely serializes `"surface_elevation":null` (an explicit clear, not an
+/// absent key) must restore `None`, not the pre-undo project's `Some` value.
+/// `surface_elevation` has no `skip_serializing_if`, so this is safe today -
+/// but nothing guarded it, and the legacy-carry-over above reads similar
+/// enough on a diff to invite a regression that carries the current value
+/// forward unconditionally.
+#[test]
+fn restore_snapshot_clears_surface_elevation_when_the_modern_snapshot_says_none() {
+    let mut project = Project::new("Cleared".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+    project.surface_elevation = None;
+    let snapshot = AppState::serialize_project_snapshot(&project).unwrap();
+    assert!(
+        snapshot.contains("\"surface_elevation\":null"),
+        "precondition: a modern snapshot must serialize the explicit null, not omit the key: {snapshot}"
+    );
+
+    let mut slot = Some(project);
+    slot.as_mut().unwrap().surface_elevation = Some(123.5);
+    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
+
+    assert_eq!(
+        slot.unwrap().surface_elevation,
+        None,
+        "a modern snapshot's explicit null must clear surface_elevation, not carry the pre-undo value forward"
     );
 }
 

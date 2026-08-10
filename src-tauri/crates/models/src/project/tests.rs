@@ -15118,3 +15118,21 @@ fn delete_shot_preview_and_execution_agree_on_the_skipped_stitch() {
     );
     assert!(project.over_anchored_merge_components().is_empty());
 }
+
+/// Pins `ariane_elevation_or_absent`'s real boundary: the filter is
+/// `raw.abs() > f64::EPSILON`, a STRICT inequality, so a value AT OR UNDER
+/// `f64::EPSILON` (2.220446049250313e-16) reads as absent, not just an exact
+/// `0.0`. `1e-9` is many orders of magnitude ABOVE `f64::EPSILON` and must
+/// pass through unchanged - a value can be "close to zero" in the everyday
+/// sense while still being nowhere near this boundary.
+#[test]
+fn ariane_elevation_or_absent_matches_the_real_epsilon_boundary() {
+    assert_eq!(ariane_elevation_or_absent(0.0), None);
+    assert_eq!(ariane_elevation_or_absent(f64::EPSILON), None);
+    assert_eq!(ariane_elevation_or_absent(-f64::EPSILON), None);
+    assert_eq!(ariane_elevation_or_absent(1e-17), None);
+    assert_eq!(ariane_elevation_or_absent(1e-9), Some(1e-9));
+    assert_eq!(ariane_elevation_or_absent(f64::NAN), None);
+    assert_eq!(ariane_elevation_or_absent(123.5), Some(123.5));
+    assert_eq!(ariane_elevation_or_absent(-7.25), Some(-7.25));
+}

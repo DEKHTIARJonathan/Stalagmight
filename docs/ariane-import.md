@@ -19,7 +19,7 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
 - Cave name
 - Measurement unit (metric / imperial)
 - Magnetic azimuth flag (parsed, unused)
-- Entrance elevation (parsed, unused)
+- Entrance elevation (parsed, used - see [Limitations](#limitations))
 - GPS reference (latitude, longitude, altitude) - extracted from the first shot with non-zero coordinates
 
 ### Per-section
@@ -99,6 +99,10 @@ When the file specifies imperial units, lengths, LRUD values, depths, section st
 
 An absent or recognised `<unit>` (empty, `m`, `metric`, `ft`, `imperial`) is handled silently. Anything else falls back to metric AND raises an import warning naming the unrecognised string, so a silent mis-scaling is visible on the receipt.
 
+### Entrance elevation's zero-is-absent convention
+
+Ariane encodes "no entrance elevation recorded" as `firstStartAbsoluteElevation = 0.0` rather than an absent field, so import treats an exact `0.0` as "not recorded" and anything else, however small, as a real value. This is format-forced, not a Stalagmight choice: a genuine entrance at exactly 0.0 m above mean sea level is not representable and will read back as unset. The convention lives in `crate::models::ariane_elevation_or_absent`, called by import and SpeleoDB pull-adoption; export mirrors it independently (it writes `0.0` back out for an unset `Project::surface_elevation` via its own `unwrap_or(0.0)`, rather than calling the helper), so the round trip is consistent.
+
 ## Azimuth Semantics
 
 Ariane has one azimuth field per shot (`Azimut` / `AZ`). Stalagmight duplicates that value into internal `azimuth_in` and `azimuth_out` on import for model compatibility, but `azimuth_out` must not be interpreted as an Ariane backsight measurement.
@@ -113,6 +117,8 @@ Ariane has one azimuth field per shot (`Azimut` / `AZ`). Stalagmight duplicates 
 
 ## Limitations
 
+**Entrance elevation round-trips, subject to the zero-is-absent convention above.** `firstStartAbsoluteElevation` is imported into `Project::surface_elevation` (+up from mean sea level, project-level rather than per-entrance) and read back by TML export; it does not feed the geometry - the zero datum's `depth_reference` (+down from the surface) is what positions stations ([#431](https://github.com/Stalagmight/Stalagmight/issues/431)).
+
 Parsed but dropped:
 
 - **Ariane shot UUIDs are PRESERVED**, and have been since [#423](https://github.com/Stalagmight/Stalagmight/issues/423)
@@ -126,7 +132,6 @@ Parsed but dropped:
   foreign identity and nothing else.
 
 - **Declination is never applied.** The `useMagneticAzimuth` flag is parsed onto `TmlFile` and read by nobody: a magnetic file's azimuths are imported as-is, with no declination correction and no warning that one may be needed.
-- **Entrance elevation is not wired.** `firstStartAbsoluteElevation` reaches `TmlFile` (and the geo-coding altitude) but has no home in the project model, so it is dropped - Ariane's elevation is +up from sea level while the zero datum's `depth_reference` is +down from the surface ([#431](https://github.com/Stalagmight/Stalagmight/issues/431)).
 - **A `0.0` LRUD field is read as UNMEASURED, per field.** `lrud_opt`
   (`parsers/tml/mod.rs:1908-1914`) maps any of `Left`/`Right`/`Up`/`Down` whose
   `abs()` is under `f64::EPSILON` to `None`, independently of the other three - so

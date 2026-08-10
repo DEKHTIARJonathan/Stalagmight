@@ -706,6 +706,14 @@ impl AppState {
         // serializes the key, so it still restores the intended thresholds (Codex).
         let snapshot_has_validation = snapshot.contains("\"validation\":");
         let current_validation = slot.as_ref().map(|p| p.validation.clone());
+        // Same idiom for `surface_elevation` (#431/#448): a snapshot persisted by a
+        // build predating that field has no "surface_elevation" key, so serde's
+        // #[serde(default)] fills None - silently dropping a real entrance
+        // elevation on undo/redo of a legacy persisted entry. Carry the CURRENT
+        // project's value across for those legacy blobs only; a real elevation
+        // edit always serializes the key, so it still restores correctly.
+        let snapshot_has_surface_elevation = snapshot.contains("\"surface_elevation\":");
+        let current_surface_elevation = slot.as_ref().and_then(|p| p.surface_elevation);
         // [#303] Where the file lives is a property of THIS machine, not of the survey, so
         // `serialize_project_snapshot` clears it rather than write a username into every
         // pushed commit. Carry the live value across on the way back, or an undo would leave
@@ -719,6 +727,11 @@ impl AppState {
                 if !snapshot_has_validation {
                     if let Some(validation) = current_validation {
                         restored.validation = validation;
+                    }
+                }
+                if !snapshot_has_surface_elevation {
+                    if let Some(surface_elevation) = current_surface_elevation {
+                        restored.surface_elevation = Some(surface_elevation);
                     }
                 }
                 restored.file_path = current_file_path;

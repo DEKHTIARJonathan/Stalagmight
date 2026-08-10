@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { saveDialog } from '../../utils/fileDialogs';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -10,13 +11,15 @@ import { ensureExtension, projectSaveFilters, PROJECT_EXTENSION } from '../../ut
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { trackDialogComplete, setProjectActionSource } from '../../utils/telemetry';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 /**
  * MergeProjectsDialog allows users to merge multiple projects into a single new project.
  * It receives the selected projects via dialogData.selectedProjects.
  */
 export default function MergeProjectsDialog() {
-  const { closeDialog, dialogData } = useUIStore();
+  const { t } = useTranslation();
+  const { closeDialog, dialogData, showToast } = useUIStore();
   const { mergeProjects, loadProject } = useProjectStore();
   const precision = useDecimalPrecision();
 
@@ -102,6 +105,21 @@ export default function MergeProjectsDialog() {
       if (result.success) {
         trackDialogComplete('merge-projects');
         closeDialog();
+        // A successful merge can still carry a warning (e.g. a no-clobber
+        // entrance-elevation mismatch, #448) - the dialog is about to close, so
+        // this is the only place watching `result.warnings`. Per
+        // docs/notifications.md the dialog has already closed and there is no
+        // decision left to make, so this rides a toast, not a second modal.
+        // Only the first warning is surfaced: the backend itself only ever
+        // reports the first disagreement.
+        const [firstWarning] = result.warnings ?? [];
+        if (firstWarning) {
+          showToast(
+            t('dialogs.mergeProjects.warningToast', { message: firstWarning.message }),
+            TOAST_KEYS.MERGE_WARNING,
+            'warning'
+          );
+        }
         // Open the merged project if requested
         // loadProject handles view switching internally
         if (openAfterMerge) {

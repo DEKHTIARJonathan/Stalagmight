@@ -90,6 +90,18 @@ impl AppState {
         let mut merged_project = Project::new(output_name, None);
         merged_project.validation = self.get_config().validation;
 
+        // Carry the entrance/surface elevation (#431, #448) forward: the first
+        // source that has one wins, and a later source disagreeing beyond the
+        // same 0.005 m tolerance used on import (see `command_import.rs`'s
+        // `surface_elevation_warning`) is reported instead of silently
+        // overwriting or averaging. Unlike the import path, a merge has no
+        // `ImportReceipt` to carry a receipt warning on - this rides the
+        // returned `CommandResult.warnings` (`ValidationWarning`, a different
+        // channel) instead. Only the first disagreement is kept: collecting
+        // every later mismatch is not worth the machinery for a value that is
+        // already pinned by the first source.
+        let mut surface_elevation_warning: Option<String> = None;
+
         // Track section ID remapping: (old_project_idx, old_section_id) -> new_section_id
         let mut section_id_map: std::collections::HashMap<(usize, SectionId), SectionId> =
             std::collections::HashMap::new();
@@ -283,6 +295,32 @@ impl AppState {
                 }
             }
 
+            // Combine surface elevation: first `Some` wins; a disagreeing later
+            // source only produces a warning, it never overwrites. A NaN/infinite
+            // incoming value (never produced by a real Ariane import, but not
+            // provably impossible upstream) is skipped outright - adopting it as
+            // the merged value would poison every later comparison and export,
+            // and comparing it against `existing` would always read as
+            // "differs" without ever explaining why.
+            if let Some(incoming) = source_project.surface_elevation.filter(|v| v.is_finite()) {
+                match merged_project.surface_elevation {
+                    None => merged_project.surface_elevation = Some(incoming),
+                    // Strictly greater than 0.005 m (exclusive): a difference AT
+                    // the boundary is treated as agreement, matching the message's
+                    // own `{:.2}` rounding (see command_import.rs's identical
+                    // comparison, which this mirrors).
+                    Some(existing) if (existing - incoming).abs() > 0.005 => {
+                        if surface_elevation_warning.is_none() {
+                            surface_elevation_warning = Some(format!(
+                                "Source project's entrance elevation ({incoming:.2} m) differs from \
+                                 the merged project's value ({existing:.2} m); kept {existing:.2} m"
+                            ));
+                        }
+                    }
+                    Some(_) => {}
+                }
+            }
+
             // Combine location if present
             if let Some(ref loc) = source_project.location {
                 if merged_project.location.is_none() {
@@ -366,7 +404,15 @@ impl AppState {
             }
         }
 
-        CommandResult::success()
+        let mut result = CommandResult::success();
+        if let Some(message) = surface_elevation_warning {
+            result.warnings.push(crate::core::ValidationWarning {
+                code: "SURFACE_ELEVATION_MISMATCH".to_string(),
+                message,
+                severity: crate::core::WarningSeverity::Warning,
+            });
+        }
+        result
     }
 
     /// Archive a project file by renaming it with .archived suffix

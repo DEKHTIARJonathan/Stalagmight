@@ -364,6 +364,17 @@ pub struct Project {
     pub realign_fixpoint: Option<offsets::RealignFixpoint>,
 }
 
+/// Apply the Ariane `.tml`/`.tmlu` no-data convention to a raw
+/// `firstStartAbsoluteElevation` value: Ariane encodes "no elevation
+/// recorded" as exactly `0.0`, so an exact zero is treated as absent here
+/// (see `Project::surface_elevation`'s doc comment above). This is
+/// format-forced, not a design choice: a genuine entrance at exactly 0.0 m
+/// above mean sea level is not representable, while any near-zero but
+/// nonzero value passes through unchanged.
+pub fn ariane_elevation_or_absent(raw: f64) -> Option<f64> {
+    (raw.abs() > f64::EPSILON).then_some(raw)
+}
+
 /// Project metadata for listing
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ProjectMetadata {

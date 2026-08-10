@@ -366,8 +366,8 @@ pub fn execute_tml_import(
     // stating 0.0 against a project already holding a non-zero value produces
     // no mismatch warning, because the value is dropped here before the
     // no-clobber comparison ever sees it.
-    let surface_elevation = (tml.first_start_absolute_elevation.abs() > f64::EPSILON)
-        .then_some(tml.first_start_absolute_elevation);
+    let surface_elevation =
+        crate::models::ariane_elevation_or_absent(tml.first_start_absolute_elevation);
 
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
     let mut result = state.execute_tml_import_sections(
