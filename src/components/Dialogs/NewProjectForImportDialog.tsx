@@ -153,13 +153,19 @@ export default function NewProjectForImportDialog() {
       // `deferInitialSave` unconditionally (#394 F14): this dialog is a STEP in
       // an import flow, not the New Project command, and the import that
       // justifies the project has not run yet. Writing the `.stalx` here made a
-      // wizard the user then cancelled leave an empty project file behind, plus
-      // a Recent Projects entry pointing at it. Deferring reserves the path and
-      // writes nothing; `finalize_deferred_import` resolves the save the moment
-      // the first import lands (and `saveAfterImport` completes it), so the file
-      // and the recents entry appear exactly when there is something in them.
-      // Without this flag the store infers `deferred = !savePath`, so only the
-      // "pick a location later" branch was ever safe.
+      // wizard abandoned at the file-selection or anchor step leave an EMPTY
+      // project file behind, plus a Recent Projects entry pointing at it.
+      // Deferring reserves the path and writes nothing; the file and the recents
+      // entry appear on the first import that lands
+      // (`finalize_deferred_import`). Without this flag the store infers
+      // `deferred = !savePath`, so only the "pick a location later" branch was
+      // ever safe.
+      //
+      // It does NOT make the whole wizard transactional, and does not claim to.
+      // Once the eager anchor import lands, the file is real; cancelling after
+      // that removes the sections and saves the emptied project through
+      // (`withdrawImportedSections`), and the file stays where the user asked
+      // for it - see docs/dmp-import.md.
       const result = await createProject(
         name.trim(),
         projectLocation.trim() || undefined,

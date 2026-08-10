@@ -18550,6 +18550,135 @@ fn batched_section_deletes_are_one_undo_entry() {
     );
 }
 
+/// The parity argument that lets `DeleteSection` into a batch, pinned.
+///
+/// `Command::reversed_section_ids` PARITY-REDUCES a batch's reverse log, and the
+/// doc comment justifies that by saying a batch cannot change a surviving
+/// section's shot count. Admitting `DeleteSection` puts one shape in reach that
+/// the comment now has to answer for: reverse a section and then delete it in
+/// the same batch. The claim is that `settle_reversed_sections` drops a section
+/// that is gone (it resolves each id through `get_section`), so the reverse is
+/// reported to nobody and there is nothing to fix up on a section that no longer
+/// exists. This is that claim as a test rather than as prose.
+#[test]
+fn a_batch_may_reverse_a_section_and_then_delete_it() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Mixed".to_string(),
+        location: None,
+    });
+
+    let doomed = state
+        .execute(Command::CreateSection {
+            name: Some("Doomed".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        })
+        .section_id
+        .unwrap();
+    let keeper = state
+        .execute(Command::CreateSection {
+            name: Some("Keeper".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(9.0)],
+        })
+        .section_id
+        .unwrap();
+
+    let result = state.execute(Command::Batch {
+        commands: vec![
+            Command::ReverseSection {
+                section_id: doomed,
+                swap_left_right: false,
+            },
+            Command::DeleteSection { section_id: doomed },
+        ],
+    });
+
+    assert!(result.success, "mixed batch: {:?}", result.error);
+    // The reverse is reported to NOBODY: the section it names is gone, so there
+    // is no shot count to divide by and nothing for the frontend to mirror.
+    assert!(
+        result
+            .reversed_sections
+            .as_ref()
+            .is_none_or(|entries| entries.iter().all(|e| e.section_id != doomed)),
+        "a section deleted in the same batch must not be reported as reversed"
+    );
+    let after: Vec<_> = state
+        .get_project_state()
+        .unwrap()
+        .sections
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(after, vec![keeper]);
+
+    // And it all comes back together, still one undo entry.
+    assert!(state.undo().success);
+    let restored: Vec<_> = state
+        .get_project_state()
+        .unwrap()
+        .sections
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(restored, vec![doomed, keeper]);
+}
+
+/// The other order is a clean REFUSAL, not a corruption: the section is already
+/// gone when the reverse runs, so the sub-command fails and `execute_batch`
+/// rolls the whole thing back. Pinned because "the batch rejects it" is half of
+/// why the parity argument holds - a batch cannot reverse a section twice around
+/// a delete if the delete makes every later reference fail.
+#[test]
+fn a_batch_that_reverses_a_section_after_deleting_it_rolls_back() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Mixed".to_string(),
+        location: None,
+    });
+
+    let section_id = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+
+    let result = state.execute(Command::Batch {
+        commands: vec![
+            Command::DeleteSection { section_id },
+            Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            },
+        ],
+    });
+
+    assert!(!result.success);
+    assert!(result.error.unwrap_or_default().contains("not found"));
+    let after: Vec<_> = state
+        .get_project_state()
+        .unwrap()
+        .sections
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(after, vec![section_id], "the delete must have rolled back");
+}
+
 /// A batch that adds two zero datums places the SECOND against the origin the
 /// FIRST one established, not against wherever the survey happened to sit when
 /// the batch started.

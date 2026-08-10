@@ -53,6 +53,7 @@ vi.mock('../DialogWrapper', () => ({
 }));
 
 import ZeroDatumConfigDialog, { type ZeroDatumConfigResult } from '../ZeroDatumConfigDialog';
+import { convertToEditableShots } from '../../../hooks/useImportState';
 import type { DmpFile, DmpSection, DmpShot } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
 
@@ -200,6 +201,36 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
     expect(screen.getByTestId('section-name-input')).toHaveValue('FileName');
     expect(screen.getByTestId('section-surveyor-input')).toHaveValue('DefaultSurveyor');
     expect(screen.getByTestId('section-reverse-checkbox')).not.toBeChecked();
+  });
+
+  /**
+   * The SHOTS and the STATION PICK come back too, and they have to come back
+   * together.
+   *
+   * `stationIndex` is numbered over the EDITED rows, so seeding the metadata
+   * while letting the reducer rebuild from the file - which is what the first
+   * cut of this prefill did - re-anchors the datum at station 0 on the way
+   * forward. Nothing downstream catches it: `set_zero_datum` only rejects an
+   * out-of-range index, so the whole survey silently relocates by however far
+   * the user's real anchor was down the passage.
+   *
+   * Injection: pass `section` to `initialShotEditState` instead of the carried
+   * state and this confirms with `stationIndex` 0 and the file's 5m rows.
+   */
+  it('restores the edited rows and the station they were picked against', () => {
+    const editedShots = convertToEditableShots(dmpFile().sections[0]!.shots);
+    editedShots[1] = { ...editedShots[1]!, length: 42 };
+
+    renderDialog({ ...carried(), stationIndex: 2, shots: editedShots });
+
+    fireEvent.click(screen.getByTestId('zero-datum-config-confirm'));
+
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    const result = onConfirm.mock.calls[0]![0];
+    expect(result.stationIndex).toBe(2);
+    expect(result.shots[1]?.length).toBe(42);
+    // The rows the user is LOOKING at are the carried ones too, not the file's.
+    expect(screen.getByTestId('shot-editor-cell-1-length')).toHaveTextContent('42');
   });
 
   /**
