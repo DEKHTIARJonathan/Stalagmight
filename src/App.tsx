@@ -837,6 +837,9 @@ function App() {
           selectionConfig={dialogData.selectionConfig as DmpSelectionConfig}
           sectionIndex={dialogData.zeroDatumSectionIndex as number}
           filePath={dialogData.filePath as string}
+          // Only the wizard's Back handler above sets this; a first visit has
+          // no previous answers and the dialog falls back to its defaults.
+          initialConfig={dialogData.previousZeroDatumConfig as ZeroDatumConfigResult | undefined}
           onCancel={closeDialog}
           onBack={() => {
             openDialog('zero-datum-selection', {

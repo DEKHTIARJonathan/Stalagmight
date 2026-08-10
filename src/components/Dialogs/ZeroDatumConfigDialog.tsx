@@ -210,6 +210,16 @@ interface ZeroDatumConfigDialogProps {
   onCancel: () => void;
   onBack: () => void;
   onConfirm: (result: ZeroDatumConfigResult) => void;
+  /**
+   * What this dialog was confirmed with LAST time (#394 F10).
+   *
+   * Stepping Back out of the import wizard returns here, and the wizard
+   * withdraws what it imported on the way (the forward pass re-imports from
+   * scratch, so keeping would duplicate). Without this the user would also lose
+   * the GPS and the metadata they typed, which turns "adjust one field" into
+   * "start over". Absent on the first visit.
+   */
+  initialConfig?: ZeroDatumConfigResult | undefined;
 }
 
 export default function ZeroDatumConfigDialog({
@@ -220,6 +230,7 @@ export default function ZeroDatumConfigDialog({
   onCancel,
   onBack,
   onConfirm,
+  initialConfig,
 }: ZeroDatumConfigDialogProps) {
   const { t } = useTranslation();
   const showToast = useUIStore((st) => st.showToast);
@@ -248,21 +259,38 @@ export default function ZeroDatumConfigDialog({
     initialShotEditState,
   );
 
-  // GPS input state
-  const [gpsInput, setGpsInput] = useState('');
-  const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(null);
-  const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(null);
+  // GPS input state. Re-entered as DECIMAL DEGREES whatever the user originally
+  // typed: `gps` is the already-parsed pair, and the source text (a UTM grid
+  // reference, a maps URL) cannot be re-derived from it. Interpolated plainly
+  // rather than through `formatGpsCoordinates`, because this string has to PARSE
+  // again on the next confirm and that formatter is locale-aware - a comma
+  // decimal separator would not round-trip through `parseDD`.
+  const [gpsInput, setGpsInput] = useState(
+    initialConfig ? `${initialConfig.gps.latitude}, ${initialConfig.gps.longitude}` : ''
+  );
+  const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(initialConfig?.gps ?? null);
+  const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(initialConfig ? 'DD' : null);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
-  // Metadata state
-  const [name, setName] = useState(section?.name ?? '');
-  const [surveyor, setSurveyor] = useState(selectionConfig.defaultSurveyor || '');
-  const [date, setDate] = useState(
-    selectionConfig.defaultDate ?? section?.date?.split(/[T ]/)[0] ?? ''
+  // Metadata state. A field the user CLEARED last time stays cleared, so each
+  // branch is chosen by whether there is a previous visit at all - `??` per
+  // field would resurrect the file/selection default under an emptied one.
+  const [name, setName] = useState(initialConfig?.metadata.name ?? section?.name ?? '');
+  const [surveyor, setSurveyor] = useState(
+    initialConfig ? (initialConfig.metadata.surveyor ?? '') : (selectionConfig.defaultSurveyor || '')
   );
-  const [color, setColor] = useState(sectionPalette[colorIndex % sectionPalette.length] ?? '#4ecdc4');
-  const [direction, setDirection] = useState<'in' | 'out'>(section?.direction === 'out' ? 'out' : 'in');
-  const [reverse, setReverse] = useState(false);
+  const [date, setDate] = useState(
+    initialConfig
+      ? (initialConfig.metadata.date ?? '')
+      : (selectionConfig.defaultDate ?? section?.date?.split(/[T ]/)[0] ?? '')
+  );
+  const [color, setColor] = useState(
+    initialConfig?.metadata.color ?? sectionPalette[colorIndex % sectionPalette.length] ?? '#4ecdc4'
+  );
+  const [direction, setDirection] = useState<'in' | 'out'>(
+    initialConfig?.metadata.direction ?? (section?.direction === 'out' ? 'out' : 'in')
+  );
+  const [reverse, setReverse] = useState(initialConfig?.metadata.reverse ?? false);
 
   // Station count = counted shots + 1. The dropdown, the preview, the payload
   // and the pick all count by `isCounted` - one predicate, one station space.
