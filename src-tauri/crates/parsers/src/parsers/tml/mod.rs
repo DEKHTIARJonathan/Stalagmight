@@ -3159,6 +3159,39 @@ mod tests {
         }
     }
 
+    /// A section with several roots gives its own name to the LONGEST root,
+    /// not to whichever root the file happened to write first (#412).
+    ///
+    /// `choose_continuation` only decides junctions inside a chain; the roots
+    /// themselves were walked in file order, so an entrance stub written first
+    /// took the section's name and the real mainline was demoted to
+    /// "(branch 2)" - the same file-order bias the continuation rule exists to
+    /// remove, one level up.
+    #[test]
+    fn the_longest_root_keeps_the_section_name() {
+        let shots = [
+            // Written first, but a dead-end stub.
+            tml_shot_xml_az_len(1, -1, "Sump", 90.0, 2.0),
+            // Written second, and the actual passage.
+            tml_shot_xml_az_len(2, -1, "Sump", 90.0, 30.0),
+            tml_shot_xml_az_len(3, 2, "Sump", 90.0, 30.0),
+            tml_shot_xml_az_len(4, 3, "Sump", 90.0, 30.0),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        let named: Vec<(&str, Vec<i64>)> = tml
+            .sections
+            .iter()
+            .map(|s| (s.name.as_str(), s.shots.iter().map(|sh| sh.id).collect()))
+            .collect();
+        assert_eq!(
+            named,
+            vec![("Sump", vec![2, 3, 4]), ("Sump (branch 2)", vec![1]),],
+            "the 90 m root is the mainline; the 2 m stub is the branch"
+        );
+    }
+
     #[test]
     fn test_malformed_cycle_and_self_loop_are_guarded() {
         // Malformed graph with a 2<->3 cycle and a self-loop at 4.

@@ -369,12 +369,25 @@ pub(super) fn linearize_section(
     let downstream = downstream_lengths(shots, &shot_by_id, &in_section_successors);
 
     // Find chain roots: shots whose from_id is not in this section's shot set.
+    //
+    // Ordered by downstream length, longest first, because the FIRST chain
+    // emitted keeps the section's own name and every later one becomes
+    // "(branch N)". Walking roots in file order instead let an entrance stub
+    // written before the mainline take the section's name and demote the real
+    // passage - the same file-order bias `choose_continuation` removes at
+    // junctions, one level up. Ties fall back to encounter order then id, so
+    // the result is still fixed for a given file.
     let mut roots: Vec<i64> = shots
         .iter()
         .filter(|s| !shot_ids.contains(&s.from_id))
         .map(|s| s.id)
         .collect();
-    roots.sort_by_key(&rank_key);
+    roots.sort_by(|a, b| {
+        let length_of = |id: &i64| downstream.get(id).copied().unwrap_or(0.0);
+        length_of(b)
+            .total_cmp(&length_of(a))
+            .then_with(|| rank_key(a).cmp(&rank_key(b)))
+    });
 
     let needs_split = roots.len() > 1 || has_branching_within(shots, successors);
     let mut visited: std::collections::HashSet<i64> = std::collections::HashSet::new();
