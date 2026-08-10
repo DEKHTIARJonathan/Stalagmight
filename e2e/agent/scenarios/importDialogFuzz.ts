@@ -486,11 +486,10 @@ function mayRaiseError(move: FuzzMove): boolean {
 /**
  * Confirms that are DISABLED while a duplicate-hash probe is in flight.
  *
- * The window is short and real, and clicking into it asserts that the disabled
- * state is HONEST: a disabled control must not advance the flow. Each screen's
- * `race-*` generator aims at exactly these, and the shell checks the outcome
- * inline, because the check is only meaningful against the state its own move
- * acted on.
+ * The window is short and real, and each screen's `race-*` generator aims at
+ * exactly these. What comes back is COUNTED rather than asserted - see the
+ * `raceMove` branch, which explains why neither end of the race is a contract
+ * reachable from here.
  */
 const RACE_TARGETS: ReadonlySet<string> = new Set([
   'continue-button',
@@ -857,10 +856,13 @@ export const importDialogFuzz: Scenario = {
        */
       offAtDispatch: boolean | null;
       /**
-       * The dialog the KEYBOARD DISPATCHER saw, for a `key:` chord. Null for
-       * every other move, and for a chord pressed at idle.
+       * The dialog the app's own gate saw: for a `key:` chord, what
+       * `useKeyboardShortcuts` read; for a `route`, what `importFlowOwnsScreen`
+       * read. Null for every other move, and whenever no dialog was up.
        */
       dialogAtDispatch: string | null;
+      /** `placementMode !== null` at the same instant. Only read on a `route`. */
+      placementAtDispatch: boolean | null;
     }
 
     /** Run one move, record it if it happened, and report the screen after. */
@@ -870,6 +872,7 @@ export const importDialogFuzz: Scenario = {
       let skip: string | null = null;
       let offAtDispatch: boolean | null = null;
       let dialogAtDispatch: string | null = null;
+      let placementAtDispatch: boolean | null = null;
       let digest: ImportScreenDigest;
 
       if (move.kind === 'ui') {
@@ -923,8 +926,10 @@ export const importDialogFuzz: Scenario = {
           const rel = live.source.rel;
           if (live.via === 'route') {
             const routed = await routeFile(ctx, absolute);
-            if (!routed) fail('the E2E routeOpenedFile hook is missing; rebuild with VITE_E2E=1');
+            if (!routed.routed) fail('the E2E routeOpenedFile hook is missing; rebuild with VITE_E2E=1');
             performed = true;
+            dialogAtDispatch = routed.dialogAtDispatch;
+            placementAtDispatch = routed.placementAtDispatch;
             if (record) recorder.record({ kind: 'route', rel, label: move.label });
             digest = await observeScreen(ctx);
           } else {
@@ -1022,7 +1027,7 @@ export const importDialogFuzz: Scenario = {
       inFlight = null;
       history.push(`${move.label}${performed ? '' : ` -> SKIPPED (${skip ?? 'unknown'})`} [${digest.screen}]`);
       ctx.metric(performed ? 'movesPerformed' : `skip:${skip ?? 'unknown'}`);
-      return { digest, performed, skip, offAtDispatch, dialogAtDispatch };
+      return { digest, performed, skip, offAtDispatch, dialogAtDispatch, placementAtDispatch };
     };
 
     // ---- per-step oracles ------------------------------------------------
@@ -1672,6 +1677,10 @@ export const importDialogFuzz: Scenario = {
           // is only meaningful against the state its own move acted on.
           const screenBefore = digest.screen;
           const rowsBefore = digest.rows;
+          // The two store values `importFlowOwnsScreen` consults, as the digest
+          // that CLASSIFIED this move saw them - see the IMPORT GATE branch.
+          const dialogBefore = digest.dialog;
+          const placementBefore = digest.placement;
           const raceMove = move.kind === 'ui' && RACE_TARGETS.has(move.testid) && digest.live[move.testid] === 1;
           const exportChord = move.kind === 'ui' && move.testid === 'key:Ctrl+E';
           const closeMove = move.kind === 'closeProject';
@@ -1781,7 +1790,25 @@ export const importDialogFuzz: Scenario = {
             }
           }
           if (interjectRoute && outcome.performed) {
-            ctx.metric('interjectRouteGuarded');
+            // Was the screen still the one the move was CLASSIFIED on when the
+            // router actually looked?
+            //
+            // `importFlowOwnsScreen` reads `activeDialog` and `placementMode`
+            // inside `routeOpenedFile`; `IMPORT_GUARDED_SCREENS` maps the same
+            // two onto this scenario's screen table, but off a digest taken a
+            // round trip earlier. An import that completes in that gap closes
+            // its dialog, and the router is then right to accept the file.
+            // Measured, on the corpus campaign's seed-117 rerun: a `walls
+            // import` raced against its own async enable left the digest on
+            // `walls`, the import finished, and the route that followed was
+            // reported as a broken guard for landing on `as-new-project`.
+            //
+            // Comparing the two readings costs nothing and needs no second copy
+            // of the app's dialog set: same `activeDialog`, same placement, and
+            // the classification the digest made still holds.
+            const sameScreenAtDispatch =
+              outcome.dialogAtDispatch === dialogBefore && outcome.placementAtDispatch === placementBefore;
+            ctx.metric(sameScreenAtDispatch ? 'interjectRouteGuarded' : 'importGateSkipped:screenMovedBeforeDispatch');
             // The REFUSAL TOAST, not the screen, is the guard's observable
             // effect - and the screen is not a sound test of it. Measured, on
             // the seed-7 five-format run: `create-and-continue-button` starts
@@ -1791,10 +1818,12 @@ export const importDialogFuzz: Scenario = {
             // move from `new-project` to `tml-config` three moves later, for a
             // reason that has nothing to do with the routed file, and a
             // screen-equality check reports the guard as broken when it worked.
-            if (!digest.toast.includes(IMPORT_GATE_TOAST_KEY)) {
+            if (sameScreenAtDispatch && !digest.toast.includes(IMPORT_GATE_TOAST_KEY)) {
               fail(
                 'IMPORT GATE: a second file was routed into a screen an import already owned',
                 `  screen ${screenBefore} -> ${digest.screen}; routeOpenedFile must refuse and SAY so (#411)\n` +
+                  `  activeDialog at dispatch=${JSON.stringify(outcome.dialogAtDispatch)} ` +
+                  `placement=${outcome.placementAtDispatch}\n` +
                   `  toasts: ${JSON.stringify(digest.toast)}`,
               );
             }

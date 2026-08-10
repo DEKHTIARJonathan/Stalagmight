@@ -895,13 +895,39 @@ export async function dismissFirstRunModal(ctx: ScenarioContext): Promise<boolea
  * from every driver-visible entry point, which is exactly the guard this
  * scenario's mid-flow interjection exists to test).
  */
-export async function routeFile(ctx: ScenarioContext, absolutePath: string): Promise<boolean> {
-  return ctx.eval<boolean>(
+/** What `routeOpenedFile`'s guard was looking at when it was called. */
+export interface RouteOutcome {
+  /** Did the E2E hook exist and get called at all? */
+  routed: boolean;
+  /**
+   * `uiStore.activeDialog` and `placementMode`, read on the same tick as the
+   * call - which is when `importFlowOwnsScreen` reads them.
+   *
+   * The pre-move digest is a round trip older, and an import that completes in
+   * the gap closes its dialog: the router then legally accepts the file, and an
+   * oracle judging by the digest calls that a broken guard. Comparing these two
+   * against the digest's own values is how the caller tells "the guard should
+   * have fired" from "the screen moved under us".
+   */
+  dialogAtDispatch: string | null;
+  placementAtDispatch: boolean;
+}
+
+export async function routeFile(ctx: ScenarioContext, absolutePath: string): Promise<RouteOutcome> {
+  return ctx.eval<RouteOutcome>(
     `
     const route = window.__E2E_TEST__ && window.__E2E_TEST__.routeOpenedFile;
-    if (typeof route !== 'function') return false;
+    const store = window.__E2E_TEST__ && window.__E2E_TEST__.uiStore;
+    const ui = store ? store.getState() : null;
+    const out = {
+      routed: false,
+      dialogAtDispatch: ui && ui.activeDialog !== undefined && ui.activeDialog !== null ? ui.activeDialog : null,
+      placementAtDispatch: !!(ui && ui.placementMode),
+    };
+    if (typeof route !== 'function') return out;
     await route(args[0], 'Import Failed');
-    return true;
+    out.routed = true;
+    return out;
   `,
     [absolutePath],
   );
