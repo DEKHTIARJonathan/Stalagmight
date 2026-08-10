@@ -286,6 +286,7 @@ test.describe('Export Dialog', () => {
     await expect(warningDialog).toContainText('Nothing is discarded');
     await expect(warningDialog).toContainText('Set Zero Datum');
     await expect(warningDialog).not.toContainText('entrance');
+    await expect(warningDialog).not.toContainText('only include sections');
     await expect(warningDialog).toContainText('Floating Section (#2)');
     await expect(warningDialog).not.toContainText('Anchored Section');
     await expect(page.getByTestId('tml-unanchored-warning-continue')).toHaveAttribute('data-primary-action', '');
