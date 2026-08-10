@@ -23,6 +23,8 @@ export const TOAST_KEYS = {
   MERGE_CHECK: 'merge-check',
   MERGE_BLOCKED: 'merge-blocked',
   MERGE_ERROR: 'merge-error',
+  /** A successful project merge whose CommandResult carries a warning (e.g. #448 entrance-elevation no-clobber). */
+  MERGE_WARNING: 'merge-warning',
   GEOMETRY_COMPUTE_FAILED: 'geometry-compute-failed',
   ANCHORED_IDS_ERROR: 'anchored-ids-error',
   MOVE_COMMENT_EMPTY: 'move-comment-empty',
