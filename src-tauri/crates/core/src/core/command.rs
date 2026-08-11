@@ -345,8 +345,26 @@ pub struct CommandResult {
     /// ID of the created section (for CreateSection command)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub section_id: Option<u32>,
-    /// IDs of created sections (for Batch commands containing CreateSection)
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    /// IDs of created sections (for Batch commands containing CreateSection);
+    /// EMPTY, never absent, for every command that created none.
+    ///
+    /// Deliberately NOT `skip_serializing_if` (#441). ts-rs 7 can emit `field?:`
+    /// only for an `Option<T>` - `optional` is rejected on any other type - so a
+    /// skipped `Vec` generates as a REQUIRED `Array<number>` while the wire omits
+    /// the key, and `tsc` is then structurally blind to every bare
+    /// `result.section_ids.length`. That is what crashed the zero-section import
+    /// receipt in #411.
+    ///
+    /// Absence and empty state the same fact here, so the honest fix is to always
+    /// send the array rather than teach ~17 read sites a distinction that carries
+    /// no information. The cost is one `"section_ids":[]` per command result -
+    /// once per user action. Contrast [`crate::models::Station::closures_with`],
+    /// where the identical skip is paid PER STATION on every `get_project_state`
+    /// refresh and therefore stays, with `Option<Vec<_>>` carrying the optionality
+    /// into the generated type instead.
+    ///
+    /// `default` is kept so a result serialized before this change still reads.
+    #[serde(default)]
     pub section_ids: Vec<u32>,
     /// ID of the created shot (for CreateShot command)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -438,13 +456,13 @@ pub struct CommandResult {
     /// The sibling `.plnx` needs none of this: its plans name a station by the shots it sits
     /// BETWEEN, so a reverse does not move them at all (see `state::dive_plan`).
     ///
-    /// Same wire contract as `section_ids` above - `skip_serializing_if` + `default`, so
-    /// the key is simply absent for every command that reversed nothing and an older
-    /// frontend is unaffected - but typed `Option` rather than `Vec` so ts-rs emits it as
-    /// `reversed_sections?:` instead of a required array. That absence IS the wire
-    /// truth (`section_ids` is typed required despite the same serde attributes, which is
-    /// why its consumers already need `?? []`), and a required field would break every
-    /// existing `CommandResult` literal on the frontend.
+    /// `skip_serializing_if` + `default`, so the key is simply absent for every
+    /// command that reversed nothing and an older frontend is unaffected - and typed
+    /// `Option` rather than `Vec` precisely so ts-rs emits it as `reversed_sections?:`
+    /// instead of a required array. That absence IS the wire truth, and a required
+    /// field would break every existing `CommandResult` literal on the frontend.
+    /// `section_ids` above wears the same serde attributes minus the skip, because
+    /// there the array is cheap enough to always send; the pairing rule is in #441.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub reversed_sections: Option<Vec<ReversedSection>>,
     /// Backend-authoritative summary of an import command's outcome (see
@@ -1269,6 +1287,74 @@ mod tests {
         assert!(failure.section_id.is_none());
         assert!(failure.section_ids.is_empty());
         assert!(failure.shot_id.is_none());
+    }
+
+    /// #441: a field the TYPE says is always there must always be on the wire.
+    ///
+    /// ts-rs 7 can only emit `foo?:` for an `Option<T>` (`optional` is rejected on
+    /// any other type), so `skip_serializing_if` on a `Vec` produces a REQUIRED
+    /// `Array<_>` that the wire sometimes omits - and `tsc` cannot see a single
+    /// bare `result.section_ids.length` after that. This test pins BOTH halves of
+    /// the rule: the key is present iff the declaration lacks `?`.
+    ///
+    /// Turns red if `section_ids` regains `skip_serializing_if` (key vanishes from
+    /// an empty result) or is retyped `Option<Vec<_>>` (declaration gains the `?`).
+    #[test]
+    fn omitted_fields_are_exactly_the_ones_declared_optional() {
+        use ts_rs::TS;
+
+        let empty = serde_json::to_value(CommandResult::success()).unwrap();
+        let empty = empty.as_object().unwrap();
+
+        assert_eq!(
+            empty.get("section_ids"),
+            Some(&serde_json::json!([])),
+            "section_ids generates as a required Array<number>, so an empty result \
+             must still carry the key (#441); got {empty:?}"
+        );
+
+        for absent in [
+            "section_id",
+            "shot_id",
+            "saved_path",
+            "session_closed",
+            "unlinked_copy_path",
+            "reversed_sections",
+            "import_receipt",
+        ] {
+            assert!(
+                !empty.contains_key(absent),
+                "`{absent}` is declared optional, so it must be ABSENT (not null) \
+                 when unset; got {empty:?}"
+            );
+        }
+
+        // The populated case must round-trip intact, not just be present: the
+        // empty-case assertion above would still pass if the field serialized as
+        // a constant `[]`.
+        let populated = CommandResult::success().with_section_ids(vec![4, 7, 9]);
+        let json = serde_json::to_string(&populated).unwrap();
+        assert!(
+            json.contains("\"section_ids\":[4,7,9]"),
+            "created section ids must reach the wire verbatim: {json}"
+        );
+        let back: CommandResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.section_ids,
+            vec![4, 7, 9],
+            "section_ids must survive the round-trip"
+        );
+
+        let decl = CommandResult::decl();
+        assert!(
+            decl.contains("section_ids: Array<number>"),
+            "section_ids must stay a required array to match the wire above: {decl}"
+        );
+        assert!(
+            decl.contains("reversed_sections?:"),
+            "reversed_sections is omitted from the wire, so its declaration must \
+             carry the `?`: {decl}"
+        );
     }
 
     #[test]

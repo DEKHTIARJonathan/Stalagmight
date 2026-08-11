@@ -327,8 +327,8 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         if !station.merged_with.is_empty() {
             station_merged_with.push((idx_u32, station.merged_with));
         }
-        if !station.closures_with.is_empty() {
-            station_closures_with.push((idx_u32, station.closures_with));
+        if let Some(closures) = station.closures_with.filter(|c| !c.is_empty()) {
+            station_closures_with.push((idx_u32, closures));
         }
         if let Some(comment) = station.comment {
             if !comment.is_empty() {

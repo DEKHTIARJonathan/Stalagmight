@@ -950,7 +950,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 (currentProject as Record<string, unknown>).validation = args.validation;
               }
             }
-            return { success: true, project: currentProject };
+            return { success: true, section_ids: [], project: currentProject };
           }
 
           case 'set_surface_elevation': {
@@ -980,7 +980,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
             (currentProject as Record<string, unknown>).surface_elevation =
               typeof elevation === 'number' ? elevation : null;
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           case 'create_project_full': {
@@ -1104,7 +1104,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               is_zero_datum: boolean;
               gps_coordinates: { latitude: number; longitude: number; depth_reference: number } | null;
               merged_with: Array<{ section_id: number; station_index: number }>;
-              closures_with: Array<{
+              // Optional, exactly like the generated `Station` type: the backend
+              // omits `closures_with` when empty (#441), so the mock must too -
+              // a present-but-empty array is a wire shape the app never sees.
+              closures_with?: Array<{
                 closure_id: bigint;
                 station_ref: { section_id: number; station_index: number };
                 via_station: { section_id: number; station_index: number } | null;
@@ -1210,7 +1213,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   is_zero_datum: !!loadDatum,
                   gps_coordinates: loadDatum ? loadDatum.gps : null,
                   merged_with: mergedWith,
-                  closures_with: closuresWith,
+                  ...(closuresWith.length > 0 ? { closures_with: closuresWith } : {}),
                 });
               }
             }
@@ -1571,7 +1574,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'close_project': {
             currentProject = null;
             projectPath = null;
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           case 'cancel_loading': {
@@ -1592,7 +1595,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               is_zero_datum: boolean;
               gps_coordinates: { latitude: number; longitude: number; depth_reference: number } | null;
               merged_with: Array<{ section_id: number; station_index: number }>;
-              closures_with: Array<{
+              // Optional, exactly like the generated `Station` type: the backend
+              // omits `closures_with` when empty (#441), so the mock must too -
+              // a present-but-empty array is a wire shape the app never sees.
+              closures_with?: Array<{
                 closure_id: bigint;
                 station_ref: { section_id: number; station_index: number };
                 via_station: { section_id: number; station_index: number } | null;
@@ -1691,7 +1697,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     is_zero_datum: !!matchingDatum,
                     gps_coordinates: matchingDatum ? matchingDatum.gps : null,
                     merged_with: mergedWith,
-                    closures_with: closuresWith,
+                    ...(closuresWith.length > 0 ? { closures_with: closuresWith } : {}),
                     ...(storedComment !== undefined ? { comment: storedComment } : {}),
                   });
                 }
@@ -2414,7 +2420,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shots,
             };
             currentProject?.sections.push(section);
-            return { success: true, section, section_id: sectionCounter, warnings: [], error: null };
+            return { success: true, section, section_id: sectionCounter, section_ids: [], warnings: [], error: null };
           }
 
           case 'import_sections': {
@@ -2546,7 +2552,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'track_imported_file':
             console.log('[Mock IPC] track_imported_file called with:', args);
             trackImportedFileCalls.push({ hash: (args?.hash as string) ?? '' });
-            return { success: true };
+            return { success: true, section_ids: [] };
 
           case 'parse_gpx': {
             return buildMockGpxFile(args?.path as string | undefined);
@@ -3343,7 +3349,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 });
               }
             }
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           case 'execute_batch': {
@@ -3382,6 +3388,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 | {
                     success?: boolean;
                     error?: string;
+                    // Always present on a real CommandResult (#441), unlike
+                    // `reversed_sections` which the wire genuinely omits.
+                    section_ids?: number[];
                     reversed_sections?: Array<{ section_id: number; shot_count: number }>;
                   }
                 | undefined;
@@ -3400,7 +3409,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // recorded track calls the withdrawal has just undone.
                 mockCheckDuplicateResult = false;
                 trackImportedFileCalls = [];
-                result = { success: true };
+                result = { success: true, section_ids: [] };
               } else if (command?.type === 'delete_section') {
                 // Withdrawing an abandoned import (#394) removes N sections in
                 // ONE batch, so the batch has to replay it or a cancelled DMP
@@ -3432,6 +3441,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
             return {
               success: true,
+              section_ids: [],
               ...(reversedSections.length > 0 ? { reversed_sections: reversedSections } : {}),
             };
           }
@@ -3515,7 +3525,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               });
             }
 
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           case 'remove_loop_closure': {
@@ -3547,7 +3557,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
 
             loopClosures.splice(closureIndex, 1);
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           case 'unmerge_stations':
@@ -3605,7 +3615,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }
               }
             }
-            return { success: true };
+            return { success: true, section_ids: [] };
 
           case 'unmerge_station_pair': {
             console.log('[Mock IPC] unmerge_station_pair called with:', args);
@@ -3661,7 +3671,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     return !(direct || reverse);
                   });
                 }
-                return { success: true };
+                return { success: true, section_ids: [] };
               }
             }
 
@@ -3677,7 +3687,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
             calls.push({ command: 'move_segment', args: args ?? null });
             win.__MOCK_MOVE_CALLS__ = calls;
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           case 'move_section': {
@@ -3688,7 +3698,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
             calls.push({ command: 'move_section', args: args ?? null });
             win.__MOCK_MOVE_CALLS__ = calls;
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           case 'move_station': {
@@ -3745,7 +3755,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 datums.push({ station_ref: stationRef, gps: coordinates });
               }
             }
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           case 'remove_zero_datum': {
@@ -3765,7 +3775,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 datums.splice(idx, 1);
               }
             }
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           case 'set_station_comment': {
@@ -3778,7 +3788,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             } else {
               mockStationComments[key] = comment;
             }
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           case 'check_section_hashes': {
@@ -3812,7 +3822,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'undo':
           case 'redo':
             undoRedoCalls.push(cmd);
-            return { success: true };
+            return { success: true, section_ids: [] };
 
           case 'can_undo':
             return false;
@@ -4593,21 +4603,21 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'remove_from_recent_projects':
             // Mock remove from recent - just return success
             console.log('[Mock IPC] remove_from_recent_projects called with:', args);
-            return { success: true };
+            return { success: true, section_ids: [] };
 
           case 'delete_project':
             // Mock destructive delete - acknowledge success. We don't mutate the
             // hardcoded recents list here (would leak across tests in a worker);
             // the store + Rust tests cover the recents-removal side effect.
             console.log('[Mock IPC] delete_project called with:', args);
-            return { success: true };
+            return { success: true, section_ids: [] };
 
           case 'set_project_name_for_path': {
             const p = String(args?.path ?? '');
             const name = String(args?.name ?? '').trim();
             if (!name) return { success: false, error: 'Project name cannot be empty' };
             recentNameOverrides[p] = name;
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           // Display settings (per-project) - uses in-memory storage for persistence testing
@@ -4831,7 +4841,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }
               }
             }
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           case 'delete_shot': {
@@ -4851,12 +4861,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 if (idx >= 0) section.shots.splice(idx, 1);
               }
             }
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           case 'delete_last_shot_and_section':
             console.log('[Mock IPC] delete_last_shot_and_section called with:', args);
-            return { success: true };
+            return { success: true, section_ids: [] };
 
           case 'preview_delete_shot': {
             console.log('[Mock IPC] preview_delete_shot called with:', args);
@@ -4888,7 +4898,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'delete_shot_and_split':
             console.log('[Mock IPC] delete_shot_and_split called with:', args);
-            return { success: true };
+            return { success: true, section_ids: [] };
 
           case 'preview_delete_shot_range': {
             console.log('[Mock IPC] preview_delete_shot_range called with:', args);
@@ -4920,11 +4930,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'delete_shot_range_split':
             console.log('[Mock IPC] delete_shot_range_split called with:', args);
-            return { success: true };
+            return { success: true, section_ids: [] };
 
           case 'delete_shot_range_shift':
             console.log('[Mock IPC] delete_shot_range_shift called with:', args);
-            return { success: true };
+            return { success: true, section_ids: [] };
 
           case 'update_section': {
             console.log('[Mock IPC] update_section called with:', args);
@@ -4940,7 +4950,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 console.log('[Mock IPC] update_section: applied updates to section', sectionId, updates);
               }
             }
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           case 'delete_section': {
@@ -4951,7 +4961,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 (s) => s.id !== sectionId,
               );
             }
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           case 'reverse_section': {
@@ -5100,6 +5110,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // it is the divisor for the frontend's mirror).
             return {
               success: true,
+              section_ids: [],
               section_id: sectionId,
               ...(shotCount > 0
                 ? { reversed_sections: [{ section_id: sectionId, shot_count: shotCount }] }
@@ -5162,7 +5173,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               if (i >= 0) insertAt = i;
             }
             section.shots.splice(insertAt, 0, newShot);
-            return { success: true, shot_id: nextId };
+            return { success: true, section_ids: [], shot_id: nextId };
           }
 
           case 'split_shot_at_distance': {
@@ -5230,12 +5241,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             target.length = length - distance;
             target.depth_in = midDepth;
             section.shots.splice(idx, 0, headShot);
-            return { success: true, shot_id: nextId };
+            return { success: true, section_ids: [], shot_id: nextId };
           }
 
           case 'merge_projects':
             console.log('[Mock IPC] merge_projects called with:', args);
-            return { success: true };
+            return { success: true, section_ids: [] };
 
           case 'set_shot_kind': {
             console.log('[Mock IPC] set_shot_kind called with:', args);
@@ -5253,7 +5264,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }
               }
             }
-            return { success: true };
+            return { success: true, section_ids: [] };
           }
 
           // Raw sqlite browsing (data table fullscreen)
@@ -5795,7 +5806,7 @@ export async function setupTauriMocksWithProject(
           case 'load_project':
             return currentProject;
           case 'save_project':
-            return { success: true };
+            return { success: true, section_ids: [] };
           case 'push_frontend_log':
             return null;
           default:

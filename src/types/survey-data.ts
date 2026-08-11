@@ -262,8 +262,13 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
     is_zero_datum: (data.stationFlags[globalIndex]! & STATION_FLAG_IS_ZERO_DATUM) !== 0,
     gps_coordinates: data.stationGps.get(globalIndex) ?? null,
     merged_with: data.stationMergedWith.get(globalIndex) ?? [],
-    closures_with: data.stationClosuresWith.get(globalIndex) ?? [],
   };
+  // `closures_with` is optional on the wire and the sparse map only holds
+  // non-empty lists, so materialize the absence rather than an empty array -
+  // same rule as `comment` below, and the same shape `get_project_state` sends
+  // (#441). Every consumer already guards.
+  const closures = data.stationClosuresWith.get(globalIndex);
+  if (closures !== undefined) station.closures_with = closures;
   const cmt = data.stationComments.get(globalIndex);
   if (cmt !== undefined) station.comment = cmt;
   return station;
@@ -463,13 +468,14 @@ export function surveyDataFromLegacy(
     data.stationCoords[i * 3 + 2] = s.coordinates.z;
     data.stationFlags[i] = s.is_zero_datum ? STATION_FLAG_IS_ZERO_DATUM : 0;
     if (s.gps_coordinates) data.stationGps.set(i, s.gps_coordinates);
-    // Rust's `Station` serializer skips `merged_with` / `closures_with`
-    // when the vec is empty (see #[serde(skip_serializing_if =
-    // "Vec::is_empty")] on src-tauri/src/models/station.rs), so the
-    // JSON IPC path (`get_project_state`) hands back stations with
-    // those fields *missing* - not empty arrays.  Treat undefined as
-    // empty.  The binary IPC path always sets them via the sparse
-    // pair maps so this only matters for the legacy JSON path.
+    // Rust's `Station` serializer skips `closures_with` when it is empty
+    // (`skip_serializing_if = "Option::is_none"` in
+    // src-tauri/crates/models/src/station.rs), so the JSON IPC path
+    // (`get_project_state`) hands back stations with that field *missing* - not
+    // an empty array. The generated type says so too (`closures_with?:`, #441).
+    // `merged_with` is NOT skipped and is always present; the guard below is
+    // kept anyway because it costs nothing and the two read alike. The binary
+    // IPC path sets both via the sparse pair maps.
     const mergedWith = s.merged_with;
     if (mergedWith && mergedWith.length > 0) {
       data.stationMergedWith.set(i, mergedWith);

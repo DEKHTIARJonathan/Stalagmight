@@ -791,7 +791,7 @@ impl Project {
                         } else {
                             Some(a_ref) // transitive: reached via the actual closure endpoint
                         };
-                        station.closures_with.push(ClosureRef {
+                        station.closures_mut().push(ClosureRef {
                             closure_id: closure.id,
                             station_ref: b_ref,
                             via_station: via,
@@ -801,7 +801,7 @@ impl Project {
                     // Transitive closures to B's merged partners (skip self-references)
                     for &b_member in &b_group {
                         if b_member != b_ref && b_member != station.station_ref {
-                            station.closures_with.push(ClosureRef {
+                            station.closures_mut().push(ClosureRef {
                                 closure_id: closure.id,
                                 station_ref: b_member,
                                 via_station: Some(b_ref),
@@ -817,7 +817,7 @@ impl Project {
                         } else {
                             Some(b_ref)
                         };
-                        station.closures_with.push(ClosureRef {
+                        station.closures_mut().push(ClosureRef {
                             closure_id: closure.id,
                             station_ref: a_ref,
                             via_station: via,
@@ -827,7 +827,7 @@ impl Project {
                     // Transitive closures to A's merged partners (skip self-references)
                     for &a_member in &a_group {
                         if a_member != a_ref && a_member != station.station_ref {
-                            station.closures_with.push(ClosureRef {
+                            station.closures_mut().push(ClosureRef {
                                 closure_id: closure.id,
                                 station_ref: a_member,
                                 via_station: Some(a_ref),
@@ -860,7 +860,7 @@ impl Project {
             // Collect direct (non-transitive) closure refs for each station
             let mut direct_closures: HashMap<StationRef, Vec<(u64, StationRef)>> = HashMap::new();
             for station in &stations {
-                for cr in &station.closures_with {
+                for cr in station.closures() {
                     if !cr.is_transitive {
                         direct_closures
                             .entry(station.station_ref)
@@ -905,12 +905,12 @@ impl Project {
             // Apply chain-transitive refs, avoiding duplicates
             for (station_ref, new_ref) in chain_transitive_refs {
                 if let Some(station) = stations.iter_mut().find(|s| s.station_ref == station_ref) {
-                    let already_exists = station.closures_with.iter().any(|cr| {
+                    let already_exists = station.closures().iter().any(|cr| {
                         cr.station_ref == new_ref.station_ref
                             && cr.via_station == new_ref.via_station
                     });
                     if !already_exists {
-                        station.closures_with.push(new_ref);
+                        station.closures_mut().push(new_ref);
                     }
                 }
             }

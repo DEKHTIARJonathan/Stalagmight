@@ -261,11 +261,32 @@ describe('SurveyData', () => {
         expect(viewed.is_zero_datum).toBe(expected.is_zero_datum);
         expect(viewed.gps_coordinates).toEqual(expected.gps_coordinates);
         expect(viewed.merged_with).toEqual(expected.merged_with);
-        expect(viewed.closures_with).toEqual(expected.closures_with);
+        // `closures_with` is optional on the wire, and the SoA normalizes the
+        // empty case to absent exactly like `get_project_state` does, so
+        // compare through that normalization (#441).
+        expect(viewed.closures_with ?? []).toEqual(expected.closures_with ?? []);
         // `comment` is an optional field on Station; treat both
         // `undefined` and "absent" as equivalent.
         expect(viewed.comment ?? undefined).toBe(expected.comment ?? undefined);
       });
+    });
+
+    // #441: the SoA view must speak the same shape as the wire - a station with
+    // no closures OMITS the key rather than materializing `[]`. A regression to
+    // `?? []` here would put a shape on screen that the backend never sends, and
+    // silently re-teach consumers that the field is always there.
+    //
+    // Turns red if `getStation` goes back to defaulting the field.
+    it('omits closures_with entirely for a station that has none', () => {
+      const { sections, stations } = fixture();
+      const data = soaFromLegacy(sections, stations);
+
+      const bare = stations.findIndex((s) => (s.closures_with ?? []).length === 0);
+      expect(bare).toBeGreaterThanOrEqual(0);
+
+      const viewed = getStation(data, bare);
+      expect('closures_with' in viewed).toBe(false);
+      expect(viewed.closures_with).toBeUndefined();
     });
   });
 

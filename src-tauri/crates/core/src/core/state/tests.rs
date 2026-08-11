@@ -11519,13 +11519,13 @@ fn test_transitive_closures_in_computed_stations() {
         .find(|s| s.station_ref == StationRef::new(a, 2))
         .unwrap();
     let a2_direct = a2
-        .closures_with
+        .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(c, 1) && !cr.is_transitive);
     assert!(
         a2_direct.is_some(),
         "A.2 should have direct closure to C.1, got: {:?}",
-        a2.closures_with
+        a2.closures()
     );
 
     // B.0: transitive closure to C.1 via A.2 (B.0 is merged with A.2)
@@ -11534,13 +11534,13 @@ fn test_transitive_closures_in_computed_stations() {
         .find(|s| s.station_ref == StationRef::new(b, 0))
         .unwrap();
     let b0_transitive = b0
-        .closures_with
+        .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(c, 1) && cr.is_transitive);
     assert!(
         b0_transitive.is_some(),
         "B.0 should have transitive closure to C.1 (via A.2), got: {:?}",
-        b0.closures_with
+        b0.closures()
     );
     assert_eq!(
         b0_transitive.unwrap().via_station,
@@ -11553,24 +11553,24 @@ fn test_transitive_closures_in_computed_stations() {
         .find(|s| s.station_ref == StationRef::new(c, 1))
         .unwrap();
     let c1_direct = c1
-        .closures_with
+        .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(a, 2) && !cr.is_transitive);
     assert!(
         c1_direct.is_some(),
         "C.1 should have direct closure to A.2, got: {:?}",
-        c1.closures_with
+        c1.closures()
     );
 
     // C.1: transitive closure to B.0 (via A.2, since B.0 is in A.2's merge group)
     let c1_transitive = c1
-        .closures_with
+        .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(b, 0) && cr.is_transitive);
     assert!(
         c1_transitive.is_some(),
         "C.1 should have transitive closure to B.0 (via A.2), got: {:?}",
-        c1.closures_with
+        c1.closures()
     );
     assert_eq!(
         c1_transitive.unwrap().via_station,
@@ -11583,18 +11583,18 @@ fn test_transitive_closures_in_computed_stations() {
         .find(|s| s.station_ref == StationRef::new(a, 0))
         .unwrap();
     assert!(
-        a0.closures_with.is_empty(),
+        a0.closures().is_empty(),
         "A.0 should have no closures, got: {:?}",
-        a0.closures_with
+        a0.closures()
     );
     let a1 = stations
         .iter()
         .find(|s| s.station_ref == StationRef::new(a, 1))
         .unwrap();
     assert!(
-        a1.closures_with.is_empty(),
+        a1.closures().is_empty(),
         "A.1 should have no closures, got: {:?}",
-        a1.closures_with
+        a1.closures()
     );
 
     // B.1: NOT in A.2's merge group, IS merged with C.0 but C.0 is not a closure endpoint
@@ -11603,9 +11603,9 @@ fn test_transitive_closures_in_computed_stations() {
         .find(|s| s.station_ref == StationRef::new(b, 1))
         .unwrap();
     assert!(
-        b1.closures_with.is_empty(),
+        b1.closures().is_empty(),
         "B.1 should have no closures, got: {:?}",
-        b1.closures_with
+        b1.closures()
     );
 
     // C.0: merged with B.1, but B.1 is not a closure endpoint. C.0 is NOT in C.1's group.
@@ -11614,17 +11614,18 @@ fn test_transitive_closures_in_computed_stations() {
         .find(|s| s.station_ref == StationRef::new(c, 0))
         .unwrap();
     assert!(
-        c0.closures_with.is_empty(),
+        c0.closures().is_empty(),
         "C.0 should have no closures, got: {:?}",
-        c0.closures_with
+        c0.closures()
     );
 }
 
 #[test]
 fn test_transitive_closures_serialization_preserves_data() {
     // Test that closures_with survives JSON serialization (the Tauri IPC path).
-    // This tests that #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    // doesn't cause data loss for non-empty vecs.
+    // This tests that `#[serde(default, skip_serializing_if =
+    // "closures_absent_or_empty")]` skips ONLY the empty case and never costs a
+    // non-empty list any data.
     use crate::models::Station;
 
     let state = AppState::new().unwrap();
@@ -11705,7 +11706,7 @@ fn test_transitive_closures_serialization_preserves_data() {
         .find(|s| s.station_ref == StationRef::new(b, 0))
         .unwrap();
     assert!(
-        !b0.closures_with.is_empty(),
+        !b0.closures().is_empty(),
         "B.0 should have transitive closures"
     );
 
@@ -11719,12 +11720,12 @@ fn test_transitive_closures_serialization_preserves_data() {
         .find(|s| s.station_ref == StationRef::new(b, 0))
         .unwrap();
     assert_eq!(
-        b0_de.closures_with.len(),
-        b0.closures_with.len(),
+        b0_de.closures().len(),
+        b0.closures().len(),
         "closures_with should survive serialization round-trip"
     );
     assert!(
-        b0_de.closures_with.iter().any(|cr| cr.is_transitive),
+        b0_de.closures().iter().any(|cr| cr.is_transitive),
         "Transitive closure should survive serialization"
     );
 
@@ -11734,7 +11735,7 @@ fn test_transitive_closures_serialization_preserves_data() {
         .find(|s| s.station_ref == StationRef::new(a, 1))
         .unwrap();
     assert!(
-        a1_de.closures_with.iter().any(|cr| !cr.is_transitive),
+        a1_de.closures().iter().any(|cr| !cr.is_transitive),
         "Direct closure on A.1 should survive serialization"
     );
 
@@ -11744,12 +11745,42 @@ fn test_transitive_closures_serialization_preserves_data() {
         .find(|s| s.station_ref == StationRef::new(c, 1))
         .unwrap();
     assert!(
-        c1_de.closures_with.iter().any(|cr| !cr.is_transitive),
+        c1_de.closures().iter().any(|cr| !cr.is_transitive),
         "C.1 direct closure should survive serialization"
     );
     assert!(
-        c1_de.closures_with.iter().any(|cr| cr.is_transitive),
+        c1_de.closures().iter().any(|cr| cr.is_transitive),
         "C.1 transitive closure should survive serialization"
+    );
+
+    // #441, the other half of the wire contract: a station with NO closures omits
+    // the key entirely, so the generated type has to declare it optional. As a
+    // plain `Vec` it generated as a required `Array<ClosureRef>` and `tsc` could
+    // not see a bare `station.closures_with.map` on the absent shape.
+    let wire: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+    let (station, closure_free) = stations
+        .iter()
+        .zip(&wire)
+        .find(|(s, _)| s.closures().is_empty())
+        .expect("this fixture has stations with no closures");
+    // The zip pairs by position; prove the pairing rather than assume it, or a
+    // reordering serializer would let this assert about the wrong station.
+    assert_eq!(
+        closure_free.get("station_ref"),
+        Some(&serde_json::to_value(station.station_ref).unwrap()),
+        "the JSON element must be the station we tested for emptiness"
+    );
+    assert!(
+        !closure_free
+            .as_object()
+            .unwrap()
+            .contains_key("closures_with"),
+        "a closure-free station must omit the key, not send []: {closure_free}"
+    );
+    assert!(
+        <Station as ts_rs::TS>::decl().contains("closures_with?:"),
+        "the key is absent above, so the generated declaration must mark it optional: {}",
+        <Station as ts_rs::TS>::decl()
     );
 }
 

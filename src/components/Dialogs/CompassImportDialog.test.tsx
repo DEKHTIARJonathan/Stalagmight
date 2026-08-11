@@ -76,9 +76,12 @@ const EMPTY_RECEIPT: ImportReceipt = {
 };
 
 /**
- * The REAL wire shape of an import that created no section: `section_ids` is
- * `#[serde(skip_serializing_if = "Vec::is_empty")]`, so the key is ABSENT -
- * not present-and-empty, which is all any other mock in the repo produces.
+ * The wire shape that CRASHED this dialog in #411: `section_ids` was
+ * `#[serde(skip_serializing_if = "Vec::is_empty")]`, so an import that created
+ * no section omitted the key while the generated type promised an array. #441
+ * removed the skip, so the backend always writes the key and this shape is no
+ * longer reachable from the shipped binary - the literal is kept as the
+ * regression record for #411 and pins the `?? []` that survives it.
  */
 const okWithoutSectionIds = (receipt: ImportReceipt): CommandResult =>
   ({ success: true, error: null, warnings: [], import_receipt: receipt } as unknown as CommandResult);

@@ -317,6 +317,23 @@ impl Coordinates {
     }
 }
 
+/// `skip_serializing_if` for [`Station::closures_with`]: absent and empty are
+/// the same fact, so both leave the key off the wire.
+///
+/// `Option::is_none` alone would not be enough. `Station::closures_mut` returns
+/// a `&mut Vec`, so `Some(vec![])` is reachable without ever pushing - and a
+/// future `clear()`/`retain()` can empty an existing list - after which every
+/// station carries `"closures_with":[]` for the life of the value, which is
+/// exactly the per-station cost the skip exists to avoid. It also normalizes a
+/// stored empty array back to nothing on re-serialize.
+#[expect(
+    clippy::ref_option,
+    reason = "serde calls skip_serializing_if with &FieldType; Option<&Vec<_>> does not typecheck there"
+)]
+fn closures_absent_or_empty(closures: &Option<Vec<ClosureRef>>) -> bool {
+    closures.as_ref().is_none_or(Vec::is_empty)
+}
+
 /// A computed station in the cave survey
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Station {
@@ -330,9 +347,31 @@ pub struct Station {
     pub gps_coordinates: Option<GpsCoordinates>,
     /// Other stations merged with this one
     pub merged_with: Vec<StationRef>,
-    /// Loop closures involving this station
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub closures_with: Vec<ClosureRef>,
+    /// Loop closures involving this station; `None` when there are none.
+    ///
+    /// `Option<Vec<_>>` rather than `Vec<_>` for the sake of the GENERATED TYPE
+    /// (#441). ts-rs 7 emits `field?:` only for an `Option<T>` - `optional` is
+    /// rejected on any other type - so a `skip_serializing_if` `Vec` would
+    /// generate as a required `Array<ClosureRef>` that the wire does not always
+    /// carry, and `tsc` would be blind to every bare `station.closures_with.map`.
+    ///
+    /// The skip stays (unlike `CommandResult::section_ids` in the core crate,
+    /// which drops it): this one is paid PER STATION - `get_project_state`
+    /// re-serializes every station as JSON on each refresh, and that payload is
+    /// already ~25 MB for the 89k-station projects the binary loader exists for.
+    /// Always sending an empty array there is not free; sending it once per
+    /// command result is.
+    ///
+    /// `None` and `Some(vec![])` mean the same thing, and
+    /// [`closures_absent_or_empty`] keeps BOTH off the wire - `closures_mut`
+    /// hands out a `&mut Vec`, so an empty `Some` is reachable without a push.
+    ///
+    /// `#[ts(optional)]` is explicit because ts-rs only infers optionality from
+    /// the literal predicate `"Option::is_none"` (`attr/field.rs:70`); a named
+    /// predicate would silently regenerate this as a required array.
+    #[serde(default, skip_serializing_if = "closures_absent_or_empty")]
+    #[ts(optional)]
+    pub closures_with: Option<Vec<ClosureRef>>,
     /// User comment for this station
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
@@ -346,7 +385,7 @@ impl Station {
             is_zero_datum: false,
             gps_coordinates: None,
             merged_with: Vec::new(),
-            closures_with: Vec::new(),
+            closures_with: None,
             comment: None,
         }
     }
@@ -358,9 +397,22 @@ impl Station {
             is_zero_datum: false,
             gps_coordinates: None,
             merged_with: Vec::new(),
-            closures_with: Vec::new(),
+            closures_with: None,
             comment: None,
         }
+    }
+
+    /// The loop closures involving this station; empty when the field is absent.
+    /// Read through this rather than matching the `Option`: `None` and an empty
+    /// `Vec` are the same fact (see the field's doc comment).
+    pub fn closures(&self) -> &[ClosureRef] {
+        self.closures_with.as_deref().unwrap_or_default()
+    }
+
+    /// The closure list for writing, created on first use. Going through this
+    /// keeps the "`None` when empty" invariant that keeps the key off the wire.
+    pub fn closures_mut(&mut self) -> &mut Vec<ClosureRef> {
+        self.closures_with.get_or_insert_with(Vec::new)
     }
 }
 
@@ -458,6 +510,88 @@ mod tests {
     fn station_ref_display_formats_as_section_and_index() {
         let station = StationRef::new(2, 3);
         assert_eq!(station.to_string(), "2:3");
+    }
+
+    /// #441: a field the wire can omit must be DECLARED omittable.
+    ///
+    /// ts-rs 7 emits `foo?:` only for an `Option<T>`, so `closures_with` has to be
+    /// `Option<Vec<_>>` to keep its `skip_serializing_if` (worth keeping: the skip
+    /// is paid per station on every `get_project_state`). `merged_with` is the
+    /// control - same element shape, no skip, so it must stay required.
+    ///
+    /// Turns red if `closures_with` goes back to a plain `Vec` (declaration loses
+    /// the `?` while the key still vanishes) or if the skip is dropped without
+    /// retyping (the empty station starts carrying `"closures_with": []`).
+    #[test]
+    fn closures_with_is_omitted_when_empty_and_declared_optional() {
+        use ts_rs::TS;
+
+        let empty = serde_json::to_value(Station::new(StationRef::new(1, 0))).unwrap();
+        assert!(
+            !empty.as_object().unwrap().contains_key("closures_with"),
+            "a station with no closures must omit the key, not send []: {empty}"
+        );
+
+        let mut linked = Station::new(StationRef::new(1, 0));
+        linked.closures_mut().push(ClosureRef {
+            closure_id: 7,
+            station_ref: StationRef::new(2, 0),
+            via_station: None,
+            is_transitive: false,
+        });
+        let linked = serde_json::to_value(linked).unwrap();
+        assert!(
+            linked.as_object().unwrap().contains_key("closures_with"),
+            "a station WITH closures must carry them: {linked}"
+        );
+
+        let decl = Station::decl();
+        assert!(
+            decl.contains("closures_with?:"),
+            "closures_with leaves the wire when empty, so its declaration must carry \
+             the `?`: {decl}"
+        );
+        assert!(
+            decl.contains("merged_with: Array<StationRef>"),
+            "merged_with is always serialized, so it must stay required: {decl}"
+        );
+    }
+
+    /// #441 follow-up: EMPTY must leave the wire too, not just `None`.
+    ///
+    /// `closures_mut()` hands out a `&mut Vec`, so `Some(vec![])` is reachable
+    /// without a push - by taking the list and not filling it, and by any future
+    /// `clear()`/`retain()` that empties one. Under a bare
+    /// `skip_serializing_if = "Option::is_none"` that value carries
+    /// `"closures_with":[]` on every station for the rest of its life, which is
+    /// precisely the per-station cost the skip exists to avoid.
+    ///
+    /// It also normalizes legacy input: a stored `"closures_with": []`
+    /// deserializes to `Some(vec![])` and must not be re-serialized.
+    #[test]
+    fn an_emptied_closure_list_leaves_the_wire_like_an_absent_one() {
+        let mut taken = Station::new(StationRef::new(1, 0));
+        let _ = taken.closures_mut();
+        let taken = serde_json::to_value(taken).unwrap();
+        assert!(
+            !taken.as_object().unwrap().contains_key("closures_with"),
+            "an empty closure list must be omitted exactly like an absent one: {taken}"
+        );
+
+        let legacy: Station = serde_json::from_value(serde_json::json!({
+            "station_ref": { "section_id": 1, "station_index": 0 },
+            "coordinates": { "x": 0.0, "y": 0.0, "z": 0.0 },
+            "is_zero_datum": false,
+            "gps_coordinates": null,
+            "merged_with": [],
+            "closures_with": [],
+        }))
+        .unwrap();
+        let legacy = serde_json::to_value(legacy).unwrap();
+        assert!(
+            !legacy.as_object().unwrap().contains_key("closures_with"),
+            "a stored empty array must not survive a re-serialize: {legacy}"
+        );
     }
 
     #[test]
