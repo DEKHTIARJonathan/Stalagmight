@@ -118,31 +118,39 @@ function fail(headline: string, detail: string[] = []): never {
  */
 export type FileHandoff = 'accepted' | 'unconsumed' | 'gate-refused';
 
-/** Why a move that MIGHT raise an error dialog did not open S4's grace window. */
-export type GraceWithheld = 'not-performed' | 'cancel' | FileHandoff;
+/** Why a move started nothing that could fail. */
+export type NoWorkReason = 'not-eligible' | 'not-performed' | 'cancel' | Exclude<FileHandoff, 'accepted'>;
 
-export type GraceVerdict = { arms: true; withheld: null } | { arms: false; withheld: GraceWithheld };
+export type S4Work = { started: true; reason: null } | { started: false; reason: NoWorkReason };
 
 /**
- * Does this move open S4's one-move grace window?
+ * Did this move hand work to something that can fail? S4's ONE question.
  *
- * The window exists for ONE shape: a move hands a file to async parsing, the
- * settle loop cannot wait for a result that changes no observable state until it
- * lands, and the error dialog therefore appears on the NEXT move, which is then
- * blamed for it. So the question is not "could this move raise an error" - that
- * is the exemption, and it is a different question - but "did this move actually
- * start something that can report late".
+ * S4 asks two things of every move and they had drifted into two decision
+ * points with two different rules:
  *
- * Answering the first question instead was a false-negative generator, twice
- * over. A picker CANCEL resolves with no path. A SWALLOWED Ctrl+O, an
- * unconsumed dialog answer and a GATE-REFUSED route all take the move and hand
- * nothing over. Each of them still armed a full grace move, and the next move's
- * genuinely unexpected error dialog was counted as `s4LateErrorCarried` instead
- * of failing S4.
+ *   EXEMPTION - may an error dialog first seen on this step be blamed on it?
+ *   GRACE     - does this move open the one-move window for a result that the
+ *               settle loop cannot wait for, because it changes nothing
+ *               observable until it lands?
  *
- * `handoff` is null for every move that is not a file entry point; an
- * ERROR_PRODUCING confirm arms on being performed, because that is a real
- * command dispatch.
+ * Both reduce to the same fact. The exemption exists because a move handed a
+ * file to a parser and the parser reported a problem; the grace window exists
+ * because that same parse can report on the NEXT move instead. If nothing was
+ * handed to anything, neither applies - there is no legitimate reason for this
+ * step to have raised the dialog, and nothing in flight to land late.
+ *
+ * Deciding it twice is what let the same bug in three times: on move SHAPE it
+ * looks like work, on OUTCOME it is not. A picker CANCEL resolves with no path.
+ * A SWALLOWED Ctrl+O, an UNCONSUMED dialog answer and a GATE-REFUSED route each
+ * take the move and hand nothing over - `routeOpenedFile` in particular raises
+ * the import-gate toast and returns before any parser is reached. A move that
+ * was not PERFORMED at all did nothing by definition, and the exemption did not
+ * even check that. Every one of those was exempted, granted grace, or both.
+ *
+ * So it is one predicate with two uses, which is the only shape in which this
+ * class cannot come back: a future entry point that hands nothing over has to
+ * report a `FileHandoff` other than `accepted`, and both answers follow.
  *
  * One acknowledged gap: `unconsumed` is read after a bounded wait, so an app
  * that answered the picker in the microseconds between that deadline and the
@@ -150,20 +158,22 @@ export type GraceVerdict = { arms: true; withheld: null } | { arms: false; withh
  * genuinely in flight. That window is the settle cap wide of any real picker
  * open, and the alternative is the false negative above.
  */
-export function errorGraceVerdict(input: {
-  /** `mayRaiseError`: may this move kind legitimately raise the error dialog? */
-  exempt: boolean;
+export function s4WorkStarted(input: {
+  /** `mayRaiseError`: is this a move KIND that can start fallible work at all? */
+  eligible: boolean;
   performed: boolean;
   /** True for a picker cancel, which resolves with no path and parses nothing. */
   cancel: boolean;
+  /** What a file entry point did with the path; null when it is not one. */
   handoff: FileHandoff | null;
-}): GraceVerdict {
-  if (!input.exempt || !input.performed) return { arms: false, withheld: 'not-performed' };
-  if (input.cancel) return { arms: false, withheld: 'cancel' };
+}): S4Work {
+  if (!input.eligible) return { started: false, reason: 'not-eligible' };
+  if (!input.performed) return { started: false, reason: 'not-performed' };
+  if (input.cancel) return { started: false, reason: 'cancel' };
   if (input.handoff !== null && input.handoff !== 'accepted') {
-    return { arms: false, withheld: input.handoff };
+    return { started: false, reason: input.handoff };
   }
-  return { arms: true, withheld: null };
+  return { started: true, reason: null };
 }
 
 /**

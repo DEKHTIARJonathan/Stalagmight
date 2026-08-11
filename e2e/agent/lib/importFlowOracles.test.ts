@@ -32,7 +32,7 @@ import {
   checkResidue,
   checkRoundtripState,
   checkTempFiles,
-  errorGraceVerdict,
+  s4WorkStarted,
   ipcArgRejections,
   leftoverTempNames,
   parseReceiptSummary,
@@ -390,67 +390,83 @@ describe('captureReceipt (F3 capture ordering)', () => {
 });
 
 /**
- * S4's grace window, which exists ONLY for a result that can land late.
+ * S4's single question, which decides BOTH the same-step exemption and the
+ * one-move grace window: did this move hand work to something that can fail?
  *
- * Every case below is a move that was performed and is exempt - so the old
- * "arm on shape" rule opened the window for all of them - and handed no file to
- * anything. Each one bought the NEXT move a free error dialog, reported as
- * `s4LateErrorCarried` rather than as the S4 failure it was. That is a
- * false-negative generator in the oracle, so the tests are written as the four
- * ways a move can take an action and start nothing.
+ * Every no-work case below is a move that is eligible by shape and was
+ * performed, so every rule that looked at shape alone said yes to it - and each
+ * handed no file to anything. As an exemption that means the step first showing
+ * an unrelated error dialog is not blamed for it; as grace it means the NEXT
+ * step is not blamed either. Both were false negatives, which is why the two
+ * answers now come from one predicate: on shape these look like work, on
+ * outcome they are not, and any rule that reads shape reintroduces the bug.
  */
-describe('errorGraceVerdict', () => {
-  const armed = { arms: true, withheld: null };
+describe('s4WorkStarted', () => {
+  const started = { started: true, reason: null };
 
-  it('arms on a file the entry point actually accepted', () => {
-    expect(errorGraceVerdict({ exempt: true, performed: true, cancel: false, handoff: 'accepted' })).toEqual(armed);
+  it('is work when the entry point actually accepted the file', () => {
+    expect(s4WorkStarted({ eligible: true, performed: true, cancel: false, handoff: 'accepted' })).toEqual(started);
   });
 
-  it('arms on an ERROR_PRODUCING confirm, which dispatches a real command', () => {
+  it('is work for an ERROR_PRODUCING confirm, which dispatches a real command', () => {
     // Not a file entry point, so no handoff to read - the dispatch is the work.
-    expect(errorGraceVerdict({ exempt: true, performed: true, cancel: false, handoff: null })).toEqual(armed);
+    expect(s4WorkStarted({ eligible: true, performed: true, cancel: false, handoff: null })).toEqual(started);
   });
 
-  it('withholds on a SWALLOWED picker: the chord dispatched and nothing opened', () => {
+  it('is NOT work on a SWALLOWED picker: the chord dispatched and nothing opened', () => {
     // Ctrl+O with a dialog already up. `useKeyboardShortcuts` returns early for
     // every non-Escape key, so the picker is never armed and the answer is
     // never consumed - but the bridge still reports `performed: true`, because
     // the keydown really was dispatched.
-    expect(errorGraceVerdict({ exempt: true, performed: true, cancel: false, handoff: 'unconsumed' })).toEqual({
-      arms: false,
-      withheld: 'unconsumed',
+    expect(s4WorkStarted({ eligible: true, performed: true, cancel: false, handoff: 'unconsumed' })).toEqual({
+      started: false,
+      reason: 'unconsumed',
     });
   });
 
-  it('withholds on a GATE-REFUSED route', () => {
+  it('is NOT work on a GATE-REFUSED route', () => {
     // `routeOpenedFile` raises the import-gate toast and returns before parsing
     // whenever a dialog is up or placement is on. The harness sets
     // `performed = true` unconditionally on a route, so only the handoff can
     // tell this from an import that started.
-    expect(errorGraceVerdict({ exempt: true, performed: true, cancel: false, handoff: 'gate-refused' })).toEqual({
-      arms: false,
-      withheld: 'gate-refused',
+    expect(s4WorkStarted({ eligible: true, performed: true, cancel: false, handoff: 'gate-refused' })).toEqual({
+      started: false,
+      reason: 'gate-refused',
     });
   });
 
-  it('withholds on a picker cancel, whatever else is true of it', () => {
-    expect(errorGraceVerdict({ exempt: true, performed: true, cancel: true, handoff: null })).toEqual({
-      arms: false,
-      withheld: 'cancel',
+  it('is NOT work on a picker cancel, whatever else is true of it', () => {
+    expect(s4WorkStarted({ eligible: true, performed: true, cancel: true, handoff: null })).toEqual({
+      started: false,
+      reason: 'cancel',
     });
   });
 
-  it('withholds on a move that did not happen, and on one that was never exempt', () => {
-    expect(errorGraceVerdict({ exempt: true, performed: false, cancel: false, handoff: 'accepted' }).arms).toBe(false);
-    expect(errorGraceVerdict({ exempt: false, performed: true, cancel: false, handoff: 'accepted' }).arms).toBe(false);
+  it('is NOT work when the move never happened', () => {
+    // The exemption did not even check this one: a file move whose control was
+    // absent was exempted for an error it could not have caused.
+    expect(s4WorkStarted({ eligible: true, performed: false, cancel: false, handoff: 'accepted' })).toEqual({
+      started: false,
+      reason: 'not-performed',
+    });
   });
 
-  it('THE REGRESSION: no handoff short of `accepted` can open the window', () => {
-    // The property rather than the three examples: whatever else is true, a
-    // file entry point that did not land a file does not grant grace.
+  it('is NOT work for a move kind that could never start any', () => {
+    expect(s4WorkStarted({ eligible: false, performed: true, cancel: false, handoff: 'accepted' })).toEqual({
+      started: false,
+      reason: 'not-eligible',
+    });
+  });
+
+  it('THE REGRESSION: nothing short of an accepted handoff counts as work', () => {
+    // The property rather than the examples. Both S4 answers read this one
+    // boolean, so this is simultaneously "cannot be exempted" and "cannot grant
+    // grace" for every combination that did not land a file.
     for (const handoff of ['unconsumed', 'gate-refused'] as const) {
       for (const cancel of [false, true]) {
-        expect(errorGraceVerdict({ exempt: true, performed: true, cancel, handoff }).arms).toBe(false);
+        for (const performed of [false, true]) {
+          expect(s4WorkStarted({ eligible: true, performed, cancel, handoff }).started).toBe(false);
+        }
       }
     }
   });

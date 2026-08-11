@@ -421,11 +421,11 @@ import {
   checkResidue,
   checkRoundtripState,
   checkTempFiles,
-  errorGraceVerdict,
   ImportOracleError,
   leftoverTempNames,
   captureReceipt,
   receiptClaimFrom,
+  s4WorkStarted,
   type CountedProject,
   type FileHandoff,
   type FlowBounds,
@@ -559,7 +559,10 @@ function traceOutPath(): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Clicks that may legitimately raise the error dialog, so S4 exempts them.
+ * Clicks that CAN start fallible work, and so are eligible for S4's exemption.
+ *
+ * Eligibility only - `s4WorkStarted` decides whether a given move actually did,
+ * and a move that started nothing is neither exempted nor granted grace.
  *
  * Every one of them re-enters the open/import ROUTER (or creates a project),
  * and a malformed file or an unwritable path there is a reported error, not a
@@ -589,13 +592,11 @@ function mayRaiseError(move: FuzzMove): boolean {
 }
 
 /**
- * Is this move a picker CANCEL - the one exempt move that hands over no path?
+ * Is this move a picker CANCEL - eligible by shape, but resolving with no path?
  *
- * The rest of the "did this actually start async work" decision needs the
- * move's OUTCOME, not just its shape, and lives in `errorGraceVerdict`.
- * `mayRaiseError` stays what it was: whether a move may legitimately raise the
- * error dialog on its own step. Being unable to raise one and not being blamed
- * for one are different claims, and only the first is narrowed by any of this.
+ * The only no-work case the move's own kind can settle. Everything else needs
+ * the OUTCOME, which is what `FileHandoff` carries; `s4WorkStarted` puts the
+ * two together.
  */
 function isPickerCancel(move: FuzzMove): boolean {
   return move.kind === 'cancelDialog';
@@ -1371,37 +1372,38 @@ export const importDialogFuzz: Scenario = {
       // Measured, on the seed-2 matrix cell: `import via router` produced "No
       // valid sections found in DMP file", which is the app reporting a problem
       // properly, and the NEXT interjection was reported as the defect.
-      const exemptNow = mayRaiseError(move);
-      if (digest.screen === 'error' && screenBefore !== 'error' && !exemptNow) {
-        if (errorGrace > 0) {
-          // The previous exempt move's parse landing late - see ERROR_GRACE_MOVES.
-          ctx.metric('s4LateErrorCarried');
-        } else {
-          fail(
-            'S4 UNEXPECTED ERROR DIALOG: a move with no business failing raised one',
-            `  after: ${move.label}\n  error: ${digest.err ?? '(no text)'}`,
-          );
-        }
-      }
-      // Counted AFTER the check, so an exempt move's own error does not spend
-      // the grace it is granting. Armed on OUTCOME, not on move shape - see
-      // `errorGraceVerdict`: being exempt is not the same as having started
-      // something that can report late, and a cancel, a swallowed chord, an
-      // unconsumed picker and a gate-refused route are none of them.
-      //
-      // Both sides counted, so a campaign can see the split rather than infer
-      // it from an absence: a `s4GraceWithheld:*` that dominates would mean the
-      // entry points are mostly not landing, which is worth knowing on its own.
-      const graceVerdict = errorGraceVerdict({
-        exempt: exemptNow,
+      // ONE decision, two uses - see `s4WorkStarted`. A move that handed work to
+      // something that can fail is not blamed for an error on its own step AND
+      // opens the window for that result to land on the next one; a move that
+      // handed nothing over gets neither. Deciding those separately, one on move
+      // shape and one on outcome, is what let the same false negative in three
+      // times.
+      const work = s4WorkStarted({
+        eligible: mayRaiseError(move),
         performed,
         cancel: isPickerCancel(move),
         handoff,
       });
-      if (exemptNow && performed) {
-        ctx.metric(graceVerdict.arms ? 's4GraceArmed' : `s4GraceWithheld:${graceVerdict.withheld}`);
+      if (digest.screen === 'error' && screenBefore !== 'error' && !work.started) {
+        if (errorGrace > 0) {
+          // The previous move's parse landing late - see ERROR_GRACE_MOVES.
+          ctx.metric('s4LateErrorCarried');
+        } else {
+          fail(
+            'S4 UNEXPECTED ERROR DIALOG: a move with no business failing raised one',
+            `  after: ${move.label}\n  error: ${digest.err ?? '(no text)'}\n` +
+              `  started no fallible work: ${work.reason}`,
+          );
+        }
       }
-      errorGrace = graceVerdict.arms ? ERROR_GRACE_MOVES : Math.max(0, errorGrace - 1);
+      // Counted AFTER the check, so a move's own error does not spend the grace
+      // it is granting. Both sides counted, and only for moves whose KIND could
+      // have started work, so a campaign sees the split rather than inferring it
+      // from an absence: an `s4NoWork:*` that dominates would mean the entry
+      // points are mostly not landing, which is worth knowing on its own.
+      if (work.started) ctx.metric('s4WorkStarted');
+      else if (work.reason !== 'not-eligible') ctx.metric(`s4NoWork:${work.reason}`);
+      errorGrace = work.started ? ERROR_GRACE_MOVES : Math.max(0, errorGrace - 1);
       if (digest.screen !== 'idle' && !WEDGE_EXEMPT_SCREENS.has(digest.screen) && actionableCount(digest) === 0) {
         fail(
           `S5 WEDGE on "${digest.screen}": no actionable control anywhere in the inventory`,
