@@ -116,7 +116,7 @@ export class SurveyGeometryIndex {
   /** Per-section world-coord (map coords) AABB over its stations, stored as flat
    *  parallel arrays (index 0..boundsCount-1) for cache-friendly projection.
    *  Lazily built by {@link ensureBounds} the first time the gate runs. */
-  private boundsSid: Int32Array = new Int32Array(0);
+  private boundsSid: Uint32Array = new Uint32Array(0);
   private boundsMinLng: Float64Array = new Float64Array(0);
   private boundsMinLat: Float64Array = new Float64Array(0);
   private boundsMaxLng: Float64Array = new Float64Array(0);
@@ -189,7 +189,7 @@ export class SurveyGeometryIndex {
     }
     const n = acc.size;
     this.boundsCount = n;
-    this.boundsSid = new Int32Array(n);
+    this.boundsSid = new Uint32Array(n);
     this.boundsMinLng = new Float64Array(n);
     this.boundsMinLat = new Float64Array(n);
     this.boundsMaxLng = new Float64Array(n);

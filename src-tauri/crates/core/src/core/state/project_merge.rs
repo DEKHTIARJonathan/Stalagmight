@@ -1,7 +1,10 @@
 use super::project_io::save_failure;
 use super::AppState;
 use crate::core::CommandResult;
-use crate::models::{Project, SectionId, StationKey, StationRef};
+use crate::models::{
+    Project, SectionId, StationKey, StationRef, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE,
+    MAX_SECTION_ID,
+};
 use crate::persistence::Database;
 use std::path::PathBuf;
 
@@ -89,6 +92,30 @@ impl AppState {
         // (the "defaults for new projects", #57) rather than the hardcoded default.
         let mut merged_project = Project::new(output_name, None);
         merged_project.validation = self.get_config().validation;
+
+        // Section-id budget (#555), checked before a single section is appended.
+        // The append loop below calls `Project::add_section` once per source
+        // section, and `Section::new` computes `next_shot_id =
+        // id * FEATURE_ID_STRIDE` unchecked, so a combined count past the
+        // encode lands sections on ids whose shot encode leaves u32: a debug
+        // panic (outright at that multiply from id 42_950 on) and a wrap that
+        // aliases shot ids in release. The merged project is fresh (ids start
+        // at 0), but the sum is stated against its `next_section_id` all the
+        // same so the check keeps holding if it ever stops being fresh. Refused
+        // whole: a merge writes a NEW file, and half a merge is not a thing the
+        // user asked for.
+        let incoming_sections: usize = source_projects.iter().map(|p| p.sections.len()).sum();
+        let spent_count = merged_project.next_section_id as usize;
+        if incoming_sections.saturating_add(spent_count) > MAX_SECTIONS_IN_ID_SPACE {
+            return CommandResult::failure(format!(
+                "Merge refused: the {} source projects hold {incoming_sections} sections \
+                 in total, which is past the limit of {MAX_SECTIONS_IN_ID_SPACE} sections \
+                 for one project. Shot ids encode as section_id * {FEATURE_ID_STRIDE} + \
+                 position in 32 bits, so section ids past {MAX_SECTION_ID} cannot hold \
+                 shots. No output file was written.",
+                source_projects.len()
+            ));
+        }
 
         // Carry the entrance/surface elevation (#431, #448) forward: the first
         // source that has one wins, and a later source disagreeing beyond the

@@ -23,6 +23,10 @@ use std::collections::HashMap;
 use chrono::NaiveDate;
 
 use super::{RawShot, TmlSection, TmlShot, TmlShotType};
+// Sections whose shot ids all fit the `section_id * FEATURE_ID_STRIDE + seq`
+// encode, as a COUNT (42_949). Shared with the import/merge boundary checks
+// (#555) so the cut budget below and the mint-time refusals cannot drift apart.
+use crate::models::MAX_SECTIONS_IN_ID_SPACE;
 
 /// How many declared names a merged run spells out before it starts counting.
 /// A run of eight joined names is not a label a person can read in the wizard's
@@ -406,10 +410,11 @@ pub(super) const MAX_TRIP_CUTS_PER_RUN: usize = 256;
 /// Sections are the numerator of the shot-id encode. Ids are handed out
 /// sequentially from 0 (`Project::add_section`), and `Section::new` computes
 /// `next_shot_id = id * FEATURE_ID_STRIDE` (100_000) as a plain `u32` multiply,
-/// so the encode holds only while `section_id <= 42_949`
-/// (42_949 x 100_000 = 4_294_900_000 <= `u32::MAX`). Past that the multiply
-/// panics in debug and, where a site saturates instead, distinct shots ALIAS
-/// onto one id - which silently moves station cross-references.
+/// so the encode holds only while `section_id <= 42_948`
+/// ([`crate::models::MAX_SECTION_ID`]: 42_948 x 100_000 + 99_999 =
+/// 4_294_899_999 <= `u32::MAX`). Past that the multiply panics in debug and,
+/// where a site saturates instead, distinct shots ALIAS onto one id - which
+/// silently moves station cross-references.
 ///
 /// 4_096 is 16 runs at the per-run cap: under a tenth of that headroom,
 /// leaving ~38_850 for the file's declared names and branch splits (both of
@@ -419,21 +424,6 @@ pub(super) const MAX_TRIP_CUTS_PER_RUN: usize = 256;
 /// [`collapsed_trip_report`] like any other uncut boundary.
 pub(super) const MAX_TRIP_CUTS_PER_FILE: usize = 4_096;
 
-/// Sections whose shot ids all fit the `section_id * FEATURE_ID_STRIDE + seq`
-/// encode, as a COUNT.
-///
-/// The last shot of section `id` encodes as `id * 100_000 + 99_999`, so the
-/// largest usable id is `(u32::MAX - 99_999) / 100_000` = 42_948, i.e. 42_949
-/// sections. (Not 42_950: id 42_949 fits the multiply on its own but overflows
-/// as soon as the section holds shots.)
-///
-/// The cut spends at most whatever is left of this after the runs the file
-/// already declared, so a file cannot use the cut to cross the boundary - only
-/// to approach it. Getting there WITHOUT the cut, by declaring tens of
-/// thousands of sections, predates this work and is unguarded; the encode sites
-/// that would then wrap are listed in `docs/ariane-import.md`.
-const MAX_SECTIONS_IN_ID_SPACE: usize = 42_949;
-
 /// How many cuts a file with `existing_runs` runs may be given.
 ///
 /// Never more than the id space it has not already spent, so
@@ -441,6 +431,15 @@ const MAX_SECTIONS_IN_ID_SPACE: usize = 42_949;
 /// holds for every input - which is the property that keeps the cut from
 /// carrying a file over the encode boundary. Saturating, so a file that is
 /// already past it gets no cuts rather than an underflow.
+///
+/// [`crate::models::MAX_SECTIONS_IN_ID_SPACE`] is the count of sections whose
+/// shot ids all fit the encode (42_949; see [`crate::models::MAX_SECTION_ID`]
+/// for the arithmetic). The cut spends at most whatever is left of it after the
+/// runs the file already declared, so a file cannot use the CUT to cross the
+/// boundary - only to approach it. Getting there without the cut, by declaring
+/// tens of thousands of sections, is refused at the import boundary
+/// (`execute_import_sections_inner`, #555) rather than here: this parser has no
+/// view of what the target project has already spent.
 pub(super) fn cut_budget(existing_runs: usize) -> usize {
     MAX_TRIP_CUTS_PER_FILE.min(MAX_SECTIONS_IN_ID_SPACE.saturating_sub(existing_runs))
 }

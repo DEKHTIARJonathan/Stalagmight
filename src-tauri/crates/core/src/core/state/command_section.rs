@@ -1,6 +1,9 @@
 use super::AppState;
 use crate::core::{CommandResult, Validator};
-use crate::models::{SectionData, SectionId, SectionUpdates, FEATURE_ID_STRIDE};
+use crate::models::{
+    SectionData, SectionId, SectionUpdates, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE,
+    MAX_SECTION_ID,
+};
 
 impl AppState {
     pub(super) fn create_section(&self, data: SectionData) -> CommandResult {
@@ -16,6 +19,24 @@ impl AppState {
         if data.shots.len() > max_shots {
             return CommandResult::failure(format!(
                 "Section exceeds maximum shots per section (limit = {max_shots})"
+            ));
+        }
+
+        // The OTHER half of the same encode (#555): a shot id is
+        // `section_id * FEATURE_ID_STRIDE + position`, so the id about to be
+        // minted must still leave a WHOLE section's worth of ids inside u32 -
+        // the max-shots check above is what entitles it to them. Id 42_949
+        // encodes only its first 67_296 shots before the section's unchecked
+        // `next_shot_id += 1` leaves u32; id 42_950 is worse still, overflowing
+        // `Section::new`'s bare `id * FEATURE_ID_STRIDE` before it holds
+        // anything. Panic in debug, wrap in release, and a wrapped base aliases
+        // distinct shots onto one id.
+        if project.next_section_id > MAX_SECTION_ID {
+            return CommandResult::failure(format!(
+                "Project has reached the maximum number of sections \
+                 (limit = {MAX_SECTIONS_IN_ID_SPACE}); shot ids encode as \
+                 section_id * {FEATURE_ID_STRIDE} + position in 32 bits, so \
+                 section ids past {MAX_SECTION_ID} cannot hold shots"
             ));
         }
 
