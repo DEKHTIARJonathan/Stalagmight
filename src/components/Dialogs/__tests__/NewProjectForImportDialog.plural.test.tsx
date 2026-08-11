@@ -27,7 +27,12 @@ const dialogData: {
         survey_count: number;
         shot_count: number;
         excluded_shot_count?: number;
-        invalid_shot_count?: number;
+        invalid_shot_counts?: {
+          non_excluded_corrected: number;
+          non_excluded_uncorrected: number;
+          excluded_corrected: number;
+          excluded_uncorrected: number;
+        };
         cave_name?: string;
       }
     | undefined;
@@ -135,7 +140,12 @@ describe('NewProjectForImportDialog summary plurals (#447)', () => {
       survey_count: 1,
       shot_count: 1,
       excluded_shot_count: 0,
-      invalid_shot_count: 0,
+      invalid_shot_counts: {
+        non_excluded_corrected: 0,
+        non_excluded_uncorrected: 0,
+        excluded_corrected: 0,
+        excluded_uncorrected: 0,
+      },
       cave_name: 'Naharon',
     };
     dialogData.importType = 'compass';
@@ -150,7 +160,12 @@ describe('NewProjectForImportDialog summary plurals (#447)', () => {
       survey_count: 2,
       shot_count: 5,
       excluded_shot_count: 0,
-      invalid_shot_count: 0,
+      invalid_shot_counts: {
+        non_excluded_corrected: 0,
+        non_excluded_uncorrected: 0,
+        excluded_corrected: 0,
+        excluded_uncorrected: 0,
+      },
       cave_name: '',
     };
     dialogData.importType = 'compass';

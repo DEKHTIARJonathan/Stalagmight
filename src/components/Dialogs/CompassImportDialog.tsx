@@ -12,13 +12,65 @@ import {
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import type { CompassFile, OrphanPlacementSuggestion } from '../../types/commands';
+import type { CompassFile, CompassSurveySummary, InvalidShotCounts, OrphanPlacementSuggestion } from '../../types/commands';
 import { setSource } from '../../utils/telemetry';
 import { importButtonLabel } from '../../utils/importButtonLabel';
 
 interface CompassImportDialogProps {
   compassFile: CompassFile;
   filePath: string;
+}
+
+/**
+ * How many of `invalid_shot_counts`'s four counters apply under the given
+ * LIVE toggles - the ONE counter matching both `includeExcluded` (which set
+ * of shots reaches the length check) and `applyCorrections` (how each
+ * shot's length resolves before that check).
+ */
+function invalidShotCountFor(
+  counts: InvalidShotCounts,
+  includeExcluded: boolean,
+  applyCorrections: boolean
+): number {
+  const nonExcluded = applyCorrections ? counts.non_excluded_corrected : counts.non_excluded_uncorrected;
+  const excluded = applyCorrections ? counts.excluded_corrected : counts.excluded_uncorrected;
+  return nonExcluded + (includeExcluded ? excluded : 0);
+}
+
+/**
+ * What the backend's converter actually lands for a shot_count/
+ * excluded_shot_count/invalid_shot_counts triple, under the live toggles -
+ * exact in all four `(includeExcluded, applyCorrections)` combinations,
+ * mirroring pass 1 of `convert_compass_to_import_configs` (#437 follow-up,
+ * review of #550). Shared by the header total and each per-survey row so
+ * the rows always sum to the header.
+ */
+function landingShotCountFor(
+  shotCount: number,
+  excludedShotCount: number,
+  invalidCounts: InvalidShotCounts,
+  includeExcluded: boolean,
+  applyCorrections: boolean
+): number {
+  return (
+    shotCount -
+    (includeExcluded ? 0 : excludedShotCount) -
+    invalidShotCountFor(invalidCounts, includeExcluded, applyCorrections)
+  );
+}
+
+function surveyLandingShotCount(
+  survey: CompassSurveySummary,
+  includeExcluded: boolean,
+  applyCorrections: boolean
+): number {
+  return landingShotCountFor(
+    survey.shot_count,
+    survey.excluded_shot_count,
+    survey.invalid_shot_counts,
+    includeExcluded,
+    applyCorrections
+  );
 }
 
 export default function CompassImportDialog({ compassFile, filePath }: CompassImportDialogProps) {
@@ -52,24 +104,21 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
 
   const fileName = useMemo(() => extractFilename(filePath), [filePath]);
 
-  // What the CURRENT `includeExcluded` toggle will actually land, not the raw
-  // parsed count. Two converter drop paths shrink the raw count: `X`-flagged
-  // shots under the default toggle (`excluded_shot_count`), and ANY shot
-  // whose resolved length is non-positive - a missing-length sentinel, an
-  // explicit zero, or a corrections-driven zero/negative - which the
-  // converter drops unconditionally (`invalid_shot_count`). The preview used
-  // to quote the raw count regardless of either (#437).
-  //
-  // Known scope limit: `invalid_shot_count` counts invalid shots among the
-  // NON-excluded set (exactly what the default `includeExcluded=false` toggle
-  // lands - the case #437 is about). A shot that is BOTH `X`-flagged AND
-  // length-invalid is not double-counted here, so flipping `includeExcluded`
-  // to true can still slightly over-promise for that narrow overlap; it never
-  // under-promises.
-  const landingShotCount =
-    compassFile.shot_count -
-    compassFile.invalid_shot_count -
-    (includeExcluded ? 0 : compassFile.excluded_shot_count);
+  // What the backend's converter actually lands under the two LIVE toggles -
+  // see `landingShotCountFor` / `invalidShotCountFor` above for the exact
+  // arithmetic (#437, review of #550).
+  const invalidShotCount = useMemo(
+    () => invalidShotCountFor(compassFile.invalid_shot_counts, includeExcluded, applyCorrections),
+    [compassFile.invalid_shot_counts, includeExcluded, applyCorrections]
+  );
+
+  const landingShotCount = landingShotCountFor(
+    compassFile.shot_count,
+    compassFile.excluded_shot_count,
+    compassFile.invalid_shot_counts,
+    includeExcluded,
+    applyCorrections
+  );
 
   // "(N excluded, M invalid)" - only the parts that are non-zero and, for
   // excluded, only while the toggle would actually drop them.
@@ -80,13 +129,11 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
         t('dialogs.compassImport.stats.excludedSuffix', { count: compassFile.excluded_shot_count })
       );
     }
-    if (compassFile.invalid_shot_count > 0) {
-      parts.push(
-        t('dialogs.compassImport.stats.invalidSuffix', { count: compassFile.invalid_shot_count })
-      );
+    if (invalidShotCount > 0) {
+      parts.push(t('dialogs.compassImport.stats.invalidSuffix', { count: invalidShotCount }));
     }
     return parts.join(', ');
-  }, [includeExcluded, compassFile.excluded_shot_count, compassFile.invalid_shot_count, t]);
+  }, [includeExcluded, compassFile.excluded_shot_count, invalidShotCount, t]);
 
   const handleImport = useCallback(async () => {
     setIsImporting(true);
@@ -224,9 +271,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
                 <tr key={i} className="border-t border-border">
                   <td className="px-3 py-1.5">{survey.name}</td>
                   <td className="px-3 py-1.5" data-testid={`compass-survey-shots-${i}`}>
-                    {survey.shot_count -
-                      survey.invalid_shot_count -
-                      (includeExcluded ? 0 : survey.excluded_shot_count)}
+                    {surveyLandingShotCount(survey, includeExcluded, applyCorrections)}
                   </td>
                   <td className="px-3 py-1.5 text-text-secondary">{survey.team ?? '-'}</td>
                   <td className="px-3 py-1.5 text-text-secondary">{survey.date}</td>

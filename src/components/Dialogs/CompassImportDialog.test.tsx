@@ -43,12 +43,19 @@ const VALIDATION_WARNING: ValidationWarning = {
   severity: 'warning',
 };
 
+const ZERO_INVALID_COUNTS = {
+  non_excluded_corrected: 0,
+  non_excluded_uncorrected: 0,
+  excluded_corrected: 0,
+  excluded_uncorrected: 0,
+};
+
 const compassFile: CompassFile = {
   cave_name: 'Test Cave',
   survey_count: 0,
   shot_count: 0,
   excluded_shot_count: 0,
-  invalid_shot_count: 0,
+  invalid_shot_counts: ZERO_INVALID_COUNTS,
   has_backsights: false,
   datum: null,
   utm_zone: null,
@@ -160,21 +167,35 @@ describe('CompassImportDialog warning surfacing (#110)', () => {
 });
 
 /**
- * #437: the header "Shots" stat must show what the current toggle will
- * actually land, not the raw parsed count, with a footnote naming what was
- * dropped and why. The per-survey rows use the same arithmetic and must sum
- * to the header.
+ * #437 (+ review of #550): the header "Shots" stat must show what the
+ * backend will actually land under BOTH live toggles - include-excluded AND
+ * apply-corrections - with a footnote naming what was dropped and why. The
+ * per-survey rows use the same arithmetic and must sum to the header, in
+ * all four toggle combinations.
  *
- * Injection: flip the header's ternary at CompassImportDialog.tsx (the
- * `includeExcluded ? 0 : compassFile.excluded_shot_count` term) and the
- * "raw count with no suffix on include-excluded" assertion goes red.
+ * Fixture: survey A has a shot that is invalid only WITHOUT corrections and
+ * a `#|X#`-flagged shot invalid either way; survey B has a shot invalid
+ * only WITH corrections. Totals: excluded_shot_count 2,
+ * invalid_shot_counts { non_excluded_corrected: 1, non_excluded_uncorrected:
+ * 2, excluded_corrected: 1, excluded_uncorrected: 1 }.
+ *
+ * Injection: flip `landingShotCountFor`'s
+ * `includeExcluded ? 0 : excludedShotCount` term at CompassImportDialog.tsx
+ * and the default-toggle assertion goes red; flip `invalidShotCountFor`'s
+ * `applyCorrections ? ... : ...` selection and the corrections-toggle
+ * assertion goes red.
  */
-describe('CompassImportDialog honest shot count (#437)', () => {
+describe('CompassImportDialog honest shot count (#437, #550)', () => {
   const twoSurveyFile: CompassFile = {
     ...compassFile,
-    shot_count: 5,
-    excluded_shot_count: 1,
-    invalid_shot_count: 1,
+    shot_count: 6,
+    excluded_shot_count: 2,
+    invalid_shot_counts: {
+      non_excluded_corrected: 1,
+      non_excluded_uncorrected: 2,
+      excluded_corrected: 1,
+      excluded_uncorrected: 1,
+    },
     surveys: [
       {
         name: 'A',
@@ -182,44 +203,81 @@ describe('CompassImportDialog honest shot count (#437)', () => {
         team: null,
         shot_count: 3,
         excluded_shot_count: 1,
-        invalid_shot_count: 0,
+        invalid_shot_counts: {
+          non_excluded_corrected: 0,
+          non_excluded_uncorrected: 1,
+          excluded_corrected: 1,
+          excluded_uncorrected: 1,
+        },
         declination: 0,
       },
       {
         name: 'B',
         date: '2026-01-01',
         team: null,
-        shot_count: 2,
-        excluded_shot_count: 0,
-        invalid_shot_count: 1,
+        shot_count: 3,
+        excluded_shot_count: 1,
+        invalid_shot_counts: {
+          non_excluded_corrected: 1,
+          non_excluded_uncorrected: 1,
+          excluded_corrected: 0,
+          excluded_uncorrected: 0,
+        },
         declination: 0,
       },
     ],
   };
 
-  it('shows the landing count with an excluded+invalid footnote by default', async () => {
+  it('shows the landing count with an excluded+invalid footnote by default (corrections on)', async () => {
     render(<CompassImportDialog compassFile={twoSurveyFile} filePath="/tmp/cave.dat" />);
 
-    // 5 raw - 1 excluded - 1 invalid = 3 landing.
+    // 6 raw - 2 excluded - 1 invalid(non_excluded_corrected) = 3 landing.
     expect(await screen.findByTestId('compass-shot-count')).toHaveTextContent('3');
-    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent('1 excluded, 1 invalid');
+    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent('2 excluded, 1 invalid');
 
-    // Per-survey rows: A = 3 - 1 excluded - 0 invalid = 2; B = 2 - 0 - 1 = 1.
+    // A: 3 - 1 excluded - 0 invalid = 2; B: 3 - 1 excluded - 1 invalid = 1.
     expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('2');
     expect(screen.getByTestId('compass-survey-shots-1')).toHaveTextContent('1');
-    // Rows sum to the header's landing count.
     expect(2 + 1).toBe(3);
   });
 
-  it('shows the raw count (minus only invalid) with no excluded suffix once include-excluded is checked', async () => {
+  it('shows the invalid-only footnote (no excluded part) once include-excluded is checked', async () => {
     render(<CompassImportDialog compassFile={twoSurveyFile} filePath="/tmp/cave.dat" />);
 
     await userEvent.click(screen.getByTestId('compass-include-excluded'));
 
-    // 5 raw - 0 excluded (now included) - 1 invalid = 4.
+    // 6 raw - 0 excluded (included) - (1 non_excluded_corrected + 1 excluded_corrected) = 4.
     expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('4');
     const footnote = screen.getByTestId('compass-shot-count-footnote');
-    expect(footnote).toHaveTextContent('1 invalid');
+    expect(footnote).toHaveTextContent('2 invalid');
+    expect(footnote).not.toHaveTextContent('excluded');
+
+    // A: 3 - 0 - (0 + 1) = 2; B: 3 - 0 - (1 + 0) = 2.
+    expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('2');
+    expect(screen.getByTestId('compass-survey-shots-1')).toHaveTextContent('2');
+    expect(2 + 2).toBe(4);
+  });
+
+  it('switches to the uncorrected invalid counter once apply-corrections is unchecked', async () => {
+    render(<CompassImportDialog compassFile={twoSurveyFile} filePath="/tmp/cave.dat" />);
+
+    await userEvent.click(screen.getByTestId('compass-apply-corrections'));
+
+    // 6 raw - 2 excluded - 2 invalid(non_excluded_uncorrected) = 2 landing.
+    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('2');
+    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent('2 excluded, 2 invalid');
+  });
+
+  it('combines include-excluded and apply-corrections off correctly', async () => {
+    render(<CompassImportDialog compassFile={twoSurveyFile} filePath="/tmp/cave.dat" />);
+
+    await userEvent.click(screen.getByTestId('compass-include-excluded'));
+    await userEvent.click(screen.getByTestId('compass-apply-corrections'));
+
+    // 6 raw - 0 excluded (included) - (2 non_excluded_uncorrected + 1 excluded_uncorrected) = 3.
+    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('3');
+    const footnote = screen.getByTestId('compass-shot-count-footnote');
+    expect(footnote).toHaveTextContent('3 invalid');
     expect(footnote).not.toHaveTextContent('excluded');
   });
 });

@@ -53,7 +53,7 @@ use stalagmight_lib::models::{
     ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair, StationRef,
     SurveyDirection, TankMaterial, Team, UnrecognisedShotKind, ZeroDatumWire,
 };
-use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
+use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary, InvalidShotCounts};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
 use stalagmight_lib::parsers::gpx::{
     GpxFile, GpxRoute, GpxRoutePoint, GpxSectionPlacement, GpxTrack, GpxTrackPoint,
@@ -265,6 +265,7 @@ fn main() {
     // Compass import
     export::<CompassFile>(&out_dir);
     export::<CompassSurveySummary>(&out_dir);
+    export::<InvalidShotCounts>(&out_dir);
 
     // Walls import
     export::<WallsFile>(&out_dir);
@@ -519,6 +520,7 @@ fn main() {
         "TmlParseAnomalies",
         "CompassFile",
         "CompassSurveySummary",
+        "InvalidShotCounts",
         "WallsFile",
         "WallsSurveySummary",
         "ExportImageOptions",
