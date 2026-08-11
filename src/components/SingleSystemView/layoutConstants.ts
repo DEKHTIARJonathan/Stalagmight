@@ -10,8 +10,9 @@ export const DATA_TABLE_MAX_HEIGHT = 500;
 
 /**
  * The import wizards' map column (#404): starting width, and the bounds its
- * divider clamps to. The max also caps the preview square, so widening the
- * column really does make the map bigger.
+ * divider clamps to (by drag and, since #567, by keyboard - they are the
+ * separator's aria-valuemin/aria-valuemax too). The max also caps the preview,
+ * which fills the column, so widening it really does make the map bigger.
  *
  * Here rather than in `WizardMapPanel.tsx` (which re-exports them under its
  * historical `MAP_PANEL_*` names) because the width is now PERSISTED, which

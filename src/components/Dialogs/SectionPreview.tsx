@@ -151,8 +151,14 @@ interface SectionPreviewProps {
   onStationClick?: (stationIndex: number, sectionIndex?: number) => void;
   /** Index of the currently selected station (shows highlight ring) */
   selectedStationIndex?: number | null;
-  /** Size of the preview container in pixels (default 250) */
+  /** Size of the preview container in pixels (default 250). Its WIDTH, and its
+   *  height too unless `height` overrides it. */
   size?: number;
+  /** Height of the preview container in pixels when it is not square (the
+   *  wizards' map column fills its panel, #567). Everything below already works
+   *  per axis - `fitBounds` pads by 10% of `clientWidth` and `clientHeight`
+   *  separately - so a rectangular viewport just shows more cave. */
+  height?: number;
   /** GPS origin for real-world positioning. When set, enables satellite tiles and positions geometry at real coordinates. */
   gpsOrigin?: GpsOrigin | null;
   /** Station index to offset the gpsOrigin to (default 0). The section is positioned so this station sits at gpsOrigin. */
@@ -191,6 +197,7 @@ export default function SectionPreview({
   onStationClick,
   selectedStationIndex,
   size = 250,
+  height = size,
   gpsOrigin,
   gpsStationIndex = 0,
   focusStationIndex,
@@ -1161,7 +1168,7 @@ export default function SectionPreview({
     <div
       data-testid="section-preview"
       className="relative border border-border rounded overflow-hidden bg-background"
-      style={{ width: size, height: size }}
+      style={{ width: size, height }}
     >
       {/* Map container is always mounted for proper lifecycle */}
       <div ref={containerRef} className="w-full h-full" data-testid="section-preview-map" />

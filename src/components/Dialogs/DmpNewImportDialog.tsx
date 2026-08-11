@@ -1,4 +1,4 @@
-import { usePreviewSquareSize } from './usePreviewSquareSize';
+import { usePreviewSize } from './usePreviewSize';
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invokeIpc } from '../../utils/ipc';
@@ -836,8 +836,9 @@ export default function DmpNewImportDialog({
   const { t } = useTranslation();
   const importSecondaryButtonClass = 'ring-1 ring-inset ring-border hover:bg-background-50';
 
-  // Responsive preview square - fits the available column height so it never
-  // overflows the fullscreen dialog on short windows (#93 review). One per flow.
+  // Responsive preview - fills the available column so it never overflows the
+  // fullscreen dialog on short windows (#93 review) and never leaves the column
+  // half empty on wide ones (#567). One per flow.
   // The map column's width, dragged by the divider between it and the settings.
   // One value for both side-by-side blocks (suggestion and manual placing), so
   // the wizard does not change shape as it steps between them - and store-owned
@@ -847,8 +848,8 @@ export default function DmpNewImportDialog({
   const setMapPanelWidth = useUIStore((s) => s.setWizardMapPanelWidth);
   const suggestionBodyRef = useRef<HTMLDivElement | null>(null);
   const manualBodyRef = useRef<HTMLDivElement | null>(null);
-  const [suggestionPreviewRef, suggestionPreviewSize] = usePreviewSquareSize(MAP_PANEL_MAX_WIDTH);
-  const [manualPreviewRef, manualPreviewSize] = usePreviewSquareSize(MAP_PANEL_MAX_WIDTH);
+  const [suggestionPreviewRef, suggestionPreviewSize] = usePreviewSize(MAP_PANEL_MAX_WIDTH);
+  const [manualPreviewRef, manualPreviewSize] = usePreviewSize(MAP_PANEL_MAX_WIDTH);
 
   // Store selectors
   const importSections = useProjectStore((s) => s.importSections);
@@ -3777,7 +3778,8 @@ export default function DmpNewImportDialog({
               <SectionPreview
                 section={importPreviewSection}
                 color={importColor}
-                size={suggestionPreviewSize}
+                size={suggestionPreviewSize.width}
+                height={suggestionPreviewSize.height}
                 mergePreview={mergePreviewConfig}
                 dmpMergePreview={dmpMergePreviewConfig}
                 focusStationIndex={selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
@@ -3982,7 +3984,8 @@ export default function DmpNewImportDialog({
               <SectionPreview
                 segmentSections={segmentPreviewSections}
                 contextSections={fromExistingContextSections}
-                size={manualPreviewSize}
+                size={manualPreviewSize.width}
+                height={manualPreviewSize.height}
                 onStationClick={handleSegmentStationClick}
                 selectedStationIndex={previewAnchor ? emittedAnchorStation(previewAnchor) : null}
                 selectedSectionIndex={previewAnchor?.sectionIndex ?? null}
