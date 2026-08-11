@@ -411,6 +411,17 @@ describe('generate-repro-report.mjs', () => {
           },
           outcome: { ok: true, durationMs: 10 },
         }),
+        // The redacted extension is itself caller-controlled: path.extname
+        // returns everything after the last dot, newlines included.
+        record({
+          type: 'action', v: 1, seq: 12, ts: ts(12), tool: 'file_dialog_answer', mutating: true,
+          params: {
+            triggerTestid: 'save-button',
+            kind: 'save',
+            path: '/tmp/cave.stalx\n## forged heading\n<img src=x>',
+          },
+          outcome: { ok: true, durationMs: 10 },
+        }),
         // Params are bare strings: a newline or a backtick would break out of
         // the markdown list item in a report headed for a public issue.
         record({
@@ -477,6 +488,18 @@ describe('generate-repro-report.mjs', () => {
       expect(steps).not.toContain('\n## Injected heading');
       expect(steps).not.toContain('<img');
       expect(steps).toContain('&lt;img');
+    });
+
+    // path.extname hands back everything after the last dot, so the redacted
+    // placeholder is caller-controlled too - it must be whitelisted, not just
+    // escaped, or the sanitizer is bypassed by the very field that replaced
+    // the leaking one.
+    it('drops an extension that is not a plain extension, rather than rendering it', () => {
+      execFileSync(process.execPath, [reportGen, v2Dir], { encoding: 'utf8' });
+      const steps = reproSteps();
+
+      expect(steps).toContain('save dialog answered <file>');
+      expect(steps).not.toContain('forged heading');
     });
 
     function reproSteps(): string {

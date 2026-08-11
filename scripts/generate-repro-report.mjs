@@ -47,10 +47,18 @@ const scrub = (s) => {
  * importer - so it is the whole of the reproducible signal here.
  */
 const redactPath = (value) => {
-  const one = (p) => `<file${path.extname(String(p)) || ''}>`;
+  // Whitelist, not escape: `path.extname` returns whatever followed the last
+  // dot, so a path ending `.stalx\n## forged heading` yields that verbatim and
+  // would carry markdown straight past the sanitizer. A real extension is a
+  // short alphanumeric run; anything else is dropped rather than repaired.
+  const ext = (p) => {
+    const raw = path.extname(String(p));
+    return /^\.[A-Za-z0-9]{1,12}$/.test(raw) ? raw : '';
+  };
+  const one = (p) => `<file${ext(p)}>`;
   if (value == null) return '<none>';
   if (Array.isArray(value)) {
-    return value.length === 1 ? one(value[0]) : `<${value.length} files${path.extname(String(value[0] ?? '')) || ''}>`;
+    return value.length === 1 ? one(value[0]) : `<${value.length} files${ext(value[0] ?? '')}>`;
   }
   return one(value);
 };
