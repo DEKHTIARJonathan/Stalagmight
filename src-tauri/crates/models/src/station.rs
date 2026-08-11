@@ -338,11 +338,12 @@ pub struct Station {
     /// generate as a required `Array<ClosureRef>` that the wire does not always
     /// carry, and `tsc` would be blind to every bare `station.closures_with.map`.
     ///
-    /// The skip stays (unlike [`crate::CommandResult::section_ids`], which drops
-    /// it) because this one is paid PER STATION: `get_project_state` re-serializes
-    /// every station as JSON on each refresh, and that payload is already ~25 MB
-    /// for the 89k-station projects the binary loader exists for. Always sending
-    /// an empty array there is not free; sending it once per command result is.
+    /// The skip stays (unlike `CommandResult::section_ids` in the core crate,
+    /// which drops it): this one is paid PER STATION - `get_project_state`
+    /// re-serializes every station as JSON on each refresh, and that payload is
+    /// already ~25 MB for the 89k-station projects the binary loader exists for.
+    /// Always sending an empty array there is not free; sending it once per
+    /// command result is.
     ///
     /// `None` and `Some(vec![])` mean the same thing; producers go through
     /// [`Station::closures_mut`] so the empty case stays `None` and off the wire.
