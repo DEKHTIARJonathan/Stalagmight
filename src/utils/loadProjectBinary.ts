@@ -411,7 +411,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   // No additional allocations beyond:
   //   - 12 per-field Float32 views over the same `shots_floats` buffer
   //     (and similar for stations) - DataView-style, zero copy
-  //   - 1 Int32Array `shotSectionIds` (4 bytes/shot, derived from the
+  //   - 1 Uint32Array `shotSectionIds` (4 bytes/shot, derived from the
   //     section metadata + offsets - we have to materialize this because
   //     it's not in the wire format)
   //   - 1 Uint8Array `shotFlags` mapping the wire's u32 marker_or_max
@@ -480,8 +480,8 @@ function buildSurveyData(
   stationComments: Map<number, string>,
 ): SurveyData {
   const N = env.shot_count;
-  const shotIds = new Int32Array(N);
-  const shotSectionIds = new Int32Array(N);
+  const shotIds = new Uint32Array(N);
+  const shotSectionIds = new Uint32Array(N);
   const shotAzimuthIn = new Float32Array(N);
   const shotAzimuthOut = new Float32Array(N);
   const shotLength = new Float32Array(N);
@@ -516,8 +516,14 @@ function buildSurveyData(
     shotTemperature[i] = shotsF32[fBase + 11]!;
 
     const uBase = i * SHOT_UINT_FIELDS;
-    shotSectionIds[i] = shotsU32[uBase]! | 0;       // section_id (u32 → i32 via |0 for typed-array store)
-    shotIds[i]        = shotsU32[uBase + 1]! | 0;   // shot.id
+    // Both columns are u32 on the wire and u32 in the SoA, so copy them
+    // verbatim. They used to be coerced with `| 0` into Int32Arrays, which
+    // wrapped every shot id past 2^31 (reachable from section 21_474 up, since
+    // Rust mints `section_id * 100_000 + sequence_order`) to a negative number
+    // while the lazy `section.shots` materializer below read the same slot
+    // unsigned - the two views of one id stopped comparing equal (#555).
+    shotSectionIds[i] = shotsU32[uBase]!;           // section_id
+    shotIds[i]        = shotsU32[uBase + 1]!;       // shot.id
     const markerRaw   = shotsU32[uBase + 2]!;
     shotMarkerIndex[i] = markerRaw === 0xFFFFFFFF ? SHOT_MARKER_NULL : (markerRaw | 0);
 
@@ -543,7 +549,7 @@ function buildSurveyData(
 
   // ─── Stations ──────────────────────────────────────────────────
   const SN = env.station_count;
-  const stationSectionIds = new Int32Array(SN);
+  const stationSectionIds = new Uint32Array(SN);
   const stationIndices = new Uint32Array(SN);
   // Reuse the existing stationsF64 view directly - it's already
   // [x0,y0,z0,x1,y1,z1,…] which matches our stationCoords stride-3.
@@ -554,7 +560,9 @@ function buildSurveyData(
 
   for (let i = 0; i < SN; i++) {
     const uBase = i * STATION_UINT_FIELDS;
-    stationSectionIds[i] = stationsU32[uBase]! | 0;
+    // u32 in, u32 out - see the shot columns above for why the old `| 0`
+    // coercion was wrong (#555).
+    stationSectionIds[i] = stationsU32[uBase]!;
     stationIndices[i] = stationsU32[uBase + 1]!;
     stationFlagsOut[i] = (stationsFlags[i]! & 1) !== 0 ? STATION_FLAG_IS_ZERO_DATUM : 0;
   }

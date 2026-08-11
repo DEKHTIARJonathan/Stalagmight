@@ -45,12 +45,12 @@ function makeFixture(): SurveyData {
     { id: 2, name: 'B', surveyor: null, date: null, color: '#00ff00', direction: 'in' as never, quality: 0, next_shot_id: 1, shotOffset: 2, shotCount: 1 },
   ];
   d.shotCount = 3;
-  d.shotIds = new Int32Array([0, 1, 0]);
-  d.shotSectionIds = new Int32Array([1, 1, 2]);
+  d.shotIds = new Uint32Array([0, 1, 0]);
+  d.shotSectionIds = new Uint32Array([1, 1, 2]);
   d.shotFlags = new Uint8Array([0, 0, 0]);
 
   d.stationCount = 4;
-  d.stationSectionIds = new Int32Array([1, 1, 1, 2]);
+  d.stationSectionIds = new Uint32Array([1, 1, 1, 2]);
   d.stationIndices = new Uint32Array([0, 1, 2, 0]);
   d.stationCoords = new Float64Array([
     0, 0, 0,
@@ -1011,13 +1011,13 @@ describe('color-only fast path (recomputeLine/CircleColors byte-identity)', () =
     }
     d.sections = sections;
     d.stationCount = stationSectionIds.length;
-    d.stationSectionIds = new Int32Array(stationSectionIds);
+    d.stationSectionIds = new Uint32Array(stationSectionIds);
     d.stationIndices = new Uint32Array(stationIndices);
     d.stationCoords = new Float64Array(stationCoords);
     d.stationFlags = new Uint8Array(stationFlags);
     d.shotCount = shotIds.length;
-    d.shotIds = new Int32Array(shotIds);
-    d.shotSectionIds = new Int32Array(shotSectionIds);
+    d.shotIds = new Uint32Array(shotIds);
+    d.shotSectionIds = new Uint32Array(shotSectionIds);
     d.shotFlags = new Uint8Array(shotFlags);
     return d;
   }

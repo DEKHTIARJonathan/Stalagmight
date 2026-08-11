@@ -71,12 +71,23 @@ export interface SurveyData {
   // ─── Shots (flat, one slot per shot) ───────────────────────────────
   /** Number of shots == length of each shot* array divided by stride. */
   shotCount: number;
-  /** Shot.id per global shot index. */
-  shotIds: Int32Array;
+  /** Shot.id per global shot index.
+   *
+   *  UNSIGNED (#555). Rust mints shot ids as
+   *  `section_id * 100_000 + sequence_order` in `u32`, so a project with a
+   *  high section id reaches ids past 2^31 (section 21_474 already does).
+   *  An `Int32Array` wrapped those to negative numbers here while every other
+   *  representation of the same id - `section.shots[j].id` off the lazy
+   *  materializer, `ProjectWarning.shotId`, the map's feature ids - stayed
+   *  unsigned, so the two sides silently stopped matching. */
+  shotIds: Uint32Array;
   /** Section id per global shot index. Redundant with the section
    *  metadata's shotOffset+shotCount but lets a consumer go from
-   *  shot index → section id without a binary search. */
-  shotSectionIds: Int32Array;
+   *  shot index → section id without a binary search.
+   *
+   *  Unsigned for the same reason as `shotIds`: section ids are `u32` on the
+   *  wire and nothing here ever stores a negative sentinel. */
+  shotSectionIds: Uint32Array;
   shotAzimuthIn: Float32Array;
   shotAzimuthOut: Float32Array;
   shotLength: Float32Array;
@@ -100,7 +111,10 @@ export interface SurveyData {
 
   // ─── Stations (flat, one slot per station) ─────────────────────────
   stationCount: number;
-  stationSectionIds: Int32Array;
+  /** Section id per global station index. Unsigned (#555): `u32` on the wire,
+   *  no negative sentinel is ever stored, and it is compared/keyed against
+   *  section ids that come from unsigned sources. */
+  stationSectionIds: Uint32Array;
   stationIndices: Uint32Array;
   /** Stride-3 flat coordinates: [x0,y0,z0, x1,y1,z1, …]. */
   stationCoords: Float64Array;
@@ -394,8 +408,8 @@ export function surveyDataFromLegacy(
   const data: SurveyData = {
     sections: [],
     shotCount: totalShots,
-    shotIds: new Int32Array(totalShots),
-    shotSectionIds: new Int32Array(totalShots),
+    shotIds: new Uint32Array(totalShots),
+    shotSectionIds: new Uint32Array(totalShots),
     shotAzimuthIn: new Float32Array(totalShots),
     shotAzimuthOut: new Float32Array(totalShots),
     shotLength: new Float32Array(totalShots),
@@ -412,7 +426,7 @@ export function surveyDataFromLegacy(
     shotMarkerIndex: new Int32Array(totalShots),
     shotComments: new Map(),
     stationCount: stations.length,
-    stationSectionIds: new Int32Array(stations.length),
+    stationSectionIds: new Uint32Array(stations.length),
     stationIndices: new Uint32Array(stations.length),
     stationCoords: new Float64Array(stations.length * 3),
     stationFlags: new Uint8Array(stations.length),
@@ -509,7 +523,7 @@ export function surveyDataWithAdjustedStations(
   adjustedStations: import('./ipc/Station').Station[],
 ): SurveyData {
   const SN = adjustedStations.length;
-  const stationSectionIds = new Int32Array(SN);
+  const stationSectionIds = new Uint32Array(SN);
   const stationIndices = new Uint32Array(SN);
   const stationCoords = new Float64Array(SN * 3);
   const stationFlags = new Uint8Array(SN);
@@ -555,8 +569,8 @@ export function emptySurveyData(): SurveyData {
   return {
     sections: [],
     shotCount: 0,
-    shotIds: new Int32Array(0),
-    shotSectionIds: new Int32Array(0),
+    shotIds: new Uint32Array(0),
+    shotSectionIds: new Uint32Array(0),
     shotAzimuthIn: new Float32Array(0),
     shotAzimuthOut: new Float32Array(0),
     shotLength: new Float32Array(0),
@@ -573,7 +587,7 @@ export function emptySurveyData(): SurveyData {
     shotMarkerIndex: new Int32Array(0),
     shotComments: new Map(),
     stationCount: 0,
-    stationSectionIds: new Int32Array(0),
+    stationSectionIds: new Uint32Array(0),
     stationIndices: new Uint32Array(0),
     stationCoords: new Float64Array(0),
     stationFlags: new Uint8Array(0),
