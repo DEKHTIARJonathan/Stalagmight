@@ -284,6 +284,122 @@ fn end_to_end_import_respects_datum_invariants() {
     );
 }
 
+/// #378 item (d): export -> import -> export must not let GPS anchors drift.
+/// Since the exporter writes one START per entrance, an import of that file
+/// creates one zero datum per GPS-tagged START - so a survey's anchor set has
+/// to be STABLE across cycles, and each anchor has to keep its own
+/// coordinates. Decision recorded here: several anchors are accepted as
+/// legitimate (one per merge component - the model's own invariant), NOT
+/// suppressed on import; the second entrance's datum is exactly what keeps
+/// its component placed on re-import, so dropping it would collapse the
+/// survey onto one anchor again.
+#[test]
+fn zero_datums_are_stable_across_export_import_cycles() {
+    use crate::core::state::{AppState, VirtualShotMode};
+    use crate::core::Command;
+    use crate::models::{
+        GpsCoordinates, Project, SectionData, ShotData, StationRef, ZeroDatum,
+    };
+
+    fn two_entrance_project(datums: &[(u32, f64, f64)]) -> Project {
+        let mut project = Project::new("Cycle".to_string(), None);
+        for name in ["North", "South"] {
+            project.add_section(SectionData {
+                name: Some(name.to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        }
+        for &(section_id, latitude, longitude) in datums {
+            project.zero_datums.push(ZeroDatum {
+                station_ref: StationRef {
+                    section_id,
+                    station_index: 0,
+                }
+                .into(),
+                gps: GpsCoordinates::new(latitude, longitude, 0.0).unwrap(),
+            });
+        }
+        project
+    }
+
+    fn import_cycle(project: &Project, dir: &std::path::Path, label: &str) -> Project {
+        let path = dir.join(format!("{label}.tmlu"));
+        crate::export::tml::export_tml(project, &path).unwrap();
+        let tml = parse_tml(&path).unwrap();
+        let (sections, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject {
+            name: label.to_string(),
+            location: None,
+        });
+        let result = state.execute_tml_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+            None,
+        );
+        assert!(result.success, "{label}: import failed: {:?}", result.error);
+        state.get_project_state().unwrap()
+    }
+
+    fn anchor_set(project: &Project) -> Vec<(i64, i64)> {
+        // Coordinates as written-precision integers so f64 noise and datum
+        // order cannot flake the comparison.
+        let mut set: Vec<(i64, i64)> = project
+            .zero_datums
+            .iter()
+            .map(|d| {
+                (
+                    (d.gps.latitude * 1e6).round() as i64,
+                    (d.gps.longitude * 1e6).round() as i64,
+                )
+            })
+            .collect();
+        set.sort_unstable();
+        set
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+
+    // Two entrances, each with its own anchor: the set survives verbatim, and
+    // stays put on a second cycle. Red before #378(e): both STARTs carried the
+    // first datum's GPS, so the second anchor's coordinates were lost.
+    let original = two_entrance_project(&[(0, 20.25, -87.5), (1, 20.31, -87.42)]);
+    let expected = anchor_set(&original);
+    let once = import_cycle(&original, dir.path(), "two-anchors-once");
+    assert_eq!(anchor_set(&once), expected, "anchors changed on import");
+    let twice = import_cycle(&once, dir.path(), "two-anchors-twice");
+    assert_eq!(anchor_set(&twice), expected, "anchors drifted on re-import");
+
+    // One anchor, two entrances: the export stamps the frame datum's GPS onto
+    // the unanchored entrance (better than null island), so the FIRST cycle
+    // legitimately gains one datum for that component - and from then on the
+    // set must hold still. This pins the drift to that single, understood step.
+    let original = two_entrance_project(&[(0, 20.25, -87.5)]);
+    let once = import_cycle(&original, dir.path(), "one-anchor-once");
+    let after_first = anchor_set(&once);
+    assert_eq!(
+        after_first.len(),
+        2,
+        "the unanchored entrance gains its placement datum on the first cycle"
+    );
+    let twice = import_cycle(&once, dir.path(), "one-anchor-twice");
+    assert_eq!(
+        anchor_set(&twice),
+        after_first,
+        "the anchor set must be stable from the first re-import onward"
+    );
+}
+
 /// Every shot in the project, cross-checked with the real validator - the
 /// same call `command_shot.rs` makes.
 fn inclination_depth_mismatch_count(project: &crate::models::Project) -> usize {
