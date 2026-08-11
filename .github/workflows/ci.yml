@@ -187,8 +187,11 @@ jobs:
       # compiles it (as a path dep) but never runs its tests (#494). Test it
       # directly. No telemetry feature or TELEMETRY_ENDPOINT - the crate defines
       # neither. fmt/clippy stay off for it deliberately (docs/linting.md).
+      # --locked: the crate has its own committed Cargo.lock (the root lock does
+      # not cover a workspace-excluded package), so assert it instead of letting
+      # a semver-compatible crates.io release change what CI tests.
       - name: Vendored compass_data tests
-        run: cargo test --manifest-path src-tauri/vendor/compass_data/Cargo.toml
+        run: cargo test --locked --manifest-path src-tauri/vendor/compass_data/Cargo.toml
       # Clippy deny-level lint gate (issue #147). The crate has a strict
       # [lints.clippy] policy (deny unwrap/expect/panic/print/dbg/...) authored in
       # 17dc4feb; this enforces it so it can't silently rot again. Pedantic lints
