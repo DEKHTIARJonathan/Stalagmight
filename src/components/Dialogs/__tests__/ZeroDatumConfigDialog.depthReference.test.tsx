@@ -49,7 +49,10 @@ vi.mock('../DialogWrapper', () => ({
 
 vi.mock('../../common/SectionMetadataForm', () => ({ SectionMetadataForm: () => null }));
 
-import ZeroDatumConfigDialog, { type ZeroDatumConfigResult } from '../ZeroDatumConfigDialog';
+import ZeroDatumConfigDialog, {
+  type ZeroDatumConfigResult,
+  type ZeroDatumConfigDraft,
+} from '../ZeroDatumConfigDialog';
 import type { DmpFile, DmpSection, DmpShot } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
 
@@ -95,7 +98,7 @@ const selectionConfig = {
 
 const onConfirm = vi.fn<(result: ZeroDatumConfigResult) => void>();
 
-function renderDialog(initialConfig?: ZeroDatumConfigResult) {
+function renderDialog(initialConfig?: ZeroDatumConfigDraft, onBack = vi.fn()) {
   render(
     <ZeroDatumConfigDialog
       dmpFile={dmpFile()}
@@ -103,7 +106,7 @@ function renderDialog(initialConfig?: ZeroDatumConfigResult) {
       sectionIndex={0}
       filePath="/tmp/anchor.dmp"
       onCancel={vi.fn()}
-      onBack={vi.fn()}
+      onBack={onBack}
       onConfirm={onConfirm}
       initialConfig={initialConfig}
     />,
@@ -222,5 +225,113 @@ describe('ZeroDatumConfigDialog depth reference (#524)', () => {
 
     enterDepthReference('3');
     expect(screen.getByTestId('zero-datum-depth-reference-input')).toHaveValue('3');
+  });
+});
+
+/**
+ * #566 review 3: every other in-progress field survives this dialog's own Back
+ * (#534) - the GPS box even carries its RAW TEXT so an unparsed entry comes
+ * back. The depth reference did not: `buildCurrentDraft` never carried it, and
+ * the re-entry could only reconstruct it from `initialConfig.gps.depth_reference`,
+ * which does not exist until the GPS box parses AND the user confirms.
+ */
+describe('ZeroDatumConfigDialog depth reference survives Back (#566)', () => {
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('carries a depth typed while the GPS box has not parsed', () => {
+    const onBack = vi.fn<(draft: ZeroDatumConfigDraft) => void>();
+    renderDialog(undefined, onBack);
+
+    // GPS deliberately unparsable, so nothing can reconstruct the depth from
+    // `gps.depth_reference` on the way back in.
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), {
+      target: { value: 'not coordinates' },
+    });
+    enterDepthReference('-12.5');
+
+    fireEvent.click(screen.getByTestId('zero-datum-config-back'));
+    // The dirty guard is up (fields were touched), so Back asks first.
+    fireEvent.click(screen.getByTestId('zero-datum-config-back-confirm-discard'));
+
+    expect(onBack).toHaveBeenCalledTimes(1);
+    const draft = onBack.mock.calls[0]![0];
+    expect(draft.gps).toBeNull();
+    expect(draft.depthReferenceText).toBe('-12.5');
+  });
+
+  it('re-seeds the typed depth on a same-section forward pass', () => {
+    const draft: ZeroDatumConfigDraft = {
+      sectionIndex: 0,
+      stationIndex: 0,
+      gps: null,
+      gpsInputText: 'not coordinates',
+      depthReferenceText: '-12.5',
+      metadata: {
+        name: 'S',
+        surveyor: null,
+        date: null,
+        color: '#3b82f6',
+        direction: 'in',
+        quality: 1.0,
+        reverse: false,
+      },
+      shots: [],
+    } as unknown as ZeroDatumConfigDraft;
+
+    renderDialog(draft);
+    expect(screen.getByTestId('zero-datum-depth-reference-input')).toHaveValue('-12.5');
+  });
+
+  /**
+   * The gps-derived fallback stays for the WIZARD's one-hop carry, which hands
+   * back a confirmed `ZeroDatumConfigResult` with no raw text at all. It also
+   * takes over the falsy-check quirk deliberately: a stored depth of exactly 0
+   * is "recorded as the surface", not "blank".
+   */
+  it('falls back to the confirmed depth when there is no carried text', () => {
+    const confirmed = {
+      sectionIndex: 0,
+      stationIndex: 0,
+      gps: { latitude: 20.2, longitude: -87.4, depth_reference: -4 },
+      metadata: {
+        name: 'S',
+        surveyor: null,
+        date: null,
+        color: '#3b82f6',
+        direction: 'in',
+        quality: 1.0,
+        reverse: false,
+      },
+      shots: [],
+    } as unknown as ZeroDatumConfigDraft;
+
+    renderDialog(confirmed);
+    expect(screen.getByTestId('zero-datum-depth-reference-input')).toHaveValue('-4');
+  });
+
+  it('shows an explicit zero rather than a blank box', () => {
+    const atSurface = {
+      sectionIndex: 0,
+      stationIndex: 0,
+      gps: { latitude: 20.2, longitude: -87.4, depth_reference: 0 },
+      metadata: {
+        name: 'S',
+        surveyor: null,
+        date: null,
+        color: '#3b82f6',
+        direction: 'in',
+        quality: 1.0,
+        reverse: false,
+      },
+      shots: [],
+    } as unknown as ZeroDatumConfigDraft;
+
+    renderDialog(atSurface);
+    expect(screen.getByTestId('zero-datum-depth-reference-input')).toHaveValue('0');
   });
 });

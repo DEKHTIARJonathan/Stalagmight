@@ -62,6 +62,13 @@ export interface ZeroDatumConfigDraft extends Omit<ZeroDatumConfigResult, 'gps'>
    *  `ZeroDatumConfigDraft` - `initialGpsInputRef` below reconstructs it from
    *  `gps` in that case. */
   gpsInputText?: string;
+  /** The raw depth/elevation box text (#524), carried for the same reason as
+   *  `gpsInputText`: a depth typed while the GPS box has not parsed exists
+   *  NOWHERE else, since `gps.depth_reference` only comes into being on a
+   *  confirm. Optional for the same reason too - the wizard's one-hop carry
+   *  hands back a confirmed result with no raw text, and
+   *  `initialDepthReferenceRef` reconstructs it from `gps` in that case. */
+  depthReferenceText?: string;
 }
 
 /** A blank row for the shot table - one 'insert' action serves appending and
@@ -372,8 +379,22 @@ export default function ZeroDatumConfigDialog({
   // (docs/inclination.md), and the OPPOSITE sign from #465's project-level
   // "entrance elevation" (+up from sea level) - the two are different
   // reference points and must not be confused.
+  //
+  // Seeded exactly like `initialGpsInputRef`: the carried RAW TEXT first, so a
+  // depth typed while the GPS box was unparsable comes back (it exists nowhere
+  // else - `gps.depth_reference` only appears on a confirm), then the
+  // gps-derived value for the wizard's one-hop carry, which has no raw text.
+  //
+  // The `!= null` rather than a falsy check is deliberate, and a behaviour
+  // change: a stored depth of exactly 0 means "recorded, at the surface" and now
+  // seeds as "0" instead of blank. Blank and 0 confirm to the same
+  // `depth_reference`, so nothing downstream moves - but the box no longer
+  // claims the user never answered.
   const initialDepthReferenceRef = useRef(
-    initialConfig?.gps?.depth_reference ? String(initialConfig.gps.depth_reference) : ''
+    initialConfig?.depthReferenceText ??
+      (initialConfig?.gps?.depth_reference != null
+        ? String(initialConfig.gps.depth_reference)
+        : '')
   );
   const [depthReferenceInput, setDepthReferenceInput] = useState(initialDepthReferenceRef.current);
   const depthReferenceParsed = depthReferenceInput.trim() === '' ? 0 : Number(depthReferenceInput);
@@ -507,6 +528,7 @@ export default function ZeroDatumConfigDialog({
       stationIndex,
       gps: gpsCoords,
       gpsInputText: gpsInput,
+      depthReferenceText: depthReferenceInput,
       metadata: {
         name,
         surveyor: surveyor || null,
@@ -518,7 +540,7 @@ export default function ZeroDatumConfigDialog({
       },
       shots,
     }),
-    [sectionIndex, stationIndex, gpsCoords, gpsInput, name, surveyor, date, color, direction, reverse, shots]
+    [sectionIndex, stationIndex, gpsCoords, gpsInput, depthReferenceInput, name, surveyor, date, color, direction, reverse, shots]
   );
 
   const [backConfirmPending, setBackConfirmPending] = useState(false);
