@@ -173,4 +173,87 @@ describe('HelpTooltip', () => {
     expect(trigger.className).toContain('focus-visible:ring-accent');
     expect(trigger.className).toContain('cursor-pointer');
   });
+
+  describe('PR #536 review round #3 (capture-phase race, double-consume)', () => {
+    it('a pinned tooltip closes on Escape targeting ANOTHER control inside a real DialogWrapper, without closing the dialog', () => {
+      // DialogWrapper's own Escape handling is a bubble-phase React listener
+      // attached where the dialog is portaled (`#dialog-root`), which sits
+      // BELOW `document` in real DOM ancestry. A bubble-phase document
+      // listener would lose this race once DialogWrapper calls
+      // e.stopPropagation() - it must be capture-phase to see the keydown
+      // first, and preventDefault() so DialogWrapper's own `!e.defaultPrevented`
+      // gate skips closing.
+      const onClose = vi.fn();
+      render(
+        <DialogWrapper title="Host" onClose={onClose} data-testid="host-dialog">
+          <HelpTooltip text="Zero datum explained" iconTestId="help-icon" tooltipTestId="help-tooltip" />
+          <button type="button" data-testid="other-control">other control</button>
+        </DialogWrapper>
+      );
+
+      fireEvent.click(screen.getByTestId('help-icon'));
+      expect(screen.getByTestId('help-tooltip')).toBeInTheDocument();
+
+      const otherControl = screen.getByTestId('other-control');
+      otherControl.focus();
+      fireEvent.keyDown(otherControl, { key: 'Escape' });
+
+      expect(screen.queryByTestId('help-tooltip')).not.toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('host-dialog-discard-backdrop')).not.toBeInTheDocument();
+    });
+
+    it('a second Escape (nothing left to dismiss) is not consumed and closes the host dialog', () => {
+      const onClose = vi.fn();
+      render(
+        <DialogWrapper title="Host" onClose={onClose} data-testid="host-dialog">
+          <HelpTooltip text="Zero datum explained" iconTestId="help-icon" tooltipTestId="help-tooltip" />
+        </DialogWrapper>
+      );
+      const trigger = screen.getByTestId('help-icon');
+
+      fireEvent.focus(trigger);
+      expect(screen.getByTestId('help-tooltip')).toBeInTheDocument();
+
+      fireEvent.keyDown(trigger, { key: 'Escape' });
+      expect(screen.queryByTestId('help-tooltip')).not.toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+
+      // Second Escape: the tooltip has nothing left to dismiss, so this
+      // press must reach DialogWrapper's own Escape-to-close handler.
+      fireEvent.keyDown(trigger, { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('interplay: with a dirty dialog, the tooltip Escape wins the first press and the dialog\'s own discard guard wins the second', () => {
+      // Chosen ordering: the tooltip is always dismissed first; the host
+      // dialog's own Escape guard only ever sees a press once the tooltip
+      // has nothing left to close.
+      const onClose = vi.fn();
+      render(
+        <DialogWrapper title="Host" onClose={onClose} isDirty data-testid="host-dialog">
+          <HelpTooltip text="Zero datum explained" iconTestId="help-icon" tooltipTestId="help-tooltip" />
+          <button type="button" data-testid="other-control">other control</button>
+        </DialogWrapper>
+      );
+
+      fireEvent.click(screen.getByTestId('help-icon'));
+      expect(screen.getByTestId('help-tooltip')).toBeInTheDocument();
+
+      const otherControl = screen.getByTestId('other-control');
+      otherControl.focus();
+      fireEvent.keyDown(otherControl, { key: 'Escape' });
+
+      // First press: tooltip closes, dialog's dirty-discard confirm does NOT open.
+      expect(screen.queryByTestId('help-tooltip')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('dirty-dialog-discard')).not.toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+
+      // Second press: nothing left for the tooltip to dismiss, so DialogWrapper's
+      // own guard now sees it and raises its unsaved-changes confirm (isDirty).
+      fireEvent.keyDown(otherControl, { key: 'Escape' });
+      expect(screen.getByTestId('dirty-dialog-discard')).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+  });
 });

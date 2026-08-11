@@ -122,6 +122,21 @@ export function HelpTooltip({
   // or Escape from anywhere. Scoped to only fire while pinned, and scoped to
   // just these two events (not scroll/resize) so it doesn't fight the
   // reposition-on-scroll effect above.
+  //
+  // CAPTURE phase, deliberately: if the pinned tooltip's trigger is inside a
+  // DialogWrapper and focus has moved to some OTHER control in that dialog, a
+  // real Escape keydown targets that control. DialogWrapper's own Escape
+  // handling is a React (bubble-phase) listener on the dialog container -
+  // which, because the dialog is portaled to `#dialog-root`, is where React
+  // actually attaches its native delegated listener for that subtree. A
+  // bubble-phase document listener sits ABOVE `#dialog-root` in real DOM
+  // ancestry, so DialogWrapper's `e.stopPropagation()` (which also stops the
+  // underlying native event since React 17) would win the race and this
+  // listener would never run. A capture-phase listener runs on the way DOWN,
+  // before any bubble-phase listener anywhere in the tree, so it always sees
+  // the keydown first. It also calls `preventDefault()` so DialogWrapper's
+  // own `!e.defaultPrevented` gate skips closing the dialog on that same
+  // press - the tooltip owns this Escape, the dialog does not.
   useEffect(() => {
     if (!isPinned) return;
 
@@ -133,14 +148,16 @@ export function HelpTooltip({
       closeAll();
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeAll();
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      closeAll();
     };
 
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('mousedown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown, true);
     return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('mousedown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown, true);
     };
   }, [isPinned, closeAll]);
 
@@ -207,8 +224,13 @@ export function HelpTooltip({
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             // A keydown only reaches a focused element, so this only fires
-            // while the trigger has focus. Stop it here so it can't bubble
-            // into a host dialog's own Escape-to-close handler.
+            // while the trigger has focus. Only consume it while there is
+            // something to dismiss - otherwise a second Escape press (the
+            // tooltip already closed by the first one) would keep eating the
+            // keystroke and a host dialog could never see it.
+            if (!isVisible) return;
+            // Stop it here so it can't bubble into a host dialog's own
+            // Escape-to-close handler.
             e.preventDefault();
             e.stopPropagation();
             closeAll();
