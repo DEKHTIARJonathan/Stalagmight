@@ -179,6 +179,11 @@ jobs:
             echo "Run the Rust tests locally and commit the result; never hand-edit that tree."
             exit 1
           fi
+      # Vendored compass_data is [workspace]-excluded, so `cargo test --workspace`
+      # compiles it (as a path dep) but never runs its tests (#494). Test it
+      # directly. No telemetry feature or TELEMETRY_ENDPOINT - the crate defines
+      # neither. fmt/clippy stay off for it deliberately (docs/linting.md).
+      - run: cargo test --manifest-path src-tauri/vendor/compass_data/Cargo.toml
       # Clippy deny-level lint gate (issue #147). The crate has a strict
       # [lints.clippy] policy (deny unwrap/expect/panic/print/dbg/...) authored in
       # 17dc4feb; this enforces it so it can't silently rot again. Pedantic lints
