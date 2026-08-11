@@ -188,3 +188,115 @@ describe('computeTmlPreviewLayout', () => {
     expect(layout.sections[0]!.section.shots).toHaveLength(1);
   });
 });
+
+/**
+ * Review round 2. The preview is the only thing telling the user where the
+ * import will put a section, so every claim it makes has to be one the backend
+ * will honour (`import_options.rs`, `determine_placement`).
+ */
+describe('computeTmlPreviewLayout agrees with the backend about placement', () => {
+  /** Section 0 is emptied by the exclusion filter, so it is never created. */
+  function firstSectionAllExcluded(): TmlFile {
+    return file([
+      section('Dropped', 0, [shot(1, 0, { excluded: true })]),
+      section('Survivor', 1, [shot(2, 1), shot(3, 2)]),
+    ]);
+  }
+
+  it('makes the first CREATED section the root, not the lowest index', () => {
+    const layout = computeTmlPreviewLayout(firstSectionAllExcluded(), all);
+
+    expect(layout.sections.map((s) => s.index)).toEqual([1]);
+    // The survivor IS the root - the dialog labels it as such and anchors the
+    // placement choice to it - so calling it re-anchored contradicts the very
+    // panel beside it, and the backend now puts the typed datum here.
+    expect(layout.sections[0]!.reanchored).toBe(false);
+    expect(layout.reanchoredCount).toBe(0);
+  });
+
+  it('does not claim the origin for a section that carries its own GPS', () => {
+    // C hangs off B; B is deselected, so C loses its connection - but its first
+    // shot carries coordinates, and `determine_placement` prefers those over
+    // the origin fallback.
+    const tml = chainOfThree();
+    tml.sections[2]!.shots[0] = shot(5, 4, { latitude: 20.5, longitude: -87.1 });
+
+    const layout = computeTmlPreviewLayout(tml, {
+      includeExcluded: false,
+      selected: new Set([0, 2]),
+    });
+    const c = layout.sections.find((s) => s.index === 2)!;
+    expect(c.reanchored).toBe(false);
+    expect(layout.reanchoredCount).toBe(0);
+  });
+
+  it('ignores GPS the backend would refuse, so the two never disagree', () => {
+    // NaN slips past a null-island guard written as `Math.abs(x) > 0`, exactly
+    // as it did in Rust. `GpsCoordinates::new` refuses it, so the section really
+    // does land at the origin and the preview must say so.
+    for (const bad of [{ latitude: Number.NaN, longitude: 10 }, { latitude: 1e300, longitude: 10 }]) {
+      const tml = chainOfThree();
+      tml.sections[2]!.shots[0] = shot(5, 4, bad);
+      const layout = computeTmlPreviewLayout(tml, {
+        includeExcluded: false,
+        selected: new Set([0, 2]),
+      });
+      expect(layout.sections.find((s) => s.index === 2)!.reanchored).toBe(true);
+    }
+  });
+
+  it('flags a file orphan whose parent ids are all negative', () => {
+    // `start_ariane_id: -1` with a negative `from_id` names no shot at all. The
+    // backend still warns and places it at the origin; the preview used to stay
+    // silent because it had no candidate id to fail to resolve.
+    const tml = file([
+      section('A', 0, [shot(1, 0)]),
+      section('Orphan', -1, [shot(2, -1)]),
+    ]);
+    const layout = computeTmlPreviewLayout(tml, all);
+
+    expect(layout.sections.find((s) => s.index === 1)!.reanchored).toBe(true);
+    expect(layout.reanchoredCount).toBe(1);
+  });
+
+  it('lays out a huge selection without spreading it into an argument list', () => {
+    // `Math.min(...set)` throws RangeError past ~1e5 arguments, and this runs
+    // inside a useMemo on every checkbox click - i.e. it took the dialog down.
+    const many = 200_000;
+    const selectedAll = new Set<number>();
+    for (let i = 0; i < many; i++) selectedAll.add(i);
+
+    const layout = computeTmlPreviewLayout(chainOfThree(), {
+      includeExcluded: false,
+      selected: selectedAll,
+    });
+    expect(layout.sections.map((s) => s.index)).toEqual([0, 1, 2]);
+  });
+
+  it('resolves a long chain of forward references in one sweep', () => {
+    // 5k sections in a single chain: S0 is the head and comes FIRST in the file
+    // (so it is the root), and the rest are written in reverse, which makes
+    // almost every parent link point forwards. The fixed-point relaxation this
+    // replaced needed one full pass per link and took ~0.8s here; the sweep is
+    // one visit per section.
+    const count = 5000;
+    const sections: TmlSection[] = [section('S0', -1, [shot(1, -1)])];
+    for (let i = count - 1; i >= 1; i--) {
+      // S_i hangs off S_{i-1}'s only shot, which has id `i`.
+      sections.push(section(`S${i}`, i, [shot(i + 1, i)]));
+    }
+    const layout = computeTmlPreviewLayout(file(sections), all);
+
+    expect(layout.sections).toHaveLength(count);
+    const at = (name: string) => {
+      const entry = layout.sections.find((s) => s.name === name)!;
+      return [mm(entry.offsetX), mm(entry.offsetY)];
+    };
+    // Every shot runs 10 m due east, so section i starts at 10i.
+    expect(at('S0')).toEqual([0, 0]);
+    expect(at('S1')).toEqual([10, 0]);
+    expect(at('S4999')).toEqual([49_990, 0]);
+    // A chain with one head has no orphan: every link resolved.
+    expect(layout.reanchoredCount).toBe(0);
+  });
+});

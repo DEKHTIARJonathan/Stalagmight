@@ -1346,8 +1346,8 @@
       "selectedCount": "{{selected}} of {{total}} selected",
       "selectAllLabel": "Select all sections",
       "importSectionLabel": "Import section {{name}}",
-      "reanchored_one": "{{count}} section connects to a section you did not select, so it will be placed at the origin.",
-      "reanchored_other": "{{count}} sections connect to sections you did not select, so they will be placed at the origin.",
+      "reanchored_one": "{{count}} section connects to nothing else being imported, so it will be placed at the origin.",
+      "reanchored_other": "{{count}} sections connect to nothing else being imported, so they will be placed at the origin.",
       "placement": {
         "heading": "Where does this survey go?",
         "appliesTo": "Applies to \"{{section}}\", the first section imported. Everything else follows the connections recorded in the file.",

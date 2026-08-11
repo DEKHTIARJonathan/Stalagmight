@@ -35,15 +35,24 @@ export interface TmlPreviewSection {
   /** Meters east/north of the layout's origin. */
   offsetX: number;
   offsetY: number;
-  /** True when this section attaches to nothing that is being imported, so it
-   *  sits at the origin rather than where the file put it. */
+  /**
+   * True when this section will be placed at the ORIGIN rather than connected
+   * to the rest of the survey - i.e. exactly when the backend takes
+   * `determine_placement`'s final fallback and emits its warning.
+   *
+   * Three things are therefore NOT re-anchored, and each was wrong at some
+   * point: the root (it belongs at the origin), a section whose own first shot
+   * carries usable coordinates (the backend prefers that over the fallback),
+   * and a section whose parent resolved normally. A section with NO parent id
+   * at all IS re-anchored - the file orphan case, which the backend has always
+   * warned about and this used to stay silent on.
+   */
   reanchored: boolean;
 }
 
 export interface TmlPreviewLayout {
   sections: TmlPreviewSection[];
-  /** Sections that lost their anchor because the section they hang off is not
-   *  selected. The root is NOT one of these - it belongs at the origin. */
+  /** How many entries carry `reanchored`. */
   reanchoredCount: number;
 }
 
@@ -110,19 +119,61 @@ function localStations(shots: TmlShot[]): Array<{ x: number; y: number }> {
 }
 
 /**
+ * Whether a shot's coordinates would survive `GpsCoordinates::new`.
+ *
+ * Mirrors `GpsCoordinates::validate` (crates/models/src/station.rs) plus the
+ * importer's own null-island guard: Ariane writes `0/0` for "no anchor". The
+ * finiteness check is not decoration - every comparison against NaN is false,
+ * so a `Math.abs(lat) > 0` test alone reports NaN as a usable anchor, which is
+ * the same hole the Rust side had.
+ */
+export function isOfferableCoordinate(latitude: number, longitude: number): boolean {
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return false;
+  return Math.abs(latitude) > 0 || Math.abs(longitude) > 0;
+}
+
+function hasUsableGps(shot: TmlShot | undefined): boolean {
+  return shot !== undefined && isOfferableCoordinate(shot.latitude, shot.longitude);
+}
+
+/** A laid-out entry while the offsets are still being resolved. */
+interface WorkingEntry {
+  index: number;
+  section: TmlSection;
+  shots: TmlShot[];
+  stations: Array<{ x: number; y: number }>;
+  parent: { section: number; station: number } | undefined;
+  offsetX: number;
+  offsetY: number;
+  reanchored: boolean;
+}
+
+/**
  * Where each selected section sits relative to the first one.
  *
- * The placement rules, in the backend's order:
- *   1. the ROOT (lowest selected index) sits at the origin;
+ * The placement rules, in the backend's order (`determine_placement`):
+ *   1. the ROOT - the first section the import will CREATE, i.e. the first one
+ *      that is selected AND still has shots after the exclusion filter - sits
+ *      at the origin;
  *   2. any other section merges its station 0 onto the station its
- *      `start_ariane_id` names - but only if that station belongs to a SELECTED
+ *      `start_ariane_id` names, but only if that station belongs to a SELECTED
  *      section, since a deselected one is never created;
- *   3. anything else falls back to the origin, and is reported as re-anchored.
+ *   3. failing that, a section with usable coordinates on its own first shot is
+ *      anchored on those (drawn at the origin here - the preview has no
+ *      georeferencing - but NOT reported as re-anchored, because the import
+ *      will not put it at the origin);
+ *   4. anything else falls back to the origin and IS reported.
  *
- * Rule 2 can point forwards (a section whose parent is later in the file), so
- * offsets are resolved by repeated relaxation rather than one pass. A cycle -
- * which valid survey data cannot produce - simply leaves the remaining sections
- * at the origin instead of looping.
+ * Rule 1 is the definition the backend now uses too, and it must stay that way:
+ * deriving it from the selection alone ("lowest selected index") disagrees
+ * whenever the exclusion filter empties that section, and the placement the
+ * dialog collected then belongs to a section that is never built.
+ *
+ * Rule 2 can point forwards, so offsets are resolved by walking a
+ * parent -> children adjacency breadth-first from the parentless entries: one
+ * visit per entry. The fixed-point relaxation this replaces re-ran on every
+ * checkbox click and needed one full pass per link of a chain.
  */
 export function computeTmlPreviewLayout(
   tml: TmlFile,
@@ -144,73 +195,79 @@ export function computeTmlPreviewLayout(
     return shots;
   });
 
-  const rootIndex = selected === null ? 0 : Math.min(...[...selected], Number.POSITIVE_INFINITY);
-
-  const laidOut = tml.sections.flatMap((section, index) => {
-    if (!isSelected(index) || kept[index]!.length === 0) return [];
+  // The entries the import will create, in file order. `entries[0]` is the
+  // root by construction - no spread over the selection, which throws
+  // RangeError on a set big enough to have one entry per section.
+  const entries: WorkingEntry[] = [];
+  for (const [index, section] of tml.sections.entries()) {
+    if (!isSelected(index) || kept[index]!.length === 0) continue;
     const shots = kept[index]!;
+    const isRoot = entries.length === 0;
     // The parent the backend would use: the raw first shot's `from_id`, then
     // the first surviving shot's, for a section whose lead shots were excluded.
     const candidates = [section.start_ariane_id, shots[0]?.from_id].filter(
       (id): id is bigint => typeof id === 'bigint' && id >= 0n
     );
-    const parent =
-      index === rootIndex
-        ? undefined
-        : candidates
-            .map((id) => idToLoc.get(id))
-            .find((loc) => loc !== undefined && loc.section !== index);
-    return [
-      {
-        index,
-        name: section.name,
-        color: section.color,
-        section: toPreviewSection(section, shots),
-        stations: localStations(shots),
-        parent,
-        offsetX: 0,
-        offsetY: 0,
-        // Root and parentless-by-design sections are not re-anchored; only a
-        // section that HAD a parent in the file and lost it is.
-        reanchored: index !== rootIndex && parent === undefined && candidates.length > 0,
-      },
-    ];
-  });
+    const parent = isRoot
+      ? undefined
+      : candidates
+          .map((id) => idToLoc.get(id))
+          .find((loc) => loc !== undefined && loc.section !== index);
+    entries.push({
+      index,
+      section,
+      shots,
+      stations: localStations(shots),
+      parent,
+      offsetX: 0,
+      offsetY: 0,
+      reanchored: !isRoot && parent === undefined && !hasUsableGps(shots[0]),
+    });
+  }
 
-  const byIndex = new Map(laidOut.map((entry) => [entry.index, entry]));
-  const placed = new Set<number>(
-    laidOut.filter((e) => e.parent === undefined).map((e) => e.index)
-  );
-  // At most one section is resolved per pass in the worst case (a chain), so
-  // `laidOut.length` passes always suffice and a cycle terminates.
-  for (let pass = 0; pass < laidOut.length && placed.size < laidOut.length; pass++) {
-    for (const entry of laidOut) {
-      if (placed.has(entry.index) || !entry.parent) continue;
-      const parent = byIndex.get(entry.parent.section);
-      if (!parent || !placed.has(parent.index)) continue;
-      const anchor = parent.stations[entry.parent.station];
-      if (!anchor) {
-        // The named station is past the parent's end - not reachable from a
-        // file the backend parsed, but a preview must not emit NaN offsets.
-        placed.add(entry.index);
-        continue;
+  // parent index -> children, then one breadth-first sweep. An entry whose
+  // parent is not itself laid out never enters the queue, so a cycle simply
+  // leaves its members at the origin instead of looping.
+  const positionOf = new Map<number, WorkingEntry>();
+  for (const entry of entries) positionOf.set(entry.index, entry);
+  const children = new Map<number, WorkingEntry[]>();
+  const queue: WorkingEntry[] = [];
+  for (const entry of entries) {
+    const parentIndex = entry.parent?.section;
+    if (parentIndex === undefined || !positionOf.has(parentIndex)) {
+      queue.push(entry);
+      continue;
+    }
+    const siblings = children.get(parentIndex);
+    if (siblings) siblings.push(entry);
+    else children.set(parentIndex, [entry]);
+  }
+  for (let head = 0; head < queue.length; head++) {
+    const parent = queue[head]!;
+    for (const child of children.get(parent.index) ?? []) {
+      // `child.parent` is defined for everything in `children`.
+      const anchor = parent.stations[child.parent!.station];
+      if (anchor) {
+        child.offsetX = parent.offsetX + anchor.x;
+        child.offsetY = parent.offsetY + anchor.y;
       }
-      entry.offsetX = parent.offsetX + anchor.x;
-      entry.offsetY = parent.offsetY + anchor.y;
-      placed.add(entry.index);
+      // A station index past the parent's end is not reachable from a file the
+      // backend parsed; leave the child at the origin rather than emit NaN, and
+      // keep walking so ITS children still resolve.
+      queue.push(child);
     }
   }
 
   return {
-    sections: laidOut.map(({ index, name, color, section, offsetX, offsetY, reanchored }) => ({
-      index,
-      name,
-      color,
-      section,
-      offsetX,
-      offsetY,
-      reanchored,
+    sections: entries.map((entry) => ({
+      index: entry.index,
+      name: entry.section.name,
+      color: entry.section.color,
+      section: toPreviewSection(entry.section, entry.shots),
+      offsetX: entry.offsetX,
+      offsetY: entry.offsetY,
+      reanchored: entry.reanchored,
     })),
-    reanchoredCount: laidOut.filter((e) => e.reanchored).length,
+    reanchoredCount: entries.reduce((n, entry) => n + (entry.reanchored ? 1 : 0), 0),
   };
 }

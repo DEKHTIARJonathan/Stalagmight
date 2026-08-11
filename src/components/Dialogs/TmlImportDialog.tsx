@@ -35,7 +35,7 @@ import type { TmlFile, OrphanPlacementSuggestion } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import type { VirtualShotMode } from '../../types/project';
 import { computeTmlImportStats } from '../../utils/tmlImportStats';
-import { computeTmlPreviewLayout } from '../../utils/tmlPreviewLayout';
+import { computeTmlPreviewLayout, isOfferableCoordinate } from '../../utils/tmlPreviewLayout';
 
 interface TmlImportDialogProps {
   tmlFile: TmlFile;
@@ -183,10 +183,16 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     [layout]
   );
 
-  // The section the placement choice applies to: the first one the selection
-  // admits that still has shots. Same rule as `root_section_index` on the Rust
-  // side, narrowed to sections that survive shot filtering, because a section
-  // with nothing in it is not what the user is placing.
+  // The section the placement choice applies to: the first one the import will
+  // CREATE - selected AND still holding shots after the exclusion filter.
+  //
+  // That is now the ONE definition of root, shared verbatim with
+  // `computeTmlPreviewLayout` (whose first entry this is) and with the backend,
+  // where the conversion loop reports it as `is_root: configs.is_empty()`. It
+  // used to be three definitions: the backend and the preview layout each said
+  // "lowest selected index", which disagrees with this one whenever the
+  // exclusion filter empties that section - and the placement collected here
+  // was then applied to a section that was never built, so it vanished.
   const rootSection = layout.sections[0] ?? null;
 
   /**
@@ -202,11 +208,14 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
    */
   const fileAnchor: TmlFileAnchor | null = useMemo(() => {
     const first = rootSection ? tmlFile.sections[rootSection.index]?.shots[0] : undefined;
-    if (first && (Math.abs(first.latitude) > 0 || Math.abs(first.longitude) > 0)) {
+    // Validity, not just non-zero: the backend runs both of these through
+    // `GpsCoordinates::new`, so offering coordinates it will refuse would put
+    // an option on screen that disables the Import button when chosen.
+    if (first && isOfferableCoordinate(first.latitude, first.longitude)) {
       return { latitude: first.latitude, longitude: first.longitude, source: 'root' };
     }
     const geo = tmlFile.geo_coding;
-    if (geo && (Math.abs(geo.latitude) > 0 || Math.abs(geo.longitude) > 0)) {
+    if (geo && isOfferableCoordinate(geo.latitude, geo.longitude)) {
       return { latitude: geo.latitude, longitude: geo.longitude, source: 'elsewhere' };
     }
     return null;

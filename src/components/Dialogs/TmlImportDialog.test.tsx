@@ -870,3 +870,85 @@ describe('TmlImportDialog placement is not walked over by other controls (#425)'
     });
   });
 });
+
+describe('TmlImportDialog root agreement (#425 review)', () => {
+  /** Section 0 is emptied by the exclusion filter, so it is never created. */
+  const firstSectionAllExcluded: TmlFile = {
+    ...tmlFile,
+    sections: [
+      {
+        name: 'Dropped',
+        shots: [shot({ id: 1n, from_id: 0n, excluded: true })],
+        surveyor: null,
+        date: null,
+        color: '#3b82f6',
+        is_branch_split: false,
+        start_ariane_id: 0n,
+        end_ariane_id: 1n,
+        start_depth: 0,
+      },
+      {
+        name: 'Survivor',
+        shots: [shot({ id: 2n, from_id: 1n })],
+        surveyor: null,
+        date: null,
+        color: '#ef4444',
+        is_branch_split: false,
+        start_ariane_id: 1n,
+        end_ariane_id: 2n,
+        start_depth: 0,
+      },
+    ],
+  };
+
+  it('anchors the placement step to the surviving section and does not also call it stranded', async () => {
+    executeTmlImport.mockResolvedValue(ok([], [1]));
+    render(<TmlImportDialog tmlFile={firstSectionAllExcluded} filePath="/tmp/cave.tml" />);
+
+    // The step names the section the import will actually create...
+    expect(await screen.findByTestId('tml-placement-step')).toHaveTextContent('Survivor');
+    // ...and cannot simultaneously badge it as landing at the origin for want
+    // of a connection. Both used to be on screen at once, because the preview
+    // layout still called section 0 the root.
+    expect(screen.queryByTestId('tml-reanchored-notice')).toBeNull();
+    expect(screen.queryByTestId('tml-section-reanchored-1')).toBeNull();
+  });
+
+  it('sends the typed datum, which the backend applies to that same section', async () => {
+    executeTmlImport.mockResolvedValue(ok([], [1]));
+    render(<TmlImportDialog tmlFile={firstSectionAllExcluded} filePath="/tmp/cave.tml" />);
+
+    await userEvent.click(await screen.findByTestId('tml-placement-manual'));
+    await userEvent.type(screen.getByTestId('tml-placement-latitude'), '20.5');
+    await userEvent.type(screen.getByTestId('tml-placement-longitude'), '-87.1');
+    await clickImport();
+
+    expect(executeTmlImport.mock.calls[executeTmlImport.mock.calls.length - 1]?.[6]).toEqual({
+      type: 'zero_datum',
+      latitude: 20.5,
+      longitude: -87.1,
+    });
+  });
+
+  it('does not offer coordinates the backend would refuse', async () => {
+    // A crafted file with NaN on the root's first shot. `Math.abs(NaN) > 0` is
+    // false, so a non-zero test alone reports it as an anchor - the same hole
+    // the Rust null-island guard had.
+    const crafted: TmlFile = {
+      ...tmlFile,
+      sections: [
+        {
+          ...firstSectionAllExcluded.sections[1]!,
+          name: 'Crafted',
+          shots: [shot({ id: 1n, from_id: 0n, latitude: Number.NaN, longitude: Number.NaN })],
+          start_ariane_id: 0n,
+        },
+      ],
+    };
+    render(<TmlImportDialog tmlFile={crafted} filePath="/tmp/cave.tml" />);
+
+    await screen.findByTestId('tml-placement-step');
+    expect(screen.queryByTestId('tml-placement-file')).toBeNull();
+    expect(screen.getByTestId('tml-placement-origin')).toBeChecked();
+  });
+});
