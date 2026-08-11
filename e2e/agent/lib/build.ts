@@ -50,6 +50,10 @@ export function gitHeadFor(root: string): string {
   try {
     return execFileSync('git', ['-C', root, 'rev-parse', '--short', 'HEAD'], {
       encoding: 'utf8',
+      // stderr discarded, not inherited: a HEAD we could not read is already
+      // handled below, and a bare `fatal: not a git repository` printed into a
+      // session log reads like the harness itself broke.
+      stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
   } catch {
     return 'unknown';

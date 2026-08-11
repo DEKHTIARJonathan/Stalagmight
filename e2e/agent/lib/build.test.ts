@@ -4,7 +4,9 @@
  * an E2E binary the harness itself built must still look fresh (no
  * always-rebuild regression). Since #421 the stamp also records whether the
  * binary carries the e2e cargo feature (the in-app WebDriver plugin macOS
- * needs), and a v1 stamp reads as no stamp at all.
+ * needs), and a v1 stamp reads as no stamp at all. Since #488 it also records
+ * WHICH source tree built the binary, because several worktrees share one
+ * CARGO_TARGET_DIR and mtimes cannot tell one builder from another.
  */
 import * as fs from 'fs';
 import * as os from 'os';
@@ -15,6 +17,7 @@ import {
   FEATURES_FOR_MODE,
   buildStampPathFor,
   featuresFor,
+  gitHeadFor,
   isPluginAclChurn,
   needsE2eFeature,
   readBuildStamp,
@@ -22,12 +25,19 @@ import {
   type E2EBuildStamp,
 } from './build';
 
+/** The harness tree this test file lives in, in the form the stamp records. */
+const HARNESS_ROOT_REAL = fs.realpathSync(
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..'),
+);
+
 const E2E_STAMP: E2EBuildStamp = {
-  v: 2,
+  v: 3,
   mode: 'debug',
   features: '',
   viteE2E: true,
   e2eFeature: false,
+  repoRoot: '/repo/a',
+  gitHead: 'abc1234',
   viteMode: 'production',
   binaryMtimeMs: 1_700_000_000_000,
   builtAtMs: 1_700_000_000_500,
@@ -91,6 +101,28 @@ describe('stampStaleReasons', () => {
   it('accepts a matching feature-build stamp', () => {
     const stamp = { ...E2E_STAMP, e2eFeature: true };
     expect(stampStaleReasons(stamp, { ...wantMatching, e2eFeature: true })).toEqual([]);
+  });
+
+  // Issue #488: worktrees share one CARGO_TARGET_DIR, so the binary a stamp sits
+  // beside may have been built somewhere else entirely. mtimes say nothing about
+  // it - the OTHER tree's sources are the ones that were touched - so without
+  // this comparison worktree A happily drove the app worktree B built.
+  it('treats a binary built from another source tree as stale', () => {
+    const reasons = stampStaleReasons(E2E_STAMP, { ...wantMatching, repoRoot: '/repo/b' });
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('/repo/a');
+    expect(reasons[0]).toContain('/repo/b');
+    expect(reasons[0]).toContain(E2E_STAMP.gitHead);
+  });
+
+  it('accepts a stamp written by the tree that is asking', () => {
+    expect(stampStaleReasons(E2E_STAMP, { ...wantMatching, repoRoot: E2E_STAMP.repoRoot })).toEqual([]);
+  });
+
+  it('skips the tree comparison when the caller does not say which tree it is', () => {
+    // `repoRoot` is optional in the same way `mode`/`features` are: omitted
+    // means "do not compare", not "compare against undefined".
+    expect(stampStaleReasons({ ...E2E_STAMP, repoRoot: '/repo/z' }, wantMatching)).toEqual([]);
   });
 });
 
@@ -168,6 +200,30 @@ describe('isPluginAclChurn', () => {
   });
 });
 
+// `gitHeadFor` is what both the stamp and sessionCore's session record use, and
+// its whole point is the `-C <root>`: the MCP server is launched with no cwd
+// pinning, so a HEAD read from the inherited cwd can belong to any repo on the
+// machine - or to none.
+describe('gitHeadFor', () => {
+  it('reads the HEAD of the tree it is pointed at, not the process cwd', () => {
+    const head = gitHeadFor(HARNESS_ROOT_REAL);
+    expect(head).not.toBe('unknown');
+    expect(head).toMatch(/^[0-9a-f]{7,40}$/);
+  });
+
+  it('returns "unknown" rather than throwing when the path is not a git tree', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-nogit-'));
+    try {
+      // Not a repo, but even if some ancestor of the tmpdir were one, `git -C`
+      // would still be answering about a DIFFERENT tree than the harness - the
+      // assertion that matters is that we never throw out of a session start.
+      expect(() => gitHeadFor(dir)).not.toThrow();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('readBuildStamp', () => {
   let dir: string;
 
@@ -194,7 +250,30 @@ describe('readBuildStamp', () => {
   });
 
   it('returns null for an unknown schema version', () => {
-    expect(readBuildStamp(write(JSON.stringify({ ...E2E_STAMP, v: 3 })))).toBeNull();
+    expect(readBuildStamp(write(JSON.stringify({ ...E2E_STAMP, v: 4 })))).toBeNull();
+  });
+
+  it('returns null for a v2 stamp (cannot name the tree that built it - one forced rebuild)', () => {
+    const v2 = { ...E2E_STAMP, v: 2 } as Record<string, unknown>;
+    delete v2['repoRoot'];
+    delete v2['gitHead'];
+    expect(readBuildStamp(write(JSON.stringify(v2)))).toBeNull();
+  });
+
+  it('returns null for a v3 stamp missing repoRoot, the field the whole defence rests on', () => {
+    const noRoot = { ...E2E_STAMP } as Record<string, unknown>;
+    delete noRoot['repoRoot'];
+    expect(readBuildStamp(write(JSON.stringify(noRoot)))).toBeNull();
+  });
+
+  it('returns null when repoRoot is not a string', () => {
+    expect(readBuildStamp(write(JSON.stringify({ ...E2E_STAMP, repoRoot: 7 })))).toBeNull();
+  });
+
+  it('defaults a missing gitHead to "unknown" (informational, never load-bearing)', () => {
+    const noHead = { ...E2E_STAMP } as Record<string, unknown>;
+    delete noHead['gitHead'];
+    expect(readBuildStamp(write(JSON.stringify(noHead)))).toEqual({ ...E2E_STAMP, gitHead: 'unknown' });
   });
 
   it('returns null for a v1 stamp (predates e2eFeature AND the profile - one forced rebuild)', () => {
@@ -300,6 +379,10 @@ describe('build modes', () => {
         mode,
         features: features.join(','),
         e2eFeature: features.includes('e2e'),
+        // What `writeBuildStamp` records, and what `checkBuildFreshness` then
+        // compares against: both go through the same realpath of the harness
+        // tree, so a build in THIS tree must not read as a foreign build.
+        repoRoot: HARNESS_ROOT_REAL,
       };
 
       expect(
@@ -309,6 +392,7 @@ describe('build modes', () => {
           binaryMtimeMs: asBuilt.binaryMtimeMs,
           mode,
           features: features.join(','),
+          repoRoot: HARNESS_ROOT_REAL,
         }),
         `${mode}: a freshly written stamp must satisfy its own freshness check`,
       ).toEqual([]);
