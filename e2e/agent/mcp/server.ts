@@ -466,12 +466,13 @@ define(
           let typed = true;
           let verified: boolean | null = null;
           let reason: string | undefined;
+          let truncated: boolean | undefined;
           const applyReactSafe = async () => {
             method = 'paste';
             // Errors here (script threw, driver timeout) are left to
             // propagate to run()'s catch, same as every other tool - a
             // swallowed exception used to surface as a false `typed: true`.
-            const outcome = await evalInApp<{ ok: boolean; verified?: boolean; reason?: string }>(
+            const outcome = await evalInApp<{ ok: boolean; verified?: boolean; truncated?: boolean; reason?: string }>(
               b,
               REACT_SAFE_SET_VALUE_SCRIPT,
               [selector, args.text, !!args.clear],
@@ -482,6 +483,7 @@ define(
               verified = null;
             } else {
               verified = outcome.verified ?? null;
+              truncated = outcome.truncated ?? undefined;
             }
           };
           if (selector) {
@@ -507,15 +509,32 @@ define(
           } else {
             await b.keys(args.text.split(''));
           }
+          let submitted = false;
           if (args.submit) {
-            await b.keys(['Enter']);
-            if (isDarwinTarget()) {
-              // Same native-key path #531 found broken for Escape - the
-              // Enter this submit relies on gets the same synthetic fallback.
-              await evalInApp(b, SYNTHETIC_KEY_SCRIPT, ['Enter']);
+            // Never submit on a write that failed (e.g. a disabled/readOnly
+            // target): pressing Enter would act on whatever already had
+            // focus, not on the text this call was supposed to deliver.
+            if (typed) {
+              await b.keys(['Enter']);
+              if (isDarwinTarget()) {
+                // Same native-key path #531 found broken for Escape - the
+                // Enter this submit relies on gets the same synthetic fallback.
+                await evalInApp(b, SYNTHETIC_KEY_SCRIPT, ['Enter']);
+              }
+              submitted = true;
             }
           }
-          return { result: { typed, method, verified, reason }, resolved: { selector } };
+          return {
+            result: {
+              typed,
+              method,
+              verified,
+              reason,
+              truncated,
+              submitted: args.submit ? submitted : undefined,
+            },
+            resolved: { selector },
+          };
         });
       },
       { digest: true, sweep: true },

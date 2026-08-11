@@ -102,15 +102,23 @@ evidence: `docs/plans/2026-08-05_macos-agent-harness.md`):
   onChange never fires, so `type_text` instead runs an in-page script
   (`e2e/agent/lib/reactInput.ts`) that writes through the prototype value
   setter and dispatches a real `input`/`change` event, which React does see.
-  Scope: only INPUT/TEXTAREA (a SELECT or anything else reports
+  Scope: only free-text INPUT types (`text`/`search`/`url`/`tel`/`email`/
+  `password`/`number`) and TEXTAREA - a checkbox/radio/date/color/file/etc.
+  reports `reason: 'not-a-text-input'` rather than certifying a string write
+  that never touched its actual state; a SELECT or anything else reports
   `reason: 'unsupported-element'`; disabled/readOnly reports
-  `reason: 'not-editable'`, neither is written to); a `testid`/`selector`-less
+  `reason: 'not-editable'`; none of these are written to, and `typed: false`
+  suppresses `submit`'s Enter (it would otherwise act on whatever already
+  had focus, not the text that failed to land). A `testid`/`selector`-less
   call still types via native driver keys. `verified` is read back after a
   tick so it reflects the app's own re-render, not just the synchronous
   write - it can legitimately be `false` when the app clamps or rejects a
-  value. A `clear: true` call fires an intermediate empty-string `input`
-  event before the target text, which any field-level side effect on empty
-  will observe (#531).
+  value. The write also mirrors the target's `maxLength` the way real typing
+  would (truncating before writing, reporting `truncated: true`), rather
+  than certifying a longer value a user could never have typed. A
+  `clear: true` call fires an intermediate empty-string `input` event before
+  the target text, which any field-level side effect on empty will observe
+  (#531).
 - **`press_keys(['Escape'])` gets a synthetic fallback on this route, and
   nothing else does.** Observed: a lone `['Escape']` call produces no effect
   through the native WebDriver key path here (no error, no app response); a

@@ -87,13 +87,13 @@ describe('REACT_SAFE_SET_VALUE_SCRIPT', () => {
     const fixture = mountControlledInput('gps-lat');
     const browser = executingBrowser();
 
-    const result = await evalInApp<{ ok: boolean; verified: boolean }>(browser, REACT_SAFE_SET_VALUE_SCRIPT, [
-      '[data-testid="gps-lat"]',
-      '12.5',
-      false,
-    ]);
+    const result = await evalInApp<{ ok: boolean; verified: boolean; truncated: boolean }>(
+      browser,
+      REACT_SAFE_SET_VALUE_SCRIPT,
+      ['[data-testid="gps-lat"]', '12.5', false],
+    );
 
-    expect(result).toEqual({ ok: true, verified: true });
+    expect(result).toEqual({ ok: true, verified: true, truncated: false });
     expect(fixture.getChangeCount()).toBeGreaterThan(0);
     expect(fixture.getValue()).toBe('12.5');
     fixture.unmount();
@@ -209,6 +209,76 @@ describe('REACT_SAFE_SET_VALUE_SCRIPT', () => {
       false,
     ]);
     expect(result).toEqual({ ok: false, reason: 'not-found' });
+  });
+
+  it('reports not-a-text-input for a checkbox rather than certifying a value write', async () => {
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.setAttribute('data-testid', 'gps-share');
+    document.body.appendChild(checkbox);
+    const browser = executingBrowser();
+
+    const result = await evalInApp<{ ok: boolean; reason?: string }>(browser, REACT_SAFE_SET_VALUE_SCRIPT, [
+      '[data-testid="gps-share"]',
+      'true',
+      false,
+    ]);
+
+    expect(result).toEqual({ ok: false, reason: 'not-a-text-input' });
+    expect(checkbox.checked).toBe(false);
+    checkbox.remove();
+  });
+
+  it.each(['radio', 'button', 'file', 'date', 'color', 'range'])(
+    'reports not-a-text-input for input type=%s',
+    async (type) => {
+      const el = document.createElement('input');
+      el.type = type;
+      el.setAttribute('data-testid', `gps-${type}`);
+      document.body.appendChild(el);
+      const browser = executingBrowser();
+
+      const result = await evalInApp<{ ok: boolean; reason?: string }>(browser, REACT_SAFE_SET_VALUE_SCRIPT, [
+        `[data-testid="gps-${type}"]`,
+        'x',
+        false,
+      ]);
+
+      expect(result).toEqual({ ok: false, reason: 'not-a-text-input' });
+      el.remove();
+    },
+  );
+
+  it('truncates to maxLength like real typing would, and reports truncated: true', async () => {
+    const fixture = mountControlledInput('gps-label', { maxLength: 5 });
+    const browser = executingBrowser();
+
+    const result = await evalInApp<{ ok: boolean; verified: boolean; truncated: boolean }>(
+      browser,
+      REACT_SAFE_SET_VALUE_SCRIPT,
+      ['[data-testid="gps-label"]', '1234567890', false],
+    );
+
+    // verified is true because it is checked against the truncated value a
+    // real user could have produced, not the original 10-character request.
+    expect(result).toEqual({ ok: true, verified: true, truncated: true });
+    expect(fixture.getValue()).toBe('12345');
+    expect(fixture.getValue().length).toBe(5);
+    fixture.unmount();
+  });
+
+  it('does not report truncated when the text already fits maxLength', async () => {
+    const fixture = mountControlledInput('gps-label-short', { maxLength: 5 });
+    const browser = executingBrowser();
+
+    const result = await evalInApp<{ ok: boolean; verified: boolean; truncated: boolean }>(
+      browser,
+      REACT_SAFE_SET_VALUE_SCRIPT,
+      ['[data-testid="gps-label-short"]', 'abc', false],
+    );
+
+    expect(result).toEqual({ ok: true, verified: true, truncated: false });
+    fixture.unmount();
   });
 });
 

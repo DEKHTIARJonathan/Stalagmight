@@ -26,10 +26,18 @@
  */
 
 /**
+ * INPUT types this script treats as free-text entry - the ones where typing
+ * a string is the whole interaction. Deliberately excludes date/time/month/
+ * week/datetime-local: those are segmented native pickers a single string
+ * assignment does not faithfully replay (format/locale-sensitive, no keyed
+ * per-segment interaction), plus color/range/file/checkbox/radio/button/
+ * submit/reset/hidden/image, none of which "typing text" describes.
+ *
  * args: [selector: string, text: string, clear: boolean]
- * result: { ok: boolean; verified?: boolean; reason?: string }
+ * result: { ok: boolean; verified?: boolean; truncated?: boolean; reason?: string }
  */
 export const REACT_SAFE_SET_VALUE_SCRIPT = `
+  const TEXT_INPUT_TYPES = ['text', 'search', 'url', 'tel', 'email', 'password', 'number'];
   const el = document.querySelector(args[0]);
   if (!el) return { ok: false, reason: 'not-found' };
   const text = args[1];
@@ -41,6 +49,12 @@ export const REACT_SAFE_SET_VALUE_SCRIPT = `
     // (e.g. contenteditable) is not a control this harness claims to type
     // into.
     return { ok: false, reason: 'unsupported-element' };
+  }
+  if (tag === 'INPUT' && !TEXT_INPUT_TYPES.includes(el.type)) {
+    // A checkbox/radio/date/color/file/etc. has a value the prototype
+    // setter would happily overwrite as a string, certifying a write that
+    // never touched the control's actual (checked/segmented/file) state.
+    return { ok: false, reason: 'not-a-text-input' };
   }
   if (el.disabled || el.readOnly) {
     // The prototype setter writes through disabled/readOnly - certifying
@@ -55,16 +69,25 @@ export const REACT_SAFE_SET_VALUE_SCRIPT = `
     setter.call(el, v);
     el.dispatchEvent(new Event('input', { bubbles: true }));
   };
+  // The prototype setter bypasses maxLength the same way it bypasses
+  // disabled/readOnly - real typing truncates at the limit, so mirror that
+  // here rather than certifying a value a user could never have produced.
+  let truncated = false;
+  let target = text;
+  if (typeof el.maxLength === 'number' && el.maxLength >= 0 && target.length > el.maxLength) {
+    target = target.slice(0, el.maxLength);
+    truncated = true;
+  }
   el.focus();
   if (clear && el.value !== '') fire('');
-  fire(text);
+  fire(target);
   el.dispatchEvent(new Event('change', { bubbles: true }));
   // A synchronous read here only proves the DOM accepted our assignment -
   // exactly the non-evidence this whole workaround exists to get past.
   // Give React (and any app-level validation/clamping in onChange, e.g. a
   // maxLength clamp) a tick to commit its re-render before reading back.
   await new Promise((resolve) => setTimeout(resolve, 0));
-  return { ok: true, verified: el.value === text };
+  return { ok: true, verified: el.value === target, truncated };
 `;
 
 /**
