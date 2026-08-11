@@ -9,7 +9,6 @@
  * interleave with a tool call, and a rejected call must not break the chain),
  * which is why they live here once instead of being duplicated per platform.
  */
-import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -22,8 +21,12 @@ import type {
   StartOptions,
   StartResult,
 } from '../sessionTypes';
+import { gitHeadFor } from './build';
 import { isPidAlive, reapPidsFromFile } from './procs';
 import { Recorder, ARTIFACTS_ROOT } from './recorder';
+
+/** This harness tree, derived from the module's own URL (see recorder.ts). */
+const harnessRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 function timestampId(): string {
   const now = new Date();
@@ -33,12 +36,16 @@ function timestampId(): string {
   return `${stamp}-${rand}`;
 }
 
+/**
+ * Short HEAD of THIS harness tree, for the session record.
+ *
+ * Anchored to the module's own location, never the process cwd: the MCP server
+ * is launched with no cwd pinning, so an inherited cwd could be any repo on the
+ * machine (or none), and a session recorded under a stranger's HEAD is a repro
+ * nobody can reconstruct. Same defect class as issue #488, one layer up.
+ */
 export function gitHead(): string {
-  try {
-    return execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
-  } catch {
-    return 'unknown';
-  }
+  return gitHeadFor(harnessRepoRoot);
 }
 
 export function safeMtime(file: string): number {
