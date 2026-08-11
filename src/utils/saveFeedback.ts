@@ -1,6 +1,11 @@
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
-import { classifySaveError, type SaveErrorKind } from './saveErrors';
+import {
+  classifySaveError,
+  stripSaveErrorMarker,
+  IGNORES_UNREADABLE,
+  type SaveErrorKind,
+} from './saveErrors';
 import { trackDialogComplete } from './telemetry';
 import { getErrorMessage, invokeIpc } from './ipc';
 import i18n from '../i18n';
@@ -31,13 +36,21 @@ import type { ToastKind } from '../store/uiStore';
  * `skipIntegrityRouting` there to go straight to the error dialog instead of
  * wrongly opening Review & Repair. `title` overrides the dialog title (e.g.
  * "Detach Failed") without leaving the router.
+ *
+ * The integrity route is SKIPPED for a failure that names its own cause and has
+ * no repair in that dialog (#517's unreadable ignore list). `saveProject` runs
+ * `checkProjectIntegrity()` on EVERY failure, so a project carrying both
+ * problems would otherwise always show Review & Repair - which cannot fix the
+ * named one - and the refusal would never render anywhere.
  */
 export function surfaceSaveFailure(
   error: string | null | undefined,
   openDialog: (dialog: string, data?: Record<string, unknown>) => void,
   opts?: { skipIntegrityRouting?: boolean; title?: string },
 ): void {
-  if (!opts?.skipIntegrityRouting && useProjectStore.getState().integritySaveBlocked) {
+  const routesToIntegrity =
+    !opts?.skipIntegrityRouting && classifySaveError(error) !== 'ignores-unreadable';
+  if (routesToIntegrity && useProjectStore.getState().integritySaveBlocked) {
     useProjectStore.getState().openIntegrityDialog();
     return;
   }
@@ -63,15 +76,43 @@ function saveFailureMessage(kind: SaveErrorKind, error: string): string {
       return i18n.t('dialogs.saveFailure.pathNotFound');
     case 'path-too-long':
       return i18n.t('dialogs.saveFailure.pathTooLong');
+    // Already a full sentence from the backend; only its routing marker comes off.
+    case 'ignores-unreadable':
+      return stripSaveErrorMarker(error, IGNORES_UNREADABLE);
     default:
       return error;
   }
 }
 
 /**
+ * Whether the autosave-failure banner should render, given the integrity
+ * banner's state (`App.tsx`).
+ *
+ * The default is to YIELD: when saving is integrity-blocked, the integrity
+ * banner already tells the "saving is paused, here is the Repair button" story,
+ * and docs/notifications.md asks for one surface per event.
+ *
+ * The exception is a failure Review & Repair cannot fix (#517's unreadable
+ * ignore list). That is a DIFFERENT ongoing condition with a different remedy,
+ * so the integrity banner is not telling its story - it is hiding it, and the
+ * user would be left repairing cross-references while every save is refused for
+ * an unrelated reason they were never shown.
+ */
+export function shouldShowAutosaveBanner(state: {
+  autosaveFailure: string | null;
+  autosaveFailureKind: SaveErrorKind | null;
+  integritySaveBlocked: boolean;
+  integrityIssueCount: number;
+}): boolean {
+  if (state.autosaveFailure === null) return false;
+  if (state.autosaveFailureKind === 'ignores-unreadable') return true;
+  return !(state.integritySaveBlocked && state.integrityIssueCount > 0);
+}
+
+/**
  * The autosave banner's line for a failed background save (banner-class, per
  * docs/notifications.md). Same rewording as the dialog, one line shorter, and
- * it must never leak a raw `FS_*` marker - the banner renders this string.
+ * it must never leak a raw marker - the banner renders this string.
  */
 export function autosaveFailureMessage(error?: string | null): string {
   switch (classifySaveError(error)) {
@@ -81,6 +122,8 @@ export function autosaveFailureMessage(error?: string | null): string {
       return i18n.t('banners.autosave.pathNotFound');
     case 'path-too-long':
       return i18n.t('banners.autosave.pathTooLong');
+    case 'ignores-unreadable':
+      return stripSaveErrorMarker(error ?? '', IGNORES_UNREADABLE);
     default:
       return error ?? i18n.t('banners.autosave.genericFailure');
   }

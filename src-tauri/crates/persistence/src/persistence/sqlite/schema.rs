@@ -1239,9 +1239,10 @@ impl Database {
         // the first write: `ALTER TABLE` returns SQLITE_READONLY and `?`
         // propagates it out of `open_existing`, refusing the user their own
         // project. Degrade instead, exactly as before #485: warn, skip the
-        // chain, open the file. Ignores may still drop on a Save As off such a
-        // file - which is what master did here anyway - and the moment the file
-        // is writable the chain runs.
+        // chain, open the file, and the moment the file is writable the chain
+        // runs. A Save As off such a file no longer costs the ignores either
+        // (#517): the save carries them with `load_resolved_warnings_verbatim`,
+        // which reads the un-migrated table in the shape it actually has.
         //
         // `== SCHEMA_VERSION`, not `>=`. A row claiming the FUTURE does not
         // belong here: its branch below drops the undo history precisely because

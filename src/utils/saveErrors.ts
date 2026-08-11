@@ -23,8 +23,26 @@ export const FS_PATH_NOT_FOUND = 'FS_PATH_NOT_FOUND';
  */
 export const FS_PATH_TOO_LONG = 'FS_PATH_TOO_LONG';
 
+/**
+ * Marker for a save refused because the project's ignore list could not be read
+ * (#517) - saving would have rebuilt the file without it. Mirrors
+ * `IGNORES_UNREADABLE_CODE` in `src-tauri/crates/core/src/core/loading.rs`.
+ *
+ * Unlike the `FS_*` markers this one exists for ROUTING, not wording: an
+ * unmarked failure is sent to Review & Repair whenever `integritySaveBlocked` is
+ * set, and Review & Repair repairs cross-references, not a broken
+ * `resolved_warnings` table - so without the marker this refusal reaches no
+ * surface at all on a project that has both problems.
+ */
+export const IGNORES_UNREADABLE = 'IGNORES_UNREADABLE';
+
 /** What a failed save's `CommandResult.error` says went wrong. */
-export type SaveErrorKind = 'permission' | 'path-not-found' | 'path-too-long' | 'other';
+export type SaveErrorKind =
+  | 'permission'
+  | 'path-not-found'
+  | 'path-too-long'
+  | 'ignores-unreadable'
+  | 'other';
 
 /**
  * Classify a save `CommandResult.error` by its backend marker. `other` covers
@@ -36,7 +54,17 @@ export function classifySaveError(error?: string | null): SaveErrorKind {
   if (error.startsWith(FS_PERMISSION_DENIED)) return 'permission';
   if (error.startsWith(FS_PATH_NOT_FOUND)) return 'path-not-found';
   if (error.startsWith(FS_PATH_TOO_LONG)) return 'path-too-long';
+  if (error.startsWith(IGNORES_UNREADABLE)) return 'ignores-unreadable';
   return 'other';
+}
+
+/**
+ * The backend's own sentence, with its routing marker taken off the front. Used
+ * for the markers whose message is already user-ready (unlike the `FS_*` ones,
+ * which are reworded) - the marker itself must never reach a surface.
+ */
+export function stripSaveErrorMarker(error: string, marker: string): string {
+  return error.startsWith(marker) ? error.slice(marker.length).replace(/^:\s*/, '') : error;
 }
 
 /** True if a save `CommandResult.error` carries the permission marker. */

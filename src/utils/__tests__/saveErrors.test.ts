@@ -3,9 +3,11 @@ import {
   FS_PATH_NOT_FOUND,
   FS_PATH_TOO_LONG,
   FS_PERMISSION_DENIED,
+  IGNORES_UNREADABLE,
   classifySaveError,
   isPathError,
   isPermissionError,
+  stripSaveErrorMarker,
 } from '../saveErrors';
 
 describe('isPermissionError', () => {
@@ -44,6 +46,18 @@ describe('classifySaveError', () => {
       'path-not-found'
     );
     expect(classifySaveError(`${FS_PATH_TOO_LONG}: too long`)).toBe('path-too-long');
+    expect(classifySaveError(`${IGNORES_UNREADABLE}: could not read the ignore list`)).toBe(
+      'ignores-unreadable'
+    );
+  });
+
+  // [#517] The marker exists to keep this refusal out of the Review & Repair
+  // route; it must not be mistaken for part of the sentence.
+  it('takes the marker off a message that is already user-ready', () => {
+    expect(stripSaveErrorMarker(`${IGNORES_UNREADABLE}: Can't save: nothing was written.`, IGNORES_UNREADABLE)).toBe(
+      "Can't save: nothing was written."
+    );
+    expect(stripSaveErrorMarker('Disk full', IGNORES_UNREADABLE)).toBe('Disk full');
   });
 
   it('treats an unmarked error - and no error at all - as other', () => {

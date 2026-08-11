@@ -564,40 +564,49 @@ impl AppState {
         // model, so save_project() won't carry them. Snapshot them from the
         // current database and re-apply to the fresh save file below, otherwise
         // every save would drop the user's "Ignore" acknowledgements (issue #57).
-        let resolved_warnings = {
+        //
+        // [#517] The read is `load_resolved_warnings_verbatim`, not the load
+        // path's `load_resolved_warnings`: it takes the table in whatever shape
+        // the file has (a pre-v8 file with no `shot_uuid`, e.g. one whose
+        // migration chain a forged `PRAGMA user_version` skipped) instead of
+        // failing on the one missing column. What it still cannot read is
+        // refused below rather than guessed at.
+        let carried_ignores = {
             // Recover a poisoned lock rather than silently dropping every ignore.
             let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
-            let loaded = db_guard.as_ref().map(|db| db.load_resolved_warnings());
-            match loaded {
-                Some(Ok(rows)) => {
-                    // Drop rows whose section no longer exists. resolved_warnings has
-                    // a FOREIGN KEY on section_id and the carry-over re-inserts in a
-                    // single transaction - one orphaned row (e.g. a section deleted
-                    // after a warning on it was ignored; delete_section is in-memory
-                    // only and never prunes this table) would abort the whole
-                    // transaction and silently drop EVERY still-valid ignore.
-                    let section_ids: std::collections::HashSet<_> =
-                        project.sections.iter().map(|s| s.id).collect();
-                    // Re-derive each UUID-keyed row's stored (section_id, shot_id)
-                    // from the live shot's CURRENT position so two distinct live
-                    // shots never share a (section_id, shot_id) in the fresh save
-                    // file (issue #57). save_project writes shot_id =
-                    // section_id*FEATURE_ID_STRIDE + sequence_order, so we derive
-                    // the same value from the in-memory project; load regenerates
-                    // ids with this identical formula. Without this, a renumber that
-                    // lands a different shot on a stale UUID-keyed row's old position
-                    // would let INSERT OR REPLACE (against UNIQUE(section_id, shot_id,
-                    // warning_code)) silently delete the older shot's still-valid
-                    // ignore.
-                    // Key by (section_id, uuid), not uuid alone: ensure_unique_shot_uuids
-                    // only de-dups within a section, so two sections can share a shot
-                    // UUID and a uuid-only key would collapse both live shots into one
-                    // entry - remapping section A's ignore to whichever section won the
-                    // collect, losing A's ignore and mis-suppressing B (issue #57 / Codex).
-                    let live_positions: std::collections::HashMap<
-                        (SectionId, &str),
-                        (SectionId, u32),
-                    > = project
+            match db_guard.as_ref() {
+                Some(db) => db.load_resolved_warnings_verbatim(),
+                None => Ok(Vec::new()),
+            }
+        };
+        let resolved_warnings: Vec<_> = match carried_ignores {
+            Ok(rows) => {
+                // Drop rows whose section no longer exists. resolved_warnings has
+                // a FOREIGN KEY on section_id and the carry-over re-inserts in a
+                // single transaction - one orphaned row (e.g. a section deleted
+                // after a warning on it was ignored; delete_section is in-memory
+                // only and never prunes this table) would abort the whole
+                // transaction and silently drop EVERY still-valid ignore.
+                let section_ids: std::collections::HashSet<_> =
+                    project.sections.iter().map(|s| s.id).collect();
+                // Re-derive each UUID-keyed row's stored (section_id, shot_id)
+                // from the live shot's CURRENT position so two distinct live
+                // shots never share a (section_id, shot_id) in the fresh save
+                // file (issue #57). save_project writes shot_id =
+                // section_id*FEATURE_ID_STRIDE + sequence_order, so we derive
+                // the same value from the in-memory project; load regenerates
+                // ids with this identical formula. Without this, a renumber that
+                // lands a different shot on a stale UUID-keyed row's old position
+                // would let INSERT OR REPLACE (against UNIQUE(section_id, shot_id,
+                // warning_code)) silently delete the older shot's still-valid
+                // ignore.
+                // Key by (section_id, uuid), not uuid alone: ensure_unique_shot_uuids
+                // only de-dups within a section, so two sections can share a shot
+                // UUID and a uuid-only key would collapse both live shots into one
+                // entry - remapping section A's ignore to whichever section won the
+                // collect, losing A's ignore and mis-suppressing B (issue #57 / Codex).
+                let live_positions: std::collections::HashMap<(SectionId, &str), (SectionId, u32)> =
+                    project
                         .sections
                         .iter()
                         .flat_map(|s| {
@@ -614,93 +623,127 @@ impl AppState {
                             })
                         })
                         .collect();
-                    // Index live shots by their CURRENT (section_id, shot_id) → (uuid,
-                    // saved position). A position-keyed (NULL-uuid) row written before
-                    // its shot's UUID was persisted (resolve_warning on a pre-v6 or
-                    // not-yet-saved shot) is upgraded here: THIS save persists every
-                    // shot's UUID, so we re-key such a row to the shot's saved position
-                    // AND its now-persisted UUID. Without this, its stale in-memory
-                    // shot_id could point at a different shot (or none) after an
-                    // insert/delete on the next load (issue #57 / Codex).
-                    let live_by_id: std::collections::HashMap<
-                        (SectionId, u32),
-                        (&str, (SectionId, u32)),
-                    > = project
-                        .sections
-                        .iter()
-                        .flat_map(|s| {
-                            s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
-                                sh.uuid.as_deref().map(|u| {
+                // Index live shots by their CURRENT (section_id, shot_id) → (uuid,
+                // saved position). A position-keyed (NULL-uuid) row written before
+                // its shot's UUID was persisted (resolve_warning on a pre-v6 or
+                // not-yet-saved shot) is upgraded here: THIS save persists every
+                // shot's UUID, so we re-key such a row to the shot's saved position
+                // AND its now-persisted UUID. Without this, its stale in-memory
+                // shot_id could point at a different shot (or none) after an
+                // insert/delete on the next load (issue #57 / Codex).
+                let live_by_id: std::collections::HashMap<
+                    (SectionId, u32),
+                    (&str, (SectionId, u32)),
+                > = project
+                    .sections
+                    .iter()
+                    .flat_map(|s| {
+                        s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
+                            sh.uuid.as_deref().map(|u| {
+                                (
+                                    (s.id, sh.id),
                                     (
-                                        (s.id, sh.id),
+                                        u,
                                         (
-                                            u,
-                                            (
-                                                s.id,
-                                                s.id * crate::models::FEATURE_ID_STRIDE
-                                                    + seq as u32,
-                                            ),
+                                            s.id,
+                                            s.id * crate::models::FEATURE_ID_STRIDE + seq as u32,
                                         ),
-                                    )
-                                })
+                                    ),
+                                )
                             })
                         })
-                        .collect();
-                    // Remap each UUID-keyed row to its shot's live position; DROP a
-                    // UUID-keyed row whose shot was deleted (UUID no longer live) - it
-                    // can never match a live shot by UUID on reload, so it is dead.
-                    // Keeping it with its stale id would let it collide (under
-                    // UNIQUE(section_id, shot_id, warning_code) + INSERT OR REPLACE)
-                    // with a live shot that a renumber moved onto that position, and
-                    // REPLACE could drop either row depending on insert order - i.e.
-                    // silently lose the live shot's still-valid ignore. Dropping dead
-                    // rows here also stops them accumulating across saves. NULL-uuid
-                    // (legacy, position-keyed) rows are kept and matched by position
-                    // (the load-time backfill upgrades the ones that map to a shot).
-                    rows.into_iter()
-                        .filter_map(|mut r| {
-                            match r.shot_uuid.as_deref() {
-                                Some(uuid) => {
-                                    // Look up by (section_id, uuid): a UUID-keyed row's
-                                    // section_id is its shot's section, so this targets the
-                                    // right shot even when another section shares the UUID.
-                                    let &(sec, shot) = live_positions.get(&(r.section_id, uuid))?;
-                                    r.section_id = sec;
-                                    r.shot_id = shot;
-                                    Some(r)
-                                }
-                                None => {
-                                    // Upgrade a position-keyed row to its shot's saved
-                                    // position + now-persisted UUID when its (section_id,
-                                    // shot_id) still maps to a live shot. A row that maps
-                                    // to NO live shot is DEAD (its shot was deleted) - DROP
-                                    // it: carrying it forward would let the load-time
-                                    // position backfill re-attach it to whatever shot now
-                                    // occupies that saved position, suppressing an
-                                    // unrelated shot's warning (issue #57 / Codex).
-                                    let &(uuid, (sec, shot)) =
-                                        live_by_id.get(&(r.section_id, r.shot_id))?;
-                                    r.shot_uuid = Some(uuid.to_string());
-                                    r.section_id = sec;
-                                    r.shot_id = shot;
-                                    Some(r)
-                                }
+                    })
+                    .collect();
+                // Remap each UUID-keyed row to its shot's live position; DROP a
+                // UUID-keyed row whose shot was deleted (UUID no longer live) - it
+                // can never match a live shot by UUID on reload, so it is dead.
+                // Keeping it with its stale id would let it collide (under
+                // UNIQUE(section_id, shot_id, warning_code) + INSERT OR REPLACE)
+                // with a live shot that a renumber moved onto that position, and
+                // REPLACE could drop either row depending on insert order - i.e.
+                // silently lose the live shot's still-valid ignore. Dropping dead
+                // rows here also stops them accumulating across saves. NULL-uuid
+                // (legacy, position-keyed) rows are kept and matched by position
+                // (the load-time backfill upgrades the ones that map to a shot).
+                rows.into_iter()
+                    .filter_map(|mut r| {
+                        match r.shot_uuid.as_deref() {
+                            Some(uuid) => {
+                                // Look up by (section_id, uuid): a UUID-keyed row's
+                                // section_id is its shot's section, so this targets the
+                                // right shot even when another section shares the UUID.
+                                let &(sec, shot) = live_positions.get(&(r.section_id, uuid))?;
+                                r.section_id = sec;
+                                r.shot_id = shot;
+                                Some(r)
                             }
-                        })
-                        // Then drop any (legacy) row whose section no longer exists so
-                        // the FK on section_id holds for every carried-over row.
-                        .filter(|r| section_ids.contains(&r.section_id))
-                        .collect()
-                }
-                Some(Err(e)) => {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "carry resolved warnings across save",
-                        "Failed to read resolved warnings; ignores may not be preserved on this save"
-                    );
-                    Vec::new()
-                }
-                None => Vec::new(),
+                            None => {
+                                // Upgrade a position-keyed row to its shot's saved
+                                // position + now-persisted UUID when its (section_id,
+                                // shot_id) still maps to a live shot. A row that maps
+                                // to NO live shot is DEAD (its shot was deleted) - DROP
+                                // it: carrying it forward would let the load-time
+                                // position backfill re-attach it to whatever shot now
+                                // occupies that saved position, suppressing an
+                                // unrelated shot's warning (issue #57 / Codex).
+                                let &(uuid, (sec, shot)) =
+                                    live_by_id.get(&(r.section_id, r.shot_id))?;
+                                r.shot_uuid = Some(uuid.to_string());
+                                r.section_id = sec;
+                                r.shot_id = shot;
+                                Some(r)
+                            }
+                        }
+                    })
+                    // Then drop any (legacy) row whose section no longer exists so
+                    // the FK on section_id holds for every carried-over row.
+                    .filter(|r| section_ids.contains(&r.section_id))
+                    .collect()
+            }
+            // [#517] REFUSE the save. This snapshot is not a nicety the save
+            // can do without: the pipeline builds a FRESH `.stalx.tmp` and
+            // renames it over the destination, so the file's ignore list is
+            // rebuilt from exactly these rows. Continuing with `Vec::new()`
+            // wrote a file with zero ignores and destroyed the old one in the
+            // same stroke - every "Ignore" the user ever recorded, gone, on a
+            // save reported as successful.
+            //
+            // Refusing loses nothing: no temp file exists yet, the destination
+            // is untouched, and the rows stay in the file that still holds
+            // them. It is also the only channel that reaches the user - a
+            // `CommandResult.warnings` entry on a SUCCESSFUL save is read by
+            // nothing on the frontend (`projectStore.saveProject` inspects the
+            // list only for `DATABASE_NOT_REOPENED`), whereas a failure is
+            // routed to the error dialog / autosave banner by
+            // `surfaceSaveFailure`.
+            //
+            // The verbatim read above already absorbs every legacy SHAPE, and
+            // coerces every hostile VALUE, so what remains here is STRUCTURAL:
+            // a missing key column, an unreadable `sqlite_master`, a step error
+            // from a corrupt page. A single nonsense row must never land here -
+            // that would make one poisoned cell in a file the user merely opened
+            // into a project that can never be saved again. The project's survey
+            // data is exportable meanwhile, so the user is not walled in.
+            //
+            // The message carries `IGNORES_UNREADABLE` because an unmarked
+            // failure is routed to Review & Repair whenever the integrity check
+            // is also unhappy, and Review & Repair cannot fix this - see
+            // `saveErrors.ts` / `surfaceSaveFailure`. The quoted cause is clamped:
+            // SQLite error text embeds the attacker's own identifiers.
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    purpose = "carry resolved warnings across save",
+                    "Refused to save: the resolved-warnings table could not be read, and the \
+                     save would rebuild the file without the user's ignores"
+                );
+                return CommandResult::failure(format!(
+                    "{}: Can't save: this project's list of ignored warnings could not be read \
+                     ({}). Saving would rewrite the file without them, so nothing was written - \
+                     the file on disk is unchanged.",
+                    crate::core::loading::IGNORES_UNREADABLE_CODE,
+                    crate::core::loading::clamp_quoted_error(&e.to_string()),
+                ));
             }
         };
 

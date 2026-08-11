@@ -148,6 +148,34 @@ pub const PATH_NOT_FOUND_CODE: &str = "FS_PATH_NOT_FOUND";
 /// that used to be answered with macOS Privacy & Security steps (#429).
 pub const PATH_TOO_LONG_CODE: &str = "FS_PATH_TOO_LONG";
 
+/// Prefix stamped onto a save `CommandResult` error when the project's ignore
+/// list could not be read, so the save was refused rather than rebuilding the
+/// file without it (#517).
+///
+/// It needs a marker of its own because the frontend's failure router
+/// (`surfaceSaveFailure`) sends any UNMARKED failure to Review & Repair
+/// whenever `integritySaveBlocked` is set - and Review & Repair cannot fix a
+/// broken `resolved_warnings` table, so on a project with both problems this
+/// refusal would never reach a surface at all.
+pub const IGNORES_UNREADABLE_CODE: &str = "IGNORES_UNREADABLE";
+
+/// How much of an underlying error may be quoted into a user-facing message.
+///
+/// SQLite error text embeds the offending SQL and identifiers, which on a file
+/// of unknown provenance is attacker-chosen and unbounded - it must not be
+/// pasted whole into a dialog, a log line or a telemetry field.
+pub const MAX_QUOTED_ERROR_CHARS: usize = 300;
+
+/// [`MAX_QUOTED_ERROR_CHARS`] worth of `detail`, on a char boundary, with an
+/// ellipsis when something was cut.
+pub fn clamp_quoted_error(detail: &str) -> String {
+    let mut clamped: String = detail.chars().take(MAX_QUOTED_ERROR_CHARS).collect();
+    if detail.chars().nth(MAX_QUOTED_ERROR_CHARS).is_some() {
+        clamped.push_str("...");
+    }
+    clamped
+}
+
 /// Windows' `MAX_PATH`: the character budget a path gets INCLUDING its
 /// terminating NUL, so 259 usable characters.
 const LEGACY_PATH_LIMIT: usize = 260;

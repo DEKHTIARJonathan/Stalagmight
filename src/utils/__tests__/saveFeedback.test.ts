@@ -7,6 +7,7 @@ vi.mock('../ipc', async (importOriginal) => ({
 
 import {
   autosaveFailureMessage,
+  shouldShowAutosaveBanner,
   surfaceSaveFailure,
   surfaceImportFailure,
   completeImportToSingleView,
@@ -20,7 +21,12 @@ import {
 import { importReceiptSummaryParts } from '../importReceipt';
 import { invokeIpc } from '../ipc';
 import i18n from '../../i18n';
-import { FS_PATH_NOT_FOUND, FS_PATH_TOO_LONG, FS_PERMISSION_DENIED } from '../saveErrors';
+import {
+  FS_PATH_NOT_FOUND,
+  FS_PATH_TOO_LONG,
+  FS_PERMISSION_DENIED,
+  IGNORES_UNREADABLE,
+} from '../saveErrors';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { ValidationWarning } from '../../types/ipc/ValidationWarning';
@@ -78,6 +84,29 @@ describe('surfaceSaveFailure', () => {
     expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
   });
 
+  // [#517] The refusal when the ignore list cannot be read names its own cause
+  // and has no repair in Review & Repair. `saveProject` runs
+  // `checkProjectIntegrity()` on EVERY failure, so on a project that also has
+  // cross-reference problems the integrity route would swallow this refusal and
+  // it would render on no surface at all.
+  it('shows the unreadable-ignore-list refusal even when the project is save-blocked', () => {
+    useProjectStore.setState({ integritySaveBlocked: true });
+    const openDialog = vi.fn();
+
+    surfaceSaveFailure(
+      `${IGNORES_UNREADABLE}: Can't save: this project's list of ignored warnings could not be read (the resolved_warnings table has no warning_code column). Saving would rewrite the file without them, so nothing was written - the file on disk is unchanged.`,
+      openDialog
+    );
+
+    expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
+    const [dialog, data] = openDialog.mock.calls[0] as [string, { message: string }];
+    expect(dialog).toBe('error');
+    // The marker is for routing; it must never reach the user.
+    expect(data.message).not.toContain(IGNORES_UNREADABLE);
+    expect(data.message).toContain('list of ignored warnings could not be read');
+    expect(data.message).toContain('the file on disk is unchanged');
+  });
+
   it('does nothing when there is no error and the project is not save-blocked', () => {
     const openDialog = vi.fn();
 
@@ -124,6 +153,53 @@ describe('surfaceSaveFailure', () => {
   });
 });
 
+// [#517] The banner has its own render gate in App.tsx, independent of
+// surfaceSaveFailure's routing: it hides whenever saving is integrity-blocked.
+// A refusal Review & Repair cannot fix would be stored and never rendered - the
+// user would see only "repair your cross-references" while every save is
+// refused for an unrelated reason.
+describe('shouldShowAutosaveBanner (#517)', () => {
+  const base = {
+    autosaveFailure: 'Autosave failed',
+    autosaveFailureKind: 'other' as const,
+    integritySaveBlocked: false,
+    integrityIssueCount: 0,
+  };
+
+  it('yields to the integrity banner for an ordinary failure', () => {
+    expect(
+      shouldShowAutosaveBanner({ ...base, integritySaveBlocked: true, integrityIssueCount: 2 })
+    ).toBe(false);
+  });
+
+  it('shows an unreadable-ignore-list refusal even behind the integrity banner', () => {
+    expect(
+      shouldShowAutosaveBanner({
+        ...base,
+        autosaveFailure: "Can't save: this project's list of ignored warnings could not be read (x).",
+        autosaveFailureKind: 'ignores-unreadable',
+        integritySaveBlocked: true,
+        integrityIssueCount: 2,
+      })
+    ).toBe(true);
+  });
+
+  it('shows nothing when there is no autosave failure, whatever the kind', () => {
+    expect(
+      shouldShowAutosaveBanner({
+        ...base,
+        autosaveFailure: null,
+        autosaveFailureKind: 'ignores-unreadable',
+      })
+    ).toBe(false);
+  });
+
+  it('shows an ordinary failure when the project is not integrity-blocked', () => {
+    expect(shouldShowAutosaveBanner(base)).toBe(true);
+    expect(shouldShowAutosaveBanner({ ...base, integrityIssueCount: 3 })).toBe(true);
+  });
+});
+
 describe('autosaveFailureMessage (#429)', () => {
   it('gives each destination failure its own banner line, never the raw marker', () => {
     const gone = autosaveFailureMessage(`${FS_PATH_NOT_FOUND}: Cannot save to Z:\\cave.stalx`);
@@ -135,6 +211,17 @@ describe('autosaveFailureMessage (#429)', () => {
       expect(line).not.toContain('FS_');
     }
     expect(new Set([gone, tooLong, denied]).size).toBe(3);
+  });
+
+  // [#517] The banner renders this string, so the routing marker has to come
+  // off there too - autosave is where this refusal is most likely to be seen.
+  it('strips the unreadable-ignore-list marker instead of rendering it', () => {
+    const line = autosaveFailureMessage(
+      `${IGNORES_UNREADABLE}: Can't save: this project's list of ignored warnings could not be read (x).`
+    );
+
+    expect(line).not.toContain(IGNORES_UNREADABLE);
+    expect(line).toContain('list of ignored warnings could not be read');
   });
 
   it('relays an unmarked failure as the backend wrote it', () => {

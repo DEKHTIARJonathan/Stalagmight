@@ -72,6 +72,17 @@ mod import_pipeline_tests;
 )]
 mod issue_485_tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    // The read-only fixture says on stderr when the OS declined to make it
+    // read-only - root ignores mode bits, and CI's check job runs as root - so
+    // a pass there is not mistaken for a pass of the guard (the #485 pattern).
+    clippy::print_stderr,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod issue_517_tests;
+#[cfg(test)]
 mod metamorphic_undo_tests;
 #[cfg(test)]
 mod open_undo_bugs_tests;

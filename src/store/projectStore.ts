@@ -4,7 +4,7 @@ import { invokeIpc } from '../utils/ipc';
 import { trackCommand, setSource, peekProjectActionSource, clearProjectActionSource } from '../utils/telemetry';
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
-import { isPermissionError } from '../utils/saveErrors';
+import { classifySaveError, isPermissionError, type SaveErrorKind } from '../utils/saveErrors';
 import { withThemeDepthRamp } from '../utils/exportOptions';
 import {
   isEditDisabledError,
@@ -257,6 +257,13 @@ export interface ProjectStore extends ProjectConfigActions {
    * successful save, project load/close, or an explicit dismiss.
    */
   autosaveFailure: string | null;
+  /**
+   * What KIND of failure `autosaveFailure` describes (#517). The message is
+   * already user-ready, so this exists only for routing: the banner yields to
+   * the integrity banner for an ordinary failure, and must NOT yield for one
+   * Review & Repair cannot fix. Kept beside the message and cleared with it.
+   */
+  autosaveFailureKind: SaveErrorKind | null;
   clearAutosaveFailure: () => void;
   canUndo: boolean;
   canRedo: boolean;
@@ -615,6 +622,7 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
     frozenShots: [],
     isDirty: false,
     autosaveFailure: null,
+    autosaveFailureKind: null,
     integrityIssues: [],
     integrityDismissed: false,
     integritySaveBlocked: false,
@@ -876,6 +884,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   config: null,
   loading: { ...initialLoadingState },
   autosaveFailure: null,
+  autosaveFailureKind: null,
   canUndo: false,
   canRedo: false,
   isDirty: false,
@@ -900,6 +909,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         lastEventTime: Date.now(),
       },
       autosaveFailure: null, // A new project's autosave state starts clean
+      autosaveFailureKind: null,
     });
     return newClientOpId;
   },
@@ -1399,7 +1409,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // the handle and flags DATABASE_NOT_REOPENED). In that case keep
       // databaseOpen=false so DB-backed actions stay disabled (issue #57 / Codex).
       const dbNotReopened = result.warnings?.some((w) => w.code === 'DATABASE_NOT_REOPENED') ?? false;
-      set({ isDirty: false, databaseOpen: !dbNotReopened, autosaveFailure: null });
+      set({
+        isDirty: false,
+        databaseOpen: !dbNotReopened,
+        autosaveFailure: null,
+        autosaveFailureKind: null,
+      });
       // If the save healed the project in memory (re-minted duplicate UUIDs,
       // dropped orphan section offsets, sanitized non-finite geometry), the
       // frontend's shots/stations are now stale vs the saved file - refresh so the
@@ -1429,7 +1444,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // changes are not on disk on a clean project is a claim the user cannot
       // clear by saving (#429).
       if (isAutosave && get().isDirty) {
-        set({ autosaveFailure: autosaveFailureMessage(result.error) });
+        set({
+          autosaveFailure: autosaveFailureMessage(result.error),
+          autosaveFailureKind: classifySaveError(result.error),
+        });
       }
       // A filesystem permission denial (e.g. macOS forgot folder access after
       // an update) needs actionable guidance, not a raw error. Skip on autosave
@@ -1455,7 +1473,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   markDirty: () => set({ isDirty: true }),
 
-  clearAutosaveFailure: () => set({ autosaveFailure: null }),
+  clearAutosaveFailure: () => set({ autosaveFailure: null, autosaveFailureKind: null }),
 
   saveAfterImport: async (): Promise<boolean> => {
     // Import into an existing project: just mark dirty so we don't silently

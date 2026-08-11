@@ -196,6 +196,11 @@ mod undo;
 mod warnings;
 mod write;
 
+/// How many `resolved_warnings` rows a carry-over will examine (#517). Exported
+/// so a caller's test can size a fixture against the real ceiling instead of
+/// hard-coding a copy of it.
+pub use warnings::MAX_CARRIED_RESOLVED_WARNINGS;
+
 /// A stringified page of rows from a raw sqlite table.
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../bindings/")]
