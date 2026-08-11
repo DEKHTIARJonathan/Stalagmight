@@ -374,10 +374,9 @@ fn is_station_shot(shot: &TmlShot) -> bool {
 /// and `Shot` carries none.
 ///
 /// This is the SAME rule `join_contiguous_chains` applies from the other side
-/// ("only chains that agree on all three merge"), so the two cannot fight: the
-/// join runs after this and refuses to sew a cut back up. It can still merge
-/// the tail of a cut run into a same-trip chain that continues it under another
-/// name, which is why the cut runs FIRST.
+/// ("only chains that agree on all three merge"), so the two cannot fight over
+/// a seam. It runs AFTER the join all the same: see the call site for what
+/// offering a cut end to the join costs.
 ///
 /// **Adjacency is the whole rule.** A trip change across a non-station shot is
 /// not cut at all: there is no seam there the import could resolve (see
