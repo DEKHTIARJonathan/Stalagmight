@@ -5096,7 +5096,10 @@ mod tests {
                 .unwrap()
         };
         let north = start_of("North");
-        assert!((north.latitude - 20.25).abs() < f64::EPSILON && (north.longitude - -87.5).abs() < f64::EPSILON);
+        assert!(
+            (north.latitude - 20.25).abs() < f64::EPSILON
+                && (north.longitude - -87.5).abs() < f64::EPSILON
+        );
         let south = start_of("South");
         assert!(
             (south.latitude - 20.31).abs() < f64::EPSILON
@@ -5180,7 +5183,9 @@ mod tests {
         // The split exists: a reversed pre-datum leg means the section name shows
         // up in both its forms, and every shot still chains (no orphan roots).
         assert!(
-            shots.iter().any(|s| s.section == "Gallery (pre-zero-datum)"),
+            shots
+                .iter()
+                .any(|s| s.section == "Gallery (pre-zero-datum)"),
             "mid-section datum must split the entrance so the START sits on it"
         );
         assert!(

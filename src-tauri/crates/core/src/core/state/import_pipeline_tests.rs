@@ -297,9 +297,7 @@ fn end_to_end_import_respects_datum_invariants() {
 fn zero_datums_are_stable_across_export_import_cycles() {
     use crate::core::state::{AppState, VirtualShotMode};
     use crate::core::Command;
-    use crate::models::{
-        GpsCoordinates, Project, SectionData, ShotData, StationRef, ZeroDatum,
-    };
+    use crate::models::{GpsCoordinates, Project, SectionData, ShotData, StationRef, ZeroDatum};
 
     fn two_entrance_project(datums: &[(u32, f64, f64)]) -> Project {
         let mut project = Project::new("Cycle".to_string(), None);
