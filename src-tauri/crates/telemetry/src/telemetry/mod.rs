@@ -197,9 +197,17 @@ impl TelemetryCollector {
         };
 
         for payload in &payloads {
-            if let Err(e) = send_payload(payload) {
-                tracing::debug!(error = %e, "Telemetry flush failed, buffering to disk");
-                buffer_to_disk(payload);
+            match send_payload(payload) {
+                Ok(()) => {}
+                Err(e) if e.retryable => {
+                    tracing::debug!(error = %e, "telemetry flush failed, buffering for retry");
+                    buffer_to_disk(payload);
+                }
+                // A permanent rejection will never be accepted; don't buffer it
+                // only for `send_buffered` to drop it on the next tick.
+                Err(e) => {
+                    tracing::debug!(error = %e, "telemetry payload rejected, dropping");
+                }
             }
         }
     }
@@ -214,6 +222,9 @@ impl TelemetryCollector {
         let Some(buffer_dir) = telemetry_buffer_dir() else {
             return;
         };
+        if buffer_dir_is_symlink(&buffer_dir) {
+            return;
+        }
 
         let entries = match fs::read_dir(&buffer_dir) {
             Ok(entries) => entries,
@@ -238,17 +249,27 @@ impl TelemetryCollector {
                 continue;
             };
 
-            // Stop at the first send failure: one failed POST means the
-            // endpoint is unreachable and the rest of the buffer will time out
-            // too. This bounds the retry to a single `HTTP_TIMEOUT` - load
-            // bearing because `send_buffered` runs synchronously on the Tauri
-            // setup thread (`lib.rs`), where an unbounded drain of a full
-            // buffer would stall app startup by up to cap x timeout. Moving
-            // that call onto the flush thread is the fuller fix (#520 follow-up).
-            if send_payload(&payload).is_err() {
-                break;
+            match send_payload(&payload) {
+                Ok(()) => {
+                    let _ = fs::remove_file(&path);
+                }
+                // Stop at the first RETRYABLE failure: the endpoint is
+                // unreachable and the rest of the buffer will time out too, so
+                // draining on bounds the retry to a single `HTTP_TIMEOUT` -
+                // load bearing because `send_buffered` runs synchronously on
+                // the Tauri setup thread (`lib.rs`), where an unbounded drain
+                // of a full buffer would stall app startup by up to
+                // cap x timeout. (Moving that call onto the flush thread is the
+                // fuller fix, #520 follow-up.)
+                Err(e) if e.retryable => break,
+                // A permanently rejected payload fails fast, not on a timeout,
+                // so it does NOT contribute to the stall - and breaking on it
+                // would wedge every later buffered file behind one file that
+                // can never leave. Drop it and drain the rest.
+                Err(_) => {
+                    let _ = fs::remove_file(&path);
+                }
             }
-            let _ = fs::remove_file(&path);
         }
     }
 }
@@ -280,12 +301,18 @@ impl TelemetryCollector {
 
 /// Serialize the payload as JSON, gzip it, and POST to the telemetry endpoint.
 #[cfg(feature = "telemetry")]
-fn send_payload(payload: &TelemetryPayload) -> Result<(), String> {
-    let json = serde_json::to_vec(payload).map_err(|e| e.to_string())?;
+fn send_payload(payload: &TelemetryPayload) -> Result<(), SendError> {
+    // A payload that cannot be serialized or gzipped is broken, not transient -
+    // it will never encode, so drop it rather than retry.
+    let encode_err = |e: &dyn std::fmt::Display| SendError {
+        retryable: false,
+        msg: e.to_string(),
+    };
+    let json = serde_json::to_vec(payload).map_err(|e| encode_err(&e))?;
 
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    encoder.write_all(&json).map_err(|e| e.to_string())?;
-    let body = encoder.finish().map_err(|e| e.to_string())?;
+    encoder.write_all(&json).map_err(|e| encode_err(&e))?;
+    let body = encoder.finish().map_err(|e| encode_err(&e))?;
 
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(HTTP_TIMEOUT))
@@ -304,7 +331,42 @@ fn send_payload(payload: &TelemetryPayload) -> Result<(), String> {
 
     match response {
         Ok(_) => Ok(()),
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(classify_send_error(&e)),
+    }
+}
+
+/// A failed send, split by whether the endpoint might accept the payload later.
+#[cfg(feature = "telemetry")]
+struct SendError {
+    /// Transport failure, timeout, 5xx, or 429 - a later attempt may succeed,
+    /// so the buffered copy is worth keeping. A permanent HTTP rejection (any
+    /// other 4xx) is NOT retryable: the same bytes will fail identically
+    /// forever, so retrying only wedges the drain behind a payload that can
+    /// never leave.
+    retryable: bool,
+    msg: String,
+}
+
+#[cfg(feature = "telemetry")]
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.msg)
+    }
+}
+
+#[cfg(feature = "telemetry")]
+fn classify_send_error(e: &ureq::Error) -> SendError {
+    let retryable = match e {
+        // 408 request-timeout and 429 rate-limit are transient; 5xx is the
+        // server's problem, not the payload's. Any other 4xx is a permanent
+        // rejection of these exact bytes.
+        ureq::Error::StatusCode(code) => *code == 408 || *code == 429 || *code >= 500,
+        // Transport, timeout, protocol, io: the network, not the payload.
+        _ => true,
+    };
+    SendError {
+        retryable,
+        msg: e.to_string(),
     }
 }
 
@@ -352,6 +414,14 @@ fn buffer_payload_in_dir(dir: &Path, payload: &TelemetryPayload) {
 /// under a fallback name but skip the prune, whose key we cannot trust.
 #[cfg(feature = "telemetry")]
 fn buffer_payload_at(dir: &Path, millis: Option<u128>, payload: &TelemetryPayload) {
+    // Refuse a symlinked buffer dir: `create_new` guards each FILE, but the
+    // prune below would follow a symlinked DIR and delete `.json` files in
+    // whatever it points at - unrelated user data outside our namespace. The
+    // read path (`send_buffered`) refuses it too (#520 review).
+    if buffer_dir_is_symlink(dir) {
+        return;
+    }
+
     // The buffer holds only this user's own usage data, so the directory is
     // owner-only where the platform can express it. Create any missing parents
     // first, then the leaf non-recursively with 0700, so the mode lands on the
@@ -530,6 +600,17 @@ fn prune_buffer_dir(dir: &Path) {
     for path in files.iter().take(excess) {
         let _ = fs::remove_file(path);
     }
+}
+
+/// True when `dir` exists and is itself a symlink rather than a real
+/// directory. Both buffer paths refuse such a dir: the writer would create
+/// files in, and the prune would DELETE files from, whatever it points at -
+/// collateral damage to unrelated user data. `create_new` protects individual
+/// files but not the directory node, so this is the guard for that node
+/// (#520 review). A missing dir or a real dir returns false.
+#[cfg(feature = "telemetry")]
+fn buffer_dir_is_symlink(dir: &Path) -> bool {
+    fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_symlink())
 }
 
 /// Directory name under the local data dir holding payloads buffered for retry.
@@ -1088,6 +1169,48 @@ mod tests {
             vec![temp.path().join("3-0.json")],
             "only the completed real payload is admitted"
         );
+    }
+
+    /// A permanent HTTP rejection (a 4xx that is not 408/429) must classify as
+    /// non-retryable, so `send_buffered` drops that payload and drains the
+    /// rest instead of wedging the whole buffer behind it. Transient statuses
+    /// (5xx, 429, 408) and transport errors stay retryable.
+    #[test]
+    fn send_errors_classify_retryable_vs_permanent() {
+        assert!(!classify_send_error(&ureq::Error::StatusCode(400)).retryable);
+        assert!(!classify_send_error(&ureq::Error::StatusCode(413)).retryable);
+        assert!(classify_send_error(&ureq::Error::StatusCode(408)).retryable);
+        assert!(classify_send_error(&ureq::Error::StatusCode(429)).retryable);
+        assert!(classify_send_error(&ureq::Error::StatusCode(500)).retryable);
+        assert!(classify_send_error(&ureq::Error::StatusCode(503)).retryable);
+    }
+
+    /// A symlinked buffer directory is refused by the write path: `create_new`
+    /// guards each file, but a prune through a symlinked dir would delete
+    /// `.json` files in the target - unrelated user data. The target's file
+    /// must survive and nothing may be written into it (#520 review).
+    #[test]
+    #[cfg(unix)]
+    fn a_symlinked_buffer_dir_is_left_alone() {
+        let temp = TempDir::new().expect("temp dir");
+        let target = temp.path().join("real-target");
+        fs::create_dir(&target).expect("target dir");
+        let victim = target.join("9-0.json");
+        fs::write(&victim, "{\"user\":\"data\"}").expect("victim payload");
+
+        let link = temp.path().join("telemetry-buffer");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink the buffer dir");
+
+        buffer_payload_at(&link, Some(1), &test_payload());
+
+        assert_eq!(
+            fs::read_to_string(&victim).expect("victim survives"),
+            "{\"user\":\"data\"}",
+            "the write path must not touch a symlinked buffer dir's target"
+        );
+        // No payload of ours was written into the target either.
+        let count = fs::read_dir(&target).expect("read target").count();
+        assert_eq!(count, 1, "only the pre-existing file remains");
     }
 
     /// The read-back size guard is on the OPEN file (fstat), so an oversized
