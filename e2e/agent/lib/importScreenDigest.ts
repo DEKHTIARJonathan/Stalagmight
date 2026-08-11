@@ -149,11 +149,22 @@ export interface ImportScreenDigest {
   /**
    * `project.file_path`, or null with no project open (or one never saved).
    *
-   * Read HERE rather than in its own round trip, so it describes the same
-   * instant as `sections`/`shots`. F3 compares the receipt against the project
-   * as it was WHEN THE RECEIPT WAS MADE, and its project-swap skip has to be
-   * asked about that same moment - a swap later in the flow is not a reason to
-   * stop believing a receipt that was already on screen.
+   * THE INVARIANT: every input F3 compares - `sections`, `shots` and this - is
+   * read from ONE `get_project_state` payload. Anything added to that set has to
+   * come from the same payload, and this field has now been the counterexample
+   * twice, which is why it is written down here rather than left to be inferred.
+   *
+   * First it was fetched in a round trip of its own, so a bound's path could
+   * describe a different instant than the numbers beside it. Then it was read
+   * synchronously off `projectStore` at the top of this function, which is
+   * WORSE: that read happens before the awaited `get_project_state` below, so an
+   * import completing (or an as-new-project swap landing) inside the await pairs
+   * the OLD path with the NEW counts. F3's swap skip would then suppress a valid
+   * comparison, or worse, let one through against the wrong project.
+   *
+   * F3 measures the receipt against the project as it stood WHEN THE RECEIPT WAS
+   * MADE, so its inputs have to describe one moment or the subtraction is
+   * between things that are not each other's pair.
    */
   projectFile: string | null;
   /**
@@ -275,8 +286,6 @@ export async function computeImportScreenDigest(
   const dialogData = (ui.dialogData as Record<string, unknown>) || {};
   const placement = ui.placementMode !== null && ui.placementMode !== undefined;
   const hasProject = !!projectState.project;
-  const project = projectState.project as { file_path?: string | null } | null | undefined;
-  const projectFile = project && project.file_path ? project.file_path : null;
 
   // App.tsx's `isImportInProgress`, clause for clause. It is a component-local
   // useMemo with no store field behind it, so there is nothing to read instead.
@@ -518,12 +527,13 @@ export async function computeImportScreenDigest(
   let undo = -1;
   let sections = -1;
   let shots = -1;
+  let projectFile = null;
   if (hasProject) {
     const core = (window as unknown as { __TAURI__?: { core?: { invoke?: (c: string) => Promise<unknown> } } }).__TAURI__
       ?.core;
     if (!core || typeof core.invoke !== 'function') throw new Error('window.__TAURI__.core.invoke unavailable');
     const state = (await core.invoke('get_project_state')) as
-      | { project?: { sections?: { shots?: unknown[] }[] } }
+      | { project?: { sections?: { shots?: unknown[] }[]; file_path?: string | null } }
       | null;
     if (state) {
       const oracle = (globalThis as unknown as { __FUZZ_ORACLE__?: { invariants?: (s: unknown) => string[] } })
@@ -532,6 +542,9 @@ export async function computeImportScreenDigest(
         throw new Error('the fuzz oracle is not injected; inject it before the screen digest');
       }
       inv = oracle.invariants(state);
+      // ONE SNAPSHOT. `file_path` comes off the same `state.project` the counts
+      // are computed from, not off the store - see the field's own doc.
+      projectFile = state.project && state.project.file_path ? state.project.file_path : null;
       const list = state.project && Array.isArray(state.project.sections) ? state.project.sections : [];
       sections = list.length;
       shots = 0;
