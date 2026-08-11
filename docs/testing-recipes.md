@@ -591,6 +591,10 @@ TELEMETRY_ENDPOINT=http://localhost/dummy \
 
 cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-parsers        # one crate
 cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture   # app crate, show println!
+
+# Vendored compass_data is [workspace]-excluded, so --workspace never tests it.
+# CI gates it as its own check-job step (#494); no telemetry feature or env var.
+cargo test --manifest-path src-tauri/vendor/compass_data/Cargo.toml
 ```
 
 **Trap: a plain `cargo test` can pass while CI fails, twice over.** Without

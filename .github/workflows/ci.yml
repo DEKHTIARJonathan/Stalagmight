@@ -90,7 +90,11 @@ jobs:
         if: runner.environment == 'github-hosted'
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          workspaces: src-tauri
+          # vendor/compass_data is [workspace]-excluded, so it builds into its own
+          # target dir; without this line its deps recompile cold every hosted run.
+          workspaces: |
+            src-tauri
+            src-tauri/vendor/compass_data
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -183,7 +187,8 @@ jobs:
       # compiles it (as a path dep) but never runs its tests (#494). Test it
       # directly. No telemetry feature or TELEMETRY_ENDPOINT - the crate defines
       # neither. fmt/clippy stay off for it deliberately (docs/linting.md).
-      - run: cargo test --manifest-path src-tauri/vendor/compass_data/Cargo.toml
+      - name: Vendored compass_data tests
+        run: cargo test --manifest-path src-tauri/vendor/compass_data/Cargo.toml
       # Clippy deny-level lint gate (issue #147). The crate has a strict
       # [lints.clippy] policy (deny unwrap/expect/panic/print/dbg/...) authored in
       # 17dc4feb; this enforces it so it can't silently rot again. Pedantic lints

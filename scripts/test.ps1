@@ -13,3 +13,10 @@ $env:STALAGMIGHT_TEST_MANIFEST = '1'
 if (-not $env:TELEMETRY_ENDPOINT) { $env:TELEMETRY_ENDPOINT = 'http://localhost/dummy' }
 
 cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry @args
+
+# Vendored compass_data is [workspace]-excluded, so the run above never tests it
+# (CI gates it separately, #494). Skipped when a filter is given - extra args
+# target the workspace run.
+if (-not $args) {
+    cargo test --manifest-path src-tauri/vendor/compass_data/Cargo.toml
+}
