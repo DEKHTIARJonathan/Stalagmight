@@ -187,6 +187,13 @@ spent:
 - **`core/state/project_merge.rs` `merge_projects`** - refuses before appending
   anything when the sources hold more sections between them than one project can
   address; no output file is written.
+- **`core/state/command_delete_split.rs`** `execute_delete_shot_and_split` and
+  `execute_delete_shot_range_split` - a delete that splits a section mints
+  section B through `Project::add_section` directly, bypassing `create_section`,
+  so both carry the same refusal with their other pre-checks. It has to sit
+  there and not at the mint: by then section A has been truncated (and, on the
+  range path, connectivity rewritten), so the shots section B is supposed to
+  carry are already gone.
 
 What each encode site does past the boundary, for the cases that come off disk
 rather than through those doors:

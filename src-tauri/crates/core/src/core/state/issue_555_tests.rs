@@ -2,17 +2,21 @@
 //! room for.
 //!
 //! A shot id is `section_id * FEATURE_ID_STRIDE + position` in `u32`, so the
-//! last usable section id is [`MAX_SECTION_ID`] (42_948) and the last usable
-//! COUNT is [`MAX_SECTIONS_IN_ID_SPACE`] (42_949). `Section::new` computes
-//! `next_shot_id = id * FEATURE_ID_STRIDE` unchecked, so a section minted past
-//! the bound panics in debug and wraps in release, and a wrapped base ALIASES
-//! distinct shots onto one id.
+//! last section id that can hold a FULL section (`FEATURE_ID_STRIDE - 1` shots)
+//! is [`MAX_SECTION_ID`] (42_948) and the last usable COUNT is
+//! [`MAX_SECTIONS_IN_ID_SPACE`] (42_949). Id 42_949 runs out of ids part-way
+//! through filling (its unchecked `next_shot_id += 1` leaves `u32` at sequence
+//! 67_296) and id 42_950 overflows `Section::new`'s bare
+//! `id * FEATURE_ID_STRIDE` before it holds anything: panic in debug, wrap in
+//! release, and a wrapped base ALIASES distinct shots onto one id.
 //!
 //! Only the TML cut budget was bounded before this (`linearize::cut_budget`),
-//! which covers exactly one way of reaching the boundary. The three places that
+//! which covers exactly one way of reaching the boundary. The places that
 //! actually MINT ids are pinned here: `create_section` (the per-section door
 //! every command comes through), `execute_import_sections_inner` (the batch
-//! door every importer comes through), and `merge_projects`.
+//! door every importer comes through), `merge_projects`, and the two
+//! delete-and-split paths, which mint a section id without going through
+//! `create_section` at all.
 //!
 //! The setup is deliberately arithmetic rather than 42k real sections:
 //! `next_section_id` is the project's own record of how many ids are spent, so
@@ -191,6 +195,125 @@ fn an_import_that_exactly_fills_the_id_space_is_accepted() {
         project.sections.iter().map(|s| s.id).collect::<Vec<_>>(),
         vec![MAX_SECTION_ID],
         "the last id in the space is spent, exactly once"
+    );
+}
+
+/// A section of `shots` shots on a project that has spent EVERY section id
+/// (`next_section_id == MAX_SECTIONS_IN_ID_SPACE`, the state the import test
+/// above blesses as legal). The section itself is id 0; only the counter says
+/// the space is full.
+fn state_at_full_id_space_with_one_section(shots: usize) -> (AppState, Vec<u32>) {
+    let mut project = Project::new("Full".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("Original".to_string()),
+        color: "#4ecdc4".to_string(),
+        shots: (0..shots).map(|i| shot(5.0 + i as f64)).collect(),
+        ..Default::default()
+    });
+    let shot_ids: Vec<u32> = project.sections[0].shots.iter().map(|s| s.id).collect();
+    project.next_section_id = MAX_SECTIONS_IN_ID_SPACE as u32;
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+    (state, shot_ids)
+}
+
+fn assert_split_was_refused(state: &AppState, result: &CommandResult, shots: usize) {
+    assert!(
+        !result.success,
+        "a split with no id to mint must be refused"
+    );
+    let error = result.error.clone().unwrap_or_default();
+    assert!(
+        error.contains("split it into two")
+            && error.contains(&MAX_SECTIONS_IN_ID_SPACE.to_string()),
+        "the refusal must say what it could not do and name the limit, got: {error}"
+    );
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.sections.len(),
+        1,
+        "no section B may be minted by a refused split"
+    );
+    assert_eq!(
+        project.sections[0].shots.len(),
+        shots,
+        "and section A must not be truncated by it"
+    );
+    assert_eq!(
+        project.sections[0].name.as_deref(),
+        Some("Original"),
+        "nor renamed"
+    );
+    assert_eq!(
+        project.next_section_id, MAX_SECTIONS_IN_ID_SPACE as u32,
+        "and no id may be spent"
+    );
+}
+
+/// The single-shot split mints section B through `Project::add_section`
+/// directly, NOT through `create_section`, so it needs its own guard - and it
+/// truncates section A first, which is what makes a mid-split refusal
+/// unacceptable.
+#[test]
+fn a_delete_that_splits_a_section_is_refused_when_no_section_id_is_left() {
+    let (state, shot_ids) = state_at_full_id_space_with_one_section(5);
+    let section_id = state.get_project_state().unwrap().sections[0].id;
+
+    let result = state.execute_delete_shot_and_split(
+        section_id,
+        shot_ids[2],
+        "A".to_string(),
+        "B".to_string(),
+    );
+
+    assert_split_was_refused(&state, &result, 5);
+}
+
+/// Same door, the range flavour: it rewrites connectivity
+/// (`preserve_connections_for_removed_stations`) BEFORE it mints, so its guard
+/// sits earlier in the function than the single-shot one.
+#[test]
+fn a_range_delete_that_splits_a_section_is_refused_when_no_section_id_is_left() {
+    let (state, shot_ids) = state_at_full_id_space_with_one_section(5);
+    let section_id = state.get_project_state().unwrap().sections[0].id;
+
+    let result = state.execute_delete_shot_range_split(
+        section_id,
+        shot_ids[1],
+        shot_ids[2],
+        "A".to_string(),
+        "B".to_string(),
+    );
+
+    assert_split_was_refused(&state, &result, 5);
+}
+
+/// One id left is enough for a split, which mints exactly one: the guard is the
+/// same exact bound the other doors use, not a margin.
+#[test]
+fn a_split_with_the_last_section_id_left_still_succeeds() {
+    let mut project = Project::new("Last".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("Original".to_string()),
+        color: "#4ecdc4".to_string(),
+        shots: (0..5).map(|i| shot(5.0 + f64::from(i))).collect(),
+        ..Default::default()
+    });
+    let section_id = project.sections[0].id;
+    let split_at = project.sections[0].shots[2].id;
+    project.next_section_id = MAX_SECTION_ID;
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    let result =
+        state.execute_delete_shot_and_split(section_id, split_at, "A".to_string(), "B".to_string());
+
+    assert!(result.success, "split failed: {:?}", result.error);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 2, "section B must exist");
+    assert_eq!(
+        project.sections[1].id, MAX_SECTION_ID,
+        "and must carry the last encodable id"
     );
 }
 

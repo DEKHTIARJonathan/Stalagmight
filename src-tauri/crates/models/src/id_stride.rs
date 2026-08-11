@@ -9,13 +9,19 @@ pub const FEATURE_ID_STRIDE: u32 = 100_000;
 /// section `id` encodes as `id * 100_000 + 99_999`. The largest `id` that keeps
 /// THAT inside `u32::MAX` is `(u32::MAX - 99_999) / 100_000` = 42_948.
 ///
-/// Not 42_949: that id survives the bare `id * FEATURE_ID_STRIDE` multiply
-/// (4_294_900_000 <= `u32::MAX`) and would overflow the moment the section held
-/// a shot, so it is not usable. Past the bound an encode site either panics
-/// (debug) or saturates, and saturating ALIASES distinct shots onto one id,
-/// which silently moves the station cross-references anchored on them - hence
-/// the bound is enforced where section ids are MINTED (import, merge,
-/// create-section) rather than at each encode.
+/// Not 42_949: a section is entitled to its full `FEATURE_ID_STRIDE - 1` shots,
+/// and that id cannot hold them. Its base multiply fits (4_294_900_000 <=
+/// `u32::MAX`) and so do its first 67_296 shots, but sequence 67_296 leaves
+/// `u32` (4_294_900_000 + 67_295 IS `u32::MAX`), so the section's own
+/// `next_shot_id += 1` counter overflows part-way through filling it. Id 42_950
+/// is the first that cannot even be created: 4_295_000_000 overflows the bare
+/// multiply in `Section::new`, before a single shot exists.
+///
+/// Past the bound an encode site either panics (debug) or saturates, and
+/// saturating ALIASES distinct shots onto one id, which silently moves the
+/// station cross-references anchored on them - hence the bound is enforced
+/// where section ids are MINTED (create-section, batch import, project merge,
+/// the delete-and-split paths) rather than at each encode.
 pub const MAX_SECTION_ID: u32 = (u32::MAX - (FEATURE_ID_STRIDE - 1)) / FEATURE_ID_STRIDE;
 
 /// The same bound expressed as a COUNT of sections.
@@ -58,12 +64,12 @@ mod tests {
         let stride = u64::from(FEATURE_ID_STRIDE);
         let last = u64::from(MAX_SECTION_ID) * stride + (stride - 1);
         assert!(
-            last <= u64::from(u32::MAX),
+            u32::try_from(last).is_ok(),
             "the last shot of section {MAX_SECTION_ID} must fit u32, got {last}"
         );
         let next = (u64::from(MAX_SECTION_ID) + 1) * stride + (stride - 1);
         assert!(
-            next > u64::from(u32::MAX),
+            u32::try_from(next).is_err(),
             "section {} must not fit, got {next}",
             MAX_SECTION_ID + 1
         );

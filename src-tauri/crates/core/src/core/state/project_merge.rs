@@ -97,11 +97,13 @@ impl AppState {
         // The append loop below calls `Project::add_section` once per source
         // section, and `Section::new` computes `next_shot_id =
         // id * FEATURE_ID_STRIDE` unchecked, so a combined count past the
-        // encode would panic in debug and alias shot ids in release. The merged
-        // project is fresh (ids start at 0), but the sum is stated against its
-        // `next_section_id` all the same so the check keeps holding if it ever
-        // stops being fresh. Refused whole: a merge writes a NEW file, and half
-        // a merge is not a thing the user asked for.
+        // encode lands sections on ids whose shot encode leaves u32: a debug
+        // panic (outright at that multiply from id 42_950 on) and a wrap that
+        // aliases shot ids in release. The merged project is fresh (ids start
+        // at 0), but the sum is stated against its `next_section_id` all the
+        // same so the check keeps holding if it ever stops being fresh. Refused
+        // whole: a merge writes a NEW file, and half a merge is not a thing the
+        // user asked for.
         let incoming_sections: usize = source_projects.iter().map(|p| p.sections.len()).sum();
         let spent_count = merged_project.next_section_id as usize;
         if incoming_sections.saturating_add(spent_count) > MAX_SECTIONS_IN_ID_SPACE {

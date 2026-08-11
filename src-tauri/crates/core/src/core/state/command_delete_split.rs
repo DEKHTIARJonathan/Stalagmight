@@ -1,6 +1,27 @@
 use super::AppState;
 use crate::core::{Command, CommandResult};
-use crate::models::{Project, SectionData, SectionId, ShotData, ShotId, StationKey, StationRef};
+use crate::models::{
+    Project, SectionData, SectionId, ShotData, ShotId, StationKey, StationRef, FEATURE_ID_STRIDE,
+    MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
+};
+
+/// Both split paths turn one section into two, so both MINT a section id
+/// (#555) through the same `Project::add_section` door `create_section` guards,
+/// while going nowhere near `create_section` itself. Refused before either path
+/// mutates anything: a split that ran out of ids half-way would leave section A
+/// truncated with nowhere to put its tail.
+fn section_budget_refusal(project: &Project, section_id: SectionId) -> Option<CommandResult> {
+    if project.next_section_id <= MAX_SECTION_ID {
+        return None;
+    }
+    Some(CommandResult::failure(format!(
+        "Cannot split section {section_id}: the delete would split it into two \
+         sections, but the project has reached the maximum number of sections \
+         (limit = {MAX_SECTIONS_IN_ID_SPACE}); shot ids encode as \
+         section_id * {FEATURE_ID_STRIDE} + position in 32 bits, so section ids \
+         past {MAX_SECTION_ID} cannot hold shots"
+    )))
+}
 
 impl AppState {
     /// Execute a delete-shot-and-split-section operation as a single atomic undo/redo unit.
@@ -83,6 +104,14 @@ impl AppState {
                     "Cannot delete a frozen shot. This shot is part of an adjusted survey network."
                         .to_string(),
                 );
+            }
+
+            // Section-id budget (#555), with the other pre-checks: the split
+            // mints section B below, and the truncation of section A that
+            // precedes it has already destroyed the shots B is supposed to
+            // carry.
+            if let Some(refusal) = section_budget_refusal(project, section_id) {
+                return refusal;
             }
 
             // Get split data (safe after pre-checks above)
@@ -387,6 +416,13 @@ impl AppState {
                             .to_string(),
                     );
                 }
+            }
+
+            // Section-id budget (#555), before the connectivity rewrites below:
+            // this path mutates the project (preserve/cleanup) well before it
+            // mints section B, so a refusal has to happen here to stay free.
+            if let Some(refusal) = section_budget_refusal(project, section_id) {
+                return refusal;
             }
 
             // Interior stations dropped by the split (strictly between the kept
