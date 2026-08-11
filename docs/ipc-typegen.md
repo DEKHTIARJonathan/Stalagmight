@@ -66,6 +66,51 @@ so a `.ts` left behind after its Rust type is deleted leaves the worktree clean
 and passes. That orphan is inert (nothing imports it), but it does mean the tree
 can accumulate dead files - delete them by hand when you remove a type.
 
+## A field the wire can omit must be DECLARED omittable
+
+ts-rs 7 marks a field optional (`foo?: T`) in exactly one situation: the Rust
+type is `Option<T>`. It does it automatically for
+`#[serde(skip_serializing_if = "Option::is_none")]`, and `#[ts(optional)]` is
+*rejected* on anything else - `optional can only be used on an Option<T> type`
+(`ts-rs-macros/src/types/named.rs`).
+
+So `#[serde(skip_serializing_if = "Vec::is_empty")]` on a `Vec` field generates a
+**required** `Array<T>` while the wire omits the key. Nothing catches that: `tsc`
+believes the declaration, so every `payload.field.length` type-checks and throws
+at runtime, and the e2e IPC mock speaks the TS type, so the mocked tier cannot
+produce the omitted shape either. That combination crashed the zero-section
+import receipt (#411, diagnosed as #441).
+
+**The rule.** A serde-omitted field has to pick one, and the choice is about who
+pays for the bytes:
+
+| Cost of always sending it | Do this |
+|---|---|
+| Once per payload (a command result, a header) | **Drop `skip_serializing_if`.** The array is a few bytes and the already-generated required type becomes true - no consumer changes, no `?? []` that encodes nothing. |
+| Once per ELEMENT of a large collection | **Keep the skip, retype the field `Option<Vec<T>>`.** ts-rs then emits `foo?:` and `tsc` flags every unguarded read. |
+
+The two live examples, one of each:
+
+- `CommandResult::section_ids` (`crates/core/src/core/command.rs`) dropped the
+  skip. One `"section_ids":[]` per command result is unmeasurable, and absence
+  and empty stated the same fact.
+- `Station::closures_with` (`crates/models/src/station.rs`) kept it and became
+  `Option<Vec<ClosureRef>>`. That skip is paid per station on every
+  `get_project_state` refresh, against a payload already ~25 MB on the projects
+  `core::load_binary` exists for. Reads go through `Station::closures()` /
+  `closures_mut()`, which keep the "`None` when empty" invariant.
+
+**What guards it.** Not a lint - there is no repo-wide check that every exported
+type obeys the rule. It is pinned per field by two tests, each asserting BOTH
+halves (the key is on the wire iff the declaration lacks `?`):
+
+- `models::station::tests::closures_with_is_omitted_when_empty_and_declared_optional`
+- `core::command::tests::omitted_fields_are_exactly_the_ones_declared_optional`
+
+Add the same pair when you add a serde-omitted field. The Playwright IPC mock
+follows the same convention: an omitted field is **absent**, not present-and-empty
+(`e2e-playwright/mocks/tauri-ipc.ts`), so specs exercise the real shape.
+
 ## Automation Policy
 
 These IPC types are **always generated**, never written by hand:
@@ -90,8 +135,11 @@ These IPC types are **always generated**, never written by hand:
    `#[ts(rename_all = "...")]` so the TS output matches JSON.
 4. For non-JSON-friendly fields (e.g., `PathBuf`, `DateTime`), add
    field-level overrides like `#[ts(type = "string")]`.
-5. Add the type to the export list in `src-tauri/examples/gen_ipc_types.rs`.
-6. Re-run `pnpm gen:ipc-types` and commit the updated generated files.
+5. For any field carrying `skip_serializing_if`, apply the rule above - a
+   collection field must either lose the skip or become an `Option`, never a
+   skipped `Vec`.
+6. Add the type to the export list in `src-tauri/examples/gen_ipc_types.rs`.
+7. Re-run `pnpm gen:ipc-types` and commit the updated generated files.
 
 ## Notes
 
