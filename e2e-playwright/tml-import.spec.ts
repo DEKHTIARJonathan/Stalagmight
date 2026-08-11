@@ -95,6 +95,11 @@ test.describe('Ariane TML import journey', () => {
     await expect(page.getByTestId('tml-section-row-1')).toContainText('Side Passage');
     // The branch-split marker rides on the second section.
     await expect(page.getByTestId('tml-section-row-1')).toContainText('branch');
+    // A connected file must show NO stranded badge. This is the e2e mirror of
+    // the wire-id regression: the mock delivers i64 ids as JSON numbers exactly
+    // like production, so a bigint-typed lookup that misses every parent turns
+    // this badge on and this line red.
+    await expect(page.getByTestId('tml-section-reanchored-1')).toHaveCount(0);
     await expect(page.getByTestId('tml-closure-count')).toContainText('1 loop closure');
 
     await page.getByTestId('tml-import-confirm').click();
