@@ -30,7 +30,9 @@ mod linearize;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_helpers;
 
-use linearize::{join_contiguous_chains, linearize_section};
+use linearize::{
+    collapsed_trip_report, join_contiguous_chains, linearize_section, split_runs_at_trip_boundaries,
+};
 
 // ============================================================================
 // IPC-visible types
@@ -567,6 +569,69 @@ fn foreign_shot_uuid(shot_id: i64, raw: Option<&str>) -> Option<String> {
     Some(raw.to_owned())
 }
 
+/// How the two halves of Ariane's one people-field are rejoined. `" / "` is
+/// what the compound values in real files already use, so a file that arrives
+/// with `"nh / ds"` leaves this app unchanged, and one that arrives in the
+/// element form leaves it in the form Ariane's own users write.
+const EXPLORER_SURVEYOR_SEPARATOR: &str = " / ";
+
+/// Ariane's placeholder for a half nobody filled in. Dropped per HALF, so
+/// `<Explorer>unknown</Explorer><Surveyor>ds</Surveyor>` keeps `ds` instead of
+/// throwing the whole field away (#427).
+fn is_explorer_placeholder(value: &str) -> bool {
+    value.is_empty() || value == "None" || value == "unknown"
+}
+
+/// The text of `<tag>…</tag>` inside an already-unescaped field value.
+fn tagged_half<'a>(raw: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let rest = &raw[raw.find(&open)? + open.len()..];
+    // An unterminated half keeps everything after the open tag - the same
+    // recovery the previous single-half reader did.
+    Some(rest.split_once(format!("</{tag}>").as_str()).map_or(rest, |(text, _)| text))
+}
+
+/// Read Ariane's `Explorer`, which is ONE element holding TWO roles.
+///
+/// Two encodings occur: a plain compound string (`"nh / ds"` - the form every
+/// file in the #411 survey used) and an entity-escaped element pair
+/// (`"<Explorer>nh</Explorer><Surveyor>ds</Surveyor>"`). Both halves are kept:
+/// the surveyor half used to be dropped outright, and an `"unknown"` explorer
+/// half took the surveyor down with it (#427).
+///
+/// Splitting a compound value into PEOPLE is [#329], not this: the halves are
+/// rejoined into the single string `Section::surveyor` holds, which the TML
+/// export writes straight back into `Explorer`, so the round trip is stable and
+/// idempotent (a re-import sees the plain compound form and returns it
+/// unchanged). Identical halves collapse to one - "the same person did both" is
+/// not two names.
+///
+/// [#329]: https://github.com/Stalagmight/Stalagmight/issues/329
+fn parse_explorer_field(raw: &str) -> Option<String> {
+    let halves: Vec<&str> = if raw.contains("<Explorer>") || raw.contains("<Surveyor>") {
+        ["Explorer", "Surveyor"]
+            .iter()
+            .filter_map(|tag| tagged_half(raw, tag))
+            .collect()
+    } else {
+        vec![raw]
+    };
+
+    let mut kept: Vec<&str> = Vec::with_capacity(halves.len());
+    for half in halves {
+        let half = half.trim();
+        if !is_explorer_placeholder(half) && !kept.contains(&half) {
+            kept.push(half);
+        }
+    }
+
+    if kept.is_empty() {
+        None
+    } else {
+        Some(kept.join(EXPLORER_SURVEYOR_SEPARATOR))
+    }
+}
+
 /// Build a `RawShot` from parsed field map.
 fn build_raw_shot(
     fields: &HashMap<&str, String>,
@@ -608,22 +673,9 @@ fn build_raw_shot(
         .get("comment")
         .filter(|c| !c.is_empty() && *c != "None")
         .cloned();
-    // Explorer field may contain entity-escaped XML like
-    // "<Explorer>name</Explorer><Surveyor>...</Surveyor>".
-    // Extract just the explorer name if present.
-    let explorer = fields.get("explorer").and_then(|e| {
-        if e.is_empty() {
-            return None;
-        }
-        if let Some(rest) = e.strip_prefix("<Explorer>") {
-            rest.split("</Explorer>")
-                .next()
-                .filter(|s| !s.is_empty() && *s != "unknown")
-                .map(String::from)
-        } else {
-            Some(e.clone()).filter(|s| s != "None" && s != "unknown")
-        }
-    });
+    let explorer = fields
+        .get("explorer")
+        .and_then(|e| parse_explorer_field(e.as_str()));
 
     Ok(RawShot {
         id,
@@ -887,6 +939,17 @@ fn build_sections(mut raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosu
     for (section_name, group_shots) in &section_groups {
         let linearized = linearize_section(section_name, group_shots, &successors, &shot_by_id);
         sections.extend(linearized);
+    }
+
+    // Give each TRIP its own run before anything is sewn together: Ariane writes
+    // surveyor/date/colour on every shot row, a run carries its first shot's,
+    // and the rest used to be dropped without a word (#427). Cutting first also
+    // lets the join below absorb a cut tail into a same-trip chain that
+    // continues it - the reverse order would have refused on the run head's
+    // metadata.
+    let trip_cuts = split_runs_at_trip_boundaries(&mut sections);
+    if trip_cuts > 0 {
+        tracing::debug!(trip_cuts, "Split TML runs where the survey trip changed");
     }
 
     // Sew the cuts back up where the file's own topology allows it: a chain that
@@ -1209,6 +1272,11 @@ pub fn convert_tml_to_import_configs(
 
     if let Some(anomalies) = tml.parse_anomalies {
         push_parse_anomaly_warnings(anomalies, &mut warnings);
+    }
+
+    // What the per-trip section cut could not express (#427).
+    if let Some(note) = collapsed_trip_report(&tml.sections, include_excluded) {
+        warnings.push(note);
     }
 
     // #438: azimuths are copied VERBATIM - the fast path this convention was
@@ -5382,7 +5450,13 @@ mod tests {
     /// two-shot chain from the entrance, "B" continues from A's LAST shot.
     /// Every refusal test below is this same shape with one thing changed, so
     /// what the test is about is the difference and nothing else.
+    ///
+    /// B's tail inherits `b_head`'s trip so that B stays ONE trip whatever a
+    /// test does to its head: a per-trip cut (#427) would otherwise split B
+    /// itself, and a join-refusal test would be reporting that instead of the
+    /// refusal it is about.
     fn series_a_b(a_tail: TripShot<'_>, b_head: TripShot<'_>) -> TmlFile {
+        let (explorer, date, color) = (b_head.explorer, b_head.date, b_head.color);
         let shots = [
             TripShot {
                 id: 1,
@@ -5399,6 +5473,9 @@ mod tests {
                 from_id: 3,
                 section: "B",
                 depth: 12.0,
+                explorer,
+                date,
+                color,
                 ..TripShot::default()
             }
             .xml(),
