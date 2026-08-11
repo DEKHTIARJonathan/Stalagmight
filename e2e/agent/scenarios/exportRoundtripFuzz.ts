@@ -1307,7 +1307,7 @@ export const exportRoundtripFuzz: Scenario = {
       //
       // With it on, anything the source file carries as a STATION comment
       // lands in `project.station_comments` - and `ProjectIpc`
-      // (`models/project.rs:585-602`) serializes 16 fields, none of them
+      // (`models/project.rs:612-629`) serializes 17 fields, none of them
       // `station_comments`, so `get_project_state` cannot show them and X6's
       // text check would read every one as lost. Measured on naharon: its 74
       // station comments were never visible over IPC. (Shot comments used to

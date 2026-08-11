@@ -20,17 +20,23 @@ pub const SHOT_MARKER: char = '\u{200B}';
 /// Encode a shot comment and a station comment into a single TML Comment field.
 ///
 /// Lines of `shot` are prefixed with [`SHOT_MARKER`]; lines of `station` are
-/// written verbatim afterwards. Returns `None` when both inputs are empty (so
-/// callers can leave the field unset). Empty/whitespace-only inputs are treated
-/// as None.
+/// written afterwards, unmarked. Returns `None` when both inputs are empty (so
+/// callers can leave the field unset). Empty inputs are treated as None;
+/// whitespace-only inputs are user content and kept.
+///
+/// The marker is the encoding's own character, so CONTENT cannot carry one
+/// into the field: a station line that began with a marker would come back as
+/// a shot line, silently changing side. TML ingestion already strips markers
+/// (#483), but text typed in the UI or arriving through another importer has
+/// no such guarantee - so the encoder strips them from both inputs itself.
 pub fn merge(shot: Option<&str>, station: Option<&str>) -> Option<String> {
-    let shot = shot.and_then(non_empty);
-    let station = station.and_then(non_empty);
+    let shot = shot.map(strip_markers).filter(|s| !s.is_empty());
+    let station = station.map(strip_markers).filter(|s| !s.is_empty());
     match (shot, station) {
         (None, None) => None,
-        (Some(s), None) => Some(prefix_lines(s)),
-        (None, Some(st)) => Some(st.to_string()),
-        (Some(s), Some(st)) => Some(format!("{}\n{}", prefix_lines(s), st)),
+        (Some(s), None) => Some(prefix_lines(&s)),
+        (None, Some(st)) => Some(st),
+        (Some(s), Some(st)) => Some(format!("{}\n{}", prefix_lines(&s), st)),
     }
 }
 
@@ -76,8 +82,9 @@ pub fn split(s: Option<&str>) -> (Option<String>, Option<String>) {
 /// every importer, not just this encoding, and sanitizing it belongs at a
 /// boundary all of them share.
 ///
-/// Applied at ingestion, never at export - re-marking on the way out is
-/// [`merge`]'s job, and stripping there would erase the encoding itself.
+/// Applied at ingestion, and by [`merge`] to its CONTENT inputs before it adds
+/// the encoding's own markers - never to an already-encoded field, where
+/// stripping would erase the encoding itself.
 pub fn strip_markers(s: &str) -> String {
     s.replace(SHOT_MARKER, "")
 }
@@ -183,6 +190,25 @@ mod tests {
             split(Some(&m)),
             (Some("line one\n\nline three".into()), None)
         );
+    }
+
+    #[test]
+    fn content_markers_are_stripped_at_encode_so_sides_cannot_flip() {
+        // A station comment whose line begins with the marker (typed/pasted in
+        // the UI, or from a non-TML importer - TML ingestion strips them) would
+        // otherwise come back as a SHOT line: a silent side flip.
+        let m = merge(None, Some(&format!("{M}looks like a shot line"))).unwrap();
+        assert_eq!(m, "looks like a shot line");
+        assert_eq!(
+            split(Some(&m)),
+            (None, Some("looks like a shot line".into()))
+        );
+        // And a shot comment carrying one cannot double-mark.
+        let m = merge(Some(&format!("{M}pasted")), None).unwrap();
+        assert_eq!(m, format!("{M}pasted"));
+        assert_eq!(split(Some(&m)), (Some("pasted".into()), None));
+        // Marker-only content is nothing once stripped.
+        assert_eq!(merge(Some(&M.to_string()), None), None);
     }
 
     #[test]

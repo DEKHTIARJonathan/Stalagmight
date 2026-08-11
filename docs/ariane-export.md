@@ -257,6 +257,10 @@ through Ariane, the exporter packs both into the shot's `<Comment>`:
   Ariane user typed, and the default import routes it to the station - before
   #564 a lone shot comment therefore silently became a station comment on a
   default re-import.
+- The non-default import setting is one-way by design: importing with
+  "comments on stations" OFF concatenates station lines into the shot comment,
+  and the next export marks all of them as shot lines - station text imported
+  that way stays shot text. The default round trip is the side-stable one.
 - The marker is invisible in any editor, including Ariane's, so a reader sees
   a single readable Comment block.
 
