@@ -17,9 +17,11 @@ import {
   TRACE_VERSION,
   type FuzzTrace,
   type TraceStep,
+  traceHasFlowBoundaries,
   TraceRecorder,
   describeSteps,
   failureSignature,
+  planReplay,
   readTrace,
   restoreTraceEnv,
   sameSignature,
@@ -864,6 +866,108 @@ describe('noProjectEpisodes (replay determinism for headless episodes)', () => {
       const read = readTrace(target);
       expect(read.noProjectEpisodes).toBeUndefined();
       expect(read.steps).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('planReplay (episode and flow boundaries)', () => {
+  const ui = (label: string): TraceStep => ({ kind: 'ui', testid: 'cancel-button', label });
+  const ep = (index: number, headless: boolean): TraceStep => ({
+    kind: 'episode',
+    index,
+    headless,
+    label: `episode ${index + 1}`,
+  });
+  const fl = (index: number): TraceStep => ({ kind: 'flow', index, label: `flow ${index + 1}` });
+
+  it('keeps a LATER episode headless choice on its own steps', () => {
+    // The defect: the replay drained the whole step list inside episode 0, so a
+    // headless episode after the first never applied to the steps recorded under
+    // it - a `.dmp` that originally entered `new-project-for-import` replayed
+    // against an open project and silently took the selection flow.
+    const plan = planReplay({
+      steps: [
+        ep(0, false),
+        fl(0),
+        ui('a'),
+        ep(1, true),
+        fl(0),
+        ui('b'),
+        ui('c'),
+      ],
+    });
+
+    expect(plan).toHaveLength(2);
+    expect(plan[0]!.headless).toBe(false);
+    expect(plan[0]!.flows).toHaveLength(1);
+    expect(plan[0]!.flows[0]!.map((s) => s.label)).toEqual(['a']);
+    // The one that used to be lost.
+    expect(plan[1]!.headless).toBe(true);
+    expect(plan[1]!.flows[0]!.map((s) => s.label)).toEqual(['b', 'c']);
+  });
+
+  it('segments an episode into its recorded flows', () => {
+    // What F3 measures against: a receipt belongs to the delta of ITS OWN flow.
+    const plan = planReplay({
+      steps: [ep(0, false), fl(0), ui('a'), ui('b'), fl(1), ui('c')],
+    });
+    expect(plan).toHaveLength(1);
+    expect(plan[0]!.flows).toHaveLength(2);
+    expect(plan[0]!.flows[0]!.map((s) => s.label)).toEqual(['a', 'b']);
+    expect(plan[0]!.flows[1]!.map((s) => s.label)).toEqual(['c']);
+  });
+
+  it('drops a trailing flow marker that scopes no steps', () => {
+    const plan = planReplay({ steps: [ep(0, false), fl(0), ui('a'), fl(1)] });
+    expect(plan[0]!.flows).toHaveLength(1);
+    expect(plan[0]!.flows[0]!.map((s) => s.label)).toEqual(['a']);
+  });
+
+  it('folds a LEGACY trace into one episode holding every step', () => {
+    // Anything recorded before the markers existed replays the way it always
+    // did: one pass over the whole list.
+    const plan = planReplay({ steps: [ui('a'), ui('b')] });
+    expect(plan).toHaveLength(1);
+    expect(plan[0]!.headless).toBe(false);
+    expect(plan[0]!.flows[0]!.map((s) => s.label)).toEqual(['a', 'b']);
+  });
+
+  it('takes a legacy episode-0 headless state from the header field', () => {
+    const plan = planReplay({ steps: [ui('a')], noProjectEpisodes: [0] });
+    expect(plan[0]!.headless).toBe(true);
+  });
+
+  it('reports whether a trace can give F3 its flow boundaries', () => {
+    // The narrowing that keeps record/replay/shrink able to reproduce an F3 red:
+    // only a trace that cannot say where a flow began is skipped.
+    expect(traceHasFlowBoundaries({ steps: [ep(0, false), fl(0), ui('a')] })).toBe(true);
+    expect(traceHasFlowBoundaries({ steps: [ui('a')] })).toBe(false);
+  });
+
+  it('round-trips the boundary steps through write and read', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-bounds-'));
+    try {
+      const target = path.join(dir, 'trace.json');
+      const recorder = new TraceRecorder();
+      recorder.record(ep(0, true));
+      recorder.record(fl(0));
+      recorder.record(ui('a'));
+      writeTrace(
+        target,
+        recorder.build({
+          scenario: 'import-dialog-fuzz',
+          seed: 1,
+          iterations: 1,
+          fixture: 'naharon.stalx',
+          stream: 'import-v3',
+          failure: null,
+        }),
+      );
+      const read = readTrace(target);
+      expect(read.steps.map((s) => s.kind)).toEqual(['episode', 'flow', 'ui']);
+      expect(planReplay(read)[0]!.headless).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

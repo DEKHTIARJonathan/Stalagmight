@@ -387,7 +387,9 @@ import { ORACLE_GLOBAL, oracleInjectionSource } from '../lib/fuzzOracleCore';
 import { mapClick } from '../lib/controls';
 import {
   defaultTracePath,
+  planReplay,
   readTrace,
+  traceHasFlowBoundaries,
   TraceRecorder,
   writeTrace,
   type FuzzTrace,
@@ -1743,6 +1745,28 @@ export const importDialogFuzz: Scenario = {
      * the field. See `FuzzTrace.noProjectEpisodes`.
      */
     const replayHeadless = replay?.noProjectEpisodes ? new Set(replay.noProjectEpisodes) : null;
+
+    /**
+     * The recording's own episode and flow structure, rebuilt from its boundary
+     * steps.
+     *
+     * A replay used to be ONE pass over the whole step list: `replayAt` is a
+     * closure variable, so episode 0's single flow drained everything and every
+     * later episode replayed nothing. Two things broke on that. A later
+     * episode's headless choice could never reach the steps recorded under it -
+     * a `.dmp` that originally entered `new-project-for-import` replayed against
+     * an open project and silently took the selection flow. And F3 had no flow
+     * boundaries to measure a receipt against, so it compared the first
+     * receipt's claim to the delta of every import in the trace.
+     *
+     * `episode`/`flow` markers give both back. A trace WITHOUT them - anything
+     * recorded before this - folds into a single episode carrying every step,
+     * which is exactly what the old replay did, so those traces keep replaying
+     * the way they always have.
+     */
+    const replayPlan = replay ? planReplay(replay) : [];
+    /** Does this trace carry the boundaries F3 needs to measure a flow? */
+    const replayHasBoundaries = replay ? traceHasFlowBoundaries(replay) : false;
     if (replay && replayHeadless === null && noProjectEpisodeProbability() > 0) {
       // The recording COULD have gone headless and this trace cannot say whether
       // it did, so the replay may walk a different import flow than the one that
@@ -1837,7 +1861,8 @@ export const importDialogFuzz: Scenario = {
 
     /** The episode loop. Extracted so `forceClean` can wrap it in a finally. */
     const runEpisodes = async (): Promise<void> => {
-    for (let episode = 0; episode < iterations; episode += 1) {
+    const episodeCount = replaySteps ? Math.max(1, replayPlan.length) : iterations;
+    for (let episode = 0; episode < episodeCount; episode += 1) {
       await loadFixtureWithoutUndoHistory(ctx, fixture);
       if (!(await disableAutoSave(ctx))) {
         throw new Error('could not turn auto-save off; a timer firing mid-run would change unmodelled state');
@@ -1874,9 +1899,19 @@ export const importDialogFuzz: Scenario = {
       // existed, which is warned about once at startup and treated as
       // fixture-open - what every replay did before this.
       const headless = replaySteps
-        ? (replayHeadless?.has(episode) ?? false)
+        ? (replayPlan[episode]?.headless ?? false)
         : ctx.rng() < noProjectEpisodeProbability();
       if (!replaySteps && headless) headlessEpisodes.push(episode);
+      // The boundary a replay rebuilds the episode structure from. Recorded
+      // BEFORE the close below, so the marker precedes every step it scopes.
+      if (!replaySteps) {
+        recorder.record({
+          kind: 'episode',
+          index: episode,
+          headless,
+          label: `episode ${episode + 1}${headless ? ' (no project)' : ''}`,
+        });
+      }
       if (headless) {
         await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
         ctx.metric('episodeWithoutProject');
@@ -1887,8 +1922,16 @@ export const importDialogFuzz: Scenario = {
 
       // A replay is ONE pass over the recorded steps; the recording's own flow
       // boundaries are not replayed, they are re-derived from the screen.
-      const flows = replaySteps ? 1 : ctx.randInt(1, flowsPerEpisode());
+      // On a replay, one flow per RECORDED flow - which is what gives F3 the
+      // boundaries it measures a receipt against.
+      const episodeFlows = replaySteps ? (replayPlan[episode]?.flows ?? [[]]) : null;
+      const flows = episodeFlows ? episodeFlows.length : ctx.randInt(1, flowsPerEpisode());
       for (let flow = 0; flow < flows; flow += 1) {
+        // The steps THIS flow replays. Per-flow rather than one global cursor:
+        // that cursor is what let episode 0 drain the whole trace.
+        const flowSteps = episodeFlows ? (episodeFlows[flow] ?? []) : null;
+        replayAt = 0;
+        if (!replaySteps) recorder.record({ kind: 'flow', index: flow, label: `flow ${flow + 1}` });
         const before = await boundsNow(digest);
         let receipt: ReceiptClaim | null = null;
         /**
@@ -1977,9 +2020,10 @@ export const importDialogFuzz: Scenario = {
         };
 
         for (;;) {
-          if (replaySteps) {
-            if (replayAt >= replaySteps.length) break;
-            const step = replaySteps[replayAt] as TraceStep;
+          if (replaySteps && !replayHasBoundaries) {
+            const source = flowSteps ?? replaySteps;
+            if (replayAt >= source.length) break;
+            const step = source[replayAt] as TraceStep;
             replayAt += 1;
             if (step.kind === 'genFile') {
               materialize(step.spec as GeneratedFileSpec, step.rel);
@@ -2461,19 +2505,21 @@ export const importDialogFuzz: Scenario = {
         // The measured end is `atReceipt`, not `after` - see `checkAccounting`.
         if (receipt && atReceipt) {
           if (replaySteps) {
-            // A REPLAY has no flow boundaries of its own. It is one pass over the
-            // whole recorded step list - `flows` is pinned to 1 above - so a
-            // recording that imported three times replays as ONE flow, and F3
-            // then compares the FIRST receipt's claim against the delta of all
-            // three. Measured on a NO_PROJECT_P=1 trace: "1 section - 6 shots"
-            // against a project that had accumulated 5 sections and 34 shots.
+            // A LEGACY trace cannot say where a flow began. It replays as one
+            // pass over the whole step list, so a recording that imported three
+            // times replays as one flow and F3 compares the FIRST receipt's
+            // claim against the delta of all three. Measured on such a trace:
+            // "1 section - 6 shots" against a project holding 5 sections and 34
+            // shots. Same objection as the two skips below - a subtraction
+            // between things that are not each other's pair.
             //
-            // The same objection as the two skips below, and the same answer:
-            // the subtraction is between two things that are not each other's
-            // pair, so it is not an accounting error to report. F3 keeps its
-            // full force on a real run, which is where it caught the campaign's
-            // seed-8 red.
-            ctx.metric('f3Skipped:replay');
+            // NARROW, and deliberately so. Skipping every replay would mean a
+            // trace whose recorded failure WAS an F3 red replays green, and
+            // record/replay/shrink could never reproduce or minimize the very
+            // failure class the campaign's seed-8 red belonged to. A trace with
+            // `flow` markers has real boundaries, so F3 runs on it exactly as it
+            // ran on the recording.
+            ctx.metric('f3Skipped:replayNoBoundaries');
           } else if (before.projectFile !== null && before.projectFile !== after.projectFile) {
             ctx.metric('f3Skipped:projectSwapped');
           } else if (historyTouchedBeforeReceipt) {

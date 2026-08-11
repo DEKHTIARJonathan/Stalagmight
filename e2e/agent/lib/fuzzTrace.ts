@@ -149,6 +149,26 @@ export type TraceStep =
    * of it, so the replayer rebuilds the identical file without the trace
    * carrying a fixture (which the repo forbids) or a megabyte of base64.
    */
+  /**
+   * The start of one EPISODE, and whether it ran with no project open.
+   *
+   * A replay used to be one pass over the whole step list, so every step
+   * belonged to episode 0 whatever it was recorded under - a later episode's
+   * headless choice could never apply to its own steps. These markers are what
+   * let a replay rebuild the recording's episode structure instead of guessing
+   * it. Same precedent as `reload`: a step that carries control flow rather than
+   * a move.
+   */
+  | { kind: 'episode'; index: number; headless: boolean; label: string }
+  /**
+   * The start of one FLOW inside the current episode.
+   *
+   * F3 compares a receipt against the delta of ITS OWN flow. Without these a
+   * replay has no flow boundaries at all - a recording that imported three
+   * times replayed as one flow - and the comparison is between things that are
+   * not each other's pair.
+   */
+  | { kind: 'flow'; index: number; label: string }
   | { kind: 'genFile'; spec: unknown; rel: string; label: string }
   /**
    * An input file taken from the replayer's OWN private corpus and copied to
@@ -273,6 +293,58 @@ export interface FuzzTrace {
    */
   noProjectEpisodes?: number[];
   steps: TraceStep[];
+}
+
+/** One replayed episode: its no-project state and its flows, each a step list. */
+export interface ReplayEpisode {
+  headless: boolean;
+  flows: TraceStep[][];
+}
+
+/**
+ * Rebuild a recording's EPISODE and FLOW structure from its boundary steps.
+ *
+ * A replay used to be one pass over the whole step list against a single global
+ * cursor, so episode 0 drained everything and every later episode replayed
+ * nothing. Two things broke on that: a later episode's headless choice could
+ * never reach the steps recorded under it, and F3 had no flow boundaries, so it
+ * compared one receipt's claim against the delta of every import in the trace.
+ *
+ * A trace WITHOUT markers - anything recorded before they existed - folds into a
+ * single episode holding every step, which is exactly what the old replay did,
+ * so those traces keep replaying the way they always have. Its headless state
+ * comes from the header's `noProjectEpisodes` when it has one.
+ */
+export function planReplay(trace: Pick<FuzzTrace, 'steps' | 'noProjectEpisodes'>): ReplayEpisode[] {
+  const headlessHeader = new Set(trace.noProjectEpisodes ?? []);
+  const episodes: ReplayEpisode[] = [];
+  for (const step of trace.steps) {
+    if (step.kind === 'episode') {
+      episodes.push({ headless: step.headless, flows: [[]] });
+      continue;
+    }
+    if (episodes.length === 0) {
+      episodes.push({ headless: headlessHeader.has(0), flows: [[]] });
+    }
+    const current = episodes[episodes.length - 1] as ReplayEpisode;
+    if (step.kind === 'flow') {
+      current.flows.push([]);
+      continue;
+    }
+    (current.flows[current.flows.length - 1] as TraceStep[]).push(step);
+  }
+  for (const episode of episodes) {
+    // A marker at the very end of an episode would otherwise replay as an empty
+    // flow and be measured as one.
+    episode.flows = episode.flows.filter((flow) => flow.length > 0);
+    if (episode.flows.length === 0) episode.flows = [[]];
+  }
+  return episodes;
+}
+
+/** Does this trace carry the flow boundaries F3 needs to measure against? */
+export function traceHasFlowBoundaries(trace: Pick<FuzzTrace, 'steps'>): boolean {
+  return trace.steps.some((step) => step.kind === 'flow');
 }
 
 /** Env knobs that change what a run does, and so belong in a trace header. */
@@ -526,6 +598,8 @@ export function writeTrace(filePath: string, trace: FuzzTrace): string {
 
 /** Every `kind` a step may carry. Anything else is not a step this build runs. */
 const STEP_KINDS = new Set([
+  'episode',
+  'flow',
   'mutate',
   'undo',
   'redo',
@@ -688,6 +762,21 @@ function validateStep(step: unknown, index: number, filePath: string): void {
       const paths = Array.isArray(rel) ? rel : [rel];
       if (paths.length === 0) throw new Error(`${where} answers the dialog with an empty path list`);
       paths.forEach((entry, at) => requireSessionRelative(entry, `rel[${at}]`, where));
+    }
+  }
+  if (candidate.kind === 'episode') {
+    requireText(candidate.label, 'label', where);
+    if (typeof candidate.index !== 'number' || !Number.isInteger(candidate.index) || candidate.index < 0) {
+      throw new Error(`${where}: episode index must be a non-negative integer`);
+    }
+    if (typeof candidate.headless !== 'boolean') {
+      throw new Error(`${where}: episode headless must be a boolean`);
+    }
+  }
+  if (candidate.kind === 'flow') {
+    requireText(candidate.label, 'label', where);
+    if (typeof candidate.index !== 'number' || !Number.isInteger(candidate.index) || candidate.index < 0) {
+      throw new Error(`${where}: flow index must be a non-negative integer`);
     }
   }
   if (candidate.kind === 'genFile') {
@@ -866,6 +955,10 @@ function describeStep(step: TraceStep): string {
         step.rel === null ? 'cancel' : Array.isArray(step.rel) ? `${step.rel.length} file(s)` : step.rel;
       return `${step.dialog}-dialog via ${step.trigger} -> ${answer} - ${step.label}`;
     }
+    case 'episode':
+      return `episode ${step.index}${step.headless ? ' (no project)' : ''}`;
+    case 'flow':
+      return `flow ${step.index}`;
     case 'genFile':
       return `genFile ${step.rel} - ${step.label}`;
     case 'corpusFile':
