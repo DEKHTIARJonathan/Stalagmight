@@ -44,6 +44,24 @@ const ENDPOINT_URL: &str = env!("TELEMETRY_ENDPOINT");
 #[cfg(feature = "telemetry")]
 const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Upper bound on a buffered payload file `send_buffered` will read back. Real
+/// payloads are a few KB of gzipped-JSON source; anything near this is foreign.
+#[cfg(feature = "telemetry")]
+const MAX_BUFFERED_FILE_BYTES: u64 = 1024 * 1024;
+
+/// Upper bound on buffered payload files. One file lands per `project_seq`
+/// bucket per failed flush (60s apart), so this covers many hours offline;
+/// beyond it the OLDEST payloads are dropped - recent usage data is worth more
+/// than a complete archive, and the alternative is unbounded growth (#520).
+#[cfg(feature = "telemetry")]
+const MAX_BUFFERED_FILES: usize = 100;
+
+/// How many same-millisecond names to try before giving the payload up. Two or
+/// three is the realistic ceiling (one file per `project_seq` bucket per failed
+/// flush); the headroom is for a directory an attacker pre-seeded with links.
+#[cfg(feature = "telemetry")]
+const MAX_NAME_ATTEMPTS: u32 = 32;
+
 // ── Payload type ─────────────────────────────────────────────────────
 
 /// Self-describing wire payload (v3): event names are sent verbatim as a
@@ -179,9 +197,17 @@ impl TelemetryCollector {
         };
 
         for payload in &payloads {
-            if let Err(e) = send_payload(payload) {
-                tracing::debug!(error = %e, "Telemetry flush failed, buffering to disk");
-                buffer_to_disk(payload);
+            match send_payload(payload) {
+                Ok(()) => {}
+                Err(e) if e.retryable => {
+                    tracing::debug!(error = %e, "telemetry flush failed, buffering for retry");
+                    buffer_to_disk(payload);
+                }
+                // A permanent rejection will never be accepted; don't buffer it
+                // only for `send_buffered` to drop it on the next tick.
+                Err(e) => {
+                    tracing::debug!(error = %e, "telemetry payload rejected, dropping");
+                }
             }
         }
     }
@@ -196,6 +222,9 @@ impl TelemetryCollector {
         let Some(buffer_dir) = telemetry_buffer_dir() else {
             return;
         };
+        if buffer_dir_is_symlink(&buffer_dir) {
+            return;
+        }
 
         let entries = match fs::read_dir(&buffer_dir) {
             Ok(entries) => entries,
@@ -203,27 +232,43 @@ impl TelemetryCollector {
         };
 
         for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            let Some(path) = admit_payload_entry(&entry) else {
                 continue;
-            }
-
-            let content = match fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
             };
 
-            let payload: TelemetryPayload = match serde_json::from_str(&content) {
-                Ok(p) => p,
-                Err(_) => {
-                    // Corrupt file - remove it
-                    let _ = fs::remove_file(&path);
-                    continue;
-                }
-            };
-
-            if send_payload(&payload).is_ok() {
+            // `admit_payload_entry` already vouched for a non-empty regular
+            // file within the size bound, so a read or parse failure now means
+            // the bytes are corrupt (e.g. non-UTF-8), not transient - remove
+            // it rather than re-examine it every tick and hold a cap slot
+            // forever. (A zero-length file is a mid-write payload; admit skips
+            // it WITHOUT removing, so it is never seen here.)
+            let payload = read_payload_bounded(&path)
+                .and_then(|content| serde_json::from_str::<TelemetryPayload>(&content).ok());
+            let Some(payload) = payload else {
                 let _ = fs::remove_file(&path);
+                continue;
+            };
+
+            match send_payload(&payload) {
+                Ok(()) => {
+                    let _ = fs::remove_file(&path);
+                }
+                // Stop at the first RETRYABLE failure: the endpoint is
+                // unreachable and the rest of the buffer will time out too, so
+                // draining on bounds the retry to a single `HTTP_TIMEOUT` -
+                // load bearing because `send_buffered` runs synchronously on
+                // the Tauri setup thread (`lib.rs`), where an unbounded drain
+                // of a full buffer would stall app startup by up to
+                // cap x timeout. (Moving that call onto the flush thread is the
+                // fuller fix, #520 follow-up.)
+                Err(e) if e.retryable => break,
+                // A permanently rejected payload fails fast, not on a timeout,
+                // so it does NOT contribute to the stall - and breaking on it
+                // would wedge every later buffered file behind one file that
+                // can never leave. Drop it and drain the rest.
+                Err(_) => {
+                    let _ = fs::remove_file(&path);
+                }
             }
         }
     }
@@ -256,12 +301,18 @@ impl TelemetryCollector {
 
 /// Serialize the payload as JSON, gzip it, and POST to the telemetry endpoint.
 #[cfg(feature = "telemetry")]
-fn send_payload(payload: &TelemetryPayload) -> Result<(), String> {
-    let json = serde_json::to_vec(payload).map_err(|e| e.to_string())?;
+fn send_payload(payload: &TelemetryPayload) -> Result<(), SendError> {
+    // A payload that cannot be serialized or gzipped is broken, not transient -
+    // it will never encode, so drop it rather than retry.
+    let encode_err = |e: &dyn std::fmt::Display| SendError {
+        retryable: false,
+        msg: e.to_string(),
+    };
+    let json = serde_json::to_vec(payload).map_err(|e| encode_err(&e))?;
 
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    encoder.write_all(&json).map_err(|e| e.to_string())?;
-    let body = encoder.finish().map_err(|e| e.to_string())?;
+    encoder.write_all(&json).map_err(|e| encode_err(&e))?;
+    let body = encoder.finish().map_err(|e| encode_err(&e))?;
 
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(HTTP_TIMEOUT))
@@ -280,7 +331,42 @@ fn send_payload(payload: &TelemetryPayload) -> Result<(), String> {
 
     match response {
         Ok(_) => Ok(()),
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(classify_send_error(&e)),
+    }
+}
+
+/// A failed send, split by whether the endpoint might accept the payload later.
+#[cfg(feature = "telemetry")]
+struct SendError {
+    /// Transport failure, timeout, 5xx, or 429 - a later attempt may succeed,
+    /// so the buffered copy is worth keeping. A permanent HTTP rejection (any
+    /// other 4xx) is NOT retryable: the same bytes will fail identically
+    /// forever, so retrying only wedges the drain behind a payload that can
+    /// never leave.
+    retryable: bool,
+    msg: String,
+}
+
+#[cfg(feature = "telemetry")]
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.msg)
+    }
+}
+
+#[cfg(feature = "telemetry")]
+fn classify_send_error(e: &ureq::Error) -> SendError {
+    let retryable = match e {
+        // 408 request-timeout and 429 rate-limit are transient; 5xx is the
+        // server's problem, not the payload's. Any other 4xx is a permanent
+        // rejection of these exact bytes.
+        ureq::Error::StatusCode(code) => *code == 408 || *code == 429 || *code >= 500,
+        // Transport, timeout, protocol, io: the network, not the payload.
+        _ => true,
+    };
+    SendError {
+        retryable,
+        msg: e.to_string(),
     }
 }
 
@@ -292,7 +378,8 @@ fn buffer_to_disk(payload: &TelemetryPayload) {
     buffer_payload_in_dir(&dir, payload);
 }
 
-/// Write one payload into `dir` as `<unix-millis>.json`, creating `dir` first.
+/// Write one payload into `dir` as `<unix-millis>-<n>.json`, creating `dir`
+/// first, then prune the buffer back under [`MAX_BUFFERED_FILES`].
 ///
 /// Split out from `buffer_to_disk` so a test can exercise the write against a
 /// directory it owns (#510). On Linux, resolving the real buffer dir falls
@@ -309,19 +396,229 @@ fn buffer_to_disk(payload: &TelemetryPayload) {
 /// as an error.
 #[cfg(feature = "telemetry")]
 fn buffer_payload_in_dir(dir: &Path, payload: &TelemetryPayload) {
+    // `None` when the clock is before the epoch (dead RTC): the millis-based
+    // sort key would then be a meaningless 0 for every write this session, so
+    // `buffer_payload_at` skips the prune rather than evict the payload it just
+    // wrote. A well-formed timestamp is what makes the prune ordering sound.
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis());
+    buffer_payload_at(dir, millis, payload);
+}
+
+/// Write + prune with the timestamp injected, so a test can drive the real
+/// write-and-prune wiring at deterministic, strictly-increasing millis instead
+/// of racing the wall clock (where >=32 writes in one millisecond would exhaust
+/// [`MAX_NAME_ATTEMPTS`] and flake). `None` millis = a clock error: buffer
+/// under a fallback name but skip the prune, whose key we cannot trust.
+#[cfg(feature = "telemetry")]
+fn buffer_payload_at(dir: &Path, millis: Option<u128>, payload: &TelemetryPayload) {
+    // Refuse a symlinked buffer dir: `create_new` guards each FILE, but the
+    // prune below would follow a symlinked DIR and delete `.json` files in
+    // whatever it points at - unrelated user data outside our namespace. The
+    // read path (`send_buffered`) refuses it too (#520 review).
+    if buffer_dir_is_symlink(dir) {
+        return;
+    }
+
+    // The buffer holds only this user's own usage data, so the directory is
+    // owner-only where the platform can express it. Create any missing parents
+    // first, then the leaf non-recursively with 0700, so the mode lands on the
+    // buffer dir alone and not on the shared app-data parents this call might
+    // otherwise create. A pre-existing buffer dir keeps its mode.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        if let Some(parent) = dir.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::DirBuilder::new().mode(0o700).create(dir);
+    }
+    #[cfg(not(unix))]
     let _ = fs::create_dir_all(dir);
 
-    let filename = format!(
-        "{}.json",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis())
-    );
-    let path = dir.join(filename);
-
     if let Ok(json) = serde_json::to_string(payload) {
-        let _ = fs::write(path, json);
+        write_unique_payload(dir, millis.unwrap_or(0), json.as_bytes());
+        if millis.is_some() {
+            prune_buffer_dir(dir);
+        }
     }
+}
+
+/// Write `json` to the first free `<millis>-<n>.json` in `dir` (#520).
+///
+/// `create_new` makes the collision-handling atomic: an existing file - a
+/// sibling payload buffered in the same millisecond, which the old truncating
+/// `fs::write` silently overwrote - and a pre-planted symlink (dangling
+/// included, which `fs::write` would have followed) both fail the open with
+/// `AlreadyExists`, shifting the write to the next `n` instead of destroying
+/// anything. Unix permissions are tightened to 0600: the payload is the user's
+/// own usage data, and nothing else reads the buffer.
+///
+/// Failures stay non-fatal but are no longer silent: this is the code path
+/// whose entire job is not losing the payload, so each way of losing one
+/// leaves a debug line.
+#[cfg(feature = "telemetry")]
+fn write_unique_payload(dir: &Path, millis: u128, json: &[u8]) {
+    for n in 0..MAX_NAME_ATTEMPTS {
+        let path = dir.join(format!("{millis}-{n}.json"));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        match options.open(&path) {
+            Ok(mut file) => {
+                if let Err(e) = file.write_all(json) {
+                    tracing::debug!(error = %e, "telemetry buffer write failed; removing the partial file");
+                    let _ = fs::remove_file(&path);
+                }
+                return;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => {
+                tracing::debug!(error = %e, "telemetry buffer file could not be created");
+                return;
+            }
+        }
+    }
+    tracing::debug!("telemetry buffer names exhausted for this millisecond; payload dropped");
+}
+
+/// lstat-gate one buffer-dir entry (#520): `Some(path)` when it is a non-empty
+/// regular `.json` file within [`MAX_BUFFERED_FILE_BYTES`]. A directory, a
+/// symlink, or an oversized file wearing `.json` is foreign - REMOVED here, or
+/// it would be re-examined on every retry tick forever and (counted but
+/// undeletable, in the directory case) poison the prune's cap accounting into
+/// evicting real payloads. A ZERO-length `.json` is left untouched: it is a
+/// payload mid-write (`create_new` opens empty, then `write_all` fills it), so
+/// deleting it here would race away a payload the writer is about to complete.
+///
+/// `DirEntry::metadata` is documented not to traverse symlinks - that is
+/// load-bearing: it makes a planted symlink read as not-a-file, so the
+/// `remove_file` below unlinks the LINK, never its target. A future
+/// "simplification" to `fs::metadata(&path)` would silently follow it.
+#[cfg(feature = "telemetry")]
+fn admit_payload_entry(entry: &fs::DirEntry) -> Option<PathBuf> {
+    let path = entry.path();
+    if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        return None;
+    }
+    match entry.metadata() {
+        Ok(m) if m.is_file() && m.len() == 0 => None,
+        Ok(m) if m.is_file() && m.len() <= MAX_BUFFERED_FILE_BYTES => Some(path),
+        Ok(m) => {
+            if m.is_dir() {
+                let _ = fs::remove_dir_all(&path);
+            } else {
+                if m.is_file() {
+                    tracing::debug!(?path, "oversized telemetry buffer file discarded");
+                }
+                let _ = fs::remove_file(&path);
+            }
+            None
+        }
+        Err(_) => None,
+    }
+}
+
+/// Read a payload back with the size check on the OPEN file descriptor
+/// (fstat), not the directory entry - a path-based check can be raced by a
+/// swap or an append between the stat and the read. The read is additionally
+/// `take`-bounded as defence in depth, so even a file that grows between the
+/// fstat and the read cannot exhaust memory.
+///
+/// Residual same-uid race, accepted: `fs::File::open` follows a symlink and
+/// blocks on a FIFO, so a same-uid process that swaps an admitted regular file
+/// for one of those AFTER the scan could redirect or stall this read. Closing
+/// it fully needs `O_NOFOLLOW | O_NONBLOCK` (a `libc`/`rustix` dependency this
+/// crate does not carry). The buffer dir is 0700 same-uid, the payload is
+/// anonymous counters, and such an attacker can already delete the files
+/// directly, so the write-path hardening (`create_new`) is the load-bearing
+/// half; this read path is best-effort. Tracked as a #520 follow-up.
+#[cfg(feature = "telemetry")]
+fn read_payload_bounded(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() > MAX_BUFFERED_FILE_BYTES {
+        return None;
+    }
+    let mut content = String::new();
+    file.take(MAX_BUFFERED_FILE_BYTES + 1)
+        .read_to_string(&mut content)
+        .ok()?;
+    Some(content)
+}
+
+/// Sort key for a buffered filename: (`millis`, `n`) from `<millis>-<n>.json`,
+/// with the pre-#520 bare `<millis>.json` reading as `n = 0`. Names that parse
+/// as neither are foreign - never minted by the writer - and sort oldest so the
+/// prune clears them first (`send_buffered` would unlink them as corrupt anyway).
+///
+/// A well-formed but implausibly FUTURE `<millis>` sorts newest and would
+/// survive the prune ahead of real payloads. Planting one needs write access
+/// to the 0700 same-uid buffer dir, from where an attacker can already delete
+/// payloads directly, so this is not defended here; it is noted so a later
+/// clock-trust change starts from the known gap (#520 follow-up).
+#[cfg(feature = "telemetry")]
+fn buffered_sort_key(path: &Path) -> (u128, u32) {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let (millis, n) = match stem.split_once('-') {
+        Some((millis, n)) => (millis, n),
+        None => (stem, "0"),
+    };
+    match (millis.parse::<u128>(), n.parse::<u32>()) {
+        (Ok(millis), Ok(n)) => (millis, n),
+        _ => (0, 0),
+    }
+}
+
+/// Delete the oldest buffered payload files until at most
+/// [`MAX_BUFFERED_FILES`] remain. Age comes from the encoded timestamp in the
+/// filename, not mtime - the writer mints the names, so the key is
+/// deterministic and testable.
+///
+/// The cap is counted over what `admit_payload_entry` admits - regular files
+/// only - and the admission pass removes foreign objects as it goes. Counting
+/// raw `.json` entries instead let a single undeletable directory inflate
+/// `excess` forever, turning the prune into an evictor of real payloads while
+/// the directory itself kept growing.
+#[cfg(feature = "telemetry")]
+fn prune_buffer_dir(dir: &Path) {
+    // Self-safe against a symlinked buffer dir rather than trusting the caller:
+    // this function DELETES, so a symlinked `dir` would evict `.json` files
+    // from the target - unrelated user data. `buffer_payload_at` also refuses
+    // one before writing, but the guard belongs here too so the deletion path
+    // is safe on its own (#520 review).
+    if buffer_dir_is_symlink(dir) {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .filter_map(|e| admit_payload_entry(&e))
+        .collect();
+    if files.len() <= MAX_BUFFERED_FILES {
+        return;
+    }
+    files.sort_by_key(|p| buffered_sort_key(p));
+    let excess = files.len() - MAX_BUFFERED_FILES;
+    for path in files.iter().take(excess) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+/// True when `dir` exists and is itself a symlink rather than a real
+/// directory. Both buffer paths refuse such a dir: the writer would create
+/// files in, and the prune would DELETE files from, whatever it points at -
+/// collateral damage to unrelated user data. `create_new` protects individual
+/// files but not the directory node, so this is the guard for that node
+/// (#520 review). A missing dir or a real dir returns false.
+#[cfg(feature = "telemetry")]
+fn buffer_dir_is_symlink(dir: &Path) -> bool {
+    fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_symlink())
 }
 
 /// Directory name under the local data dir holding payloads buffered for retry.
@@ -616,24 +913,13 @@ mod tests {
     /// disagree and the read hit a directory that did not exist (#510). It also deleted every `.json` in the
     /// developer's own telemetry buffer as "cleanup"; the `TempDir` handles that.
     ///
-    /// One payload, so it says nothing about what two writes in the same
-    /// millisecond do to each other - they collide, and that is #520, not
-    /// something to assert as correct here.
+    /// One payload; what two writes in the same millisecond do to each other
+    /// is `same_millisecond_payloads_get_distinct_files` below (#520).
     #[test]
     fn buffer_to_disk_writes_a_payload_that_reads_back() {
         let temp = TempDir::new().expect("temp dir");
         let dir = temp.path().join(BUFFER_DIR_NAME);
-        let mut events = HashMap::new();
-        events.insert("command.create_shot:keyboard".to_string(), 3);
-        let payload = TelemetryPayload {
-            v: PAYLOAD_VERSION,
-            app_version: "0.1.0".to_string(),
-            os: "test".to_string(),
-            session_id: "test-session".to_string(),
-            duration_secs: 60,
-            project_seq: 0,
-            events: events.clone(),
-        };
+        let payload = test_payload();
 
         // The directory does not exist yet - creating it is part of the contract.
         buffer_payload_in_dir(&dir, &payload);
@@ -652,6 +938,318 @@ mod tests {
         assert_eq!(round_tripped.duration_secs, payload.duration_secs);
         // The event map is the whole point of the payload - a buffered file that
         // round-trips its envelope but drops its counts is a silent data loss.
-        assert_eq!(round_tripped.events, events);
+        assert_eq!(round_tripped.events, payload.events);
+    }
+
+    /// Two payloads buffered in the same millisecond used to collide on
+    /// `<millis>.json` and the second truncated the first away - on the code
+    /// path whose entire job is not losing the payload (#520). The fixed
+    /// timestamp makes the collision deterministic instead of hoping two
+    /// `buffer_payload_in_dir` calls land in one millisecond.
+    #[test]
+    fn same_millisecond_payloads_get_distinct_files() {
+        let temp = TempDir::new().expect("temp dir");
+        write_unique_payload(temp.path(), 123, b"{\"first\":1}");
+        write_unique_payload(temp.path(), 123, b"{\"second\":2}");
+
+        let first = fs::read_to_string(temp.path().join("123-0.json")).expect("first file");
+        let second = fs::read_to_string(temp.path().join("123-1.json")).expect("second file");
+        assert_eq!(first, "{\"first\":1}");
+        assert_eq!(second, "{\"second\":2}");
+    }
+
+    /// A pre-planted symlink at the predictable name must not be written
+    /// through (the old `fs::write` followed it - an overwrite primitive for a
+    /// same-uid process or a misconfigured parent directory, #520).
+    /// `create_new` refuses it and the payload shifts to the next name.
+    #[test]
+    #[cfg(unix)]
+    fn write_refuses_a_preplanted_symlink() {
+        let temp = TempDir::new().expect("temp dir");
+        let victim = temp.path().join("victim.txt");
+        fs::write(&victim, "precious").expect("write victim");
+        std::os::unix::fs::symlink(&victim, temp.path().join("123-0.json")).expect("plant symlink");
+
+        write_unique_payload(temp.path(), 123, b"{\"v\":3}");
+
+        assert_eq!(
+            fs::read_to_string(&victim).expect("victim"),
+            "precious",
+            "the symlink target must not be overwritten"
+        );
+        assert_eq!(
+            fs::read_to_string(temp.path().join("123-1.json")).expect("shifted payload"),
+            "{\"v\":3}",
+            "the payload lands on the next free name"
+        );
+    }
+
+    /// The buffer holds the user's own usage data; nothing else reads it, so
+    /// the files are owner-only (#520).
+    ///
+    /// Caveat: under a 0o077 (or stricter) umask the DEFAULT mode is already
+    /// 0600, so there this passes without the explicit `mode(0o600)` line -
+    /// the assertion is injection-proof only under permissive umasks like
+    /// CI's 022. Controlling the umask would mean mutating process-wide
+    /// state, the exact class #519 removed from this binary.
+    #[test]
+    #[cfg(unix)]
+    fn buffered_files_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = TempDir::new().expect("temp dir");
+        write_unique_payload(temp.path(), 123, b"{}");
+        let mode = fs::metadata(temp.path().join("123-0.json"))
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// The prune key must order the pre-#520 bare `<millis>.json` names, the
+    /// counter-suffixed ones, and foreign names correctly - foreign sorts
+    /// oldest so it is cleared first.
+    #[test]
+    fn buffered_sort_key_orders_legacy_counter_and_foreign_names() {
+        let key = |name: &str| buffered_sort_key(Path::new(name));
+        assert_eq!(key("123.json"), (123, 0), "legacy name reads as n = 0");
+        assert_eq!(key("123-2.json"), (123, 2));
+        assert!(key("123-0.json") < key("123-1.json"));
+        assert!(key("123-9.json") < key("124-0.json"), "millis outranks n");
+        assert_eq!(key("not-ours.json"), (0, 0), "foreign sorts oldest");
+    }
+
+    /// Beyond [`MAX_BUFFERED_FILES`] the OLDEST payloads are dropped - a long
+    /// offline session used to grow the directory without limit (#520).
+    #[test]
+    fn prune_drops_the_oldest_files_beyond_the_cap() {
+        let temp = TempDir::new().expect("temp dir");
+        for millis in 0..(MAX_BUFFERED_FILES as u128 + 3) {
+            write_unique_payload(temp.path(), millis, b"{}");
+        }
+
+        prune_buffer_dir(temp.path());
+
+        let count = fs::read_dir(temp.path()).expect("read dir").count();
+        assert_eq!(count, MAX_BUFFERED_FILES, "pruned back to the cap");
+        for millis in 0..3u128 {
+            assert!(
+                !temp.path().join(format!("{millis}-0.json")).exists(),
+                "the oldest files are the ones dropped"
+            );
+        }
+        assert!(temp.path().join("3-0.json").exists(), "newer files survive");
+    }
+
+    fn test_payload() -> TelemetryPayload {
+        let mut events = HashMap::new();
+        events.insert("command.create_shot:keyboard".to_string(), 3);
+        TelemetryPayload {
+            v: PAYLOAD_VERSION,
+            app_version: "0.1.0".to_string(),
+            os: "test".to_string(),
+            session_id: "test-session".to_string(),
+            duration_secs: 60,
+            project_seq: 0,
+            events,
+        }
+    }
+
+    /// The cap must hold at the REAL entry point. A test that calls
+    /// `prune_buffer_dir` directly cannot notice the call being deleted from
+    /// the write path - the vacuous-delegation shape - and this one exists
+    /// precisely to fail on that deletion (proven by injection).
+    ///
+    /// Drives `buffer_payload_at` with injected, strictly-increasing millis:
+    /// the wall-clock path would flake if >=32 of these fast writes landed in
+    /// one millisecond and exhausted `MAX_NAME_ATTEMPTS`.
+    #[test]
+    fn the_cap_is_enforced_through_the_real_entry_point() {
+        let temp = TempDir::new().expect("temp dir");
+        let payload = test_payload();
+        for millis in 0..(MAX_BUFFERED_FILES as u128 + 2) {
+            buffer_payload_at(temp.path(), Some(millis), &payload);
+        }
+        let count = fs::read_dir(temp.path()).expect("read dir").count();
+        assert_eq!(
+            count, MAX_BUFFERED_FILES,
+            "writing past the cap through the write path must prune"
+        );
+    }
+
+    /// A clock error (millis `None`) still buffers the payload but skips the
+    /// prune, whose key would be a meaningless 0 - so the just-written payload
+    /// is never the prune's own first victim on a backwards clock.
+    #[test]
+    fn a_clock_error_buffers_without_pruning() {
+        let temp = TempDir::new().expect("temp dir");
+        let payload = test_payload();
+        // Pre-fill past the cap so a prune, if it ran, would evict.
+        for n in 0..(MAX_BUFFERED_FILES + 2) {
+            fs::write(temp.path().join(format!("10-{n}.json")), "{}").expect("seed");
+        }
+        buffer_payload_at(temp.path(), None, &payload);
+        let count = fs::read_dir(temp.path()).expect("read dir").count();
+        assert_eq!(
+            count,
+            MAX_BUFFERED_FILES + 3,
+            "the write lands and nothing is pruned on a clock error"
+        );
+    }
+
+    /// The sharp cap-poisoning case: an undeletable `.json` DIRECTORY plus
+    /// `MAX + 1` real payloads. Before #520 the directory was counted toward
+    /// the cap but `remove_file` could not evict it, so the prune deleted a
+    /// real payload every pass while the directory grew. Now the admission
+    /// pass removes it and the cap is counted over real payloads only, so
+    /// exactly one real payload (the oldest) is evicted and the rest survive.
+    #[test]
+    fn an_undeletable_directory_does_not_poison_the_cap() {
+        let temp = TempDir::new().expect("temp dir");
+        fs::create_dir(temp.path().join("0-0.json")).expect("dir squatting a payload name");
+        // MAX + 1 real payloads at millis 1..=MAX+1, so the oldest (1-0) is the
+        // single legitimate eviction and everything from 2-0 up must survive.
+        for millis in 1..=(MAX_BUFFERED_FILES as u128 + 1) {
+            fs::write(temp.path().join(format!("{millis}-0.json")), "{}").expect("real payload");
+        }
+
+        prune_buffer_dir(temp.path());
+
+        assert!(
+            !temp.path().join("0-0.json").exists(),
+            "the squatting directory is removed by the admission pass"
+        );
+        assert!(
+            !temp.path().join("1-0.json").exists(),
+            "exactly the oldest real payload is evicted"
+        );
+        let surviving = fs::read_dir(temp.path()).expect("read dir").count();
+        assert_eq!(
+            surviving, MAX_BUFFERED_FILES,
+            "the directory did not steal a cap slot from a real payload"
+        );
+    }
+
+    /// Foreign objects wearing `.json` - a directory, an oversized file, a
+    /// dangling symlink - are removed by the admission pass, not retried
+    /// forever; a zero-length `.json` (a payload mid-write) is left untouched;
+    /// and a real payload survives.
+    #[test]
+    fn admission_removes_foreign_objects_and_spares_mid_write() {
+        let temp = TempDir::new().expect("temp dir");
+        fs::create_dir(temp.path().join("0-0.json")).expect("dir squatting a payload name");
+        fs::write(
+            temp.path().join("1-0.json"),
+            vec![b' '; (MAX_BUFFERED_FILE_BYTES + 1) as usize],
+        )
+        .expect("oversized file");
+        fs::write(temp.path().join("4-0.json"), "").expect("zero-length mid-write payload");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(temp.path().join("gone"), temp.path().join("2-0.json"))
+            .expect("dangling symlink");
+        write_unique_payload(temp.path(), 3, b"{}");
+
+        // The admission pass runs as a side effect of collecting the survivors.
+        let admitted: Vec<_> = fs::read_dir(temp.path())
+            .expect("read dir")
+            .flatten()
+            .filter_map(|e| admit_payload_entry(&e))
+            .collect();
+
+        assert!(
+            !temp.path().join("0-0.json").exists(),
+            "a directory named *.json is removed, not retried forever"
+        );
+        assert!(
+            !temp.path().join("1-0.json").exists(),
+            "an oversized file is removed"
+        );
+        #[cfg(unix)]
+        assert!(
+            fs::symlink_metadata(temp.path().join("2-0.json")).is_err(),
+            "the symlink itself is unlinked"
+        );
+        assert!(
+            temp.path().join("4-0.json").exists(),
+            "a zero-length payload mid-write is left for the writer to finish"
+        );
+        assert_eq!(
+            admitted,
+            vec![temp.path().join("3-0.json")],
+            "only the completed real payload is admitted"
+        );
+    }
+
+    /// A permanent HTTP rejection (a 4xx that is not 408/429) must classify as
+    /// non-retryable, so `send_buffered` drops that payload and drains the
+    /// rest instead of wedging the whole buffer behind it. Transient statuses
+    /// (5xx, 429, 408) and transport errors stay retryable.
+    #[test]
+    fn send_errors_classify_retryable_vs_permanent() {
+        assert!(!classify_send_error(&ureq::Error::StatusCode(400)).retryable);
+        assert!(!classify_send_error(&ureq::Error::StatusCode(413)).retryable);
+        assert!(classify_send_error(&ureq::Error::StatusCode(408)).retryable);
+        assert!(classify_send_error(&ureq::Error::StatusCode(429)).retryable);
+        assert!(classify_send_error(&ureq::Error::StatusCode(500)).retryable);
+        assert!(classify_send_error(&ureq::Error::StatusCode(503)).retryable);
+    }
+
+    /// A symlinked buffer directory is refused by the write path: `create_new`
+    /// guards each file, but a prune through a symlinked dir would delete
+    /// `.json` files in the target - unrelated user data. The target's file
+    /// must survive and nothing may be written into it (#520 review).
+    #[test]
+    #[cfg(unix)]
+    fn a_symlinked_buffer_dir_is_left_alone() {
+        let temp = TempDir::new().expect("temp dir");
+        let target = temp.path().join("real-target");
+        fs::create_dir(&target).expect("target dir");
+        let victim = target.join("9-0.json");
+        fs::write(&victim, "{\"user\":\"data\"}").expect("victim payload");
+
+        let link = temp.path().join("telemetry-buffer");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink the buffer dir");
+
+        buffer_payload_at(&link, Some(1), &test_payload());
+
+        assert_eq!(
+            fs::read_to_string(&victim).expect("victim survives"),
+            "{\"user\":\"data\"}",
+            "the write path must not touch a symlinked buffer dir's target"
+        );
+        // No payload of ours was written into the target either.
+        let count = fs::read_dir(&target).expect("read target").count();
+        assert_eq!(count, 1, "only the pre-existing file remains");
+
+        // And the prune itself is self-safe: filling the target past the cap
+        // and pruning through the symlink must delete nothing (Codex's exact
+        // scenario - foreign names would sort oldest and be evicted).
+        for millis in 100..(100 + MAX_BUFFERED_FILES as u128 + 5) {
+            fs::write(target.join(format!("{millis}-0.json")), "{}").expect("target payload");
+        }
+        let before = fs::read_dir(&target).expect("read target").count();
+        prune_buffer_dir(&link);
+        let after = fs::read_dir(&target).expect("read target").count();
+        assert_eq!(
+            before, after,
+            "pruning through a symlinked buffer dir must not delete the target's files"
+        );
+    }
+
+    /// The read-back size guard is on the OPEN file (fstat), so an oversized
+    /// file is rejected there even if it reached this point.
+    #[test]
+    fn read_back_rejects_an_oversized_file() {
+        let temp = TempDir::new().expect("temp dir");
+        let oversized = temp.path().join("1-0.json");
+        fs::write(
+            &oversized,
+            vec![b' '; (MAX_BUFFERED_FILE_BYTES + 1) as usize],
+        )
+        .expect("oversized file");
+        assert!(read_payload_bounded(&oversized).is_none());
+
+        let ok = temp.path().join("2-0.json");
+        fs::write(&ok, "{\"v\":3}").expect("small file");
+        assert_eq!(read_payload_bounded(&ok).as_deref(), Some("{\"v\":3}"));
     }
 }

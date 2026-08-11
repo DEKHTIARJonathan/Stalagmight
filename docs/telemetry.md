@@ -20,7 +20,10 @@ to Rust every 60 seconds.
 **Backend** (`src-tauri/crates/telemetry/src/telemetry/mod.rs`): Aggregates counts per session, flushes
 to the configured telemetry endpoint every 60 seconds. Buffers to
 `<app-local-data-dir>/telemetry-buffer/*.json` when offline (the per-app data
-dir - see the path tables in [configuration.md](configuration.md)).
+dir - see the path tables in [configuration.md](configuration.md)). The buffer
+is capped at 100 payload files; beyond that the oldest are dropped, so a very
+long offline stretch loses its oldest usage counts rather than growing the
+directory without bound.
 
 **Feature-gated**: All Rust telemetry is behind `#[cfg(feature = "telemetry")]`.
 When disabled, all methods are zero-cost no-ops eliminated by the compiler.
