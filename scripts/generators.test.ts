@@ -335,4 +335,87 @@ describe('generate-repro-report.mjs', () => {
     expect(md).toContain('cmd+s');
     expect(md).toContain('[OS-level]');
   });
+
+  // The bug this replaced: the step list came from a hand-maintained name list
+  // that nobody updated as tools were added, so a repro whose decisive step was
+  // a drag or a native-dialog answer rendered WITHOUT that step. The recorder
+  // now stamps `mutating` per action, and the report must believe it - both
+  // ways round, which is what makes the name list unable to rot again.
+  describe('mutation comes from the action record, not a name list', () => {
+    let v2Dir: string;
+
+    beforeAll(() => {
+      v2Dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-v2-'));
+      const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
+      const lines = [
+        record({ type: 'session-start', v: 1, sessionId: 'v2-fixture', startedAt: ts(0), gitHead: 'def5678' }),
+        // Mutating, and absent from the frozen legacy list: these are exactly
+        // the tools the old report dropped.
+        record({
+          type: 'action', v: 1, seq: 1, ts: ts(1), tool: 'drag', mutating: true,
+          params: { fromTestid: 'station-a', toTestid: 'station-b' },
+          outcome: { ok: true, durationMs: 10 },
+        }),
+        record({
+          type: 'action', v: 1, seq: 2, ts: ts(2), tool: 'file_dialog_answer', mutating: true,
+          params: { triggerTestid: 'import-button', kind: 'open', path: '/caves/survey.dmp' },
+          outcome: { ok: true, durationMs: 10 },
+        }),
+        record({
+          type: 'action', v: 1, seq: 3, ts: ts(3), tool: 'scroll', mutating: true,
+          params: { testid: 'warnings-content', deltaY: 400 },
+          outcome: { ok: true, durationMs: 10 },
+        }),
+        record({
+          type: 'action', v: 1, seq: 4, ts: ts(4), tool: 'select_option', mutating: true,
+          params: { testid: 'select-number-format', value: 'en-US' },
+          outcome: { ok: true, durationMs: 10 },
+        }),
+        record({
+          type: 'action', v: 1, seq: 5, ts: ts(5), tool: 'map_feature_click', mutating: true,
+          params: { featureType: 'shot', sectionId: 2, shotId: 17 },
+          outcome: { ok: true, durationMs: 10 },
+        }),
+        // A mutation that THREW is still the step that reproduces the bug.
+        record({
+          type: 'action', v: 1, seq: 6, ts: ts(6), tool: 'hover', mutating: true,
+          params: { testid: 'toolbar-undo-button' },
+          outcome: { ok: false, durationMs: 10, error: 'element not interactable' },
+        }),
+        // In the legacy list, but recorded as NOT mutating: a bare map_view is
+        // a read. The record must win over the list.
+        record({
+          type: 'action', v: 1, seq: 7, ts: ts(7), tool: 'map_view', mutating: false,
+          params: {}, outcome: { ok: true, durationMs: 10 },
+        }),
+      ];
+      fs.writeFileSync(path.join(v2Dir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+    });
+
+    afterAll(() => fs.rmSync(v2Dir, { recursive: true, force: true }));
+
+    it('lists every recorded mutation, with detail, including ones no name list knew about', () => {
+      execFileSync(process.execPath, [reportGen, v2Dir], { encoding: 'utf8' });
+      const md = fs.readFileSync(path.join(v2Dir, 'report.md'), 'utf8');
+
+      // Present AND described - a bare tool name is not a reproducible step.
+      expect(md).toContain('`drag` testid=station-a -> testid=station-b');
+      expect(md).toContain('open dialog answered "/caves/survey.dmp"');
+      expect(md).toContain('`scroll` testid=warnings-content by (0,400)');
+      expect(md).toContain('`select_option` testid=select-number-format = "en-US"');
+      expect(md).toContain('`map_feature_click` shot id=17 in section 2');
+      // A failed mutation stays, flagged.
+      expect(md).toContain('`hover` testid=toolbar-undo-button **(failed)**');
+    });
+
+    it('drops an action the record says is not mutating, even though the legacy list names it', () => {
+      execFileSync(process.execPath, [reportGen, v2Dir], { encoding: 'utf8' });
+      const steps = fs
+        .readFileSync(path.join(v2Dir, 'report.md'), 'utf8')
+        .split('## Steps to reproduce')[1]
+        .split('Automated replay')[0];
+
+      expect(steps).not.toContain('map_view');
+    });
+  });
 });

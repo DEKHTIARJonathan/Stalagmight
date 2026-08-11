@@ -1,7 +1,13 @@
 # macOS agent harness: MacSession (Tier 1) + grant-gated OS input (Tier 2)
 
-Status: design accepted, implementation in progress. Tracking issue: #421 (preflight
-error-surfacing split out as #422).
+Status: SHIPPED 2026-08-05. Tier 1 in PR #434, Tier 2 in PR #440, both merged;
+tracking issue #421 closed, preflight error-surfacing #422 closed with Tier 1.
+The live reference is `docs/agent-harness.md` (macOS section) and
+`e2e/agent/os/README.md` - this document is the design record and the probe
+evidence behind the decisions, kept because the platform constraints it measured
+are not re-derivable from the code. Deferred items live in the two "review
+residue" sections below; the only feature deliberately left out is `os_menu`
+(the AX menu-bar walk), whose helper subcommand is an explicit stub.
 
 ## 1. Problem
 
@@ -226,34 +232,6 @@ origin shifted down by `frame.h - window.innerHeight`, the only offset macOS win
 so the whole TS layer is covered without posting a real event or capturing a real screen -
 nothing in CI touches the desktop.
 
-## 6. Phased delivery
-
-- **Phase 0 - probes** (throwaway, results recorded below):
-  - R1: wdio-over-tauri-wd fidelity without the legacy overrides - `waitForDisplayed`,
-    element-origin `action('pointer')` move+click, `executeAsync` round-trip,
-    `browser.keys()`, `takeScreenshot()`.
-  - R2: harness `mapClick` under synthetic `MouseEvent` (fallback: eval-based
-    `PointerEvent` shim - the harness already owns `dispatchMapPointer` + interaction
-    verification).
-  - R3: confirm orphaned app on `delete_session` and that the wrapper pidfile lands
-    before it returns.
-  - R4: `__stalagmight_map__.getCanvas().toDataURL()` non-blank?
-  - R5: occlusion/App Nap - do waiters slow when the window is fully covered?
-- **PR 1** - interface extraction (behavioral no-op on Linux) + procs darwin arms + #422
-  fast refusal. Gate: `typecheck:agent`, lib unit tests, Linux `agent:smoke` +
-  `agent:mcp:smoke` via the on-demand workflow.
-- **PR 2** - MacSession + build arm/stamp v2 + wrapper orphan watch. Gate:
-  `pnpm agent:smoke` and `pnpm agent:mcp:smoke` green on macOS (mac-tolerant assertions:
-  crash markers under the isolated `HOME/Library/Application Support`, DOM-only
-  screenshot), plus a leak check (3 start/stop cycles, no surviving
-  `stalagmight`/`tauri-wd` processes).
-- **PR 3** - gap hardening (Meta caveat, `domOnly`, page.ts notes) + the
-  `docs/agent-harness.md` macOS section + app-tester agent-definition tier labels.
-- **PR 4** - Tier 2. Gate is manual at the machine (TCC): grant flow, preflights, a
-  testid click toggling real state, Cmd+S firing the real menu accelerator,
-  `os_screenshot` showing real map pixels, and the revoked-Screen-Recording path failing
-  loudly instead of shipping a wallpaper.
-
 ### 5.4b Tier 2 manual verification (2026-08-05, M1, owner present)
 
 The gate no automation can run, done at the machine with both TCC permissions
@@ -294,6 +272,34 @@ Deferred with rationale, per the one-triage-pass rule:
 - The helper crate's Rust `#[test]`s run under no gate (it is outside the
   src-tauri workspace and links macOS frameworks, so Linux CI cannot run them).
   Run `env -C e2e/agent/os/helper cargo test` locally when touching the crate.
+
+## 6. Phased delivery
+
+- **Phase 0 - probes** (throwaway, results recorded below):
+  - R1: wdio-over-tauri-wd fidelity without the legacy overrides - `waitForDisplayed`,
+    element-origin `action('pointer')` move+click, `executeAsync` round-trip,
+    `browser.keys()`, `takeScreenshot()`.
+  - R2: harness `mapClick` under synthetic `MouseEvent` (fallback: eval-based
+    `PointerEvent` shim - the harness already owns `dispatchMapPointer` + interaction
+    verification).
+  - R3: confirm orphaned app on `delete_session` and that the wrapper pidfile lands
+    before it returns.
+  - R4: `__stalagmight_map__.getCanvas().toDataURL()` non-blank?
+  - R5: occlusion/App Nap - do waiters slow when the window is fully covered?
+- **PR 1** - interface extraction (behavioral no-op on Linux) + procs darwin arms + #422
+  fast refusal. Gate: `typecheck:agent`, lib unit tests, Linux `agent:smoke` +
+  `agent:mcp:smoke` via the on-demand workflow.
+- **PR 2** - MacSession + build arm/stamp v2 + wrapper orphan watch. Gate:
+  `pnpm agent:smoke` and `pnpm agent:mcp:smoke` green on macOS (mac-tolerant assertions:
+  crash markers under the isolated `HOME/Library/Application Support`, DOM-only
+  screenshot), plus a leak check (3 start/stop cycles, no surviving
+  `stalagmight`/`tauri-wd` processes).
+- **PR 3** - gap hardening (Meta caveat, `domOnly`, page.ts notes) + the
+  `docs/agent-harness.md` macOS section + app-tester agent-definition tier labels.
+- **PR 4** - Tier 2. Gate is manual at the machine (TCC): grant flow, preflights, a
+  testid click toggling real state, Cmd+S firing the real menu accelerator,
+  `os_screenshot` showing real map pixels, and the revoked-Screen-Recording path failing
+  loudly instead of shipping a wallpaper.
 
 ## 7. Review residue (Tier 1 pre-PR round, 2026-08-05)
 
