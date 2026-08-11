@@ -94,6 +94,8 @@ The ROOT is a user choice, taken in the dialog and sent as `root_placement: Opti
 - **Place at the origin** - what a file with no georeference used to get in silence.
 - **Enter coordinates** - typed latitude/longitude, validated through `GpsCoordinates::new` in the converter, so a NaN or an out-of-range value fails the import rather than landing in a project.
 
+The typed datum deliberately carries `depth_reference: 0` ("not recorded"), the same value the file-derived anchor uses: Ariane states a surface position, not a datum depth. The zero-datum config dialog's own depth/elevation field (#524) is the eventual home for that number if this step ever needs to collect it - it is not a second convention, just a field this step does not ask for yet. Both magnitudes are bounded by `MAX_DEPTH_REFERENCE_M` (11 000 m, mirrored in `src/utils/gpsBounds.ts`).
+
 Deliberately NOT the DMP wizard's manual-placement engine: this dialog only ever opens on a brand-new, empty project (Ariane is a new-project-only format in `openOrImport.ts`), so there is no existing station to attach to and nothing on the map to drag against. A fuller step would need the dialog to be reachable with a project open, which is a separate change to the import router.
 
 ### Excluded shots

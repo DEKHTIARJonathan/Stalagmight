@@ -11,6 +11,7 @@ import { Select } from '../common/Select';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { parseGps, detectFormat, looksTransposed, looksTransposedRawDD, type GpsFormat } from '../../utils/gps';
+import { MAX_DEPTH_REFERENCE_M } from '../../utils/gpsBounds';
 import { formatFixed } from '../../i18n/format';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -376,7 +377,13 @@ export default function ZeroDatumConfigDialog({
   );
   const [depthReferenceInput, setDepthReferenceInput] = useState(initialDepthReferenceRef.current);
   const depthReferenceParsed = depthReferenceInput.trim() === '' ? 0 : Number(depthReferenceInput);
-  const depthReferenceValid = Number.isFinite(depthReferenceParsed);
+  // Finiteness is not a range: `1e300` is finite and used to travel all the way
+  // into the project's geometry. The backend refuses it now
+  // (`GpsCoordinates::validate`), so accepting it here would only produce a
+  // confirm that fails at the far end.
+  const depthReferenceValid =
+    Number.isFinite(depthReferenceParsed) &&
+    Math.abs(depthReferenceParsed) <= MAX_DEPTH_REFERENCE_M;
 
   // Metadata state. Each field keeps an initial-value ref alongside it, so the
   // dirty guard (#F9) can tell "touched" from "still what the dialog opened

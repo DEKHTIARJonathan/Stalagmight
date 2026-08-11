@@ -188,6 +188,33 @@ describe('ZeroDatumConfigDialog depth reference (#524)', () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
+  // #524 review: `Number.isFinite` was the only gate, and finiteness is not a
+  // range - 1e300 is finite and travelled through the confirm, into the
+  // project's geometry, and into every distance derived from it. The backend
+  // (`GpsCoordinates::validate`) refuses it now, so accepting it here would
+  // only produce a Confirm that fails at the far end.
+  it('blocks Confirm on a depth reference outside any earthly range', () => {
+    renderDialog();
+    enterGps();
+
+    for (const value of ['1e300', '-1e300', '11001']) {
+      enterDepthReference(value);
+      expect(Number.isFinite(Number(value))).toBe(true);
+      expect(screen.getByTestId('zero-datum-config-confirm')).toBeDisabled();
+      expect(screen.getByTestId('zero-datum-depth-reference-error')).toBeInTheDocument();
+    }
+
+    // The bound itself is still fine, and so is a datum above the surface.
+    for (const value of ['11000', '-11000', '-4']) {
+      enterDepthReference(value);
+      expect(screen.getByTestId('zero-datum-config-confirm')).toBeEnabled();
+    }
+
+    fireEvent.click(screen.getByTestId('zero-datum-config-confirm'));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onConfirm.mock.calls[0]![0].gps.depth_reference).toBe(-4);
+  });
+
   it('is dirty once a depth reference is typed, and the guard is field-specific', () => {
     renderDialog();
     enterGps();
