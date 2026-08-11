@@ -46,6 +46,16 @@ jobs:
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      # Release-profile compile check (#541): the debug-profile test run above
+      # cannot see a call whose only target is cfg(debug_assertions)-gated
+      # (debug_assert! arguments still type-check in release), and this job is
+      # the last thing standing between a tag/dispatch and the paid
+      # three-platform matrix. Type resolution only - codegen, LTO and link
+      # failures still surface in `build`.
+      - name: Release-profile compile check
+        run: cargo check --release --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
+        env:
+          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
 
   build:
     needs: verify
