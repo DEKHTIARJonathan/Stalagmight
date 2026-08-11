@@ -184,4 +184,86 @@ describe('useOnboarding: workspace-basics start/close thrash (#368)', () => {
     rerender({ ...baseContext, activeDialog: 'settings' });
     expect(result.current.activeFlowId).toBeNull();
   });
+
+  it('does not resume after disable -> restart (config rewrite shape) -> re-enable: starts at 0', () => {
+    // Mirrors Settings > General > toggle onboarding off, then Restart
+    // onboarding (which rewrites enabled: true, completedFlowIds: [],
+    // independent of the toggle) - a review-confirmed gap (#368): the
+    // enabled-false effect used to remember the interrupted step via
+    // `closeActiveFlow(false)`, and nothing forgot it again on re-enable.
+    interface Props {
+      context: OnboardingContext;
+      enabled: boolean;
+      completedFlowIds: string[];
+    }
+    const { result, rerender } = renderHook(
+      (props: Props) => useOnboarding(props.context, props),
+      { initialProps: { context: baseContext, enabled: true, completedFlowIds: noCompletedFlows } }
+    );
+    expect(result.current.activeFlowId).toBe(ORIENTATION_FLOW_ID);
+
+    act(() => {
+      result.current.next();
+      result.current.next();
+    });
+    expect(result.current.stepIndex).toBe(2);
+
+    // Toggle off mid-tour: the enabled-false effect closes and (pre-fix)
+    // would remember step 2.
+    rerender({ context: baseContext, enabled: false, completedFlowIds: noCompletedFlows });
+    expect(result.current.activeFlowId).toBeNull();
+
+    // Restart onboarding's config rewrite: enabled back to true,
+    // completedFlowIds cleared (a fresh `[]` reference, as a real config
+    // reload would produce - not the same `noCompletedFlows` instance).
+    // Injection: removing `rememberedStepRef.current.clear()` from the
+    // enabled-false effect makes `stepIndex` read 2 below instead of 0.
+    rerender({ context: baseContext, enabled: true, completedFlowIds: [] });
+    expect(result.current.activeFlowId).toBe(ORIENTATION_FLOW_ID);
+    expect(result.current.stepIndex).toBe(0);
+  });
+
+  it('a mid-tour Settings-open interruption does not resume after clearRememberedProgress() fires (the Restart-click wiring), even though nothing else in the hook\'s inputs changed', () => {
+    // #368 review finding: opening Settings mid-tour (activeDialog !=
+    // null) closes and remembers the step via the ordinary shouldStart
+    // re-check - same as any other interruption. Clicking Restart onboarding
+    // stages a config rewrite that will not actually reach the store until
+    // Settings Save, and even then can be a same-session no-op for every
+    // field this hook reads (a first-time tour already burned
+    // `orientationConsumed`'s underlying flag, and nothing has completed
+    // yet, so `completedFlowIds` does not shrink). That is why Restart calls
+    // `clearRememberedProgress()` directly (via useOnboardingRestart.ts),
+    // not something this test can trigger by rerendering `context` alone.
+    const { result, rerender } = renderHook(
+      (context: OnboardingContext) =>
+        useOnboarding(context, { enabled: true, completedFlowIds: noCompletedFlows }),
+      { initialProps: baseContext }
+    );
+    expect(result.current.activeFlowId).toBe(ORIENTATION_FLOW_ID);
+
+    act(() => {
+      result.current.next();
+      result.current.next();
+    });
+    expect(result.current.stepIndex).toBe(2);
+
+    // Settings opens: the ordinary re-check closes and remembers step 2.
+    rerender({ ...baseContext, activeDialog: 'settings' });
+    expect(result.current.activeFlowId).toBeNull();
+
+    // Restart is clicked (GeneralSettings calls this immediately, at click
+    // time - see useOnboardingRestart.ts). Injection: if
+    // `clearRememberedProgress` did not clear `rememberedStepRef`, this call
+    // would be a no-op and the assertion below would still fail with 2.
+    act(() => {
+      result.current.clearRememberedProgress();
+    });
+
+    // Settings closes (context returns to baseContext, exactly as it was
+    // before Settings opened - reproducing the "nothing else changed"
+    // scenario the review confirmed).
+    rerender(baseContext);
+    expect(result.current.activeFlowId).toBe(ORIENTATION_FLOW_ID);
+    expect(result.current.stepIndex).toBe(0);
+  });
 });

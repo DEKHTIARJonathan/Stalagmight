@@ -21,6 +21,14 @@ interface UseOnboardingResult {
   skip: () => void;
   resetProgress: () => void;
   startFlow: (flowId: string) => void;
+  /**
+   * Forgets every remembered interrupted-flow step (#368) - and ONLY that:
+   * no config write, no touch to `completedFlowIds` or the active flow. See
+   * `useOnboardingRestart.ts` for why Settings > General > Restart onboarding
+   * needs this distinct from `resetProgress` (which does write config, live,
+   * outside Settings' staged Save/Cancel).
+   */
+  clearRememberedProgress: () => void;
 }
 
 interface UseOnboardingOptions {
@@ -68,6 +76,15 @@ export function useOnboarding(context: OnboardingContext, options: UseOnboarding
    * it must not itself trigger a render, and it is read once per restart.
    */
   const rememberedStepRef = useRef<Map<string, number>>(new Map());
+  /**
+   * The previous prop-derived `completedFlowIds`, used ONLY to detect a
+   * config-level progress reset (below) - never the internal `completedFlowIds`
+   * state, which grows ahead of this prop between a completion and its
+   * (fire-and-forget) config persist landing; comparing against that instead
+   * would misfire on every ordinary completion.
+   */
+  const previousCompletedFlowIdsPropRef = useRef<string[]>(normalizeFlowIds(completedFlowIdsProp));
+  const previousOrientationConsumedRef = useRef(context.orientationConsumed);
 
   const activeFlow = useMemo(
     () => ONBOARDING_FLOWS.find((flow) => flow.id === activeFlowId) ?? null,
@@ -93,8 +110,38 @@ export function useOnboarding(context: OnboardingContext, options: UseOnboarding
 
   useEffect(() => {
     const normalized = normalizeFlowIds(completedFlowIdsProp);
+    const previous = previousCompletedFlowIdsPropRef.current;
+    if (normalized.length < previous.length) {
+      // A shorter list than the config held a moment ago is an explicit
+      // progress reset (#368), not ordinary completion: the only writers of
+      // `onboarding_completed_flows` are `markFlowCompleted` (App.tsx's
+      // `persistCompletedOnboardingFlows`, which only ever accumulates) and
+      // Settings > General > Restart onboarding (which writes `[]`). Nothing
+      // else in the codebase touches this field, so a shrink here can only
+      // be that Restart - config just told every flow to start over, not
+      // merely one interrupted flow to resume.
+      rememberedStepRef.current.clear();
+    }
+    previousCompletedFlowIdsPropRef.current = normalized;
     setCompletedFlowIds((current) => (sameFlowIdList(current, normalized) ? current : normalized));
   }, [completedFlowIdsProp]);
+
+  useEffect(() => {
+    const previousOrientationConsumed = previousOrientationConsumedRef.current;
+    previousOrientationConsumedRef.current = context.orientationConsumed;
+    if (previousOrientationConsumed && !context.orientationConsumed) {
+      // `orientationConsumed` only ever burns true (App.tsx's burn effect,
+      // once the tour is actually on screen); the only write back to false
+      // is Restart onboarding's `onboarding_first_launch_done: false`. That
+      // covers the Restart shape the `completedFlowIds`-shrink check above
+      // cannot: if nothing has completed yet (workspace-basics interrupted
+      // mid-run, nothing else touched), `onboarding_completed_flows` is
+      // already `[]` and Restart's write to it is a no-op length-wise, but
+      // this flag still flips - the tour DID already burn it by the time it
+      // is on screen to interrupt.
+      rememberedStepRef.current.clear();
+    }
+  }, [context.orientationConsumed]);
 
   const markFlowCompleted = useCallback(
     (flowId: string) => {
@@ -160,6 +207,10 @@ export function useOnboarding(context: OnboardingContext, options: UseOnboarding
     setStepIndex(0);
   }, [onCompletedFlowIdsChange]);
 
+  const clearRememberedProgress = useCallback(() => {
+    rememberedStepRef.current.clear();
+  }, []);
+
   const startFlow = useCallback((flowId: string) => {
     const flow = ONBOARDING_FLOWS.find((candidate) => candidate.id === flowId);
     if (!flow) {
@@ -201,6 +252,11 @@ export function useOnboarding(context: OnboardingContext, options: UseOnboarding
     }
     if (activeFlowId) {
       closeActiveFlow(false);
+      // Toggling onboarding off is an explicit opt-out (#368), not a
+      // transient interruption `closeActiveFlow(false)` should let the flow
+      // resume from: forget the step it just remembered, same as an
+      // explicit skip/completion.
+      rememberedStepRef.current.clear();
     }
   }, [enabled, activeFlowId, closeActiveFlow]);
 
@@ -241,5 +297,6 @@ export function useOnboarding(context: OnboardingContext, options: UseOnboarding
     skip,
     resetProgress,
     startFlow,
+    clearRememberedProgress,
   };
 }

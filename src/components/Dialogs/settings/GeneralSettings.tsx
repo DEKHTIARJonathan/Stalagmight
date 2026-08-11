@@ -11,6 +11,7 @@ import { isFieldChanged, createNumericHandler, createToggleHandler, createSelect
 import { defaultConfig } from '../../../types/config';
 import type { ShortcutFeedback } from '../../../types/config';
 import { isTelemetryAvailable } from '../../../utils/telemetry';
+import { restartOnboardingProgress } from '../../../hooks/useOnboardingRestart';
 
 /**
  * General settings category content.
@@ -87,6 +88,11 @@ export function GeneralSettings({
   const handleOnboardingToggle = createToggleHandler(onChange,
     (v) => ({ general: { ...config.general, onboarding_enabled: v } }));
   const handleRestartOnboarding = useCallback(() => {
+    // Clears `useOnboarding`'s live remembered-step map immediately, at
+    // click time - not gated on this staged change reaching Save (#368).
+    // See useOnboardingRestart.ts for why the config write below cannot be
+    // relied on to signal this on its own.
+    restartOnboardingProgress();
     onChange({
       general: {
         ...config.general,

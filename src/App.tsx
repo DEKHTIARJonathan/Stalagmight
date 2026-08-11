@@ -21,6 +21,7 @@ import { guardQuit } from './utils/quit';
 import { isDroppableFilePath } from './utils/fileDialogs';
 import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
+import { registerOnboardingRestart } from './hooks/useOnboardingRestart';
 import { ORIENTATION_FLOW_ID } from './onboarding/flows';
 import i18n from './i18n';
 import { setNumberFormatLocale, setDateFormatLocale } from './i18n/format';
@@ -445,6 +446,15 @@ function App() {
     completedFlowIds: config?.general?.onboarding_completed_flows ?? [],
     onCompletedFlowIdsChange: persistCompletedOnboardingFlows,
   });
+
+  // Lets Settings > General > Restart onboarding reach `clearRememberedProgress`
+  // without prop-drilling it through SettingsDialog and every settings
+  // category (#368) - see useOnboardingRestart.ts for why the config write
+  // Restart stages cannot be relied on to signal this on its own.
+  useEffect(() => {
+    registerOnboardingRestart(onboarding.clearRememberedProgress);
+    return () => registerOnboardingRestart(null);
+  }, [onboarding.clearRememberedProgress]);
 
   // Burn the flag once the orientation tour is actually on screen - not when
   // config loads (a first launch has no project, so the tour cannot start yet
