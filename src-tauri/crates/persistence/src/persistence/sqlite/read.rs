@@ -419,7 +419,16 @@ impl Database {
                     Ok((
                         section_id,
                         Shot {
-                            id: section_id * FEATURE_ID_STRIDE + (seq as u32),
+                            // Saturating, like `models::shot_display_position`:
+                            // the section id comes off disk, and a file naming
+                            // a section id >= u32::MAX / FEATURE_ID_STRIDE
+                            // would panic this encode in a debug build rather
+                            // than load. What the import can create is bounded
+                            // upstream (#427's per-run cut cap); this is the
+                            // read side refusing to trust the file.
+                            id: section_id
+                                .saturating_mul(FEATURE_ID_STRIDE)
+                                .saturating_add(seq as u32),
                             azimuth_in: row.get(2)?,
                             azimuth_out: row.get(3)?,
                             length: row.get(4)?,
@@ -499,8 +508,10 @@ impl Database {
                 // Advance each section's next_shot_id past its loaded
                 // shots so future appends don't collide with persisted IDs.
                 for section in sections.iter_mut() {
-                    section.next_shot_id =
-                        section.id * FEATURE_ID_STRIDE + section.shots.len() as u32;
+                    section.next_shot_id = section
+                        .id
+                        .saturating_mul(FEATURE_ID_STRIDE)
+                        .saturating_add(section.shots.len() as u32);
                 }
             }
         }
