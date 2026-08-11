@@ -21,6 +21,7 @@ export type {
   TmlUnit,
   TmlGeoCoding,
   TmlClosure,
+  TmlRootPlacement,
   CompassFile,
   CompassSurveySummary,
   InvalidShotCounts,

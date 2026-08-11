@@ -231,39 +231,94 @@ test.describe('Ariane TML import journey', () => {
   });
 
   // #447: the Cancel/Import footer used to scroll away with the dialog body,
-  // starting below the fold at 1024x640 (the issue's cited default zoom). A
-  // small viewport forces the body to overflow so scrolling is observable.
-  test('the sticky footer stays visible and does not cover the last row when the body scrolls', async ({ page }) => {
+  // starting below the fold at 1024x640 (the issue's cited default zoom).
+  //
+  // #425 moved this dialog to the mNemo wizard's shape - a `WizardScrollBody`
+  // scroller with a map column beside the settings - so the footer is now a
+  // flex SIBLING below the scroller rather than sticky inside it. The
+  // guarantee is unchanged and still worth pinning structurally: nothing the
+  // body scrolls can take the primary action off screen or end up on top of it.
+  test('the footer stays visible and clear of the body when the body scrolls', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 500 });
     await openTmlImportDialog(page, TML_PATH, 'Sticky Footer Import');
 
-    const body = page.getByTestId('tml-import-dialog-body');
+    const scroller = page.getByTestId('wizard-body-scroll');
     const confirmButton = page.getByTestId('tml-import-confirm');
-    const lastRow = page.getByTestId('tml-section-row-1');
 
-    // Scroll the dialog BODY (not the inner section-table scroller) part-way
-    // down: the primary action must still be reachable without a second,
-    // manual scroll to find it.
-    await body.evaluate((el) => {
-      el.scrollTop = el.scrollHeight / 2;
-    });
     await expect(confirmButton).toBeInViewport();
-
-    // Scroll to the true bottom: the sticky footer must not overlap the last
-    // row of content above it (it occupies real flow space - a z-index or
-    // negative-margin regression could make it float on top instead).
-    await body.evaluate((el) => {
+    await scroller.evaluate((el) => {
       el.scrollTop = el.scrollHeight;
     });
     await expect(confirmButton).toBeInViewport();
 
-    const rowBox = await lastRow.boundingBox();
+    const scrollerBox = await scroller.boundingBox();
     const footerBox = await confirmButton.boundingBox();
-    expect(rowBox).not.toBeNull();
+    expect(scrollerBox).not.toBeNull();
     expect(footerBox).not.toBeNull();
-    if (rowBox && footerBox) {
-      expect(rowBox.y + rowBox.height).toBeLessThanOrEqual(footerBox.y + 1);
+    if (scrollerBox && footerBox) {
+      expect(scrollerBox.y + scrollerBox.height).toBeLessThanOrEqual(footerBox.y + 1);
     }
+  });
+
+  // #425: the per-section filter. Side Passage hangs off Main Line, so
+  // unticking Main Line also exercises the re-anchor path end to end.
+  test('unticking a section imports only the rest, and says so on the wire', async ({ page }) => {
+    await openTmlImportDialog(page, TML_PATH, 'Filtered Import');
+
+    await expect(page.getByTestId('tml-selected-count')).toContainText('2 of 2');
+    await page.getByTestId('tml-section-0').uncheck();
+
+    await expect(page.getByTestId('tml-selected-count')).toContainText('1 of 2');
+    // Counts follow the SELECTION, not the file: Side Passage keeps 2 shots
+    // (its Closure row is never imported).
+    await expect(page.getByTestId('tml-section-count')).toHaveText('1');
+    await expect(page.getByTestId('tml-shot-count')).toHaveText('2');
+
+    await page.getByTestId('tml-import-confirm').click();
+    await expect(page.getByTestId('tml-import-dialog')).toBeHidden({ timeout: 15000 });
+
+    const calls = await getTmlImportCalls(page);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.selectedSections).toEqual([1]);
+    expect((await getImportedSections(page)).map((s) => s.name)).toEqual(['Side Passage']);
+  });
+
+  test('unticking every section disables Import', async ({ page }) => {
+    await openTmlImportDialog(page, TML_PATH, 'Empty Selection Import');
+
+    await page.getByTestId('tml-select-all').uncheck();
+
+    await expect(page.getByTestId('tml-import-empty')).toBeVisible();
+    await expect(page.getByTestId('tml-import-confirm')).toBeDisabled();
+    expect(await getTmlImportCalls(page)).toHaveLength(0);
+  });
+
+  // #425: placement is a stated choice now, not a silent default. The synthetic
+  // file carries no georeference, so the "use the file's position" option is
+  // not offered and Origin is what the dialog proposes.
+  test('states the placement choice on the wire, and holds Import on bad coordinates', async ({ page }) => {
+    await openTmlImportDialog(page, TML_PATH, 'Placement Import');
+
+    await expect(page.getByTestId('tml-placement-step')).toBeVisible();
+    await expect(page.getByTestId('tml-placement-file')).toHaveCount(0);
+    await expect(page.getByTestId('tml-placement-origin')).toBeChecked();
+
+    // Choosing manual entry with nothing typed is not an answer.
+    await page.getByTestId('tml-placement-manual').check();
+    await expect(page.getByTestId('tml-import-confirm')).toBeDisabled();
+    await page.getByTestId('tml-placement-latitude').fill('91');
+    await page.getByTestId('tml-placement-longitude').fill('0');
+    await expect(page.getByTestId('tml-placement-error')).toBeVisible();
+    await expect(page.getByTestId('tml-import-confirm')).toBeDisabled();
+
+    // Back to the origin, which the backend now hears explicitly.
+    await page.getByTestId('tml-placement-origin').check();
+    await expect(page.getByTestId('tml-import-confirm')).toBeEnabled();
+    await page.getByTestId('tml-import-confirm').click();
+    await expect(page.getByTestId('tml-import-dialog')).toBeHidden({ timeout: 15000 });
+
+    const calls = await getTmlImportCalls(page);
+    expect(calls[0]?.rootPlacement).toEqual({ type: 'origin' });
   });
 
   test('discarding the empty project after cancelling returns to the project list', async ({ page }) => {

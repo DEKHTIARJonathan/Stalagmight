@@ -2819,9 +2819,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // index i ends at station i+1. Placements and closures below both
             // resolve through this, so exclusion renumbering behaves like the
             // real import.
+            // #425: `null` selects every section; a list selects those indices.
+            // Deselected sections contribute nothing to `idToImportLoc` either,
+            // mirroring `build_selection_index` - which is what makes a
+            // dependent section fall back to the origin instead of pointing at
+            // a section that was never created.
+            const rawSelection = args?.selectedSections as number[] | null | undefined;
+            const selectedSections = rawSelection ? new Set(rawSelection) : null;
+            const isSectionSelected = (i: number) =>
+              selectedSections === null || selectedSections.has(i);
             const keptBySection: Array<{ tmlIndex: number; shots: typeof tmlFile.sections[number]['shots'] }> = [];
             const idToImportLoc = new Map<number, [number, number]>();
             tmlFile.sections.forEach((tmlSection, tmlIndex) => {
+              if (!isSectionSelected(tmlIndex)) return;
               const kept = tmlSection.shots.filter(
                 (shot) => shot.shot_type !== 'Closure' && (includeExcluded || !shot.excluded)
               );
