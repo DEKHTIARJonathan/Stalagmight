@@ -40,7 +40,7 @@ import { ZERO_DATUM_CARRY_KEY, readCarriedZeroDatumConfig, carryZeroDatumConfig 
 
 function App() {
   const { t } = useTranslation();
-  const { project, stations, recentProjects, loading, loadConfig, config, isDirty, setConfig } = useProjectStore();
+  const { project, stations, loading, loadConfig, config, isDirty, setConfig } = useProjectStore();
   const integrityIssues = useProjectStore((s) => s.integrityIssues);
   const integrityDismissed = useProjectStore((s) => s.integrityDismissed);
   const integritySaveBlocked = useProjectStore((s) => s.integritySaveBlocked);
@@ -406,20 +406,41 @@ function App() {
     }
   }, [config]);
 
-  const onboarding = useOnboarding({
-    view,
-    hasProject: project !== null,
-    hasRecentProjects: recentProjects.length > 0,
-    configRecentProjectsCount: config?.general?.recent_projects.length ?? null,
-    activeDialog,
-    dmpImportWizardPhase,
-    placementModeActive: placementMode !== null,
-    isDmpImportContext: Boolean(dialogData.dmpFile),
-    loadingProject: loading.isLoading,
-    splashVisible: splashMounted,
-    configLoaded: config !== null,
-    orientationConsumed,
-  }, {
+  // Memoized on the primitive values it is built from, not recreated fresh
+  // every App render: an unstable reference here re-ran `useOnboarding`'s
+  // effects on every App render (e.g. on every `loading-progress` event
+  // during an import) instead of only on a real change to one of these
+  // values. That churn is only ever wasted work, not the source of the
+  // #368 thrash itself - a real, sustained `shouldStart` transition (a
+  // project load, a dialog) still reaches these effects either way, new
+  // object or not. The fix for THAT is `useOnboarding`'s remembered-step
+  // resume; this memo only keeps unrelated re-renders from mattering.
+  const onboardingContext = useMemo(
+    () => ({
+      view,
+      hasProject: project !== null,
+      activeDialog,
+      dmpImportWizardPhase,
+      placementModeActive: placementMode !== null,
+      loadingProject: loading.isLoading,
+      splashVisible: splashMounted,
+      configLoaded: config !== null,
+      orientationConsumed,
+    }),
+    [
+      view,
+      project !== null,
+      activeDialog,
+      dmpImportWizardPhase,
+      placementMode !== null,
+      loading.isLoading,
+      splashMounted,
+      config !== null,
+      orientationConsumed,
+    ]
+  );
+
+  const onboarding = useOnboarding(onboardingContext, {
     enabled: config?.general?.onboarding_enabled ?? true,
     completedFlowIds: config?.general?.onboarding_completed_flows ?? [],
     onCompletedFlowIdsChange: persistCompletedOnboardingFlows,

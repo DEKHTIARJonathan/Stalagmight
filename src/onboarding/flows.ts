@@ -24,12 +24,9 @@ export interface OnboardingStepDefinition {
 export interface OnboardingContext {
   view: ViewType;
   hasProject: boolean;
-  hasRecentProjects: boolean;
-  configRecentProjectsCount: number | null;
   activeDialog: string | null;
   dmpImportWizardPhase: DmpImportWizardPhase | null;
   placementModeActive: boolean;
-  isDmpImportContext: boolean;
   loadingProject: boolean;
   splashVisible: boolean;
   configLoaded: boolean;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ONBOARDING_FLOWS,
   type OnboardingContext,
@@ -57,6 +57,17 @@ export function useOnboarding(context: OnboardingContext, options: UseOnboarding
   );
   const [activeFlowId, setActiveFlowId] = useState<string | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
+  /**
+   * Session-only memory of the step a flow was on when it was torn down by
+   * the `shouldStart` re-check (never by an explicit skip/complete - see
+   * `closeActiveFlow` below). `shouldStart`'s inputs can legitimately go
+   * false for seconds during a real operation (a project load, a dialog) -
+   * long enough that no bounded debounce can span it - so instead of
+   * delaying the close, the close is immediate and invisible: the SAME flow
+   * resumes from here instead of step 0 (#368). Not React state on purpose -
+   * it must not itself trigger a render, and it is read once per restart.
+   */
+  const rememberedStepRef = useRef<Map<string, number>>(new Map());
 
   const activeFlow = useMemo(
     () => ONBOARDING_FLOWS.find((flow) => flow.id === activeFlowId) ?? null,
@@ -101,13 +112,24 @@ export function useOnboarding(context: OnboardingContext, options: UseOnboarding
 
   const closeActiveFlow = useCallback(
     (suppressActiveFlow: boolean) => {
-      if (activeFlowId && suppressActiveFlow) {
-        markFlowCompleted(activeFlowId);
+      if (activeFlowId) {
+        if (suppressActiveFlow) {
+          // A completion or an explicit skip: never resume this. Drop any
+          // memory of an earlier interrupted run so a later re-eligible
+          // context can't resurrect a step past the one the user dismissed.
+          markFlowCompleted(activeFlowId);
+          rememberedStepRef.current.delete(activeFlowId);
+        } else {
+          // Torn down by the shouldStart re-check, not by the user (#368):
+          // remember where it was so the auto-start effect resumes here
+          // instead of step 0 once the flow is eligible again.
+          rememberedStepRef.current.set(activeFlowId, stepIndex);
+        }
       }
       setActiveFlowId(null);
       setStepIndex(0);
     },
-    [activeFlowId, markFlowCompleted]
+    [activeFlowId, markFlowCompleted, stepIndex]
   );
 
   const next = useCallback(() => {
@@ -133,6 +155,7 @@ export function useOnboarding(context: OnboardingContext, options: UseOnboarding
   const resetProgress = useCallback(() => {
     setCompletedFlowIds([]);
     onCompletedFlowIdsChange?.([]);
+    rememberedStepRef.current.clear();
     setActiveFlowId(null);
     setStepIndex(0);
   }, [onCompletedFlowIdsChange]);
@@ -142,6 +165,9 @@ export function useOnboarding(context: OnboardingContext, options: UseOnboarding
     if (!flow) {
       return;
     }
+    // An explicit start (e.g. "Restart onboarding") always begins at step 0,
+    // never resuming a stale interrupted run.
+    rememberedStepRef.current.delete(flowId);
     setActiveFlowId(flowId);
     setStepIndex(0);
   }, []);
@@ -158,6 +184,13 @@ export function useOnboarding(context: OnboardingContext, options: UseOnboarding
       return;
     }
     if (!activeFlow.shouldStart(context)) {
+      // Close immediately - the interrupting condition (a project load, a
+      // dialog) can legitimately hold for seconds, far past anything a
+      // bounded debounce could span, and every current step is
+      // `interaction: 'locked'`: leaving the overlay up past its own
+      // precondition would keep blocking clicks on whatever now owns the
+      // screen. `closeActiveFlow(false)` remembers `stepIndex` (#368) so the
+      // auto-start effect below resumes here instead of restarting at 0.
       closeActiveFlow(false);
     }
   }, [activeFlow, closeActiveFlow, context]);
@@ -185,7 +218,11 @@ export function useOnboarding(context: OnboardingContext, options: UseOnboarding
       return;
     }
     setActiveFlowId(nextFlow.id);
-    setStepIndex(0);
+    // Resume where a `shouldStart` re-check interrupted this same flow
+    // (#368), rather than restarting at step 0. `rememberedStepRef` holds
+    // nothing for a flow that has never run, or that was completed/skipped
+    // (cleared in `closeActiveFlow`), so both of those still start at 0.
+    setStepIndex(rememberedStepRef.current.get(nextFlow.id) ?? 0);
   }, [
     enabled,
     activeFlowId,
