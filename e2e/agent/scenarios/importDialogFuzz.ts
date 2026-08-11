@@ -2098,157 +2098,54 @@ export const importDialogFuzz: Scenario = {
           if (digest.undo > Math.max(0, before.undoDepth)) sawCommit = true;
         };
 
-        for (;;) {
-          if (replaySteps) {
-            const source = flowSteps ?? replaySteps;
-            if (replayAt >= source.length) break;
-            const step = source[replayAt] as TraceStep;
-            replayAt += 1;
-            if (step.kind === 'genFile') {
-              materialize(step.spec as GeneratedFileSpec, step.rel);
-              ctx.metric('replay:genFile');
-              continue;
-            }
-            if (step.kind === 'corpusFile') {
-              // The replayer's OWN corpus, or none. A trace carries a reference
-              // and no content, so resolving one means scanning the corpus THIS
-              // machine configured; a machine without that file replays
-              // everything else and the move that would have opened it is
-              // skipped and counted. That is a narrower replay, not a failed one.
-              //
-              // THE HASH IS PREFERRED AND THERE IS NO FALLBACK TO THE ID. Both
-              // resolve the same file when the replayer has it, and when the
-              // hash misses, the id is precisely the thing that might match a
-              // DIFFERENT file - 20 bits over a few thousand entries - which
-              // would materialize somebody else's survey and open it under the
-              // recorded file's name. A miss is a skip; a wrong file is a lie.
-              const lookup = corpusLookup(step.corpusHash ?? step.corpusId);
-              if (lookup.entry === null) {
-                // `ambiguous` is a v3-shaped step (id only) landing on a corpus
-                // whose crc20 collides. Counted apart from a plain absence
-                // because it says something about the corpus, not the trace.
-                ctx.metric(lookup.outcome === 'ambiguous' ? 'corpus:ambiguousId' : 'corpus:absent');
-                continue;
-              }
-              const destination = resolveRel(step.rel);
-              const copied = materializeCorpusEntry(lookup.entry, destination);
-              ctx.metric(
-                copied.skipped ? `corpus:notMaterialized:${copied.reason ?? 'unknown'}` : 'replay:corpusFile',
-              );
-              // A REPLAY needs the redactions as much as a recording does - the
-              // app echoes the basenames it opened, and a replayed failure is
-              // exactly the message somebody attaches to an issue.
-              if (!copied.skipped) registerCorpusRedactions(lookup.entry.id, destination, copied.names);
-              continue;
-            }
-            const move = moveFromStep(step);
-            if (move === null) {
-              ctx.metric(`replay:unsupported:${step.kind}`);
-              continue;
-            }
-            // OBSERVE BEFORE ACTING, on a replay only.
-            //
-            // The walk otherwise sees the screen only AFTER each move, so a
-            // dialog that opens in the async tail of move N and is dismissed by
-            // move N+1 is never sampled. Measured on a recorded F3 red: the
-            // recording's steps 29-30 are `zero-datum-config-confirm` then
-            // `import-receipt-continue`, and on replay the post-confirm digest
-            // read `wiz-done` (the modal had not opened yet) while the next step
-            // dispatched successfully against `import-receipt-continue` and left
-            // `idle`. The receipt existed only between the two moves. F3 reads
-            // its claim off that modal, so it had nothing to compare and a
-            // recorded F3 failure replayed green.
-            //
-            // A live walk does not need this - it keeps drawing moves and meets
-            // the dialog on a later step - and must not have it: the race
-            // generators depend on dispatching against the screen the digest
-            // already classified.
-            const beforeStep = await observeScreen(ctx, false);
-            {
-              const seen = captureReceipt(
-                { claim: receipt, atReceipt, projectFileAtReceipt, historyTouchedBeforeReceipt },
-                beforeStep,
-                historyTouched,
-              );
-              if (seen.claim !== null && receipt === null) {
-                receipt = seen.claim;
-                atReceipt = seen.atReceipt;
-                projectFileAtReceipt = seen.projectFileAtReceipt;
-                historyTouchedBeforeReceipt = seen.historyTouchedBeforeReceipt;
-                ctx.metric('replay:receiptSeenBetweenSteps');
-                guarded(() => checkReceipt(receipt as ReceiptClaim));
-              }
-              if (beforeStep.receipt !== null) sawReceipt = true;
-            }
-            await afterMove(move, await execute(move, false));
-            continue;
-          }
-
-          if (steps >= budget) {
-            ctx.metric('flowBudgetExhausted');
-            break;
-          }
-          if (digest.screen === 'idle') {
-            if (leftIdle) break;
-            if (startAttempts >= START_ATTEMPTS) {
-              ctx.metric('flowNeverStarted');
-              break;
-            }
-            startAttempts += 1;
-          }
-
-          stepsOnScreen = digest.screen === previousScreen ? stepsOnScreen + 1 : 0;
-          previousScreen = digest.screen;
-          const mode = digest.screen === 'idle' ? 'draw' : progressMode(stepsOnScreen);
-          if (mode === 'escape') {
-            digest = await escapeFrom(digest);
-            stepsOnScreen = 0;
-            previousScreen = digest.screen;
-            break;
-          }
-
-          const drawn = drawMove(digest, mode);
-          const move = drawn === null ? null : enforceSavePath(drawn, digest);
-          if (move === null) {
-            // Nothing to draw here. At idle there is nothing to leave either, so
-            // the flow is simply not startable this time round.
-            if (digest.screen === 'idle') {
-              ctx.metric('idleHadNoMove');
-              break;
-            }
-            digest = await escapeFrom(digest);
-            break;
-          }
-
+        /**
+         * Run one move and everything that judges it. SHARED by both walks.
+         *
+         * It used to be the live walk's own code, sitting after the draw, and a
+         * replay `continue`d before reaching any of it - so every INLINE check
+         * here (FROZEN DELETE, INCOMPLETE SHOTS, OVERLAP MODES, ORPHAN PLACEMENT,
+         * IMPORT GATE, EXPORT CHORD, CLOSE) was live-only, and a recorded red from
+         * one of them replayed GREEN. That is the reproduction blindness we already
+         * closed for F3, one layer over: an oracle a replay cannot run is an oracle
+         * record/replay/shrink cannot minimize.
+         *
+         * Every check in here is a function of the PRE-move screen, the move, and
+         * the outcome, all three of which a replay has - `before` is the digest the
+         * replay samples ahead of the step, exactly as the live walk uses the digest
+         * it drew against. Nothing needed generator context in the end, including
+         * the race counters: `raceMove` reads `before.live[testid]`, not the
+         * generator that chose it.
+         */
+        const runMove = async (move: FuzzMove, before: ImportScreenDigest, record: boolean): Promise<void> => {
           // Snapshots taken BEFORE the move, for the three inline checks: each
           // is only meaningful against the state its own move acted on.
-          const screenBefore = digest.screen;
-          const rowsBefore = digest.rows;
+          const screenBefore = before.screen;
+          const rowsBefore = before.rows;
           // The two store values `importFlowOwnsScreen` consults, as the digest
           // that CLASSIFIED this move saw them - see the IMPORT GATE branch.
-          const dialogBefore = digest.dialog;
-          const placementBefore = digest.placement;
-          const raceMove = move.kind === 'ui' && RACE_TARGETS.has(move.testid) && digest.live[move.testid] === 1;
+          const dialogBefore = before.dialog;
+          const placementBefore = before.placement;
+          const raceMove = move.kind === 'ui' && RACE_TARGETS.has(move.testid) && before.live[move.testid] === 1;
           const exportChord = move.kind === 'ui' && move.testid === 'key:Ctrl+E';
           const closeMove = move.kind === 'closeProject';
           const frozenDelete =
             move.kind === 'ui' &&
             move.testid === 'shot-editor-context-delete-rows' &&
-            digest.selRows.length > 0 &&
-            digest.selRows.every((row) => digest.frozen.includes(row));
+            before.selRows.length > 0 &&
+            before.selRows.every((row) => before.frozen.includes(row));
           const interjectRoute =
             move.kind === 'openFile' && move.label.startsWith('INTERJECT:') && IMPORT_GUARDED_SCREENS.has(screenBefore);
           // A wizard move the incomplete-shot guard can refuse. All three call
           // `refuseIncompleteShots()` before they do anything else.
           const wizardCommit =
             move.kind === 'ui' && INCOMPLETE_GUARDED_MOVES.has(move.testid) && screenBefore.startsWith('wiz-');
-          const incompleteBefore = digest.toast.includes(TOAST_INCOMPLETE);
+          const incompleteBefore = before.toast.includes(TOAST_INCOMPLETE);
           const overlapMode =
             move.kind === 'input' && move.mode === 'select' && move.testid === 'overlap-mode-select'
               ? move.value
               : null;
-          const sectionsBefore = digest.sections;
-          const undoBefore = digest.undo;
+          const sectionsBefore = before.sections;
+          const undoBefore = before.undo;
           const orphanMove =
             move.kind === 'ui' &&
             screenBefore === 'orphan-placement' &&
@@ -2256,9 +2153,9 @@ export const importDialogFuzz: Scenario = {
               ? move.testid
               : null;
           // Only paid for on an orphan move: it is an extra `get_project_state`.
-          const unanchoredBefore = orphanMove !== null && digest.hasProject ? await countUnanchoredComponents() : -1;
+          const unanchoredBefore = orphanMove !== null && before.hasProject ? await countUnanchoredComponents() : -1;
 
-          const outcome = await execute(move, true);
+          const outcome = await execute(move, record);
           steps += 1;
           await afterMove(move, outcome);
 
@@ -2579,6 +2476,134 @@ export const importDialogFuzz: Scenario = {
               );
             }
           }
+        };
+
+        for (;;) {
+          if (replaySteps) {
+            const source = flowSteps ?? replaySteps;
+            if (replayAt >= source.length) break;
+            const step = source[replayAt] as TraceStep;
+            replayAt += 1;
+            if (step.kind === 'genFile') {
+              materialize(step.spec as GeneratedFileSpec, step.rel);
+              ctx.metric('replay:genFile');
+              continue;
+            }
+            if (step.kind === 'corpusFile') {
+              // The replayer's OWN corpus, or none. A trace carries a reference
+              // and no content, so resolving one means scanning the corpus THIS
+              // machine configured; a machine without that file replays
+              // everything else and the move that would have opened it is
+              // skipped and counted. That is a narrower replay, not a failed one.
+              //
+              // THE HASH IS PREFERRED AND THERE IS NO FALLBACK TO THE ID. Both
+              // resolve the same file when the replayer has it, and when the
+              // hash misses, the id is precisely the thing that might match a
+              // DIFFERENT file - 20 bits over a few thousand entries - which
+              // would materialize somebody else's survey and open it under the
+              // recorded file's name. A miss is a skip; a wrong file is a lie.
+              const lookup = corpusLookup(step.corpusHash ?? step.corpusId);
+              if (lookup.entry === null) {
+                // `ambiguous` is a v3-shaped step (id only) landing on a corpus
+                // whose crc20 collides. Counted apart from a plain absence
+                // because it says something about the corpus, not the trace.
+                ctx.metric(lookup.outcome === 'ambiguous' ? 'corpus:ambiguousId' : 'corpus:absent');
+                continue;
+              }
+              const destination = resolveRel(step.rel);
+              const copied = materializeCorpusEntry(lookup.entry, destination);
+              ctx.metric(
+                copied.skipped ? `corpus:notMaterialized:${copied.reason ?? 'unknown'}` : 'replay:corpusFile',
+              );
+              // A REPLAY needs the redactions as much as a recording does - the
+              // app echoes the basenames it opened, and a replayed failure is
+              // exactly the message somebody attaches to an issue.
+              if (!copied.skipped) registerCorpusRedactions(lookup.entry.id, destination, copied.names);
+              continue;
+            }
+            const move = moveFromStep(step);
+            if (move === null) {
+              ctx.metric(`replay:unsupported:${step.kind}`);
+              continue;
+            }
+            // OBSERVE BEFORE ACTING, on a replay only.
+            //
+            // The walk otherwise sees the screen only AFTER each move, so a
+            // dialog that opens in the async tail of move N and is dismissed by
+            // move N+1 is never sampled. Measured on a recorded F3 red: the
+            // recording's steps 29-30 are `zero-datum-config-confirm` then
+            // `import-receipt-continue`, and on replay the post-confirm digest
+            // read `wiz-done` (the modal had not opened yet) while the next step
+            // dispatched successfully against `import-receipt-continue` and left
+            // `idle`. The receipt existed only between the two moves. F3 reads
+            // its claim off that modal, so it had nothing to compare and a
+            // recorded F3 failure replayed green.
+            //
+            // A live walk does not need this - it keeps drawing moves and meets
+            // the dialog on a later step - and must not have it: the race
+            // generators depend on dispatching against the screen the digest
+            // already classified.
+            const beforeStep = await observeScreen(ctx, false);
+            {
+              const seen = captureReceipt(
+                { claim: receipt, atReceipt, projectFileAtReceipt, historyTouchedBeforeReceipt },
+                beforeStep,
+                historyTouched,
+              );
+              if (seen.claim !== null && receipt === null) {
+                receipt = seen.claim;
+                atReceipt = seen.atReceipt;
+                projectFileAtReceipt = seen.projectFileAtReceipt;
+                historyTouchedBeforeReceipt = seen.historyTouchedBeforeReceipt;
+                ctx.metric('replay:receiptSeenBetweenSteps');
+                guarded(() => checkReceipt(receipt as ReceiptClaim));
+              }
+              if (beforeStep.receipt !== null) sawReceipt = true;
+            }
+            // The SAME judgement the live walk runs - see `runMove`. `beforeStep`
+            // is this walk's pre-move digest, which is what every inline check is
+            // written against.
+            await runMove(move, beforeStep, false);
+            continue;
+          }
+
+          if (steps >= budget) {
+            ctx.metric('flowBudgetExhausted');
+            break;
+          }
+          if (digest.screen === 'idle') {
+            if (leftIdle) break;
+            if (startAttempts >= START_ATTEMPTS) {
+              ctx.metric('flowNeverStarted');
+              break;
+            }
+            startAttempts += 1;
+          }
+
+          stepsOnScreen = digest.screen === previousScreen ? stepsOnScreen + 1 : 0;
+          previousScreen = digest.screen;
+          const mode = digest.screen === 'idle' ? 'draw' : progressMode(stepsOnScreen);
+          if (mode === 'escape') {
+            digest = await escapeFrom(digest);
+            stepsOnScreen = 0;
+            previousScreen = digest.screen;
+            break;
+          }
+
+          const drawn = drawMove(digest, mode);
+          const move = drawn === null ? null : enforceSavePath(drawn, digest);
+          if (move === null) {
+            // Nothing to draw here. At idle there is nothing to leave either, so
+            // the flow is simply not startable this time round.
+            if (digest.screen === 'idle') {
+              ctx.metric('idleHadNoMove');
+              break;
+            }
+            digest = await escapeFrom(digest);
+            break;
+          }
+
+          await runMove(move, digest, true);
         }
 
         if (!leftIdle) {
