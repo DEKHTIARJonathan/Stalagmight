@@ -4571,11 +4571,7 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
         .iter()
         .find(|s| s.station_ref == StationRef::new(sec_main, 0))
         .unwrap();
-    let x_directs: Vec<_> = x
-        .closures()
-        .iter()
-        .filter(|cr| !cr.is_transitive)
-        .collect();
+    let x_directs: Vec<_> = x.closures().iter().filter(|cr| !cr.is_transitive).collect();
     assert_eq!(
         x_directs.len(),
         3,
