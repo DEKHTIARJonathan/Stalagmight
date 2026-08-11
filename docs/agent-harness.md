@@ -96,6 +96,41 @@ evidence: `docs/plans/2026-08-05_macos-agent-harness.md`):
 - **Input is synthetic.** The plugin dispatches JS events in the webview
   (`isTrusted: false`). Everything testid-driven works; native menu
   accelerators do not - `press_keys` with `Meta` returns a `caveat` saying so.
+- **`type_text` on an INPUT/TEXTAREA selector writes through React's
+  controlled-input path on this route.** Observed: the driver's `setValue()`
+  here lands the DOM value (a plain read-back matches) while React's
+  onChange never fires, so `type_text` instead runs an in-page script
+  (`e2e/agent/lib/reactInput.ts`) that writes through the prototype value
+  setter and dispatches a real `input`/`change` event, which React does see.
+  Scope: only free-text INPUT types (`text`/`search`/`url`/`tel`/`email`/
+  `password`/`number`) and TEXTAREA - a checkbox/radio/date/color/file/etc.
+  reports `reason: 'not-a-text-input'` rather than certifying a string write
+  that never touched its actual state; a SELECT or anything else reports
+  `reason: 'unsupported-element'`; disabled/readOnly reports
+  `reason: 'not-editable'`; none of these are written to, and `typed: false`
+  suppresses `submit`'s Enter (it would otherwise act on whatever already
+  had focus, not the text that failed to land). A `testid`/`selector`-less
+  call still types via native driver keys. `verified` is read back after a
+  tick so it reflects the app's own re-render, not just the synchronous
+  write - it can legitimately be `false` when the app clamps or rejects a
+  value. The write also mirrors the target's `maxLength` the way real typing
+  would (truncating before writing, reporting `truncated: true`), rather
+  than certifying a longer value a user could never have typed. A
+  `clear: true` call fires an intermediate empty-string `input` event before
+  the target text, which any field-level side effect on empty will observe
+  (#531).
+- **`press_keys(['Escape'])` gets a synthetic fallback on this route, and
+  nothing else does.** Observed: a lone `['Escape']` call produces no effect
+  through the native WebDriver key path here (no error, no app response); a
+  manually dispatched `KeyboardEvent('keydown'/'keyup', {key: 'Escape'})` on
+  the focused element (or the app's mounted root, if nothing is focused)
+  does, and darwin targets do this automatically, marking the result
+  `syntheticEscape: true`. This is scoped to that exact one-key shape - a
+  sequence with `'Escape'` mixed into other keys is unconfirmed on this route
+  and carries a `caveat` explaining so rather than silently guessing.
+  `type_text`'s own `submit: true` gets the analogous synthetic Enter
+  automatically (same broken native path as Escape); a bare `press_keys`
+  call for `Enter` or any other key does not (#531).
 - **Screenshots are DOM-only.** The plugin rasterizes the DOM, so canvas/WebGL
   (the survey map) is blank; the `screenshot` result carries `domOnly: true`.
 - **Teardown is pidfile-based.** tauri-wd SIGKILLs the wrapper on

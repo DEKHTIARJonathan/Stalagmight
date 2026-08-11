@@ -35,6 +35,7 @@ import {
   targetSelector,
 } from '../lib/controls';
 import { mapFeatureClick } from '../lib/mapControls';
+import { REACT_SAFE_SET_VALUE_SCRIPT, SYNTHETIC_KEY_SCRIPT } from '../lib/reactInput';
 
 const STORE_NAMES = ['ui', 'project', 'globalView', 'gasPlan', 'speleo', 'export', 'network'] as const;
 
@@ -462,44 +463,78 @@ define(
         const selector = targetSelector(args);
         return session.exclusive(async () => {
           let method: 'keys' | 'paste' = 'keys';
+          let typed = true;
           let verified: boolean | null = null;
+          let reason: string | undefined;
+          let truncated: boolean | undefined;
+          const applyReactSafe = async () => {
+            method = 'paste';
+            // Errors here (script threw, driver timeout) are left to
+            // propagate to run()'s catch, same as every other tool - a
+            // swallowed exception used to surface as a false `typed: true`.
+            const outcome = await evalInApp<{ ok: boolean; verified?: boolean; truncated?: boolean; reason?: string }>(
+              b,
+              REACT_SAFE_SET_VALUE_SCRIPT,
+              [selector, args.text, !!args.clear],
+            );
+            if (!outcome.ok) {
+              typed = false;
+              reason = outcome.reason;
+              verified = null;
+            } else {
+              verified = outcome.verified ?? null;
+              truncated = outcome.truncated ?? undefined;
+            }
+          };
           if (selector) {
             const el = b.$(selector);
             await el.waitForDisplayed({ timeout: 5000 });
-            if (args.clear) await el.clearValue();
-            await el.setValue(args.text);
-            // WebKitWebDriver can coalesce rapid repeated keystrokes ("8000"
-            // arriving as "800"), silently corrupting input. Verify the value
-            // landed; on mismatch fall back to a synthetic paste through the
-            // native value setter + input event (React-compatible).
-            const landed = (await el.getValue().catch(() => null)) as string | null;
-            if (typeof landed === 'string') {
-              verified = landed === args.text;
-              if (!verified) {
-                method = 'paste';
-                await evalInApp(
-                  b,
-                  `
-                  const el = document.querySelector(args[0]);
-                  if (!el) return false;
-                  const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-                  const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-                  setter.call(el, args[1]);
-                  el.dispatchEvent(new Event('input', { bubbles: true }));
-                  el.dispatchEvent(new Event('change', { bubbles: true }));
-                  return true;
-                `,
-                  [selector, args.text],
-                );
-                const after = (await el.getValue().catch(() => null)) as string | null;
-                verified = after === args.text;
+            if (isDarwinTarget()) {
+              // On this route el.setValue() lands the DOM value without
+              // React seeing it (#531) - go straight to the React-safe
+              // script rather than trusting a landed-value check.
+              await applyReactSafe();
+            } else {
+              if (args.clear) await el.clearValue();
+              await el.setValue(args.text);
+              // WebKitWebDriver can coalesce rapid repeated keystrokes ("8000"
+              // arriving as "800"), silently corrupting input. Verify the value
+              // landed; on mismatch fall back to the React-safe script.
+              const landed = (await el.getValue().catch(() => null)) as string | null;
+              if (typeof landed === 'string') {
+                verified = landed === args.text;
+                if (!verified) await applyReactSafe();
               }
             }
           } else {
             await b.keys(args.text.split(''));
           }
-          if (args.submit) await b.keys(['Enter']);
-          return { result: { typed: true, method, verified }, resolved: { selector } };
+          let submitted = false;
+          if (args.submit) {
+            // Never submit on a write that failed (e.g. a disabled/readOnly
+            // target): pressing Enter would act on whatever already had
+            // focus, not on the text this call was supposed to deliver.
+            if (typed) {
+              await b.keys(['Enter']);
+              if (isDarwinTarget()) {
+                // Same native-key path #531 found broken for Escape - the
+                // Enter this submit relies on gets the same synthetic fallback.
+                await evalInApp(b, SYNTHETIC_KEY_SCRIPT, ['Enter']);
+              }
+              submitted = true;
+            }
+          }
+          return {
+            result: {
+              typed,
+              method,
+              verified,
+              reason,
+              truncated,
+              submitted: args.submit ? submitted : undefined,
+            },
+            resolved: { selector },
+          };
         });
       },
       { digest: true, sweep: true },
@@ -514,21 +549,43 @@ define('press_keys', 'Press a sequence of WebDriver keys (e.g. ["Control","z"]).
     args,
     async () => {
       await session.exclusive(() => session.browser.keys(args.keys));
+      // #531 characterized exactly one shape: a lone ['Escape'] call
+      // produces no observable effect natively on this route. Scoped this
+      // narrowly - a multi-key sequence containing 'Escape' (e.g.
+      // ['Shift','Escape'] or ['a','Escape','b']) was never verified and
+      // firing a modifier-less synthetic Escape for it would be a guess.
+      const singleEscape = args.keys.length === 1 && args.keys[0] === 'Escape';
+      let syntheticEscape = false;
+      // isDarwinTarget() is a platform predicate, not a route one in
+      // general - but createSession() (../createSession.ts) only ever
+      // builds a MacSession (the tauri-wd route) for darwin, so there is no
+      // other darwin route to conflate here. Reported via `syntheticEscape`
+      // regardless, so a call is never silently doubled without a trace.
+      if (isDarwinTarget() && singleEscape) {
+        await session.exclusive(() => evalInApp(session.browser, SYNTHETIC_KEY_SCRIPT, ['Escape']));
+        syntheticEscape = true;
+      }
+      const caveats: string[] = [];
+      if (isDarwinTarget() && args.keys.includes('Escape') && !singleEscape) {
+        caveats.push(
+          'Only a lone ["Escape"] call gets the verified synthetic fallback (#531) - this ' +
+            'sequence relies on the native WebDriver path, whose delivery here is unconfirmed.',
+        );
+      }
       // darwin: keys are synthetic KeyboardEvents in the webview, so Meta chords
       // never reach the native menu - a "passed" Cmd shortcut here proves only
       // the DOM handler. No silent remap to Control: the app may bind both, and
       // rewriting would corrupt repro records (#421).
       if (isDarwinTarget() && args.keys.some((k) => k === 'Meta' || k === 'Command')) {
-        return {
-          result: {
-            pressed: args.keys,
-            caveat:
-              'Meta is synthetic-only on macOS: native menu accelerators will not fire. ' +
-              'Use the in-app Control binding, or Tier 2 os_keys for a real Cmd chord.',
-          },
-        };
+        caveats.push(
+          'Meta is synthetic-only on macOS: native menu accelerators will not fire. ' +
+            'Use the in-app Control binding, or Tier 2 os_keys for a real Cmd chord.',
+        );
       }
-      return { result: { pressed: args.keys } };
+      const result: Record<string, unknown> = { pressed: args.keys };
+      if (syntheticEscape) result.syntheticEscape = true;
+      if (caveats.length) result.caveat = caveats.join(' ');
+      return { result };
     },
     { digest: true, sweep: true },
   ),
