@@ -290,7 +290,17 @@ function printReport(results: RunResult[], opts: Options, wallMs: number): void 
         : (merged[key] ?? 0) + value;
     }
   }
-  process.stdout.write('\n=== merged metrics (max for snapshotBytesMax/maxDepth, sum otherwise) ===\n');
+  // GENERATED from the set, and from the keys actually present, so it cannot go
+  // stale the way a hand-written list did: the legend named `snapshotBytesMax`
+  // and `maxDepth` long after four more maxima joined them, which labelled real
+  // maxima as sums in every campaign summary that printed them. Naming only the
+  // ones this run produced also keeps the line honest about the run in hand.
+  const maxed = Object.keys(merged)
+    .filter((key) => MAX_MERGED_METRICS.has(key))
+    .sort();
+  process.stdout.write(
+    `\n=== merged metrics (${maxed.length > 0 ? `max for ${maxed.join(', ')}; ` : ''}sum otherwise) ===\n`,
+  );
   for (const key of Object.keys(merged).sort()) process.stdout.write(`  ${key} = ${merged[key]}\n`);
 
   const serialMs = results.reduce((sum, r) => sum + r.durationMs, 0);
