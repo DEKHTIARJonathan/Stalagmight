@@ -2033,6 +2033,23 @@ export const useUIStore = create<UIStore>((set) => ({
     useUIStore.getState().exitGasPlan();
     setDwellState('placement');
     set({
+      // Placement REQUIRES visible stations (#518). `MapCanvas` cancels an active
+      // placement the moment `showStations` goes false - it needs them to snap
+      // to - so starting one with the toggle off produced a placement that died
+      // before the first click, and the caller's `onCancel` put the user back
+      // where they started with no explanation. Turning it on here is the same
+      // shape as the `exitGasPlan()` above and the `MEASURE_CLEARED` below:
+      // entering a mode settles the state that mode needs, in this one funnel
+      // every placement passes through.
+      //
+      // NOT restored on exit, and NOT persisted. Not restored because no sibling
+      // does - gas exit, the measure clear and the dwell state are all one-way -
+      // and because re-hiding the stations the instant a section lands would
+      // take away the thing the user just placed it against. Not persisted
+      // because this is a prerequisite of a transient mode, not a preference:
+      // `set` writes session state only, where `toggleDisplay` would also call
+      // `saveDisplaySetting` and silently rewrite the project's saved config.
+      showStations: true,
       placementMode: {
         sectionData,
         alignStationIndex,
