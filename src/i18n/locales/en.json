@@ -1,5 +1,8 @@
 {
   "common": {
+    "a11y": {
+      "wizardMapResize": "Resize map panel"
+    },
     "toast": {
       "dismiss": "Dismiss notification: {{message}}"
     },
