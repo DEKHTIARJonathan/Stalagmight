@@ -192,6 +192,7 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Debug Gates](docs/debug-gates.md) | Where dev-only logs / asserts / profile harnesses live, and how to turn them on |
 | [macOS Build](docs/macos-build.md) | macOS build scripts and known issues |
 | [Agent Harness](docs/agent-harness.md) | LLM-agent harness (MCP + WebdriverIO) to drive the real app: tools, oracles, stress scenarios, replay + repro reports. Runs on the repo-pinned Node. |
+| [UAT ledger](docs/uat/ledger.md) | Acceptance tier: one line per real-app UAT run, the per-RC checklist, and the machine-readable records. |
 | [App modes](docs/app-modes.md) | Survey/Plan/Export modes and the read-only contract every mutation path must check |
 | [Loop closures](docs/closures.md) | Raw Data View vs Closures Computed View, the least-squares solve, co-location with the move tools |
 | [Undo/Redo](docs/undo-redo.md) | Command-pattern undo: two-phase capture, `UndoData` variants, batch commands, persistence, lock ordering |
