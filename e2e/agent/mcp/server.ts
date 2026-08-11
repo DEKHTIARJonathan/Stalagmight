@@ -66,7 +66,7 @@ async function record<T>(
   tool: string,
   params: unknown,
   fn: (seq: number) => Promise<RunOutput<T>>,
-  opts: { digest?: boolean } = {},
+  opts: { digest?: boolean; mutates?: boolean } = {},
 ): Promise<T> {
   const start = Date.now();
   const seq = session.hasRecorder ? session.recorder.nextSeq() : 0;
@@ -84,6 +84,7 @@ async function record<T>(
         seq,
         ts: new Date().toISOString(),
         tool,
+        mutating: opts.mutates === true,
         params,
         resolved,
         outcome: { ok: true, durationMs: Date.now() - start },
@@ -99,6 +100,9 @@ async function record<T>(
         seq,
         ts: new Date().toISOString(),
         tool,
+        // A mutation that THREW is still a repro step - often the decisive one -
+        // and the report renders it with a "(failed)" flag.
+        mutating: opts.mutates === true,
         params,
         outcome: { ok: false, durationMs: Date.now() - start, error: asMessage(err) },
       });
@@ -117,10 +121,18 @@ async function run(
   tool: string,
   params: unknown,
   fn: (seq: number) => Promise<RunOutput<unknown>>,
-  opts: { digest?: boolean; sweep?: boolean } = {},
+  opts: { digest?: boolean; sweep?: boolean; mutates?: boolean } = {},
 ): Promise<ToolResult> {
   try {
-    const result = await record(tool, params, fn, { digest: opts.digest });
+    // `sweep` is the default answer to "does this mutate?" because the oracle
+    // sweep exists to run after state changes - the two coincide for all but a
+    // few tools that mutate without being worth a sweep, which pass `mutates`
+    // explicitly. Deriving it this way means a new mutating tool is classified
+    // correctly by default rather than being forgotten.
+    const result = await record(tool, params, fn, {
+      digest: opts.digest,
+      mutates: opts.mutates ?? opts.sweep ?? false,
+    });
     const envelope: Record<string, unknown> =
       result && typeof result === 'object' ? { ...(result as Record<string, unknown>) } : { value: result };
     if (opts.sweep) {
@@ -703,7 +715,11 @@ define(
         answerFileDialog(session.browser, args.triggerTestid, args.kind, value),
       );
       return { result: { consumed: true, kind: args.kind, triggerTestid: args.triggerTestid }, resolved };
-    }),
+    },
+    // Answering a native dialog commits an open/save - decisive in a repro, and
+    // frequently the step a report most needs to show. It skips the oracle
+    // sweep only because the app is mid-dialog, not because it is observation.
+    { mutates: true }),
 );
 
 // ------------------------------------------------------------ escape hatches
@@ -774,7 +790,10 @@ define('map_view', 'Read or set the MapLibre view (center/zoom/bearing).', {
         [args.set ?? null],
       ),
     ),
-  })),
+    // Read OR set: only the setting form moves the map, so this is a per-call
+    // fact rather than a property of the tool. A bare read is observation and
+    // does not belong in a list of steps to reproduce.
+  }), { mutates: args.set != null }),
 );
 
 define('map_click', 'Click a visible geographic point through the active map interaction path.', {
@@ -998,7 +1017,12 @@ defineDarwin(
       return {
         result: { granted: true, note: 'valid until this MCP server exits', permissions },
       };
-    }),
+    },
+    // Not a change to app state, but the comment above is the contract: every
+    // later os_* step depends on this consent, so the repro has to show it.
+    // The sweep flag cannot express that - granting is not worth an oracle
+    // pass - so it is declared.
+    { mutates: true }),
 );
 
 defineDarwin(
@@ -1043,6 +1067,9 @@ defineDarwin(
   { name: z.string().regex(/^[\w.-]{1,64}$/).optional() },
   async (args) => {
     try {
+      // Observation, despite the os_ prefix: capturing real pixels changes
+      // nothing, so it is not a step in a repro. Declared rather than left to
+      // the default, because the prefix makes the opposite look plausible.
       const { base64, meta } = await record('os_screenshot', args, async (seq) => {
         const file = path.join(
           session.recorder.dir,
@@ -1113,7 +1140,7 @@ define(
             if (session.hasRecorder) session.recorder.event('scenario-log', { scenario: args.name, message: m });
           },
         }),
-      }));
+      }), { mutates: true });
       const sweep = await runSweep(session, oracleState, {
         full: true,
         recorder: session.hasRecorder ? session.recorder : undefined,

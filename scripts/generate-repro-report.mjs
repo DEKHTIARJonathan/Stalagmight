@@ -39,6 +39,42 @@ const scrub = (s) => {
   return out;
 };
 
+/**
+ * Render a chosen file as its EXTENSION only. `scrub` rewrites the $HOME prefix
+ * but keeps every segment after it, and in this project the basename is the
+ * sensitive part: survey filenames name real caves, and the repo bans cave data
+ * leaving it. The extension is what a repro actually needs - it selects the
+ * importer - so it is the whole of the reproducible signal here.
+ */
+const redactPath = (value) => {
+  // Whitelist, not escape: `path.extname` returns whatever followed the last
+  // dot, so a path ending `.stalx\n## forged heading` yields that verbatim and
+  // would carry markdown straight past the sanitizer. A real extension is a
+  // short alphanumeric run; anything else is dropped rather than repaired.
+  const ext = (p) => {
+    const raw = path.extname(String(p));
+    return /^\.[A-Za-z0-9]{1,12}$/.test(raw) ? raw : '';
+  };
+  const one = (p) => `<file${ext(p)}>`;
+  if (value == null) return '<none>';
+  if (Array.isArray(value)) {
+    return value.length === 1 ? one(value[0]) : `<${value.length} files${ext(value[0] ?? '')}>`;
+  }
+  return one(value);
+};
+
+/**
+ * Neutralize a caller-supplied string for a markdown list item. Tool params are
+ * bare strings, and a newline or a backtick in a testid or selector escapes the
+ * step and injects arbitrary markdown into a report headed for a public issue.
+ * Also capped: nothing here is worth unbounded width.
+ */
+const mdInline = (s, max = 80) => {
+  const flat = String(s).replace(/[\r\n]+/g, ' ');
+  const clipped = flat.length > max ? `${flat.slice(0, max)}...` : flat;
+  return clipped.replace(/[`<>|]/g, (c) => ({ '`': "'", '<': '&lt;', '>': '&gt;', '|': '\\|' })[c]);
+};
+
 const records = fs
   .readFileSync(jsonlPath, 'utf8')
   .split('\n')
@@ -86,16 +122,25 @@ try {
 const title = getFlag('--title') || `Agent-found issue in session ${start.sessionId ?? path.basename(sessionDir)}`;
 const summary = getFlag('--summary') || '_Describe the bug in one or two sentences._';
 
-// Compact step list: mutating actions only. os_* (Tier 2 OS-level input) are
-// always mutating - matched by prefix so new os tools cannot silently drop out
-// of repro reports.
-const MUTATING = new Set([
+// Compact step list: mutating actions only.
+//
+// The recorder stamps `mutating` on every action from the tool that made it
+// (`e2e/agent/mcp/server.ts`), so this reads the fact rather than re-deriving
+// it. The list below is ONLY for sessions recorded before that field existed:
+// it is deliberately frozen, and adding a tool to it is always wrong - set
+// `mutates` at the tool definition instead. It was a live defect for exactly
+// this reason, having silently omitted drag, scroll, select_option, hover,
+// file_dialog_answer and map_feature_click as they were added.
+const LEGACY_MUTATING = new Set([
   'click', 'type_text', 'press_keys', 'eval', 'ipc', 'store_action', 'map_click', 'map_view',
   'seed', 'driver_script', 'run_scenario',
 ]);
-const isMutating = (tool) => MUTATING.has(tool) || (typeof tool === 'string' && tool.startsWith('os_'));
+const isLegacyMutating = (tool) =>
+  LEGACY_MUTATING.has(tool) || (typeof tool === 'string' && tool.startsWith('os_'));
+const isMutating = (a) =>
+  typeof a.mutating === 'boolean' ? a.mutating : isLegacyMutating(a.tool);
 const steps = actions
-  .filter((a) => isMutating(a.tool))
+  .filter((a) => isMutating(a))
   .map((a) => {
     const detail = describeAction(a);
     const flag = a.outcome?.ok === false ? ' **(failed)**' : '';
@@ -174,9 +219,47 @@ function describeAction(a) {
   switch (a.tool) {
     case 'click':
     case 'map_click':
-      return p.testid ? `testid=${p.testid}` : p.selector ? `selector=${p.selector}` : p.lngLat ? `lngLat=${JSON.stringify(p.lngLat)}` : `coords=(${p.x},${p.y})`;
+      return p.testid ? `testid=${mdInline(p.testid)}` : p.selector ? `selector=${mdInline(p.selector)}` : p.lngLat ? `lngLat=${JSON.stringify(p.lngLat)}` : `coords=(${p.x},${p.y})`;
+    case 'map_feature_click': {
+      const which =
+        p.featureType === 'station'
+          ? `station index=${p.stationIndex}`
+          : `shot id=${p.shotId}`;
+      return `${which} in section ${p.sectionId}${p.button === 'right' ? ' (right)' : ''}`;
+    }
     case 'type_text':
-      return `"${String(p.text ?? '').slice(0, 40)}"${p.testid ? ` into ${p.testid}` : ''}`;
+      return `"${mdInline(p.text ?? '', 40)}"${p.testid ? ` into ${mdInline(p.testid)}` : ''}`;
+    case 'hover':
+      return p.testid ? `testid=${mdInline(p.testid)}` : `selector=${mdInline(p.selector)}`;
+    case 'drag': {
+      const end = (kindTestid, kindSelector, x, y) =>
+        kindTestid
+          ? `testid=${mdInline(kindTestid)}`
+          : kindSelector
+            ? `selector=${mdInline(kindSelector)}`
+            : `(${x},${y})`;
+      const from = end(p.fromTestid, p.fromSelector, p.fromX, p.fromY);
+      const to = end(p.toTestid, p.toSelector, p.toX, p.toY);
+      return `${from} -> ${to}${p.button && p.button !== 'left' ? ` (${p.button})` : ''}`;
+    }
+    case 'scroll': {
+      const target = p.testid
+        ? `testid=${mdInline(p.testid)}`
+        : p.selector
+          ? `selector=${mdInline(p.selector)}`
+          : 'window';
+      // Two modes on one tool: a pixel delta, or scroll-into-view.
+      return p.deltaX != null || p.deltaY != null
+        ? `${target} by (${p.deltaX ?? 0},${p.deltaY ?? 0})`
+        : `${target} into view`;
+    }
+    case 'select_option':
+      return `${p.testid ? `testid=${mdInline(p.testid)}` : `selector=${mdInline(p.selector)}`} = "${mdInline(p.value)}"`;
+    case 'file_dialog_answer':
+      // The chosen path is redacted to its extension - see redactPath.
+      return p.cancel
+        ? `${p.kind} dialog cancelled (trigger ${mdInline(p.triggerTestid)})`
+        : `${p.kind} dialog answered ${redactPath(p.paths ?? p.path)} (trigger ${mdInline(p.triggerTestid)})`;
     case 'press_keys':
       return JSON.stringify(p.keys ?? []);
     case 'eval':

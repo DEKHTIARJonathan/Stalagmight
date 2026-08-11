@@ -28,6 +28,15 @@ export interface ActionRecord {
   seq: number;
   ts: string;
   tool: string;
+  /**
+   * Whether this call changed application state, decided by the tool that made
+   * it. Repro reports list mutating actions as the steps to reproduce, and
+   * before this field they re-derived that from a hand-maintained name list in
+   * `scripts/generate-repro-report.mjs` - which silently omitted every tool
+   * added after it was written. Recording the fact at the one place that knows
+   * it means a new tool cannot drop out of a repro report by omission.
+   */
+  mutating?: boolean;
   params: unknown;
   resolved?: unknown;
   outcome: { ok: boolean; durationMs: number; error?: string };

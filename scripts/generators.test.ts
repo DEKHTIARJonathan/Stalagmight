@@ -335,4 +335,178 @@ describe('generate-repro-report.mjs', () => {
     expect(md).toContain('cmd+s');
     expect(md).toContain('[OS-level]');
   });
+
+  // The bug this replaced: the step list came from a hand-maintained name list
+  // that nobody updated as tools were added, so a repro whose decisive step was
+  // a drag or a native-dialog answer rendered WITHOUT that step. The recorder
+  // now stamps `mutating` per action, and the report must believe it - both
+  // ways round, which is what makes the name list unable to rot again.
+  describe('mutation comes from the action record, not a name list', () => {
+    let v2Dir: string;
+
+    beforeAll(() => {
+      v2Dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-v2-'));
+      const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
+      const lines = [
+        record({ type: 'session-start', v: 1, sessionId: 'v2-fixture', startedAt: ts(0), gitHead: 'def5678' }),
+        // Mutating, and absent from the frozen legacy list: these are exactly
+        // the tools the old report dropped.
+        record({
+          type: 'action', v: 1, seq: 1, ts: ts(1), tool: 'drag', mutating: true,
+          params: { fromTestid: 'station-a', toTestid: 'station-b' },
+          outcome: { ok: true, durationMs: 10 },
+        }),
+        record({
+          type: 'action', v: 1, seq: 2, ts: ts(2), tool: 'file_dialog_answer', mutating: true,
+          params: { triggerTestid: 'import-button', kind: 'open', path: '/caves/survey.dmp' },
+          outcome: { ok: true, durationMs: 10 },
+        }),
+        record({
+          type: 'action', v: 1, seq: 3, ts: ts(3), tool: 'scroll', mutating: true,
+          params: { testid: 'warnings-content', deltaY: 400 },
+          outcome: { ok: true, durationMs: 10 },
+        }),
+        record({
+          type: 'action', v: 1, seq: 4, ts: ts(4), tool: 'select_option', mutating: true,
+          params: { testid: 'select-number-format', value: 'en-US' },
+          outcome: { ok: true, durationMs: 10 },
+        }),
+        record({
+          type: 'action', v: 1, seq: 5, ts: ts(5), tool: 'map_feature_click', mutating: true,
+          params: { featureType: 'shot', sectionId: 2, shotId: 17 },
+          outcome: { ok: true, durationMs: 10 },
+        }),
+        // A mutation that THREW is still the step that reproduces the bug.
+        record({
+          type: 'action', v: 1, seq: 6, ts: ts(6), tool: 'hover', mutating: true,
+          params: { testid: 'toolbar-undo-button' },
+          outcome: { ok: false, durationMs: 10, error: 'element not interactable' },
+        }),
+        // In the legacy list, but recorded as NOT mutating: a bare map_view is
+        // a read. The record must win over the list.
+        record({
+          type: 'action', v: 1, seq: 7, ts: ts(7), tool: 'map_view', mutating: false,
+          params: {}, outcome: { ok: true, durationMs: 10 },
+        }),
+        // The os_ family no longer rides a prefix rule, so each member's
+        // classification has to be pinned individually: consent is a step,
+        // capturing pixels is not.
+        record({
+          type: 'action', v: 1, seq: 8, ts: ts(8), tool: 'os_grant', mutating: true,
+          params: {}, outcome: { ok: true, durationMs: 10 },
+        }),
+        record({
+          type: 'action', v: 1, seq: 9, ts: ts(9), tool: 'os_screenshot', mutating: false,
+          params: { name: 'after-drag' }, outcome: { ok: true, durationMs: 10 },
+        }),
+        // A survey filename names a real cave, and reports get pasted into
+        // public issues - so this one sits under $HOME, where the prefix
+        // scrubber would still leave the basename exposed.
+        record({
+          type: 'action', v: 1, seq: 10, ts: ts(10), tool: 'file_dialog_answer', mutating: true,
+          params: {
+            triggerTestid: 'open-button',
+            kind: 'open',
+            path: `${process.env.HOME ?? '/home/someone'}/Documents/Secret Sump Cave.stalx`,
+          },
+          outcome: { ok: true, durationMs: 10 },
+        }),
+        // The redacted extension is itself caller-controlled: path.extname
+        // returns everything after the last dot, newlines included.
+        record({
+          type: 'action', v: 1, seq: 12, ts: ts(12), tool: 'file_dialog_answer', mutating: true,
+          params: {
+            triggerTestid: 'save-button',
+            kind: 'save',
+            path: '/tmp/cave.stalx\n## forged heading\n<img src=x>',
+          },
+          outcome: { ok: true, durationMs: 10 },
+        }),
+        // Params are bare strings: a newline or a backtick would break out of
+        // the markdown list item in a report headed for a public issue.
+        record({
+          type: 'action', v: 1, seq: 11, ts: ts(11), tool: 'click', mutating: true,
+          params: { testid: 'evil\n## Injected heading\n<img src=x onerror=alert(1)> `code`' },
+          outcome: { ok: true, durationMs: 10 },
+        }),
+      ];
+      fs.writeFileSync(path.join(v2Dir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+    });
+
+    afterAll(() => fs.rmSync(v2Dir, { recursive: true, force: true }));
+
+    it('lists every recorded mutation, with detail, including ones no name list knew about', () => {
+      execFileSync(process.execPath, [reportGen, v2Dir], { encoding: 'utf8' });
+      const md = fs.readFileSync(path.join(v2Dir, 'report.md'), 'utf8');
+
+      // Present AND described - a bare tool name is not a reproducible step.
+      expect(md).toContain('`drag` testid=station-a -> testid=station-b');
+      expect(md).toContain('open dialog answered <file.dmp>');
+      expect(md).toContain('`scroll` testid=warnings-content by (0,400)');
+      expect(md).toContain('`select_option` testid=select-number-format = "en-US"');
+      expect(md).toContain('`map_feature_click` shot id=17 in section 2');
+      // A failed mutation stays, flagged.
+      expect(md).toContain('`hover` testid=toolbar-undo-button **(failed)**');
+    });
+
+    it('drops an action the record says is not mutating, even though the legacy list names it', () => {
+      execFileSync(process.execPath, [reportGen, v2Dir], { encoding: 'utf8' });
+      const steps = reproSteps();
+
+      expect(steps).not.toContain('map_view');
+    });
+
+    // The os_ prefix used to decide this for the whole family. It doesn't now,
+    // so each member needs its own pin - os_grant is the consent every later
+    // os_* step depends on, os_screenshot changes nothing.
+    it('keeps os_grant as a step and drops os_screenshot, per member not per prefix', () => {
+      execFileSync(process.execPath, [reportGen, v2Dir], { encoding: 'utf8' });
+      const steps = reproSteps();
+
+      expect(steps).toContain('os_grant');
+      expect(steps).not.toContain('os_screenshot');
+    });
+
+    // Reports are pasted into public issues, and in this project a survey
+    // filename names a real cave. `scrub` only rewrites the $HOME prefix, so
+    // the basename has to be dropped at the point of rendering.
+    it('redacts a chosen file to its extension, leaking neither the name nor the directory', () => {
+      execFileSync(process.execPath, [reportGen, v2Dir], { encoding: 'utf8' });
+      const md = fs.readFileSync(path.join(v2Dir, 'report.md'), 'utf8');
+
+      expect(md).toContain('open dialog answered <file.stalx>');
+      expect(md).not.toContain('Secret Sump Cave');
+      expect(md).not.toContain('Documents');
+    });
+
+    // A step is one markdown list item. A param that escapes it can forge
+    // headings, hide later steps behind a <details>, or smuggle HTML.
+    it('neutralizes markdown and newlines in caller-supplied params', () => {
+      execFileSync(process.execPath, [reportGen, v2Dir], { encoding: 'utf8' });
+      const steps = reproSteps();
+
+      expect(steps).not.toContain('\n## Injected heading');
+      expect(steps).not.toContain('<img');
+      expect(steps).toContain('&lt;img');
+    });
+
+    // path.extname hands back everything after the last dot, so the redacted
+    // placeholder is caller-controlled too - it must be whitelisted, not just
+    // escaped, or the sanitizer is bypassed by the very field that replaced
+    // the leaking one.
+    it('drops an extension that is not a plain extension, rather than rendering it', () => {
+      execFileSync(process.execPath, [reportGen, v2Dir], { encoding: 'utf8' });
+      const steps = reproSteps();
+
+      expect(steps).toContain('save dialog answered <file>');
+      expect(steps).not.toContain('forged heading');
+    });
+
+    function reproSteps(): string {
+      return fs
+        .readFileSync(path.join(v2Dir, 'report.md'), 'utf8')
+        .split('## Steps to reproduce')[1]
+        .split('Automated replay')[0];
+    }
+  });
 });
