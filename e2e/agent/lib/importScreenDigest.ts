@@ -147,6 +147,16 @@ export interface ImportScreenDigest {
   phase: string | null;
   hasProject: boolean;
   /**
+   * `project.file_path`, or null with no project open (or one never saved).
+   *
+   * Read HERE rather than in its own round trip, so it describes the same
+   * instant as `sections`/`shots`. F3 compares the receipt against the project
+   * as it was WHEN THE RECEIPT WAS MADE, and its project-swap skip has to be
+   * asked about that same moment - a swap later in the flow is not a reason to
+   * stop believing a receipt that was already on screen.
+   */
+  projectFile: string | null;
+  /**
    * App.tsx's `isImportInProgress` useMemo, replicated. It is a component-local
    * value with no store field behind it, so the four clauses are mirrored here;
    * `importFlowOracles.ts`'s F2 is what asserts it comes back false.
@@ -265,6 +275,8 @@ export async function computeImportScreenDigest(
   const dialogData = (ui.dialogData as Record<string, unknown>) || {};
   const placement = ui.placementMode !== null && ui.placementMode !== undefined;
   const hasProject = !!projectState.project;
+  const project = projectState.project as { file_path?: string | null } | null | undefined;
+  const projectFile = project && project.file_path ? project.file_path : null;
 
   // App.tsx's `isImportInProgress`, clause for clause. It is a component-local
   // useMemo with no store field behind it, so there is nothing to read instead.
@@ -538,6 +550,7 @@ export async function computeImportScreenDigest(
     ctx: (ui.importContext as 'new-project' | 'existing-project' | null) ?? null,
     phase: (ui.dmpImportWizardPhase as string | null) ?? null,
     hasProject,
+    projectFile,
     importInProgress,
     live,
     opts,

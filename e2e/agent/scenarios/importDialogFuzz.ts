@@ -1550,13 +1550,11 @@ export const importDialogFuzz: Scenario = {
       return canonical;
     };
 
-    const projectFilePath = async (): Promise<string | null> =>
-      ctx.eval<string | null>(
-        'const p = window.__E2E_TEST__.projectStore.getState().project; return p && p.file_path ? p.file_path : null;',
-      );
-
     const boundsNow = async (digest: ImportScreenDigest): Promise<Bounds> => {
-      const file = await projectFilePath();
+      // Off the DIGEST, not a round trip of its own: bounds are compared against
+      // counts read in that same digest, and a separately-fetched path could
+      // describe a different instant than the numbers beside it.
+      const file = digest.projectFile;
       const leftovers = leftoverTempNames(file);
       return {
         snapshot: await canonicalNow(digest.hasProject),
@@ -2023,6 +2021,8 @@ export const importDialogFuzz: Scenario = {
          * delta measured across those is a measurement of the WALK.
          */
         let atReceipt: CountedProject | null = null;
+        /** The project the receipt is ABOUT - see `ReceiptCapture`. */
+        let projectFileAtReceipt: string | null = null;
         /**
          * Had an undo/redo/save/close already landed when the receipt appeared?
          *
@@ -2077,13 +2077,14 @@ export const importDialogFuzz: Scenario = {
             // FIRST WINS, and the counts are read on the SAME step as the claim -
             // see `captureReceipt`, which owns that rule and is tested for it.
             const grown = captureReceipt(
-              { claim: receipt, atReceipt, historyTouchedBeforeReceipt },
+              { claim: receipt, atReceipt, projectFileAtReceipt, historyTouchedBeforeReceipt },
               digest,
               historyTouched,
             );
             if (grown.claim !== null && receipt === null) {
               receipt = grown.claim;
               atReceipt = grown.atReceipt;
+              projectFileAtReceipt = grown.projectFileAtReceipt;
               historyTouchedBeforeReceipt = grown.historyTouchedBeforeReceipt;
               guarded(() => checkReceipt(receipt as ReceiptClaim));
             }
@@ -2165,13 +2166,14 @@ export const importDialogFuzz: Scenario = {
             const beforeStep = await observeScreen(ctx, false);
             {
               const seen = captureReceipt(
-                { claim: receipt, atReceipt, historyTouchedBeforeReceipt },
+                { claim: receipt, atReceipt, projectFileAtReceipt, historyTouchedBeforeReceipt },
                 beforeStep,
                 historyTouched,
               );
               if (seen.claim !== null && receipt === null) {
                 receipt = seen.claim;
                 atReceipt = seen.atReceipt;
+                projectFileAtReceipt = seen.projectFileAtReceipt;
                 historyTouchedBeforeReceipt = seen.historyTouchedBeforeReceipt;
                 ctx.metric('replay:receiptSeenBetweenSteps');
                 guarded(() => checkReceipt(receipt as ReceiptClaim));
@@ -2652,7 +2654,12 @@ export const importDialogFuzz: Scenario = {
             // `flow` markers has real boundaries, so F3 runs on it exactly as it
             // ran on the recording.
             ctx.metric('f3Skipped:replayNoBoundaries');
-          } else if (before.projectFile !== null && before.projectFile !== after.projectFile) {
+            // Asked AT THE RECEIPT, like everything else F3 measures. Comparing
+            // `after.projectFile` asked it at the end of the flow, where a
+            // SECOND file swapping projects suppressed an oracle whose claim and
+            // counts were both fixed, on the original project, moves earlier -
+            // the same mistake `atReceipt` exists to avoid, one field over.
+          } else if (before.projectFile !== null && before.projectFile !== projectFileAtReceipt) {
             ctx.metric('f3Skipped:projectSwapped');
           } else if (historyTouchedBeforeReceipt) {
             ctx.metric('f3Skipped:historyTouched');

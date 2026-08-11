@@ -68,6 +68,7 @@ const digest = (over: Partial<ImportScreenDigest> = {}): ImportScreenDigest => (
   ctx: null,
   phase: null,
   hasProject: true,
+  projectFile: '/tmp/project.stalx',
   importInProgress: false,
   live: {},
   opts: {},
@@ -349,11 +350,13 @@ describe('captureReceipt (F3 capture ordering)', () => {
     summary: string | null,
     sections: number,
     shots: number,
+    projectFile: string | null = '/tmp/a.stalx',
   ): ImportScreenDigest =>
     ({
       receipt: summary === null ? null : { summary, shown: 0, more: 0, hasDetails: false, unitConversion: false },
       sections,
       shots,
+      projectFile,
     }) as unknown as ImportScreenDigest;
 
   it('takes the counts on the SAME step as the claim', () => {
@@ -386,6 +389,30 @@ describe('captureReceipt (F3 capture ordering)', () => {
   it('is inert on a step with no receipt on screen', () => {
     const start = emptyReceiptCapture();
     expect(captureReceipt(start, digestWith(null, 3, 3), true)).toBe(start);
+  });
+
+  it('takes the PROJECT on the same step too, so the swap skip can ask about it', () => {
+    // F3's project-swap skip asked `before.projectFile !== after.projectFile` -
+    // the END of the flow. A second file later in the same flow swapping
+    // projects then suppressed an oracle whose claim and counts were both
+    // already fixed on the original project. Same mistake `atReceipt` exists to
+    // avoid, one field over, so it is captured at the same instant.
+    const captured = captureReceipt(emptyReceiptCapture(), digestWith('1 section - 3 shots', 5, 8, '/tmp/first.stalx'), false);
+    expect(captured.projectFileAtReceipt).toBe('/tmp/first.stalx');
+
+    // The swap arrives afterwards: FIRST WINS keeps the receipt's own project,
+    // so the skip compares `before` against `/tmp/first.stalx` and F3 runs.
+    const afterSwap = captureReceipt(captured, digestWith('9 sections - 90 shots', 99, 99, '/tmp/second.stalx'), true);
+    expect(afterSwap).toBe(captured);
+    expect(afterSwap.projectFileAtReceipt).toBe('/tmp/first.stalx');
+  });
+
+  it('carries a null project file rather than inventing one', () => {
+    // No project open, or one never saved. `before.projectFile !== null` is what
+    // gates the skip, so a null here must not read as a swap.
+    const captured = captureReceipt(emptyReceiptCapture(), digestWith('1 section - 3 shots', 5, 8, null), false);
+    expect(captured.projectFileAtReceipt).toBeNull();
+    expect(emptyReceiptCapture().projectFileAtReceipt).toBeNull();
   });
 });
 

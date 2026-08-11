@@ -216,13 +216,25 @@ export interface ReceiptCapture {
   claim: ReceiptClaim | null;
   /** Section and shot counts read at the same moment as the claim. */
   atReceipt: CountedProject | null;
+  /**
+   * `project.file_path` at that same moment - the project the receipt is ABOUT.
+   *
+   * F3 skips a flow whose project changed identity underneath it, because the
+   * counts then belong to two different projects. That skip was asked at the
+   * END of the flow, which is the wrong moment for an oracle that measures at
+   * the receipt: a SECOND file later in the same flow swapping projects
+   * suppressed a receipt whose claim and counts both described the original one
+   * and were already fixed. Captured here so the question is asked about the
+   * moment F3 actually compares.
+   */
+  projectFileAtReceipt: string | null;
   /** Had an undo/redo/save/close already run when the receipt appeared? */
   historyTouchedBeforeReceipt: boolean;
 }
 
 /** The empty capture a flow starts from. */
 export function emptyReceiptCapture(): ReceiptCapture {
-  return { claim: null, atReceipt: null, historyTouchedBeforeReceipt: false };
+  return { claim: null, atReceipt: null, projectFileAtReceipt: null, historyTouchedBeforeReceipt: false };
 }
 
 /**
@@ -255,6 +267,7 @@ export function captureReceipt(
   return {
     claim,
     atReceipt: { sections: digest.sections, shots: digest.shots },
+    projectFileAtReceipt: digest.projectFile,
     historyTouchedBeforeReceipt: historyTouched,
   };
 }
