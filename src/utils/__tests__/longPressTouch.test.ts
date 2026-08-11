@@ -50,6 +50,23 @@ describe('attachLongPressTouch', () => {
     detach();
   });
 
+  it('reports what the finger landed on, not the element the listeners sit on', () => {
+    // Callers resolve the press against what was under it, and the listener
+    // lives on a container whose children are the interesting part.
+    const child = document.createElement('span');
+    target.appendChild(child);
+    const onLongPress = vi.fn((_start: { target: EventTarget | null }) => true);
+    const detach = attachLongPressTouch(target, { onLongPress });
+
+    dispatch(child, 'touchstart', [touchAt(30, 40)]);
+    vi.advanceTimersByTime(500);
+
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+    expect(onLongPress.mock.calls[0]![0]!.target).toBe(child);
+
+    detach();
+  });
+
   it('swallows the touchend that ends a press which opened a menu', () => {
     // The preventDefault is what stops the compatibility mouse events from
     // running the tool underneath the menu that just opened.

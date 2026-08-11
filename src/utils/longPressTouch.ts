@@ -25,26 +25,33 @@ const LONG_PRESS_MS = 500;
 const MOVE_CANCEL_PX = 10;
 const MOVE_CANCEL_PX_SQUARED = MOVE_CANCEL_PX * MOVE_CANCEL_PX;
 
-/** Where the finger landed, copied out of the starting `Touch` at touchstart. */
-export interface LongPressPoint {
+/** The press as it began, copied out of the starting `Touch` at touchstart. */
+export interface LongPressStart {
   clientX: number;
   clientY: number;
+  /**
+   * What the finger came down on, snapshotted for the same reason the
+   * coordinates are: read at fire time it is a different question ("what is
+   * under the finger now"), and the wobble-cancel already guarantees the two
+   * answers agree within 10 px.
+   */
+  target: EventTarget | null;
 }
 
 export interface LongPressTouchOptions {
   /**
-   * The hold completed. Receives the position where the finger landed - which
-   * is the position the menu belongs at. The coordinates are copied at
-   * touchstart rather than read off the `Touch` later: the spec says a `Touch`
-   * is a snapshot, but both implementations this helper replaced kept a
-   * defensive copy, and a webview that reused `Touch` objects would otherwise
+   * The hold completed. Receives where the finger landed - which is the
+   * position the menu belongs at - and what it landed on. The coordinates are
+   * copied at touchstart rather than read off the `Touch` later: the spec says
+   * a `Touch` is a snapshot, but both implementations this helper replaced kept
+   * a defensive copy, and a webview that reused `Touch` objects would otherwise
    * silently break the wobble-cancel whose whole job is "did the finger move".
    *
    * Return whether a menu actually opened. `true` arms the `touchend`
    * suppression described in the module doc; `false` (nothing under the
    * finger) leaves the trailing tap alone, so it behaves like any other tap.
    */
-  onLongPress: (point: LongPressPoint) => boolean;
+  onLongPress: (start: LongPressStart) => boolean;
   /**
    * Gate: `false` keeps the press inert. Consulted both when the finger lands
    * and again before the menu would open, because what it reads (a modal
@@ -63,8 +70,8 @@ export function attachLongPressTouch(
   options: LongPressTouchOptions
 ): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  /** Where the pending press landed, or null when none is pending. */
-  let pending: LongPressPoint | null = null;
+  /** How the pending press began, or null when none is pending. */
+  let pending: LongPressStart | null = null;
   /** Set once a press opened a menu, so the `touchend` ending it is swallowed. */
   let fired = false;
 
@@ -80,14 +87,18 @@ export function attachLongPressTouch(
     if (e.touches.length !== 1) return;
     if (options.isEnabled?.() === false) return;
     const touch = e.touches[0]!;
-    const point: LongPressPoint = { clientX: touch.clientX, clientY: touch.clientY };
-    pending = point;
+    const start: LongPressStart = {
+      clientX: touch.clientX,
+      clientY: touch.clientY,
+      target: e.target,
+    };
+    pending = start;
     timer = setTimeout(() => {
       timer = null;
       if (!pending) return;
       pending = null;
       if (options.isEnabled?.() === false) return;
-      fired = options.onLongPress(point);
+      fired = options.onLongPress(start);
     }, LONG_PRESS_MS);
   };
 
