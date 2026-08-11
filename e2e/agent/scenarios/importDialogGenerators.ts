@@ -1760,6 +1760,31 @@ const TERMINALS: Generator[] = [
     },
   },
   {
+    /**
+     * The THIRD answer #394 gave the cancel overlay: close AND withdraw the
+     * sections the wizard already imported, in one batched undoable step.
+     *
+     * The model carries the id and the escape path names it as something "the
+     * walk reaches through the generators rather than while trying to leave" -
+     * this is that generator. It self-gates: the button only renders once
+     * `pendingWithdrawCount > 0`, so it cannot fire on a wizard that has
+     * imported nothing.
+     *
+     * Weighted BELOW keep-and-close (8) deliberately, and not for taste: a
+     * withdrawal removes the very sections the post-import surfaces need, so a
+     * walk that withdrew every time it cancelled would starve the receipt, the
+     * orphan dialog and the F1 undo roundtrip of the state they measure. Four is
+     * enough to exercise the path often without owning the flow's ending.
+     */
+    name: 'confirm:cancel-remove',
+    weight: 4,
+    screens: ['wiz-confirm'],
+    build: (env) =>
+      actionable(env.digest, 'cancel-remove-button')
+        ? click('cancel-remove-button', 'cancel AND remove what was imported')
+        : null,
+  },
+  {
     name: 'blocked:choose',
     weight: 10,
     screens: ['blocked'],

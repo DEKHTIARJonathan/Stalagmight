@@ -78,10 +78,11 @@
  * suggestion (4 matched shots, score 1.42, direction reverse). The data was
  * there; the frontend did not ask.
  *
- * Two product commits closed it: the accumulators moved to a run-scoped record
- * that a remount cannot empty (`utils/dmpWizardRun.ts`, #523), and
- * `startPlacementMode` now turns on the stations a placement needs, without
- * which every placement was cancelled before its first click (#518). The same
+ * Two fixes closed it, one from each side of a parallel effort. Master carries
+ * the run's ids and receipts across the remount in `SavedManualPlacingState`
+ * (6667269b, 2c2e6c72 - #487 residue, and what closes #523), and this branch's
+ * `startPlacementMode` turns on the stations a placement needs, without which
+ * every placement was cancelled before its first click (#518). The same
  * hand-driven sequence then raised the dialog - "Connect Orphaned Sections,
  * Section 1 of 2", one suggestion at High confidence, 5 shots matched - and the
  * screenshot and log are kept under `.agent-artifacts/orphan-proof-20260811/`.

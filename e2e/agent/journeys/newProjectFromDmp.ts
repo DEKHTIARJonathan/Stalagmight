@@ -151,8 +151,12 @@ export const newProjectFromDmp: Journey = {
     await ctx.eval<boolean>(`${oracleInjectionSource()}\nreturn true;`);
     await injectScreenDigest(ctx);
     await dismissFirstRunModal(ctx);
+    // `routeFile` answers a RouteOutcome, not a boolean: it also reports the two
+    // store values `importFlowOwnsScreen` read on the same tick, which is what
+    // lets the import fuzzer tell a fired guard from a screen that moved under
+    // it. This journey only needs the "did the hook run" half.
     const routed = await routeFile(ctx, dmp);
-    ctx.expect('file router accepted the .dmp', routed, 'routeOpenedFile hook missing or threw');
+    ctx.expect('file router accepted the .dmp', routed.routed, 'routeOpenedFile hook missing or threw');
 
     const visited: string[] = [];
     let digest = await observeScreen(ctx);
