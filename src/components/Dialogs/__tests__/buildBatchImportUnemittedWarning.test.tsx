@@ -8,9 +8,16 @@
  * ever set for it, but it stays reachable in the graph every subsequent call -
  * so counting "reachable and not in `emittedPosition`" toward the warning
  * counted every already-successful step as a fresh gap, climbing by one on
- * every healthy incremental placement. Same shape for `deferredImportSet`
- * (deliberately deferred to a later joint placement) and `emptySections`
- * (already reported via `reportEmptySections`).
+ * every healthy incremental placement. Same shape for `emptySections`
+ * (already reported via `reportEmptySections`) - a reachable section whose
+ * every shot got deleted in the wizard produces nothing to send, which is not
+ * a "gap" either.
+ *
+ * (`deferredImportSet` looks like a third source in the exclusion filter, but
+ * is dead there in practice: `bfsReachable` is called with `deferredImportSet`
+ * as its `blocked` set at both call sites, so a deferred index can never be in
+ * `reachableOrder` to begin with. Kept as defensive belt-and-braces, not
+ * exercised by a dedicated test here.)
  *
  * .tsx so vitest runs it under jsdom - the module under test pulls in React.
  */
@@ -163,6 +170,46 @@ describe('buildBatchImport unemitted-reachable warning', () => {
     // reachable but already imported, and must not be re-sent.
     expect(configs).toHaveLength(1);
     expect(configs[0]?.name).toBe('Segment');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('does not warn when the only reachable-but-unemitted section produced nothing (every shot deleted)', () => {
+    // Section 0 is anchored (reachable) but every shot was deleted in the
+    // wizard's shot table, so it emits nothing - `emptySections`, not a gap.
+    const dmpFile: DmpFile = { version: 1, sections: [dmpSection('Segment', 3)] };
+    const selectionConfig: DmpSelectionConfig = {
+      selectedIndices: new Set([0]),
+      defaultSurveyor: 'S',
+      defaultDate: null,
+      fileHash: null,
+      sectionHashes: [],
+    };
+    const connections: VirtualConnection[] = [
+      {
+        importSectionIndex: 0,
+        importStationIndex: 0,
+        targetType: 'existing',
+        existingSectionId: 99,
+        existingStationIndex: 0,
+      },
+    ];
+    const allDeleted: SectionEditState = {
+      ...edits('Segment', 3),
+      shots: [0, 1, 2].map((i) => ({ ...editableShot(i), isDeleted: true })),
+    };
+    const sectionEdits = new Map<number, SectionEditState>([[0, allDeleted]]);
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { configs, emptySections } = buildBatchImport(
+      connections,
+      null,
+      dmpFile,
+      selectionConfig,
+      sectionEdits,
+    );
+
+    expect(configs).toHaveLength(0);
+    expect(emptySections).toEqual([0]);
     expect(warn).not.toHaveBeenCalled();
   });
 

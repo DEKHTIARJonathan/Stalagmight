@@ -778,13 +778,19 @@ export function buildBatchImport(
   // #535: `!emittedPosition.has(idx)` alone is a superset of "gap" - it is
   // ALSO true of every section that was legitimately handled elsewhere:
   // already emitted in an earlier batch (`alreadyImported`, skipped before
-  // `emittedPosition.set` at the top of the loop), deliberately deferred to a
-  // later joint placement (`deferredImportSet`), or reachable but empty
+  // `emittedPosition.set` at the top of the loop), or reachable but empty
   // (`emptySections`, already surfaced via `reportEmptySections`). Manual
   // placement calls `buildBatchImport` fresh on every step with the FULL
   // accumulated graph, so `alreadyImported` alone grows by one on every
   // successful step - counting it here made the warning fire on every healthy
   // incremental placement, climbing with each step instead of naming a gap.
+  //
+  // `!deferredImportSet.has(idx)` is NOT a third spam source and is dead in
+  // practice: both `bfsReachable` calls above (:387, :450) pass
+  // `deferredImportSet` as `blocked`, and `bfsReachable` never visits or
+  // returns a blocked index (:280, :291) - so no `idx` in `reachableOrder`
+  // can ever be in `deferredImportSet`. Kept only as defensive belt-and-
+  // braces against a future caller passing a differently-scoped set.
   const unemittedReachableCount = reachableOrder.filter(
     (idx) =>
       idx !== zeroDatumIndex &&

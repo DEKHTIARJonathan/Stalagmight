@@ -53,12 +53,40 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
   const fileName = useMemo(() => extractFilename(filePath), [filePath]);
 
   // What the CURRENT `includeExcluded` toggle will actually land, not the raw
-  // parsed count - a Compass file's `X`-flagged shots are dropped by the
-  // converter under the default toggle, and the preview used to quote the raw
-  // count regardless (#437).
-  const landingShotCount = includeExcluded
-    ? compassFile.shot_count
-    : compassFile.shot_count - compassFile.excluded_shot_count;
+  // parsed count. Two converter drop paths shrink the raw count: `X`-flagged
+  // shots under the default toggle (`excluded_shot_count`), and ANY shot
+  // whose resolved length is non-positive - a missing-length sentinel, an
+  // explicit zero, or a corrections-driven zero/negative - which the
+  // converter drops unconditionally (`invalid_shot_count`). The preview used
+  // to quote the raw count regardless of either (#437).
+  //
+  // Known scope limit: `invalid_shot_count` counts invalid shots among the
+  // NON-excluded set (exactly what the default `includeExcluded=false` toggle
+  // lands - the case #437 is about). A shot that is BOTH `X`-flagged AND
+  // length-invalid is not double-counted here, so flipping `includeExcluded`
+  // to true can still slightly over-promise for that narrow overlap; it never
+  // under-promises.
+  const landingShotCount =
+    compassFile.shot_count -
+    compassFile.invalid_shot_count -
+    (includeExcluded ? 0 : compassFile.excluded_shot_count);
+
+  // "(N excluded, M invalid)" - only the parts that are non-zero and, for
+  // excluded, only while the toggle would actually drop them.
+  const shotCountFootnote = useMemo(() => {
+    const parts: string[] = [];
+    if (!includeExcluded && compassFile.excluded_shot_count > 0) {
+      parts.push(
+        t('dialogs.compassImport.stats.excludedSuffix', { count: compassFile.excluded_shot_count })
+      );
+    }
+    if (compassFile.invalid_shot_count > 0) {
+      parts.push(
+        t('dialogs.compassImport.stats.invalidSuffix', { count: compassFile.invalid_shot_count })
+      );
+    }
+    return parts.join(', ');
+  }, [includeExcluded, compassFile.excluded_shot_count, compassFile.invalid_shot_count, t]);
 
   const handleImport = useCallback(async () => {
     setIsImporting(true);
@@ -155,14 +183,12 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
             <div className="text-xs text-text-tertiary" title={t('dialogs.compassImport.stats.shotsTooltip')}>
               {t('dialogs.compassImport.stats.shots')}
             </div>
-            <div className="text-sm font-medium">
+            <div className="text-sm font-medium" data-testid="compass-shot-count">
               {landingShotCount}
-              {!includeExcluded && compassFile.excluded_shot_count > 0 && (
-                <span className="text-text-tertiary font-normal">
+              {shotCountFootnote && (
+                <span className="text-text-tertiary font-normal" data-testid="compass-shot-count-footnote">
                   {' '}
-                  {t('dialogs.compassImport.stats.excludedSuffix', {
-                    count: compassFile.excluded_shot_count,
-                  })}
+                  ({shotCountFootnote})
                 </span>
               )}
             </div>
@@ -197,8 +223,10 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
               {compassFile.surveys.map((survey, i) => (
                 <tr key={i} className="border-t border-border">
                   <td className="px-3 py-1.5">{survey.name}</td>
-                  <td className="px-3 py-1.5">
-                    {includeExcluded ? survey.shot_count : survey.shot_count - survey.excluded_shot_count}
+                  <td className="px-3 py-1.5" data-testid={`compass-survey-shots-${i}`}>
+                    {survey.shot_count -
+                      survey.invalid_shot_count -
+                      (includeExcluded ? 0 : survey.excluded_shot_count)}
                   </td>
                   <td className="px-3 py-1.5 text-text-secondary">{survey.team ?? '-'}</td>
                   <td className="px-3 py-1.5 text-text-secondary">{survey.date}</td>

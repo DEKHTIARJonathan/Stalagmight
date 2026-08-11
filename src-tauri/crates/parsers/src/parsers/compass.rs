@@ -62,6 +62,17 @@ pub struct CompassFile {
     /// toggle (#437). `shot_count - excluded_shot_count` is what a default
     /// import actually lands.
     pub excluded_shot_count: u32,
+    /// How many of the remaining (non-excluded) shots the converter drops
+    /// unconditionally because their resolved length is non-positive - a
+    /// missing-length sentinel, an explicit zero, or a non-finite reading
+    /// (`convert_compass_to_import_configs`'s `length_m <= 0.0` check).
+    /// Computed with the SAME per-survey geometry context the converter
+    /// uses (declination/corrections applied under default options), not a
+    /// bare `shot.length` read - `CORRECTIONS2`'s length term can itself
+    /// push an otherwise-positive length to zero or below (#437 follow-up).
+    /// `shot_count - excluded_shot_count - invalid_shot_count` is what a
+    /// default import actually lands.
+    pub invalid_shot_count: u32,
     pub has_backsights: bool,
     pub datum: Option<String>,
     pub utm_zone: Option<i32>,
@@ -86,6 +97,9 @@ pub struct CompassSurveySummary {
     /// See `CompassFile::excluded_shot_count`; same accounting, scoped to
     /// this survey.
     pub excluded_shot_count: u32,
+    /// See `CompassFile::invalid_shot_count`; same accounting, scoped to
+    /// this survey.
+    pub invalid_shot_count: u32,
     pub declination: f64,
 }
 
@@ -469,6 +483,35 @@ fn excluded_shot_count(survey: &Survey) -> u32 {
         .count() as u32
 }
 
+/// Number of a survey's non-excluded shots the converter drops because their
+/// resolved length is non-positive (`convert_compass_to_import_configs`'s
+/// `length_m <= 0.0` check, pass 1). Runs the SAME `build_ctx` +
+/// `shot_geometry` pipeline the converter uses under default options -
+/// `CORRECTIONS2`'s length term can itself drive an otherwise-positive raw
+/// length to zero or below, so a bare `shot.length` read would under-report
+/// (#437 follow-up).
+///
+/// `anchor_lat_lng` is deliberately `None` here rather than resolving the
+/// real GPS anchor: it only feeds `Auto`-mode declination, which affects
+/// azimuth, never length, so it cannot change this count. Any warnings
+/// `build_ctx` would emit are scratch - `build_preview` already carries the
+/// parser's own warnings and must not duplicate conversion-time ones it
+/// isn't otherwise running.
+fn invalid_shot_count(survey: &Survey, file_state: &CompassFileState) -> u32 {
+    let opts = CompassImportOptions::default();
+    let mut scratch_warnings = Vec::new();
+    let ctx = build_ctx(survey, file_state, None, &opts, &mut scratch_warnings);
+    survey
+        .shots
+        .iter()
+        .filter(|shot| !parse_flags(shot.flags.as_ref()).exclude_all)
+        .filter(|shot| {
+            let (_, length_m, _) = shot_geometry(shot, &ctx);
+            length_m <= 0.0
+        })
+        .count() as u32
+}
+
 pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
     let shot_count = parsed
         .surveys
@@ -479,6 +522,11 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
         .surveys
         .iter()
         .map(|s| excluded_shot_count(&s.survey))
+        .sum::<u32>();
+    let invalid_shot_count_total = parsed
+        .surveys
+        .iter()
+        .map(|s| invalid_shot_count(&s.survey, &s.state))
         .sum::<u32>();
     let has_backsights = parsed
         .surveys
@@ -494,6 +542,7 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
             team: non_empty(&s.survey.team),
             shot_count: s.survey.shots.len() as u32,
             excluded_shot_count: excluded_shot_count(&s.survey),
+            invalid_shot_count: invalid_shot_count(&s.survey, &s.state),
             // Preview-only field, but it crosses IPC as a ts-rs `number`;
             // a NaN would serialize as JSON null (#275).
             declination: finite_or_zero(s.survey.parameters.declination),
@@ -504,6 +553,7 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
         survey_count,
         shot_count,
         excluded_shot_count: excluded_shot_count_total,
+        invalid_shot_count: invalid_shot_count_total,
         has_backsights,
         datum: parsed.datum.map(|d| format!("{d:?}")),
         utm_zone: parsed.utm_zone.map(i32::from),
@@ -1865,18 +1915,21 @@ mod tests {
         }
     }
 
-    /// #437: `build_preview`'s `shot_count` was the raw shot count, but the
-    /// default `include_excluded=false` toggle drops `X`-flagged shots at
-    /// import time, so the number the dialog showed did not match what
-    /// landed. `excluded_shot_count` must name exactly the shots the default
-    /// conversion drops - both at the file level and per survey - so
-    /// `shot_count - excluded_shot_count` is honest without a second parse.
+    /// #437: `build_preview`'s `shot_count` was the raw shot count, but two
+    /// converter drop paths shrink that at import time: `X`-flagged shots
+    /// under the default `include_excluded=false` toggle, AND (pass 1,
+    /// unconditional) any non-excluded shot whose resolved length is
+    /// non-positive. `excluded_shot_count` / `invalid_shot_count` must name
+    /// exactly what each path drops - file-level and per-survey - so
+    /// `shot_count - excluded_shot_count - invalid_shot_count` is honest
+    /// without a second parse.
     ///
-    /// Injection: revert `excluded_shot_count` to always return 0 (as if the
-    /// preview never accounted for exclusions) and this fails, because the
-    /// synthetic survey below has one excluded shot out of three.
+    /// Injection: revert `excluded_shot_count` to always return 0 and this
+    /// fails on the excluded assertions (one shot is `#|X#`-flagged);
+    /// revert `invalid_shot_count` to always return 0 and this fails on the
+    /// invalid/landed assertions (one shot has `LENGTH 0.00`).
     #[test]
-    fn preview_excluded_shot_count_matches_what_default_toggles_drop() {
+    fn preview_excluded_and_invalid_shot_count_match_what_default_toggles_drop() {
         let dir = tempfile::tempdir().unwrap();
         let dat = format!(
             "Synthetic Cave\r\n\
@@ -1890,26 +1943,29 @@ mod tests {
              \r\n\
              A1 A2 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n\
              A2 A3 10.00 90.00 0.00 1.00 2.00 3.00 4.00 #|X#\r\n\
-             A3 A4 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n"
+             A3 A4 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n\
+             A4 A5 0.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n"
         );
         let path = dir.path().join("excluded.dat");
         std::fs::write(&path, &dat).unwrap();
 
         let parsed = parse_compass(&path).unwrap();
         let preview = build_preview(&parsed);
-        assert_eq!(preview.shot_count, 3, "raw shot count");
+        assert_eq!(preview.shot_count, 4, "raw shot count");
         assert_eq!(preview.excluded_shot_count, 1, "one shot is #|X#-flagged");
+        assert_eq!(preview.invalid_shot_count, 1, "one shot has LENGTH 0.00");
         assert_eq!(preview.surveys.len(), 1);
-        assert_eq!(preview.surveys[0].shot_count, 3);
+        assert_eq!(preview.surveys[0].shot_count, 4);
         assert_eq!(preview.surveys[0].excluded_shot_count, 1);
+        assert_eq!(preview.surveys[0].invalid_shot_count, 1);
 
         // What the default (`include_excluded: false`) toggle actually lands
-        // must equal shot_count - excluded_shot_count.
+        // must equal shot_count - excluded_shot_count - invalid_shot_count.
         let (configs, _, _) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         assert_eq!(
             total_shots(&configs) as u32,
-            preview.shot_count - preview.excluded_shot_count,
+            preview.shot_count - preview.excluded_shot_count - preview.invalid_shot_count,
             "landed shot count must match the honest preview count"
         );
     }

@@ -22,7 +22,15 @@ import '../../../i18n';
 const dialogData: {
   dmpFile: { sections: Array<{ shots: Array<{ shot_type: string }> }> } | undefined;
   tmlFile: { sections: unknown[]; cave_name?: string } | undefined;
-  compassFile: { survey_count: number; shot_count: number; cave_name?: string } | undefined;
+  compassFile:
+    | {
+        survey_count: number;
+        shot_count: number;
+        excluded_shot_count?: number;
+        invalid_shot_count?: number;
+        cave_name?: string;
+      }
+    | undefined;
   wallsFile: { resolved_survey_count: number; shot_count: number; project_name?: string } | undefined;
   gpxFile: { waypoints: unknown[]; tracks: unknown[]; routes: unknown[]; name?: string | null } | undefined;
   filePath?: string;
@@ -123,7 +131,13 @@ describe('NewProjectForImportDialog summary plurals (#447)', () => {
   });
 
   it('pluralizes the Compass summary (surveys_one) and keeps the cave-name suffix', () => {
-    dialogData.compassFile = { survey_count: 1, shot_count: 1, cave_name: 'Naharon' };
+    dialogData.compassFile = {
+      survey_count: 1,
+      shot_count: 1,
+      excluded_shot_count: 0,
+      invalid_shot_count: 0,
+      cave_name: 'Naharon',
+    };
     dialogData.importType = 'compass';
 
     render(<NewProjectForImportDialog />);
@@ -132,7 +146,13 @@ describe('NewProjectForImportDialog summary plurals (#447)', () => {
   });
 
   it('pluralizes the Compass summary (surveys_other) with no cave name', () => {
-    dialogData.compassFile = { survey_count: 2, shot_count: 5, cave_name: '' };
+    dialogData.compassFile = {
+      survey_count: 2,
+      shot_count: 5,
+      excluded_shot_count: 0,
+      invalid_shot_count: 0,
+      cave_name: '',
+    };
     dialogData.importType = 'compass';
 
     render(<NewProjectForImportDialog />);

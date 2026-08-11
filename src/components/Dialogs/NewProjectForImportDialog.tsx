@@ -287,7 +287,18 @@ export default function NewProjectForImportDialog() {
             <div className="text-text-secondary">
               {t('dialogs.newProjectForImport.summary.surveys', { count: compassFile.survey_count })}
               {t('dialogs.newProjectForImport.summary.separator')}
-              {t('dialogs.newProjectForImport.summary.shots', { count: compassFile.shot_count })}
+              {/* This dialog has no include-excluded toggle of its own - it hands
+                  off to CompassImportDialog, which defaults to
+                  `include_excluded: false` - so the honest landing count here
+                  subtracts both converter drop paths under that default
+                  (#437), matching what the next dialog will show before the
+                  user changes anything. */}
+              {t('dialogs.newProjectForImport.summary.shots', {
+                count:
+                  compassFile.shot_count -
+                  compassFile.excluded_shot_count -
+                  compassFile.invalid_shot_count,
+              })}
               {compassFile.cave_name
                 ? `${t('dialogs.newProjectForImport.summary.separator')}${compassFile.cave_name}`
                 : ''}

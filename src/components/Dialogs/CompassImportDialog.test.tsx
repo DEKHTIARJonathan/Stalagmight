@@ -48,6 +48,7 @@ const compassFile: CompassFile = {
   survey_count: 0,
   shot_count: 0,
   excluded_shot_count: 0,
+  invalid_shot_count: 0,
   has_backsights: false,
   datum: null,
   utm_zone: null,
@@ -155,5 +156,70 @@ describe('CompassImportDialog warning surfacing (#110)', () => {
     // catch reported the empty import as a broken IPC call.
     expect(openDialog).not.toHaveBeenCalledWith('error', expect.anything());
     expect(orphanCalled()).toBe(false);
+  });
+});
+
+/**
+ * #437: the header "Shots" stat must show what the current toggle will
+ * actually land, not the raw parsed count, with a footnote naming what was
+ * dropped and why. The per-survey rows use the same arithmetic and must sum
+ * to the header.
+ *
+ * Injection: flip the header's ternary at CompassImportDialog.tsx (the
+ * `includeExcluded ? 0 : compassFile.excluded_shot_count` term) and the
+ * "raw count with no suffix on include-excluded" assertion goes red.
+ */
+describe('CompassImportDialog honest shot count (#437)', () => {
+  const twoSurveyFile: CompassFile = {
+    ...compassFile,
+    shot_count: 5,
+    excluded_shot_count: 1,
+    invalid_shot_count: 1,
+    surveys: [
+      {
+        name: 'A',
+        date: '2026-01-01',
+        team: null,
+        shot_count: 3,
+        excluded_shot_count: 1,
+        invalid_shot_count: 0,
+        declination: 0,
+      },
+      {
+        name: 'B',
+        date: '2026-01-01',
+        team: null,
+        shot_count: 2,
+        excluded_shot_count: 0,
+        invalid_shot_count: 1,
+        declination: 0,
+      },
+    ],
+  };
+
+  it('shows the landing count with an excluded+invalid footnote by default', async () => {
+    render(<CompassImportDialog compassFile={twoSurveyFile} filePath="/tmp/cave.dat" />);
+
+    // 5 raw - 1 excluded - 1 invalid = 3 landing.
+    expect(await screen.findByTestId('compass-shot-count')).toHaveTextContent('3');
+    expect(screen.getByTestId('compass-shot-count-footnote')).toHaveTextContent('1 excluded, 1 invalid');
+
+    // Per-survey rows: A = 3 - 1 excluded - 0 invalid = 2; B = 2 - 0 - 1 = 1.
+    expect(screen.getByTestId('compass-survey-shots-0')).toHaveTextContent('2');
+    expect(screen.getByTestId('compass-survey-shots-1')).toHaveTextContent('1');
+    // Rows sum to the header's landing count.
+    expect(2 + 1).toBe(3);
+  });
+
+  it('shows the raw count (minus only invalid) with no excluded suffix once include-excluded is checked', async () => {
+    render(<CompassImportDialog compassFile={twoSurveyFile} filePath="/tmp/cave.dat" />);
+
+    await userEvent.click(screen.getByTestId('compass-include-excluded'));
+
+    // 5 raw - 0 excluded (now included) - 1 invalid = 4.
+    expect(screen.getByTestId('compass-shot-count')).toHaveTextContent('4');
+    const footnote = screen.getByTestId('compass-shot-count-footnote');
+    expect(footnote).toHaveTextContent('1 invalid');
+    expect(footnote).not.toHaveTextContent('excluded');
   });
 });

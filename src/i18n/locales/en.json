@@ -1448,7 +1448,10 @@
         "surveys": "Surveys",
         "shots": "Shots",
         "shotsTooltip": "Shots that will actually be imported under the current toggles",
-        "excludedSuffix": "({{count}} excluded)",
+        "excludedSuffix_one": "{{count}} excluded",
+        "excludedSuffix_other": "{{count}} excluded",
+        "invalidSuffix_one": "{{count}} invalid",
+        "invalidSuffix_other": "{{count}} invalid",
         "datum": "Datum",
         "georeference": "Georeference",
         "noGeoreference": "None"
