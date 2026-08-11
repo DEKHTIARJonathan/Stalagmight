@@ -17,7 +17,7 @@
  * The post-attach `__E2E_TEST__` check in session.ts stays as the definitive
  * backstop; this is the cheap pre-flight.
  */
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -25,6 +25,36 @@ import { agentBuildMode, binaryPathFor, cargoTargetDir, type AgentBuildMode } fr
 import { isDarwinTarget } from './platform';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+/**
+ * `repoRoot` with symlinks resolved, which is the form the stamp records and
+ * compares. Two paths naming the same tree (a symlinked checkout, /tmp vs
+ * /private/tmp on darwin) must not read as two different trees, or every start
+ * through the other name would rebuild forever.
+ */
+function realRepoRoot(): string {
+  try {
+    return fs.realpathSync(repoRoot);
+  } catch {
+    return repoRoot;
+  }
+}
+
+/**
+ * Short HEAD of the tree at `root`, or 'unknown'. Always `git -C <root>`, never
+ * an inherited cwd: the harness is imported by an MCP server whose cwd is
+ * whatever launched it, and a HEAD read from some other tree is worse than no
+ * HEAD at all.
+ */
+export function gitHeadFor(root: string): string {
+  try {
+    return execFileSync('git', ['-C', root, 'rev-parse', '--short', 'HEAD'], {
+      encoding: 'utf8',
+    }).trim();
+  } catch {
+    return 'unknown';
+  }
+}
 
 /**
  * macOS has no external WebDriver daemon; the app itself must embed
@@ -82,10 +112,25 @@ function mtimeOf(file: string): number {
  * Stamp written by `buildApp` beside the binary it produced. Lives in the cargo
  * target dir (a build output, never the source tree, and outside the repo under
  * the default `~/.cargo_build`), so it is not something git can pick up.
+ *
+ * That location is also SHARED: several git worktrees of this repo point at one
+ * `CARGO_TARGET_DIR`, so the binary a stamp vouches for may have been built from
+ * a different tree than the one asking. mtimes cannot see that either - worktree
+ * A's sources are typically older than a binary B just built, so the check
+ * passed and A drove B's app (issue #488). Since `v: 3` the stamp therefore
+ * records WHICH tree built it, and a mismatch is stale.
  */
 export interface E2EBuildStamp {
   /** Stamp schema version; an unknown version is treated as no stamp. */
-  v: 2;
+  v: 3;
+  /**
+   * Absolute, realpath-normalized root of the source tree this build ran in.
+   * Load-bearing: it is the whole cross-worktree defence, so a stamp without it
+   * is not a stamp.
+   */
+  repoRoot: string;
+  /** Short HEAD of `repoRoot` at build time. Informational (shown in reasons). */
+  gitHead: string;
   /** Cargo profile this binary was built with. */
   mode: AgentBuildMode;
   /**
@@ -198,19 +243,24 @@ export function readBuildStamp(file: string = buildStampPath): E2EBuildStamp | n
   const candidate = parsed as Partial<E2EBuildStamp>;
   // A v1 stamp predates BOTH the e2eFeature field and the release mode, so it
   // can say neither whether the binary carries the WebDriver plugin nor which
-  // profile it is. Treated as no stamp: one rebuild per machine, once.
-  if (candidate.v !== 2) return null;
+  // profile it is; a v2 stamp cannot say which SOURCE TREE built the binary,
+  // which is the one thing a shared CARGO_TARGET_DIR makes ambiguous. Either is
+  // treated as no stamp: one rebuild per machine per bump, once.
+  if (candidate.v !== 3) return null;
   if (candidate.mode !== 'debug' && candidate.mode !== 'release') return null;
   if (typeof candidate.features !== 'string') return null;
   if (typeof candidate.viteE2E !== 'boolean') return null;
   if (typeof candidate.e2eFeature !== 'boolean') return null;
+  if (typeof candidate.repoRoot !== 'string') return null;
   if (typeof candidate.binaryMtimeMs !== 'number') return null;
   return {
-    v: 2,
+    v: 3,
     mode: candidate.mode,
     features: candidate.features,
     viteE2E: candidate.viteE2E,
     e2eFeature: candidate.e2eFeature,
+    repoRoot: candidate.repoRoot,
+    gitHead: typeof candidate.gitHead === 'string' ? candidate.gitHead : 'unknown',
     viteMode: typeof candidate.viteMode === 'string' ? candidate.viteMode : 'unknown',
     binaryMtimeMs: candidate.binaryMtimeMs,
     builtAtMs: typeof candidate.builtAtMs === 'number' ? candidate.builtAtMs : 0,
@@ -231,6 +281,8 @@ export function stampStaleReasons(
     binaryMtimeMs: number;
     mode?: AgentBuildMode;
     features?: string;
+    /** Realpath of the tree asking. Omitted = do not compare (tests, callers that cannot know). */
+    repoRoot?: string;
   },
 ): string[] {
   if (!stamp) {
@@ -239,6 +291,12 @@ export function stampStaleReasons(
   const reasons: string[] = [];
   if (want.mode !== undefined && stamp.mode !== want.mode) {
     reasons.push(`build stamp is for the ${stamp.mode} profile but this start needs ${want.mode}`);
+  }
+  if (want.repoRoot !== undefined && stamp.repoRoot !== want.repoRoot) {
+    reasons.push(
+      `the binary was built from a different source tree (${stamp.repoRoot} @ ${stamp.gitHead}), ` +
+        `current tree is ${want.repoRoot}`,
+    );
   }
   if (want.features !== undefined && stamp.features !== want.features) {
     reasons.push(
@@ -269,6 +327,18 @@ export interface Freshness {
   fresh: boolean;
   reasons: string[];
   binaryPath: string;
+  /**
+   * Which tree built the binary, per its stamp; null when there is no valid
+   * stamp. Surfaced so a caller can report builder identity without re-reading
+   * (and re-validating) the stamp itself.
+   */
+  builtFrom: { repoRoot: string; gitHead: string } | null;
+}
+
+/** Builder identity recorded in `mode`'s stamp, or null when there is none. */
+export function builtFromFor(mode: AgentBuildMode): { repoRoot: string; gitHead: string } | null {
+  const stamp = readBuildStamp(buildStampPathFor(mode));
+  return stamp ? { repoRoot: stamp.repoRoot, gitHead: stamp.gitHead } : null;
 }
 
 export interface FreshnessOptions {
@@ -289,16 +359,28 @@ export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
   const reasons: string[] = [];
   const binMtime = mtimeOf(binaryPath);
   if (binMtime === 0) {
-    return { fresh: false, reasons: [`${mode} binary missing at ${binaryPath}`], binaryPath };
+    return {
+      fresh: false,
+      reasons: [`${mode} binary missing at ${binaryPath}`],
+      binaryPath,
+      builtFrom: null,
+    };
   }
 
+  // Read ONCE: the staleness decision and the reported builder identity must be
+  // the same stamp, not two reads that a concurrent build could split.
+  const stamp = readBuildStamp(buildStampPathFor(mode));
+  const builtFrom = stamp ? { repoRoot: stamp.repoRoot, gitHead: stamp.gitHead } : null;
   reasons.push(
-    ...stampStaleReasons(readBuildStamp(buildStampPathFor(mode)), {
+    ...stampStaleReasons(stamp, {
       viteE2E: requireE2E,
       e2eFeature: featuresFor(mode).includes('e2e'),
       binaryMtimeMs: binMtime,
       mode,
       features: featureKey(mode),
+      // Unconditional: production always knows which tree it is, and a shared
+      // CARGO_TARGET_DIR means another worktree's binary must not pass as fresh.
+      repoRoot: realRepoRoot(),
     }),
   );
 
@@ -312,7 +394,7 @@ export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
   if (newestSource > binMtime) {
     reasons.push('a source file is newer than the binary');
   }
-  return { fresh: reasons.length === 0, reasons, binaryPath };
+  return { fresh: reasons.length === 0, reasons, binaryPath, builtFrom };
 }
 
 /**
@@ -447,12 +529,15 @@ function writeBuildStamp(
 ): void {
   const now = Date.now();
   const stampPath = buildStampPathFor(info.mode);
+  const root = realRepoRoot();
   const stamp: E2EBuildStamp = {
-    v: 2,
+    v: 3,
     mode: info.mode,
     features: info.features,
     viteE2E: info.viteE2E,
     e2eFeature: info.e2eFeature,
+    repoRoot: root,
+    gitHead: gitHeadFor(root),
     viteMode: info.viteMode,
     binaryMtimeMs: mtimeOf(binaryPathFor(info.mode)),
     builtAtMs: now,
