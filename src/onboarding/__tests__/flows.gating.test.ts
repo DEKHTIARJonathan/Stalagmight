@@ -4,12 +4,9 @@ import { ONBOARDING_FLOWS, ORIENTATION_FLOW_ID, type OnboardingContext } from '.
 const baseContext: OnboardingContext = {
   view: 'single',
   hasProject: true,
-  hasRecentProjects: false,
-  configRecentProjectsCount: 0,
   activeDialog: null,
   dmpImportWizardPhase: null,
   placementModeActive: false,
-  isDmpImportContext: false,
   loadingProject: false,
   splashVisible: false,
   configLoaded: true,

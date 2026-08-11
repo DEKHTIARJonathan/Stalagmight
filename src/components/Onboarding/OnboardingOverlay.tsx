@@ -45,9 +45,6 @@ const TOOLTIP_GAP = 18;
 const TOOLTIP_DEFAULT_MAX_WIDTH = 360;
 const VIEWPORT_MARGIN = 16;
 const TOOLTIP_ESTIMATED_HEIGHT = 250;
-const STEP_SCROLL_TOP_PADDING = 10;
-const STEP_SCROLL_MAX_ATTEMPTS = 12;
-const STEP_SCROLL_RETRY_MS = 80;
 const TOOLTIP_SETTLE_DELAY_MS = 220;
 /**
  * How long to wait for a step's target before giving up on anchoring to it.
@@ -179,8 +176,6 @@ function calculateTooltipStyle(
   viewportVersion: number,
   maxWidth: number = TOOLTIP_DEFAULT_MAX_WIDTH,
   offsetX: number = 0,
-  offsetY: number = 0,
-  anchorY: 'auto' | 'top' | 'bottom' = 'auto',
   tooltipHeight: number = TOOLTIP_ESTIMATED_HEIGHT
 ): CSSProperties {
   void viewportVersion;
@@ -205,10 +200,10 @@ function calculateTooltipStyle(
   const targetBottom = targetRect.top + targetRect.height;
 
   let left = centerX - maxWidth / 2;
-  let top = (anchorY === 'top' ? targetTop : targetBottom) + TOOLTIP_GAP;
+  let top = targetBottom + TOOLTIP_GAP;
 
   if (placement === 'top') {
-    top = (anchorY === 'bottom' ? targetBottom : targetTop) - tooltipHeight - TOOLTIP_GAP;
+    top = targetTop - tooltipHeight - TOOLTIP_GAP;
   } else if (placement === 'left') {
     left = targetRect.left - maxWidth - TOOLTIP_GAP;
     top = centerY - tooltipHeight / 2;
@@ -217,11 +212,10 @@ function calculateTooltipStyle(
     top = centerY - tooltipHeight / 2;
   }
 
-  const allowAutoFlip = anchorY === 'auto';
-  if (allowAutoFlip && placement === 'bottom' && top > maxTop) {
+  if (placement === 'bottom' && top > maxTop) {
     top = targetRect.top - tooltipHeight - TOOLTIP_GAP;
   }
-  if (allowAutoFlip && placement === 'top' && top < VIEWPORT_MARGIN) {
+  if (placement === 'top' && top < VIEWPORT_MARGIN) {
     top = targetRect.top + targetRect.height + TOOLTIP_GAP;
   }
   if (placement === 'left' && left < VIEWPORT_MARGIN) {
@@ -232,7 +226,6 @@ function calculateTooltipStyle(
   }
 
   left += offsetX;
-  top += offsetY;
 
   return {
     width: `min(${maxWidth}px, calc(100vw - ${VIEWPORT_MARGIN * 2}px))`,
@@ -685,9 +678,6 @@ export default function OnboardingOverlay({
   const { t } = useTranslation();
   const cardRef = useRef<HTMLDivElement>(null);
   const maskIdRef = useRef(`onboarding-mask-${Math.random().toString(36).slice(2)}`);
-  const previousFlowIdRef = useRef(step.flowId);
-  const previousStepRef = useRef({ flowId: step.flowId, stepIndex });
-  const scrolledContainerSelectorsRef = useRef<Set<string>>(new Set());
   const [targetRects, setTargetRects] = useState<SpotlightRect[]>([]);
   const [viewportVersion, setViewportVersion] = useState(0);
   const [tooltipHeight, setTooltipHeight] = useState(TOOLTIP_ESTIMATED_HEIGHT);
@@ -741,17 +731,6 @@ export default function OnboardingOverlay({
     setShowSkipConfirm(false);
     onSkipAll();
   }, [onSkipAll]);
-
-  const resetScrolledContainers = useCallback(() => {
-    for (const selector of scrolledContainerSelectorsRef.current) {
-      const container = document.querySelector(selector) as HTMLElement | null;
-      if (!container) {
-        continue;
-      }
-      container.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-    }
-    scrolledContainerSelectorsRef.current.clear();
-  }, []);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -851,103 +830,6 @@ export default function OnboardingOverlay({
       observer.disconnect();
     };
   }, [step.id, stepIndex]);
-
-  useEffect(() => {
-    const previousFlowId = previousFlowIdRef.current;
-    if (previousFlowId !== step.flowId) {
-      resetScrolledContainers();
-    }
-    previousFlowIdRef.current = step.flowId;
-  }, [resetScrolledContainers, step.flowId]);
-
-  useEffect(() => {
-    const previousStep = previousStepRef.current;
-    const movedBackWithinFlow = previousStep.flowId === step.flowId && stepIndex < previousStep.stepIndex;
-    if (movedBackWithinFlow && (!step.scrollContainerSelector || !step.scrollTargetSelector)) {
-      resetScrolledContainers();
-    }
-    previousStepRef.current = { flowId: step.flowId, stepIndex };
-  }, [
-    resetScrolledContainers,
-    step.flowId,
-    step.scrollContainerSelector,
-    step.scrollTargetSelector,
-    stepIndex,
-  ]);
-
-  useEffect(() => () => {
-    resetScrolledContainers();
-  }, [resetScrolledContainers]);
-
-  useEffect(() => {
-    if (!step.scrollContainerSelector || !step.scrollTargetSelector) {
-      return;
-    }
-    const scrollContainerSelector = step.scrollContainerSelector;
-    const scrollTargetSelector = step.scrollTargetSelector;
-    const scrollAlignment = step.scrollAlignment ?? 'top';
-
-    let timeoutId: number | null = null;
-    let isCancelled = false;
-
-    const scrollStepTargetToTop = (attempt: number) => {
-      if (isCancelled) {
-        return;
-      }
-
-      const container = document.querySelector(scrollContainerSelector) as HTMLElement | null;
-      const target = document.querySelector(scrollTargetSelector) as HTMLElement | null;
-
-      if (!container || !target) {
-        if (attempt >= STEP_SCROLL_MAX_ATTEMPTS) {
-          return;
-        }
-        timeoutId = window.setTimeout(
-          () => scrollStepTargetToTop(attempt + 1),
-          STEP_SCROLL_RETRY_MS
-        );
-        return;
-      }
-
-      scrolledContainerSelectorsRef.current.add(scrollContainerSelector);
-
-      const containerRect = container.getBoundingClientRect();
-      const targetRect = target.getBoundingClientRect();
-      const targetTopInContainer = container.scrollTop + (targetRect.top - containerRect.top);
-      const targetBottomInContainer = targetTopInContainer + targetRect.height;
-      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
-      let nextScrollTop: number;
-
-      if (scrollAlignment === 'nearest') {
-        const visibleTop = container.scrollTop + STEP_SCROLL_TOP_PADDING;
-        const visibleBottom =
-          container.scrollTop + container.clientHeight - STEP_SCROLL_TOP_PADDING;
-
-        if (targetTopInContainer < visibleTop) {
-          nextScrollTop = targetTopInContainer - STEP_SCROLL_TOP_PADDING;
-        } else if (targetBottomInContainer > visibleBottom) {
-          nextScrollTop =
-            targetBottomInContainer - container.clientHeight + STEP_SCROLL_TOP_PADDING;
-        } else {
-          nextScrollTop = container.scrollTop;
-        }
-      } else {
-        nextScrollTop = targetTopInContainer - STEP_SCROLL_TOP_PADDING;
-      }
-
-      nextScrollTop = clamp(nextScrollTop, 0, maxScrollTop);
-      container.scrollTo({ top: nextScrollTop, left: 0, behavior: 'auto' });
-    };
-
-    scrollStepTargetToTop(0);
-
-    return () => {
-      isCancelled = true;
-      if (timeoutId !== null) {
-        window.clearTimeout(timeoutId);
-      }
-    };
-  }, [step.id, step.scrollAlignment, step.scrollContainerSelector, step.scrollTargetSelector]);
 
   useEffect(() => {
     const isAllowedTarget = (node: Node | null): boolean => {
@@ -1095,16 +977,12 @@ export default function OnboardingOverlay({
         viewportVersion,
         step.tooltipMaxWidth ?? TOOLTIP_DEFAULT_MAX_WIDTH,
         step.tooltipOffsetX ?? 0,
-        step.tooltipOffsetY ?? 0,
-        step.tooltipAnchorY ?? 'auto',
         tooltipHeight
       ),
     [
       placement,
       step.tooltipMaxWidth,
-      step.tooltipAnchorY,
       step.tooltipOffsetX,
-      step.tooltipOffsetY,
       tooltipHeight,
       tooltipTargetRect,
       viewportVersion,
