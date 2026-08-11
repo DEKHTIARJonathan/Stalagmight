@@ -40,89 +40,156 @@ pub fn app_state_with_project_db(project: Project) -> Result<(AppState, TestDb)>
 
 // === Config isolation =====================================================
 //
-// `AppState::new()` loads the global config via `Config::load()`, which (because
-// `app_dirs` is never initialized in unit tests) falls back to the developer's
-// REAL `~/.config/stalagmight/config.toml`. Tests that read or write config
-// therefore raced on - and permanently polluted - that real file (e.g. a test
-// writing `undo_history_limit = 42` made `test_get_config`'s default assertion
-// fail forever after). These helpers redirect the config path to a fresh temp
-// dir, serialized so the process-global override can't tear under parallel
-// tests, so config-touching tests are isolated from each other and the real file.
+// `AppState::new()` LOADS the global config via `Config::load()` and half the
+// state module writes it back (`note_recent_project` -> `Config::save()`), so
+// any test that builds an `AppState` reads and writes ONE file. `app_dirs` is
+// never initialized in unit tests, so unredirected that file is the developer's
+// REAL `~/.config/stalagmight/config.toml`.
+//
+// Isolation is therefore NOT opt-in. `Config::config_path()` resolves through
+// this module, and the default for a thread that never asked for anything is a
+// temp dir of its own, created on first use and removed when the thread exits.
+// libtest gives every `#[test]` its own thread, so every test in the binary is
+// isolated from the real file and from its siblings whether it says so or not.
+//
+// The opt-in helpers used to be the whole mechanism, and #522 is what that
+// cost: the redirect was a process-global cell taken under a process-global
+// mutex, so the tests that never took it resolved to the real path - and one of
+// them atomically renamed its own `config.toml` over an isolated test's file
+// between that test's save and its read-back, failing an assertion about retry
+// logic with an environment problem. Per-thread resolution has no such window,
+// and needs no process-wide mutex, so isolated tests no longer serialize.
+//
+// THE ONE TRAP is a SPAWNED THREAD: it is a new thread, so by default it gets a
+// dir of its own rather than the spawning test's. That is the right default -
+// a worker writing recents into its own dir is what keeps it off everyone
+// else's file - but a test whose workers must share ONE config file has to say
+// so: [`ConfigHandoff::capture`] on the parent, [`ConfigHandoff::adopt`] inside
+// the worker.
+//
+// [`real_config_resolution`] is the way out for the handful of tests that drive
+// `config_path()` itself, by pointing XDG_CONFIG_HOME / HOME at an unwritable
+// directory to force a save failure. Those mutate the environment
+// process-wide, so they serialize against each other; nothing else consults the
+// environment.
 
+#[cfg(any(test, feature = "test-support"))]
+use std::cell::{OnceCell, RefCell};
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+/// How the calling thread resolves `Config::config_path()`.
 #[cfg(any(test, feature = "test-support"))]
-fn config_override_cell() -> &'static Mutex<Option<PathBuf>> {
-    static CELL: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(None))
-}
-
-/// The config directory override active for the current isolated test, if any.
-/// `Config::config_path()` consults this (under `#[cfg(any(test, feature = "test-support"))]`) so tests never
-/// touch the real config file.
-#[cfg(any(test, feature = "test-support"))]
-pub fn config_path_override() -> Option<PathBuf> {
-    config_override_cell()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+#[derive(Clone)]
+enum ConfigMode {
+    /// Into this directory, whatever the environment says.
+    Isolated(PathBuf),
+    /// For real: `app_dirs`, then `directories` over the environment.
+    Real,
 }
 
 #[cfg(any(test, feature = "test-support"))]
-fn config_test_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
-/// Acquire the process-global config serialization lock WITHOUT setting an
-/// override. For the rare test that drives `Config::config_path()` itself (e.g.
-/// pointing `XDG_CONFIG_HOME` at a read-only dir to force a save failure): it
-/// must still serialize against override-using tests, but must not have the
-/// path redirected to a temp dir. Recovers from a poisoned lock.
-#[cfg(any(test, feature = "test-support"))]
-pub fn config_lock_guard() -> MutexGuard<'static, ()> {
-    config_test_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// RAII guard that holds the config serialization lock and the temp dir backing
-/// the override. Dropping it clears the override (so later non-isolated calls
-/// see the real path) and releases the lock.
-#[cfg(any(test, feature = "test-support"))]
-pub struct IsolatedConfig {
-    _dir: TempDir,
-    _guard: MutexGuard<'static, ()>,
+thread_local! {
+    /// What a guard asked this thread for; `None` selects [`own_config_dir`].
+    static CONFIG_MODE: RefCell<Option<ConfigMode>> = const { RefCell::new(None) };
+    /// The default: this thread's own config dir, created on first use and
+    /// removed when the thread exits.
+    static OWN_CONFIG_DIR: OnceCell<Option<TempDir>> = const { OnceCell::new() };
 }
 
 #[cfg(any(test, feature = "test-support"))]
-impl Drop for IsolatedConfig {
-    fn drop(&mut self) {
-        *config_override_cell()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+fn own_config_dir() -> Option<PathBuf> {
+    OWN_CONFIG_DIR
+        .try_with(|cell| {
+            cell.get_or_init(|| TempDir::new().ok())
+                .as_ref()
+                .map(|dir| dir.path().to_path_buf())
+        })
+        .unwrap_or_else(|_| teardown_config_dir())
+}
+
+/// Where a config write lands when it arrives after the thread's own TLS has
+/// been destroyed (a `Drop` running at thread exit). There is no per-thread
+/// slot left to own a dir by then, so one shared dir answers for all of them;
+/// it outlives the process rather than being cleaned up, which is the price of
+/// never falling back to the developer's real config file.
+#[cfg(any(test, feature = "test-support"))]
+fn teardown_config_dir() -> Option<PathBuf> {
+    static DIR: OnceLock<Option<TempDir>> = OnceLock::new();
+    DIR.get_or_init(|| TempDir::new().ok())
+        .as_ref()
+        .map(|dir| dir.path().to_path_buf())
+}
+
+/// The directory THIS THREAD resolves the config file into, or `None` when it
+/// resolves for real (see [`real_config_resolution`]).
+///
+/// `Config::config_path()` consults this under
+/// `cfg(any(test, feature = "test-support"))` - the same gate as this module
+/// rather than `cfg(test)`, because the root crate's tests isolate through this
+/// hook too and for THEIR builds this crate is a dependency.
+#[cfg(any(test, feature = "test-support"))]
+pub fn current_config_dir() -> Option<PathBuf> {
+    match CONFIG_MODE.try_with(|mode| mode.borrow().clone()) {
+        Ok(Some(ConfigMode::Isolated(dir))) => Some(dir),
+        Ok(Some(ConfigMode::Real)) => None,
+        Ok(None) | Err(_) => own_config_dir(),
     }
 }
 
-/// Redirect the global config path to a fresh temp directory until the returned
-/// guard drops, serialized against every other config-touching test. Hold the
-/// guard for the lifetime of any code that reads or writes config (note: recent
-/// projects live in the config too, so they are isolated as well).
+/// Puts back whatever the thread resolved to before, so guards nest.
+#[cfg(any(test, feature = "test-support"))]
+struct ModeRestore(Option<ConfigMode>);
+
+#[cfg(any(test, feature = "test-support"))]
+impl ModeRestore {
+    fn install(mode: ConfigMode) -> Self {
+        Self(CONFIG_MODE.with(|slot| slot.replace(Some(mode))))
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for ModeRestore {
+    fn drop(&mut self) {
+        let previous = self.0.take();
+        let _ = CONFIG_MODE.try_with(|slot| slot.replace(previous));
+    }
+}
+
+/// RAII guard owning the temp dir this thread's config resolves into.
+#[cfg(any(test, feature = "test-support"))]
+pub struct IsolatedConfig {
+    // Declared first so the mode is restored BEFORE the dir it names is removed.
+    _restore: ModeRestore,
+    dir: TempDir,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl IsolatedConfig {
+    /// The directory this guard resolves the config into.
+    pub fn path(&self) -> &Path {
+        self.dir.path()
+    }
+}
+
+/// Redirect THIS THREAD's config path to a fresh temp directory until the
+/// returned guard drops.
+///
+/// Every thread is already isolated (see the module header), so what this adds
+/// is a dir the test knows the identity of - to seed a config file in, to squat
+/// to make a save fail, or to hand to a worker thread - and one dir for the
+/// whole test rather than one per thread it spawns.
 #[cfg(any(test, feature = "test-support"))]
 #[expect(
     clippy::expect_used,
     reason = "test-support helper; panic on setup failure is acceptable"
 )]
 pub fn isolated_config() -> IsolatedConfig {
-    let guard = config_lock_guard();
     let dir = TempDir::new().expect("create temp config dir");
-    *config_override_cell()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(dir.path().to_path_buf());
+    let restore = ModeRestore::install(ConfigMode::Isolated(dir.path().to_path_buf()));
     IsolatedConfig {
-        _dir: dir,
-        _guard: guard,
+        _restore: restore,
+        dir,
     }
 }
 
@@ -132,4 +199,87 @@ pub fn isolated_config() -> IsolatedConfig {
 pub fn with_isolated_config<T>(f: impl FnOnce() -> T) -> T {
     let _cfg = isolated_config();
     f()
+}
+
+/// How the thread that built it resolves the config path, ready to be moved
+/// into a thread it spawns.
+///
+/// Resolution is per-thread, so a worker starts out with a dir of its own. For
+/// a test whose workers must share the parent's config FILE - a concurrent-save
+/// race, or a worker whose write the parent reads back - capture on the parent
+/// and adopt inside the worker:
+///
+/// ```ignore
+/// let handoff = ConfigHandoff::capture();
+/// std::thread::spawn(move || {
+///     let _config = handoff.adopt();
+///     // ... every Config::load()/save() here is the parent's file
+/// });
+/// ```
+///
+/// `Clone` because a `'static` thread closure has to own its copy: capture once
+/// and clone it per worker.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone)]
+pub struct ConfigHandoff(ConfigMode);
+
+#[cfg(any(test, feature = "test-support"))]
+impl ConfigHandoff {
+    /// Capture the calling thread's resolution, materializing its own dir if it
+    /// never had one.
+    pub fn capture() -> Self {
+        Self(
+            CONFIG_MODE
+                .with(|slot| slot.borrow().clone())
+                .unwrap_or_else(|| {
+                    own_config_dir().map_or(ConfigMode::Real, ConfigMode::Isolated)
+                }),
+        )
+    }
+
+    /// Resolve the captured way on THIS thread until the returned guard drops.
+    /// Call it inside the spawned thread.
+    pub fn adopt(&self) -> AdoptedConfig {
+        AdoptedConfig(ModeRestore::install(self.0.clone()))
+    }
+}
+
+/// RAII guard for [`ConfigHandoff::adopt`]: gives the thread its own resolution
+/// back when it drops.
+#[cfg(any(test, feature = "test-support"))]
+pub struct AdoptedConfig(#[expect(dead_code, reason = "held for its Drop")] ModeRestore);
+
+#[cfg(any(test, feature = "test-support"))]
+fn real_resolution_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// RAII guard for [`real_config_resolution`].
+#[cfg(any(test, feature = "test-support"))]
+pub struct RealConfigResolution {
+    // Declared first so this thread stops resolving for real BEFORE the next
+    // real-resolution test is let in.
+    _restore: ModeRestore,
+    _serialized: MutexGuard<'static, ()>,
+}
+
+/// Resolve `Config::config_path()` FOR REAL on this thread - `app_dirs`, then
+/// `directories` over the environment - until the returned guard drops.
+///
+/// For the tests that drive resolution itself, by pointing XDG_CONFIG_HOME (or
+/// HOME, which is what `directories` reads on macOS) at an unwritable directory
+/// to force a save failure. The environment is process-wide, so these serialize
+/// against each other; every other test resolves per-thread and never reads the
+/// environment at all. Recovers from a poisoned lock - the guarded value is
+/// `()`, so only the serialization matters.
+#[cfg(any(test, feature = "test-support"))]
+pub fn real_config_resolution() -> RealConfigResolution {
+    let serialized = real_resolution_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    RealConfigResolution {
+        _restore: ModeRestore::install(ConfigMode::Real),
+        _serialized: serialized,
+    }
 }

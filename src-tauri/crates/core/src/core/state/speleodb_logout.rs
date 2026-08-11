@@ -475,31 +475,32 @@ mod tests {
     /// the squatted path so the test can unblock it and retry. (Same idiom as
     /// `logout_reports_a_seed_that_could_not_be_cleared`.)
     fn squat_the_config_file() -> std::path::PathBuf {
-        let squatted = crate::test_helpers::config_path_override()
-            .expect("the override is active")
+        let squatted = crate::test_helpers::current_config_dir()
+            .expect("this thread is isolated")
             .join("config.toml");
         std::fs::create_dir_all(&squatted).expect("squat the config file path");
         squatted
     }
 
-    /// Diagnosis for the post-unblock asserts, which failed once on CI and
-    /// never since, nor locally (#522).
+    /// Diagnosis for the post-unblock asserts, which failed on CI and never
+    /// locally (#522).
     ///
     /// After the squat is lifted, the retry can miss its disk write two ways -
     /// the retry short-circuited on the in-memory guard (the real bug these
     /// tests catch), or the unblocked save failed again for an environmental
-    /// reason. (A third theory, "the write landed where `Config::load` does not
-    /// read", is impossible here: `Config::config_path()` returns
-    /// `config_path_override().join("config.toml")`, the same path the save
-    /// writes, so save and load cannot diverge in this test.)
+    /// reason. Save and load cannot diverge on the PATH: both go through
+    /// `Config::config_path()`, which resolves to this thread's own config dir.
     ///
-    /// An empty config dir alone cannot tell the two real causes apart. What
-    /// discriminates them is the file `Config::load` reads: present with the
-    /// stale value = the retry short-circuited without writing (cause 1);
-    /// absent = the retry attempted the write and it failed again (cause 2).
-    /// So this prints the load path AND that file's contents, not just a dir
-    /// listing. Total by construction - it must never panic and replace the
-    /// assertion message it is meant to enrich.
+    /// An empty config dir alone cannot tell those apart. What discriminates
+    /// them is the file `Config::load` reads: absent means the retry attempted
+    /// the write and it failed again, while present narrows it to a write that
+    /// never happened OR a file that is not the one this test wrote - #522 was
+    /// the second, another test's `config.toml` renamed over this one between
+    /// the save and the read-back, which per-thread config resolution now
+    /// prevents. So this prints the load path AND that file's contents (whose
+    /// `recent_projects` name the writer), not just a dir listing. Total by
+    /// construction - it must never panic and replace the assertion message it
+    /// is meant to enrich.
     fn config_state_for_diagnosis() -> String {
         use std::fmt::Write;
         let mut out = String::new();
@@ -521,8 +522,8 @@ mod tests {
             }
         }
 
-        let Some(dir) = crate::test_helpers::config_path_override() else {
-            out.push_str("; no config override active");
+        let Some(dir) = crate::test_helpers::current_config_dir() else {
+            out.push_str("; this thread resolves the config for real");
             return out;
         };
         match std::fs::read_dir(&dir) {

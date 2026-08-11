@@ -6222,7 +6222,7 @@ mod tests {
         // the write cannot land no matter how the save is spelled.
         crate::test_helpers::with_isolated_config(|| {
             let config_dir =
-                crate::test_helpers::config_path_override().expect("the override is active");
+                crate::test_helpers::current_config_dir().expect("this thread is isolated");
             std::fs::create_dir_all(config_dir.join("config.toml"))
                 .expect("squat the config file path with a directory");
 
@@ -6766,8 +6766,8 @@ mod tests {
         // or not; with two, the half that succeeded (or the half that rolled back)
         // leaves them describing different accounts.
         crate::test_helpers::with_isolated_config(|| {
-            let squatted = crate::test_helpers::config_path_override()
-                .expect("the override is active")
+            let squatted = crate::test_helpers::current_config_dir()
+                .expect("this thread is isolated")
                 .join("config.toml");
             std::fs::create_dir_all(&squatted).expect("squat the config file path");
 

@@ -802,14 +802,14 @@ use crate::models::{
     ShotKind, ShotUpdates, StationRef, SurveyDirection,
 };
 // CONFIG ISOLATION. Every test in this module opens with
-// `let _config = isolated_config();`, and none of them may skip it:
-// `AppState::new()` LOADS the global config, and every save reaches
-// `note_recent_project` -> `Config::save()`, which WRITES it. Unguarded that
-// is the developer's real ~/.config/stalagmight/config.toml - recent_projects
-// fills with dead /tmp paths - and the write also races the process-global
-// override the config tests set, so it can land inside a sibling test's
-// isolated config and fail it. The guard redirects the path and serializes
-// against them; it is held for the whole test because the saves are.
+// `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
+// and every save reaches `note_recent_project` -> `Config::save()`, which WRITES
+// it. Config resolution is PER-THREAD since #522, so a test that forgot the
+// guard can no longer land a write in a sibling's config file (nor in the
+// developer's real ~/.config/stalagmight/config.toml); what the guard still buys
+// is ONE dir for the whole test, whose path the test can name and hand to any
+// worker thread (`ConfigHandoff`). It is held for the whole test because the
+// saves are.
 use crate::test_helpers::isolated_config;
 
 // ===========================================================================

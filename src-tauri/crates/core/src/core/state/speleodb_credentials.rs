@@ -526,7 +526,7 @@ mod tests {
             let dir = tempfile::tempdir().expect("tempdir");
             let state = holding(Some(dir.path().to_path_buf()));
             let config_dir =
-                crate::test_helpers::config_path_override().expect("the override is active");
+                crate::test_helpers::current_config_dir().expect("this thread is isolated");
             let squatted = config_dir.join("config.toml");
             std::fs::create_dir_all(&squatted).expect("squat the config file path");
 

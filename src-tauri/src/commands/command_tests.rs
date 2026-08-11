@@ -35,10 +35,11 @@ fn state(app: &tauri::App<MockRuntime>) -> State<'_, AppState> {
 }
 
 fn with_config_lock<T>(f: impl FnOnce() -> T) -> T {
-    // Serialize config-touching tests AND redirect the config path to a fresh
-    // temp dir, so they neither race each other nor read/pollute the real
-    // ~/.config/stalagmight/config.toml. (Shared with test_get_config and any
-    // other config-touching test via the same process-global lock.)
+    // Redirect the config path to a fresh temp dir for the duration, so a test
+    // neither reads nor pollutes the real ~/.config/stalagmight/config.toml.
+    // Resolution is per-thread now (see `test_helpers`), so this no longer takes
+    // a process-global lock and no longer serializes with anything; the name is
+    // kept because dozens of tests call it.
     crate::test_helpers::with_isolated_config(f)
 }
 
@@ -1444,10 +1445,11 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
         return;
     }
 
-    // Serialize against other config-touching tests, but DON'T redirect the
-    // config path to a temp dir - this test drives config_path() itself by
-    // pointing XDG_CONFIG_HOME at a read-only dir to force a save failure.
-    let _config_guard = crate::test_helpers::config_lock_guard();
+    // Resolve the config path for REAL rather than into this thread's own temp
+    // dir: this test drives config_path() itself by pointing XDG_CONFIG_HOME at
+    // a read-only dir to force a save failure. The env is process-wide, so the
+    // guard also serializes against the other real-resolution tests.
+    let _config_guard = crate::test_helpers::real_config_resolution();
     {
         let readonly_dir = TempDir::new().unwrap();
         let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
@@ -1502,8 +1504,8 @@ fn test_open_project_updates_recent_projects_when_config_save_fails_macos() {
         return;
     }
 
-    // Lock-only (no temp-dir override): this test drives config_path() via HOME.
-    let _config_guard = crate::test_helpers::config_lock_guard();
+    // Real resolution (not this thread's temp dir): drives config_path() via HOME.
+    let _config_guard = crate::test_helpers::real_config_resolution();
     {
         let readonly_dir = TempDir::new().unwrap();
         let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
@@ -2426,12 +2428,12 @@ fn test_delete_project_partial_failure_still_prunes_recents() {
     }
 
     // Same technique as test_open_project_updates_recent_projects_when_config_save_fails:
-    // take the config lock WITHOUT redirecting `config_path()` to a temp dir, and point
+    // resolve `config_path()` for real rather than into this thread's temp dir, and point
     // the platform's config root at a read-only directory so every `config.save()` fails
     // deterministically (`save_to_path` cannot create its parent there). Linux resolves
     // the root from XDG_CONFIG_HOME; the `directories` crate ignores that on macOS and
     // derives from HOME instead.
-    let _config_guard = crate::test_helpers::config_lock_guard();
+    let _config_guard = crate::test_helpers::real_config_resolution();
     let readonly_dir = TempDir::new().unwrap();
     let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
     perms.set_mode(0o555);
@@ -5830,6 +5832,11 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
         // reintroduced lost update, not raw iteration count.
         const ITERS: u32 = 25;
         const TRIALS: u32 = 12;
+        // The race is between two SPAWNED threads writing one config file, and
+        // config resolution is per-thread - without the handoff each worker
+        // would save into a temp dir of its own and no write could ever be lost
+        // to the other's.
+        let config = crate::test_helpers::ConfigHandoff::capture();
         // Trial-DISTINCT values, and that is the whole reason the trials count.
         // Every trial builds a fresh `AppState`, which re-loads the config the
         // previous trial left in the shared isolated directory - so with a value
@@ -5846,7 +5853,9 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
             let shared = std::sync::Arc::new(AppState::new().expect("app state"));
 
             let a = std::sync::Arc::clone(&shared);
+            let config_a = config.clone();
             let handle_a = std::thread::spawn(move || {
+                let _config = config_a.adopt();
                 for i in 0..ITERS {
                     let width = 150 + trial * 10 + (i % 10);
                     retrying(|| {
@@ -5855,7 +5864,9 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
                 }
             });
             let b = std::sync::Arc::clone(&shared);
+            let config_b = config.clone();
             let handle_b = std::thread::spawn(move || {
+                let _config = config_b.adopt();
                 for i in 0..ITERS {
                     let widths =
                         BTreeMap::from([("length".to_string(), 100 + trial * 10 + (i % 10))]);
