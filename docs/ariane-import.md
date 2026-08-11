@@ -158,26 +158,51 @@ Three rules bound it, the first two mirroring the join:
 
 A shot id is `section_id * FEATURE_ID_STRIDE + sequence_order` with a stride of
 100_000, in `u32`. The last shot of section `id` encodes as `id * 100_000 +
-99_999`, so the encode holds up to **42_949 sections**; past that a site either
-panics (debug) or saturates, and saturating ALIASES distinct shots onto one id,
-which silently moves the station cross-references anchored on them. The cut's
-budget is therefore also clamped to `42_949 - (runs the file already has)`, so
-importing a file can never use the CUT to cross that line.
+99_999`, so the encode holds up to **42_949 sections** (ids `0..=42_948`); past
+that a site either panics (debug) or saturates, and saturating ALIASES distinct
+shots onto one id, which silently moves the station cross-references anchored on
+them. The cut's budget is therefore also clamped to `42_949 - (runs the file
+already has)`, so importing a file can never use the CUT to cross that line.
 
-Reaching it without the cut - by declaring tens of thousands of sections in the
-file - predates this work and is not guarded. The encode sites, and what each
-does at the boundary:
+The budget is `models::MAX_SECTIONS_IN_ID_SPACE` (42_949) with
+`models::MAX_SECTION_ID` (42_948) beside it - shared constants, so the TML cut
+budget (`parsers/tml/linearize.rs` `cut_budget`) and the mint-time refusals
+below are the same number by construction rather than by two copies agreeing.
+
+Reaching the boundary without the cut - by declaring tens of thousands of
+sections in the file - is refused where section ids are MINTED (#555), which is
+the only place that can see both the file and what the project has already
+spent:
+
+- **`core/state/command_import.rs` `execute_import_sections_inner`** - the batch
+  door every importer funnels through (Ariane TML/TMLU, Compass, Walls, GPX, the
+  mNemo DMP wizard). Before any mutation it compares the configs it was handed
+  against `Project::next_section_id` and refuses the WHOLE import if the sum
+  crosses the limit, naming the file's section count, the ids already spent and
+  the limit. Nothing is created, so there is no partial import to roll back.
+- **`core/state/command_section.rs` `create_section`** - the per-section door
+  (in-app section creation, and each section of an import). Refuses when
+  `next_section_id` is already past `MAX_SECTION_ID`, alongside the existing
+  max-shots-per-section check.
+- **`core/state/project_merge.rs` `merge_projects`** - refuses before appending
+  anything when the sources hold more sections between them than one project can
+  address; no output file is written.
+
+What each encode site does past the boundary, for the cases that come off disk
+rather than through those doors:
 
 | Site | Behaviour past 42_949 sections |
 |------|-------------------------------|
 | `models/section.rs` `Section::new` (`next_shot_id`) | unchecked multiply - panics in debug, wraps in release |
 | `core/state/project_io.rs` (uuid index, twice) | unchecked multiply - same |
-| `persistence/sqlite/read.rs` (shot id, `next_shot_id`) | saturating (#427) - no panic, ids alias |
+| `persistence/sqlite/read.rs` (shot id, `next_shot_id`) | saturating (#427) - no panic, ids alias. The load path calls `Section::new` (the unchecked site above) for every row it reads, so a file naming such a section id reaches that multiply BEFORE these saturating encodes |
+| `persistence/sqlite/read.rs` `unrecognised_shot_kinds` (`shot_id`) | unchecked multiply-add, on the load path - a hostile file's section id reaches it directly |
 | `models/shot.rs` `shot_display_position` | saturating (#413) - display only |
-| `src/utils/ids.ts` `encodeFeatureId` | JS doubles, exact past 2^32 - no wrap |
+| `src/utils/ids.ts` `encodeFeatureId` | JS doubles, exact past 2^32 - no wrap. The SoA typed arrays feeding the renderer were widened from `Int32Array` to `Uint32Array` (#555), so the JS side is exact across the full `u32` range, not just the positive half of `i32` |
 
-Closing that off properly means bounding the section count at the import
-boundary rather than at each encode, which is its own change.
+Hardening the encode sites themselves is deliberately not part of the mint-time
+bound: a `.stalx` that already contains such ids is a separate problem from a
+project growing into them.
 
 The suffix can collide with a name the file itself declares (a file with both
 `A` and `A (trip 2)`). That is accepted, not disambiguated: nothing in the

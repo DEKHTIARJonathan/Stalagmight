@@ -1,6 +1,9 @@
 use super::AppState;
 use crate::core::{CommandResult, Validator};
-use crate::models::{SectionData, SectionId, SectionUpdates, FEATURE_ID_STRIDE};
+use crate::models::{
+    SectionData, SectionId, SectionUpdates, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE,
+    MAX_SECTION_ID,
+};
 
 impl AppState {
     pub(super) fn create_section(&self, data: SectionData) -> CommandResult {
@@ -16,6 +19,21 @@ impl AppState {
         if data.shots.len() > max_shots {
             return CommandResult::failure(format!(
                 "Section exceeds maximum shots per section (limit = {max_shots})"
+            ));
+        }
+
+        // The OTHER half of the same encode (#555): a shot id is
+        // `section_id * FEATURE_ID_STRIDE + position`, so the id about to be
+        // minted must still leave a whole section's worth of ids inside u32.
+        // `Section::new` computes `next_shot_id = id * FEATURE_ID_STRIDE`
+        // unchecked, so without this the 42_950th section panics in debug and
+        // wraps in release, aliasing distinct shots onto one id.
+        if project.next_section_id > MAX_SECTION_ID {
+            return CommandResult::failure(format!(
+                "Project has reached the maximum number of sections \
+                 (limit = {MAX_SECTIONS_IN_ID_SPACE}); shot ids encode as \
+                 section_id * {FEATURE_ID_STRIDE} + position in 32 bits, so \
+                 section ids past {MAX_SECTION_ID} cannot hold shots"
             ));
         }
 
