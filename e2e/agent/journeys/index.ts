@@ -4,8 +4,15 @@ import { importTml } from './importTml';
 import { saveReopen } from './saveReopen';
 import { exportTmlRoundtrip } from './exportTmlRoundtrip';
 import { newProjectFromDmp } from './newProjectFromDmp';
+import { createProjectSingleWrite } from './createProjectSingleWrite';
 
-const JOURNEYS: Journey[] = [importTml, saveReopen, exportTmlRoundtrip, newProjectFromDmp];
+const JOURNEYS: Journey[] = [
+  importTml,
+  saveReopen,
+  exportTmlRoundtrip,
+  newProjectFromDmp,
+  createProjectSingleWrite,
+];
 
 const REGISTRY: Record<string, Journey> = Object.fromEntries(JOURNEYS.map((j) => [j.name, j]));
 

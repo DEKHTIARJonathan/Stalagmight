@@ -78,7 +78,7 @@ const SMOKE_ITERATIONS: Record<string, number> = {
  * expected GREEN, neither has a classifier or a tolerance, and a red from
  * either is the app's.
  */
-const SMOKE_EXCLUDED = new Set(['import-dialog-fuzz', 'export-roundtrip-fuzz']);
+const SMOKE_EXCLUDED = new Set(['import-dialog-fuzz', 'export-roundtrip-fuzz', 'fractal-stress']);
 
 // There is no expected-failure list, and adding one back would be a regression.
 // `undo-redo-fuzz` and `undo-persistence-fuzz` are expected GREEN and STRICT:
