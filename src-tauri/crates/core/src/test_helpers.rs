@@ -128,6 +128,10 @@ fn teardown_config_dir() -> Option<PathBuf> {
 /// `cfg(any(test, feature = "test-support"))` - the same gate as this module
 /// rather than `cfg(test)`, because the root crate's tests isolate through this
 /// hook too and for THEIR builds this crate is a dependency.
+///
+/// `test-support` must therefore stay a DEV-dependency-only feature of the root
+/// crate: enabled in a shipping build, this hook would answer for the app and it
+/// would keep its config in a temp dir that dies with the process.
 #[cfg(any(test, feature = "test-support"))]
 pub fn current_config_dir() -> Option<PathBuf> {
     match CONFIG_MODE.try_with(|mode| mode.borrow().clone()) {
