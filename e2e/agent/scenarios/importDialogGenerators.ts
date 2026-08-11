@@ -423,18 +423,32 @@ export function enabledFormats(): SurveyFileFormat[] {
  * Draw one input file: a generated spec (valid-biased or corrupted), a tracked
  * fixture, or a private-corpus entry.
  *
- * The corpus is drawn FIRST and only from entries whose format this run is
- * allowed to use, so a `--axis STALAGMIGHT_FUZZ_IMPORT_FORMAT=gpx` cell does not
- * quietly import somebody's `.srv` collection. When no corpus is configured the
- * caller counts `corpus:absent` once and this returns a generated file, which is
- * a narrower run and not a failed one.
+ * The corpus is drawn FIRST, and the format is chosen from the INTERSECTION of
+ * "formats this run may use" and "formats the corpus actually has entries for".
+ * Both halves matter. The enabled set is what stops a
+ * `--axis STALAGMIGHT_FUZZ_IMPORT_FORMAT=gpx` cell quietly importing somebody's
+ * `.srv` collection; the corpus-bearing set is what stops a corpus-only campaign
+ * spending draws on synthetic input. Picking the format FIRST and only then
+ * looking for a corpus - which is what this did - meant an enabled format the
+ * corpus has nothing for fell straight through to a generated spec even at
+ * `STALAGMIGHT_FUZZ_CORPUS_DRAW_P=1`. Measured: a `FORMAT=dmp,tml` run over a
+ * corpus of 11 `.dmp` and one `.tml` enables `dmp,tml,tmlu`, and every `tmlu`
+ * draw - a third of them - took the synthetic path silently.
+ *
+ * When the intersection is EMPTY the draw falls through to a generated file,
+ * which is a narrower run and not a failed one; the shell counts `corpus:absent`
+ * for it once at startup and says so loudly if the run asked for corpus-only.
  */
 export function drawFileSource(env: GenEnv): FileSource {
   const rng = () => env.ctx.rng();
-  const format = pickFrom(rng, enabledFormats()) as SurveyFileFormat;
+  const enabled = enabledFormats();
+  // The intersection, computed BEFORE the dice: a format the corpus cannot serve
+  // must not be able to win a corpus draw and then quietly fall through.
+  const corpusFormats = enabled.filter((candidate) => (env.corpus[candidate]?.length ?? 0) > 0);
 
-  const corpus = env.corpus[format];
-  if (corpus !== undefined && corpus.length > 0 && rng() < corpusDrawProbability()) {
+  if (corpusFormats.length > 0 && rng() < corpusDrawProbability()) {
+    const format = pickFrom(rng, corpusFormats) as SurveyFileFormat;
+    const corpus = env.corpus[format] as readonly CorpusEntry[];
     const entry = pickFrom(rng, corpus) as CorpusEntry;
     const dirRel = `${env.filesRel}/corpus-${env.fileSeq}`;
     // `relPath` is POSIX by construction (`discoverCorpus` joins on '/').
@@ -448,6 +462,8 @@ export function drawFileSource(env: GenEnv): FileSource {
       rel: `${dirRel}/${base}`,
     };
   }
+
+  const format = pickFrom(rng, enabled) as SurveyFileFormat;
 
   // Tracked fixtures are all `.dmp`; there are none for the other formats, and
   // the repo forbids adding any.

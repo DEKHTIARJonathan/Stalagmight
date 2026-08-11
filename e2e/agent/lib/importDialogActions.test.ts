@@ -39,6 +39,7 @@ import {
   CORPUS_DRAW_P,
   corpusDrawProbability,
   describeSource,
+  drawFileSource,
   enabledFamilies,
   GENERATORS,
   GPS_HOSTILE,
@@ -484,6 +485,78 @@ describe('import fuzzer testid allowlists', () => {
         window,
         `materializeCorpusEntry at line ${site.index + 1} must register redactions`,
       ).toContain('registerCorpusRedactions(');
+    }
+  });
+
+  it('spends a winning corpus draw on a format the corpus can actually serve', () => {
+    // The bug: the format was picked FIRST and the corpus only consulted after,
+    // so an enabled format the corpus has nothing for fell through to a
+    // generated spec even at a draw share of 1. Measured on a `FORMAT=dmp,tml`
+    // run over 11 `.dmp` and one `.tml`: `tmlu` is enabled, the corpus has none,
+    // and a third of the draws took the synthetic path silently.
+    const before = {
+      format: process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT,
+      share: process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P,
+    };
+    try {
+      // `tml` enables BOTH `tml` and `tmlu`; the corpus below has only `tml`.
+      process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT = 'dmp,tml';
+      process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P = '1';
+      const corpus = {
+        dmp: [{ relPath: 'a/one.dmp', id: 'aaaaa', pathHash: 'h1', format: 'dmp' }],
+        tml: [{ relPath: 'a/two.tml', id: 'bbbbb', pathHash: 'h2', format: 'tml' }],
+        tmlu: [],
+      } as unknown as Parameters<typeof drawFileSource>[0]['corpus'];
+
+      let rngCalls = 0;
+      const env = {
+        ctx: { rng: () => ((rngCalls += 1) * 0.37) % 1, randInt: () => 0 },
+        digest: {},
+        filesRel: 'fuzz-files',
+        fileSeq: 1,
+        corpus,
+      } as unknown as Parameters<typeof drawFileSource>[0];
+
+      // Every draw at share 1 must be a corpus draw, and never a `tmlu` one.
+      for (let i = 0; i < 60; i += 1) {
+        const source = drawFileSource(env);
+        expect(source.origin, `draw ${i}`).toBe('corpus');
+        if (source.origin === 'corpus') {
+          expect(['a/one.dmp', 'a/two.tml']).toContain(source.corpusRel);
+        }
+      }
+    } finally {
+      if (before.format === undefined) delete process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT;
+      else process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT = before.format;
+      if (before.share === undefined) delete process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P;
+      else process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P = before.share;
+    }
+  });
+
+  it('falls through to a generated file when the corpus serves NO enabled format', () => {
+    // Narrower, not failed - and the shell counts it. The draw must still
+    // produce a usable file rather than throwing on an empty intersection.
+    const before = {
+      format: process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT,
+      share: process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P,
+    };
+    try {
+      process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT = 'gpx';
+      process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P = '1';
+      const env = {
+        ctx: { rng: () => 0.5, randInt: () => 0 },
+        digest: {},
+        filesRel: 'fuzz-files',
+        fileSeq: 2,
+        corpus: { gpx: [] },
+      } as unknown as Parameters<typeof drawFileSource>[0];
+      const source = drawFileSource(env);
+      expect(source.origin).toBe('gen');
+    } finally {
+      if (before.format === undefined) delete process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT;
+      else process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT = before.format;
+      if (before.share === undefined) delete process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P;
+      else process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P = before.share;
     }
   });
 

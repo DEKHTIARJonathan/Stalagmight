@@ -454,6 +454,7 @@ import {
   auxInterjectProbability,
   buildAuxInterjection,
   buildInterjection,
+  corpusDrawProbability,
   describeSource,
   drawAuxInterjection,
   drawInterjection,
@@ -719,6 +720,17 @@ export const importDialogFuzz: Scenario = {
       // see is a coverage claim wrong by an unknown amount. It names a count,
       // never a path, like everything else corpus-shaped that leaves this run.
       ctx.setMetric('corpusDirsTooDeep', inventory.tooDeep);
+    }
+    if (corpusUsable === 0 && corpusDrawProbability() >= 1) {
+      // The run ASKED for corpus-only and there is nothing to draw: every file
+      // will be synthetic, which is the opposite of what the knob requested. A
+      // metric as well as a log line, because the log scrolls and the metric
+      // block is what a campaign summary carries.
+      ctx.setMetric('corpusDrawUnsatisfied', 1);
+      ctx.log(
+        `${CORPUS_DIR_ENV} draw share is 1 but no entry matches the enabled formats ` +
+          `(${enabledFormats().join(',')}) - every file this run imports will be generated`,
+      );
     }
     if (corpusUsable === 0) {
       // Not a failure and never one: a corpus is optional by design, and a run
