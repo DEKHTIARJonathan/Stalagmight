@@ -544,7 +544,15 @@ export function materializeCorpusEntry(
       throw new Error('not a directory');
     }
   } catch (err) {
-    throw new Error(`corpus entry ${entry.id} is not readable: ${(err as Error).message}`);
+    // The ERRNO CODE, never the message. Node builds an fs error message out of
+    // the full path it tried - `ENOENT: no such file or directory, stat
+    // '/home/.../<a real cave name>/...'` - and this throw is not caught by
+    // `sourceOnDisk`, so it escapes into the scenario's failure payload BEFORE
+    // any redaction for this entry has been registered, and from there into the
+    // printed detail and the campaign report. The id is the publishable name for
+    // exactly this reason; the code says what went wrong without saying where.
+    const code = (err as NodeJS.ErrnoException).code;
+    throw new Error(`corpus entry ${entry.id} is not readable (${code ?? 'io'})`);
   }
 
   const measured = measureTree(sourceDir);

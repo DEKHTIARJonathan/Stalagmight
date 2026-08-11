@@ -758,6 +758,30 @@ export const importDialogFuzz: Scenario = {
      * attached to. Filled in as entries are materialized; applied by `fail`.
      */
     const redactions: { find: string; say: string }[] = [];
+
+    /**
+     * Register the redactions for one materialized corpus entry.
+     *
+     * Shared by BOTH materialization sites, and that is the whole point: the
+     * generator path registered them and the REPLAY path did not, so replaying a
+     * corpus trace put real basenames - which the app echoes back in its own
+     * messages - straight into `fail()` output, the trace and the printed
+     * detail. One helper is what stops the next call site from forgetting.
+     *
+     * The directory goes FIRST so a full path is redacted whole rather than
+     * leaving `<corpus #id>/<basename>` behind. `names` is every segment the copy
+     * created AT ANY DEPTH - a Walls project's `.PATH` subfolder can name a cave
+     * system exactly as well as a file can, and a single-level readdir here used
+     * to miss all of them.
+     */
+    const registerCorpusRedactions = (id: string, destination: string, names: readonly string[]): void => {
+      const tag = `<corpus #${id}>`;
+      redactions.unshift({ find: destination, say: tag });
+      for (const name of names) {
+        redactions.push({ find: name, say: `${tag}/file` });
+      }
+    };
+
     const redact = (text: string): string => {
       let out = text;
       for (const entry of redactions) out = out.split(entry.find).join(entry.say);
@@ -891,16 +915,7 @@ export const importDialogFuzz: Scenario = {
         ctx.metric('corpus:materialized');
         ctx.metric('corpus:copiedBytes', copied.bytes);
         ctx.metric('corpus:copiedFiles', copied.copied);
-        // Both halves, and the directory FIRST so a full path is redacted whole
-        // rather than leaving `<corpus #id>/<basename>` behind. `names` is every
-        // segment the copy created AT ANY DEPTH - a Walls project's `.PATH`
-        // subfolder can name a cave system exactly as well as a file can, and a
-        // single-level readdir here used to miss all of them.
-        const tag = `<corpus #${source.id}>`;
-        redactions.unshift({ find: destination, say: tag });
-        for (const name of copied.names) {
-          redactions.push({ find: name, say: `${tag}/file` });
-        }
+        registerCorpusRedactions(source.id, destination, copied.names);
         return copied.path;
       }
       const target = resolveRel(source.rel);
@@ -1936,10 +1951,15 @@ export const importDialogFuzz: Scenario = {
                 ctx.metric(lookup.outcome === 'ambiguous' ? 'corpus:ambiguousId' : 'corpus:absent');
                 continue;
               }
-              const copied = materializeCorpusEntry(lookup.entry, resolveRel(step.rel));
+              const destination = resolveRel(step.rel);
+              const copied = materializeCorpusEntry(lookup.entry, destination);
               ctx.metric(
                 copied.skipped ? `corpus:notMaterialized:${copied.reason ?? 'unknown'}` : 'replay:corpusFile',
               );
+              // A REPLAY needs the redactions as much as a recording does - the
+              // app echoes the basenames it opened, and a replayed failure is
+              // exactly the message somebody attaches to an issue.
+              if (!copied.skipped) registerCorpusRedactions(lookup.entry.id, destination, copied.names);
               continue;
             }
             const move = moveFromStep(step);

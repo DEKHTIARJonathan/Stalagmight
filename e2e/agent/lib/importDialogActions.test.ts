@@ -459,6 +459,34 @@ describe('import fuzzer testid allowlists', () => {
     }
   });
 
+  it('registers redactions at EVERY corpus materialization site', async () => {
+    // The recording path registered them and the REPLAY path did not, so
+    // replaying a corpus trace put real basenames - which the app echoes back in
+    // its own messages - into `fail()` output, the trace and the printed detail.
+    // A structural check rather than a behavioural one because the helper lives
+    // inside the scenario's closure and has no seam: what has to hold is that no
+    // call site can materialize without registering, which is a property of the
+    // SOURCE.
+    const fs = await import('fs');
+    const scenario = fs.readFileSync(new URL('../scenarios/importDialogFuzz.ts', import.meta.url), 'utf8');
+    const lines = scenario.split('\n');
+    const sites = lines
+      .map((line, index) => ({ line, index }))
+      .filter((entry) => /\bmaterializeCorpusEntry\(/.test(entry.line) && !entry.line.trimStart().startsWith('*'));
+    // Both known sites: the generator draw and the replayed `corpusFile` step.
+    expect(sites.length).toBeGreaterThanOrEqual(2);
+    for (const site of sites) {
+      // The registration follows within the same block - it needs the
+      // `copied.names` the call returns, so it cannot precede it. The window is
+      // generous because the generator site explains its skip reasons first.
+      const window = lines.slice(site.index, site.index + 22).join('\n');
+      expect(
+        window,
+        `materializeCorpusEntry at line ${site.index + 1} must register redactions`,
+      ).toContain('registerCorpusRedactions(');
+    }
+  });
+
   it('has a generator catalog with only positive weights', () => {
     for (const generator of GENERATORS) {
       expect(generator.weight, `${generator.name} weight`).toBeGreaterThan(0);

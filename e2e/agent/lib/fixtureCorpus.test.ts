@@ -30,6 +30,7 @@ import {
   describeCorpus,
   discoverCorpus,
   materializeCorpusEntry,
+  type CorpusEntry,
 } from './fixtureCorpus';
 
 let root = '';
@@ -552,5 +553,32 @@ describe('materializeCorpusEntry', () => {
     const entry = corpusEntryFor('device/alpha.dmp')!;
     delete process.env[CORPUS_DIR_ENV];
     expect(() => materializeCorpusEntry(entry, root)).toThrow(new RegExp(CORPUS_DIR_ENV));
+  });
+
+  it('names an unreadable entry by its ID and its errno, never by its path', () => {
+    // Node builds an fs error message out of the full path it tried - "ENOENT:
+    // no such file or directory, stat '/home/.../<a real cave name>/...'" - and
+    // this throw is NOT caught by the scenario's `sourceOnDisk`, so it escapes
+    // into the failure payload before any redaction for the entry exists, and
+    // from there into the printed detail and the campaign report.
+    const entry = corpusEntryFor('device/alpha.dmp')!;
+    const vanished: CorpusEntry = { ...entry, relPath: 'device-that-is-gone/secret-cave-name.dmp' };
+
+    let message = '';
+    try {
+      materializeCorpusEntry(vanished, path.join(root, 'out'));
+    } catch (err) {
+      message = (err as Error).message;
+    }
+
+    expect(message).not.toBe('');
+    expect(message).toContain(entry.id);
+    // The two segments of the path it failed on, and the separator itself.
+    expect(message).not.toContain('device-that-is-gone');
+    expect(message).not.toContain('secret-cave-name');
+    expect(message).not.toContain(root);
+    expect(message).not.toContain(path.sep);
+    // The errno still comes through, so the failure is still diagnosable.
+    expect(message).toMatch(/\((ENOENT|ENOTDIR|EACCES|io)\)$/);
   });
 });
