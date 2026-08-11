@@ -717,11 +717,19 @@ impl AppState {
             // routed to the error dialog / autosave banner by
             // `surfaceSaveFailure`.
             //
-            // The verbatim read above already absorbs every legacy SHAPE, so
-            // what remains here is a table that cannot be understood at all:
-            // a missing key column, an unreadable value, an I/O error. The
-            // project's survey data is still exportable, so the user is not
-            // walled in while they restore the file.
+            // The verbatim read above already absorbs every legacy SHAPE, and
+            // coerces every hostile VALUE, so what remains here is STRUCTURAL:
+            // a missing key column, an unreadable `sqlite_master`, a step error
+            // from a corrupt page. A single nonsense row must never land here -
+            // that would make one poisoned cell in a file the user merely opened
+            // into a project that can never be saved again. The project's survey
+            // data is exportable meanwhile, so the user is not walled in.
+            //
+            // The message carries `IGNORES_UNREADABLE` because an unmarked
+            // failure is routed to Review & Repair whenever the integrity check
+            // is also unhappy, and Review & Repair cannot fix this - see
+            // `saveErrors.ts` / `surfaceSaveFailure`. The quoted cause is clamped:
+            // SQLite error text embeds the attacker's own identifiers.
             Err(e) => {
                 tracing::error!(
                     error = %e,
@@ -730,9 +738,11 @@ impl AppState {
                      save would rebuild the file without the user's ignores"
                 );
                 return CommandResult::failure(format!(
-                    "Can't save: this project's list of ignored warnings could not be read \
-                     ({e}). Saving would rewrite the file without them, so nothing was \
-                     written - the file on disk is unchanged."
+                    "{}: Can't save: this project's list of ignored warnings could not be read \
+                     ({}). Saving would rewrite the file without them, so nothing was written - \
+                     the file on disk is unchanged.",
+                    crate::core::loading::IGNORES_UNREADABLE_CODE,
+                    crate::core::loading::clamp_quoted_error(&e.to_string()),
                 ));
             }
         };

@@ -352,8 +352,10 @@ fn an_unwritable_unstamped_file_still_opens_without_running_the_chain() {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
     let db = opened.expect("a write-protected project must still open");
 
-    // Degraded, exactly as before #485: the column is still missing, and the
-    // save-path read still fails. That is the documented cost of opening it.
+    // Degraded, exactly as before #485: the column is still missing, because
+    // nothing may be written here. That no longer costs the ignores on a Save
+    // As - `load_resolved_warnings_verbatim` reads this shape (#517) - but the
+    // schema itself stays as the read-only file holds it.
     let has_column: i64 = db
         .conn
         .query_row(

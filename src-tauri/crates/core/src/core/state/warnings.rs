@@ -24,9 +24,16 @@ impl AppState {
         // stable UUID (issue #57): an ignore stays bound to the same shot even
         // after inserts/deletes/reorders renumber `shot_id`. Pre-v8 rows that
         // carry no UUID fall back to the legacy (section_id, shot_id) position.
+        //
+        // [#517] Read side and save side use the SAME verbatim loader. The
+        // strict one names every current column, so on a file whose schema was
+        // never migrated (a forged `PRAGMA user_version` over pre-v8 tables) it
+        // fails and `unwrap_or_default` shows every ignored warning as
+        // unresolved - while the save quietly carries rows the user cannot see,
+        // and a re-Ignore then fails against the missing `shot_uuid` column.
         let resolved = if let Some(db) = db {
             // Use provided database reference (pre-finalization)
-            db.load_resolved_warnings().unwrap_or_default()
+            db.load_resolved_warnings_verbatim().unwrap_or_default()
         } else {
             // Fall back to self.database (post-finalization)
             self.load_resolved_warnings().unwrap_or_default()
@@ -297,7 +304,12 @@ impl AppState {
         }
     }
 
-    /// Load resolved warnings from database
+    /// Load resolved warnings from database.
+    ///
+    /// [#517] Verbatim, like the save carry-over: a shape this build's SELECT
+    /// cannot name is a file to read leniently, not a file with no ignores. The
+    /// return type is identical and the read is strictly more permissive, so
+    /// every caller sees the same rows or more.
     pub fn load_resolved_warnings(&self) -> Result<Vec<crate::persistence::ResolvedWarning>> {
         let db_guard = self
             .database
@@ -306,7 +318,7 @@ impl AppState {
         let db = db_guard
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No database open"))?;
-        db.load_resolved_warnings()
+        db.load_resolved_warnings_verbatim()
     }
 
     /// Save a resolved warning to database

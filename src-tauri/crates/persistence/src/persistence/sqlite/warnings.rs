@@ -12,6 +12,70 @@ use super::{Database, ResolvedWarning};
 const REQUIRED_RESOLVED_COLUMNS: [&str; 4] =
     ["section_id", "shot_id", "warning_code", "resolved_at"];
 
+/// Ceiling on a carried `resolved_comment`, in chars. The resolve dialog writes
+/// a sentence; this is three orders of magnitude above that, and exists only so
+/// a hand-written 100 MB cell cannot be re-serialized into every future save and
+/// every SpeleoDB push (`resolved_warnings` is NOT stripped from the push
+/// snapshot - see `core::state::warnings::save_resolved_warning_gated`).
+const MAX_RESOLVED_COMMENT_CHARS: usize = 10_000;
+
+/// Ceiling on a carried `warning_code` / `shot_uuid`, in chars. Real values are
+/// ~30 and 36. Deliberately a LENGTH clamp and nothing else: a code this build
+/// does not recognise may well come from a newer version, and dropping it is
+/// precisely the loss this whole path exists to prevent.
+const MAX_RESOLVED_KEY_CHARS: usize = 512;
+
+/// Ceiling on how many rows one carry-over will move. Above this the file is not
+/// a survey's worth of "Ignore" clicks any more, and the cost is paid on every
+/// save, every autosave and every push. Generous by ~2 orders of magnitude
+/// against any real project.
+const MAX_CARRIED_RESOLVED_WARNINGS: usize = 100_000;
+
+/// Read a text-ish cell as a bounded `String`, or `None` for SQL NULL.
+///
+/// SQLite columns are UNTYPED - a declared `TEXT` column holds whatever was put
+/// in it - so a hand-written or hostile file can park a BLOB or an INTEGER here.
+/// `row.get::<String>` answers that with `InvalidColumnType`, which on the save
+/// path would mean a permanently unsaveable project (the read failure refuses
+/// the save). Coerce instead: the value is carried inert rather than costing the
+/// user their file.
+///
+/// The byte slice is truncated BEFORE the lossy conversion so a huge cell is
+/// never materialised in full; `from_utf8_lossy` turns any partial trailing
+/// char into U+FFFD, which is exactly what a clamp should do.
+fn coerce_text(value: rusqlite::types::ValueRef<'_>, max_chars: usize) -> Option<String> {
+    let bounded = |bytes: &[u8]| -> String {
+        let budget = bytes.len().min(max_chars.saturating_mul(4));
+        String::from_utf8_lossy(bytes.get(..budget).unwrap_or(bytes))
+            .chars()
+            .take(max_chars)
+            .collect()
+    };
+    match value {
+        rusqlite::types::ValueRef::Null => None,
+        rusqlite::types::ValueRef::Text(t) | rusqlite::types::ValueRef::Blob(t) => Some(bounded(t)),
+        rusqlite::types::ValueRef::Integer(i) => Some(i.to_string()),
+        rusqlite::types::ValueRef::Real(f) => Some(f.to_string()),
+    }
+}
+
+/// Read an id cell as a `u32`, or `None` when it names nothing usable.
+///
+/// TEXT is parsed because a hand-edited file plausibly quotes its numbers. REAL,
+/// BLOB and NULL are not: an id is a lookup key into the live project, and a
+/// value that is not one identifies no shot and no section, so the row it keys
+/// can never suppress anything. Those rows are counted and dropped rather than
+/// guessed at - see `read_resolved_warnings`.
+fn coerce_id(value: rusqlite::types::ValueRef<'_>) -> Option<u32> {
+    match value {
+        rusqlite::types::ValueRef::Integer(i) => u32::try_from(i).ok(),
+        rusqlite::types::ValueRef::Text(t) => {
+            std::str::from_utf8(t).ok()?.trim().parse::<u32>().ok()
+        }
+        _ => None,
+    }
+}
+
 impl Database {
     /// Load resolved warnings from database
     pub fn load_resolved_warnings(&self) -> Result<Vec<ResolvedWarning>> {
@@ -43,12 +107,27 @@ impl Database {
     /// only when present, and their absence yields `None`, exactly as a NULL
     /// would.
     ///
-    /// Errors are reserved for a table that genuinely cannot be understood -
-    /// a missing [`REQUIRED_RESOLVED_COLUMNS`] column, an unreadable value, an
-    /// I/O failure - so the caller can tell "no ignores" from "cannot tell". A
-    /// table that does not exist at all is not an error: it is a file from
-    /// before the feature, and it truly has no ignores.
+    /// Errors are reserved for STRUCTURAL trouble - a missing
+    /// [`REQUIRED_RESOLVED_COLUMNS`] column, a probe or a scan the connection
+    /// refuses (a locked database, a corrupt page, an I/O fault) - so the caller
+    /// can tell "no ignores" from "cannot tell". A single unreadable VALUE is
+    /// explicitly NOT one of them; see [`coerce_text`]. A table that does not
+    /// exist at all is not an error either: it is a file from before the
+    /// feature, and it truly has no ignores.
     pub fn load_resolved_warnings_verbatim(&self) -> Result<Vec<ResolvedWarning>> {
+        // Probe and read under ONE deferred transaction so the shape cannot
+        // change between "which columns exist" and "SELECT them" - a race that
+        // would surface as a spurious refusal on the save path. Best-effort on
+        // purpose: if a transaction cannot be started (one is already open), the
+        // read still runs, because turning this hardening into a new failure
+        // mode would defeat its own point.
+        let _snapshot = self.conn.unchecked_transaction().ok();
+
+        // `table_exists` filters `type='table'`, so a VIEW named
+        // `resolved_warnings` reads as absent and the save carries nothing. That
+        // is the safe direction and it costs no real data: the save then writes
+        // a genuine table into the fresh file, whereas selecting through a view
+        // could not be re-inserted into one anyway.
         if !self.table_exists("resolved_warnings")? {
             return Ok(Vec::new());
         }
@@ -88,34 +167,79 @@ impl Database {
 
     /// Shared row reader for the two loads above. `comment_expr` / `uuid_expr` are
     /// column names this crate chose (or the literal `NULL`), never user input.
+    ///
+    /// Every CELL is coerced and clamped rather than type-checked (see
+    /// [`coerce_text`]): the only failures that escape are STRUCTURAL - a step
+    /// error from a corrupt page or an I/O fault - because those are the ones
+    /// that mean "this table cannot be read", as opposed to "this row is
+    /// nonsense". The save path turns the first into a refusal and must not be
+    /// handed the second, or one poisoned row would make a project permanently
+    /// unsaveable.
     fn read_resolved_warnings(
         &self,
         comment_expr: &str,
         uuid_expr: &str,
     ) -> Result<Vec<ResolvedWarning>> {
-        let mut resolved = Vec::new();
         let mut stmt = self.conn.prepare(&format!(
             "SELECT section_id, shot_id, warning_code, resolved_at, {comment_expr}, {uuid_expr} \
              FROM resolved_warnings"
         ))?;
 
         let rows = stmt.query_map([], |row| {
-            let resolved_at_str: String = row.get(3)?;
-            let resolved_at = chrono::DateTime::parse_from_rfc3339(&resolved_at_str)
-                .map_or_else(|_| Utc::now(), |dt| dt.with_timezone(&Utc));
-            Ok(ResolvedWarning {
-                section_id: row.get(0)?,
-                shot_id: row.get(1)?,
-                warning_code: row.get(2)?,
+            // A row that names no shot, or no warning, cannot suppress anything
+            // on any project - carrying it forward would preserve nothing.
+            let (Some(section_id), Some(shot_id), Some(warning_code)) = (
+                coerce_id(row.get_ref(0)?),
+                coerce_id(row.get_ref(1)?),
+                coerce_text(row.get_ref(2)?, MAX_RESOLVED_KEY_CHARS),
+            ) else {
+                return Ok(None);
+            };
+            // An unparseable timestamp already fell back to "now"; a non-text
+            // one now joins it rather than failing the read.
+            let resolved_at = coerce_text(row.get_ref(3)?, MAX_RESOLVED_KEY_CHARS)
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                .map_or_else(Utc::now, |dt| dt.with_timezone(&Utc));
+            Ok(Some(ResolvedWarning {
+                section_id,
+                shot_id,
+                warning_code,
                 resolved_at,
-                resolved_comment: row.get(4)?,
+                resolved_comment: coerce_text(row.get_ref(4)?, MAX_RESOLVED_COMMENT_CHARS),
                 // NULL for pre-v8 rows; an empty string is treated as absent too.
-                shot_uuid: row.get::<_, Option<String>>(5)?.filter(|s| !s.is_empty()),
-            })
+                shot_uuid: coerce_text(row.get_ref(5)?, MAX_RESOLVED_KEY_CHARS)
+                    .filter(|s| !s.is_empty()),
+            }))
         })?;
 
+        let mut resolved = Vec::new();
+        let mut unusable = 0usize;
+        let mut capped = false;
         for row in rows {
-            resolved.push(row?);
+            match row? {
+                Some(r) => resolved.push(r),
+                None => unusable += 1,
+            }
+            // Stop READING at the ceiling, rather than reading everything and
+            // truncating: the point is to bound the work, not just the output.
+            if resolved.len() >= MAX_CARRIED_RESOLVED_WARNINGS {
+                capped = true;
+                break;
+            }
+        }
+        if unusable > 0 {
+            tracing::warn!(
+                unusable,
+                purpose = "read the ignore list from a file of unknown provenance",
+                "Skipped resolved-warning rows that name no shot or no warning code"
+            );
+        }
+        if capped {
+            tracing::warn!(
+                cap = MAX_CARRIED_RESOLVED_WARNINGS,
+                purpose = "bound the ignore list a save re-serializes",
+                "The resolved_warnings table is larger than the cap; the rest was not read"
+            );
         }
 
         Ok(resolved)
