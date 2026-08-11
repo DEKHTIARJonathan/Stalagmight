@@ -902,10 +902,10 @@ describe('planReplay (episode and flow boundaries)', () => {
     expect(plan).toHaveLength(2);
     expect(plan[0]!.headless).toBe(false);
     expect(plan[0]!.flows).toHaveLength(1);
-    expect(plan[0]!.flows[0]!.map((s) => s.label)).toEqual(['a']);
+    expect(plan[0]!.flows[0]!.map((s) => ('label' in s ? s.label : s.kind))).toEqual(['a']);
     // The one that used to be lost.
     expect(plan[1]!.headless).toBe(true);
-    expect(plan[1]!.flows[0]!.map((s) => s.label)).toEqual(['b', 'c']);
+    expect(plan[1]!.flows[0]!.map((s) => ('label' in s ? s.label : s.kind))).toEqual(['b', 'c']);
   });
 
   it('segments an episode into its recorded flows', () => {
@@ -915,14 +915,14 @@ describe('planReplay (episode and flow boundaries)', () => {
     });
     expect(plan).toHaveLength(1);
     expect(plan[0]!.flows).toHaveLength(2);
-    expect(plan[0]!.flows[0]!.map((s) => s.label)).toEqual(['a', 'b']);
-    expect(plan[0]!.flows[1]!.map((s) => s.label)).toEqual(['c']);
+    expect(plan[0]!.flows[0]!.map((s) => ('label' in s ? s.label : s.kind))).toEqual(['a', 'b']);
+    expect(plan[0]!.flows[1]!.map((s) => ('label' in s ? s.label : s.kind))).toEqual(['c']);
   });
 
   it('drops a trailing flow marker that scopes no steps', () => {
     const plan = planReplay({ steps: [ep(0, false), fl(0), ui('a'), fl(1)] });
     expect(plan[0]!.flows).toHaveLength(1);
-    expect(plan[0]!.flows[0]!.map((s) => s.label)).toEqual(['a']);
+    expect(plan[0]!.flows[0]!.map((s) => ('label' in s ? s.label : s.kind))).toEqual(['a']);
   });
 
   it('folds a LEGACY trace into one episode holding every step', () => {
@@ -931,7 +931,7 @@ describe('planReplay (episode and flow boundaries)', () => {
     const plan = planReplay({ steps: [ui('a'), ui('b')] });
     expect(plan).toHaveLength(1);
     expect(plan[0]!.headless).toBe(false);
-    expect(plan[0]!.flows[0]!.map((s) => s.label)).toEqual(['a', 'b']);
+    expect(plan[0]!.flows[0]!.map((s) => ('label' in s ? s.label : s.kind))).toEqual(['a', 'b']);
   });
 
   it('takes a legacy episode-0 headless state from the header field', () => {

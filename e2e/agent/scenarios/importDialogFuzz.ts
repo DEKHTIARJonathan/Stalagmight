@@ -2020,7 +2020,7 @@ export const importDialogFuzz: Scenario = {
         };
 
         for (;;) {
-          if (replaySteps && !replayHasBoundaries) {
+          if (replaySteps) {
             const source = flowSteps ?? replaySteps;
             if (replayAt >= source.length) break;
             const step = source[replayAt] as TraceStep;
@@ -2504,7 +2504,7 @@ export const importDialogFuzz: Scenario = {
         //
         // The measured end is `atReceipt`, not `after` - see `checkAccounting`.
         if (receipt && atReceipt) {
-          if (replaySteps) {
+          if (replaySteps && !replayHasBoundaries) {
             // A LEGACY trace cannot say where a flow began. It replays as one
             // pass over the whole step list, so a recording that imported three
             // times replays as one flow and F3 compares the FIRST receipt's
