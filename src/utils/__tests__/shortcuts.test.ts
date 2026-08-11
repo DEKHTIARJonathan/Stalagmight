@@ -467,6 +467,44 @@ describe('checkReservedConflict', () => {
     expect(checkReservedConflict('Ctrl+Alt+,')).toEqual({ isReserved: true, reason: 'Open Settings' });
   });
 
+  it('returns conflict for the UI-zoom keys (#319)', () => {
+    // useUiScale listens for these unconditionally, so binding them to an
+    // action would fire both handlers.
+    expect(checkReservedConflict('Ctrl+Equal')).toEqual({ isReserved: true, reason: 'Zoom interface in' });
+    expect(checkReservedConflict('Ctrl+Plus')).toEqual({ isReserved: true, reason: 'Zoom interface in' });
+    expect(checkReservedConflict('Ctrl+Minus')).toEqual({ isReserved: true, reason: 'Zoom interface out' });
+    expect(checkReservedConflict('Ctrl+0')).toEqual({ isReserved: true, reason: 'Reset interface zoom' });
+  });
+
+  it("blocks Shift+'-', which normalizes to Ctrl+Shift+_ (#319)", () => {
+    expect(checkReservedConflict('Ctrl+Shift+_')).toEqual({
+      isReserved: true,
+      reason: 'Zoom interface out',
+    });
+  });
+
+  it('blocks the UI-zoom keys even with extra modifiers (#319)', () => {
+    expect(checkReservedConflict('Ctrl+Alt+Equal')).toEqual({ isReserved: true, reason: 'Zoom interface in' });
+    expect(checkReservedConflict('Ctrl+Shift+0')).toEqual({
+      isReserved: true,
+      reason: 'Reset interface zoom',
+    });
+  });
+
+  it('leaves the bare zoom keys bindable - the map-zoom defaults use them (#319)', () => {
+    expect(checkReservedConflict('Equal')).toBeNull();
+    expect(checkReservedConflict('Plus')).toBeNull();
+    expect(checkReservedConflict('Minus')).toBeNull();
+    // The raw glyphs normalize to the same keys and must stay bindable too.
+    expect(checkReservedConflict('=')).toBeNull();
+    expect(checkReservedConflict('+')).toBeNull();
+    expect(checkReservedConflict('-')).toBeNull();
+    // Only the Ctrl branch is reserved, so Shift/Alt alone are fine.
+    expect(checkReservedConflict('Shift+Equal')).toBeNull();
+    expect(checkReservedConflict('Alt+Minus')).toBeNull();
+    expect(checkReservedConflict('0')).toBeNull();
+  });
+
   it('returns null for Ctrl+I (now configurable)', () => {
     expect(checkReservedConflict('Ctrl+I')).toBeNull();
     expect(checkReservedConflict('ctrl+i')).toBeNull();

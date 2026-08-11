@@ -135,11 +135,16 @@ export default defineConfig({
     // e2e/agent/os/**/*.test.ts: the Tier 2 OS-input layer, which takes its helper
     // runner and its osascript/screencapture execs as injected deps precisely so
     // these run unattended - nothing in them posts a real event or moves the cursor.
+    // e2e/lib/**/*.test.ts: pure-logic unit tests for the shared harness helpers
+    // (e.g. the profile config-path resolution both runners depend on). Same
+    // reasoning as the e2e/agent/lib entry above - `lib/` is helper code, so
+    // nothing here needs mocha/wdio globals.
     include: [
       'src/**/*.{test,spec}.?(c|m)[jt]s?(x)',
       'scripts/**/*.{test,spec}.ts',
       'e2e/agent/lib/**/*.test.ts',
       'e2e/agent/os/**/*.test.ts',
+      'e2e/lib/**/*.test.ts',
     ],
     exclude: [
       '**/e2e/legacy/**',

@@ -2563,7 +2563,7 @@
       "add": "Add section",
       "delete": "Delete section",
       "focus": "Focus this section",
-      "zoom": "Click to select · double-click to focus this section"
+      "zoom": "Click to select · double-click to zoom to this section"
     },
     "ariaList": "Sections list",
     "confirmDelete": "Delete this section?",

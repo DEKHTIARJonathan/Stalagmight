@@ -344,8 +344,8 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       return;
     }
     // Single click only selects - it must NOT move the map (reverts #64's
-    // single-click-centers behaviour). Double-click enters focus mode, which is
-    // what frames the section - see handleSectionDoubleClick.
+    // single-click-centers behaviour). Double-click zooms to the section, which
+    // is what frames it - see handleSectionDoubleClick.
     setSelection(sel);
   }, [setSelection, addToSelection, toggleSelection]);
 
@@ -470,8 +470,8 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
 
   // Dedicated focus-mode entry button (replaces the old per-row delete control;
   // section deletion now lives in the right-click / long-press context menu).
-  // Single click selects the section and enters focus mode - the same outcome as
-  // double-clicking the row, but discoverable as an explicit affordance.
+  // Single click selects the section and enters focus mode - the only focus
+  // entry on the row since double-click was retasked to zoom.
   const handleEnterFocusClick = useCallback((section: Section, e: React.MouseEvent) => {
     e.stopPropagation();
     if (e.button !== 0) return;

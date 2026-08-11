@@ -341,10 +341,22 @@ export const RESERVED_KEYS: ReadonlySet<string> = new Set([
 /**
  * Reserved key+modifier combinations.
  * The modifier (Ctrl) plus these keys are reserved.
+ *
+ * The zoom keys are here because useUiScale installs an unconditional window
+ * keydown listener for Ctrl/Cmd + '=' / '+' / '-' / '_' / '0'. Binding any of
+ * them to an action would fire both handlers, so the editor must refuse them -
+ * which also makes enforcement agree with the Settings dialog, where they have
+ * always been listed as reserved. Only the Ctrl-modified forms are blocked:
+ * the bare Equal/Plus/Minus map-zoom defaults stay bindable.
  */
 export const RESERVED_CTRL_KEYS: ReadonlySet<string> = new Set([
   'A', // Select all
   ',', // Open Settings
+  'Equal', // Zoom interface in
+  'Plus', // Zoom interface in
+  'Minus', // Zoom interface out
+  '_', // Zoom interface out (Shift+Minus)
+  '0', // Reset interface zoom
 ]);
 
 /**
@@ -354,15 +366,28 @@ export const RESERVED_CTRL_KEYS: ReadonlySet<string> = new Set([
 export const RESERVED_CTRL_DESCRIPTIONS: Readonly<Record<string, string>> = {
   A: 'Select all',
   ',': 'Open Settings',
+  Equal: 'Zoom interface in',
+  Plus: 'Zoom interface in',
+  Minus: 'Zoom interface out',
+  _: 'Zoom interface out',
+  '0': 'Reset interface zoom',
 };
 
 /**
  * Check if a shortcut conflicts with reserved shortcuts.
  * This is broader than isReservedShortcut - it blocks:
  * 1. Any shortcut using Escape, Delete, or Backspace (regardless of modifiers)
- * 2. Any shortcut using Ctrl+A or Ctrl+, (regardless of additional modifiers)
+ * 2. Any shortcut using Ctrl plus a key in RESERVED_CTRL_KEYS - A, ',' and the
+ *    UI-zoom keys Equal/Plus/Minus/_/0 (regardless of additional modifiers)
  *
- * This matches the runtime behavior where reserved handlers fire even with extra modifiers.
+ * The "regardless of additional modifiers" part is DELIBERATELY broader than the
+ * runtime handlers, not a mirror of them. The UI-zoom listener in
+ * src/hooks/useUiScale.ts bails on Alt (`if (!(event.ctrlKey || event.metaKey) ||
+ * event.altKey) return;`), so Ctrl+Alt+Equal never actually zooms - yet the editor
+ * still refuses it. That over-block is intentional and conservative: it keeps the
+ * refusal rule stated in terms of the key rather than a modifier matrix that would
+ * have to track each handler's guards, and it matches how Ctrl+Alt+A is already
+ * refused for Select all.
  *
  * @param shortcut - Shortcut string (will be normalized before checking)
  * @returns Object with isReserved flag and reason string, or null if not reserved
@@ -394,7 +419,8 @@ export function checkReservedConflict(shortcut: string): { isReserved: boolean; 
     };
   }
 
-  // Check if Ctrl + reserved key (A, ,)
+  // Check if Ctrl + reserved key (A, ',', and the UI-zoom keys).
+  // Bare Equal/Plus/Minus stay bindable - the map-zoom defaults use them.
   if (key && hasCtrl && RESERVED_CTRL_KEYS.has(key)) {
     return {
       isReserved: true,
