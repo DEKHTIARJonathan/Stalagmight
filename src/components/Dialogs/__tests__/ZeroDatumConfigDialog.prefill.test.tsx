@@ -346,11 +346,12 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
 
     /**
      * The executable statement of the reconciliation's one behavioural
-     * consequence: a reopened, untouched dialog leaves via Back with no prompt,
-     * even though the carried config is discarded by it (this Back reopens
-     * 'zero-datum-selection', which carries nothing forward). That is the
-     * deliberate choice - the alternative would nag on a dialog the user has not
-     * touched - and it is recorded as a follow-up rather than changed here.
+     * consequence: a reopened, untouched dialog leaves via Back with no prompt.
+     * Since #534, that is no longer a silent discard of the carried config -
+     * App.tsx relays `previousZeroDatumConfig` through 'zero-datum-selection'
+     * and back on a same-section forward pass (see ZeroDatumConfigDialog.back.test.tsx)
+     * - so no prompt is exactly right here: there is nothing typed in THIS
+     * visit to lose.
      *
      * Injection: make `isDirty` unconditionally true and the first half fails;
      * make it unconditionally false and the second half does.
