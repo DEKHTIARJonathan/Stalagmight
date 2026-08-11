@@ -415,6 +415,49 @@ test.describe('DMP Import Dialog - Zero Datum + Wizard Flow', () => {
   });
 
   /**
+   * #534: the config dialog's OWN Back (not the wizard's) used to discard
+   * everything typed - App.tsx relayed no carry through the hop back to
+   * 'zero-datum-selection'. It now hands `onBack` the dialog's LIVE state
+   * (`buildCurrentDraft`), and App.tsx re-seeds it on a forward pass ONLY
+   * when the re-picked section matches (`carryZeroDatumConfig`,
+   * `src/utils/zeroDatumCarry.ts`). This drives the REAL App.tsx wiring -
+   * the vitest suite for this pins the shared decision function, not the
+   * routing that calls it.
+   */
+  test('carries typed GPS back through Back-to-selection on a same-section re-pick, not a different one', async ({
+    page,
+  }) => {
+    await createProject(page, 'Zero Datum Back Carry Test');
+    await openDmpSelectionDialog(page);
+
+    await page.getByTestId('continue-button').click();
+    await expect(page.getByTestId('zero-datum-selection-dialog')).toBeVisible({ timeout: 5000 });
+
+    await page.getByTestId('zero-datum-section-card-0').click();
+    await expect(page.getByTestId('zero-datum-config-dialog')).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('zero-datum-gps-input').fill('24.550123, -81.780456');
+    await expect(page.getByTestId('zero-datum-gps-parsed')).toBeVisible({ timeout: 5000 });
+
+    await page.getByTestId('zero-datum-config-back').click();
+    await page.getByTestId('zero-datum-config-back-confirm-discard').click();
+    await expect(page.getByTestId('zero-datum-selection-dialog')).toBeVisible({ timeout: 5000 });
+
+    // Same section re-picked: the typed GPS comes back.
+    await page.getByTestId('zero-datum-section-card-0').click();
+    await expect(page.getByTestId('zero-datum-config-dialog')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('zero-datum-gps-input')).toHaveValue('24.550123, -81.780456');
+
+    // Back out again - this reopen holds exactly what it was carried with, so
+    // it is CLEAN and Back leaves immediately with no discard confirm.
+    await page.getByTestId('zero-datum-config-back').click();
+    await expect(page.getByTestId('zero-datum-selection-dialog')).toBeVisible({ timeout: 5000 });
+
+    await page.getByTestId('zero-datum-section-card-1').click();
+    await expect(page.getByTestId('zero-datum-config-dialog')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('zero-datum-gps-input')).toHaveValue('');
+  });
+
+  /**
    * The section preview starts drawing Esri imagery the moment valid GPS
    * coordinates are entered, so it owes attribution from that moment too. It is
    * a few hundred pixels square, so the source names live behind the `i` button

@@ -1635,8 +1635,8 @@
       "gpsEmptyHint": "Enter coordinates to set the zero datum - Confirm stays disabled until it parses.",
       "transposedWarning": "Latitude and longitude may be swapped - check the format.",
       "backConfirm": {
-        "message": "You have unsaved changes. Going back will discard them.",
-        "discard": "Discard and Go Back"
+        "message": "You have unsaved changes. They come back if you return to this section, but are lost if you pick a different one or leave.",
+        "discard": "Go Back"
       },
       "confirm": "Confirm Zero Datum",
       "metadataHeading": "Section Metadata",
