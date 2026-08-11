@@ -85,6 +85,31 @@ function saveFailureMessage(kind: SaveErrorKind, error: string): string {
 }
 
 /**
+ * Whether the autosave-failure banner should render, given the integrity
+ * banner's state (`App.tsx`).
+ *
+ * The default is to YIELD: when saving is integrity-blocked, the integrity
+ * banner already tells the "saving is paused, here is the Repair button" story,
+ * and docs/notifications.md asks for one surface per event.
+ *
+ * The exception is a failure Review & Repair cannot fix (#517's unreadable
+ * ignore list). That is a DIFFERENT ongoing condition with a different remedy,
+ * so the integrity banner is not telling its story - it is hiding it, and the
+ * user would be left repairing cross-references while every save is refused for
+ * an unrelated reason they were never shown.
+ */
+export function shouldShowAutosaveBanner(state: {
+  autosaveFailure: string | null;
+  autosaveFailureKind: SaveErrorKind | null;
+  integritySaveBlocked: boolean;
+  integrityIssueCount: number;
+}): boolean {
+  if (state.autosaveFailure === null) return false;
+  if (state.autosaveFailureKind === 'ignores-unreadable') return true;
+  return !(state.integritySaveBlocked && state.integrityIssueCount > 0);
+}
+
+/**
  * The autosave banner's line for a failed background save (banner-class, per
  * docs/notifications.md). Same rewording as the dialog, one line shorter, and
  * it must never leak a raw marker - the banner renders this string.

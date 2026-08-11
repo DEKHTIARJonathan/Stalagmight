@@ -10,6 +10,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { invokeIpc, getErrorMessage } from './utils/ipc';
 import {
   surfaceSaveFailure,
+  shouldShowAutosaveBanner,
   completeImportToSingleView,
   finishImportWithoutOrphanSuggestions,
 } from './utils/saveFeedback';
@@ -49,6 +50,7 @@ function App() {
   const openIntegrityDialog = useProjectStore((s) => s.openIntegrityDialog);
   const closeIntegrityDialog = useProjectStore((s) => s.closeIntegrityDialog);
   const autosaveFailure = useProjectStore((s) => s.autosaveFailure);
+  const autosaveFailureKind = useProjectStore((s) => s.autosaveFailureKind);
   const clearAutosaveFailure = useProjectStore((s) => s.clearAutosaveFailure);
   const saveProject = useProjectStore((s) => s.saveProject);
   const [repairingIntegrity, setRepairingIntegrity] = useState(false);
@@ -548,8 +550,14 @@ function App() {
       {/* Autosave-failure banner (docs/notifications.md: an ongoing "your latest
           changes are not on disk" condition is banner-class, not modal and not a
           repeating toast). When saving is integrity-blocked the integrity banner
-          above already owns the "saving is paused" story, so this one yields. */}
-      {autosaveFailure !== null && !(integritySaveBlocked && integrityIssues.length > 0) && project && !loading.isLoading && (
+          above already owns the "saving is paused" story, so this one yields -
+          except for a failure Repair cannot fix; see shouldShowAutosaveBanner. */}
+      {shouldShowAutosaveBanner({
+        autosaveFailure,
+        autosaveFailureKind,
+        integritySaveBlocked,
+        integrityIssueCount: integrityIssues.length,
+      }) && project && !loading.isLoading && (
         <div
           className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
           role="status"

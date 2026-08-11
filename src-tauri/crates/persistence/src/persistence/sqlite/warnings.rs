@@ -25,11 +25,26 @@ const MAX_RESOLVED_COMMENT_CHARS: usize = 10_000;
 /// precisely the loss this whole path exists to prevent.
 const MAX_RESOLVED_KEY_CHARS: usize = 512;
 
-/// Ceiling on how many rows one carry-over will move. Above this the file is not
-/// a survey's worth of "Ignore" clicks any more, and the cost is paid on every
-/// save, every autosave and every push. Generous by ~2 orders of magnitude
+/// Ceiling on how many rows one carry-over will EXAMINE. Above this the file is
+/// not a survey's worth of "Ignore" clicks any more, and the cost is paid on
+/// every save, every autosave and every push. Generous by ~2 orders of magnitude
 /// against any real project.
-const MAX_CARRIED_RESOLVED_WARNINGS: usize = 100_000;
+///
+/// Deliberately counted over rows PROCESSED, not rows kept: a table of a million
+/// rows that all fail [`coerce_id`] keeps none of them, so a cap on the kept
+/// count would never trip and the whole table would be scanned on every save -
+/// which is the work this exists to bound. The consequence, stated plainly: past
+/// this many rows the read stops, so usable rows sitting BEHIND a wall of junk
+/// are not carried. That trade only ever applies to a file no user made.
+pub const MAX_CARRIED_RESOLVED_WARNINGS: usize = 100_000;
+
+/// Ceiling on an id cell's TEXT, in bytes, applied before it is decoded.
+///
+/// A `u32` is at most 10 digits, so anything past this is not an id under any
+/// reading. Checked first because `from_utf8` + `trim` + `parse` are each O(n)
+/// over the cell: without it, one multi-megabyte cell costs that much work per
+/// row, per save, to reach the same `None`.
+const MAX_ID_TEXT_BYTES: usize = 64;
 
 /// Read a text-ish cell as a bounded `String`, or `None` for SQL NULL.
 ///
@@ -69,7 +84,9 @@ fn coerce_text(value: rusqlite::types::ValueRef<'_>, max_chars: usize) -> Option
 fn coerce_id(value: rusqlite::types::ValueRef<'_>) -> Option<u32> {
     match value {
         rusqlite::types::ValueRef::Integer(i) => u32::try_from(i).ok(),
-        rusqlite::types::ValueRef::Text(t) => {
+        // Length first, so an oversized cell is rejected in O(1) instead of
+        // being validated and parsed in full on the way to the same answer.
+        rusqlite::types::ValueRef::Text(t) if t.len() <= MAX_ID_TEXT_BYTES => {
             std::str::from_utf8(t).ok()?.trim().parse::<u32>().ok()
         }
         _ => None,
@@ -214,15 +231,20 @@ impl Database {
 
         let mut resolved = Vec::new();
         let mut unusable = 0usize;
+        let mut examined = 0usize;
         let mut capped = false;
         for row in rows {
+            examined += 1;
             match row? {
                 Some(r) => resolved.push(r),
                 None => unusable += 1,
             }
             // Stop READING at the ceiling, rather than reading everything and
             // truncating: the point is to bound the work, not just the output.
-            if resolved.len() >= MAX_CARRIED_RESOLVED_WARNINGS {
+            // Counted over rows EXAMINED - a table of nothing but unusable rows
+            // grows `resolved` not at all, so a kept-count cap would never trip
+            // and would leave the scan unbounded, which is the whole exposure.
+            if examined >= MAX_CARRIED_RESOLVED_WARNINGS {
                 capped = true;
                 break;
             }
@@ -237,8 +259,10 @@ impl Database {
         if capped {
             tracing::warn!(
                 cap = MAX_CARRIED_RESOLVED_WARNINGS,
+                examined,
+                carried = resolved.len(),
                 purpose = "bound the ignore list a save re-serializes",
-                "The resolved_warnings table is larger than the cap; the rest was not read"
+                "Stopped reading resolved_warnings at the cap; any rows past it were not read"
             );
         }
 

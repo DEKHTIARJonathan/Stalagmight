@@ -47,6 +47,20 @@ const UNREADABLE_COLUMNS: &str = "section_id INTEGER NOT NULL, \
      shot_id INTEGER NOT NULL, \
      resolved_at TEXT NOT NULL";
 
+/// The hostile-values shape: `shot_id` and `warning_code` are declared with NO
+/// type, so the cells keep whatever the file put in them.
+///
+/// This matters, and it is not a detail. A column declared `INTEGER` has
+/// INTEGER AFFINITY, and SQLite silently CONVERTS a numeric-looking TEXT into
+/// an integer on insert - so a fixture that stores a text id in a declared
+/// INTEGER column is not testing a text id at all. The tests below assert
+/// `typeof()` afterwards rather than trusting this.
+const UNTYPED_ID_COLUMNS: &str = "section_id INTEGER NOT NULL, \
+     shot_id, \
+     warning_code, \
+     resolved_at, \
+     resolved_comment";
+
 /// What the seeded file holds, as this build wrote it.
 struct Seeded {
     section_id: u32,
@@ -251,7 +265,9 @@ fn a_forged_current_stamp_over_pre_v8_tables_does_not_erase_the_ignore_list() {
 ///
 /// Red before the fix: drop the `coerce_*` helpers (read the cells with
 /// `row.get::<String>` / `row.get::<u32>`) and the save is refused, so the
-/// `success` assertion fails.
+/// `success` assertion fails. Red again if `MAX_ID_TEXT_BYTES` is removed from
+/// `coerce_id`: the padded-id row below then parses and is carried, so the
+/// carried count is 3.
 #[test]
 fn hostile_column_types_are_carried_inert_instead_of_making_the_project_unsaveable() {
     let _cfg = crate::test_helpers::isolated_config();
@@ -260,7 +276,7 @@ fn hostile_column_types_are_carried_inert_instead_of_making_the_project_unsaveab
     let seeded = seed_current_file(&path);
     forge_ignore_table(
         &path,
-        PRE_V8_COLUMNS,
+        UNTYPED_ID_COLUMNS,
         "section_id, shot_id, warning_code, resolved_at",
         &[
             // Readable, and the row whose survival is the point.
@@ -281,7 +297,46 @@ fn hostile_column_types_are_carried_inert_instead_of_making_the_project_unsaveab
                 "{}, X'FFFE', 'LONG_SHOT', '{RESOLVED_AT}'",
                 seeded.section_id
             ),
+            // A multi-megabyte TEXT id. Rejected on LENGTH before it is decoded
+            // or parsed: an id is at most 10 digits, so validating megabytes of
+            // UTF-8 to reach that answer is work a hostile file must not be able
+            // to buy, once per row per save.
+            format!(
+                "{}, printf('%.*c', 4000000, '7'), 'AZIMUTH_DEVIATION', '{RESOLVED_AT}'",
+                seeded.section_id
+            ),
+            // The same guard, made observable: 65 characters of zero-padding in
+            // front of a LIVE shot id. Without the byte cap this parses happily
+            // and the row is carried; with it, the cell is refused for its
+            // length before `parse` ever runs. No file a user made looks like
+            // this, which is exactly why the cheap check is safe.
+            format!(
+                "{}, printf('%065d', {}), 'DEPTH_MISMATCH', '{RESOLVED_AT}'",
+                seeded.section_id, seeded.shot_id
+            ),
         ],
+    );
+
+    // The cells really are the types this test is about. Without this the
+    // padded id would be silently converted to an INTEGER by column affinity
+    // and the byte guard below would never be what decides its fate - the
+    // fixture would look like it was testing the guard while testing nothing.
+    let stored_types: Vec<String> = {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT typeof(shot_id) FROM resolved_warnings ORDER BY id")
+            .unwrap();
+        let types = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        types
+    };
+    assert_eq!(
+        stored_types,
+        vec!["integer", "integer", "blob", "text", "text"],
+        "the fixture's cell types must be the ones under test"
     );
 
     let state = AppState::new().unwrap();
@@ -306,7 +361,81 @@ fn hostile_column_types_are_carried_inert_instead_of_making_the_project_unsaveab
     assert_eq!(
         rows.len(),
         2,
-        "the two rows that name a shot are carried; the one that names none is not"
+        "the two rows that name a shot are carried; none of the three that name none is"
+    );
+}
+
+/// The cap has to bound the WORK, not just the output. Counted over rows KEPT it
+/// would never trip on a table of pure junk - nothing is kept - so every save and
+/// every autosave would scan the whole thing.
+///
+/// The observable is deliberate: the usable rows sit BEHIND the wall of junk, so
+/// a reader that stops at the cap never reaches them and carries nothing, while
+/// one that scans the whole table carries them. That difference is the presence
+/// or absence of the bound.
+///
+/// Red before the fix: count the cap over `resolved.len()` instead of rows
+/// examined, and the reader walks past the junk to the usable rows at the end -
+/// the `is_empty` assertion fails.
+#[test]
+fn the_row_cap_bounds_the_scan_even_when_no_row_is_usable() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("flooded.stalx");
+    let seeded = seed_current_file(&path);
+
+    // Build the wall with SQLite itself: a recursive CTE inserts the rows far
+    // faster than round-tripping them, and keeps the fixture synthetic.
+    let junk = crate::persistence::MAX_CARRIED_RESOLVED_WARNINGS;
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(&format!(
+        "DROP TABLE resolved_warnings;
+         CREATE TABLE resolved_warnings (
+            id INTEGER PRIMARY KEY,
+            section_id INTEGER NOT NULL,
+            shot_id,
+            warning_code TEXT NOT NULL,
+            resolved_at TEXT NOT NULL,
+            resolved_comment TEXT,
+            FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+         );
+         WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < {junk})
+         INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at)
+            SELECT {}, X'FFFE', 'JUNK_' || n, '{RESOLVED_AT}' FROM seq;
+         INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at)
+            VALUES ({}, {}, '{IGNORED_CODE}', '{RESOLVED_AT}');",
+        seeded.section_id, seeded.section_id, seeded.shot_id
+    ))
+    .unwrap();
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM resolved_warnings", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        total,
+        junk as i64 + 1,
+        "the fixture must hold one usable row behind exactly the cap's worth of junk"
+    );
+    drop(conn);
+
+    let state = AppState::new().unwrap();
+    let opened = state.open_project(path.clone());
+    assert!(opened.success, "open failed: {:?}", opened.error);
+
+    let saved = state.save_project(Some(path.clone()));
+    assert!(
+        saved.success,
+        "a flooded table must still save, not refuse: {:?}",
+        saved.error
+    );
+
+    let rows = Database::open_existing(&path)
+        .unwrap()
+        .load_resolved_warnings()
+        .unwrap();
+    assert!(
+        rows.is_empty(),
+        "the read must stop at the cap, so nothing behind the junk is reached (got {} rows)",
+        rows.len()
     );
 }
 

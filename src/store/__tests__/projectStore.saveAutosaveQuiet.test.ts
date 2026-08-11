@@ -2,6 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
+import { shouldShowAutosaveBanner } from '../../utils/saveFeedback';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 
@@ -129,6 +130,42 @@ describe('saveProject autosave quieting', () => {
     expect(banner).not.toContain('FS_PATH_NOT_FOUND');
     // A missing folder is not a permission problem, so no guidance dialog.
     expect(openDialogSpy).not.toHaveBeenCalledWith('save-permission', expect.anything());
+  });
+
+  // [#517] The banner's render gate hides an ordinary failure behind the
+  // integrity banner, so the KIND has to reach the store - the message alone
+  // (marker already stripped) cannot tell `shouldShowAutosaveBanner` that this
+  // is the one failure Review & Repair cannot fix.
+  it('records the unreadable-ignore-list kind so the banner can refuse to yield', async () => {
+    useProjectStore.setState({
+      integritySaveBlocked: true,
+      integrityIssues: [{ category: 'dangling_merge_ref', message: 'x' }],
+    } as never);
+    invokeIpcMock.mockImplementation(async (command: string) =>
+      command === 'save_project'
+        ? {
+            success: false,
+            error:
+              "IGNORES_UNREADABLE: Can't save: this project's list of ignored warnings could not be read (x).",
+          }
+        : undefined
+    );
+
+    await useProjectStore.getState().saveProject('/cave.stalx', true);
+
+    const { autosaveFailure, autosaveFailureKind } = useProjectStore.getState();
+    expect(autosaveFailureKind).toBe('ignores-unreadable');
+    expect(autosaveFailure).not.toContain('IGNORES_UNREADABLE');
+    expect(autosaveFailure).toContain('list of ignored warnings could not be read');
+    // The whole point: this combination still renders.
+    expect(
+      shouldShowAutosaveBanner({
+        autosaveFailure,
+        autosaveFailureKind,
+        integritySaveBlocked: useProjectStore.getState().integritySaveBlocked,
+        integrityIssueCount: useProjectStore.getState().integrityIssues.length,
+      })
+    ).toBe(true);
   });
 
   it('raises the banner when the autosave fails and the changes really are unsaved', async () => {

@@ -7,6 +7,7 @@ vi.mock('../ipc', async (importOriginal) => ({
 
 import {
   autosaveFailureMessage,
+  shouldShowAutosaveBanner,
   surfaceSaveFailure,
   surfaceImportFailure,
   completeImportToSingleView,
@@ -149,6 +150,53 @@ describe('surfaceSaveFailure', () => {
     expect(data.message).not.toContain(FS_PATH_TOO_LONG);
     expect(data.message).not.toContain('Failed to open database');
     expect(data.message).toContain('too long');
+  });
+});
+
+// [#517] The banner has its own render gate in App.tsx, independent of
+// surfaceSaveFailure's routing: it hides whenever saving is integrity-blocked.
+// A refusal Review & Repair cannot fix would be stored and never rendered - the
+// user would see only "repair your cross-references" while every save is
+// refused for an unrelated reason.
+describe('shouldShowAutosaveBanner (#517)', () => {
+  const base = {
+    autosaveFailure: 'Autosave failed',
+    autosaveFailureKind: 'other' as const,
+    integritySaveBlocked: false,
+    integrityIssueCount: 0,
+  };
+
+  it('yields to the integrity banner for an ordinary failure', () => {
+    expect(
+      shouldShowAutosaveBanner({ ...base, integritySaveBlocked: true, integrityIssueCount: 2 })
+    ).toBe(false);
+  });
+
+  it('shows an unreadable-ignore-list refusal even behind the integrity banner', () => {
+    expect(
+      shouldShowAutosaveBanner({
+        ...base,
+        autosaveFailure: "Can't save: this project's list of ignored warnings could not be read (x).",
+        autosaveFailureKind: 'ignores-unreadable',
+        integritySaveBlocked: true,
+        integrityIssueCount: 2,
+      })
+    ).toBe(true);
+  });
+
+  it('shows nothing when there is no autosave failure, whatever the kind', () => {
+    expect(
+      shouldShowAutosaveBanner({
+        ...base,
+        autosaveFailure: null,
+        autosaveFailureKind: 'ignores-unreadable',
+      })
+    ).toBe(false);
+  });
+
+  it('shows an ordinary failure when the project is not integrity-blocked', () => {
+    expect(shouldShowAutosaveBanner(base)).toBe(true);
+    expect(shouldShowAutosaveBanner({ ...base, integrityIssueCount: 3 })).toBe(true);
   });
 });
 
