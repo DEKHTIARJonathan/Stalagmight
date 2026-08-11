@@ -141,14 +141,43 @@ Three rules bound it, the first two mirroring the join:
   unrelated branch at that junction splice onto the mainline's head. The cost,
   pinned by `a_chain_continuing_a_cut_tail_stays_its_own_section`, is that a
   chain continuing a cut tail under its own name is not absorbed into it.
-- **At most `MAX_TRIP_CUTS_PER_RUN` (256) cuts per run.** The trip is
-  file-controlled and written on every row, so a file carrying a per-ROW date -
-  a data-entry timestamp, or a crafted file - would otherwise mint one section
-  per shot from a single declared name. 256 sits far above real multi-trip
-  surveys (about five years of WEEKLY survey days under one declared name; the
-  largest real file measured cuts none at all) and far below degeneracy. Past
-  the cap the remaining trips stay on the last part and are named on the
-  receipt, so the bound costs reporting, not data.
+- **A cut budget, per run AND per file.** The trip is file-controlled and
+  written on every row, so a file carrying a per-ROW date - a data-entry
+  timestamp, or a crafted file - would otherwise mint one section per shot from
+  a single declared name. `MAX_TRIP_CUTS_PER_RUN` (256) sits far above real
+  multi-trip surveys (about five years of WEEKLY survey days under one declared
+  name; the largest real file measured cuts none at all) and far below
+  degeneracy. It is not enough on its own, because a file chooses how many RUNS
+  it has too, so `MAX_TRIP_CUTS_PER_FILE` (4096 = 16 runs at the per-run cap)
+  bounds the total, and the budget is further clamped to the id space the file
+  has not already used (below). Past either bound the remaining trips stay on
+  the last part and are named on the receipt, so the bounds cost reporting, not
+  data.
+
+#### Why sections are budgeted at all
+
+A shot id is `section_id * FEATURE_ID_STRIDE + sequence_order` with a stride of
+100_000, in `u32`. The last shot of section `id` encodes as `id * 100_000 +
+99_999`, so the encode holds up to **42_949 sections**; past that a site either
+panics (debug) or saturates, and saturating ALIASES distinct shots onto one id,
+which silently moves the station cross-references anchored on them. The cut's
+budget is therefore also clamped to `42_949 - (runs the file already has)`, so
+importing a file can never use the CUT to cross that line.
+
+Reaching it without the cut - by declaring tens of thousands of sections in the
+file - predates this work and is not guarded. The encode sites, and what each
+does at the boundary:
+
+| Site | Behaviour past 42_949 sections |
+|------|-------------------------------|
+| `models/section.rs` `Section::new` (`next_shot_id`) | unchecked multiply - panics in debug, wraps in release |
+| `core/state/project_io.rs` (uuid index, twice) | unchecked multiply - same |
+| `persistence/sqlite/read.rs` (shot id, `next_shot_id`) | saturating (#427) - no panic, ids alias |
+| `models/shot.rs` `shot_display_position` | saturating (#413) - display only |
+| `src/utils/ids.ts` `encodeFeatureId` | JS doubles, exact past 2^32 - no wrap |
+
+Closing that off properly means bounding the section count at the import
+boundary rather than at each encode, which is its own change.
 
 The suffix can collide with a name the file itself declares (a file with both
 `A` and `A (trip 2)`). That is accepted, not disambiguated: nothing in the

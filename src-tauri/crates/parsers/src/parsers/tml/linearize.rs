@@ -396,6 +396,44 @@ fn trip_head(shots: &[TmlShot]) -> Option<&TmlShot> {
 /// bound costs reporting rather than data.
 pub(super) const MAX_TRIP_CUTS_PER_RUN: usize = 256;
 
+/// Most cuts one FILE may be given, across every run in it.
+///
+/// [`MAX_TRIP_CUTS_PER_RUN`] alone bounds the wrong denominator: a file
+/// controls how many runs it has as well as how many trips each one holds, so
+/// 170 crafted runs of 257 trips would still mint 43k sections while obeying
+/// the per-run cap.
+///
+/// Sections are the numerator of the shot-id encode. Ids are handed out
+/// sequentially from 0 (`Project::add_section`), and `Section::new` computes
+/// `next_shot_id = id * FEATURE_ID_STRIDE` (100_000) as a plain `u32` multiply,
+/// so the encode holds only while `section_id <= 42_949`
+/// (42_949 x 100_000 = 4_294_900_000 <= `u32::MAX`). Past that the multiply
+/// panics in debug and, where a site saturates instead, distinct shots ALIAS
+/// onto one id - which silently moves station cross-references.
+///
+/// 4_096 is 16 runs at the per-run cap: under a tenth of that headroom,
+/// leaving ~38_850 for the file's declared names and branch splits (both of
+/// which predate this cut and are bounded only by the file itself - see
+/// `docs/ariane-import.md`). Cuts past the budget are not made, and the trips
+/// they would have separated are named on the receipt by
+/// [`collapsed_trip_report`] like any other uncut boundary.
+pub(super) const MAX_TRIP_CUTS_PER_FILE: usize = 4_096;
+
+/// Sections whose shot ids all fit the `section_id * FEATURE_ID_STRIDE + seq`
+/// encode, as a COUNT.
+///
+/// The last shot of section `id` encodes as `id * 100_000 + 99_999`, so the
+/// largest usable id is `(u32::MAX - 99_999) / 100_000` = 42_948, i.e. 42_949
+/// sections. (Not 42_950: id 42_949 fits the multiply on its own but overflows
+/// as soon as the section holds shots.)
+///
+/// The cut spends at most whatever is left of this after the runs the file
+/// already declared, so a file cannot use the cut to cross the boundary - only
+/// to approach it. Getting there WITHOUT the cut, by declaring tens of
+/// thousands of sections, predates this work and is unguarded; the encode sites
+/// that would then wrap are listed in `docs/ariane-import.md`.
+const MAX_SECTIONS_IN_ID_SPACE: usize = 42_949;
+
 /// Cut each run where the trip changes between two ADJACENT stations (#427).
 ///
 /// A run takes its metadata from its first shot (see `linearize_section`), so
@@ -422,17 +460,26 @@ pub(super) fn split_runs_at_trip_boundaries(sections: &mut Vec<TmlSection>) -> u
     let mut out: Vec<TmlSection> = Vec::with_capacity(sections.len());
     let mut cuts_made = 0;
     let mut clamped_runs = 0;
+    // Never spend more of the id space than the file has left after its own
+    // declared runs: the cut may approach `MAX_SECTIONS_IN_ID_SPACE`, never
+    // carry a file across it.
+    let mut budget =
+        MAX_TRIP_CUTS_PER_FILE.min(MAX_SECTIONS_IN_ID_SPACE.saturating_sub(sections.len()));
 
     for section in sections.drain(..) {
         let mut cuts = trip_cut_points(&section.shots);
+        // Both caps at once: a file may not buy its way past the file-wide
+        // budget by spreading the same trip churn over more runs.
+        let allowed = cuts.len().min(MAX_TRIP_CUTS_PER_RUN).min(budget);
+        if allowed < cuts.len() {
+            clamped_runs += 1;
+            cuts.truncate(allowed);
+        }
         if cuts.is_empty() {
             out.push(section);
             continue;
         }
-        if cuts.len() > MAX_TRIP_CUTS_PER_RUN {
-            clamped_runs += 1;
-            cuts.truncate(MAX_TRIP_CUTS_PER_RUN);
-        }
+        budget -= cuts.len();
         cuts_made += cuts.len();
         out.extend(cut_run(section, &cuts));
     }
@@ -442,9 +489,11 @@ pub(super) fn split_runs_at_trip_boundaries(sections: &mut Vec<TmlSection>) -> u
         // per-shot consequence.
         tracing::warn!(
             runs = clamped_runs,
-            cap = MAX_TRIP_CUTS_PER_RUN,
-            "TML run changed trip more times than the cap allows; the rest of its \
-             per-shot values were left on the last part"
+            per_run_cap = MAX_TRIP_CUTS_PER_RUN,
+            per_file_cap = MAX_TRIP_CUTS_PER_FILE,
+            cuts_made,
+            "TML runs changed trip more times than the caps allow; the rest of their \
+             per-shot values were left on the last part of each"
         );
     }
 

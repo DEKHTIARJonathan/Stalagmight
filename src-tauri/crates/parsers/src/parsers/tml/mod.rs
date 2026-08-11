@@ -610,9 +610,10 @@ fn tagged_half<'a>(raw: &'a str, tag: &str) -> Option<(usize, &'a str)> {
 /// Splitting a compound value into PEOPLE is [#329], not this: the halves are
 /// rejoined into the single string `Section::surveyor` holds, which the TML
 /// export writes straight back into `Explorer`, so the round trip is stable and
-/// idempotent (a re-import sees the plain compound form and returns it
-/// unchanged). Identical halves collapse to one - "the same person did both" is
-/// not two names.
+/// idempotent: a re-import splits the plain form on the same separator, applies
+/// the same per-half rules, and rejoins - and anything that survived those rules
+/// once survives them again unchanged. Identical halves collapse to one - "the
+/// same person did both" is not two names.
 ///
 /// Halves come out in DOCUMENT order, and any text before the first tag is a
 /// half of its own: this field is a person's name in a file nobody validates,
@@ -637,7 +638,11 @@ fn parse_explorer_field(raw: &str) -> Option<String> {
         found.sort_by_key(|(at, _)| *at);
         found.into_iter().map(|(_, text)| text).collect()
     } else {
-        vec![raw]
+        // The plain compound form gets the SAME per-half treatment, on the same
+        // separator this rejoins with. Splitting it verbatim instead let
+        // "unknown / ds" carry Ariane's placeholder into `Section::surveyor`
+        // and back out through the export, while the element form dropped it.
+        raw.split(EXPLORER_SURVEYOR_SEPARATOR).collect()
     };
 
     let mut kept: Vec<&str> = Vec::with_capacity(halves.len());
@@ -2015,7 +2020,7 @@ fn determine_placement(
     clippy::print_stderr
 )]
 mod tests {
-    use super::linearize::MAX_TRIP_CUTS_PER_RUN;
+    use super::linearize::{MAX_TRIP_CUTS_PER_FILE, MAX_TRIP_CUTS_PER_RUN};
     use super::test_helpers::*;
     use super::*;
 
@@ -5826,6 +5831,63 @@ mod tests {
         );
     }
 
+    /// The per-run cap alone bounds the wrong denominator: a file chooses how
+    /// many RUNS it has as well as how many trips each holds. Sections are the
+    /// numerator of the `section_id * FEATURE_ID_STRIDE` shot-id encode, which
+    /// holds only below 42_950 sections, so the budget is file-wide too.
+    #[test]
+    fn the_cut_budget_is_file_wide_not_only_per_run() {
+        // Enough runs that the per-run cap alone would let them all through:
+        // 20 x 256 = 5120 cuts against a 4096 budget.
+        let runs = 20;
+        let per_run = MAX_TRIP_CUTS_PER_RUN as i64 + 1;
+        let mut shots: Vec<String> = Vec::new();
+        for run in 0..runs {
+            for seq in 0..per_run {
+                let id = run * 1000 + seq + 1;
+                shots.push(
+                    TripShot {
+                        id,
+                        // Each run starts from the entrance, so they are
+                        // separate runs rather than one chain.
+                        from_id: if seq == 0 { -1 } else { id - 1 },
+                        section: "A",
+                        explorer: "Tester",
+                        date: &format!("2024-{:02}-{:02}", 1 + seq / 28, 1 + seq % 28),
+                        depth: seq as f64,
+                        ..TripShot::default()
+                    }
+                    .xml(),
+                );
+            }
+        }
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots.join("\n")));
+
+        let cuts = tml.sections.len() - runs as usize;
+        assert_eq!(
+            cuts,
+            MAX_TRIP_CUTS_PER_FILE,
+            "the file-wide budget is spent exactly once, however many runs ask \
+             for it (got {} sections over {runs} runs)",
+            tml.sections.len()
+        );
+        assert!(
+            tml.sections.len() < 42_950,
+            "and the result stays inside the shot-id encode's section range"
+        );
+        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+
+        let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        let note = warnings
+            .iter()
+            .find(|w| w.contains("recorded a different"))
+            .expect("what the budget refused to cut must reach the receipt");
+        assert!(
+            note.contains("trip changes in"),
+            "and it names how many places were collapsed: {note}"
+        );
+    }
+
     /// Three trips in one run: the parts are cut back to front and each one
     /// rebases on the PREVIOUS part's tail, so a two-part test cannot see a
     /// chaining mistake.
@@ -6293,6 +6355,25 @@ mod tests {
             "the placeholder is a word, so its capitalisation does not decide"
         );
         assert_eq!(surveyor_of("NONE"), None);
+
+        // The PLAIN compound form gets the same per-half rules. It used to be
+        // kept verbatim, so Ariane's placeholder rode into the section surveyor
+        // and back out through the export.
+        assert_eq!(
+            surveyor_of("nh / ds").as_deref(),
+            Some("nh / ds"),
+            "a compound with no placeholder half is unchanged"
+        );
+        assert_eq!(surveyor_of("unknown / ds").as_deref(), Some("ds"));
+        assert_eq!(surveyor_of("ds / unknown").as_deref(), Some("ds"));
+        assert_eq!(surveyor_of("Unknown / None").as_deref(), None);
+        // Idempotence, on the value this app itself writes back out: whatever
+        // survives the filter must survive it again.
+        for once in ["nh / ds", "unknown / ds", "ds / unknown", "nh"] {
+            let first = surveyor_of(once);
+            let second = first.as_deref().and_then(surveyor_of);
+            assert_eq!(second, first, "re-reading {once:?} must not change it");
+        }
     }
 
     /// With duplicate shot ids in the file, a chain END no longer names a
