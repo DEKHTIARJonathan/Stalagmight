@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeTmlPreviewLayout } from '../tmlPreviewLayout';
+import { computeTmlPreviewLayout, isOfferableCoordinate } from '../tmlPreviewLayout';
 import type { TmlFile, TmlSection, TmlShot } from '../../types/commands';
 
 /**
@@ -386,5 +386,34 @@ describe('computeTmlPreviewLayout reads the ids the wire actually delivers', () 
     );
     const layout = computeTmlPreviewLayout(orphan, all);
     expect(layout.sections.find((s) => s.index === 1)!.reanchored).toBe(true);
+  });
+});
+
+describe('isOfferableCoordinate mirrors the backend null-island guard', () => {
+  it('treats a denormal as absent, the way f64::EPSILON does', () => {
+    // The backend's `gps_placement` says "no anchor" when BOTH components are
+    // `<= f64::EPSILON`. A `> 0` test disagrees for a denormal: it offers the
+    // coordinate, the dialog preselects "use the file's position", and the
+    // survey is georeferenced next to Null Island by an explicit zero datum the
+    // backend would never have chosen on its own.
+    expect(Number.EPSILON).toBe(2 ** -52); // === f64::EPSILON
+    expect(isOfferableCoordinate(1e-300, 0)).toBe(false);
+    expect(isOfferableCoordinate(0, 1e-300)).toBe(false);
+    expect(isOfferableCoordinate(Number.EPSILON, 0)).toBe(false);
+  });
+
+  it('still offers a real coordinate, however small', () => {
+    // 1e-10 degrees is ~0.01 mm, far below survey precision, but it is a value
+    // a file states rather than a rounding artefact - and the backend accepts
+    // it, so refusing it here would put the two out of step again.
+    expect(isOfferableCoordinate(1e-10, 0)).toBe(true);
+    expect(isOfferableCoordinate(20.5, -87.1)).toBe(true);
+  });
+
+  it('refuses what GpsCoordinates::new refuses', () => {
+    expect(isOfferableCoordinate(Number.NaN, 10)).toBe(false);
+    expect(isOfferableCoordinate(91, 10)).toBe(false);
+    expect(isOfferableCoordinate(10, 181)).toBe(false);
+    expect(isOfferableCoordinate(0, 0)).toBe(false);
   });
 });

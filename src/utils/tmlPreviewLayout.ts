@@ -130,7 +130,13 @@ function localStations(shots: TmlShot[]): Array<{ x: number; y: number }> {
 export function isOfferableCoordinate(latitude: number, longitude: number): boolean {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
   if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return false;
-  return Math.abs(latitude) > 0 || Math.abs(longitude) > 0;
+  // `Number.EPSILON` IS `f64::EPSILON` (both 2^-52), so this is the backend's
+  // `<= f64::EPSILON` guard spelled the same way rather than approximated. A
+  // plain `> 0` is not the same predicate: it calls (1e-300, 0) an anchor, and
+  // the dialog would then preselect "use the file's position" and send an
+  // explicit zero datum, georeferencing the survey next to Null Island where
+  // the backend on its own would have left it at the origin.
+  return Math.abs(latitude) > Number.EPSILON || Math.abs(longitude) > Number.EPSILON;
 }
 
 /**
