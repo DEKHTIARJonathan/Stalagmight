@@ -122,20 +122,24 @@ async function verifyAgainstBackend(
   merges: ReturnType<typeof executeLSystem>['merges'],
   sectionIdMap: Map<number, number>,
 ): Promise<void> {
+  // The payload nests the project (`project.sections`, see fuzzOracleCore's
+  // canonical key paths).
   const state = (await ctx.ipc('get_project_state')) as {
-    sections?: unknown[];
-    station_merges?: Array<{
-      station_a: { section_id: number; station_index: number };
-      station_b: { section_id: number; station_index: number };
-    }>;
+    project?: {
+      sections?: unknown[];
+      station_merges?: Array<{
+        station_a: { section_id: number; station_index: number };
+        station_b: { section_id: number; station_index: number };
+      }>;
+    };
   };
-  const gotSections = state.sections?.length ?? 0;
+  const gotSections = state.project?.sections?.length ?? 0;
   if (gotSections !== expectedSections) {
     throw new Error(`backend holds ${gotSections} sections, expected ${expectedSections}`);
   }
 
   const expected = buildExpectedMergeSet(merges, sectionIdMap);
-  const actual = buildActualMergeSet(state.station_merges ?? []);
+  const actual = buildActualMergeSet(state.project?.station_merges ?? []);
   const missing = [...expected].filter((k) => !actual.has(k));
   const extra = [...actual].filter((k) => !expected.has(k));
   if (missing.length > 0 || extra.length > 0) {
