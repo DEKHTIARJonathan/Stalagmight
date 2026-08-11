@@ -8,15 +8,15 @@
  * null uniform location at runtime.
  */
 
-/** `uniform <type> <name>` at the start of a line. `\w+` stops before a `[`, so
- *  an array uniform (`u_foo[4]`) already yields the bare name. */
-const UNIFORM_RE = /^uniform\s+\w+\s+(u_\w+)/gm;
+/** `uniform [precision] <type> <name>`, leading whitespace allowed. `\w+` stops
+ *  before a `[`, so an array uniform (`u_foo[4]`) already yields the bare name. */
+const UNIFORM_RE = /^\s*uniform\s+(?:(?:lowp|mediump|highp)\s+)?\w+\s+(u_\w+)/gm;
 
-/** `in <type> <name>` at the start of a line. Fragment shaders also declare
- *  `in` VARYINGS, and only a vertex shader's `in`s are attributes - the `a_`
- *  prefix separates the two here (every varying in shaders.ts is `v_`-prefixed),
- *  but callers should still pass vertex sources only. */
-const ATTRIB_RE = /^in\s+\w+\s+(a_\w+)/gm;
+/** `in [precision] <type> <name>`, leading whitespace allowed. Fragment shaders
+ *  also declare `in` VARYINGS, and only a vertex shader's `in`s are attributes -
+ *  the `a_` prefix separates the two here (every varying in shaders.ts is
+ *  `v_`-prefixed), but callers should still pass vertex sources only. */
+const ATTRIB_RE = /^\s*in\s+(?:(?:lowp|mediump|highp)\s+)?\w+\s+(a_\w+)/gm;
 
 function scrape(src: string, re: RegExp): string[] {
   const out: string[] = [];
@@ -32,4 +32,17 @@ export function declaredUniforms(src: string): string[] {
 /** Attribute names declared by a VERTEX shader source, in declaration order. */
 export function declaredAttribs(src: string): string[] {
   return scrape(src, ATTRIB_RE);
+}
+
+/** Every `uniform` declaration, in ANY form - the anti-blind-spot count. A
+ *  declaration the scraper cannot parse (new qualifier, non-`u_` name) makes
+ *  this exceed declaredUniforms().length, failing the pin loudly instead of
+ *  letting the set-equality tests pass vacuously on both sides missing it. */
+export function rawUniformDeclCount(src: string): number {
+  return (src.match(/^\s*uniform\b/gm) ?? []).length;
+}
+
+/** Every `in` declaration of a VERTEX shader (all of which are attributes). */
+export function rawVertexInputCount(src: string): number {
+  return (src.match(/^\s*in\b/gm) ?? []).length;
 }

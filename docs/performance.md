@@ -354,8 +354,10 @@ link-time location cache (#339): in the harness (or devtools), wrap
 run the `map-storm` scenario, and divide by frames (`map.on('render')`).
 Measured on the fractal fixture (32 sections / 116 stations, 300 jumps):
 ~54 lookups per frame before the cache, ~0.4 after - the residue is MapLibre's
-own lazy program setup on the shared context; the survey layers contribute
-zero, which `surveyCustomLayerGl.test.ts` pins. Frame times were vsync-bound
+own lazy program setup on the shared context. The survey layers contribute
+zero: the only `get*Location` call sites left under `src/` are inside
+`linkProgramBundle`, and `surveyCustomLayerGl.test.ts` pins the geometry
+layer's render loop at zero lookups. Frame times were vsync-bound
 (~16.7 ms mean) on the measurement machine both before and after; the win is
 removing driver string lookups from the hot loop, not a measured FPS change.
 

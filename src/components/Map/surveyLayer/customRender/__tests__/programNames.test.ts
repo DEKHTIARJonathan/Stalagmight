@@ -37,7 +37,12 @@ import {
   MEASURE_CIRCLE_VERTEX_SRC,
   MEASURE_CIRCLE_FRAGMENT_SRC,
 } from '../measurePathShaders';
-import { declaredUniforms, declaredAttribs } from './shaderDecls';
+import {
+  declaredUniforms,
+  declaredAttribs,
+  rawUniformDeclCount,
+  rawVertexInputCount,
+} from './shaderDecls';
 
 /** Set comparison as a sorted array, so a mismatch prints the missing name. */
 const asSet = (names: readonly string[]): string[] => [...new Set(names)].sort();
@@ -218,5 +223,40 @@ describe('surveyMeasurePathLayer program name lists match the GLSL (#339)', () =
     expect(MEASURE_CIRCLE_ATTRIBS.length).toBe(2);
     expect(declaredAttribs(MEASURE_LINE_FRAGMENT_SRC)).toEqual([]);
     expect(declaredAttribs(MEASURE_CIRCLE_FRAGMENT_SRC)).toEqual([]);
+  });
+});
+
+describe('the scraper parses every declaration form the shaders use (#339)', () => {
+  // A declaration the scraper cannot parse (new qualifier, non-standard prefix)
+  // would vanish from BOTH sides of the set-equality pins above and pass
+  // silently; comparing against a bare keyword count makes it fail loudly.
+  const sources: [string, string][] = [
+    ['line vertex', LINE_VERTEX_SRC],
+    ['line fragment', LINE_FRAGMENT_SRC],
+    ['circle vertex', CIRCLE_VERTEX_SRC],
+    ['circle fragment', CIRCLE_FRAGMENT_SRC],
+    ['label vertex', LABEL_VERTEX_SRC],
+    ['label fragment', LABEL_FRAGMENT_SRC],
+    ['ghost line vertex', GHOST_LINE_VERTEX_SRC],
+    ['ghost line fragment', GHOST_LINE_FRAGMENT_SRC],
+    ['ghost circle vertex', GHOST_CIRCLE_VERTEX_SRC],
+    ['ghost circle fragment', GHOST_CIRCLE_FRAGMENT_SRC],
+    ['measure line vertex', MEASURE_LINE_VERTEX_SRC],
+    ['measure line fragment', MEASURE_LINE_FRAGMENT_SRC],
+    ['measure circle vertex', MEASURE_CIRCLE_VERTEX_SRC],
+    ['measure circle fragment', MEASURE_CIRCLE_FRAGMENT_SRC],
+  ];
+  const vertexSources = sources.filter(([label]) => label.endsWith('vertex'));
+
+  it('sees every uniform declaration', () => {
+    for (const [label, src] of sources) {
+      expect(declaredUniforms(src).length, `${label} uniforms`).toBe(rawUniformDeclCount(src));
+    }
+  });
+
+  it('sees every vertex-shader input declaration', () => {
+    for (const [label, src] of vertexSources) {
+      expect(declaredAttribs(src).length, `${label} attributes`).toBe(rawVertexInputCount(src));
+    }
   });
 });

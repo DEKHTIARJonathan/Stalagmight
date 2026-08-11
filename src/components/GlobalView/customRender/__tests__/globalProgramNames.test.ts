@@ -14,6 +14,8 @@ import {
 import {
   declaredUniforms,
   declaredAttribs,
+  rawUniformDeclCount,
+  rawVertexInputCount,
 } from '../../../Map/surveyLayer/customRender/__tests__/shaderDecls';
 
 /** Set comparison as a sorted array, so a mismatch prints the missing name. */
@@ -66,5 +68,22 @@ describe('globalCustomLayer program name lists match the GLSL (#339)', () => {
     expect(GLOBAL_CIRCLE_ATTRIBS.length).toBe(7);
     expect(declaredAttribs(GLOBAL_LINE_FRAGMENT_SRC)).toEqual([]);
     expect(declaredAttribs(GLOBAL_CIRCLE_FRAGMENT_SRC)).toEqual([]);
+  });
+
+  it('the scraper parses every declaration form the shaders use', () => {
+    // A declaration the scraper cannot parse would vanish from BOTH sides of
+    // the set-equality pins and pass silently; a bare keyword count fails loud.
+    const sources: [string, string][] = [
+      ['line vertex', GLOBAL_LINE_VERTEX_SRC],
+      ['line fragment', GLOBAL_LINE_FRAGMENT_SRC],
+      ['circle vertex', GLOBAL_CIRCLE_VERTEX_SRC],
+      ['circle fragment', GLOBAL_CIRCLE_FRAGMENT_SRC],
+    ];
+    for (const [label, src] of sources) {
+      expect(declaredUniforms(src).length, `${label} uniforms`).toBe(rawUniformDeclCount(src));
+    }
+    for (const [label, src] of [sources[0], sources[2]] as [string, string][]) {
+      expect(declaredAttribs(src).length, `${label} attributes`).toBe(rawVertexInputCount(src));
+    }
   });
 });

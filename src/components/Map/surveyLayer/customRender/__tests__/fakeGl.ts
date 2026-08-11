@@ -82,14 +82,26 @@ export class FakeGl {
     return this.calls[name] ?? 0;
   }
 
-  /** The location object handed out for `name`, or undefined if never queried. */
-  uniformLocation(name: string): object | undefined {
-    return this.uniformLocations.get(name);
+  /** The location object handed out for `name`, or undefined if never queried.
+   *  Throws when `name` was queried on more than one program and no `progId`
+   *  disambiguates - locations are per-program, and a caller that ignores that
+   *  would hide exactly the cross-program mix-up the keying exists to expose. */
+  uniformLocation(name: string, progId?: number): object | undefined {
+    return this.lookup(this.uniformLocations, name, progId);
   }
 
   /** The location index handed out for `name`, or undefined if never queried. */
-  attribLocation(name: string): number | undefined {
-    return this.attribLocations.get(name);
+  attribLocation(name: string, progId?: number): number | undefined {
+    return this.lookup(this.attribLocations, name, progId);
+  }
+
+  private lookup<T>(map: Map<string, T>, name: string, progId?: number): T | undefined {
+    if (progId !== undefined) return map.get(`${progId}:${name}`);
+    const hits = [...map.entries()].filter(([k]) => k.endsWith(`:${name}`));
+    if (hits.length > 1) {
+      throw new Error(`location for '${name}' is ambiguous across programs; pass progId`);
+    }
+    return hits[0]?.[1];
   }
 
   private bump(name: string): void {
@@ -154,26 +166,30 @@ export class FakeGl {
     this.bump('useProgram');
   }
 
-  /** A distinct object per name, stable across queries of the same name. */
-  getUniformLocation(_prog: FakeWebGLProgram, name: string): object {
+  /** A distinct object per (program, name), stable across repeat queries. Keyed
+   *  by the program too - as in real GL - so a draw path that reads a location
+   *  from the WRONG bundle gets a different object, not a lookalike. */
+  getUniformLocation(prog: FakeWebGLProgram, name: string): object {
     this.bump('getUniformLocation');
     this.uniformQueries.push(name);
-    let loc = this.uniformLocations.get(name);
+    const key = `${prog.id}:${name}`;
+    let loc = this.uniformLocations.get(key);
     if (!loc) {
       loc = { name };
-      this.uniformLocations.set(name, loc);
+      this.uniformLocations.set(key, loc);
     }
     return loc;
   }
 
-  /** A distinct index per name, stable across queries of the same name. */
-  getAttribLocation(_prog: FakeWebGLProgram, name: string): number {
+  /** A distinct index per (program, name), stable across repeat queries. */
+  getAttribLocation(prog: FakeWebGLProgram, name: string): number {
     this.bump('getAttribLocation');
     this.attribQueries.push(name);
-    let loc = this.attribLocations.get(name);
+    const key = `${prog.id}:${name}`;
+    let loc = this.attribLocations.get(key);
     if (loc === undefined) {
       loc = this.nextAttribLoc++;
-      this.attribLocations.set(name, loc);
+      this.attribLocations.set(key, loc);
     }
     return loc;
   }
