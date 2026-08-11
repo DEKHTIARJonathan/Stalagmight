@@ -1442,15 +1442,14 @@ fn build_export_shots_with_report(
             if shot.shot_type != "REAL" && shot.shot_type != "VIRTUAL" {
                 continue;
             }
-            let joined_station: Option<String> = comments_by_ariane.remove(&shot.id).map(
-                |attachments| {
+            let joined_station: Option<String> =
+                comments_by_ariane.remove(&shot.id).map(|attachments| {
                     attachments
                         .iter()
                         .map(|(_, t)| *t)
                         .collect::<Vec<_>>()
                         .join("\n")
-                },
-            );
+                });
             shot.comment = comment_split::merge(shot.comment.as_deref(), joined_station.as_deref());
         }
     }
