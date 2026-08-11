@@ -214,12 +214,11 @@ use super::fuzz_undo_tests::Rng;
 // CONFIG ISOLATION. Every test in this module opens with
 // `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
 // and every save reaches `note_recent_project` -> `Config::save()`, which WRITES
-// it. Config resolution is PER-THREAD since #522, so a test that forgot the
-// guard can no longer land a write in a sibling's config file (nor in the
-// developer's real ~/.config/stalagmight/config.toml); what the guard still buys
-// is ONE dir for the whole test, whose path the test can name and hand to any
-// worker thread (`ConfigHandoff`). It is held for the whole test because the
-// saves are.
+// it. Config resolution is per-thread (`crate::test_helpers` documents what that
+// does and does not protect, and why it is not opt-in), so the guard is no longer
+// what keeps these tests off other files; what it buys is ONE dir for the whole
+// test, whose path the test can name and hand to a worker thread
+// (`ConfigHandoff`). It is held for the whole test because the saves are.
 use crate::test_helpers::isolated_config;
 
 // ===========================================================================

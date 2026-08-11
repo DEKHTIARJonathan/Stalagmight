@@ -5835,8 +5835,10 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
         // The race is between two SPAWNED threads writing one config file, and
         // config resolution is per-thread - without the handoff each worker
         // would save into a temp dir of its own and no write could ever be lost
-        // to the other's.
+        // to the other's, so this whole test would pass VACUOUSLY. Each worker
+        // therefore asserts, once, that it really is on this file.
         let config = crate::test_helpers::ConfigHandoff::capture();
+        let raced_file = crate::config::Config::config_path().expect("config path");
         // Trial-DISTINCT values, and that is the whole reason the trials count.
         // Every trial builds a fresh `AppState`, which re-loads the config the
         // previous trial left in the shared isolated directory - so with a value
@@ -5854,8 +5856,14 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
 
             let a = std::sync::Arc::clone(&shared);
             let config_a = config.clone();
+            let file_a = raced_file.clone();
             let handle_a = std::thread::spawn(move || {
                 let _config = config_a.adopt();
+                assert_eq!(
+                    crate::config::Config::config_path().expect("config path"),
+                    file_a,
+                    "worker A must write the file worker B writes, or no update can be lost"
+                );
                 for i in 0..ITERS {
                     let width = 150 + trial * 10 + (i % 10);
                     retrying(|| {
@@ -5865,8 +5873,14 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
             });
             let b = std::sync::Arc::clone(&shared);
             let config_b = config.clone();
+            let file_b = raced_file.clone();
             let handle_b = std::thread::spawn(move || {
                 let _config = config_b.adopt();
+                assert_eq!(
+                    crate::config::Config::config_path().expect("config path"),
+                    file_b,
+                    "worker B must write the file worker A writes, or no update can be lost"
+                );
                 for i in 0..ITERS {
                     let widths =
                         BTreeMap::from([("length".to_string(), 100 + trial * 10 + (i % 10))]);
