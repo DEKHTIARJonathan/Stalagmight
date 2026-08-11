@@ -114,12 +114,21 @@ with the rest discarded silently (#427).
 
 Each linearized run is therefore **cut where the trip changes between two
 adjacent stations**, and each part keeps its own surveyor, date and colour. The
-parts after the first are named `"<name> (trip N)"`; each hangs off the station
-it was cut at (`FromImporting`), so the geometry is byte-for-byte what the uncut
-run produced. This is the same (surveyor, date, colour) triple
-`join_contiguous_chains` refuses to merge across, applied to the cut side.
+parts after the first are named `"<name> (trip N)"` - backend-owned English, the
+same as the `(branch N)` suffix beside it (`linearize.rs`, `format!("{section_name}
+(branch {branch_number})")`); the only translated string in this area is the
+wizard's `(branch)` BADGE, which is driven by `is_branch_split` and not by a
+name. Each part hangs off the station it was cut at (`FromImporting`), so the
+geometry is byte-for-byte what the uncut run produced. This is the same
+(surveyor, date, colour) triple `join_contiguous_chains` refuses to merge
+across, applied to the cut side.
 
-Two rules bound it, both mirroring the join:
+A run takes those three values from its first shot that could be a STATION of it
+(non-CLOSURE, non-excluded), not simply its first shot: a run headed by an
+excluded shot was otherwise named after a shot the default import does not keep,
+and every shot it did keep then read as a collapsed trip that never happened.
+
+Three rules bound it, the first two mirroring the join:
 
 - **A cut needs a station on both sides.** A trip that changes across a CLOSURE
   or excluded shot is not cut, because that shot is not in the import's station
@@ -132,10 +141,26 @@ Two rules bound it, both mirroring the join:
   unrelated branch at that junction splice onto the mainline's head. The cost,
   pinned by `a_chain_continuing_a_cut_tail_stays_its_own_section`, is that a
   chain continuing a cut tail under its own name is not absorbed into it.
+- **At most `MAX_TRIP_CUTS_PER_RUN` (256) cuts per run.** The trip is
+  file-controlled and written on every row, so a file carrying a per-ROW date -
+  a data-entry timestamp, or a crafted file - would otherwise mint one section
+  per shot from a single declared name. 256 sits far above real multi-trip
+  surveys (about five years of WEEKLY survey days under one declared name; the
+  largest real file measured cuts none at all) and far below degeneracy. Past
+  the cap the remaining trips stay on the last part and are named on the
+  receipt, so the bound costs reporting, not data.
 
-Measured on the committed Naharon file: 17 configs, median 14 shots - identical
-to the pre-cut numbers, because no declared section in it changes trip
-mid-chain.
+The suffix can collide with a name the file itself declares (a file with both
+`A` and `A (trip 2)`). That is accepted, not disambiguated: nothing in the
+import resolves a section by name - grouping keys on the file's own `<Section>`
+text before any suffix exists, placement and closures key on Ariane ids, and
+`simplify_lone_branch_names` only rewrites `(branch N)` names - so the result is
+two sections sharing a label, exactly as a file declaring one name twice has
+always produced (`a_declared_name_that_collides_with_a_cut_suffix_is_accepted`).
+
+Measured on a large real-world survey (14 declared names): 17 configs, median 14
+shots - identical to the pre-cut numbers, because no declared section in it
+changes trip mid-chain.
 
 ## Unit Conversion
 

@@ -32,7 +32,6 @@ pub mod test_helpers;
 
 use linearize::{
     collapsed_trip_report, join_contiguous_chains, linearize_section, split_runs_at_trip_boundaries,
-    MAX_TRIP_CUTS_PER_RUN,
 };
 
 // ============================================================================
@@ -2016,6 +2015,7 @@ fn determine_placement(
     clippy::print_stderr
 )]
 mod tests {
+    use super::linearize::MAX_TRIP_CUTS_PER_RUN;
     use super::test_helpers::*;
     use super::*;
 
@@ -5813,7 +5813,8 @@ mod tests {
         );
         assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
 
-        let (configs, _, warnings) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        let (configs, _, warnings) =
+            convert_tml_to_import_configs(&tml, false, false).expect("cvt");
         assert_eq!(configs.len(), MAX_TRIP_CUTS_PER_RUN + 1);
         let note = warnings
             .iter()
@@ -5848,7 +5849,8 @@ mod tests {
         assert_eq!(ids, vec![vec![1, 2], vec![3, 4], vec![5, 6]]);
         assert_eq!(tml.sections[2].surveyor.as_deref(), Some("Team 3"));
 
-        let (configs, _, warnings) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        let (configs, _, warnings) =
+            convert_tml_to_import_configs(&tml, false, false).expect("cvt");
         assert!(
             !warnings.iter().any(|w| w.contains("recorded a different")),
             "every trip got its own section, so nothing collapsed: {warnings:?}"

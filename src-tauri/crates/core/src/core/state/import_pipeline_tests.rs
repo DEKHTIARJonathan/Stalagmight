@@ -574,3 +574,116 @@ fn depth_only_shots_closed_into_a_loop_do_not_fabricate_a_mismatch() {
          not something to paper over"
     );
 }
+
+/// #427 end to end: a chain that changes trip mid-run imports as one section
+/// per trip, and a full export/re-import round trip returns the SAME section
+/// names and trips - no second cut, no second suffix.
+///
+/// The export writes each section's name into every one of its shot rows, so a
+/// re-import sees two DECLARED names rather than one run to cut; the join then
+/// has to refuse to sew them back together, which it does on the same trip
+/// metadata. Anything that broke either half would show up here as a name like
+/// "A (trip 2) (trip 2)", a re-merged "A", or a lost surveyor.
+#[test]
+fn per_trip_sections_survive_an_export_and_re_import_unchanged() {
+    use crate::core::state::{AppState, VirtualShotMode};
+    use crate::core::Command;
+    use crate::parsers::tml::test_helpers::TripShot;
+
+    let second = TripShot {
+        section: "A",
+        explorer: "Ada Lovelace",
+        date: "2025-03-04",
+        color: "0x11223344",
+        ..TripShot::default()
+    };
+    let shots = [
+        TripShot {
+            id: 1,
+            from_id: -1,
+            section: "A",
+            depth: 5.0,
+            ..TripShot::default()
+        }
+        .xml(),
+        TripShot {
+            id: 2,
+            from_id: 1,
+            section: "A",
+            depth: 9.0,
+            ..TripShot::default()
+        }
+        .xml(),
+        TripShot {
+            id: 3,
+            from_id: 2,
+            depth: 11.0,
+            ..second
+        }
+        .xml(),
+        TripShot {
+            id: 4,
+            from_id: 3,
+            depth: 12.0,
+            ..second
+        }
+        .xml(),
+    ]
+    .join("\n");
+
+    let import_into = |name: &str, tml: &crate::parsers::tml::TmlFile| {
+        let (sections, closures, _) = convert_tml_to_import_configs(tml, false, false).unwrap();
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject {
+            name: name.to_string(),
+            location: None,
+        });
+        let result = state.execute_tml_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+            None,
+        );
+        assert!(result.success, "import failed: {:?}", result.error);
+        state.get_project_state().unwrap()
+    };
+    let trips = |project: &crate::models::Project| -> Vec<(String, Option<String>)> {
+        project
+            .sections
+            .iter()
+            .map(|s| (s.name.clone().unwrap_or_default(), s.surveyor.clone()))
+            .collect()
+    };
+
+    let tml = parse_synthetic_tmlu(&wrap_xml_with("m", 0.0, &shots));
+    let project = import_into("Trips", &tml);
+    let expected = vec![
+        ("A".to_string(), Some("Tester".to_string())),
+        ("A (trip 2)".to_string(), Some("Ada Lovelace".to_string())),
+    ];
+    assert_eq!(trips(&project), expected, "the cut lands in the project");
+
+    let out_dir = tempfile::tempdir().unwrap();
+    let out_path = out_dir.path().join("trips.tmlu");
+    crate::export::tml::export_tml(&project, &out_path).unwrap();
+    let reparsed = parse_tml(&out_path).unwrap();
+    assert_eq!(
+        reparsed
+            .sections
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["A", "A (trip 2)"],
+        "the round trip must not cut again, re-merge, or double the suffix"
+    );
+
+    let round_tripped = import_into("Trips Again", &reparsed);
+    assert_eq!(
+        trips(&round_tripped),
+        expected,
+        "and both trips come back with their own surveyor"
+    );
+}
