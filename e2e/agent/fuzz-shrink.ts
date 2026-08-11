@@ -43,6 +43,7 @@ import {
   readTrace,
   restoreTraceEnv,
   sameSignature,
+  shrinkableSteps,
   writeTrace,
   type FailureSignature,
   type FuzzTrace,
@@ -178,22 +179,36 @@ async function main(): Promise<number> {
     }
     const target = baseline.signature;
 
-    // 2. ddmin.
-    const result = await ddmin(trace.steps, {
+    // 2. ddmin - over the MOVES, with the structure held out of its reach.
+    //
+    // `episode` and `flow` steps are boundaries, not moves. Given to ddmin as
+    // ordinary elements it deletes them like anything else, and deleting the
+    // marker that opens a flow does not remove a step: it MERGES that flow into
+    // the one before it. `planReplay` then measures one delta across two
+    // imports, F3's headline normalizes digits so the merged failure signs
+    // identically to the recorded one, and the divergence check - the thing
+    // that is supposed to stop a shrink wandering onto another bug - waves it
+    // through. The output would be a minimized trace failing on a boundary no
+    // run ever had.
+    //
+    // So the candidates are move indices and `rebuild` restores the recorded
+    // grouping around whatever survived. See `shrinkableSteps`.
+    const structure = shrinkableSteps(trace.steps);
+    const result = await ddmin(structure.payload, {
       maxTests: args.maxTests,
       test: async (candidate): Promise<ShrinkVerdict> => {
-        const outcome = await replay(candidate);
+        const outcome = await replay(structure.rebuild(candidate));
         if (!outcome) return 'passed';
         return sameSignature(outcome.signature, target) ? 'preserved' : 'divergent';
       },
       onProgress: (info) => {
         process.stdout.write(
-          `  [${String(info.stats.tests).padStart(3)}] tried ${String(info.candidateSize).padStart(3)} step(s) ` +
+          `  [${String(info.stats.tests).padStart(3)}] tried ${String(info.candidateSize).padStart(3)} move(s) ` +
             `-> ${info.verdict} (best ${info.bestSize})\n`,
         );
       },
     });
-    minimal = result.minimal;
+    minimal = structure.rebuild(result.minimal);
 
     const wallMs = Date.now() - wallStart;
     const perReplay = replayTimesMs.reduce((sum, ms) => sum + ms, 0) / Math.max(replayTimesMs.length, 1);
@@ -207,8 +222,9 @@ async function main(): Promise<number> {
     process.stdout.write(
       [
         '',
-        `SHRUNK ${trace.steps.length} -> ${minimal.length} step(s)` +
-          `${args.maxTests > 0 && result.stats.tests >= args.maxTests ? ' (budget exhausted: SMALLEST FOUND, not proven 1-minimal)' : ' (1-minimal: no single step can still be removed)'}`,
+        `SHRUNK ${trace.steps.length} -> ${minimal.length} step(s), ` +
+          `${structure.payload.length} -> ${result.minimal.length} move(s)` +
+          `${args.maxTests > 0 && result.stats.tests >= args.maxTests ? ' (budget exhausted: SMALLEST FOUND, not proven 1-minimal)' : ' (1-minimal: no single move can still be removed)'}`,
         `  replays: ${result.stats.tests} (+${result.stats.cacheHits} cached) - ` +
           `${result.stats.preserved} preserved, ${result.stats.passed} lost the failure, ` +
           `${result.stats.divergent} failed DIFFERENTLY and were rejected`,

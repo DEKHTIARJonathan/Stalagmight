@@ -389,7 +389,7 @@ import {
   defaultTracePath,
   planReplay,
   readTrace,
-  traceHasFlowBoundaries,
+  traceHasWellFormedFlows,
   TraceRecorder,
   writeTrace,
   type FuzzTrace,
@@ -1817,7 +1817,7 @@ export const importDialogFuzz: Scenario = {
      */
     const replayPlan = replay ? planReplay(replay) : [];
     /** Does this trace carry the boundaries F3 needs to measure a flow? */
-    const replayHasBoundaries = replay ? traceHasFlowBoundaries(replay) : false;
+    const replayHasBoundaries = replay ? traceHasWellFormedFlows(replay) : false;
     if (replay && replayHeadless === null && noProjectEpisodeProbability() > 0) {
       // The recording COULD have gone headless and this trace cannot say whether
       // it did, so the replay may walk a different import flow than the one that

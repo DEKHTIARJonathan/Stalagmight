@@ -342,9 +342,116 @@ export function planReplay(trace: Pick<FuzzTrace, 'steps' | 'noProjectEpisodes'>
   return episodes;
 }
 
-/** Does this trace carry the flow boundaries F3 needs to measure against? */
-export function traceHasFlowBoundaries(trace: Pick<FuzzTrace, 'steps'>): boolean {
-  return trace.steps.some((step) => step.kind === 'flow');
+/**
+ * Are this trace's flow boundaries WELL FORMED - every step inside a marked flow?
+ *
+ * "Some step is a flow marker" was the old test and it is not strong enough,
+ * because a shrink hands this function step lists nobody recorded. ddmin tries
+ * arbitrary subsequences, so a candidate could delete the marker that opened the
+ * FAILING flow while keeping a later one: any-marker-present still said yes, F3
+ * stayed armed, and `planReplay` folded the now-unmarked steps into whatever
+ * flow preceded them. F3's failure headline normalizes every run of digits, so a
+ * merged-delta accounting failure carries the SAME signature as the recorded one
+ * - which is exactly the check that is supposed to stop a shrink wandering, and
+ * it cannot see this. ddmin would then accept a minimized trace that fails on a
+ * boundary the recording never had.
+ *
+ * `shrinkableSteps` is the other half and the primary fix: markers travel with
+ * their segment, so a shrink cannot produce this shape at all. This is the
+ * defense in depth, for the step lists that do not come from there - a
+ * hand-edited trace, an older tool, a file somebody mailed.
+ *
+ * A trace with no markers at all is unbounded, not partially bounded, and
+ * returns false the same way it always did: F3 disarms and every other oracle
+ * runs.
+ */
+export function traceHasWellFormedFlows(trace: Pick<FuzzTrace, 'steps'>): boolean {
+  let insideMarkedFlow = false;
+  let sawFlowMarker = false;
+  for (const step of trace.steps) {
+    if (step.kind === 'episode') {
+      // An episode opens no flow of its own: its first flow needs its own
+      // marker, which is what the recorder writes.
+      insideMarkedFlow = false;
+      continue;
+    }
+    if (step.kind === 'flow') {
+      insideMarkedFlow = true;
+      sawFlowMarker = true;
+      continue;
+    }
+    if (!insideMarkedFlow) return false;
+  }
+  return sawFlowMarker;
+}
+
+/**
+ * A trace split into the steps a shrink may DELETE and the structure it may not.
+ *
+ * `episode` and `flow` steps are not moves; they are the grouping the replay is
+ * rebuilt from, and the oracles measure per group. Handing them to ddmin as
+ * ordinary elements let it delete a boundary and merge two flows into one - a
+ * trace shape the recorder cannot produce, measuring a delta no run ever had.
+ *
+ * So ddmin runs over `payload` (the real moves) and `rebuild` puts the structure
+ * back: each marker survives exactly when something it scopes survived. The
+ * grouping of the steps that remain is therefore always the recorded grouping,
+ * restricted to survivors. It is also a strictly smaller search space, so this
+ * costs nothing in replays.
+ *
+ * TWO asymmetries, both deliberate:
+ *
+ * - An empty `flow` marker is DROPPED, because `planReplay` already filters
+ *   empty flows; keeping it would change nothing and read as a flow that ran.
+ * - A HEADLESS `episode` marker is kept even with nothing left inside it. It is
+ *   not just a label: the replay closes the project on it, and that outlives the
+ *   episode. A non-headless empty episode does nothing and is dropped.
+ */
+export interface ShrinkableSteps {
+  /** Indices into the original list, one per non-marker step, in order. */
+  payload: number[];
+  /** A well-formed step list from any subset of `payload`. */
+  rebuild(kept: readonly number[]): TraceStep[];
+}
+
+export function shrinkableSteps(steps: readonly TraceStep[]): ShrinkableSteps {
+  const payload: number[] = [];
+  const flowMarkerOf = new Map<number, number>();
+  const episodeMarkerOf = new Map<number, number>();
+  const alwaysKeep = new Set<number>();
+  let openFlow = -1;
+  let openEpisode = -1;
+  steps.forEach((step, index) => {
+    if (step.kind === 'episode') {
+      openEpisode = index;
+      openFlow = -1;
+      if (step.headless) alwaysKeep.add(index);
+      return;
+    }
+    if (step.kind === 'flow') {
+      openFlow = index;
+      return;
+    }
+    payload.push(index);
+    if (openFlow >= 0) flowMarkerOf.set(index, openFlow);
+    if (openEpisode >= 0) episodeMarkerOf.set(index, openEpisode);
+  });
+
+  const rebuild = (kept: readonly number[]): TraceStep[] => {
+    const keep = new Set(kept);
+    const markers = new Set(alwaysKeep);
+    for (const index of keep) {
+      const flow = flowMarkerOf.get(index);
+      if (flow !== undefined) markers.add(flow);
+      const episode = episodeMarkerOf.get(index);
+      if (episode !== undefined) markers.add(episode);
+    }
+    return steps.filter((step, index) =>
+      step.kind === 'episode' || step.kind === 'flow' ? markers.has(index) : keep.has(index),
+    );
+  };
+
+  return { payload, rebuild };
 }
 
 /** Env knobs that change what a run does, and so belong in a trace header. */
