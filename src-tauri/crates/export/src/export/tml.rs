@@ -1404,7 +1404,16 @@ fn build_export_shots_with_report(
         .station_comments
         .iter()
         .filter(|(_, v)| !v.is_empty())
-        .filter_map(|(k, v)| project.resolve_key(k).map(|sr| (sr, v.as_str())))
+        .filter_map(|(k, v)| match project.resolve_key(k) {
+            Some(sr) => Some((sr, v.as_str())),
+            None => {
+                tracing::debug!(
+                    key = ?k,
+                    "Station comment dropped from .tml export: its station key no longer resolves"
+                );
+                None
+            }
+        })
         .collect();
     entries.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
     for (sr, text) in entries {
@@ -1457,9 +1466,10 @@ fn build_export_shots_with_report(
     // Anything still in the map named an Ariane node that no fold-eligible shot
     // carries - a START, or (defensively) an id `station_to_ariane` holds with
     // no shot of its own. Those comments are simply absent from the file, and
-    // WHICH ones is not derivable from the output, so the drop has to be said
-    // out loud here or it is unobservable. Sorted so the log reads the same on
-    // every export, like the fold itself.
+    // WHICH ones is not derivable from the output, so the drop is named here -
+    // deliberately at debug level only, not as an export note; see the
+    // co-encoding caveats in docs/ariane-export.md. Sorted so the log reads
+    // the same on every export, like the fold itself.
     let mut dropped: Vec<(StationRef, i64)> = comments_by_ariane
         .into_iter()
         .flat_map(|(ariane_id, attachments)| {
@@ -2469,6 +2479,30 @@ mod tests {
                 .is_some_and(|c| c.contains("on the START station"))),
             "a START-aliased station comment must not reach the file"
         );
+    }
+
+    /// #564: the shape that used to export unmarked - a shot comment with no
+    /// station comment anywhere. An unmarked line is indistinguishable from
+    /// Ariane-typed text, which the default import routes to the station.
+    #[test]
+    fn a_lone_shot_comment_exports_marked() {
+        let project = simple_project();
+        assert!(
+            project.station_comments.is_empty(),
+            "the point of this shape is NO station comment riding along"
+        );
+
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
+        let first_real = shots.iter().find(|s| s.shot_type == "REAL").unwrap();
+        assert_eq!(
+            first_real.comment.as_deref(),
+            Some(format!("{}first shot", comment_split::SHOT_MARKER).as_str()),
+            "a lone shot comment must carry the ZWSP marker, or a default \
+             re-import moves it to the to-station"
+        );
+        // START stays exactly as minted - unmarked, hardcoded.
+        let start = shots.iter().find(|s| s.shot_type == "START").unwrap();
+        assert_eq!(start.comment.as_deref(), Some("START"));
     }
 
     #[test]
