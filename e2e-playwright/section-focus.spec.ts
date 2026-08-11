@@ -125,6 +125,9 @@ test.describe('Section focus mode', () => {
 
     const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
     await expect(sectionRow).toBeVisible();
+    // The row tooltip must teach the current gesture (double-click zooms; focus
+    // lives on the per-row button) - pins the #319 stale-copy fix.
+    await expect(sectionRow).toHaveAttribute('title', /double-click to zoom/i);
     await sectionRow.dblclick();
 
     // The section is selected, but focus mode is NOT entered: project name stays,
