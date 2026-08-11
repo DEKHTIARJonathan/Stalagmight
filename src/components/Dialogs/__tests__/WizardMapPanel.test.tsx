@@ -32,6 +32,8 @@ const PERSIST_DELAY_MS = 300;
  * that here so `aria-valuenow` is asserted on the value that actually round
  * trips, not on the prop the test passed in.
  */
+const noopPanelRef = () => {};
+
 function Harness({ initialWidth = DEFAULT_WIDTH }: { initialWidth?: number }) {
   const [width, setWidth] = useState(initialWidth);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -45,7 +47,7 @@ function Harness({ initialWidth = DEFAULT_WIDTH }: { initialWidth?: number }) {
           setWidth(next);
         }}
         bodyRef={bodyRef}
-        panelRef={() => {}}
+        panelRef={noopPanelRef}
       >
         <div data-testid="preview" />
       </WizardMapPanel>
@@ -66,12 +68,46 @@ const pointerCaptureHost = Element.prototype as unknown as {
   setPointerCapture?: (pointerId: number) => void;
 };
 
+// The panel observes its parent to learn the width the window can render.
+// jsdom has neither a ResizeObserver nor layout, so both are supplied here.
+class FakeResizeObserver {
+  static instances: FakeResizeObserver[] = [];
+  constructor(private readonly callback: () => void) {
+    FakeResizeObserver.instances.push(this);
+  }
+  observe() {}
+  disconnect() {
+    FakeResizeObserver.instances = FakeResizeObserver.instances.filter((o) => o !== this);
+  }
+  fire() {
+    this.callback();
+  }
+}
+const realResizeObserver = globalThis.ResizeObserver;
+
+/**
+ * Give the wizard body a width and re-measure, the way a window resize does.
+ * The panel's `maxWidth` is `calc(100% - WIZARD_SETTINGS_MIN_WIDTH)` of this
+ * element, so the render cap is `band - 320`.
+ */
+function setBandWidth(band: number) {
+  Object.defineProperty(screen.getByTestId('body'), 'clientWidth', {
+    configurable: true,
+    get: () => band,
+  });
+  act(() => {
+    for (const observer of [...FakeResizeObserver.instances]) observer.fire();
+  });
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   widthChanges = [];
   savePanelSizes = vi.fn(async () => {});
   useUIStore.setState({ savePanelSizes });
   pointerCaptureHost.setPointerCapture = () => {};
+  FakeResizeObserver.instances = [];
+  globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
 });
 
 afterEach(() => {
@@ -82,6 +118,7 @@ afterEach(() => {
   vi.useRealTimers();
   useUIStore.setState({ savePanelSizes: realSavePanelSizes });
   delete pointerCaptureHost.setPointerCapture;
+  globalThis.ResizeObserver = realResizeObserver;
 });
 
 describe('WizardMapPanel divider - ARIA', () => {
@@ -147,6 +184,47 @@ describe('WizardMapPanel divider - keyboard resize', () => {
     act(() => void vi.advanceTimersByTime(PERSIST_DELAY_MS));
     expect(savePanelSizes).toHaveBeenCalledTimes(1);
     expect(savePanelSizes).toHaveBeenCalledWith('wizard-map', MAP_PANEL_MAX_WIDTH);
+  });
+
+  it('stops at the width the window can render, instead of climbing past it', () => {
+    render(<Harness />);
+    // 800px band: the settings floor leaves the map column 480, which is
+    // exactly where it already is. There is nowhere left to grow.
+    setBandWidth(800);
+    expect(divider()).toHaveAttribute('aria-valuemax', '480');
+    expect(divider()).toHaveAttribute('aria-valuenow', '480');
+
+    fireEvent.keyDown(divider(), { key: 'ArrowRight' });
+    fireEvent.keyDown(divider(), { key: 'ArrowRight', shiftKey: true });
+    fireEvent.keyDown(divider(), { key: 'End' });
+
+    // Nothing moved on screen, so nothing was announced and nothing was written.
+    expect(widthChanges).toEqual([]);
+    expect(divider()).toHaveAttribute('aria-valuenow', '480');
+    act(() => void vi.advanceTimersByTime(PERSIST_DELAY_MS));
+    expect(savePanelSizes).not.toHaveBeenCalled();
+
+    // Shrinking still works from there, and widening works again once the
+    // window has the room.
+    fireEvent.keyDown(divider(), { key: 'ArrowLeft' });
+    expect(lastWidth()).toBe(DEFAULT_WIDTH - STEP);
+    setBandWidth(1600);
+    fireEvent.keyDown(divider(), { key: 'End' });
+    expect(lastWidth()).toBe(MAP_PANEL_MAX_WIDTH);
+  });
+
+  it('steps from where the divider is when the stored width cannot fit', () => {
+    // A width dragged wide on a big monitor, restored onto a laptop.
+    render(<Harness initialWidth={MAP_PANEL_MAX_WIDTH} />);
+    setBandWidth(800);
+
+    // Announce where it IS (480), not the 900 it cannot honor.
+    expect(divider()).toHaveAttribute('aria-valuenow', '480');
+
+    fireEvent.keyDown(divider(), { key: 'ArrowLeft' });
+
+    // One step down from the rendered 480, not from the stored 900.
+    expect(widthChanges).toEqual([480 - STEP]);
   });
 
   it('ignores keys that are not resize keys', () => {

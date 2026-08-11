@@ -38,7 +38,11 @@ export function usePreviewSize(
   max = 440,
   min = 240,
 ): [(el: HTMLDivElement | null) => void, PreviewSize] {
-  const [size, setSize] = useState<PreviewSize>({ width: max, height: max });
+  // Seeded at the MINIMUM, not the max: the ref callback measures on attach, so
+  // this value is on screen for at most one frame - and at `max` that frame is
+  // a 900px-tall preview inside a ~600px column, i.e. a visible overflow before
+  // the first measurement lands. Too small is invisible; too big is not.
+  const [size, setSize] = useState<PreviewSize>({ width: min, height: min });
   const elRef = useRef<HTMLDivElement | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
 
