@@ -50,6 +50,10 @@ import {
   type TraceStep,
 } from './lib/fuzzTrace';
 import { ddmin, type ShrinkVerdict } from './lib/fuzzShrink';
+// Safe to import statically, unlike the scenarios below: this module freezes
+// nothing at import and reads `STALAGMIGHT_FUZZ_CORPUS_DIR` at call time, which
+// its own tests pin.
+import { CORPUS_DIR_ENV, corpusAvailable, corpusLookup } from './lib/fixtureCorpus';
 
 interface Args {
   trace: string;
@@ -137,6 +141,31 @@ async function main(): Promise<number> {
       `  env=${JSON.stringify(trace.env)}\n`,
   );
 
+  // Said BEFORE the baseline replay, not after it, and it RESOLVES the ids
+  // rather than just checking the knob.
+  //
+  // A trace whose corpus draws all skip replays green, and the green-baseline
+  // message reads as "the bug is fixed" - so without this an operator waits out
+  // a full replay and then draws the wrong conclusion from it. Measured twice
+  // in a row on the F3 trace this shrinker was validated against: once with the
+  // knob unset, and once with it set to a DIFFERENT corpus, where every id
+  // resolved to nothing and the replay drifted from step one. The second is why
+  // "is the knob set" is not the question - only resolving the ids is.
+  //
+  // A corpus root is never named in the output, here or anywhere else; the
+  // count and the ids are.
+  const corpusIds = trace.steps.flatMap((step) => (step.kind === 'corpusFile' ? [step.corpusHash ?? step.corpusId] : []));
+  const unresolved = corpusIds.filter((reference) => corpusLookup(reference).outcome !== 'found');
+  if (unresolved.length > 0) {
+    process.stdout.write(
+      `WARNING: ${unresolved.length} of ${corpusIds.length} CORPUS draw(s) do not resolve here` +
+        `${corpusAvailable() ? ' - the configured corpus is not the one this was recorded against' : ` - ${CORPUS_DIR_ENV} is not set`}.\n` +
+        '  Those steps will be skipped and the replay will very likely not reproduce.\n' +
+        '  A trace never carries that path (it would let a file decide which tree this process walks\n' +
+        `  and copies out of), so ${CORPUS_DIR_ENV} has to come from the shell that starts the shrink.\n`,
+    );
+  }
+
   const replayTimesMs: number[] = [];
   const replay = async (steps: readonly TraceStep[]): Promise<ReplayOutcome> => {
     writeTrace(candidatePath, { ...trace, steps: [...steps], failure: null });
@@ -164,7 +193,10 @@ async function main(): Promise<number> {
     if (!baseline) {
       process.stdout.write(
         'the trace REPLAYED GREEN: nothing to shrink.\n' +
-          '  Either the bug is fixed, or the failure needed something the trace does not carry.\n',
+          '  Either the bug is fixed, or the failure needed something the trace does not carry.\n' +
+          (unresolved.length > 0
+            ? `  START HERE: ${unresolved.length} corpus draw(s) did not resolve - see the warning above.\n`
+            : ''),
       );
       failed = true;
       return 1;
