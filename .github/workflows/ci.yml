@@ -44,7 +44,9 @@ jobs:
     runs-on: ${{ fromJSON(needs.pick.outputs.runs_on || '["ubuntu-latest"]') }}
     # hekatrine ≈ 3m on the manual benchmark (a full pass, cargo test included);
     # hosted ≈ 3m. The ≈ 7m cold / ≈ 4m warm figures this used to cite were the
-    # NUC's, which no longer takes CI. Generous headroom either way.
+    # NUC's, which no longer takes CI. The release-profile check (#541) adds a
+    # second target profile on top of that: 2m37s cold on an M-series Mac,
+    # near-free once target/release is warm in the cache. Headroom holds.
     timeout-minutes: 30
     env:
       # Required for sccache to cache on the self-hosted runner; harmless on
@@ -183,6 +185,21 @@ jobs:
       # stay warn-level (advisory) - only the deny-level policy fails the build.
       - name: Clippy (deny-level lint gate)
         run: cargo clippy --workspace --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets
+        env:
+          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      # Release-profile compile check (#541): nothing else in this job
+      # compiles with debug_assertions off, so a call whose only target is
+      # #[cfg(any(debug_assertions, test))]-gated type-checks everywhere here
+      # (debug_assert! expands to `if cfg!(debug_assertions) { assert!(..) }`)
+      # while `pnpm tauri build` cannot compile it - the class that cost rc4
+      # prep nine hours (#530). The hard stop before the paid matrix is the
+      # same step in release.yml's verify job (master is unprotected, so this
+      # job is advisory); this copy just fails on the PR/push, days earlier.
+      # Scope is deliberately narrow, matching the sibling clippy/test steps:
+      # type resolution only (no codegen, LTO or linking), Linux host only,
+      # telemetry feature on - the no-secret fork build path is not covered.
+      - name: Release-profile compile check
+        run: cargo check --release --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
       # sccache health on the self-hosted path (the cache that replaces rust-cache
