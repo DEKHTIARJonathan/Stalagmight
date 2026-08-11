@@ -19,6 +19,7 @@ import {
   WIZARD_MAP_PANEL_DEFAULT_WIDTH,
   WIZARD_MAP_PANEL_MIN_WIDTH,
   WIZARD_MAP_PANEL_MAX_WIDTH,
+  WIZARD_SETTINGS_MIN_WIDTH,
 } from '../SingleSystemView/layoutConstants';
 
 /** Starting width, and the bounds the divider clamps to. Defined in
@@ -68,7 +69,14 @@ export function WizardMapPanel({
     <div
       ref={panelRef}
       className="sticky top-0 self-start relative shrink-0 flex flex-col items-center justify-center p-4 border-r border-border"
-      style={{ width, height }}
+      // `maxWidth` is the settings column's floor, and it is CSS rather than a
+      // clamp on the stored number on purpose: the width persists across
+      // sessions now (#404), so a column dragged wide on a large monitor is
+      // restored on a laptop, where an absolute 900px would leave the settings
+      // beside it a few dozen pixels wide with no way to grab the divider back.
+      // Capping the RENDER leaves the user's number intact - widen the window
+      // and the map is wide again - which a clamp on the value could not do.
+      style={{ width, height, maxWidth: `calc(100% - ${WIZARD_SETTINGS_MIN_WIDTH}px)` }}
       data-testid="segment-preview-panel"
     >
       {children}

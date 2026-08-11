@@ -24,6 +24,20 @@ export const WIZARD_MAP_PANEL_MIN_WIDTH = 280;
 export const WIZARD_MAP_PANEL_MAX_WIDTH = 900;
 
 /**
+ * Width (px) the settings column beside a wizard map must keep, whatever the
+ * map column's stored width says. Same argument as `MAP_MIN_WIDTH` below, with
+ * the sides swapped: the map is the sized element and the settings are the
+ * remainder, so without a floor the remainder absorbs every shortfall.
+ *
+ * Sized from the widest row those columns hold: the mNemo wizard's paired
+ * "Section" + "Station" selects with their labels (~300px before the selects
+ * start truncating their option text), plus the card padding they sit in.
+ * It bites only when the window is narrower than
+ * `stored width + this` - at the 480px default that is a window under ~800px.
+ */
+export const WIZARD_SETTINGS_MIN_WIDTH = 320;
+
+/**
  * Per-panel resize bounds (px). Single source of truth shared by the
  * ResizablePanel `minSize`/`maxSize` props (SingleSystemView) and the
  * `savePanelSizes` persist-clamp (uiStore). Persisting a value below the minimum
