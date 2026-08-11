@@ -1661,6 +1661,10 @@
       "gpsPlaceholder": "e.g. 48.8584, 2.2945",
       "gpsEmptyHint": "Enter coordinates to set the zero datum - Confirm stays disabled until it parses.",
       "transposedWarning": "Latitude and longitude may be swapped - check the format.",
+      "depthReferenceLabel": "Depth below surface",
+      "depthReferencePlaceholder": "e.g. 12.5 (optional)",
+      "depthReferenceHint": "Meters, positive = below the surface. Leave blank if unknown.",
+      "depthReferenceError": "Depth below surface must be a number.",
       "backConfirm": {
         "message": "You have unsaved changes. They come back if you return to this section, but are lost if you pick a different one or leave.",
         "discard": "Go Back"

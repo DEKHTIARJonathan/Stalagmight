@@ -169,8 +169,12 @@ export function validateCoordinates(lat: number, lon: number): GpsValidationResu
 /**
  * Parse Decimal Degrees format.
  * Examples: "48.8584, 2.2945", "48.8584 2.2945", "-33.8688, 151.2093"
+ *
+ * `depthReference` (meters below the surface, +down - matches
+ * `GpsCoordinates.depth_reference`; see docs/inclination.md) defaults to 0,
+ * the app's long-standing "not recorded" value.
  */
-export function parseDD(input: string): GpsParseResult | GpsParseError {
+export function parseDD(input: string, depthReference = 0): GpsParseResult | GpsParseError {
   const trimmed = normalizeGpsWhitespace(input);
 
   // Match patterns like "lat, lon" or "lat lon" with optional signs
@@ -198,7 +202,7 @@ export function parseDD(input: string): GpsParseResult | GpsParseError {
   }
 
   return {
-    coordinates: { latitude: lat, longitude: lon, depth_reference: 0 },
+    coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
     format: 'DD',
     original: input,
   };
@@ -210,8 +214,10 @@ export function parseDD(input: string): GpsParseResult | GpsParseError {
  *
  * Requires direction letters OR negative degrees for disambiguation.
  * Will not silently default to N/E for ambiguous inputs.
+ *
+ * See `parseDD` for `depthReference`.
  */
-export function parseDMS(input: string): GpsParseResult | GpsParseError {
+export function parseDMS(input: string, depthReference = 0): GpsParseResult | GpsParseError {
   const trimmed = normalizeGpsWhitespace(input);
 
   // We'll extract these values from whichever pattern matches
@@ -349,7 +355,7 @@ export function parseDMS(input: string): GpsParseResult | GpsParseError {
   }
 
   return {
-    coordinates: { latitude: lat, longitude: lon, depth_reference: 0 },
+    coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
     format: 'DMS',
     original: input,
   };
@@ -360,8 +366,10 @@ export function parseDMS(input: string): GpsParseResult | GpsParseError {
  * Examples: "48°51.5'N 2°17.67'E"
  *
  * Requires degree symbol AND direction letters to disambiguate from DMS/DD.
+ *
+ * See `parseDD` for `depthReference`.
  */
-export function parseDDM(input: string): GpsParseResult | GpsParseError {
+export function parseDDM(input: string, depthReference = 0): GpsParseResult | GpsParseError {
   const trimmed = normalizeGpsWhitespace(input);
 
   // Stricter DDM regex - requires degree symbol and direction letters
@@ -429,7 +437,7 @@ export function parseDDM(input: string): GpsParseResult | GpsParseError {
   }
 
   return {
-    coordinates: { latitude: lat, longitude: lon, depth_reference: 0 },
+    coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
     format: 'DDM',
     original: input,
   };
@@ -441,8 +449,10 @@ export function parseDDM(input: string): GpsParseResult | GpsParseError {
  *
  * Note: Uses simplified conversion formulas. For survey-grade accuracy,
  * use a dedicated geodetic library.
+ *
+ * See `parseDD` for `depthReference`.
  */
-export function parseUTM(input: string): GpsParseResult | GpsParseError {
+export function parseUTM(input: string, depthReference = 0): GpsParseResult | GpsParseError {
   const trimmed = normalizeGpsWhitespace(input);
 
   // More flexible UTM regex:
@@ -523,7 +533,7 @@ export function parseUTM(input: string): GpsParseResult | GpsParseError {
   }
 
   return {
-    coordinates: { latitude: result.lat, longitude: result.lon, depth_reference: 0 },
+    coordinates: { latitude: result.lat, longitude: result.lon, depth_reference: depthReference },
     format: 'UTM',
     original: input,
   };
@@ -694,8 +704,10 @@ export function parseMGRS(input: string): GpsParseResult | GpsParseError {
  * Plus Codes are encoded lat/lon with the format: 8 digits + '+' + 2+ digits.
  * The first 10 digits (4 pairs before + and 1 pair after) use base-20 encoding.
  * Additional digits after the first 10 use a 4x5 grid refinement.
+ *
+ * See `parseDD` for `depthReference`.
  */
-export function parsePlusCodes(input: string): GpsParseResult | GpsParseError {
+export function parsePlusCodes(input: string, depthReference = 0): GpsParseResult | GpsParseError {
   const trimmed = normalizeGpsWhitespace(input).replace(/\s+/g, '').toUpperCase();
 
   // Plus codes: 8 characters + '+' + at least 2 more characters
@@ -727,7 +739,7 @@ export function parsePlusCodes(input: string): GpsParseResult | GpsParseError {
   }
 
   return {
-    coordinates: { latitude: result.lat, longitude: result.lon, depth_reference: 0 },
+    coordinates: { latitude: result.lat, longitude: result.lon, depth_reference: depthReference },
     format: 'PlusCodes',
     original: input,
   };
@@ -884,8 +896,10 @@ export function parseWhat3words(input: string): GpsParseResult | GpsParseError {
  * Supports: Google Maps, OpenStreetMap, Bing Maps.
  *
  * Note: Does not support shortened URLs (goo.gl) or Apple Maps.
+ *
+ * See `parseDD` for `depthReference`.
  */
-export function parseUrl(input: string): GpsParseResult | GpsParseError {
+export function parseUrl(input: string, depthReference = 0): GpsParseResult | GpsParseError {
   const trimmed = input.trim();
 
   // Check if it looks like a URL
@@ -914,11 +928,11 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
       try {
         const decoded = decodeURIComponent(placeMatch[1].replace(/\+/g, ' '));
         // Try parsing the decoded place name as GPS coordinates
-        const placeResult = parseDMS(decoded);
+        const placeResult = parseDMS(decoded, depthReference);
         if ('coordinates' in placeResult) return { ...placeResult, original: input };
-        const ddmResult = parseDDM(decoded);
+        const ddmResult = parseDDM(decoded, depthReference);
         if ('coordinates' in ddmResult) return { ...ddmResult, original: input };
-        const ddResult = parseDD(decoded);
+        const ddResult = parseDD(decoded, depthReference);
         if ('coordinates' in ddResult) return { ...ddResult, original: input };
       } catch {
         // decodeURIComponent can throw on malformed input - fall through
@@ -936,7 +950,7 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
       const validation = validateCoordinates(lat, lon);
       if (validation.valid) {
         return {
-          coordinates: { latitude: lat, longitude: lon, depth_reference: 0 },
+          coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
           format: 'DD',
           original: input,
         };
@@ -955,7 +969,7 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
       const validation = validateCoordinates(lat, lon);
       if (validation.valid) {
         return {
-          coordinates: { latitude: lat, longitude: lon, depth_reference: 0 },
+          coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
           format: 'DD',
           original: input,
         };
@@ -972,7 +986,7 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
     const validation = validateCoordinates(lat, lon);
     if (validation.valid) {
       return {
-        coordinates: { latitude: lat, longitude: lon, depth_reference: 0 },
+        coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
         format: 'DD',
         original: input,
       };
@@ -986,7 +1000,7 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
     const validation = validateCoordinates(lat, lon);
     if (validation.valid) {
       return {
-        coordinates: { latitude: lat, longitude: lon, depth_reference: 0 },
+        coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
         format: 'DD',
         original: input,
       };
@@ -1003,7 +1017,7 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
     const validation = validateCoordinates(lat, lon);
     if (validation.valid) {
       return {
-        coordinates: { latitude: lat, longitude: lon, depth_reference: 0 },
+        coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
         format: 'DD',
         original: input,
       };
@@ -1020,7 +1034,7 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
     const validation = validateCoordinates(lat, lon);
     if (validation.valid) {
       return {
-        coordinates: { latitude: lat, longitude: lon, depth_reference: 0 },
+        coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
         format: 'DD',
         original: input,
       };
@@ -1093,8 +1107,10 @@ export function detectFormat(input: string): GpsFormat | undefined {
 /**
  * Auto-detect format and parse GPS coordinates.
  * Tries each parser in order of likelihood.
+ *
+ * See `parseDD` for `depthReference`.
  */
-export function parseGps(input: string): GpsParseResult | GpsParseError {
+export function parseGps(input: string, depthReference = 0): GpsParseResult | GpsParseError {
   const trimmed = normalizeGpsWhitespace(input);
 
   if (!trimmed) {
@@ -1110,7 +1126,7 @@ export function parseGps(input: string): GpsParseResult | GpsParseError {
     (trimmed.includes('maps') && trimmed.includes('/')) ||
     trimmed.includes('@')
   ) {
-    const urlResult = parseUrl(trimmed);
+    const urlResult = parseUrl(trimmed, depthReference);
     if ('coordinates' in urlResult) {
       return urlResult;
     }
@@ -1127,17 +1143,17 @@ export function parseGps(input: string): GpsParseResult | GpsParseError {
     // Try detected format first
     switch (format) {
       case 'DD':
-        return parseDD(trimmed);
+        return parseDD(trimmed, depthReference);
       case 'DMS':
-        return parseDMS(trimmed);
+        return parseDMS(trimmed, depthReference);
       case 'DDM':
-        return parseDDM(trimmed);
+        return parseDDM(trimmed, depthReference);
       case 'UTM':
-        return parseUTM(trimmed);
+        return parseUTM(trimmed, depthReference);
       case 'MGRS':
         return parseMGRS(trimmed);
       case 'PlusCodes':
-        return parsePlusCodes(trimmed);
+        return parsePlusCodes(trimmed, depthReference);
       case 'What3words':
         return parseWhat3words(trimmed);
     }
@@ -1145,12 +1161,12 @@ export function parseGps(input: string): GpsParseResult | GpsParseError {
 
   // Try all parsers in order (DD first as most common)
   const parsers: Array<[GpsFormat, (s: string) => GpsParseResult | GpsParseError]> = [
-    ['DD', parseDD],
-    ['DMS', parseDMS],
-    ['DDM', parseDDM],
-    ['UTM', parseUTM],
+    ['DD', (s) => parseDD(s, depthReference)],
+    ['DMS', (s) => parseDMS(s, depthReference)],
+    ['DDM', (s) => parseDDM(s, depthReference)],
+    ['UTM', (s) => parseUTM(s, depthReference)],
     ['MGRS', parseMGRS],
-    ['PlusCodes', parsePlusCodes],
+    ['PlusCodes', (s) => parsePlusCodes(s, depthReference)],
     ['What3words', parseWhat3words],
   ];
 

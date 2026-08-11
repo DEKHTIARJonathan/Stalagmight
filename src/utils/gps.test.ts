@@ -634,3 +634,56 @@ describe('looksTransposedRawDD', () => {
     expect(looksTransposedRawDD('')).toBe(false);
   });
 });
+
+describe('depthReference threading (#524)', () => {
+  it('defaults to 0 ("not recorded") when omitted', () => {
+    const result = parseDD('48.8584, 2.2945');
+    expect(isSuccess(result)).toBe(true);
+    if (isSuccess(result)) expect(result.coordinates.depth_reference).toBe(0);
+  });
+
+  it('parseDD carries a positive depthReference straight through, unflipped', () => {
+    // Sign convention pin: `GpsCoordinates.depth_reference` is +down (meters
+    // below the surface, docs/inclination.md), so an entered positive depth
+    // must land as the SAME positive number - not negated.
+    const result = parseDD('48.8584, 2.2945', 12.5);
+    expect(isSuccess(result)).toBe(true);
+    if (isSuccess(result)) expect(result.coordinates.depth_reference).toBe(12.5);
+  });
+
+  it('parseDMS threads depthReference', () => {
+    const result = parseDMS('48°51\'30"N 2°17\'40"E', 7);
+    expect(isSuccess(result)).toBe(true);
+    if (isSuccess(result)) expect(result.coordinates.depth_reference).toBe(7);
+  });
+
+  it('parseDDM threads depthReference', () => {
+    const result = parseDDM("48°51.5'N 2°17.67'E", -3);
+    expect(isSuccess(result)).toBe(true);
+    if (isSuccess(result)) expect(result.coordinates.depth_reference).toBe(-3);
+  });
+
+  it('parseUTM threads depthReference', () => {
+    const result = parseUTM('31U 448251 5411932', 42);
+    expect(isSuccess(result)).toBe(true);
+    if (isSuccess(result)) expect(result.coordinates.depth_reference).toBe(42);
+  });
+
+  it('parsePlusCodes threads depthReference', () => {
+    const result = parsePlusCodes('8FW4V75V+8Q', 9);
+    expect(isSuccess(result)).toBe(true);
+    if (isSuccess(result)) expect(result.coordinates.depth_reference).toBe(9);
+  });
+
+  it('parseUrl threads depthReference through its DD-pattern branches', () => {
+    const result = parseUrl('https://www.google.com/maps/@48.8584,2.2945,15z', 5);
+    expect(isSuccess(result)).toBe(true);
+    if (isSuccess(result)) expect(result.coordinates.depth_reference).toBe(5);
+  });
+
+  it('parseGps threads depthReference through format auto-detection', () => {
+    const result = parseGps('48.8584, 2.2945', 15.75);
+    expect(isSuccess(result)).toBe(true);
+    if (isSuccess(result)) expect(result.coordinates.depth_reference).toBe(15.75);
+  });
+});

@@ -30,10 +30,16 @@ vi.mock('../../utils/fileDialogs', () => ({
   ensureExtension: vi.fn((p: string) => p),
 }));
 
+vi.mock('../../utils/telemetry', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
+  trackDialogComplete: vi.fn(),
+}));
+
 import ExportControls from './ExportControls';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { saveDialog } from '../../utils/fileDialogs';
+import { trackDialogComplete } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { DEFAULT_IMAGE_OPTIONS } from '../../store/exportStore';
 import type { Project } from '../../types/ipc/Project';
@@ -165,6 +171,82 @@ describe('TML export unanchored-section notice', () => {
 
     await waitFor(() => expect(saveDialog).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId('tml-unanchored-warning-dialog')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * A cancelled OS save picker must not complete the dialog (#560).
+ *
+ * `handleExport`'s completion block (`trackDialogComplete` + `onComplete`)
+ * used to sit OUTSIDE both `if (selected)` guards, so it ran even when
+ * `saveDialog` resolved `null` (the user cancelled). That closed the dialog
+ * on a cancel and suppressed the `dialog-cancel.export` telemetry
+ * `trackDialogComplete` is meant to gate.
+ */
+describe('export save-picker cancel (#560)', () => {
+  beforeEach(() => {
+    vi.mocked(saveDialog).mockResolvedValue(null);
+  });
+
+  it('data export: leaves the dialog open and does not track completion on cancel', async () => {
+    const exportCsv = vi.fn(async () => undefined);
+    const onComplete = vi.fn();
+    useProjectStore.setState({
+      project: buildProject([section(1)], [ZERO_DATUM]),
+      getAnchoredSectionIds,
+      exportCsv,
+    });
+
+    render(<ExportControls {...baseProps} dataFormat="csv" onComplete={onComplete} />);
+    await userEvent.click(screen.getByTestId('export-button'));
+
+    await waitFor(() => expect(saveDialog).toHaveBeenCalledTimes(1));
+    expect(exportCsv).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(trackDialogComplete).not.toHaveBeenCalled();
+  });
+
+  it('image export: leaves the dialog open and does not track completion on cancel', async () => {
+    const exportImage = vi.fn(async () => undefined);
+    const onComplete = vi.fn();
+    useProjectStore.setState({
+      project: buildProject([section(1)], [ZERO_DATUM]),
+      getAnchoredSectionIds,
+      exportImage,
+    });
+
+    render(<ExportControls {...baseProps} exportType="image" onComplete={onComplete} />);
+    await userEvent.click(screen.getByTestId('export-button'));
+
+    await waitFor(() => expect(saveDialog).toHaveBeenCalledTimes(1));
+    expect(exportImage).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(trackDialogComplete).not.toHaveBeenCalled();
+  });
+
+  it('TML "continue anyway" re-entry: still does not complete on a cancelled picker', async () => {
+    // The unanchored-warning "Continue" path re-enters handleExport with
+    // skipTmlAnchorCheck - it must obey the same cancel guard as the direct path.
+    getAnchoredSectionIds.mockResolvedValue([]);
+    const exportTmlFn = vi.fn(async () => undefined);
+    const onComplete = vi.fn();
+    useProjectStore.setState({
+      project: buildProject([section(1), section(2)], []),
+      getAnchoredSectionIds,
+      exportTml: exportTmlFn,
+    });
+
+    render(<ExportControls {...baseProps} onComplete={onComplete} />);
+    await userEvent.click(screen.getByTestId('export-button'));
+
+    const dialog = await screen.findByTestId('tml-unanchored-warning-dialog');
+    expect(dialog).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('tml-unanchored-warning-continue'));
+
+    await waitFor(() => expect(saveDialog).toHaveBeenCalledTimes(1));
+    expect(exportTmlFn).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(trackDialogComplete).not.toHaveBeenCalled();
   });
 });
 
