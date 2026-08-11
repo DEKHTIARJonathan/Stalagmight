@@ -7,12 +7,36 @@ import {
 } from '../surveyCustomLayer';
 import { LABEL_UNIFORMS, LABEL_ATTRIBS } from '../surveyCustomLabelLayer';
 import {
+  GHOST_LINE_UNIFORMS,
+  GHOST_LINE_ATTRIBS,
+  GHOST_CIRCLE_UNIFORMS,
+  GHOST_CIRCLE_ATTRIBS,
+} from '../surveyGhostLayer';
+import {
+  MEASURE_LINE_UNIFORMS,
+  MEASURE_LINE_ATTRIBS,
+  MEASURE_CIRCLE_UNIFORMS,
+  MEASURE_CIRCLE_ATTRIBS,
+} from '../surveyMeasurePathLayer';
+import {
   LINE_VERTEX_SRC,
   LINE_FRAGMENT_SRC,
   CIRCLE_VERTEX_SRC,
   CIRCLE_FRAGMENT_SRC,
 } from '../shaders';
 import { LABEL_VERTEX_SRC, LABEL_FRAGMENT_SRC } from '../labelShaders';
+import {
+  GHOST_LINE_VERTEX_SRC,
+  GHOST_LINE_FRAGMENT_SRC,
+  GHOST_CIRCLE_VERTEX_SRC,
+  GHOST_CIRCLE_FRAGMENT_SRC,
+} from '../ghostShaders';
+import {
+  MEASURE_LINE_VERTEX_SRC,
+  MEASURE_LINE_FRAGMENT_SRC,
+  MEASURE_CIRCLE_VERTEX_SRC,
+  MEASURE_CIRCLE_FRAGMENT_SRC,
+} from '../measurePathShaders';
 import { declaredUniforms, declaredAttribs } from './shaderDecls';
 
 /** Set comparison as a sorted array, so a mismatch prints the missing name. */
@@ -100,5 +124,99 @@ describe('surveyCustomLabelLayer program name lists match the GLSL (#339)', () =
       expect(LABEL_UNIFORMS).toContain(name);
     }
     expect(LABEL_UNIFORMS.some((n) => n.includes('['))).toBe(false);
+  });
+});
+
+describe('surveyGhostLayer program name lists match the GLSL (#339)', () => {
+  it('GHOST_LINE_UNIFORMS covers every uniform the line program declares', () => {
+    const declared = [
+      ...declaredUniforms(GHOST_LINE_VERTEX_SRC),
+      ...declaredUniforms(GHOST_LINE_FRAGMENT_SRC),
+    ];
+    expect(asSet(GHOST_LINE_UNIFORMS)).toEqual(asSet(declared));
+  });
+
+  it('GHOST_LINE_ATTRIBS covers every attribute the line vertex shader declares', () => {
+    expect(asSet(GHOST_LINE_ATTRIBS)).toEqual(asSet(declaredAttribs(GHOST_LINE_VERTEX_SRC)));
+  });
+
+  it('GHOST_CIRCLE_UNIFORMS covers every uniform the circle program declares', () => {
+    const declared = [
+      ...declaredUniforms(GHOST_CIRCLE_VERTEX_SRC),
+      ...declaredUniforms(GHOST_CIRCLE_FRAGMENT_SRC),
+    ];
+    expect(asSet(GHOST_CIRCLE_UNIFORMS)).toEqual(asSet(declared));
+  });
+
+  it('GHOST_CIRCLE_ATTRIBS covers every attribute the circle vertex shader declares', () => {
+    expect(asSet(GHOST_CIRCLE_ATTRIBS)).toEqual(asSet(declaredAttribs(GHOST_CIRCLE_VERTEX_SRC)));
+  });
+
+  it('no list repeats a name (a duplicate would waste a location query)', () => {
+    for (const names of [
+      GHOST_LINE_UNIFORMS,
+      GHOST_LINE_ATTRIBS,
+      GHOST_CIRCLE_UNIFORMS,
+      GHOST_CIRCLE_ATTRIBS,
+    ]) {
+      expect(new Set(names).size).toBe(names.length);
+    }
+  });
+
+  it('the scraper sees the counts the location cache is sized for', () => {
+    expect(GHOST_LINE_UNIFORMS.length).toBe(5);
+    expect(GHOST_LINE_ATTRIBS.length).toBe(8);
+    expect(GHOST_CIRCLE_UNIFORMS.length).toBe(6);
+    expect(GHOST_CIRCLE_ATTRIBS.length).toBe(7);
+    expect(declaredAttribs(GHOST_LINE_FRAGMENT_SRC)).toEqual([]);
+    expect(declaredAttribs(GHOST_CIRCLE_FRAGMENT_SRC)).toEqual([]);
+  });
+});
+
+describe('surveyMeasurePathLayer program name lists match the GLSL (#339)', () => {
+  it('MEASURE_LINE_UNIFORMS covers every uniform the line program declares', () => {
+    // u_color is fragment-only here (the tint is applied at shade time), so the
+    // union across both stages is what the linked program exposes.
+    const declared = [
+      ...declaredUniforms(MEASURE_LINE_VERTEX_SRC),
+      ...declaredUniforms(MEASURE_LINE_FRAGMENT_SRC),
+    ];
+    expect(asSet(MEASURE_LINE_UNIFORMS)).toEqual(asSet(declared));
+  });
+
+  it('MEASURE_LINE_ATTRIBS covers every attribute the line vertex shader declares', () => {
+    expect(asSet(MEASURE_LINE_ATTRIBS)).toEqual(asSet(declaredAttribs(MEASURE_LINE_VERTEX_SRC)));
+  });
+
+  it('MEASURE_CIRCLE_UNIFORMS covers every uniform the circle program declares', () => {
+    const declared = [
+      ...declaredUniforms(MEASURE_CIRCLE_VERTEX_SRC),
+      ...declaredUniforms(MEASURE_CIRCLE_FRAGMENT_SRC),
+    ];
+    expect(asSet(MEASURE_CIRCLE_UNIFORMS)).toEqual(asSet(declared));
+  });
+
+  it('MEASURE_CIRCLE_ATTRIBS covers every attribute the circle vertex shader declares', () => {
+    expect(asSet(MEASURE_CIRCLE_ATTRIBS)).toEqual(asSet(declaredAttribs(MEASURE_CIRCLE_VERTEX_SRC)));
+  });
+
+  it('no list repeats a name (a duplicate would waste a location query)', () => {
+    for (const names of [
+      MEASURE_LINE_UNIFORMS,
+      MEASURE_LINE_ATTRIBS,
+      MEASURE_CIRCLE_UNIFORMS,
+      MEASURE_CIRCLE_ATTRIBS,
+    ]) {
+      expect(new Set(names).size).toBe(names.length);
+    }
+  });
+
+  it('the scraper sees the counts the location cache is sized for', () => {
+    expect(MEASURE_LINE_UNIFORMS.length).toBe(5);
+    expect(MEASURE_LINE_ATTRIBS.length).toBe(4);
+    expect(MEASURE_CIRCLE_UNIFORMS.length).toBe(5);
+    expect(MEASURE_CIRCLE_ATTRIBS.length).toBe(2);
+    expect(declaredAttribs(MEASURE_LINE_FRAGMENT_SRC)).toEqual([]);
+    expect(declaredAttribs(MEASURE_CIRCLE_FRAGMENT_SRC)).toEqual([]);
   });
 });
