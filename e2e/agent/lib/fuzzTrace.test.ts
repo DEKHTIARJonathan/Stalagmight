@@ -810,3 +810,62 @@ describe('restoreTraceEnv', () => {
     ]);
   });
 });
+
+describe('noProjectEpisodes (replay determinism for headless episodes)', () => {
+  const meta = {
+    scenario: 'import-dialog-fuzz',
+    seed: 5,
+    iterations: 3,
+    fixture: 'naharon.stalx',
+    stream: 'import-v3',
+    failure: null,
+  };
+
+  it('carries the episodes that ran with no project open', () => {
+    const recorder = new TraceRecorder();
+    const trace = recorder.build({ ...meta, noProjectEpisodes: [0, 2] });
+    expect(trace.noProjectEpisodes).toEqual([0, 2]);
+  });
+
+  it('OMITS the field when no episode was headless', () => {
+    // Absent and "none of them" mean the same on replay, and an always-present
+    // empty array would make every trace look like it carried the field when
+    // older ones cannot.
+    const recorder = new TraceRecorder();
+    expect(recorder.build({ ...meta, noProjectEpisodes: [] }).noProjectEpisodes).toBeUndefined();
+    expect(recorder.build(meta).noProjectEpisodes).toBeUndefined();
+  });
+
+  it('round-trips through write and read', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-noproj-'));
+    try {
+      const target = path.join(dir, 'trace.json');
+      const recorder = new TraceRecorder();
+      writeTrace(target, recorder.build({ ...meta, noProjectEpisodes: [1] }));
+      const read = readTrace(target);
+      expect(read.noProjectEpisodes).toEqual([1]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reads a trace written BEFORE the field as simply not carrying it', () => {
+    // The compatibility contract: an older trace still loads, and the scenario
+    // treats a missing field as "the fixture stayed open" while warning that it
+    // cannot know. Refusing these would invalidate every trace kept for
+    // shrinking, to fix a gap that only bites a recording that went headless.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-noproj-old-'));
+    try {
+      const target = path.join(dir, 'trace.json');
+      const recorder = new TraceRecorder();
+      const built = recorder.build(meta) as unknown as Record<string, unknown>;
+      delete built.noProjectEpisodes;
+      fs.writeFileSync(target, JSON.stringify(built), 'utf8');
+      const read = readTrace(target);
+      expect(read.noProjectEpisodes).toBeUndefined();
+      expect(read.steps).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

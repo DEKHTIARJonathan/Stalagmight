@@ -255,6 +255,23 @@ export interface FuzzTrace {
   recordedAt: string;
   /** Null when the run passed and the trace was written because of the env var. */
   failure: { message: string; signature: FailureSignature } | null;
+  /**
+   * Episode indices the recording ran with NO PROJECT OPEN, in order.
+   *
+   * A per-episode coin toss, and one that changes which import flow the SAME
+   * file steps drive: with nothing loaded a `.dmp` routes through
+   * `new-project-for-import`, and with the fixture open it goes straight to the
+   * selection dialog. Restoring `STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P` is not
+   * enough - it restores the ODDS, and a replay does not re-draw them.
+   *
+   * OPTIONAL, and absent means "assume the fixture stayed open", which is what
+   * every replay did before this field existed. Refusing such a trace was the
+   * alternative and it is the wrong trade: it would invalidate every trace
+   * already kept for shrinking, to fix a gap that only bites a recording whose
+   * episodes actually went headless. The scenario warns instead, and only when
+   * the restored odds say the recording COULD have had one.
+   */
+  noProjectEpisodes?: number[];
   steps: TraceStep[];
 }
 
@@ -443,6 +460,8 @@ export class TraceRecorder {
     fixture: string;
     stream: string;
     failure: { message: string } | null;
+    /** Episode indices that ran with no project open; omitted when none did. */
+    noProjectEpisodes?: readonly number[];
   }): FuzzTrace {
     return {
       v: TRACE_VERSION,
@@ -457,6 +476,12 @@ export class TraceRecorder {
       failure: meta.failure
         ? { message: meta.failure.message, signature: failureSignature(meta.failure.message) }
         : null,
+      // Omitted rather than written empty: absent and "none of them" mean the
+      // same thing on replay, and an always-present empty array would make every
+      // trace look like it carried the field when older ones cannot.
+      ...(meta.noProjectEpisodes && meta.noProjectEpisodes.length > 0
+        ? { noProjectEpisodes: [...meta.noProjectEpisodes] }
+        : {}),
       steps: this.snapshot(),
     };
   }

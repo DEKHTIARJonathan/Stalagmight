@@ -804,6 +804,17 @@ export const importDialogFuzz: Scenario = {
     let inFlight: string | null = null;
     let fileSeq = 0;
     let lastUndoDepth = -1;
+    /**
+     * Episodes that ran with NO project open, recorded so a replay can reproduce
+     * them.
+     *
+     * The decision is a per-episode coin toss and it changes which import flow
+     * the same file steps drive - with nothing loaded a `.dmp` routes through
+     * `new-project-for-import` instead of the selection dialog. Restoring
+     * `STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P` restores the ODDS, and a replay
+     * does not re-draw them, so the odds alone cannot reproduce the choice.
+     */
+    const headlessEpisodes: number[] = [];
 
     const dumpTrace = (failure: { message: string } | null): string | null => {
       const target = traceOut || defaultTracePath(sessionDir, SCENARIO, ctx.seed);
@@ -819,6 +830,7 @@ export const importDialogFuzz: Scenario = {
             // keyboard picker, and the auxiliary interjection stream.
             stream: 'import-v3',
             failure,
+            noProjectEpisodes: headlessEpisodes,
           }),
         );
       } catch {
@@ -1726,6 +1738,22 @@ export const importDialogFuzz: Scenario = {
     // ---- the run ----------------------------------------------------------
 
     const replaySteps = replay ? replay.steps : null;
+    /**
+     * Which episodes the RECORDING ran headless, or null when the trace predates
+     * the field. See `FuzzTrace.noProjectEpisodes`.
+     */
+    const replayHeadless = replay?.noProjectEpisodes ? new Set(replay.noProjectEpisodes) : null;
+    if (replay && replayHeadless === null && noProjectEpisodeProbability() > 0) {
+      // The recording COULD have gone headless and this trace cannot say whether
+      // it did, so the replay may walk a different import flow than the one that
+      // failed. Loud, and only when the restored odds make it possible.
+      ctx.metric('replay:noProjectUnknown');
+      ctx.log(
+        'REPLAY: this trace predates `noProjectEpisodes` and the restored ' +
+          `STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P is ${noProjectEpisodeProbability()} - ` +
+          'assuming the fixture stayed open, which may not be the flow that was recorded',
+      );
+    }
     let replayAt = 0;
 
     /**
@@ -1841,7 +1869,14 @@ export const importDialogFuzz: Scenario = {
       // only way to reach `importContext='new-project'` and the DEFERRED
       // initial save that context selects. The fixture is still opened first,
       // so E2's integrity check on it runs either way.
-      const headless = !replaySteps && ctx.rng() < noProjectEpisodeProbability();
+      // On a REPLAY the recording's own choice is authoritative; a fresh run
+      // draws it. `replayHeadless` is null for a trace written before the field
+      // existed, which is warned about once at startup and treated as
+      // fixture-open - what every replay did before this.
+      const headless = replaySteps
+        ? (replayHeadless?.has(episode) ?? false)
+        : ctx.rng() < noProjectEpisodeProbability();
+      if (!replaySteps && headless) headlessEpisodes.push(episode);
       if (headless) {
         await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
         ctx.metric('episodeWithoutProject');
@@ -2425,7 +2460,21 @@ export const importDialogFuzz: Scenario = {
         //
         // The measured end is `atReceipt`, not `after` - see `checkAccounting`.
         if (receipt && atReceipt) {
-          if (before.projectFile !== null && before.projectFile !== after.projectFile) {
+          if (replaySteps) {
+            // A REPLAY has no flow boundaries of its own. It is one pass over the
+            // whole recorded step list - `flows` is pinned to 1 above - so a
+            // recording that imported three times replays as ONE flow, and F3
+            // then compares the FIRST receipt's claim against the delta of all
+            // three. Measured on a NO_PROJECT_P=1 trace: "1 section - 6 shots"
+            // against a project that had accumulated 5 sections and 34 shots.
+            //
+            // The same objection as the two skips below, and the same answer:
+            // the subtraction is between two things that are not each other's
+            // pair, so it is not an accounting error to report. F3 keeps its
+            // full force on a real run, which is where it caught the campaign's
+            // seed-8 red.
+            ctx.metric('f3Skipped:replay');
+          } else if (before.projectFile !== null && before.projectFile !== after.projectFile) {
             ctx.metric('f3Skipped:projectSwapped');
           } else if (historyTouchedBeforeReceipt) {
             ctx.metric('f3Skipped:historyTouched');
