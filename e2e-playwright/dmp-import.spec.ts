@@ -465,7 +465,12 @@ test.describe('DMP Import Dialog - Zero Datum + Wizard Flow', () => {
     // dirty, so DialogWrapper turns Escape into its discard confirm (#526) and
     // the dialog - and this panel - stay mounted.
     await toggle.click();
+    // Park the pointer off the toggle first: hovering it re-opens the panel
+    // after a 350ms real timer (HOVER_OPEN_MS), the same race the
+    // MapAttribution unit tests unhover() around.
+    await page.mouse.move(0, 0);
     await expect(panel).toBeHidden();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   });
 
   test('should skip zero datum selection and open wizard', async ({ page }) => {
