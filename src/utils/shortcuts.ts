@@ -341,10 +341,22 @@ export const RESERVED_KEYS: ReadonlySet<string> = new Set([
 /**
  * Reserved key+modifier combinations.
  * The modifier (Ctrl) plus these keys are reserved.
+ *
+ * The zoom keys are here because useUiScale installs an unconditional window
+ * keydown listener for Ctrl/Cmd + '=' / '+' / '-' / '_' / '0'. Binding any of
+ * them to an action would fire both handlers, so the editor must refuse them -
+ * which also makes enforcement agree with the Settings dialog, where they have
+ * always been listed as reserved. Only the Ctrl-modified forms are blocked:
+ * the bare Equal/Plus/Minus map-zoom defaults stay bindable.
  */
 export const RESERVED_CTRL_KEYS: ReadonlySet<string> = new Set([
   'A', // Select all
   ',', // Open Settings
+  'Equal', // Zoom interface in
+  'Plus', // Zoom interface in
+  'Minus', // Zoom interface out
+  '_', // Zoom interface out (Shift+Minus)
+  '0', // Reset interface zoom
 ]);
 
 /**
@@ -354,13 +366,19 @@ export const RESERVED_CTRL_KEYS: ReadonlySet<string> = new Set([
 export const RESERVED_CTRL_DESCRIPTIONS: Readonly<Record<string, string>> = {
   A: 'Select all',
   ',': 'Open Settings',
+  Equal: 'Zoom interface in',
+  Plus: 'Zoom interface in',
+  Minus: 'Zoom interface out',
+  _: 'Zoom interface out',
+  '0': 'Reset interface zoom',
 };
 
 /**
  * Check if a shortcut conflicts with reserved shortcuts.
  * This is broader than isReservedShortcut - it blocks:
  * 1. Any shortcut using Escape, Delete, or Backspace (regardless of modifiers)
- * 2. Any shortcut using Ctrl+A or Ctrl+, (regardless of additional modifiers)
+ * 2. Any shortcut using Ctrl plus a key in RESERVED_CTRL_KEYS - A, ',' and the
+ *    UI-zoom keys Equal/Plus/Minus/_/0 (regardless of additional modifiers)
  *
  * This matches the runtime behavior where reserved handlers fire even with extra modifiers.
  *
@@ -394,7 +412,8 @@ export function checkReservedConflict(shortcut: string): { isReserved: boolean; 
     };
   }
 
-  // Check if Ctrl + reserved key (A, ,)
+  // Check if Ctrl + reserved key (A, ',', and the UI-zoom keys).
+  // Bare Equal/Plus/Minus stay bindable - the map-zoom defaults use them.
   if (key && hasCtrl && RESERVED_CTRL_KEYS.has(key)) {
     return {
       isReserved: true,

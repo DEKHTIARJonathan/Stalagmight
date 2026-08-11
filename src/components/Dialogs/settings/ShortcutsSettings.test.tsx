@@ -45,10 +45,10 @@ function renderPanel(
 }
 
 /** Drive a full record cycle on a recorder: click, press the key, release it. */
-function recordKey(testId: string, key: string): void {
+function recordKey(testId: string, key: string, modifiers: { ctrlKey?: boolean } = {}): void {
   fireEvent.click(screen.getByTestId(testId));
-  fireEvent.keyDown(window, { key });
-  fireEvent.keyUp(window, { key });
+  fireEvent.keyDown(window, { key, ...modifiers });
+  fireEvent.keyUp(window, { key, ...modifiers });
 }
 
 beforeEach(() => {
@@ -174,6 +174,17 @@ describe('ShortcutsSettings navigation rows while the tools are hidden (#409)', 
     recordKey('shortcut-primary-measure', 'Z');
 
     expect(screen.getByTestId('shortcut-error')).toHaveTextContent(/already used by/);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('rejects Ctrl+= : the UI-zoom keys are reserved, not just displayed as such (#319)', () => {
+    renderPanel(false);
+
+    recordKey('shortcut-primary-measure', '=', { ctrlKey: true });
+
+    const error = screen.getByTestId('shortcut-error');
+    expect(error).toHaveTextContent(/cannot be assigned/);
+    expect(error).toHaveTextContent(/Zoom interface in/);
     expect(onChange).not.toHaveBeenCalled();
   });
 
