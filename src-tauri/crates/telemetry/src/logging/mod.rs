@@ -13,6 +13,15 @@ use ts_rs::TS;
 /// Maximum number of log entries kept in the ring buffer.
 const RING_BUFFER_CAPACITY: usize = 500;
 
+/// File-name prefix handed to the daily rolling appender.
+///
+/// The appender does NOT write `stalagmight.log`: with `Rotation::DAILY` it
+/// writes `<prefix>.<date>`, i.e. `stalagmight.log.2026-08-11`, so the files'
+/// `extension()` is the date and never `log`. Shared with the cleanup sweep
+/// (`is_log_file`) so the two cannot drift apart - matching on the `log`
+/// extension alone would skip every file the appender has ever produced.
+const LOG_FILE_PREFIX: &str = "stalagmight.log";
+
 /// Monotonic sequence counter for ring-buffer entries. Lets a caller ask for
 /// "everything after seq N" (`get_recent_logs_since`) so a checkpoint-based
 /// consumer (the agent harness) can detect new lines without content-diffing.
@@ -39,6 +48,20 @@ pub struct LogsSince {
 
 /// Global ring buffer for recent log entries, readable by the `get_recent_logs` command.
 static LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<RingLogEntry>>>> = OnceLock::new();
+
+/// The directory the rolling file appender was actually opened in, recorded by
+/// [`init`].
+///
+/// `log_directory()` does not resolve to the same path before and after Tauri's
+/// `.setup()`: `init()` runs first, while `app_dirs` is still uninitialised, so
+/// it gets the `directories` fallback (`~/.local/share/stalagmight/logs` on
+/// Linux); once `.setup()` has called `init_app_dirs` the same function returns
+/// the Tauri identifier dir (`<local-data>/com.stalagmight.desktop/logs`). A
+/// sweep scheduled from `.setup()` must therefore target the directory the log
+/// files are really in - calling `log_directory()` again there would name a
+/// directory that holds no logs and no-op at `cleanup_logs_in_dir`'s
+/// `exists()` guard, leaving the real one to grow forever.
+static ACTIVE_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// Append a formatted line to a ring buffer, minting a fresh sequence number and
 /// timestamp and evicting the oldest entry when full. Shared by the tracing
@@ -160,12 +183,16 @@ pub fn init() -> Option<WorkerGuard> {
     // unavailable or read-only (common on Android before Tauri setup).
     let (file_layer, guard) = match log_directory() {
         Ok(log_dir) if std::fs::create_dir_all(&log_dir).is_ok() => {
-            let file_appender = tracing_appender::rolling::daily(&log_dir, "stalagmight.log");
+            let file_appender = tracing_appender::rolling::daily(&log_dir, LOG_FILE_PREFIX);
             let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
             let layer = fmt::layer()
                 .with_writer(non_blocking)
                 .with_ansi(false)
                 .json();
+            // Remember where the appender really opened, so a later
+            // `cleanup_logs` sweeps THIS directory rather than whatever
+            // `log_directory()` resolves to once `app_dirs` is up.
+            ACTIVE_LOG_DIR.set(log_dir).ok();
             (Some(layer), Some(guard))
         }
         _ => (None, None),
@@ -250,15 +277,34 @@ pub fn log_directory() -> Result<PathBuf> {
     Ok(dirs.data_local_dir().join("logs"))
 }
 
-/// Clean up old log files if directory size exceeds max
+/// Directory a [`cleanup_logs`] sweep must target: the one [`init`] recorded in
+/// [`ACTIVE_LOG_DIR`], falling back to [`log_directory`] when init never ran
+/// (unit tests, or a build with no file logging). Split out from `cleanup_logs`
+/// so the preference can be tested without writing the process-global
+/// `OnceLock`. See [`ACTIVE_LOG_DIR`] for why the recorded path wins.
+fn cleanup_target_dir(recorded: Option<&PathBuf>) -> Result<PathBuf> {
+    match recorded {
+        Some(dir) => Ok(dir.clone()),
+        None => log_directory(),
+    }
+}
+
+/// Clean up old log files if directory size exceeds max.
+///
+/// Called once per launch from the Tauri `setup` hook; `max_size_mb` comes
+/// straight from `logging.max_directory_size_mb` (the Settings UI constrains it
+/// to 1..=10000, and the config layer applies no further clamping to it).
 pub fn cleanup_logs(max_size_mb: u32) -> Result<()> {
-    let log_dir = log_directory()?;
+    let log_dir = cleanup_target_dir(ACTIVE_LOG_DIR.get())?;
     let max_size_bytes = u64::from(max_size_mb) * 1024 * 1024;
     cleanup_logs_in_dir(&log_dir, max_size_bytes)
 }
 
-/// Clean up old `.log` files and `crash-*.json` panic markers in `log_dir` if
-/// their total size exceeds `max_size_bytes`. Deletes oldest files first.
+/// Clean up old log files (`stalagmight.log`, its daily-rotated
+/// `stalagmight.log.<date>` siblings, and any plain `.log` file) plus
+/// `crash-*.json` panic markers in `log_dir` if their total size exceeds
+/// `max_size_bytes`. Deletes oldest files first, so the file the appender is
+/// currently writing is the last candidate.
 /// Crash markers are included because the panic hook writes one per backend
 /// panic in ALL builds; without this sweep they accumulate unbounded in the
 /// user's data dir (nothing else ever deletes them). Extracted for
@@ -274,11 +320,22 @@ fn cleanup_logs_in_dir(log_dir: &std::path::Path, max_size_bytes: u64) -> Result
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.starts_with("crash-"))
     };
+    // `stalagmight.log.2026-08-11` (what the daily appender actually writes)
+    // has extension `2026-08-11`, so an extension-only test would match none of
+    // the log files. Accept the appender's prefix - bare or date-suffixed - as
+    // well as any plain `.log` file left by an older build.
+    let is_log_file = |p: &std::path::Path| {
+        p.extension().is_some_and(|ext| ext == "log")
+            || p.file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_prefix(LOG_FILE_PREFIX))
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+    };
     let mut entries: Vec<_> = std::fs::read_dir(log_dir)?
         .filter_map(std::result::Result::ok)
         .filter(|e| {
             let p = e.path();
-            p.extension().is_some_and(|ext| ext == "log") || is_crash_marker(&p)
+            is_log_file(&p) || is_crash_marker(&p)
         })
         .collect();
 
@@ -394,6 +451,98 @@ mod tests {
 
         assert!(!first.exists());
         assert!(!second.exists());
+    }
+
+    #[test]
+    fn cleanup_target_dir_prefers_the_recorded_active_dir() {
+        // Pure form of the rule `cleanup_logs` follows: whatever `init()`
+        // recorded wins over `log_directory()`, because the two disagree once
+        // `app_dirs` is initialised (pre-setup fallback vs identifier dir) and
+        // only the recorded one holds log files. Order-independent: it never
+        // touches the process-global OnceLock.
+        let recorded = PathBuf::from("/somewhere/pre-setup/logs");
+        let target = cleanup_target_dir(Some(&recorded)).expect("target dir");
+        assert_eq!(target, recorded);
+        assert_ne!(
+            target,
+            log_directory().expect("log dir"),
+            "the recorded dir must not silently collapse to log_directory()"
+        );
+    }
+
+    #[test]
+    fn cleanup_target_dir_falls_back_to_log_directory_when_unrecorded() {
+        // init() never ran (unit tests, or file logging unavailable): the sweep
+        // still has to have a target, and log_directory() is the only guess.
+        assert_eq!(
+            cleanup_target_dir(None).expect("target dir"),
+            log_directory().expect("log dir")
+        );
+    }
+
+    #[test]
+    fn cleanup_logs_sweeps_the_recorded_dir_not_log_directory() {
+        // End-to-end through the public entry point: with ACTIVE_LOG_DIR set,
+        // `cleanup_logs` must delete inside THAT directory. Without the
+        // recording it would resolve `log_directory()`, which post-setup names
+        // a different (empty) directory and no-ops - the bug this guards.
+        let dir = TempDir::new().expect("temp dir");
+        let log_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&log_dir).expect("create log dir");
+
+        // `ACTIVE_LOG_DIR` is process-global, and this is the only test that
+        // writes it (`init()` installs a global subscriber, so no unit test
+        // calls it). Claim it, and refuse to continue if something else got
+        // there first - asserting BEFORE any deletion, so a future setter can
+        // never make this test sweep a real log directory.
+        let recorded = ACTIVE_LOG_DIR.get_or_init(|| log_dir.clone());
+        assert_eq!(
+            recorded, &log_dir,
+            "another test set ACTIVE_LOG_DIR; nothing else in this binary may"
+        );
+
+        let rotated = log_dir.join("stalagmight.log.2020-01-01");
+        let marker = log_dir.join("crash-42-1751970000000.json");
+        let unrelated = log_dir.join("settings-backup.json");
+        std::fs::write(&rotated, b"old").expect("write log");
+        std::fs::write(&marker, b"{}").expect("write marker");
+        std::fs::write(&unrelated, b"{}").expect("write other");
+
+        // Limit 0 MB: everything sweepable in the recorded dir goes.
+        cleanup_logs(0).expect("cleanup logs");
+
+        assert!(!rotated.exists(), "recorded dir must be swept");
+        assert!(!marker.exists(), "crash markers in the recorded dir go too");
+        assert!(unrelated.exists(), "unrelated files stay");
+    }
+
+    #[test]
+    fn cleanup_logs_in_dir_sweeps_daily_rotated_names() {
+        // Regression: the appender writes `stalagmight.log.<date>`, whose
+        // `extension()` is the DATE. A sweep that only matched `.log` files
+        // deleted crash markers and left every real log file behind, so the
+        // directory still grew without bound.
+        let dir = TempDir::new().expect("temp dir");
+        let log_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&log_dir).expect("create log dir");
+
+        let rotated = log_dir.join(format!("{LOG_FILE_PREFIX}.2026-02-06"));
+        let bare = log_dir.join(LOG_FILE_PREFIX);
+        let foreign = log_dir.join("notes.txt");
+        // Prefix matching must not spill onto a merely similar name: this is
+        // NOT `stalagmight.log.<date>` and nothing here owns it.
+        let lookalike = log_dir.join("stalagmight-extra.2026-02-06");
+        std::fs::write(&rotated, b"rotated").expect("write log");
+        std::fs::write(&bare, b"bare").expect("write log");
+        std::fs::write(&foreign, b"notes").expect("write notes");
+        std::fs::write(&lookalike, b"other").expect("write other");
+
+        cleanup_logs_in_dir(&log_dir, 0).expect("cleanup logs");
+
+        assert!(!rotated.exists(), "daily-rotated log must be swept");
+        assert!(!bare.exists(), "bare prefix file must be swept");
+        assert!(lookalike.exists(), "a similar name is not our log file");
+        assert!(foreign.exists(), "unrelated files must be untouched");
     }
 
     #[test]

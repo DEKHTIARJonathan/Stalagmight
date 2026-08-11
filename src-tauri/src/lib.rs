@@ -1729,6 +1729,19 @@ pub fn run() {
             telemetry::start_periodic_flush(collector.clone());
             collector.send_buffered();
 
+            // Bound the log directory once per launch (#319). `cleanup_logs`
+            // existed but had no caller, so logs and crash markers grew
+            // forever. Runs here because the config is only readable after
+            // `AppState::new`; it sweeps the directory `logging::init()`
+            // recorded, not `log_directory()` (which now resolves elsewhere -
+            // see `ACTIVE_LOG_DIR`). Sub-millisecond at this scale, so inline,
+            // and a failure must never block startup.
+            if let Err(err) =
+                logging::cleanup_logs(state.get_config().logging.max_directory_size_mb)
+            {
+                tracing::warn!(error = %err, "Failed to prune the log directory");
+            }
+
             // Launch-with-file (#424): a cold launch from Explorer or a Linux
             // `.desktop` handler puts the path in argv. Queue it now; the
             // frontend drains the queue once its stores are up. macOS passes
