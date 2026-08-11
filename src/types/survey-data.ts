@@ -262,8 +262,13 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
     is_zero_datum: (data.stationFlags[globalIndex]! & STATION_FLAG_IS_ZERO_DATUM) !== 0,
     gps_coordinates: data.stationGps.get(globalIndex) ?? null,
     merged_with: data.stationMergedWith.get(globalIndex) ?? [],
-    closures_with: data.stationClosuresWith.get(globalIndex) ?? [],
   };
+  // `closures_with` is optional on the wire and the sparse map only holds
+  // non-empty lists, so materialize the absence rather than an empty array -
+  // same rule as `comment` below, and the same shape `get_project_state` sends
+  // (#441). Every consumer already guards.
+  const closures = data.stationClosuresWith.get(globalIndex);
+  if (closures !== undefined) station.closures_with = closures;
   const cmt = data.stationComments.get(globalIndex);
   if (cmt !== undefined) station.comment = cmt;
   return station;

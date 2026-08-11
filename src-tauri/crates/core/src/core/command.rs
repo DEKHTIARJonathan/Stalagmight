@@ -1329,6 +1329,22 @@ mod tests {
             );
         }
 
+        // The populated case must round-trip intact, not just be present: the
+        // empty-case assertion above would still pass if the field serialized as
+        // a constant `[]`.
+        let populated = CommandResult::success().with_section_ids(vec![4, 7, 9]);
+        let json = serde_json::to_string(&populated).unwrap();
+        assert!(
+            json.contains("\"section_ids\":[4,7,9]"),
+            "created section ids must reach the wire verbatim: {json}"
+        );
+        let back: CommandResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.section_ids,
+            vec![4, 7, 9],
+            "section_ids must survive the round-trip"
+        );
+
         let decl = CommandResult::decl();
         assert!(
             decl.contains("section_ids: Array<number>"),

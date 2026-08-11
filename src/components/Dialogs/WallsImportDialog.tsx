@@ -169,7 +169,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
       }
 
       // `section_ids` was omitted from the IPC payload when empty until #441
-      // made the backend always send it; kept as a guard for an older backend.
+      // made the backend always send it; this default is now defensive only.
       const sectionIds = result.section_ids ?? [];
 
       // Nothing was imported - most commonly a `.wpj` whose `.srv` files aren't

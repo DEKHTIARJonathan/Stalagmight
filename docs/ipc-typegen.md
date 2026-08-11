@@ -69,10 +69,13 @@ can accumulate dead files - delete them by hand when you remove a type.
 ## A field the wire can omit must be DECLARED omittable
 
 ts-rs 7 marks a field optional (`foo?: T`) in exactly one situation: the Rust
-type is `Option<T>`. It does it automatically for
-`#[serde(skip_serializing_if = "Option::is_none")]`, and `#[ts(optional)]` is
-*rejected* on anything else - `optional can only be used on an Option<T> type`
-(`ts-rs-macros/src/types/named.rs`).
+type is `Option<T>`. `#[ts(optional)]` is *rejected* on anything else -
+`` `optional` can only be used on an Option<T> type `` (verified verbatim at
+`ts-rs-macros-7.1.1/src/types/named.rs:138`). It also *infers* the annotation,
+but only from the literal predicate string: `attr/field.rs:70` is
+`out.0.optional = parse_assign_str(input)? == *"Option::is_none"`, so a NAMED
+predicate (`skip_serializing_if = "my_fn"`) silently regenerates the field as
+required. Any field using one must carry an explicit `#[ts(optional)]`.
 
 So `#[serde(skip_serializing_if = "Vec::is_empty")]` on a `Vec` field generates a
 **required** `Array<T>` while the wire omits the key. Nothing catches that: `tsc`
@@ -95,21 +98,37 @@ The two live examples, one of each:
   skip. One `"section_ids":[]` per command result is unmeasurable, and absence
   and empty stated the same fact.
 - `Station::closures_with` (`crates/models/src/station.rs`) kept it and became
-  `Option<Vec<ClosureRef>>`. That skip is paid per station on every
-  `get_project_state` refresh, against a payload already ~25 MB on the projects
-  `core::load_binary` exists for. Reads go through `Station::closures()` /
-  `closures_mut()`, which keep the "`None` when empty" invariant.
+  `Option<Vec<ClosureRef>>` + `#[ts(optional)]`. That skip is paid per station on
+  every `get_project_state` refresh - and the msgpack `load_project_full_binary`
+  route does NOT cover it: the binary encoder is the LOAD path only (taken
+  unconditionally, no station-count threshold), while `refreshProjectState`
+  re-fetches `get_project_state` as JSON after mutations, and
+  `get_adjusted_stations` returns a bare `Vec<Station>` as JSON too. On the
+  89k-station projects `core::load_binary` cites, that is the payload the skip
+  protects. Reads go through `Station::closures()` / `closures_mut()`.
+
+  Its predicate is `closures_absent_or_empty`, not `Option::is_none`: because
+  `closures_mut()` hands out a `&mut Vec`, an empty `Some` is reachable without a
+  push, and `Option::is_none` alone would then put `"closures_with":[]` on every
+  station for the life of the value. Emptiness-aware is the rule whenever the
+  collection is reachable mutably.
 
 **What guards it.** Not a lint - there is no repo-wide check that every exported
 type obeys the rule. It is pinned per field by two tests, each asserting BOTH
 halves (the key is on the wire iff the declaration lacks `?`):
 
 - `models::station::tests::closures_with_is_omitted_when_empty_and_declared_optional`
+- `models::station::tests::an_emptied_closure_list_leaves_the_wire_like_an_absent_one`
 - `core::command::tests::omitted_fields_are_exactly_the_ones_declared_optional`
 
-Add the same pair when you add a serde-omitted field. The Playwright IPC mock
-follows the same convention: an omitted field is **absent**, not present-and-empty
-(`e2e-playwright/mocks/tauri-ipc.ts`), so specs exercise the real shape.
+Add the same pair when you add a serde-omitted field. In the Playwright IPC mock
+(`e2e-playwright/mocks/tauri-ipc.ts`) the same convention applies by hand: an
+omitted field is written **absent**, not present-and-empty (`closures_with` on
+the `get_project_state` stations), and an always-present one is written even when
+empty (`section_ids` on every `-> CommandResult` handler). Nothing enforces
+that - `pnpm test:mock-contract` checks only that the mock covers the command
+NAMES in `generate_handler!`, not the shape of what it returns - so a mock
+literal that drifts from the wire is caught by review, not by a gate.
 
 ## Automation Policy
 

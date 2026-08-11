@@ -11623,8 +11623,9 @@ fn test_transitive_closures_in_computed_stations() {
 #[test]
 fn test_transitive_closures_serialization_preserves_data() {
     // Test that closures_with survives JSON serialization (the Tauri IPC path).
-    // This tests that #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    // doesn't cause data loss for non-empty vecs.
+    // This tests that `#[serde(default, skip_serializing_if =
+    // "closures_absent_or_empty")]` skips ONLY the empty case and never costs a
+    // non-empty list any data.
     use crate::models::Station;
 
     let state = AppState::new().unwrap();
@@ -11757,11 +11758,18 @@ fn test_transitive_closures_serialization_preserves_data() {
     // plain `Vec` it generated as a required `Array<ClosureRef>` and `tsc` could
     // not see a bare `station.closures_with.map` on the absent shape.
     let wire: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
-    let (_, closure_free) = stations
+    let (station, closure_free) = stations
         .iter()
         .zip(&wire)
         .find(|(s, _)| s.closures().is_empty())
         .expect("this fixture has stations with no closures");
+    // The zip pairs by position; prove the pairing rather than assume it, or a
+    // reordering serializer would let this assert about the wrong station.
+    assert_eq!(
+        closure_free.get("station_ref"),
+        Some(&serde_json::to_value(station.station_ref).unwrap()),
+        "the JSON element must be the station we tested for emptiness"
+    );
     assert!(
         !closure_free
             .as_object()

@@ -83,8 +83,8 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
       // generated type said `Array<number>`. A bare `.length` here threw, the
       // catch below reported it as a transport failure, and the receipt
       // explaining the empty import was thrown away (#411). #441 removed the
-      // skip - the key is always on the wire now - so this `?? []` is belt and
-      // braces against an older backend, not the load-bearing guard it was.
+      // skip, so the key is always on the wire: this `?? []` is defensive only
+      // and unreachable in the shipped pairing (one binary, one frontend).
       // Same shape as WallsImportDialog.
       const sectionIds = result.section_ids ?? [];
 
