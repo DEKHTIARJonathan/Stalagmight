@@ -8,9 +8,8 @@ name: Nightly E2E Regression
 # The `full` job runs on the self-hosted runner (labels: self-hosted,
 # ubuntu-latest-local) so the weekly suite costs zero Actions minutes (#130).
 #
-# NOTE: the heavyweight WebdriverIO suite (e2e/legacy/) drives the real Tauri
-# app and is intentionally NOT run here - it stays on-demand. See
-# e2e/legacy/README.md.
+# Real-app coverage lives in the agent harness (journeys/scenarios, on-demand
+# and per-RC - docs/agent-harness.md); the old WDIO suite is gone (#549).
 on:
   schedule:
     # 07:00 UTC nightly - overnight in the Americas, morning in CET. Runs on the

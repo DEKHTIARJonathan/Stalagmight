@@ -29,8 +29,8 @@ agent harness's default `seed(mode: "fixture")` flow and stress scenarios.
 
 ### Usage in Tests
 
-**WebdriverIO (True E2E)**:
-The real Tauri backend parses these files. Tests can use file dialogs or direct paths to import.
+**Agent harness (True E2E)**:
+The real Tauri backend parses these files. Journeys and scenarios use direct paths to import.
 
 **Playwright (Mocked)**:
 The mock IPC layer returns simulated section data. These files are available for reference but mocks don't actually read them.

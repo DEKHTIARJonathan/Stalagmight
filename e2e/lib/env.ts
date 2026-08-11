@@ -1,7 +1,7 @@
 /**
  * Shared environment + path helpers for driving the real Tauri binary under
- * WebDriver. Used by both the quarantined wdio runner (wdio.conf.ts) and the
- * agent harness (e2e/agent). Keep this behavior-identical to what wdio.conf.ts
+ * WebDriver. Used by the agent harness (e2e/agent); originally shared with the
+ * retired WDIO runner (#549). Keep this behavior-identical to what that runner
  * did inline before extraction.
  */
 import * as fs from 'fs';
@@ -19,7 +19,7 @@ const isMacOS = process.platform === 'darwin';
 
 /** Name of the built binary for this platform. */
 export const binaryName = isWindows ? 'stalagmight.exe' : 'stalagmight';
-/** Cargo target dir (the ~/.cargo_build default scripts/wdio.sh + mac-build.sh export). */
+/** Cargo target dir (the ~/.cargo_build default mac-build.sh exports). */
 export const cargoTargetDir =
   process.env.CARGO_TARGET_DIR || path.join(os.homedir(), '.cargo_build');
 
@@ -48,7 +48,7 @@ export function binaryPathFor(mode: AgentBuildMode): string {
 /**
  * Absolute path to the built DEBUG binary.
  *
- * Still a constant because the quarantined wdio runner imports it and has no
+ * Still a constant because the original WDIO consumer had no
  * release mode. The agent harness calls `binaryPathFor(agentBuildMode())`.
  */
 export const binaryPath = binaryPathFor('debug');
@@ -62,7 +62,7 @@ export const macWrapperPath = path.join(repoRoot, 'e2e', 'mac-app-wrapper.mjs');
 /**
  * Build the environment-variable map for an isolated app profile rooted at
  * `root`, creating the backing directories. Does NOT mutate `process.env`: the
- * caller decides whether to apply it to its own process (a wdio worker) or hand
+ * caller decides whether to apply it to its own process or hand
  * it to a child `spawn()` (the agent's tauri-driver). This is the key
  * difference from `applyWorkerEnv` and the reason the two are split.
  */
@@ -108,7 +108,7 @@ export function isolatedEnv(root: string): Record<string, string> {
 
 /**
  * Apply an isolated profile to the CURRENT process's environment. Thin wrapper
- * over `isolatedEnv` for the wdio worker path (behavior-identical to the old
+ * over `isolatedEnv` (behavior-identical to the old
  * inline `applyWorkerEnv`).
  */
 export function applyWorkerEnv(root: string): void {

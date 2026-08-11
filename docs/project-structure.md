@@ -12,7 +12,7 @@
 | Database | SQLite (rusqlite) |
 | Styling | Tailwind CSS |
 | Logging | tracing + tracing-appender |
-| E2E Testing | Playwright (mocked IPC, the CI tier), WebdriverIO (full app: the quarantined `e2e/legacy` suite + the `e2e/agent` harness) |
+| E2E Testing | Playwright (mocked IPC, the CI tier), the `e2e/agent` harness (full app, via the webdriverio library) |
 | Unit / Component Testing | Vitest (+ Testing Library) |
 | Backend Testing | Rust built-in tests (`cargo test`) |
 
@@ -84,7 +84,6 @@ stalagmight/
 ├── e2e/                          # Full-app tests + harnesses (real Tauri app)
 │   ├── agent/                    # LLM-agent harness (MCP + WebdriverIO)
 │   ├── fixtures/                 # Test data (DMP files)
-│   ├── legacy/                   # Quarantined WebdriverIO suite (on-demand)
 │   └── lib/                      # Shared helpers
 │
 ├── e2e-playwright/               # Playwright E2E tests (mocked IPC, 100+ spec files)

@@ -273,8 +273,8 @@ keyboard. Applied across `ShotTableEditor`, `EditShotDialog`,
   suppressor, including a hold far longer than its window) and
   `src/components/common/SpreadsheetGrid/__tests__/spreadsheetGridLongPress.test.tsx`.
   Still missing: a mobile device profile in the Playwright projects
-  (`playwright.config.ts:112` runs Desktop Chrome only) and any touch case in
-  the legacy WebdriverIO suite. Outside those two specs, every claim on this
+  (`playwright.config.ts:112` runs Desktop Chrome only); the WDIO suite that
+  might have carried one is retired (#549). Outside those two specs, every claim on this
   page about *behavior on a device* is untested; the claims about code are what
   was read from source.
 - **Two surfaces outside the maps have a long press.** `SectionsPanel`'s section

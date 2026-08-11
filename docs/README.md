@@ -68,7 +68,7 @@ in determines how you write it, and picking wrong is the most common rework.
 | [TESTING.md](TESTING.md) | The tier model and how to pick one, plus the contract a UI component has to satisfy to be testable. Read before your first PR. |
 | [testing-recipes.md](testing-recipes.md) | Lookup reference: exact commands per tier, per-framework patterns, mock and fixture conventions, troubleshooting. |
 | [speleodb-dev-testing.md](speleodb-dev-testing.md) | Testing the SpeleoDB client against a real server: env setup, env-gated live tests, the verified v2 API contract. |
-| [agent-harness.md](agent-harness.md) | The MCP + WebdriverIO harness that drives the real app: tools, oracles, stress scenarios, replay and repro reports. Runs on the repo-pinned Node. |
+| [agent-harness.md](agent-harness.md) | The MCP + webdriverio harness that drives the real app: tools, oracles, stress scenarios, replay and repro reports. Runs on the repo-pinned Node. |
 | [uat/ledger.md](uat/ledger.md) | The acceptance tier: one line per real-app UAT run, the per-RC checklist in `uat/checklists/`, and the machine-readable records in `uat/runs/`. |
 | [debug-gates.md](debug-gates.md) | Where every dev-only log, assert and profile harness lives, how to switch it on, and the rules for adding more. |
 | [linting.md](linting.md) | The `cargo fmt` + clippy CI gates, the anti-AI-slop lint policy, the per-test-module `#[expect]` idiom, deferred lints. |

@@ -98,7 +98,7 @@ The `docs/` tree is extensive. Good entry points:
 | [architecture.md](docs/architecture.md) | State flow, command pattern, key files, Rust patterns |
 | [project-structure.md](docs/project-structure.md) | Directory tree and tech stack |
 | [TESTING.md](docs/TESTING.md) | Test tiers, and which one your test belongs in |
-| [testing-recipes.md](docs/testing-recipes.md) | Commands and patterns (Rust, Playwright, vitest, WebdriverIO) |
+| [testing-recipes.md](docs/testing-recipes.md) | Commands and patterns (Rust, Playwright, vitest, agent harness) |
 | [roadmap.md](docs/roadmap.md) | Phases and planned work |
 
 Everything else - subsystems, import formats, testing, platform notes - is

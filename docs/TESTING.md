@@ -19,8 +19,7 @@ model below.
 | Component | Vitest + Testing Library | `jsdom` | Render a React component, assert handlers/wiring (`*.test.tsx`) | Milliseconds |
 | Playwright E2E | Playwright | Chromium, **mocked IPC** | UI flows across views (`e2e-playwright/`) | Seconds per test; full suite ~15 min |
 | Backend | Rust `#[test]` | native | Rust logic, and the **real** file I/O / persistence paths (`src-tauri/src/` + `src-tauri/crates/*/src/`) | Fast |
-| WebdriverIO E2E | WebdriverIO + tauri-driver / tauri-wd | **real Tauri app** | Real webview + real backend (`e2e/legacy/`, on-demand only) | Slow |
-| Agent harness | MCP + WebdriverIO | **real Tauri app** | LLM-agent exploration, stress scenarios, bug repro (`e2e/agent/`, on-demand) - see [Agent Harness](agent-harness.md) | Slow |
+| Agent harness | MCP + webdriverio + tauri-driver | **real Tauri app** | Journeys (release golden flows), stress scenarios, fuzz tiers, LLM-agent exploration, bug repro (`e2e/agent/`, on-demand) - see [Agent Harness](agent-harness.md) | Slow |
 
 ### The axis that actually matters: mocked IPC vs. real backend
 
@@ -33,10 +32,11 @@ The real backend is covered by the **Rust tests**, which run in CI against real
 in `src-tauri/src/commands/command_tests.rs` are where the save/import
 persistence pipeline is pinned.
 
-Only two things drive the real webview *and* the real backend together: the
-WebdriverIO suite and the agent harness (which is WebdriverIO underneath, see
-[agent-harness.md](agent-harness.md)). Neither runs in an automated gate. Do not
-rely on either to catch anything.
+One thing drives the real webview *and* the real backend together: the agent
+harness (webdriverio underneath, see [agent-harness.md](agent-harness.md)). It
+runs in no automated merge gate - journeys run per release candidate
+([docs/uat](uat/ledger.md)) and on demand. Do not rely on it to catch anything
+a PR gate should.
 
 **Consequence:** if your change can fail on disk, in a parser, or across an app
 restart, a Playwright test cannot cover it. Write a Rust test.
@@ -81,9 +81,9 @@ work:
 - Retries are configured in `playwright.config.ts` (2 in CI, 1 locally), so one
   blip does not abort a push. `PW_RETRIES=0` to fail fast while hunting a flake.
 
-The WebdriverIO suite and the agent harness are **on-demand only** and are in no
-tier above. See [`e2e/legacy/README.md`](../e2e/legacy/README.md) for what is
-still worth running there.
+The agent harness is **on-demand plus per-RC** and is in no gated tier above.
+The retired WDIO suite's residual coverage lives in the journeys
+(`pnpm agent:journeys`) and the `fractal-stress` scenario (#549).
 
 ## What CI gates
 
@@ -116,13 +116,11 @@ Three workflows gate `master`:
 defaults to *running*. Two edges are load-bearing and must not be widened:
 
 - `check` must **not** ignore all of `e2e/**`. Rust tests read
-  `e2e/fixtures/*.dmp`, so a fixture edit has to run `check`. Only
-  `e2e/legacy/**` is safe to drop.
+  `e2e/fixtures/*.dmp`, so a fixture edit has to run `check`.
 - `check` must **not** ignore `e2e/agent/**`. `pnpm typecheck:agent` is the
   harness's only automated gate.
 
-The full Playwright suite runs nightly, not on every change. The WebdriverIO
-suite runs in no workflow at all.
+The full Playwright suite runs nightly, not on every change.
 
 ## Test conventions
 

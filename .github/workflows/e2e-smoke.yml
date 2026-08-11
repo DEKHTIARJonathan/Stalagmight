@@ -11,10 +11,10 @@ name: E2E Smoke
 on:
   push:
     branches: [master]
-    paths-ignore: ['**/*.md', 'docs/**', 'e2e/legacy/**', 'e2e/agent/**', 'src-tauri/**']
+    paths-ignore: ['**/*.md', 'docs/**', 'e2e/agent/**', 'src-tauri/**']
   pull_request:
     branches: [master]
-    paths-ignore: ['**/*.md', 'docs/**', 'e2e/legacy/**', 'e2e/agent/**', 'src-tauri/**']
+    paths-ignore: ['**/*.md', 'docs/**', 'e2e/agent/**', 'src-tauri/**']
 
 concurrency:
   group: smoke-${{ github.ref }}
@@ -42,8 +42,8 @@ jobs:
       # `check` path-ignores `e2e-playwright/**`, and root `tsconfig.json` includes
       # only `src`, so without this the specs and the IPC mock are type-checked by
       # nothing. This is the job that runs on `e2e-playwright/**` changes, so the
-      # gate belongs here. (`tsconfig.e2e.json` covers the quarantined WDIO tree and
-      # is deliberately NOT gated - it has ~600 pre-existing errors and runs nowhere.)
+      # gate belongs here. (e2e/agent + e2e/lib are `check`'s typecheck:agent;
+      # only generated replay specs under e2e/agent/replays/ are ungoverned, #466.)
       - name: Typecheck Playwright specs + IPC mock
         run: pnpm typecheck:playwright
       # mockContract pins the mock against lib.rs's generate_handler! list. It lives

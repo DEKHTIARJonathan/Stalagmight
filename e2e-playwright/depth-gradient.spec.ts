@@ -484,8 +484,9 @@ test.describe('Depth Gradient', () => {
   });
 
   // Note: Reload persistence cannot be tested with mocks because the mock's
-  // in-memory storage is re-initialized on page reload. The WebdriverIO test
-  // in e2e/specs/depth-gradient.spec.ts tests persistence against the real backend.
+  // in-memory storage is re-initialized on page reload. Config persistence is
+  // pinned against the real backend in the Rust config tier (crates/core config
+  // tests + loading paths).
   // This test verifies that the setting is correctly saved to the backend.
   test('depth gradient setting is saved to backend on toggle', async ({ page }) => {
     // Track IPC calls via console logs (mock logs them)

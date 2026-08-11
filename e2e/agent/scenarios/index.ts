@@ -16,6 +16,7 @@ import { importRepeatedly } from './importRepeatedly';
 import { importDialogFuzz } from './importDialogFuzz';
 import { exportRoundtripFuzz } from './exportRoundtripFuzz';
 import { rapidProjectCycle } from './rapidProjectCycle';
+import { fractalStress } from './fractalStress';
 
 const SCENARIOS: Scenario[] = [
   seedLargeProject,
@@ -30,6 +31,7 @@ const SCENARIOS: Scenario[] = [
   importDialogFuzz,
   exportRoundtripFuzz,
   rapidProjectCycle,
+  fractalStress,
 ];
 
 const REGISTRY: Record<string, Scenario> = Object.fromEntries(SCENARIOS.map((s) => [s.name, s]));

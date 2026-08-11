@@ -71,7 +71,7 @@ Runs the complete build and test pipeline. Assumes `mac-setup.sh` has already be
 4. `pnpm test:ui` / `pnpm test:ui:headed` - Playwright tests *(only with `--test-ui*`)*
 5. `cargo test` - Rust test suite (with `ulimit -n 4096`)
 5a. `pnpm tauri build --debug --no-bundle -- --features e2e` - E2E debug binary *(only with `--test-e2e`)*
-5b. `./scripts/wdio.sh --skip-build` - WebDriverIO E2E tests *(only with `--test-e2e`)*
+5b. `pnpm agent:journeys` - agent-harness journeys *(only with `--test-e2e`; the WDIO suite was retired in #549)*
 6. `CI=true pnpm tauri build` - production build (`.app` bundle + `.dmg`)
 6a. `./scripts/verify-macos-signature.sh` - checks the code signature of the app
     *inside* the built DMG, and **fails the build** if it is invalid. Tauri signs
@@ -120,7 +120,7 @@ The `e2e` feature is gated behind a Cargo feature flag (`[features] e2e = [...]`
 
 | Artifact | Location |
 |----------|----------|
-| Per-spec logs | `wdio-logs/` |
+| Journey logs + screenshots | `.agent-artifacts/sessions/<id>/` |
 
 ## Known Issues & Workarounds
 

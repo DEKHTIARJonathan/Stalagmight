@@ -151,7 +151,7 @@ so both return an explanatory error pointing at the offline formats
 - Rust unit and integration tests for the backend
 - vitest for TypeScript unit and component tests
 - Playwright E2E against mocked IPC: a fast `@smoke` tier on pushes that can affect it (the workflow's `paths-ignore` skips docs-only, Rust-only, and legacy-suite-only changes), the full suite nightly
-- The WebdriverIO suite drives the real Tauri app but is quarantined under `e2e/legacy/` and runs on demand only
+- The agent harness (`e2e/agent/`) drives the real Tauri app: journeys, stress scenarios, and fuzz tiers, on demand and per release candidate
 
 See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 [testing-recipes.md](testing-recipes.md) for the commands.
@@ -2097,7 +2097,7 @@ fn backup_before_repair(path: &Path) -> Result<PathBuf> {
 | Rust unit + integration tests | cargo test | Backend logic |
 | Unit / component tests | vitest | Frontend logic and components |
 | Playwright E2E | Playwright | Frontend with mocked IPC |
-| WebdriverIO E2E | WebdriverIO | Full app integration; quarantined under `e2e/legacy/`, on demand |
+| Agent harness | webdriverio + tauri-driver | Full app integration (`e2e/agent/` journeys + scenarios), on demand |
 
 ### 15.3 Test Requirements per Feature
 
@@ -2410,7 +2410,7 @@ section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out
 | **Database** | SQLite (via rusqlite) |
 | **Logging** | tracing + tracing-subscriber |
 | **Build** | pnpm + Vite + Tauri CLI |
-| **Testing** | cargo test, vitest, Playwright; WebdriverIO for the legacy full-app suite |
+| **Testing** | cargo test, vitest, Playwright; the agent harness for full-app runs |
 
 ### 18.2 Dependencies and Build Configuration
 

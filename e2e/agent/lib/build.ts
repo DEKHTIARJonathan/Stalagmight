@@ -1,6 +1,6 @@
 /**
  * Build freshness + build for the agent harness. Mirrors the intent of
- * scripts/wdio.sh's freshness check: the debug binary must be newer than the
+ * the retired scripts/wdio.sh's freshness check: the debug binary must be newer than the
  * frontend/backend sources and must have been built with VITE_E2E=1 (the
  * window.__E2E_TEST__ hooks).
  *
@@ -120,7 +120,7 @@ function mtimeOf(file: string): number {
 
 /**
  * The frontend bundle's identity: md5 of `dist/index.html`, which is exactly
- * what `scripts/wdio.sh` writes into `.e2e-build-marker` and compares on its own
+ * the `.e2e-build-marker` convention (from the retired scripts/wdio.sh) on its own
  * freshness path. `''` when there is no readable bundle to hash.
  *
  * md5 is a CHANGE DETECTOR here, not a security primitive - the file is a local
@@ -184,7 +184,7 @@ export interface E2EBuildStamp {
   /**
    * md5 of the `dist/index.html` this build embedded (`''` if it was unreadable).
    *
-   * The CONTENT backstop under the mtime heuristic, and the guard `scripts/wdio.sh`
+   * The CONTENT backstop under the mtime heuristic, and the guard the retired wdio.sh
    * has had all along: a frontend rebuilt after the binary (a stray `pnpm build`,
    * a `dev.sh` run, a vitest that emitted a bundle) leaves the binary serving the
    * assets it was linked with while `dist/` holds different ones, which is the
@@ -242,7 +242,7 @@ export const buildStampPath = buildStampPathFor('debug');
  * and "release differs only by compiled-out debug_asserts" is not the whole
  * truth - a finding that reproduces in one mode and not the other has a second
  * candidate explanation. The WDIO tier passes `--features e2e` for its DEBUG
- * build too (`scripts/wdio.sh`); this map deliberately does not, to leave the
+ * build too (the retired scripts/wdio.sh did); this map deliberately does not, to leave the
  * agent harness's default build unchanged, and the asymmetry is recorded here
  * rather than discovered later.
  */
@@ -383,7 +383,7 @@ export function stampStaleReasons(
   }
   if (want.distIndexHash === '') {
     // Not "assume it is fine": the binary embeds a bundle, and with nothing on
-    // disk to hash there is no way to tell WHICH one. `scripts/wdio.sh` refuses
+    // disk to hash there is no way to tell WHICH one. The retired wdio.sh refused
     // the same way ("Frontend dist not found"), and the cost is one rebuild for
     // whoever deleted `dist/`.
     reasons.push('dist/index.html is missing, so the bundle this binary embeds cannot be verified');

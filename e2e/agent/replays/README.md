@@ -1,28 +1,21 @@
 # e2e/agent/replays
 
-Curated, committed regression replays generated from agent sessions. A replay is
-a WebdriverIO spec that re-executes a recorded session (using the `resolved`
-selectors/coordinates the harness captured) to reproduce a bug deterministically.
+Curated, committed regression replays generated from agent sessions. A replay
+spec re-executes a recorded session step-by-step (using the `resolved`
+selectors/coordinates the harness captured) to reproduce a bug
+deterministically.
 
-## Generate + run
+## Status (#549)
 
-```bash
-# from a session under .agent-artifacts/sessions/<id>/
-node scripts/generate-replay.mjs <sessionDir> --assert-final --out e2e/agent/replays/<name>.spec.ts
-
-# run it
-REPLAY_SPEC=e2e/agent/replays/<name>.spec.ts pnpm test:e2e:replay
-```
-
-`test:e2e:replay` uses `wdio.replay.conf.ts` (the base wdio config, single
-instance, no retries). With no `REPLAY_SPEC` it runs everything here.
+The WDIO runner that executed these (`test:e2e:replay` / `wdio.replay.conf.ts`)
+was retired with the legacy suite. The corpus was empty at that point, so no
+coverage was lost. `scripts/generate-replay.mjs` still emits a spec as the
+precise, reviewable record of a session's steps; a harness-native replay
+runner is the replay-corpus phase of #466 and will replace the WDIO one.
 
 ## What to commit here
 
-Only durable repros worth keeping as regression tests: deterministic (re-run
-green twice), leak-scanned (no `$HOME`/personal paths - the generator scrubs
-reports, but check the spec), and minimal. Uncommitted/exploratory replays stay
-in their session dir under `.agent-artifacts/` (gitignored).
-
-These specs use wdio ambient globals (`browser`/`$`) and are typechecked by
-`tsconfig.e2e.json`, not `tsconfig.agent.json` (which excludes this dir).
+Only durable repros worth keeping as regression records: deterministic,
+leak-scanned (no `$HOME`/personal paths - the generator scrubs reports, but
+check the spec), and minimal. Uncommitted/exploratory replays stay in their
+session dir under `.agent-artifacts/` (gitignored).

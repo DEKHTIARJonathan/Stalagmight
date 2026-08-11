@@ -226,7 +226,7 @@ export class AppSession extends SessionCore {
       );
     }
 
-    // 6. Attach. Mirror wdio.conf.ts's capabilities exactly (no browserName;
+    // 6. Attach. The capability set the retired WDIO config proved out (no browserName;
     // tauri-driver reads the non-standard tauri:options).
     try {
       this.browserInstance = await attachBrowser(this.driverPort, {

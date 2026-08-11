@@ -11,10 +11,10 @@ stale or hand-edited; regenerate after any dependency change.
 
 <!-- lockfile-hashes
 Cargo.lock=3a7ac20374bbbeb94ef828b42d12cc94e33ea8202cf0add388add679791823e0
-pnpm-lock.yaml=98e7b00c3d204c8f92df55569640b374de723a0d9ccd6b7fca65c1c33de346d9
+pnpm-lock.yaml=1fdc055d3c894ac76e59e13a7a253e52f910c3b414a2984baf155990a05c15e8
 gen-third-party-licenses.mjs=ebb68f24487c3cca49f60ec5c0867729efa22850dc3fc7d5780e163eb707c1f1
 about.toml=a6751e567d54df96b63b6e14089a1763d14443b34a815b085dbb45a57436d455
-bundle-body=de326bdbe52b3d9057e24c9907b3398cb83bc34edcb8b2f3a2cfe6025cb6675a
+bundle-body=8b0dee1561ad8ae296f4532a937a1765f26fe0c560992739cd7d21ab45c332cf
 -->
 
 ## npm packages
@@ -7023,7 +7023,6 @@ Copyright 2013-2014 RAD Game Tools and Valve Software
 Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC
 Copyright (c) 2017 Frommi
 Copyright (c) 2017-2024 oyvindln
-
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

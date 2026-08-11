@@ -1,6 +1,6 @@
 /**
  * Shared X display helpers for running the real Tauri binary headless. Used by
- * wdio.conf.ts and the agent harness. On Linux with no DISPLAY/WAYLAND, start a
+ * the agent harness. On Linux with no DISPLAY/WAYLAND, start a
  * throwaway Xvfb server so the webview has somewhere to render.
  */
 import { spawn, execSync, type ChildProcess } from 'child_process';

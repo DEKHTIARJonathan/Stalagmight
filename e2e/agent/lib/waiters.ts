@@ -1,6 +1,6 @@
 /**
  * App-state waiters, ported from e2e/legacy/helpers/app.ts but parameterized by
- * a `Browser` instance (the legacy versions use the ambient wdio `browser`/`$`
+ * a `Browser` instance (the retired WDIO originals used the ambient `browser`/`$`
  * globals, which a standalone `remote()` session does not have).
  */
 import type { Browser } from 'webdriverio';
