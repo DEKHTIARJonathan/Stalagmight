@@ -281,6 +281,9 @@ export default function SectionPreview({
     // Disable rotation
     map.dragRotate.disable();
     map.touchPitch.disable();
+    // Two-finger twist rotates by default; the preview is a top-down plan, so a
+    // pinch must zoom only.
+    map.touchZoomRotate.disableRotation();
 
     // The preview is a small map inside a dialog, so a pan is easily released
     // over the dialog chrome around it - which would leave it stuck "moving";

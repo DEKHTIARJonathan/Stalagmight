@@ -23,6 +23,7 @@ It is not built, run, or tested in CI.
 | `src/components/Map/SurveyLayer.tsx` | `initializeEventHandlers` (the `attachLongPressTouch` call), gated by `modalInteractionActive` | Long-press the survey canvas -> survey context menu |
 | `src/components/GlobalView/GlobalSurveyLayer.ts` | `initializeEventHandlers` (the `attachLongPressTouch` call) | Long-press the global canvas -> system context menu |
 | `src/components/GlobalView/GlobalViewMap.tsx` | per-marker `touch*` listeners, inline in the marker builder; the handler block at `:376-381` | Long-press a project marker -> marker context menu (its own copy - see Long press). The handler block disables `dragRotate`, `touchPitch` and, since #338, the rotation half of the pinch (`:381`) |
+| `src/components/Dialogs/SectionPreview.tsx` | the handler block at `:281-286` | The third MapLibre surface: same `dragRotate` / `touchPitch` / `disableRotation` set as the other two |
 | `src/utils/mapGestures.ts` | `mapGestureMode` | The one predicate deciding which gestures the map keeps for itself |
 | `src/components/Map/MapCanvas.tsx` | the `mapGestureMode` call site, feeding the `dragPan` effect and the container's `touchAction` | Consumes that predicate |
 | `src/components/SingleSystemView/useResizeHandle.ts` | `useResizeHandle` | Pointer-capture drag for every resize handle |
@@ -75,7 +76,7 @@ scroll container serves every cell (see `useTouchContextMenu` below).
 
 | | `useLongPress` | `attachLongPressTouch` |
 |---|---|---|
-| Delay | `delay` option, default 500 ms (`useLongPress.ts:103`) | `LONG_PRESS_MS` = 500 ms |
+| Delay | `delay` option, default 500 ms (`useLongPress.ts:121`) | `LONG_PRESS_MS` = 500 ms |
 | Move cancel | `moveThreshold` option, default 10 px | `MOVE_CANCEL_PX` = 10 px, compared squared |
 | Multi-touch | not checked | ignored unless `e.touches.length === 1` |
 | Events | pointer events, spread onto an element | raw `touch*` listeners on the element |
@@ -91,17 +92,31 @@ behavior.
 
 `useLongPress` returns `{ onPointerDown, onPointerMove, onPointerUp,
 onPointerCancel }` to spread onto an element, and hands the callback the press
-position plus the element the finger actually landed on: `e.target`, guarded up
-to the nearest `HTMLElement` (an SVG icon inside a row resolves to its parent),
-not the element the handlers happen to be bound to. On fire it sets a flag, and
-the `onPointerUp` that sees that flag arms a one-shot suppressor
-(`useLongPress.ts:44`): capture-phase `document` listeners for `mousedown`,
-`mouseup`, `click` and `contextmenu` that stop propagation - and prevent the
-`click` - torn down on the first `click` or after 700 ms, whichever comes first.
-Capture on `document` is the one position ahead of both React's root delegation
-and the bubble-phase `mousedown` dismissable layers close themselves on
+position plus the element the finger actually landed on: `e.target` walked up to
+the nearest `HTMLElement` (`useLongPress.ts:102` - a press on a row's icon lands
+on an `SVGPathElement`, and its parent `<svg>` is not HTML either), not the
+element the handlers happen to be bound to. A callback that returns `false` says
+it opened nothing and gets no swallow; returning nothing - what `SectionsPanel`
+does - keeps it. On fire the hook sets a flag, and the `onPointerUp` that sees
+that flag arms a one-shot suppressor (`useLongPress.ts:51`): capture-phase
+`document` listeners for `mousedown`, `mouseup`, `click` and `contextmenu`,
+which stop propagation and, for the two cancelable ones, prevent the default as
+well - stopping a compat `contextmenu` without preventing it would leave the
+browser's own native menu to open over the one the press just gave you. Capture
+on `document` is the one position ahead of both React's root delegation and the
+bubble-phase `mousedown` dismissable layers close themselves on
 (`useDismissableLayer.ts:136`), so the menu the hold just opened survives the
 tap that ends the hold.
+
+The window closes at the first of three things: the compat `click`, a
+`pointerdown`, or 700 ms. The `pointerdown` matters on platforms that suppress
+the compat events themselves - nothing arrives to close the window early there,
+and the user's genuine tap on the menu is well inside 700 ms. A real gesture
+always begins with a `pointerdown` and a compat sequence synthesized from a lift
+never does, so that signal cannot fire ahead of the events the window exists to
+eat. The suppressor is also torn down when the consumer unmounts
+(`useLongPress.ts:200`), since the menu a press opens can take the row
+underneath it away.
 
 Two details there are load-bearing. The suppressor is armed at the LIFT, not
 when the timer fires: the browser synthesizes those events from the lift, so a
@@ -113,10 +128,16 @@ tap-to-select rides on exactly that (`SectionsPanel.tsx:766`). The
 `preventDefault()` on `pointerup` stays as belt-and-braces for engines that
 honour it. `src/hooks/__tests__/useLongPress.test.tsx` pins all of this in jsdom.
 
+That asymmetry is the whole reason the two mechanisms differ. The Touch Events
+spec makes `preventDefault()` on `touchend` the sanctioned way to suppress the
+compatibility mouse events, so the raw-touch path simply does that and is done;
+the Pointer Events spec's equivalent point is `pointerdown`, which this hook
+cannot use, so the pointer path needs the document-capture window instead.
+
 `attachLongPressTouch(target, { onLongPress, isEnabled? })` returns a detach
 function (both map layers call it from `destroy()`; the grid's effect returns it
-as its cleanup). Its `onLongPress` receives a
-snapshot of how the press began - the client coords copied out of the starting
+as its cleanup). Its `onLongPress` receives a snapshot of how the press began -
+the client coords copied out of the starting
 `Touch`, plus the `e.target` the `touchstart` carried
 (`longPressTouch.ts:29-39`) - and returns whether a menu actually opened. The
 target is snapshotted rather than looked up at fire time, because "what did the
@@ -194,10 +215,11 @@ any list.**
 **MapLibre handlers.** `dragRotate`, `touchPitch` and `boxZoom` are disabled at
 map construction (`MapCanvas.tsx:1789-1796`), and so is the rotation half of the
 pinch: `touchZoomRotate.disableRotation()` (`MapCanvas.tsx:1794`) leaves a
-two-finger twist zooming only. The global view's map gets the same treatment
-minus the box zoom (`GlobalViewMap.tsx:376-381`, the `disableRotation()` at
-`:381`) - it was the one map still missing that line until #338, so a twist
-there used to leave the plan sitting at an angle. The survey is a top-down plan,
+two-finger twist zooming only. The other two MapLibre surfaces get the same
+treatment minus the box zoom - the global view (`GlobalViewMap.tsx:376-381`, the
+`disableRotation()` at `:381`) and the section preview dialog
+(`SectionPreview.tsx:281-286`, at `:286`). Both were missing that line until
+#338, so a twist on either used to leave the plan sitting at an angle. The survey is a top-down plan,
 so a bearing means nothing here, and a non-zero one would drop the `axisAligned`
 fast path in the hit-test/geometry index (`SurveyLayer.cameraSnapshot`, ~:1315)
 with no way to reset it from the touch UI.

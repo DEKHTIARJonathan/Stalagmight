@@ -181,7 +181,9 @@ test.describe('Grid touch context menu', () => {
     for (let step = 1; step <= 6; step += 1) {
       await touch(cdp, 'touchMove', [{ x: start.x, y: start.y - step * 12, id: 1 }]);
     }
-    // Longer than the hold, so a press that survived the movement would fire.
+    // Comfortably past the 500 ms hold (`LONG_PRESS_MS` in
+    // src/utils/longPressTouch.ts - not imported, so this tier's typecheck
+    // stays clear of src/), so a press that survived the movement would fire.
     await page.waitForTimeout(700);
     await touch(cdp, 'touchEnd');
     await page.waitForTimeout(200);
