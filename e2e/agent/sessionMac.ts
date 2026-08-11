@@ -29,7 +29,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { agentBuildMode, binaryPathFor, macWrapperPath } from '../lib/env';
-import { checkBuildFreshness, buildApp } from './lib/build';
+import { builtFromFor, checkBuildFreshness, buildApp, type BuiltFrom } from './lib/build';
 import { findFreePort, isPidAlive, recordPid, reapPidsFromFile, waitForPortListening } from './lib/procs';
 import { SessionCore, gitHead, safeMtime } from './lib/sessionCore';
 import { attachBrowser, verifyReadiness, E2EHooksMissingError } from './lib/sessionShared';
@@ -84,18 +84,34 @@ export class MacSession extends SessionCore {
     // means the same thing on both platforms and the stamp says which it is.
     const buildMode = agentBuildMode();
     let buildAction: StartResult['buildAction'] = 'skipped';
+    let rebuildReasons: string[] | undefined;
+    // Who built the binary this session will drive. Taken from the freshness
+    // result on the `fresh` path - the stamp it already read is the same stamp,
+    // and asking again would be the second read that comment forbids. The other
+    // two paths have no such stamp in hand: a build has just REWRITTEN it, and
+    // `build: "skip"` never computed freshness at all.
+    let builtFrom: BuiltFrom = null;
     if (build !== 'skip') {
       const freshness = checkBuildFreshness({ mode: buildMode });
       if (build === 'force' || !freshness.fresh) {
         this.state = 'building';
         if (build !== 'force' && freshness.reasons.length > 0) {
           process.stderr.write(`Rebuilding: ${freshness.reasons.join('; ')}\n`);
+          // Reported alongside the result too: the stderr line is invisible to
+          // an MCP client, and "why did that take four minutes" (and, since
+          // #488, "whose binary was I about to drive") is exactly what a caller
+          // needs to see.
+          rebuildReasons = freshness.reasons;
         }
         buildApp((line) => process.stderr.write(`${line}\n`), buildMode);
         buildAction = 'built';
+        builtFrom = builtFromFor(buildMode);
       } else {
         buildAction = 'fresh';
+        builtFrom = freshness.builtFrom;
       }
+    } else {
+      builtFrom = builtFromFor(buildMode);
     }
 
     this.state = 'launching';
@@ -222,6 +238,8 @@ export class MacSession extends SessionCore {
       display: 'aqua',
       profileDir: profileRoot,
       buildAction,
+      builtFrom,
+      ...(rebuildReasons ? { rebuildReasons } : {}),
       buildMode,
       sessionDir: this.recorder.dir,
       headedForced,

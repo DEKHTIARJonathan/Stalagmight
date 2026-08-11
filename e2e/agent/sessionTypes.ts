@@ -35,6 +35,23 @@ export interface StartResult {
   display: string;
   profileDir: string;
   buildAction: 'skipped' | 'built' | 'fresh';
+  /**
+   * Which source tree built the binary being driven, per its E2E build stamp.
+   * The cargo target dir is shared across worktrees, so "which tree is this" is
+   * not answerable from the session's own cwd - see issue #488.
+   *
+   * Null means NO STAMP VOUCHES FOR THE BINARY ON DISK, which is more than
+   * "somebody else built it": no stamp at all, a v1/v2/corrupt one, a stamp our
+   * own build failed to write, or a stamp whose recorded binary mtime no longer
+   * matches the file (`./scripts/dev.sh` relinked it in place). Null is "cannot
+   * say", never "not this tree".
+   */
+  builtFrom: { repoRoot: string; gitHead: string } | null;
+  /**
+   * Why the binary was rebuilt, when staleness (not `build: "force"`) triggered
+   * it. Absent when nothing was rebuilt or the caller forced the build.
+   */
+  rebuildReasons?: string[];
   /** Cargo profile this session is driving ('release' only when opted in). */
   buildMode: 'debug' | 'release';
   sessionDir: string;
