@@ -929,9 +929,11 @@ mod root_and_coordinate_tests {
     /// straight through the `abs() <= EPSILON` null-island guard.
     #[test]
     fn a_file_supplied_coordinate_that_fails_validation_is_refused() {
-        assert!(
-            !(f64::NAN.abs() <= f64::EPSILON),
-            "premise: NaN passes the null-island guard, so only validation can stop it"
+        assert_eq!(
+            f64::NAN.partial_cmp(&f64::EPSILON),
+            None,
+            "premise: NaN is incomparable, so the null-island guard's `<=` is false \
+             for it and only validation can stop it"
         );
 
         for (latitude, longitude, what) in [
