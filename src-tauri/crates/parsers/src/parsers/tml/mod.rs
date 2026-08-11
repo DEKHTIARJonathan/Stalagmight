@@ -5888,6 +5888,35 @@ mod tests {
         );
     }
 
+    /// The budget also never spends id space the file has already used. Driven
+    /// as a pure function because the interesting inputs are tens of thousands
+    /// of runs, which is a fixture nobody should build to assert arithmetic.
+    #[test]
+    fn the_cut_budget_never_spends_id_space_the_file_already_used() {
+        assert_eq!(linearize::cut_budget(0), MAX_TRIP_CUTS_PER_FILE);
+        // 42_949 - 4_096: the last run count that can still afford a full budget.
+        assert_eq!(linearize::cut_budget(38_853), MAX_TRIP_CUTS_PER_FILE);
+        assert_eq!(linearize::cut_budget(38_854), MAX_TRIP_CUTS_PER_FILE - 1);
+        assert_eq!(linearize::cut_budget(42_949), 0);
+        assert_eq!(
+            linearize::cut_budget(usize::MAX),
+            0,
+            "a file already past the boundary gets no cuts, and no underflow"
+        );
+
+        // The property the constants exist for: a shot id is
+        // `section_id * FEATURE_ID_STRIDE + seq`, so the sections a file ends
+        // up with must stay inside the u32 encode.
+        for runs in [0, 1, 100, 38_000, 38_853, 40_000, 42_948, 42_949, 60_000] {
+            let total = runs + linearize::cut_budget(runs);
+            assert!(
+                total <= 42_949 || runs > 42_949,
+                "{runs} runs + {} cuts = {total} sections, past the id space",
+                linearize::cut_budget(runs)
+            );
+        }
+    }
+
     /// Three trips in one run: the parts are cut back to front and each one
     /// rebases on the PREVIOUS part's tail, so a two-part test cannot see a
     /// chaining mistake.

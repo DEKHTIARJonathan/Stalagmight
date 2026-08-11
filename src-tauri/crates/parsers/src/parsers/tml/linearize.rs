@@ -434,6 +434,17 @@ pub(super) const MAX_TRIP_CUTS_PER_FILE: usize = 4_096;
 /// that would then wrap are listed in `docs/ariane-import.md`.
 const MAX_SECTIONS_IN_ID_SPACE: usize = 42_949;
 
+/// How many cuts a file with `existing_runs` runs may be given.
+///
+/// Never more than the id space it has not already spent, so
+/// `existing_runs + cut_budget(existing_runs) <= MAX_SECTIONS_IN_ID_SPACE`
+/// holds for every input - which is the property that keeps the cut from
+/// carrying a file over the encode boundary. Saturating, so a file that is
+/// already past it gets no cuts rather than an underflow.
+pub(super) fn cut_budget(existing_runs: usize) -> usize {
+    MAX_TRIP_CUTS_PER_FILE.min(MAX_SECTIONS_IN_ID_SPACE.saturating_sub(existing_runs))
+}
+
 /// Cut each run where the trip changes between two ADJACENT stations (#427).
 ///
 /// A run takes its metadata from its first shot (see `linearize_section`), so
@@ -460,11 +471,7 @@ pub(super) fn split_runs_at_trip_boundaries(sections: &mut Vec<TmlSection>) -> u
     let mut out: Vec<TmlSection> = Vec::with_capacity(sections.len());
     let mut cuts_made = 0;
     let mut clamped_runs = 0;
-    // Never spend more of the id space than the file has left after its own
-    // declared runs: the cut may approach `MAX_SECTIONS_IN_ID_SPACE`, never
-    // carry a file across it.
-    let mut budget =
-        MAX_TRIP_CUTS_PER_FILE.min(MAX_SECTIONS_IN_ID_SPACE.saturating_sub(sections.len()));
+    let mut budget = cut_budget(sections.len());
 
     for section in sections.drain(..) {
         let mut cuts = trip_cut_points(&section.shots);
