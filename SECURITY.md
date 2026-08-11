@@ -25,7 +25,8 @@ and a maintainer will follow up. Do not name the affected component, importer,
 file format, or version in that issue - for a parser bug that is most of the
 exploit hint - and do not include reproduction details.
 
-Please include, where possible:
+In the private report - never in a public issue - please include, where
+possible:
 
 - the affected version (and OS/platform),
 - a clear description of the issue and its impact,
