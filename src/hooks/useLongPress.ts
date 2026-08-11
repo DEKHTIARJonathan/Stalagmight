@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 
 interface LongPressOptions {
   /** Delay in ms before firing (default 500) */
@@ -38,8 +38,15 @@ let disarmCompatEvents: (() => void) | null = null;
  * kills the compat `mousedown` of every ordinary tap, and tap-to-select rides
  * on that.
  *
- * A platform that suppresses the compat events itself sends none of them, hence
- * the timeout: the window closes on the first `click` or when it expires.
+ * A platform that suppresses the compat events itself sends none of them, so
+ * the window has to close on its own: on the first `click`, on the `pointerdown`
+ * that starts the user's NEXT gesture (a real gesture always begins with one,
+ * while a compat sequence synthesised from a lift never does - so this can
+ * never disarm ahead of the events it exists to eat), or when it times out.
+ *
+ * `contextmenu` and `click` are prevented as well as stopped: stopping
+ * propagation alone leaves the browser's own default live, which for a compat
+ * `contextmenu` is a NATIVE menu over the one the press just opened.
  */
 function armCompatEventSuppressor(): void {
   // Re-arm rather than stack, so a second long press just restarts the window.
@@ -50,11 +57,16 @@ function armCompatEventSuppressor(): void {
   const swallow = (e: Event) => {
     e.stopPropagation();
   };
-  const swallowClick = (e: Event) => {
+  const swallowDefault = (e: Event) => {
     e.preventDefault();
     e.stopPropagation();
+  };
+  const swallowClick = (e: Event) => {
+    swallowDefault(e);
     disarm();
   };
+  // A new gesture: everything from here on is the user's, not the lift's.
+  const disarmForNewGesture = () => disarm();
 
   const disarm = () => {
     if (timer !== null) {
@@ -63,15 +75,17 @@ function armCompatEventSuppressor(): void {
     }
     document.removeEventListener('mousedown', swallow, true);
     document.removeEventListener('mouseup', swallow, true);
-    document.removeEventListener('contextmenu', swallow, true);
+    document.removeEventListener('contextmenu', swallowDefault, true);
     document.removeEventListener('click', swallowClick, true);
+    document.removeEventListener('pointerdown', disarmForNewGesture, true);
     if (disarmCompatEvents === disarm) disarmCompatEvents = null;
   };
 
   document.addEventListener('mousedown', swallow, true);
   document.addEventListener('mouseup', swallow, true);
-  document.addEventListener('contextmenu', swallow, true);
+  document.addEventListener('contextmenu', swallowDefault, true);
   document.addEventListener('click', swallowClick, true);
+  document.addEventListener('pointerdown', disarmForNewGesture, true);
   timer = setTimeout(disarm, COMPAT_EVENT_WINDOW_MS);
   disarmCompatEvents = disarm;
 }
@@ -79,15 +93,18 @@ function armCompatEventSuppressor(): void {
 /**
  * What the finger landed on, as an `HTMLElement`.
  *
- * The press target is the deepest node under the finger, which can be an
- * `SVGElement` (a row's icon) - one step up lands back on the HTML the caller
- * can position a menu against. Anything else means there is nothing to hand the
- * callback, and the press is not worth arming.
+ * The press target is the deepest node under the finger, and that is routinely
+ * not HTML: a press on a row's icon lands on an `SVGPathElement` whose parent
+ * is an `<svg>`, itself not an `HTMLElement`. So walk up until HTML appears -
+ * the chain ends at the document, which is not one, so an unrooted or
+ * non-element target simply yields null and the press stays unarmed.
  */
 function pressTarget(raw: EventTarget | null): HTMLElement | null {
-  if (raw instanceof HTMLElement) return raw;
-  if (raw instanceof Node && raw.parentElement instanceof HTMLElement) return raw.parentElement;
-  return null;
+  let node: Node | null = raw instanceof Node ? raw : null;
+  while (node !== null && !(node instanceof HTMLElement)) {
+    node = node.parentNode;
+  }
+  return node instanceof HTMLElement ? node : null;
 }
 
 /**
@@ -95,9 +112,10 @@ function pressTarget(raw: EventTarget | null): HTMLElement | null {
  * Only activates for `pointerType === 'touch'` - mouse events pass through untouched.
  * After firing, the compatibility mouse events the lift synthesises are swallowed
  * (see `armCompatEventSuppressor`), so the menu the press opened survives its own tap.
+ * A callback that returns `false` says it opened nothing, and gets no swallow.
  */
 export function useLongPress(
-  callback: (position: { x: number; y: number }, target: HTMLElement) => void,
+  callback: (position: { x: number; y: number }, target: HTMLElement) => boolean | void,
   options?: LongPressOptions,
 ): LongPressHandlers {
   const { delay = 500, moveThreshold = 10, enabled = true } = options ?? {};
@@ -130,8 +148,9 @@ export function useLongPress(
 
       timerRef.current = setTimeout(() => {
         timerRef.current = null;
-        firedRef.current = true;
-        callback({ x, y }, target);
+        // Only an explicit false counts as "nothing opened": there is then no
+        // menu for the trailing tap to disturb, so it is left alone.
+        firedRef.current = callback({ x, y }, target) !== false;
       }, delay);
     },
     [enabled, delay, callback],
@@ -174,6 +193,11 @@ export function useLongPress(
     },
     [clear],
   );
+
+  // An armed window outlives the element that armed it - the menu a press opens
+  // can unmount the row underneath it. Nothing left listening on `document`
+  // once this consumer is gone.
+  useEffect(() => () => disarmCompatEvents?.(), []);
 
   return { onPointerDown, onPointerMove, onPointerUp, onPointerCancel };
 }
