@@ -31,6 +31,8 @@ import { mulberry32, type ScenarioContext } from '../scenarios/framework';
 import {
   IMPORT_ACTION_GENERATORS,
   importGeneratorNames,
+  MOTIF_KEYS,
+  motifShots,
   mustBeRejected,
 } from '../scenarios/undoRedoFuzzImportActions';
 import {
@@ -101,6 +103,81 @@ function withStream<T>(value: string | null, fn: () => T): T {
     else process.env.STALAGMIGHT_FUZZ_STREAM = before;
   }
 }
+
+describe('the suggestion motif', () => {
+  /**
+   * The suggester's hard cutoffs, mirrored from `PlacementSuggestionConfig`
+   * defaults (`crates/models/src/config/mod.rs`) and the guards in
+   * `compute_sequence_shot_score`. Same mirror, and the same caveat, as the one
+   * in `surveyFileSpecs.test.ts`: it catches the generator drifting, which is
+   * the likely direction, and goes stale if the product retunes.
+   */
+  const MAX_AZIMUTH_ERROR = 25;
+  const MAX_DEPTH_ERROR = 0.3;
+  const LENGTH_FLOOR = 0.4;
+  const LENGTH_FRACTION = 0.03;
+
+  const number = (shot: Record<string, unknown>, key: string): number => {
+    const value = shot[key];
+    expect(typeof value, `${key} must be a number`).toBe('number');
+    return value as number;
+  };
+
+  it('keeps a drifted probe inside every cutoff of its own planted section', () => {
+    // Without this the probe is just `randomShotData` by another name: the
+    // command returns an empty list and the scoring loop, the merge-offset
+    // search and the crossing-clearance guard behind it never run.
+    for (let key = 0; key < MOTIF_KEYS; key++) {
+      const planted = motifShots(key, 0);
+      for (const drift of [-2, -1, 0, 1, 2]) {
+        const probe = motifShots(key, drift);
+        expect(probe.length, `motif ${key} shot count`).toBe(planted.length);
+        for (let i = 0; i < planted.length; i++) {
+          const a = planted[i] as Record<string, unknown>;
+          const b = probe[i] as Record<string, unknown>;
+          const azimuthError = Math.abs(number(a, 'azimuth_in') - number(b, 'azimuth_in'));
+          const lengthError = Math.abs(number(a, 'length') - number(b, 'length'));
+          const maxLengthError = Math.max(LENGTH_FRACTION * number(a, 'length'), LENGTH_FLOOR);
+          expect(azimuthError, `motif ${key} drift ${drift} shot ${i} azimuth`).toBeLessThan(MAX_AZIMUTH_ERROR);
+          expect(lengthError, `motif ${key} drift ${drift} shot ${i} length`).toBeLessThan(maxLengthError);
+          for (const field of ['depth_in', 'depth_out'] as const) {
+            expect(
+              Math.abs(number(a, field) - number(b, field)),
+              `motif ${key} drift ${drift} shot ${i} ${field}`,
+            ).toBeLessThan(MAX_DEPTH_ERROR);
+          }
+        }
+      }
+    }
+  });
+
+  it('is pure, so the planting and probing generators agree without shared state', () => {
+    // Both halves rebuild the run from the same two integers. A generator that
+    // remembered anything between calls would derive a different one on a
+    // shrinker replay, which is why this is a property and not a convention.
+    for (let key = 0; key < MOTIF_KEYS; key++) {
+      for (const drift of [-2, 0, 2]) {
+        expect(JSON.stringify(motifShots(key, drift))).toBe(JSON.stringify(motifShots(key, drift)));
+      }
+    }
+  });
+
+  it('emits shots the store action can send as they are', () => {
+    for (let key = 0; key < MOTIF_KEYS; key++) {
+      for (const shot of motifShots(key, 0)) {
+        expect(shot.kind).toBe('Normal');
+        for (const field of ['azimuth_in', 'azimuth_out', 'length', 'depth_in', 'depth_out'] as const) {
+          const value = shot[field];
+          expect(typeof value, `${field}`).toBe('number');
+          expect(Number.isFinite(value as number), `${field} finite`).toBe(true);
+        }
+        expect(number(shot, 'azimuth_in')).toBeGreaterThanOrEqual(0);
+        expect(number(shot, 'azimuth_in')).toBeLessThan(360);
+        expect(number(shot, 'length')).toBeGreaterThan(0);
+      }
+    }
+  });
+});
 
 describe('the v3 import group', () => {
   it('is entirely since:v3, so no other stream can draw it', () => {

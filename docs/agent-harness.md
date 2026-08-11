@@ -791,6 +791,21 @@ it copies nothing and says which one, because a half-copied project is
 indistinguishable from a corrupt one from inside the app and the fuzzer would
 file the difference against the importer.
 
+**The discovery walk goes 16 levels too, and counts what it refuses.** The two
+depths are the same number on purpose and a test pins them equal: a walk
+shallower than the copy hides files the copy would have taken, a walk deeper
+draws entries the copy then refuses every time. It was 8, and the shallow half
+is what that cost - on the corpus this was written against, 8 levels found 352
+importable files and 16 finds 396. The 44 in between are 41 more `.srv` surveys
+and three more Walls project files, one of them 12 `.PATH` directives over a
+14-file tree. Nothing reported the gap, because a file that is never discovered
+leaves no trace anywhere: so directories past the bound are now counted,
+`describeCorpus` prints that count and calls its own file total a lower bound,
+and `import-dialog-fuzz` sets `corpusDirsTooDeep`. A corpus that outgrows 16
+levels is then a number rather than an absence. The walk is also capped at 20000
+visited entries and does not follow symlinks - which is what makes it terminate
+on a directory that links back into itself.
+
 Before it fuzzes anything, the run pushes a valid-biased spec of EVERY enabled
 format through the real parse command and checks the count against
 `selfCheckClaim`. That is the writer/parser drift detector: without it a writer

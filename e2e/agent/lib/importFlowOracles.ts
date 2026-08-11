@@ -14,9 +14,10 @@
  *   F2 RESIDUE         - no dialog, no placement, no import context, and
  *                        `isImportInProgress` false once the flow is over.
  *   F3 ACCOUNTING      - the section and shot deltas equal what the receipt
- *                        claimed. The receipt is the user's only account of what
- *                        happened, so a receipt that disagrees with the project
- *                        is a bug even when the import itself was correct.
+ *                        claimed, measured WHERE THE RECEIPT WAS MADE. The
+ *                        receipt is the user's only account of what happened, so
+ *                        a receipt that disagrees with the project is a bug even
+ *                        when the import itself was correct.
  *   F4 RECEIPT         - the warnings list is capped and the details toggle
  *                        appears exactly when there is something behind it.
  *   F5 TEMP FILES      - no `.stalx.tmp` / `.download.tmp` / `.vacuum.tmp`
@@ -101,6 +102,81 @@ function fail(headline: string, detail: string[] = []): never {
 }
 
 /**
+ * What a file ENTRY POINT actually did with the path it was handed.
+ *
+ * `accepted` is the only one where a parse started, and so the only one that can
+ * report a failure LATE. The other two took the move - the click landed, the
+ * chord dispatched - and handed nothing on:
+ *
+ * - `unconsumed`: the picker was never answered. A Ctrl+O the shortcut
+ *   dispatcher swallowed (a dialog was open), or a trigger click that opened no
+ *   picker at all. Read from the app's own consumption record, not inferred.
+ * - `gate-refused`: `routeOpenedFile` refused the file. Both of its refusals
+ *   (`importFlowOwnsScreen(ui)`, and any other `ui.activeDialog`) raise
+ *   `TOAST_KEYS.IMPORT_IN_PROGRESS` and `return` before anything is parsed, so
+ *   between them they are exactly "a dialog was up, or placement was on".
+ */
+export type FileHandoff = 'accepted' | 'unconsumed' | 'gate-refused';
+
+/** Why a move started nothing that could fail. */
+export type NoWorkReason = 'not-eligible' | 'not-performed' | 'cancel' | Exclude<FileHandoff, 'accepted'>;
+
+export type S4Work = { started: true; reason: null } | { started: false; reason: NoWorkReason };
+
+/**
+ * Did this move hand work to something that can fail? S4's ONE question.
+ *
+ * S4 asks two things of every move and they had drifted into two decision
+ * points with two different rules:
+ *
+ *   EXEMPTION - may an error dialog first seen on this step be blamed on it?
+ *   GRACE     - does this move open the one-move window for a result that the
+ *               settle loop cannot wait for, because it changes nothing
+ *               observable until it lands?
+ *
+ * Both reduce to the same fact. The exemption exists because a move handed a
+ * file to a parser and the parser reported a problem; the grace window exists
+ * because that same parse can report on the NEXT move instead. If nothing was
+ * handed to anything, neither applies - there is no legitimate reason for this
+ * step to have raised the dialog, and nothing in flight to land late.
+ *
+ * Deciding it twice is what let the same bug in three times: on move SHAPE it
+ * looks like work, on OUTCOME it is not. A picker CANCEL resolves with no path.
+ * A SWALLOWED Ctrl+O, an UNCONSUMED dialog answer and a GATE-REFUSED route each
+ * take the move and hand nothing over - `routeOpenedFile` in particular raises
+ * the import-gate toast and returns before any parser is reached. A move that
+ * was not PERFORMED at all did nothing by definition, and the exemption did not
+ * even check that. Every one of those was exempted, granted grace, or both.
+ *
+ * So it is one predicate with two uses, which is the only shape in which this
+ * class cannot come back: a future entry point that hands nothing over has to
+ * report a `FileHandoff` other than `accepted`, and both answers follow.
+ *
+ * One acknowledged gap: `unconsumed` is read after a bounded wait, so an app
+ * that answered the picker in the microseconds between that deadline and the
+ * harness withdrawing the answer would be scored `unconsumed` while a parse was
+ * genuinely in flight. That window is the settle cap wide of any real picker
+ * open, and the alternative is the false negative above.
+ */
+export function s4WorkStarted(input: {
+  /** `mayRaiseError`: is this a move KIND that can start fallible work at all? */
+  eligible: boolean;
+  performed: boolean;
+  /** True for a picker cancel, which resolves with no path and parses nothing. */
+  cancel: boolean;
+  /** What a file entry point did with the path; null when it is not one. */
+  handoff: FileHandoff | null;
+}): S4Work {
+  if (!input.eligible) return { started: false, reason: 'not-eligible' };
+  if (!input.performed) return { started: false, reason: 'not-performed' };
+  if (input.cancel) return { started: false, reason: 'cancel' };
+  if (input.handoff !== null && input.handoff !== 'accepted') {
+    return { started: false, reason: input.handoff };
+  }
+  return { started: true, reason: null };
+}
+
+/**
  * The receipt's summary, parsed.
  *
  * `importReceiptSummaryParts` joins i18n'd fragments with ' - ', so the numbers
@@ -131,6 +207,68 @@ export function receiptClaimFrom(digest: ImportScreenDigest): ReceiptClaim | nul
     shown: digest.receipt.shown,
     more: digest.receipt.more,
     hasDetails: digest.receipt.hasDetails,
+  };
+}
+
+/** What F3 has captured about this flow's receipt so far. */
+export interface ReceiptCapture {
+  /** The claim, taken from the FIRST receipt the flow showed. */
+  claim: ReceiptClaim | null;
+  /** Section and shot counts read at the same moment as the claim. */
+  atReceipt: CountedProject | null;
+  /**
+   * `project.file_path` at that same moment - the project the receipt is ABOUT.
+   *
+   * F3 skips a flow whose project changed identity underneath it, because the
+   * counts then belong to two different projects. That skip was asked at the
+   * END of the flow, which is the wrong moment for an oracle that measures at
+   * the receipt: a SECOND file later in the same flow swapping projects
+   * suppressed a receipt whose claim and counts both described the original one
+   * and were already fixed. Captured here so the question is asked about the
+   * moment F3 actually compares.
+   */
+  projectFileAtReceipt: string | null;
+  /** Had an undo/redo/save/close already run when the receipt appeared? */
+  historyTouchedBeforeReceipt: boolean;
+}
+
+/** The empty capture a flow starts from. */
+export function emptyReceiptCapture(): ReceiptCapture {
+  return { claim: null, atReceipt: null, projectFileAtReceipt: null, historyTouchedBeforeReceipt: false };
+}
+
+/**
+ * Fold one step's digest into the capture. FIRST WINS, and it must.
+ *
+ * F3 compares the receipt's claim against the project as it stood WHEN THE
+ * RECEIPT WAS MADE. Reading the counts at the end of the flow instead compares
+ * the claim against a project that later moves - another import in the same
+ * flow, an undo interjection - and the oracle then reports a receipt that was
+ * telling the truth. That is why the counts are taken on the same step as the
+ * claim rather than at the end, and why a second receipt in one flow does not
+ * overwrite the first.
+ *
+ * `historyTouchedBeforeReceipt` is the other half: if an undo or a save had
+ * already run before the receipt appeared, the counts it describes are not the
+ * ones the import produced, and F3 skips rather than guesses.
+ *
+ * Pure, and separate from the scenario, so the ordering is pinned by a test
+ * instead of by the position of a call in a 2000-line walk.
+ */
+export function captureReceipt(
+  previous: ReceiptCapture,
+  digest: ImportScreenDigest,
+  historyTouched: boolean,
+): ReceiptCapture {
+  if (previous.claim !== null) return previous;
+  if (!digest.receipt) return previous;
+  const claim = receiptClaimFrom(digest);
+  if (claim === null) return previous;
+  return {
+    claim,
+    atReceipt: { sections: digest.sections, shots: digest.shots },
+    projectFileAtReceipt: digest.projectFile,
+    historyTouchedBeforeReceipt: historyTouched,
   };
 }
 
@@ -203,6 +341,12 @@ export function checkResidue(digest: ImportScreenDigest, what: string): void {
   fail(`F2 RESIDUE: ${what} left import state behind`, wrong);
 }
 
+/** The two numbers F3 compares. `FlowBounds` satisfies it. */
+export interface CountedProject {
+  sections: number;
+  shots: number;
+}
+
 /**
  * F3. The receipt is an account of the import; the project is what happened.
  *
@@ -210,21 +354,33 @@ export function checkResidue(digest: ImportScreenDigest, what: string): void {
  * wizard calls `import_sections` up to four times for one logical import and
  * `aggregateImportReceipts` merges the results, so the claim is compared against
  * the WHOLE flow's delta, never against one command's.
+ *
+ * `atReceipt` is the project AS IT WAS WHEN THE RECEIPT WAS PRESENTED, not at
+ * the end of the flow, and that distinction is the oracle. The walk keeps moving
+ * after a receipt appears - the interjection stream plays `undo`, a second file
+ * gets imported, the receipt is dismissed onto another import - so a delta taken
+ * at the end of the flow measures the WALK, not the receipt. Measured, on the
+ * campaign's seed-8 cell: a Walls import whose receipt correctly said "1 section
+ * - 7 shots" was reported as a 0/0 delta, because an `undo` interjection two
+ * moves later had taken the import back. The receipt was right; the oracle was
+ * subtracting numbers from two different moments.
+ *
+ * The caller reads both counts off the receipt's OWN digest, so this costs
+ * nothing extra and cannot drift from the claim it is checking.
  */
-export function checkAccounting(claim: ReceiptClaim, before: FlowBounds, after: FlowBounds): void {
+export function checkAccounting(claim: ReceiptClaim, before: CountedProject, atReceipt: CountedProject): void {
   if (claim.sections === null || claim.shots === null) return;
   // `-1` is the digest's "no project open" sentinel, not a count.
   //
-  // A flow that ENDS with no project has nothing to compare against - the
-  // residue discard deletes the project the import created - so there is no
-  // claim to check. A flow that STARTED with none created one, and a project
-  // that did not exist had zero sections: subtracting the sentinel would make
-  // every count one too many. Measured, on the first five-format run: a `.tml`
-  // imported into a project the flow itself created reported a 3/5 delta
+  // A measurement taken with no project has nothing to compare against, so there
+  // is no claim to check. A flow that STARTED with none created one, and a
+  // project that did not exist had zero sections: subtracting the sentinel would
+  // make every count one too many. Measured, on the first five-format run: a
+  // `.tml` imported into a project the flow itself created reported a 3/5 delta
   // against a receipt that correctly said 2/4.
-  if (after.sections < 0 || after.shots < 0) return;
-  const sectionDelta = after.sections - Math.max(0, before.sections);
-  const shotDelta = after.shots - Math.max(0, before.shots);
+  if (atReceipt.sections < 0 || atReceipt.shots < 0) return;
+  const sectionDelta = atReceipt.sections - Math.max(0, before.sections);
+  const shotDelta = atReceipt.shots - Math.max(0, before.shots);
   if (sectionDelta !== claim.sections || shotDelta !== claim.shots) {
     fail('F3 ACCOUNTING: the receipt does not describe what landed in the project', [
       `receipt:  ${claim.sections} section(s), ${claim.shots} shot(s)`,

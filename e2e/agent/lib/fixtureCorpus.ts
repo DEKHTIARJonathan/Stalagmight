@@ -95,14 +95,55 @@ export interface CorpusEntry {
 }
 
 export interface CorpusInventory {
+  /**
+   * Are there entries to draw from? The question every CALLER asks.
+   *
+   * Not the same question as `configured`, and conflating the two is what hid
+   * the bound this module counts: a corpus whose every file sits below
+   * `MAX_WALK_DEPTH` discovers zero entries, so `available` is false and the
+   * run reported "corpus: none (unset or empty)" - the one message that is
+   * wrong in exactly the case `tooDeep` exists to announce. A reader told the
+   * knob was unset never looks at the depth bound.
+   */
   available: boolean;
+  /**
+   * Did the knob name a directory this process could walk?
+   *
+   * True the moment discovery got somewhere to look, whatever it found there.
+   * `configured && !available` is the interesting state - it is "your corpus is
+   * set and yielded nothing", and it is the one that has to print WHY.
+   */
+  configured: boolean;
   /** Absolute corpus root, or null when the knob is unset or unusable. */
   root: string | null;
   entries: CorpusEntry[];
   /** `entries` grouped by format, in discovery order. */
   byFormat: Record<CorpusFormat, CorpusEntry[]>;
-  /** Directories skipped by the walk bounds, so a thin inventory is explicable. */
+  /**
+   * Directories the walk could not read, plus whatever it dropped on reaching
+   * `MAX_WALK_ENTRIES`. Depth is NOT counted here - see `tooDeep`.
+   */
   skipped: number;
+  /**
+   * Directories not descended into because they sat deeper than
+   * `MAX_WALK_DEPTH` levels below the corpus root.
+   *
+   * DIRECTORIES, not the files inside them: counting those would mean walking
+   * them, which is the work the bound exists to refuse. So this is a count of
+   * doors not opened, and any non-zero value means the inventory is a lower
+   * bound on what the corpus holds.
+   *
+   * It exists because the alternative to a number is an ABSENCE, and an absence
+   * is unreadable: at a walk depth of 8 this integration reported 352 files with
+   * total confidence, and nothing in that line distinguished "this is all there
+   * is" from "this is all I looked at" - 44 more sat at levels 9 to 11, among
+   * them a Walls project whose `.PATH` directives name a dozen surveys. A run
+   * that sees less of the corpus than it could is a run whose coverage claim is
+   * wrong by an unknown amount. Printed by `describeCorpus` whenever it is
+   * non-zero, so the next corpus that outgrows the bound says so on the first
+   * line of output rather than in a file count nobody can check.
+   */
+  tooDeep: number;
   /**
    * Every `id` that more than one entry folds to, sorted.
    *
@@ -117,9 +158,35 @@ export interface CorpusInventory {
 /**
  * Walk bounds. A corpus is somebody's data directory, not a curated tree: it can
  * contain a node_modules, a photo archive or a mounted share, and discovery runs
- * at the start of every fuzz session.
+ * at the start of every fuzz session. So the walk is bounded in two independent
+ * ways - how deep it goes, and how much it looks at in total - and it does not
+ * follow symlinks, which is also what makes it terminate without a visited set.
+ *
+ * `MAX_WALK_DEPTH` IS DELIBERATELY THE SAME NUMBER AS `MAX_MATERIALIZED_DEPTH`,
+ * and the two are pinned equal by a test. Discovery and materialization are the
+ * two halves of one operation - see a file, then copy its tree - so a walk
+ * shallower than the copy hides files the copy would have taken happily, and a
+ * walk deeper than the copy draws entries every materialization then refuses.
+ * Neither half is the interesting one on its own; the pair is.
+ *
+ * It was 8, and the shallow half is exactly what that cost: measured on the
+ * corpus this integration was written for, 8 levels found 352 importable files
+ * and 16 finds 396 - the 44 in between including three more Walls project files,
+ * one of them 12 `.PATH` directives over a 14-file tree. Nothing reported the
+ * gap, because a file that is never discovered leaves no trace anywhere, which
+ * is why the depth bound now COUNTS what it refuses (`CorpusInventory.tooDeep`)
+ * instead of folding it into the general skip counter. 16 leaves that corpus
+ * with five levels of headroom and the counter to say when that stops being
+ * true; the entry cap, not the depth, is what bounds the walk's total work.
+ *
+ * The two depths are measured from different origins and that asymmetry is the
+ * safe one: this walk counts levels below the CORPUS ROOT, while `measureTree`
+ * counts them below the entry's OWN directory, so every file this walk can see
+ * is at depth 0 of its own materialization and can never be refused for being
+ * the deep thing itself. (A companion further below it still can be, which is
+ * what the `depth` skip reason reports.)
  */
-const MAX_WALK_DEPTH = 8;
+export const MAX_WALK_DEPTH = 16;
 const MAX_WALK_ENTRIES = 20000;
 
 /** The corpus root as configured RIGHT NOW, or null. */
@@ -192,10 +259,12 @@ export function discoverCorpus(): CorpusInventory {
   const root = corpusDir();
   const empty: CorpusInventory = {
     available: false,
+    configured: false,
     root: null,
     entries: [],
     byFormat: emptyByFormat(),
     skipped: 0,
+    tooDeep: 0,
     idCollisions: [],
   };
   if (root === null || !corpusAvailable()) return empty;
@@ -203,10 +272,19 @@ export function discoverCorpus(): CorpusInventory {
   const entries: CorpusEntry[] = [];
   const byFormat = emptyByFormat();
   let skipped = 0;
+  let tooDeep = 0;
   let visited = 0;
 
   const walk = (dir: string, depth: number): void => {
-    if (depth > MAX_WALK_DEPTH || visited >= MAX_WALK_ENTRIES) {
+    // Two bounds, counted apart. Depth is the one a growing corpus hits by
+    // simply being organised one folder deeper, and the one whose fix is a
+    // number in this file - so it gets its own counter and its own line of
+    // output rather than being one more anonymous skip.
+    if (depth > MAX_WALK_DEPTH) {
+      tooDeep++;
+      return;
+    }
+    if (visited >= MAX_WALK_ENTRIES) {
       skipped++;
       return;
     }
@@ -266,7 +344,16 @@ export function discoverCorpus(): CorpusInventory {
     .map(([id]) => id)
     .sort();
 
-  return { available: entries.length > 0, root, entries, byFormat, skipped, idCollisions };
+  return {
+    available: entries.length > 0,
+    configured: true,
+    root,
+    entries,
+    byFormat,
+    skipped,
+    tooDeep,
+    idCollisions,
+  };
 }
 
 /** What a lookup did. `ambiguous` is a crc20 collision and is never a guess. */
@@ -341,6 +428,10 @@ export function corpusEntryFor(reference: string): CorpusEntry | null {
  * Exceeding any bound copies NOTHING and says which bound it was. A partial copy
  * would be the worst outcome available: the import would fail on a missing
  * companion and the run would record that as the app's answer to a real project.
+ *
+ * `MAX_MATERIALIZED_DEPTH` and `MAX_WALK_DEPTH` are the same number on purpose,
+ * and a test pins them equal; the reasoning lives on `MAX_WALK_DEPTH`, because
+ * the failure the pairing prevents is a discovery-side one.
  */
 export const MAX_MATERIALIZED_BYTES = 64 * 1024 * 1024;
 export const MAX_MATERIALIZED_FILES = 4000;
@@ -481,7 +572,15 @@ export function materializeCorpusEntry(
       throw new Error('not a directory');
     }
   } catch (err) {
-    throw new Error(`corpus entry ${entry.id} is not readable: ${(err as Error).message}`);
+    // The ERRNO CODE, never the message. Node builds an fs error message out of
+    // the full path it tried - `ENOENT: no such file or directory, stat
+    // '/home/.../<a real cave name>/...'` - and this throw is not caught by
+    // `sourceOnDisk`, so it escapes into the scenario's failure payload BEFORE
+    // any redaction for this entry has been registered, and from there into the
+    // printed detail and the campaign report. The id is the publishable name for
+    // exactly this reason; the code says what went wrong without saying where.
+    const code = (err as NodeJS.ErrnoException).code;
+    throw new Error(`corpus entry ${entry.id} is not readable (${code ?? 'io'})`);
   }
 
   const measured = measureTree(sourceDir);
@@ -540,16 +639,35 @@ export function materializeCorpusEntry(
  * log tag, and a trace recorded now can only be replayed through the `pathHash`.
  * The colliding IDS are named and the paths are not, which is the same rule as
  * everywhere else in this module.
+ *
+ * A depth refusal is called out for the same kind of reason and a stronger one:
+ * it makes the file count on this very line a LOWER BOUND, so a reader who is
+ * not told cannot interpret the number they were given.
  */
 export function describeCorpus(inventory: CorpusInventory): string {
-  if (!inventory.available) return `corpus: none (${CORPUS_DIR_ENV} unset or empty)`;
+  // Gated on `configured`, NOT on `available`. A corpus that was walked and
+  // yielded nothing still has to report why it yielded nothing, and the depth
+  // note below is the whole reason `tooDeep` is counted separately: the case it
+  // was built for - every importable file one level too deep - is precisely the
+  // case that produces zero entries, so an `available` gate here made the
+  // warning unreachable exactly when it was needed.
+  if (!inventory.configured) return `corpus: none (${CORPUS_DIR_ENV} unset, missing or unreadable)`;
   const counts = (Object.keys(inventory.byFormat) as CorpusFormat[])
     .filter((format) => inventory.byFormat[format].length > 0)
     .map((format) => `${format}=${inventory.byFormat[format].length}`)
     .join(' ');
+  const formats = counts === '' ? 'no importable format' : counts;
+  const notes: string[] = [];
+  if (inventory.skipped > 0) notes.push(`${inventory.skipped} dir(s) skipped`);
+  if (inventory.tooDeep > 0) {
+    notes.push(
+      `${inventory.tooDeep} dir(s) deeper than ${MAX_WALK_DEPTH} levels NOT searched - ` +
+        'this count is a lower bound',
+    );
+  }
   return (
-    `corpus: ${inventory.entries.length} file(s) [${counts}]` +
-    (inventory.skipped > 0 ? ` (${inventory.skipped} dir(s) skipped)` : '') +
+    `corpus: ${inventory.entries.length} file(s) [${formats}]` +
+    (notes.length > 0 ? ` (${notes.join('; ')})` : '') +
     (inventory.idCollisions.length > 0
       ? ` WARNING: ${inventory.idCollisions.length} crc20 id(s) name more than one file ` +
         `[${inventory.idCollisions.join(',')}]; those ids are ambiguous in metric keys and ` +

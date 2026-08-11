@@ -54,7 +54,7 @@ export function streamV2(): boolean {
  * SUBSET of v2 (v2 added generators to it and moved every trajectory), while
  * `STALAGMIGHT_FUZZ_STREAM=v3` leaves `streamV2()` true - so every v2 generator,
  * weight and value range is present and unaltered under v3. What changes is only
- * that thirteen more names join the weighted array, at the END, so the array a
+ * that fifteen more names join the weighted array, at the END, so the array a
  * v1 or v2 run builds is byte-identical to what it was before v3 existed.
  *
  * v3 is OPT-IN, not the default. A v3 run necessarily draws differently from a

@@ -52,6 +52,67 @@
  *     or the step budget runs out (`STALAGMIGHT_FUZZ_IMPORT_MAX_FLOW_STEPS`,
  *     default 140 - exhausting the cap is a METRIC, not a failure)
  *
+ * ## Why `screen:orphan-placement` was zero, and what fixed it
+ *
+ * FIXED - kept here because the surface stayed dark for 242 cells and the
+ * reason was not a coverage gap. `App.tsx`'s DMP `onComplete` asks for orphan
+ * placements only `if (newSectionIds?.length)`, and on any flow that used MAP
+ * PLACEMENT that array used to be empty by the time it was read:
+ *
+ *   - `importPlacedSegmentNow` imports the placed segment and pushes its ids
+ *     into `importedSectionIdsRef` (`DmpNewImportDialog.tsx`);
+ *   - when the queue empties, `handlePlacementComplete` calls
+ *     `openPlacementDialog([], ...)`, which re-opens `dmp-import-new` and
+ *     therefore REMOUNTS the dialog;
+ *   - `SavedManualPlacingState` carries twelve fields and neither
+ *     `importedSectionIds` nor `importedReceipts`, and both refs initialise to
+ *     `[]` on the new instance;
+ *   - the restored instance finishes and calls `onComplete([], <empty receipt>)`.
+ *
+ * So the one import that reliably CREATES an orphan - a segment dropped on the
+ * map, merged to nothing, in a component with no datum - is the one import that
+ * can never report one. Verified by hand against a live app: two DMP files whose
+ * sections share geometry, the first placed far from anything, the second
+ * imported after it. The dialog did not open, and asking the backend the same
+ * question `App.tsx` asks, with the same ids, returned ONE high-confidence
+ * suggestion (4 matched shots, score 1.42, direction reverse). The data was
+ * there; the frontend did not ask.
+ *
+ * Two fixes closed it, one from each side of a parallel effort. Master carries
+ * the run's ids and receipts across the remount in `SavedManualPlacingState`
+ * (6667269b, 2c2e6c72 - #487 residue, and what closes #523), and this branch's
+ * `startPlacementMode` turns on the stations a placement needs, without which
+ * every placement was cancelled before its first click (#518). The same
+ * hand-driven sequence then raised the dialog - "Connect Orphaned Sections,
+ * Section 1 of 2", one suggestion at High confidence, 5 shots matched - and the
+ * screenshot and log are kept under `.agent-artifacts/orphan-proof-20260811/`.
+ *
+ * The scenario never worked around either defect. `unanchoredComponents:*` still
+ * measures the precondition, so "no orphan component existed" stays
+ * distinguishable from "the geometry did not match", and the ORPHAN PLACEMENT
+ * check above now holds both of the dialog's answers to account.
+ *
+ * ## `wiz-no-suggest` is a transition, not a screen
+ *
+ * `wizard-no-suggestions` reads like the "nothing could be placed
+ * automatically" surface and is not one. It renders while `phase ===
+ * 'suggesting'` with no current suggestion, which is only the gap between the
+ * pool running dry and `transitionToPlacingOrManual` setting `isImporting` - and
+ * that call sets it synchronously, so the frame rarely survives a paint. It has
+ * no control of its own either: the footer renders nothing for a
+ * suggestion-less `suggesting` phase, leaving the wizard's standing Cancel and
+ * Back. Over the 130-cell corpus campaign the digest never sampled it once, so
+ * the two generators that named it never ran.
+ *
+ * The options a user is actually offered when nothing was suggested are on
+ * `manual_placing` - reuse a skipped suggestion, attach to an existing section,
+ * place on the map by hand, or discard - together with a map placement and a
+ * shot table. So the bridge's settle predicate WAITS through the frame and the
+ * walk arrives at `wiz-manual`, where those live. The screen id, its digest
+ * classification and its escape path all stay: a frame that outlasts the settle
+ * cap is a genuine hang, and it must still be named and still be escapable when
+ * the escape oracle comes for it.
+ *
  * ## What is asserted
  *
  * Per STEP:
@@ -63,15 +124,27 @@
  *   plus `check_project_integrity` after any step that pushed an undo entry -
  *   `save_blocked`, or a non-finite-geometry message, is a hard failure
  *
- * Five inline expected-behaviour checks ride along with the moves that provoke
+ * Seven inline expected-behaviour checks ride along with the moves that provoke
  * them, because each one is only meaningful against the state immediately
  * before its own move:
- *   RACE          a DISABLED confirm must not advance the flow (`RACE_TARGETS`)
- *   FROZEN DELETE an all-frozen selection must survive, and must say so
- *   IMPORT GATE   a second file routed into a screen an import owns must be
- *                 refused (#411's `importFlowOwnsScreen`)
- *   EXPORT CHORD  Ctrl+E must be inert while a dialog owns the screen
- *   CLOSE         closing the project at idle must leave nothing behind
+ *   FROZEN DELETE    an all-frozen selection must survive, and must say so
+ *   INCOMPLETE SHOTS a wizard commit the incomplete-shot guard refused must
+ *                    import nothing, push no undo entry, and leave the wizard up
+ *   ORPHAN PLACEMENT declining must not touch the project at all; accepting may
+ *                    only JOIN components, and if it did, it must be undoable
+ *   OVERLAP MODES    the two unconditional overlap treatments must always be
+ *                    offered, and changing the treatment - which writes the
+ *                    GLOBAL CONFIG mid-import - must not move the undo stack
+ *   IMPORT GATE      a second file routed into a screen an import owns must be
+ *                    refused (#411's `importFlowOwnsScreen`)
+ *   EXPORT CHORD     Ctrl+E must be inert while a dialog owns the screen -
+ *                    judged on the dialog the DISPATCHER saw, not the digest
+ *   CLOSE            closing the project at idle must leave nothing behind
+ *
+ * The `RACE_TARGETS` generators still play (clicking a confirm the digest saw
+ * disabled is a real thing to do to a wizard), but what they produce is COUNTED
+ * rather than asserted: see the `raceMove` branch for why neither end of that
+ * race is a contract this harness can hold the app to.
  *
  * Per FLOW (`lib/importFlowOracles.ts`): F1 undo roundtrip, F2 residue,
  * F3 receipt-vs-project accounting, F4 receipt rendering, F5 temp files.
@@ -124,10 +197,15 @@
  *   STALAGMIGHT_FUZZ_IMPORT_FLOWS_PER_EPISODE   default 3
  *   STALAGMIGHT_FUZZ_IMPORT_MAX_FLOW_STEPS      default 140
  *   STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P         default 0.2
+ *   STALAGMIGHT_FUZZ_IMPORT_SUGGESTIVE_P        default 0.5 (well-formed .dmp)
  *   STALAGMIGHT_FUZZ_IMPORT_INTERJECT_P         default 0.08
  *   STALAGMIGHT_FUZZ_IMPORT_AUX_INTERJECT_P     default 0.04 (wave-3 stream)
  *   STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS           default 12000
- *   STALAGMIGHT_FUZZ_CORPUS_DIR                 optional private corpus root
+ *   STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P      default 0.6, clamped to [0.5, 1]
+ *   STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P        default 0.3; 0 = fixture always
+ *   STALAGMIGHT_FUZZ_IMPORT_FORCE_STATIONS      default on; 0 = fixture's own
+ *   STALAGMIGHT_FUZZ_CORPUS_DIR                 optional corpus root
+ *   STALAGMIGHT_FUZZ_CORPUS_DRAW_P              default 0.25; 1 = corpus only
  *   STALAGMIGHT_FUZZ_TRACE / _REPLAY            record / replay a trace
  *
  * ## Findings
@@ -309,7 +387,9 @@ import { ORACLE_GLOBAL, oracleInjectionSource } from '../lib/fuzzOracleCore';
 import { mapClick } from '../lib/controls';
 import {
   defaultTracePath,
+  planReplay,
   readTrace,
+  traceHasWellFormedFlows,
   TraceRecorder,
   writeTrace,
   type FuzzTrace,
@@ -343,7 +423,11 @@ import {
   checkTempFiles,
   ImportOracleError,
   leftoverTempNames,
+  captureReceipt,
   receiptClaimFrom,
+  s4WorkStarted,
+  type CountedProject,
+  type FileHandoff,
   type FlowBounds,
   type FlowShape,
   type ReceiptClaim,
@@ -374,6 +458,7 @@ import {
   auxInterjectProbability,
   buildAuxInterjection,
   buildInterjection,
+  corpusDrawProbability,
   describeSource,
   drawAuxInterjection,
   drawInterjection,
@@ -413,12 +498,38 @@ const IDLE_CONFIRMATIONS = 3;
 /** Grace between those observations. One IPC round trip is tens of ms. */
 const IDLE_CONFIRM_MS = 200;
 /**
- * Share of episodes that run with NO project open.
+ * Default share of episodes that run with NO project open.
  *
- * Fixed rather than a knob: it is a coverage split, not something a repro would
- * want to vary, and every seed's trajectory depends on it.
+ * The split matters: with nothing loaded a `.dmp` routes to
+ * `new-project-for-import` instead of the selection dialog, which is the only
+ * way to reach `importContext='new-project'` and its deferred initial save.
+ *
+ * It is now a knob (`STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P`) because the other
+ * end matters too, and could not be asked for: the DMP wizard's suggester scores
+ * an import against the sections ALREADY in the project, so a campaign aimed at
+ * the suggestion surface wants the fixture open every time. Zero is a legal
+ * value and means exactly that. Every seed's trajectory depends on it, so a
+ * repro line has to carry it - which the `STALAGMIGHT_FUZZ_` prefix rule in
+ * `fuzzTrace.ts` makes automatic.
  */
 const NO_PROJECT_EPISODE_P = 0.3;
+
+function noProjectEpisodeProbability(): number {
+  const raw = Number(process.env.STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P);
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : NO_PROJECT_EPISODE_P;
+}
+
+/**
+ * Should each episode make the survey's stations visible before it starts?
+ *
+ * Default ON. `0` restores the old behaviour - the fixture's own saved display
+ * settings - which is what a run WOULD want if it were fuzzing the display
+ * toggles themselves rather than the import flows. See `ensureStationsVisible`
+ * for what a hidden-station fixture does to the placement surface.
+ */
+function forceStationsVisible(): boolean {
+  return process.env.STALAGMIGHT_FUZZ_IMPORT_FORCE_STATIONS !== '0';
+}
 
 // ---------------------------------------------------------------------------
 // Knobs. Read at CALL time, never frozen at import: a replay restores the
@@ -448,7 +559,10 @@ function traceOutPath(): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Clicks that may legitimately raise the error dialog, so S4 exempts them.
+ * Clicks that CAN start fallible work, and so are eligible for S4's exemption.
+ *
+ * Eligibility only - `s4WorkStarted` decides whether a given move actually did,
+ * and a move that started nothing is neither exempted nor granted grace.
  *
  * Every one of them re-enters the open/import ROUTER (or creates a project),
  * and a malformed file or an unwritable path there is a reported error, not a
@@ -478,13 +592,23 @@ function mayRaiseError(move: FuzzMove): boolean {
 }
 
 /**
+ * Is this move a picker CANCEL - eligible by shape, but resolving with no path?
+ *
+ * The only no-work case the move's own kind can settle. Everything else needs
+ * the OUTCOME, which is what `FileHandoff` carries; `s4WorkStarted` puts the
+ * two together.
+ */
+function isPickerCancel(move: FuzzMove): boolean {
+  return move.kind === 'cancelDialog';
+}
+
+/**
  * Confirms that are DISABLED while a duplicate-hash probe is in flight.
  *
- * The window is short and real, and clicking into it asserts that the disabled
- * state is HONEST: a disabled control must not advance the flow. Each screen's
- * `race-*` generator aims at exactly these, and the shell checks the outcome
- * inline, because the check is only meaningful against the state its own move
- * acted on.
+ * The window is short and real, and each screen's `race-*` generator aims at
+ * exactly these. What comes back is COUNTED rather than asserted - see the
+ * `raceMove` branch, which explains why neither end of the race is a contract
+ * reachable from here.
  */
 const RACE_TARGETS: ReadonlySet<string> = new Set([
   'continue-button',
@@ -494,6 +618,52 @@ const RACE_TARGETS: ReadonlySet<string> = new Set([
   'gpx-continue-button',
   'gpx-import-confirm',
 ]);
+
+/**
+ * Wizard commits `refuseIncompleteShots()` guards.
+ *
+ * All three open with `if (refuseIncompleteShots()) return;`
+ * (`DmpNewImportDialog.tsx`), so a row the grid left half-filled blocks every
+ * way forward until it is fixed. The guard is the only one in the wizard whose
+ * refusal the fuzzer could reach and never checked.
+ */
+const INCOMPLETE_GUARDED_MOVES: ReadonlySet<string> = new Set([
+  'confirm-button',
+  'skip-button',
+  'segment-place-button',
+  // The guard's FOURTH call site, and the one that was missed:
+  // `handlePlaceOnMapClick` opens with the same `if (refuseIncompleteShots())
+  // return;` before it hands off to `handleStartSegmentPlacement`. It is also
+  // the busiest - it is what `ADVANCE_MOVE['wiz-manual']` reaches for first - so
+  // leaving it out meant the refusal that stops most flows was the one nothing
+  // watched.
+  'segment-place-on-map-button',
+]);
+
+/** `TOAST_KEYS.DMP_WIZARD_INCOMPLETE` - the key, which is i18n-independent. */
+const TOAST_INCOMPLETE = 'dmp-wizard-incomplete';
+
+/**
+ * The orphan dialog's two kinds of button, and what each one owes the project.
+ *
+ * Written from the dialog as OBSERVED, not from its source: a hand-driven run
+ * (`.agent-artifacts/orphan-proof-20260811/`) raised it with two suggestions
+ * queued - "Connect Orphaned Sections / Section 1 of 2", one suggested
+ * connection with a merge-station picker and an overlap mode, and four enabled
+ * buttons. Accepting joins the orphan to a newly imported section; skipping and
+ * closing only move through the queue.
+ */
+const ORPHAN_ACCEPTS: ReadonlySet<string> = new Set(['orphan-accept', 'orphan-accept-all']);
+const ORPHAN_DECLINES: ReadonlySet<string> = new Set(['orphan-skip', 'orphan-close']);
+
+/**
+ * Overlap treatments NO guard in the wizard disables.
+ *
+ * `isTargetDoublyAnchored` greys out `interpolate` and `import_data` only; the
+ * other two are rendered unconditionally, so a build that stopped offering one
+ * of them would leave a user with an overlap and no treatment to apply to it.
+ */
+const OVERLAP_MODES_ALWAYS_LEGAL: ReadonlySet<string> = new Set(['existing_data', 'keep_both']);
 
 /**
  * `mutate` actions a REPLAYED trace may drive - the DOM allowlist's twin.
@@ -560,12 +730,37 @@ export const importDialogFuzz: Scenario = {
     ctx.log(`formats: ${enabledFamilies().join(',')} (${formats.join(',')})`);
     ctx.log(describeCorpus(inventory));
     ctx.setMetric('corpusEntriesUsable', corpusUsable);
+    if (inventory.tooDeep > 0) {
+      // The inventory above is a LOWER bound: this many directories sat past the
+      // discovery walk's depth limit and were never opened. A metric as well as
+      // the log line, because the log scrolls and the metric block is what a
+      // run's summary and an issue carry - and a corpus the fuzzer can only half
+      // see is a coverage claim wrong by an unknown amount. It names a count,
+      // never a path, like everything else corpus-shaped that leaves this run.
+      ctx.setMetric('corpusDirsTooDeep', inventory.tooDeep);
+    }
+    if (corpusUsable === 0 && corpusDrawProbability() >= 1) {
+      // The run ASKED for corpus-only and there is nothing to draw: every file
+      // will be synthetic, which is the opposite of what the knob requested. A
+      // metric as well as a log line, because the log scrolls and the metric
+      // block is what a campaign summary carries.
+      ctx.setMetric('corpusDrawUnsatisfied', 1);
+      ctx.log(
+        `${CORPUS_DIR_ENV} draw share is 1 but no entry matches the enabled formats ` +
+          `(${enabledFormats().join(',')}) - every file this run imports will be generated`,
+      );
+    }
     if (corpusUsable === 0) {
       // Not a failure and never one: a corpus is optional by design, and a run
       // without one is exactly as valid, just narrower. Counted so a run that
       // MEANT to use one can tell that it did not.
       ctx.metric('corpus:absent');
-      if (!inventory.available) ctx.log(`corpus: set ${CORPUS_DIR_ENV} to widen this run's inputs`);
+      // Only the UNCONFIGURED case gets told to set the knob. A corpus that is
+      // set and yielded nothing has a different problem, and `describeCorpus`
+      // has already printed which one (a depth bound, a skip, no importable
+      // format) on the line above - repeating "set this variable" there sends
+      // the reader to check something that is already correct.
+      if (!inventory.configured) ctx.log(`corpus: set ${CORPUS_DIR_ENV} to widen this run's inputs`);
     }
 
     const replayPath = replayTracePath();
@@ -600,6 +795,30 @@ export const importDialogFuzz: Scenario = {
      * attached to. Filled in as entries are materialized; applied by `fail`.
      */
     const redactions: { find: string; say: string }[] = [];
+
+    /**
+     * Register the redactions for one materialized corpus entry.
+     *
+     * Shared by BOTH materialization sites, and that is the whole point: the
+     * generator path registered them and the REPLAY path did not, so replaying a
+     * corpus trace put real basenames - which the app echoes back in its own
+     * messages - straight into `fail()` output, the trace and the printed
+     * detail. One helper is what stops the next call site from forgetting.
+     *
+     * The directory goes FIRST so a full path is redacted whole rather than
+     * leaving `<corpus #id>/<basename>` behind. `names` is every segment the copy
+     * created AT ANY DEPTH - a Walls project's `.PATH` subfolder can name a cave
+     * system exactly as well as a file can, and a single-level readdir here used
+     * to miss all of them.
+     */
+    const registerCorpusRedactions = (id: string, destination: string, names: readonly string[]): void => {
+      const tag = `<corpus #${id}>`;
+      redactions.unshift({ find: destination, say: tag });
+      for (const name of names) {
+        redactions.push({ find: name, say: `${tag}/file` });
+      }
+    };
+
     const redact = (text: string): string => {
       let out = text;
       for (const entry of redactions) out = out.split(entry.find).join(entry.say);
@@ -608,6 +827,17 @@ export const importDialogFuzz: Scenario = {
     let inFlight: string | null = null;
     let fileSeq = 0;
     let lastUndoDepth = -1;
+    /**
+     * Episodes that ran with NO project open, recorded so a replay can reproduce
+     * them.
+     *
+     * The decision is a per-episode coin toss and it changes which import flow
+     * the same file steps drive - with nothing loaded a `.dmp` routes through
+     * `new-project-for-import` instead of the selection dialog. Restoring
+     * `STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P` restores the ODDS, and a replay
+     * does not re-draw them, so the odds alone cannot reproduce the choice.
+     */
+    const headlessEpisodes: number[] = [];
 
     const dumpTrace = (failure: { message: string } | null): string | null => {
       const target = traceOut || defaultTracePath(sessionDir, SCENARIO, ctx.seed);
@@ -623,6 +853,7 @@ export const importDialogFuzz: Scenario = {
             // keyboard picker, and the auxiliary interjection stream.
             stream: 'import-v3',
             failure,
+            noProjectEpisodes: headlessEpisodes,
           }),
         );
       } catch {
@@ -705,7 +936,13 @@ export const importDialogFuzz: Scenario = {
      * because a corpus is optional by design.
      */
     const sourceOnDisk = (source: FileSource): string | null => {
-      if (source.origin === 'gen') return materialize(source.spec, source.rel);
+      if (source.origin === 'gen') {
+        // Counted here rather than at draw time: `drawFileSource` is called for
+        // candidates the 8-attempt loop may discard, and a generator that
+        // recorded a metric would count files that were never written.
+        if (source.shape !== undefined) ctx.metric(`file:shape:${source.shape}`);
+        return materialize(source.spec, source.rel);
+      }
       if (source.origin === 'fixture') return ctx.fixturePath(source.name);
       if (source.origin === 'corpus') {
         const entry = corpusEntryFor(source.corpusRel);
@@ -727,16 +964,7 @@ export const importDialogFuzz: Scenario = {
         ctx.metric('corpus:materialized');
         ctx.metric('corpus:copiedBytes', copied.bytes);
         ctx.metric('corpus:copiedFiles', copied.copied);
-        // Both halves, and the directory FIRST so a full path is redacted whole
-        // rather than leaving `<corpus #id>/<basename>` behind. `names` is every
-        // segment the copy created AT ANY DEPTH - a Walls project's `.PATH`
-        // subfolder can name a cave system exactly as well as a file can, and a
-        // single-level readdir here used to miss all of them.
-        const tag = `<corpus #${source.id}>`;
-        redactions.unshift({ find: destination, say: tag });
-        for (const name of copied.names) {
-          redactions.push({ find: name, say: `${tag}/file` });
-        }
+        registerCorpusRedactions(source.id, destination, copied.names);
         return copied.path;
       }
       const target = resolveRel(source.rel);
@@ -831,10 +1059,69 @@ export const importDialogFuzz: Scenario = {
 
     // ---- move execution --------------------------------------------------
 
+    /**
+     * Per-call WALL TIME, summed and at its worst.
+     *
+     * The maxima are the load-bearing half. Every in-page call this scenario
+     * makes goes through WebDriver's `execute/async`, which
+     * `lib/sessionShared.ts` gives 30 s and no more - and a fused UI step is
+     * action + settle (up to `STALAGMIGHT_FUZZ_IMPORT_SETTLE_MS`, 12 s) + a
+     * digest that invokes `get_project_state` on whatever the project has grown
+     * to. On a corpus run that is a real number, so how close the worst call came
+     * to the ceiling is something a campaign should be able to read off its own
+     * metrics rather than reconstruct from a `WebDriverError: operation was
+     * aborted due to timeout` with no attribution in it.
+     */
+    let bridgeStepMsMax = 0;
+    let bridgeDigestMsMax = 0;
+    const noteBridgeTiming = (timing: { actionMs: number; settleMs: number; digestMs: number }): void => {
+      ctx.metric('bridgeActionMs', timing.actionMs);
+      ctx.metric('bridgeSettleMs', timing.settleMs);
+      ctx.metric('bridgeDigestMs', timing.digestMs);
+      const step = timing.actionMs + timing.settleMs + timing.digestMs;
+      if (step > bridgeStepMsMax) {
+        bridgeStepMsMax = step;
+        ctx.setMetric('bridgeStepMsMax', step);
+      }
+      if (timing.digestMs > bridgeDigestMsMax) {
+        bridgeDigestMsMax = timing.digestMs;
+        ctx.setMetric('bridgeDigestMsMax', timing.digestMs);
+      }
+    };
+
     interface Executed {
       digest: ImportScreenDigest;
       performed: boolean;
       skip: string | null;
+      /**
+       * The target's disabled state as the BRIDGE read it, one round trip after
+       * the digest that chose the move. Null for every move that is not a click
+       * or an edit on a live element. See `StepOutcome.offAtDispatch`.
+       */
+      offAtDispatch: boolean | null;
+      /**
+       * The dialog the app's own gate saw: for a `key:` chord, what
+       * `useKeyboardShortcuts` read; for a `route`, what `importFlowOwnsScreen`
+       * read. Null for every other move, and whenever no dialog was up.
+       */
+      dialogAtDispatch: string | null;
+      /**
+       * `placementMode !== null` at the same instant: on a `route`, what
+       * `importFlowOwnsScreen` read; on a `key:` chord, one of the three gates
+       * `useKeyboardShortcuts` reads. Null on every other move.
+       */
+      placementAtDispatch: boolean | null;
+      /** `dataTableFullScreen` at the same instant. `key:` chords only. */
+      fullscreenAtDispatch: boolean | null;
+      /**
+       * What a file entry point did with the path. Null for every other move.
+       *
+       * The distinction S4's grace window turns on - see `errorGraceVerdict`.
+       * A move can be `performed` and still have handed nothing over: a chord
+       * the dispatcher swallowed, a trigger that opened no picker, a route the
+       * import gate refused.
+       */
+      handoff: FileHandoff | null;
     }
 
     /** Run one move, record it if it happened, and report the screen after. */
@@ -842,16 +1129,23 @@ export const importDialogFuzz: Scenario = {
       inFlight = move.label;
       let performed = false;
       let skip: string | null = null;
+      let offAtDispatch: boolean | null = null;
+      let dialogAtDispatch: string | null = null;
+      let placementAtDispatch: boolean | null = null;
+      let fullscreenAtDispatch: boolean | null = null;
+      let handoff: FileHandoff | null = null;
       let digest: ImportScreenDigest;
 
       if (move.kind === 'ui') {
         const outcome = await runUiStep(ctx, move as Move);
         performed = outcome.performed;
         skip = outcome.reason;
+        offAtDispatch = outcome.offAtDispatch;
+        dialogAtDispatch = outcome.dialogAtDispatch;
+        placementAtDispatch = outcome.placementAtDispatch;
+        fullscreenAtDispatch = outcome.fullscreenAtDispatch;
         digest = outcome.digest;
-        ctx.metric('bridgeActionMs', outcome.timing.actionMs);
-        ctx.metric('bridgeSettleMs', outcome.timing.settleMs);
-        ctx.metric('bridgeDigestMs', outcome.timing.digestMs);
+        noteBridgeTiming(outcome.timing);
         if (record && performed) {
           recorder.record(
             move.double === true
@@ -865,10 +1159,10 @@ export const importDialogFuzz: Scenario = {
         const outcome = await runUiStep(ctx, dispatchable(move) as Move);
         performed = outcome.performed;
         skip = outcome.reason;
+        offAtDispatch = outcome.offAtDispatch;
+        dialogAtDispatch = outcome.dialogAtDispatch;
         digest = outcome.digest;
-        ctx.metric('bridgeActionMs', outcome.timing.actionMs);
-        ctx.metric('bridgeSettleMs', outcome.timing.settleMs);
-        ctx.metric('bridgeDigestMs', outcome.timing.digestMs);
+        noteBridgeTiming(outcome.timing);
         if (record && performed) {
           recorder.record({
             kind: 'input',
@@ -891,8 +1185,19 @@ export const importDialogFuzz: Scenario = {
           const rel = live.source.rel;
           if (live.via === 'route') {
             const routed = await routeFile(ctx, absolute);
-            if (!routed) fail('the E2E routeOpenedFile hook is missing; rebuild with VITE_E2E=1');
+            if (!routed.routed) fail('the E2E routeOpenedFile hook is missing; rebuild with VITE_E2E=1');
             performed = true;
+            dialogAtDispatch = routed.dialogAtDispatch;
+            placementAtDispatch = routed.placementAtDispatch;
+            // `routeOpenedFile` returns void, so acceptance is read off the two
+            // values its guards consulted on the same tick. Those guards are
+            // `importFlowOwnsScreen(ui)` (an import-flow dialog, or placement)
+            // and `ui.activeDialog && !swapConfirmed` (any other dialog, and the
+            // E2E hook never passes opts) - between them exactly "a dialog was
+            // up, or placement was on". Both raise the import-gate toast and
+            // return before anything is parsed.
+            handoff =
+              routed.dialogAtDispatch !== null || routed.placementAtDispatch ? 'gate-refused' : 'accepted';
             if (record) recorder.record({ kind: 'route', rel, label: move.label });
             digest = await observeScreen(ctx);
           } else {
@@ -900,6 +1205,7 @@ export const importDialogFuzz: Scenario = {
             performed = answered.performed;
             skip = answered.reason;
             digest = answered.digest;
+            handoff = answered.consumed ? 'accepted' : 'unconsumed';
             if (performed && !answered.consumed) ctx.metric('dialogAnswerUnconsumed');
             if (record && performed) {
               recorder.record({ kind: 'fileDialog', trigger: live.trigger, dialog: 'open', rel, label: move.label });
@@ -921,6 +1227,7 @@ export const importDialogFuzz: Scenario = {
           // A chord the dispatcher swallowed (it returns early whenever a
           // dialog is open) leaves the answer unconsumed. That is the app's
           // documented gate, so it is counted rather than asserted.
+          handoff = answered.consumed ? 'accepted' : 'unconsumed';
           ctx.metric(answered.consumed ? 'keyPickerConsumed' : 'keyPickerSwallowed');
           if (record && performed) {
             recorder.record({
@@ -990,15 +1297,48 @@ export const importDialogFuzz: Scenario = {
       inFlight = null;
       history.push(`${move.label}${performed ? '' : ` -> SKIPPED (${skip ?? 'unknown'})`} [${digest.screen}]`);
       ctx.metric(performed ? 'movesPerformed' : `skip:${skip ?? 'unknown'}`);
-      return { digest, performed, skip };
+      return {
+        digest,
+        performed,
+        skip,
+        offAtDispatch,
+        dialogAtDispatch,
+        placementAtDispatch,
+        fullscreenAtDispatch,
+        handoff,
+      };
     };
 
     // ---- per-step oracles ------------------------------------------------
+
+    /**
+     * Moves for which a NEWLY raised error dialog is still the previous exempt
+     * move's, not this one's.
+     *
+     * An exempt move hands a file to a parser and returns; the parse resolves on
+     * its own schedule, and the error dialog it raises can land after the move's
+     * settle loop has already reported a stable, dialog-free screen - the settle
+     * marker cannot see a promise. S4 then blames whatever move happened to be
+     * next. Measured, on the corpus campaign's seed-70 cell: `import via
+     * toolbar-import-button` (a `.dmp` with no valid sections) came back at
+     * `idle`, and "Import Failed / No valid sections found in DMP file" was
+     * reported against the mode-switch interjection that followed it.
+     *
+     * One move of grace, because that is the whole observed lag and every extra
+     * move is real coverage given away: S4's other half - an error dialog left
+     * UP exempting every later move - is already conceded by the
+     * `screenBefore !== 'error'` clause, and this is the same concession for the
+     * instant the dialog arrives.
+     */
+    const ERROR_GRACE_MOVES = 1;
+    let errorGrace = 0;
 
     const stepOracles = async (
       move: FuzzMove,
       digest: ImportScreenDigest,
       screenBefore: ScreenId,
+      performed: boolean,
+      handoff: FileHandoff | null,
     ): Promise<void> => {
       if (digest.boundary) {
         fail('S2 ERROR BOUNDARY: the React tree crashed', `  after: ${move.label}`);
@@ -1032,12 +1372,38 @@ export const importDialogFuzz: Scenario = {
       // Measured, on the seed-2 matrix cell: `import via router` produced "No
       // valid sections found in DMP file", which is the app reporting a problem
       // properly, and the NEXT interjection was reported as the defect.
-      if (digest.screen === 'error' && screenBefore !== 'error' && !mayRaiseError(move)) {
-        fail(
-          'S4 UNEXPECTED ERROR DIALOG: a move with no business failing raised one',
-          `  after: ${move.label}\n  error: ${digest.err ?? '(no text)'}`,
-        );
+      // ONE decision, two uses - see `s4WorkStarted`. A move that handed work to
+      // something that can fail is not blamed for an error on its own step AND
+      // opens the window for that result to land on the next one; a move that
+      // handed nothing over gets neither. Deciding those separately, one on move
+      // shape and one on outcome, is what let the same false negative in three
+      // times.
+      const work = s4WorkStarted({
+        eligible: mayRaiseError(move),
+        performed,
+        cancel: isPickerCancel(move),
+        handoff,
+      });
+      if (digest.screen === 'error' && screenBefore !== 'error' && !work.started) {
+        if (errorGrace > 0) {
+          // The previous move's parse landing late - see ERROR_GRACE_MOVES.
+          ctx.metric('s4LateErrorCarried');
+        } else {
+          fail(
+            'S4 UNEXPECTED ERROR DIALOG: a move with no business failing raised one',
+            `  after: ${move.label}\n  error: ${digest.err ?? '(no text)'}\n` +
+              `  started no fallible work: ${work.reason}`,
+          );
+        }
       }
+      // Counted AFTER the check, so a move's own error does not spend the grace
+      // it is granting. Both sides counted, and only for moves whose KIND could
+      // have started work, so a campaign sees the split rather than inferring it
+      // from an absence: an `s4NoWork:*` that dominates would mean the entry
+      // points are mostly not landing, which is worth knowing on its own.
+      if (work.started) ctx.metric('s4WorkStarted');
+      else if (work.reason !== 'not-eligible') ctx.metric(`s4NoWork:${work.reason}`);
+      errorGrace = work.started ? ERROR_GRACE_MOVES : Math.max(0, errorGrace - 1);
       if (digest.screen !== 'idle' && !WEDGE_EXEMPT_SCREENS.has(digest.screen) && actionableCount(digest) === 0) {
         fail(
           `S5 WEDGE on "${digest.screen}": no actionable control anywhere in the inventory`,
@@ -1141,7 +1507,7 @@ export const importDialogFuzz: Scenario = {
         const screenBefore = digest.screen;
         const outcome = await execute(move, true);
         digest = outcome.digest;
-        await stepOracles(move, digest, screenBefore);
+        await stepOracles(move, digest, screenBefore, outcome.performed, outcome.handoff);
       }
       if (isEscaped(digest.screen, digest.placement)) return digest;
       fail(
@@ -1153,24 +1519,42 @@ export const importDialogFuzz: Scenario = {
 
     // ---- flow bookkeeping ------------------------------------------------
 
+    /**
+     * The whole project state, canonicalized IN PAGE - the single most expensive
+     * call this scenario makes, and the one with the most room to grow: it
+     * invokes `get_project_state` and then walks the result. Timed and sized for
+     * the same reason `noteBridgeTiming` keeps maxima.
+     */
+    let canonicalMsMax = 0;
+    let canonicalBytesMax = 0;
     const canonicalNow = async (has: boolean): Promise<string | null> => {
       if (!has) return null;
-      return ctx.eval<string | null>(`
+      const startedAt = Date.now();
+      const canonical = await ctx.eval<string | null>(`
         const O = globalThis.${ORACLE_GLOBAL};
         if (!O) throw new Error('fuzz oracle is not injected');
         const core = window.__TAURI__ && window.__TAURI__.core;
         const state = await core.invoke('get_project_state');
         return state === null || state === undefined ? null : O.canonical(state, false);
       `);
+      const elapsed = Date.now() - startedAt;
+      ctx.metric('canonicalMs', elapsed);
+      if (elapsed > canonicalMsMax) {
+        canonicalMsMax = elapsed;
+        ctx.setMetric('canonicalMsMax', elapsed);
+      }
+      if (canonical !== null && canonical.length > canonicalBytesMax) {
+        canonicalBytesMax = canonical.length;
+        ctx.setMetric('canonicalBytesMax', canonical.length);
+      }
+      return canonical;
     };
 
-    const projectFilePath = async (): Promise<string | null> =>
-      ctx.eval<string | null>(
-        'const p = window.__E2E_TEST__.projectStore.getState().project; return p && p.file_path ? p.file_path : null;',
-      );
-
     const boundsNow = async (digest: ImportScreenDigest): Promise<Bounds> => {
-      const file = await projectFilePath();
+      // Off the DIGEST, not a round trip of its own: bounds are compared against
+      // counts read in that same digest, and a separately-fetched path could
+      // describe a different instant than the numbers beside it.
+      const file = digest.projectFile;
       const leftovers = leftoverTempNames(file);
       return {
         snapshot: await canonicalNow(digest.hasProject),
@@ -1199,12 +1583,37 @@ export const importDialogFuzz: Scenario = {
     const drawMove = (digest: ImportScreenDigest, mode: 'draw' | 'advance'): FuzzMove | null => {
       if (mode === 'advance') {
         const route = ADVANCE_MOVE[digest.screen] ?? [];
-        const testid = route.find((candidate) => digest.live[candidate] === 2);
+        // A `*` entry is a PREFIX the model could not spell concretely (the
+        // zero-datum section cards carry an index). Expanded against the live
+        // digest and resolved to the LOWEST actionable index, so a forced
+        // advance is as deterministic as a literal one.
+        const resolve = (candidate: string): string | undefined => {
+          if (!candidate.endsWith('*')) return digest.live[candidate] === 2 ? candidate : undefined;
+          const prefix = candidate.slice(0, -1);
+          const matches = Object.keys(digest.live)
+            .filter((id) => id.startsWith(prefix) && digest.live[id] === 2 && /^\d+$/.test(id.slice(prefix.length)))
+            .sort((a, b) => Number(a.slice(prefix.length)) - Number(b.slice(prefix.length)));
+          return matches[0];
+        };
+        let testid: string | undefined;
+        for (const candidate of route) {
+          testid = resolve(candidate);
+          if (testid !== undefined) break;
+        }
         if (testid !== undefined) {
           ctx.metric('forcedAdvance');
+          // Per screen as well as in total. The aggregate said 135 forced
+          // advances and 435 unavailable ones over the corpus campaign and
+          // could not say WHERE, which is what hid two screens whose advancing
+          // control is disabled by default: `zero-datum-config`'s confirm needs
+          // a GPS that parses, and `wiz-manual`'s needed a placement mode the
+          // walk had not chosen yet. Both read as "the walk is slow" until the
+          // counter was split.
+          ctx.metric(`forcedAdvance:${digest.screen}`);
           return { kind: 'ui', testid, label: `FORCED advance on ${digest.screen}` };
         }
         ctx.metric('forcedAdvanceUnavailable');
+        ctx.metric(`forcedAdvanceUnavailable:${digest.screen}`);
       }
       // Interjections come off their OWN stream, so adding one later does not
       // shift the trajectory every existing repro line depends on. Wave 3's
@@ -1243,6 +1652,13 @@ export const importDialogFuzz: Scenario = {
         const move = generator.build(genEnv(digest));
         if (move === null) continue;
         ctx.metric(`gen:${generator.name}`);
+        // A generator legal on ONE screen is already attributed by its name; one
+        // legal on several is not, and the shot-table and metadata families are
+        // shared by `zero-datum-config`, `wiz-suggest` and `wiz-manual`. The
+        // corpus campaign could only apportion their 226 firings by the ratio of
+        // screen samples, which is an estimate presented as a measurement. This
+        // is the measurement.
+        if (generator.screens.length > 1) ctx.metric(`gen@${digest.screen}:${generator.name}`);
         if (move.kind === 'openFile') fileSeq += 1;
         return move;
       }
@@ -1400,14 +1816,139 @@ export const importDialogFuzz: Scenario = {
     // ---- the run ----------------------------------------------------------
 
     const replaySteps = replay ? replay.steps : null;
+    /**
+     * Which episodes the RECORDING ran headless, or null when the trace predates
+     * the field. See `FuzzTrace.noProjectEpisodes`.
+     */
+    const replayHeadless = replay?.noProjectEpisodes ? new Set(replay.noProjectEpisodes) : null;
+
+    /**
+     * The recording's own episode and flow structure, rebuilt from its boundary
+     * steps.
+     *
+     * A replay used to be ONE pass over the whole step list: `replayAt` is a
+     * closure variable, so episode 0's single flow drained everything and every
+     * later episode replayed nothing. Two things broke on that. A later
+     * episode's headless choice could never reach the steps recorded under it -
+     * a `.dmp` that originally entered `new-project-for-import` replayed against
+     * an open project and silently took the selection flow. And F3 had no flow
+     * boundaries to measure a receipt against, so it compared the first
+     * receipt's claim to the delta of every import in the trace.
+     *
+     * `episode`/`flow` markers give both back. A trace WITHOUT them - anything
+     * recorded before this - folds into a single episode carrying every step,
+     * which is exactly what the old replay did, so those traces keep replaying
+     * the way they always have.
+     */
+    const replayPlan = replay ? planReplay(replay) : [];
+    /** Does this trace carry the boundaries F3 needs to measure a flow? */
+    const replayHasBoundaries = replay ? traceHasWellFormedFlows(replay) : false;
+    if (replay && replayHeadless === null && noProjectEpisodeProbability() > 0) {
+      // The recording COULD have gone headless and this trace cannot say whether
+      // it did, so the replay may walk a different import flow than the one that
+      // failed. Loud, and only when the restored odds make it possible.
+      ctx.metric('replay:noProjectUnknown');
+      ctx.log(
+        'REPLAY: this trace predates `noProjectEpisodes` and the restored ' +
+          `STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P is ${noProjectEpisodeProbability()} - ` +
+          'assuming the fixture stayed open, which may not be the flow that was recorded',
+      );
+    }
     let replayAt = 0;
+
+    /**
+     * Make the survey's stations visible, because the placement surface needs
+     * them.
+     *
+     * `MapCanvas` runs an effect that cancels an active placement the moment
+     * `showStations` is false - `handlePlacementCancel()` fires the placement's
+     * own `onCancel`, which in the DMP wizard's case re-opens the wizard. A
+     * fixture whose SAVED display settings hide stations therefore turns the
+     * whole manual-placement surface into a loop: the wizard auto-starts a
+     * placement, the effect cancels it before a click can land, the wizard comes
+     * back, and the Place-on-Map button it offers does nothing.
+     *
+     * Measured on `naharon.stalx`, whose `display_settings` carry
+     * `showStations=false`: 955 place-on-map clicks across one campaign phase
+     * produced ONE sampled `map-placement` frame, and every inert click came
+     * back with the placement-hint toast up and the wizard visible again.
+     *
+     * Toggled here rather than worked around, because a hidden-station project
+     * is a legitimate state a user can save and this is the state the SURFACE
+     * needs, not a bug being hidden: the app behaviour that makes the button
+     * inert is reported separately and is not patched by this scenario.
+     */
+    const ensureStationsVisible = async (): Promise<boolean> => {
+      const read = async (): Promise<boolean> =>
+        ctx.eval<boolean>(
+          'return !!(window.__E2E_TEST__ && window.__E2E_TEST__.uiStore ' +
+            '&& window.__E2E_TEST__.uiStore.getState().showStations);',
+        );
+      if (await read()) return true;
+      // `toggleDisplay` is a toggle, not a setter, so this is read-then-flip.
+      await ctx.callAction('ui', 'toggleDisplay', ['showStations']).catch(() => undefined);
+      return read();
+    };
+
+    /**
+     * How many merge-connected components carry NO zero datum.
+     *
+     * A transcription of the first two steps of
+     * `Project::suggest_orphan_placements` - union-find over `station_merges`,
+     * then drop every component that holds a datum - computed in the page off
+     * `get_project_state`, which is the same payload the digest reads. It is the
+     * PRECONDITION for the orphan dialog, and nothing else the harness records
+     * can distinguish "no orphan component existed" from "one existed and the
+     * geometry did not match".
+     */
+    const countUnanchoredComponents = async (): Promise<number> =>
+      ctx.eval<number>(`
+        const core = window.__TAURI__ && window.__TAURI__.core;
+        if (!core || typeof core.invoke !== 'function') return -1;
+        const state = await core.invoke('get_project_state');
+        const project = (state && state.project) || null;
+        if (!project || !Array.isArray(project.sections)) return -1;
+        const parent = new Map();
+        const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+        for (const section of project.sections) parent.set(section.id, section.id);
+        const union = (a, b) => {
+          if (!parent.has(a) || !parent.has(b)) return;
+          const ra = find(a); const rb = find(b);
+          if (ra !== rb) parent.set(ra, rb);
+        };
+        for (const merge of (project.station_merges || [])) {
+          union(merge.station_a && merge.station_a.section_id, merge.station_b && merge.station_b.section_id);
+        }
+        // \`ZeroDatumWire.station_ref\` - the field name matters, and getting it
+        // wrong is silent: every component then reads as unanchored.
+        const anchored = new Set();
+        for (const datum of (project.zero_datums || [])) {
+          const ref = datum && datum.station_ref;
+          const id = ref && ref.section_id;
+          if (id !== undefined && parent.has(id)) anchored.add(find(id));
+        }
+        if (anchored.size === 0 && (project.zero_datums || []).length > 0) return -2;
+        const roots = new Set();
+        for (const section of project.sections) roots.add(find(section.id));
+        let count = 0;
+        for (const root of roots) if (!anchored.has(root)) count += 1;
+        return count;
+      `);
 
     /** The episode loop. Extracted so `forceClean` can wrap it in a finally. */
     const runEpisodes = async (): Promise<void> => {
-    for (let episode = 0; episode < iterations; episode += 1) {
+    const episodeCount = replaySteps ? Math.max(1, replayPlan.length) : iterations;
+    for (let episode = 0; episode < episodeCount; episode += 1) {
       await loadFixtureWithoutUndoHistory(ctx, fixture);
       if (!(await disableAutoSave(ctx))) {
         throw new Error('could not turn auto-save off; a timer firing mid-run would change unmodelled state');
+      }
+      if (forceStationsVisible() && !(await ensureStationsVisible())) {
+        throw new Error(
+          'could not make stations visible; every map placement would be cancelled the instant it started ' +
+            '(MapCanvas cancels placement mode whenever showStations is false), and the wizard would offer an ' +
+            'inert Place-on-Map button for the whole run',
+        );
       }
       // E2: the fixture this episode starts from must itself be sound, or every
       // integrity verdict inside it is measured from a broken floor.
@@ -1429,7 +1970,24 @@ export const importDialogFuzz: Scenario = {
       // only way to reach `importContext='new-project'` and the DEFERRED
       // initial save that context selects. The fixture is still opened first,
       // so E2's integrity check on it runs either way.
-      const headless = !replaySteps && ctx.rng() < NO_PROJECT_EPISODE_P;
+      // On a REPLAY the recording's own choice is authoritative; a fresh run
+      // draws it. `replayHeadless` is null for a trace written before the field
+      // existed, which is warned about once at startup and treated as
+      // fixture-open - what every replay did before this.
+      const headless = replaySteps
+        ? (replayPlan[episode]?.headless ?? false)
+        : ctx.rng() < noProjectEpisodeProbability();
+      if (!replaySteps && headless) headlessEpisodes.push(episode);
+      // The boundary a replay rebuilds the episode structure from. Recorded
+      // BEFORE the close below, so the marker precedes every step it scopes.
+      if (!replaySteps) {
+        recorder.record({
+          kind: 'episode',
+          index: episode,
+          headless,
+          label: `episode ${episode + 1}${headless ? ' (no project)' : ''}`,
+        });
+      }
       if (headless) {
         await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
         ctx.metric('episodeWithoutProject');
@@ -1440,10 +1998,39 @@ export const importDialogFuzz: Scenario = {
 
       // A replay is ONE pass over the recorded steps; the recording's own flow
       // boundaries are not replayed, they are re-derived from the screen.
-      const flows = replaySteps ? 1 : ctx.randInt(1, flowsPerEpisode());
+      // On a replay, one flow per RECORDED flow - which is what gives F3 the
+      // boundaries it measures a receipt against.
+      const episodeFlows = replaySteps ? (replayPlan[episode]?.flows ?? [[]]) : null;
+      const flows = episodeFlows ? episodeFlows.length : ctx.randInt(1, flowsPerEpisode());
       for (let flow = 0; flow < flows; flow += 1) {
+        // The steps THIS flow replays. Per-flow rather than one global cursor:
+        // that cursor is what let episode 0 drain the whole trace.
+        const flowSteps = episodeFlows ? (episodeFlows[flow] ?? []) : null;
+        replayAt = 0;
+        if (!replaySteps) recorder.record({ kind: 'flow', index: flow, label: `flow ${flow + 1}` });
         const before = await boundsNow(digest);
         let receipt: ReceiptClaim | null = null;
+        /**
+         * The project as it was WHEN THE RECEIPT WAS PRESENTED - read off the
+         * receipt's own digest, so it costs no extra IPC and cannot describe a
+         * different moment than the claim it will be compared against.
+         *
+         * F3 needs this rather than the end-of-flow bounds because the walk goes
+         * on after a receipt appears: the interjection stream plays `undo`, the
+         * next file gets imported, the flow ends somewhere else entirely. A
+         * delta measured across those is a measurement of the WALK.
+         */
+        let atReceipt: CountedProject | null = null;
+        /** The project the receipt is ABOUT - see `ReceiptCapture`. */
+        let projectFileAtReceipt: string | null = null;
+        /**
+         * Had an undo/redo/save/close already landed when the receipt appeared?
+         *
+         * Then `before` describes a project the interjection has since rewritten,
+         * and the subtraction has no meaning in EITHER direction - so the flow is
+         * counted rather than measured, exactly as F1 does with `historyTouched`.
+         */
+        let historyTouchedBeforeReceipt = false;
         /**
          * Did the completion path present a receipt, in EITHER of its surfaces?
          * The modal carries a decision; a clean receipt is a toast. Both come
@@ -1479,16 +2066,28 @@ export const importDialogFuzz: Scenario = {
         const afterMove = async (move: FuzzMove, outcome: Executed): Promise<void> => {
           const screenBefore = digest.screen;
           digest = outcome.digest;
-          await stepOracles(move, digest, screenBefore);
+          await stepOracles(move, digest, screenBefore, outcome.performed, outcome.handoff);
           if (move.kind === 'undo' || move.kind === 'redo' || move.kind === 'save') historyTouched = true;
           if (move.kind === 'closeProject') historyTouched = true;
           // The export modal is not an import screen, so opening it must not
           // make an idle walk look like a flow that imported nothing - see
           // NON_FLOW_SCREENS.
           if (digest.screen !== 'idle' && !NON_FLOW_SCREENS.has(digest.screen)) leftIdle = true;
-          if (digest.receipt && receipt === null) {
-            receipt = receiptClaimFrom(digest);
-            if (receipt) guarded(() => checkReceipt(receipt as ReceiptClaim));
+          {
+            // FIRST WINS, and the counts are read on the SAME step as the claim -
+            // see `captureReceipt`, which owns that rule and is tested for it.
+            const grown = captureReceipt(
+              { claim: receipt, atReceipt, projectFileAtReceipt, historyTouchedBeforeReceipt },
+              digest,
+              historyTouched,
+            );
+            if (grown.claim !== null && receipt === null) {
+              receipt = grown.claim;
+              atReceipt = grown.atReceipt;
+              projectFileAtReceipt = grown.projectFileAtReceipt;
+              historyTouchedBeforeReceipt = grown.historyTouchedBeforeReceipt;
+              guarded(() => checkReceipt(receipt as ReceiptClaim));
+            }
           }
           if (digest.receipt !== null) sawReceipt = true;
           if (!receiptToastAtStart && digest.toast.includes(RECEIPT_TOAST_KEY)) sawReceipt = true;
@@ -1499,10 +2098,391 @@ export const importDialogFuzz: Scenario = {
           if (digest.undo > Math.max(0, before.undoDepth)) sawCommit = true;
         };
 
+        /**
+         * Run one move and everything that judges it. SHARED by both walks.
+         *
+         * It used to be the live walk's own code, sitting after the draw, and a
+         * replay `continue`d before reaching any of it - so every INLINE check
+         * here (FROZEN DELETE, INCOMPLETE SHOTS, OVERLAP MODES, ORPHAN PLACEMENT,
+         * IMPORT GATE, EXPORT CHORD, CLOSE) was live-only, and a recorded red from
+         * one of them replayed GREEN. That is the reproduction blindness we already
+         * closed for F3, one layer over: an oracle a replay cannot run is an oracle
+         * record/replay/shrink cannot minimize.
+         *
+         * Every check in here is a function of the PRE-move screen, the move, and
+         * the outcome, all three of which a replay has - `before` is the digest the
+         * replay samples ahead of the step, exactly as the live walk uses the digest
+         * it drew against. Nothing needed generator context in the end, including
+         * the race counters: `raceMove` reads `before.live[testid]`, not the
+         * generator that chose it.
+         */
+        const runMove = async (move: FuzzMove, before: ImportScreenDigest, record: boolean): Promise<void> => {
+          // Snapshots taken BEFORE the move, for the three inline checks: each
+          // is only meaningful against the state its own move acted on.
+          const screenBefore = before.screen;
+          const rowsBefore = before.rows;
+          // The two store values `importFlowOwnsScreen` consults, as the digest
+          // that CLASSIFIED this move saw them - see the IMPORT GATE branch.
+          const dialogBefore = before.dialog;
+          const placementBefore = before.placement;
+          const raceMove = move.kind === 'ui' && RACE_TARGETS.has(move.testid) && before.live[move.testid] === 1;
+          const exportChord = move.kind === 'ui' && move.testid === 'key:Ctrl+E';
+          const closeMove = move.kind === 'closeProject';
+          const frozenDelete =
+            move.kind === 'ui' &&
+            move.testid === 'shot-editor-context-delete-rows' &&
+            before.selRows.length > 0 &&
+            before.selRows.every((row) => before.frozen.includes(row));
+          const interjectRoute =
+            move.kind === 'openFile' && move.label.startsWith('INTERJECT:') && IMPORT_GUARDED_SCREENS.has(screenBefore);
+          // A wizard move the incomplete-shot guard can refuse. All three call
+          // `refuseIncompleteShots()` before they do anything else.
+          const wizardCommit =
+            move.kind === 'ui' && INCOMPLETE_GUARDED_MOVES.has(move.testid) && screenBefore.startsWith('wiz-');
+          const incompleteBefore = before.toast.includes(TOAST_INCOMPLETE);
+          const overlapMode =
+            move.kind === 'input' && move.mode === 'select' && move.testid === 'overlap-mode-select'
+              ? move.value
+              : null;
+          const sectionsBefore = before.sections;
+          const undoBefore = before.undo;
+          const orphanMove =
+            move.kind === 'ui' &&
+            screenBefore === 'orphan-placement' &&
+            (ORPHAN_ACCEPTS.has(move.testid) || ORPHAN_DECLINES.has(move.testid))
+              ? move.testid
+              : null;
+          // Only paid for on an orphan move: it is an extra `get_project_state`.
+          const unanchoredBefore = orphanMove !== null && before.hasProject ? await countUnanchoredComponents() : -1;
+
+          const outcome = await execute(move, record);
+          steps += 1;
+          await afterMove(move, outcome);
+
+          if (raceMove) {
+            // COUNTED, never asserted - and the reason is the same one that took
+            // the screen-equality check out of the IMPORT GATE branch below.
+            //
+            // The generator picks a confirm the DIGEST saw disabled. The bridge
+            // then refuses a disabled element at dispatch with byte-identical
+            // predicates, so a race move that was performed is a move whose
+            // target was ENABLED when it was clicked, and clicking an enabled
+            // confirm is not a defect - it is the app having finished the async
+            // work the digest caught it in the middle of (`WallsImportDialog`
+            // holds Import behind `!hashChecked` while a hash and a
+            // duplicate-check round trip run). Asserting on it reported that
+            // legal click as "a DISABLED control advanced the flow" on four
+            // campaign cells; `raceContinue` never once fired for another reason.
+            //
+            // And the other branch cannot be asserted either. When the target IS
+            // still disabled the bridge does not click it, so nothing the app did
+            // can be attributed to the move: any screen change belongs to work
+            // that was already in flight, which is precisely the shape that made
+            // this scenario abandon screen-equality once already.
+            //
+            // Nor is there a third dispatch that reaches the contract. MEASURED
+            // on this app under WebKitGTK, on a disabled button carrying a click
+            // listener: a real WebDriver coordinate click ran the listener ZERO
+            // times, and `dispatchEvent` ran it ONCE. The browser itself already
+            // enforces "a disabled control must not act" and never delivers the
+            // click, so the only dispatch that reaches the app at all is the one
+            // that bypasses that gate - and asserting on THAT is testing the
+            // harness against a button no user could press.
+            if (outcome.offAtDispatch === true) {
+              ctx.metric('raceRefused');
+              if (digest.screen !== screenBefore) ctx.metric('raceRefusedScreenMoved');
+            } else if (outcome.performed) {
+              ctx.metric('raceEnabledBeforeClick');
+              if (digest.screen !== screenBefore) ctx.metric('raceEnabledAdvanced');
+            } else {
+              // Gone from the DOM between the digest and the dispatch - the
+              // dialog closed under the race. Same window, other end.
+              ctx.metric(`raceVanished:${outcome.skip ?? 'unknown'}`);
+            }
+          }
+          if (exportChord && outcome.performed) {
+            ctx.metric(`exportChord:${screenBefore}`);
+            // The app's own gate, in full. `useKeyboardShortcuts` reads THREE
+            // pieces of store state inside the keydown handler, and Ctrl+E is
+            // swallowed by any of them:
+            //
+            //   activeDialog        -> returns early for every non-Escape key
+            //   placementModeActive -> `export` is not in PLACEMENT_MODE_ALLOWED_SHORTCUTS
+            //   dataTableFullScreen -> nor in FULLSCREEN_TABLE_ALLOWED_SHORTCUTS
+            //
+            // Reading only the first was a hole with a live case behind it: on
+            // MAP PLACEMENT the dialog is CLOSED and placement is on, which is
+            // where this scenario spends its map clicks. A regression letting
+            // the chord through there would have been recorded as
+            // `exportChordAfterDialogClosed` - a counter - instead of failing.
+            // An export modal opened behind any of the three sits over a flow
+            // that still owns the state under it.
+            //
+            // The handler's two remaining early returns - `defaultPrevented`,
+            // and focus sitting in an input or contenteditable - are deliberately
+            // NOT read. Both are conditions under which the app swallows MORE
+            // chords, never fewer, so neither can turn a legal export modal into
+            // a failure here; and a chord they swallow opens nothing to assert
+            // on. They are properties of the event and its target rather than of
+            // app state, which is also why the store cannot answer for them.
+            //
+            // Judged at dispatch - the values that gate read - and not
+            // on `screenBefore`, which is a round trip older. An import that
+            // completes in that gap closes its dialog, and the chord then lands
+            // at idle and is entitled to open the modal. Measured, on the corpus
+            // campaign's seed-117 retry: `walls import` left the screen on
+            // `walls` with the import still running, the next move was the Ctrl+E
+            // interjection, and the failure blamed the dispatcher for a chord it
+            // had swallowed correctly - the dialog was simply gone by then.
+            const gatesAtDispatch: string[] = [];
+            if (outcome.dialogAtDispatch !== null) gatesAtDispatch.push(`activeDialog="${outcome.dialogAtDispatch}"`);
+            if (outcome.placementAtDispatch === true) gatesAtDispatch.push('placementMode active');
+            if (outcome.fullscreenAtDispatch === true) gatesAtDispatch.push('dataTableFullScreen');
+            if (gatesAtDispatch.length > 0 && digest.screen === 'export-modal') {
+              fail(
+                `EXPORT CHORD: Ctrl+E opened the export modal behind ${gatesAtDispatch.join(' + ')}`,
+                `  screen ${screenBefore} -> ${digest.screen}; that gate was on when the keydown was ` +
+                  'dispatched, so the shortcut dispatcher must swallow the chord',
+              );
+            } else if (screenBefore !== 'idle' && digest.screen === 'export-modal') {
+              ctx.metric('exportChordAfterDialogClosed');
+            }
+          }
+          if (frozenDelete && outcome.performed) {
+            ctx.metric('frozenDeleteRefused');
+            if (digest.rows !== rowsBefore) {
+              fail(
+                'FROZEN DELETE: an all-frozen selection was deleted anyway',
+                `  rendered rows ${rowsBefore} -> ${digest.rows}; the wizard must refuse and say so`,
+              );
+            }
+            if (!digest.toast.includes('dmp-wizard-frozen-delete')) {
+              fail(
+                'FROZEN DELETE: the refusal was SILENT',
+                `  no dmp-wizard-frozen-delete toast; toasts=${JSON.stringify(digest.toast)}`,
+              );
+            }
+          }
+          // INCOMPLETE SHOTS. `handleConfirm`, `handleSkip` and
+          // `handleSegmentPlace` all open with `if (refuseIncompleteShots()) return;`
+          // (`DmpNewImportDialog.tsx`), which raises `dmp-wizard-incomplete` and
+          // does nothing else - so a row the grid's Clear left half-filled blocks
+          // the whole wizard until it is fixed.
+          //
+          // Armed on the TOAST rather than on a pre-move fact, because the digest
+          // cannot see what `findIncompleteSections` sees; and on a toast this
+          // move RAISED, because the key is deduped and one from two moves ago
+          // would otherwise blame whatever came next. A confirm that was allowed
+          // through never raises it, so the arming cannot fire on the happy path.
+          // DIAGNOSTIC, not an assertion: a commit played while the warning was
+          // ALREADY up. `showToast` dedups on the key, so a second refusal
+          // re-raises nothing and `incompleteRefused` below cannot see it - which
+          // is how a wizard stuck behind one cleared cell reads as a quiet walk
+          // rather than as a flow that can no longer commit anything.
+          if (wizardCommit && outcome.performed && incompleteBefore) {
+            ctx.metric(`wizardCommitBlocked:${move.testid}`);
+          }
+          // A place-on-map that did NOT start a placement. Every other outcome of
+          // that button is a placement (`startPlacementMode`) or a re-opened
+          // wizard, so this counts the two early returns in
+          // `handlePlaceOnMapClick` / `handleStartSegmentPlacement`: the
+          // incomplete-shot guard, and a missing segment or anchor.
+          if (
+            move.kind === 'ui' &&
+            move.testid === 'segment-place-on-map-button' &&
+            outcome.performed &&
+            !digest.placement &&
+            digest.screen === screenBefore
+          ) {
+            // WHY it was inert, from the toasts the click left behind. The
+            // placement-hint toast is the LAST statement of the success path in
+            // `startSegmentPlacement`, so seeing it means the placement really
+            // did start and something cancelled it before the next observation -
+            // a very different fault from the two silent early returns, which
+            // leave no toast at all. That distinction is what identified the
+            // `showStations` cancel loop, and it is worth keeping.
+            ctx.metric(
+              digest.toast.includes('dmp-manual-placement-hint')
+                ? 'placeOnMapInert:startedThenCancelled'
+                : digest.toast.includes(TOAST_INCOMPLETE)
+                  ? 'placeOnMapInert:incompleteShots'
+                  : 'placeOnMapInert:silentEarlyReturn',
+            );
+          }
+          if (wizardCommit && outcome.performed && !incompleteBefore && digest.toast.includes(TOAST_INCOMPLETE)) {
+            ctx.metric('incompleteRefused');
+            if (sectionsBefore >= 0 && digest.sections !== sectionsBefore) {
+              fail(
+                'INCOMPLETE SHOTS: a refused wizard commit imported sections anyway',
+                `  after: ${move.label}\n  sections ${sectionsBefore} -> ${digest.sections}`,
+              );
+            }
+            if (undoBefore >= 0 && digest.undo > undoBefore) {
+              fail(
+                'INCOMPLETE SHOTS: a refused wizard commit pushed an undo entry',
+                `  after: ${move.label}\n  undo depth ${undoBefore} -> ${digest.undo}`,
+              );
+            }
+            // The guard returns before any transition, so the wizard is still the
+            // thing on screen - and a refusal that closed it would leave the user
+            // with a warning about a section they can no longer reach.
+            if (!digest.screen.startsWith('wiz-')) {
+              fail(
+                'INCOMPLETE SHOTS: the refusal closed the wizard',
+                `  after: ${move.label}\n  screen ${screenBefore} -> ${digest.screen}`,
+              );
+            }
+          }
+          // ORPHAN PLACEMENT. The dialog offers to connect a section that was
+          // left floating - no zero datum, merged to nothing - to something the
+          // import just landed. Both of its answers are accountable.
+          if (orphanMove !== null && outcome.performed) {
+            ctx.metric(`orphanChoice:${orphanMove}`);
+            const unanchoredAfter = digest.hasProject ? await countUnanchoredComponents() : -1;
+            // Neither answer creates or destroys a section. Accepting MERGES two
+            // that already exist; declining moves through the queue.
+            if (sectionsBefore >= 0 && digest.sections !== sectionsBefore) {
+              fail(
+                `ORPHAN PLACEMENT: "${orphanMove}" changed the section count`,
+                `  after: ${move.label}\n  sections ${sectionsBefore} -> ${digest.sections}; ` +
+                  'the dialog connects sections that already exist, it does not import any',
+              );
+            }
+            if (ORPHAN_DECLINES.has(orphanMove)) {
+              // Pure navigation. Skip advances the queue and Skip All closes it;
+              // neither may touch the project, or a user who declined every
+              // suggestion would still have been charged for one.
+              if (undoBefore >= 0 && digest.undo !== undoBefore) {
+                fail(
+                  `ORPHAN PLACEMENT: declining with "${orphanMove}" moved the undo stack`,
+                  `  after: ${move.label}\n  undo depth ${undoBefore} -> ${digest.undo}`,
+                );
+              }
+              if (unanchoredBefore >= 0 && unanchoredAfter >= 0 && unanchoredAfter !== unanchoredBefore) {
+                fail(
+                  `ORPHAN PLACEMENT: declining with "${orphanMove}" changed the survey's shape`,
+                  `  after: ${move.label}\n  unanchored components ${unanchoredBefore} -> ${unanchoredAfter}`,
+                );
+              }
+            } else {
+              // Accepting is a merge, so it may only ever JOIN components - the
+              // count can fall (the orphan found a home) or hold (this queue
+              // entry was refused), never rise. A rise would mean the connection
+              // broke something apart, which no merge can do.
+              if (unanchoredBefore >= 0 && unanchoredAfter > unanchoredBefore) {
+                fail(
+                  `ORPHAN PLACEMENT: accepting with "${orphanMove}" left MORE unanchored components`,
+                  `  after: ${move.label}\n  unanchored components ${unanchoredBefore} -> ${unanchoredAfter}; ` +
+                    'a merge can only join components, never split them',
+                );
+              }
+              if (unanchoredBefore >= 0 && unanchoredAfter >= 0 && unanchoredAfter < unanchoredBefore) {
+                // It landed, so it is a project mutation and must be undoable -
+                // the same rule F1 holds every import to.
+                ctx.metric('orphanAccepted');
+                if (undoBefore >= 0 && digest.undo <= undoBefore) {
+                  fail(
+                    'ORPHAN PLACEMENT: an accepted connection pushed no undo entry',
+                    `  after: ${move.label}\n  unanchored ${unanchoredBefore} -> ${unanchoredAfter} ` +
+                      `but undo depth ${undoBefore} -> ${digest.undo}`,
+                  );
+                }
+              }
+            }
+          }
+          if (overlapMode !== null) {
+            // The doubly-anchored guard disables `interpolate` and `import_data`
+            // when the target has positional constraints on BOTH sides of the
+            // overlap (`isTargetDoublyAnchored`), and the bridge will not click a
+            // disabled option - so a refusal here is the guard being reached, and
+            // worth counting rather than asserting.
+            if (!outcome.performed && outcome.skip === 'option-absent') {
+              ctx.metric(`overlapModeRefused:${overlapMode}`);
+              // But the guard must never disable ALL of them. `existing_data` and
+              // `keep_both` are unconditional in the source, and a build where
+              // one of them stopped being offered would leave a user with an
+              // overlap they cannot choose a treatment for.
+              if (OVERLAP_MODES_ALWAYS_LEGAL.has(overlapMode) && digest.live['overlap-mode-select'] === 2) {
+                fail(
+                  'OVERLAP MODES: an unconditional overlap treatment was not offered',
+                  `  after: ${move.label}\n  the picker is actionable but refused "${overlapMode}", ` +
+                    'which no guard in the wizard disables',
+                );
+              }
+            }
+            // The picker WRITES THE GLOBAL CONFIG (`handleOverlapModeChange` ->
+            // `updateConfig`) in the middle of an import. That is a preference,
+            // not a project mutation, so it must not reach the undo stack - if it
+            // ever did, every undo count F1 makes about the flow around it would
+            // be off by the number of times the user changed their mind.
+            if (outcome.performed && undoBefore >= 0 && digest.undo !== undoBefore) {
+              fail(
+                'OVERLAP MODES: changing the treatment moved the undo stack',
+                `  after: ${move.label}\n  undo depth ${undoBefore} -> ${digest.undo}; ` +
+                  'the overlap mode is config, not project state',
+              );
+            }
+          }
+          if (closeMove && outcome.performed) {
+            ctx.metric('closeProjectInterjections');
+            // Only ever played at `idle` (see `buildAuxInterjection`), so this
+            // is E1's contract applied mid-run: closing must leave no project,
+            // no dialog and no placement behind it.
+            const residue = [
+              digest.hasProject ? 'a project is still open' : null,
+              digest.dialog !== null ? `activeDialog=${JSON.stringify(digest.dialog)}` : null,
+              digest.placement ? 'placementMode is still set' : null,
+            ].filter((line): line is string => line !== null);
+            if (residue.length > 0) {
+              fail('CLOSE: closing the project at idle left state behind', residue.map((line) => `  ${line}`).join('\n'));
+            }
+          }
+          if (interjectRoute && outcome.performed) {
+            // Was the screen still the one the move was CLASSIFIED on when the
+            // router actually looked?
+            //
+            // `importFlowOwnsScreen` reads `activeDialog` and `placementMode`
+            // inside `routeOpenedFile`; `IMPORT_GUARDED_SCREENS` maps the same
+            // two onto this scenario's screen table, but off a digest taken a
+            // round trip earlier. An import that completes in that gap closes
+            // its dialog, and the router is then right to accept the file.
+            // Measured, on the corpus campaign's seed-117 rerun: a `walls
+            // import` raced against its own async enable left the digest on
+            // `walls`, the import finished, and the route that followed was
+            // reported as a broken guard for landing on `as-new-project`.
+            //
+            // Comparing the two readings costs nothing and needs no second copy
+            // of the app's dialog set: same `activeDialog`, same placement, and
+            // the classification the digest made still holds.
+            const sameScreenAtDispatch =
+              outcome.dialogAtDispatch === dialogBefore && outcome.placementAtDispatch === placementBefore;
+            ctx.metric(sameScreenAtDispatch ? 'interjectRouteGuarded' : 'importGateSkipped:screenMovedBeforeDispatch');
+            // The REFUSAL TOAST, not the screen, is the guard's observable
+            // effect - and the screen is not a sound test of it. Measured, on
+            // the seed-7 five-format run: `create-and-continue-button` starts
+            // an async chain (create the project, then open the format's own
+            // dialog) that the settle loop cannot wait for, because
+            // `activeDialog` does not change until it lands. So the screen can
+            // move from `new-project` to `tml-config` three moves later, for a
+            // reason that has nothing to do with the routed file, and a
+            // screen-equality check reports the guard as broken when it worked.
+            if (sameScreenAtDispatch && !digest.toast.includes(IMPORT_GATE_TOAST_KEY)) {
+              fail(
+                'IMPORT GATE: a second file was routed into a screen an import already owned',
+                `  screen ${screenBefore} -> ${digest.screen}; routeOpenedFile must refuse and SAY so (#411)\n` +
+                  `  activeDialog at dispatch=${JSON.stringify(outcome.dialogAtDispatch)} ` +
+                  `placement=${outcome.placementAtDispatch}\n` +
+                  `  toasts: ${JSON.stringify(digest.toast)}`,
+              );
+            }
+          }
+        };
+
         for (;;) {
           if (replaySteps) {
-            if (replayAt >= replaySteps.length) break;
-            const step = replaySteps[replayAt] as TraceStep;
+            const source = flowSteps ?? replaySteps;
+            if (replayAt >= source.length) break;
+            const step = source[replayAt] as TraceStep;
             replayAt += 1;
             if (step.kind === 'genFile') {
               materialize(step.spec as GeneratedFileSpec, step.rel);
@@ -1530,10 +2510,15 @@ export const importDialogFuzz: Scenario = {
                 ctx.metric(lookup.outcome === 'ambiguous' ? 'corpus:ambiguousId' : 'corpus:absent');
                 continue;
               }
-              const copied = materializeCorpusEntry(lookup.entry, resolveRel(step.rel));
+              const destination = resolveRel(step.rel);
+              const copied = materializeCorpusEntry(lookup.entry, destination);
               ctx.metric(
                 copied.skipped ? `corpus:notMaterialized:${copied.reason ?? 'unknown'}` : 'replay:corpusFile',
               );
+              // A REPLAY needs the redactions as much as a recording does - the
+              // app echoes the basenames it opened, and a replayed failure is
+              // exactly the message somebody attaches to an issue.
+              if (!copied.skipped) registerCorpusRedactions(lookup.entry.id, destination, copied.names);
               continue;
             }
             const move = moveFromStep(step);
@@ -1541,7 +2526,44 @@ export const importDialogFuzz: Scenario = {
               ctx.metric(`replay:unsupported:${step.kind}`);
               continue;
             }
-            await afterMove(move, await execute(move, false));
+            // OBSERVE BEFORE ACTING, on a replay only.
+            //
+            // The walk otherwise sees the screen only AFTER each move, so a
+            // dialog that opens in the async tail of move N and is dismissed by
+            // move N+1 is never sampled. Measured on a recorded F3 red: the
+            // recording's steps 29-30 are `zero-datum-config-confirm` then
+            // `import-receipt-continue`, and on replay the post-confirm digest
+            // read `wiz-done` (the modal had not opened yet) while the next step
+            // dispatched successfully against `import-receipt-continue` and left
+            // `idle`. The receipt existed only between the two moves. F3 reads
+            // its claim off that modal, so it had nothing to compare and a
+            // recorded F3 failure replayed green.
+            //
+            // A live walk does not need this - it keeps drawing moves and meets
+            // the dialog on a later step - and must not have it: the race
+            // generators depend on dispatching against the screen the digest
+            // already classified.
+            const beforeStep = await observeScreen(ctx, false);
+            {
+              const seen = captureReceipt(
+                { claim: receipt, atReceipt, projectFileAtReceipt, historyTouchedBeforeReceipt },
+                beforeStep,
+                historyTouched,
+              );
+              if (seen.claim !== null && receipt === null) {
+                receipt = seen.claim;
+                atReceipt = seen.atReceipt;
+                projectFileAtReceipt = seen.projectFileAtReceipt;
+                historyTouchedBeforeReceipt = seen.historyTouchedBeforeReceipt;
+                ctx.metric('replay:receiptSeenBetweenSteps');
+                guarded(() => checkReceipt(receipt as ReceiptClaim));
+              }
+              if (beforeStep.receipt !== null) sawReceipt = true;
+            }
+            // The SAME judgement the live walk runs - see `runMove`. `beforeStep`
+            // is this walk's pre-move digest, which is what every inline check is
+            // written against.
+            await runMove(move, beforeStep, false);
             continue;
           }
 
@@ -1581,95 +2603,7 @@ export const importDialogFuzz: Scenario = {
             break;
           }
 
-          // Snapshots taken BEFORE the move, for the three inline checks: each
-          // is only meaningful against the state its own move acted on.
-          const screenBefore = digest.screen;
-          const rowsBefore = digest.rows;
-          const raceMove = move.kind === 'ui' && RACE_TARGETS.has(move.testid) && digest.live[move.testid] === 1;
-          const exportChord = move.kind === 'ui' && move.testid === 'key:Ctrl+E';
-          const closeMove = move.kind === 'closeProject';
-          const frozenDelete =
-            move.kind === 'ui' &&
-            move.testid === 'shot-editor-context-delete-rows' &&
-            digest.selRows.length > 0 &&
-            digest.selRows.every((row) => digest.frozen.includes(row));
-          const interjectRoute =
-            move.kind === 'openFile' && move.label.startsWith('INTERJECT:') && IMPORT_GUARDED_SCREENS.has(screenBefore);
-
-          const outcome = await execute(move, true);
-          steps += 1;
-          await afterMove(move, outcome);
-
-          if (raceMove && outcome.performed) {
-            ctx.metric('raceContinue');
-            if (digest.screen !== screenBefore) {
-              fail(
-                `RACE: a DISABLED ${move.kind === 'ui' ? move.testid : '?'} advanced the flow`,
-                `  screen ${screenBefore} -> ${digest.screen}; a disabled control must not act`,
-              );
-            }
-          }
-          if (exportChord && outcome.performed) {
-            ctx.metric(`exportChord:${screenBefore}`);
-            // The app's own gate: both keyboard dispatchers return early for
-            // every non-Escape key while a dialog is open, so Ctrl+E must be
-            // inert on top of an import screen. An export modal that opened
-            // there would sit over a flow that still owns the state under it.
-            if (screenBefore !== 'idle' && digest.screen === 'export-modal') {
-              fail(
-                `EXPORT CHORD: Ctrl+E opened the export modal on top of "${screenBefore}"`,
-                `  a dialog was already up; the shortcut dispatcher must swallow the chord`,
-              );
-            }
-          }
-          if (frozenDelete && outcome.performed) {
-            ctx.metric('frozenDeleteRefused');
-            if (digest.rows !== rowsBefore) {
-              fail(
-                'FROZEN DELETE: an all-frozen selection was deleted anyway',
-                `  rendered rows ${rowsBefore} -> ${digest.rows}; the wizard must refuse and say so`,
-              );
-            }
-            if (!digest.toast.includes('dmp-wizard-frozen-delete')) {
-              fail(
-                'FROZEN DELETE: the refusal was SILENT',
-                `  no dmp-wizard-frozen-delete toast; toasts=${JSON.stringify(digest.toast)}`,
-              );
-            }
-          }
-          if (closeMove && outcome.performed) {
-            ctx.metric('closeProjectInterjections');
-            // Only ever played at `idle` (see `buildAuxInterjection`), so this
-            // is E1's contract applied mid-run: closing must leave no project,
-            // no dialog and no placement behind it.
-            const residue = [
-              digest.hasProject ? 'a project is still open' : null,
-              digest.dialog !== null ? `activeDialog=${JSON.stringify(digest.dialog)}` : null,
-              digest.placement ? 'placementMode is still set' : null,
-            ].filter((line): line is string => line !== null);
-            if (residue.length > 0) {
-              fail('CLOSE: closing the project at idle left state behind', residue.map((line) => `  ${line}`).join('\n'));
-            }
-          }
-          if (interjectRoute && outcome.performed) {
-            ctx.metric('interjectRouteGuarded');
-            // The REFUSAL TOAST, not the screen, is the guard's observable
-            // effect - and the screen is not a sound test of it. Measured, on
-            // the seed-7 five-format run: `create-and-continue-button` starts
-            // an async chain (create the project, then open the format's own
-            // dialog) that the settle loop cannot wait for, because
-            // `activeDialog` does not change until it lands. So the screen can
-            // move from `new-project` to `tml-config` three moves later, for a
-            // reason that has nothing to do with the routed file, and a
-            // screen-equality check reports the guard as broken when it worked.
-            if (!digest.toast.includes(IMPORT_GATE_TOAST_KEY)) {
-              fail(
-                'IMPORT GATE: a second file was routed into a screen an import already owned',
-                `  screen ${screenBefore} -> ${digest.screen}; routeOpenedFile must refuse and SAY so (#411)\n` +
-                  `  toasts: ${JSON.stringify(digest.toast)}`,
-              );
-            }
-          }
+          await runMove(move, digest, true);
         }
 
         if (!leftIdle) {
@@ -1691,6 +2625,26 @@ export const importDialogFuzz: Scenario = {
         const what = `flow ${flow + 1} of episode ${episode + 1}`;
         const shape: FlowShape = sawCommit || sawReceipt ? 'imported' : 'cancelled';
         ctx.metric(`flowShape:${shape}`);
+        // The ORPHAN precondition, measured rather than assumed.
+        //
+        // `Project::suggest_orphan_placements` offers a placement only for a
+        // merge-connected component that has NO zero datum and NO newly-imported
+        // member - so unless a flow LEAVES one behind, the next flow's import
+        // cannot raise the dialog whatever its geometry does. Counting it here
+        // separates "the orphan surface is unreachable" from "the geometry never
+        // matched", which are different bugs with different fixes and read
+        // identically from `screen:orphan-placement` alone.
+        if (digest.hasProject) {
+          const unanchored = await countUnanchoredComponents();
+          // -1 no project state, -2 the datum field name stopped resolving. Both
+          // are reported rather than folded into a bucket, because a probe that
+          // silently reads every component as unanchored is worse than none.
+          ctx.metric(
+            unanchored < 0
+              ? `unanchoredComponents:probeFailed${unanchored}`
+              : `unanchoredComponents:${unanchored === 0 ? 'none' : unanchored === 1 ? 'one' : 'many'}`,
+          );
+        }
         guarded(() => checkResidue(digest, what));
         guarded(() => checkTempFiles(before, after, what));
         // Counted, never asserted: `checkResidue` documents why this scenario
@@ -1698,19 +2652,44 @@ export const importDialogFuzz: Scenario = {
         // completion-path defect - was established by reading the code.
         if (digest.ctx !== null) ctx.metric(`residualImportContext:${digest.ctx}`);
         if (sawReceipt) ctx.metric('flowPresentedReceipt');
-        // F3 measures the receipt against the DELTA this flow made, so it needs
-        // both bounds to describe the same project. A flow that started with a
-        // project and ended with a DIFFERENT one - `import-as-new-project`
+        // F3 measures the receipt against the delta the import made, so it needs
+        // both measurements to describe the same project. A flow that started
+        // with a project and ended with a DIFFERENT one - `import-as-new-project`
         // confirms by closing the current project and re-entering the router -
         // has bounds taken from two unrelated projects, and the difference
         // between them is not an accounting error, it is a subtraction with no
         // meaning. A flow that CREATED the project it ended with is still
         // measured: `before` is then simply empty.
-        if (receipt) {
-          if (before.projectFile !== null && before.projectFile !== after.projectFile) {
+        //
+        // The measured end is `atReceipt`, not `after` - see `checkAccounting`.
+        if (receipt && atReceipt) {
+          if (replaySteps && !replayHasBoundaries) {
+            // A LEGACY trace cannot say where a flow began. It replays as one
+            // pass over the whole step list, so a recording that imported three
+            // times replays as one flow and F3 compares the FIRST receipt's
+            // claim against the delta of all three. Measured on such a trace:
+            // "1 section - 6 shots" against a project holding 5 sections and 34
+            // shots. Same objection as the two skips below - a subtraction
+            // between things that are not each other's pair.
+            //
+            // NARROW, and deliberately so. Skipping every replay would mean a
+            // trace whose recorded failure WAS an F3 red replays green, and
+            // record/replay/shrink could never reproduce or minimize the very
+            // failure class the campaign's seed-8 red belonged to. A trace with
+            // `flow` markers has real boundaries, so F3 runs on it exactly as it
+            // ran on the recording.
+            ctx.metric('f3Skipped:replayNoBoundaries');
+            // Asked AT THE RECEIPT, like everything else F3 measures. Comparing
+            // `after.projectFile` asked it at the end of the flow, where a
+            // SECOND file swapping projects suppressed an oracle whose claim and
+            // counts were both fixed, on the original project, moves earlier -
+            // the same mistake `atReceipt` exists to avoid, one field over.
+          } else if (before.projectFile !== null && before.projectFile !== projectFileAtReceipt) {
             ctx.metric('f3Skipped:projectSwapped');
+          } else if (historyTouchedBeforeReceipt) {
+            ctx.metric('f3Skipped:historyTouched');
           } else {
-            guarded(() => checkAccounting(receipt as ReceiptClaim, before, after));
+            guarded(() => checkAccounting(receipt as ReceiptClaim, before, atReceipt as CountedProject));
           }
         }
 
@@ -1776,6 +2755,31 @@ export const importDialogFuzz: Scenario = {
       await runEpisodes();
     } finally {
       await forceClean();
+    }
+
+    // SUGGESTER DRIFT. `suggestiveDmpSpec` is calibrated against a THREE-WAY
+    // mirror of the Rust suggester's cutoffs - the spec generator, the offline
+    // test's copy of the per-shot rule, and the product. The offline test pins
+    // the first two to each other and cannot see the third, so the day the
+    // product retunes `PlacementSuggestionConfig` the tests stay green while the
+    // pool silently comes back empty and every suggestion-shaped counter goes to
+    // zero. This is the only place that notices.
+    //
+    // WARNED, not failed, on the same argument `corpusDirsTooDeep` makes: a
+    // suggestion needs sections to score against, and a run whose flows all
+    // cancelled early legitimately never opens the wizard. Failing here would
+    // red a cell for the walk being unlucky. The metric is what a summary
+    // carries, and the log line is what a human reads.
+    const suggestiveDrawn = ctx.metrics['file:shape:suggestive'] ?? 0;
+    const suggestSamples = ctx.metrics['screen:wiz-suggest'] ?? 0;
+    if (suggestiveDrawn > 0 && suggestSamples === 0) {
+      ctx.setMetric('suggesterDrift', suggestiveDrawn);
+      ctx.log(
+        `SUGGESTER DRIFT: ${suggestiveDrawn} suggestion-bearing .dmp file(s) were imported and the wizard ` +
+          'never once reached `wiz-suggest`. Either every flow was abandoned before the wizard opened, or ' +
+          "`suggestiveDmpSpec`'s calibration no longer clears the product's cutoffs - re-check it against " +
+          '`PlacementSuggestionConfig` and the mirror in `lib/surveyFileSpecs.test.ts`.',
+      );
     }
 
     if (traceOut) {

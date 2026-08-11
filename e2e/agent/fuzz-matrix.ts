@@ -50,6 +50,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { checkBuildFreshness } from './lib/build';
 import { agentBuildMode } from '../lib/env';
+import { failureDetail } from './lib/fuzzMatrixReport';
 import {
   BASE_PORT,
   INHERITED_ENV_BLOCKLIST,
@@ -67,14 +68,24 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const TSX_BIN = path.join(repoRoot, 'node_modules', '.bin', 'tsx');
 const CHILD_SCRIPT = path.join('e2e', 'agent', 'scenario-run.ts');
 const CHILD_TIMEOUT_MS = 20 * 60 * 1000;
-const TAIL_LINES = 15;
 /**
  * Metrics that are per-run MAXIMA, not counters: merging them across the matrix
  * takes the max. Everything else is a tally (`op:createShot`, `mutations`,
  * `knownAsymmetry`, ...) and sums. A per-run constant such as `historyLimit`
  * still sums, so it reads as cells * constant - that is the documented rule.
  */
-const MAX_MERGED_METRICS = new Set(['snapshotBytesMax', 'maxDepth']);
+const MAX_MERGED_METRICS = new Set([
+  'snapshotBytesMax',
+  'maxDepth',
+  // `import-dialog-fuzz`'s in-page call maxima. Summing them would report a
+  // matrix of 30 cells as having spent 30x its worst call, which is exactly the
+  // number nobody wants: the question these answer is how close ONE call came to
+  // WebDriver's 30 s `execute/async` ceiling.
+  'bridgeStepMsMax',
+  'bridgeDigestMsMax',
+  'canonicalMsMax',
+  'canonicalBytesMax',
+]);
 
 const USAGE =
   'usage: pnpm agent:fuzz-matrix [--scenario NAME] [--fixtures a.stalx,b.stalx] [--seeds 1..8|1,3,7] ' +
@@ -88,10 +99,11 @@ interface RunResult {
   durationMs: number;
   metrics: Record<string, number>;
   // FAIL only: the error's first line, the scenario's own `reproduce:` line
-  // verbatim, and the last TAIL_LINES of output for a crash with no FAIL line.
+  // verbatim, and everything else worth keeping - see `lib/fuzzMatrixReport.ts`,
+  // which owns what "worth keeping" means and why the choice matters.
   headline: string;
   reproduce: string;
-  tail: string;
+  detail: string;
 }
 
 function bail(message: string): never {
@@ -206,7 +218,7 @@ function runOne(
         metrics: passLine ? parseMetrics(passLine) : {},
         headline,
         reproduce: passed ? '' : (allLines.find((line) => line.trim().startsWith('reproduce:')) ?? '').trim(),
-        tail: passed ? '' : allLines.filter((line) => line.trim()).slice(-TAIL_LINES).join('\n'),
+        detail: passed ? '' : failureDetail({ outLines, allLines }),
       });
     };
     child.on('error', (err: Error) => finish(null, null, err));
@@ -256,8 +268,16 @@ function printReport(results: RunResult[], opts: Options, wallMs: number): void 
         `${failure.fixture} seed=${failure.seed}${failure.axis ? ` ${axisLabel(failure.axis)}` : ''}: ` +
           `${failure.reproduce || `(no reproduce line) ${prefix} pnpm agent:scenario ${opts.scenario} --seed ${failure.seed}`}\n`,
       );
-      if (!failure.reproduce && failure.tail) {
-        process.stdout.write(`${failure.tail.split('\n').map((l) => `    | ${l}`).join('\n')}\n`);
+      // ALWAYS, not just when there is no repro line. A matrix cell's child
+      // process and its session are gone by the time anyone reads this, so a
+      // payload that is not printed here is destroyed - and the earlier
+      // condition dropped it for precisely the failures that HAD one, since
+      // every oracle failure carries a `reproduce:` line and only a bare crash
+      // does not. Two reds of the 130-cell corpus campaign had to be diagnosed
+      // from their solo-retry logs for that reason, and one - a first-run-only
+      // S4 - could not be diagnosed at all.
+      if (failure.detail) {
+        process.stdout.write(`${failure.detail.split('\n').map((l) => `    | ${l}`).join('\n')}\n`);
       }
     }
   }
@@ -270,7 +290,17 @@ function printReport(results: RunResult[], opts: Options, wallMs: number): void 
         : (merged[key] ?? 0) + value;
     }
   }
-  process.stdout.write('\n=== merged metrics (max for snapshotBytesMax/maxDepth, sum otherwise) ===\n');
+  // GENERATED from the set, and from the keys actually present, so it cannot go
+  // stale the way a hand-written list did: the legend named `snapshotBytesMax`
+  // and `maxDepth` long after four more maxima joined them, which labelled real
+  // maxima as sums in every campaign summary that printed them. Naming only the
+  // ones this run produced also keeps the line honest about the run in hand.
+  const maxed = Object.keys(merged)
+    .filter((key) => MAX_MERGED_METRICS.has(key))
+    .sort();
+  process.stdout.write(
+    `\n=== merged metrics (${maxed.length > 0 ? `max for ${maxed.join(', ')}; ` : ''}sum otherwise) ===\n`,
+  );
   for (const key of Object.keys(merged).sort()) process.stdout.write(`  ${key} = ${merged[key]}\n`);
 
   const serialMs = results.reduce((sum, r) => sum + r.durationMs, 0);

@@ -35,8 +35,19 @@ import {
   SELECT_TESTIDS,
   TESTID_INVENTORY,
 } from '../scenarios/importDialogModel';
-import { describeSource, enabledFamilies, GENERATORS } from '../scenarios/importDialogGenerators';
+import {
+  CORPUS_DRAW_P,
+  corpusDrawProbability,
+  describeSource,
+  drawFileSource,
+  enabledFamilies,
+  GENERATORS,
+  GPS_HOSTILE,
+  GPS_PASSABLE,
+  gpsPassableProbability,
+} from '../scenarios/importDialogGenerators';
 import { corpusPathHash } from './fixtureCorpus';
+import { restoreTraceEnv } from './fuzzTrace';
 
 /**
  * Testids a generator can emit, as literals.
@@ -133,8 +144,28 @@ describe('import fuzzer testid allowlists', () => {
       ...Object.values(ESCAPE_PATH).flatMap((route) => [...route]),
     ].filter((id): id is string => typeof id === 'string');
     expect(forced.length).toBeGreaterThan(30);
-    const rejected = forced.filter((id) => !isDispatchable({ kind: 'ui', testid: id, label: 'x' }));
+    // A `*` entry is a PREFIX the shell expands against the digest, so what has
+    // to be dispatchable is the EXPANDED id - which means the bridge needs a
+    // matching pattern for it, not a literal.
+    const rejected = forced
+      .map((id) => (id.endsWith('*') ? `${id.slice(0, -1)}7` : id))
+      .filter((id) => !isDispatchable({ kind: 'ui', testid: id, label: 'x' }));
     expect(rejected).toEqual([]);
+  });
+
+  it('keeps every advance-route prefix inside the observable inventory', () => {
+    // The other half: the shell expands a `*` route entry out of `digest.live`,
+    // so the digest has to be reporting those ids in the first place. A prefix
+    // the inventory does not carry would expand to nothing, every time, and the
+    // screen would silently have no advancing move at all.
+    const prefixes = Object.values(ADVANCE_MOVE)
+      .flatMap((route) => [...(route ?? [])])
+      .filter((id) => id.endsWith('*'));
+    expect(prefixes.length).toBeGreaterThan(0);
+    const inventoryPrefixes = TESTID_INVENTORY.filter((entry) => entry.endsWith('*'));
+    for (const prefix of prefixes) {
+      expect(inventoryPrefixes, `${prefix} must be observable`).toContain(prefix);
+    }
   });
 
   it('allows every dynamic testid the generators can select', async () => {
@@ -255,6 +286,35 @@ describe('import fuzzer testid allowlists', () => {
     expect(uncovered).toEqual([]);
   });
 
+  it('has a generator for every literal the bridge will click', async () => {
+    // The third direction of the contract, and the one that was missing.
+    // Allowlisted-and-observable is not enough: a control no generator ever
+    // names is one the fuzzer cannot reach, so it is dead surface that reads as
+    // covered. `shot-editor-context-clear`, `shot-editor-expand` and
+    // `dirty-dialog-keep-editing` all sat in both lists for a whole wave and
+    // were never once clicked.
+    //
+    // Scanned as "does the CODE mention this id at all", not as a `click('x')`
+    // call shape: a third of the catalog picks its target out of a local array
+    // (`orphan:choose`, `blocked:choose`, the two gpx footer primaries) and a
+    // call-shape scan reports every one of those as unreachable. Comments are
+    // stripped first, so a name that survives only in prose does not count.
+    const text = (await generatorSource())
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+    const named = new Set([
+      ...[...text.matchAll(/'([a-z0-9-]{3,60})'/g)].map((match) => match[1] as string),
+      ...templateTargets(text).map(sampleFrom),
+      ...Object.values(ADVANCE_MOVE).flatMap((route) => [...(route ?? [])]),
+      ...Object.values(ESCAPE_PATH).flatMap((route) => [...route]),
+    ]);
+    const unreachable = [...CLICKABLE_TESTIDS].filter((id) => !named.has(id));
+    // No exceptions. Every clickable id is either drawn by a generator or named
+    // by the model as an advance or an escape; `telemetry-opt-in-no` qualifies
+    // through `first-run`'s entry in both tables.
+    expect(unreachable.sort()).toEqual([]);
+  });
+
   it('has a generator catalog whose screens are all escapable', () => {
     const screens = new Set(GENERATORS.flatMap((generator) => [...generator.screens]));
     expect(screens.size).toBeGreaterThan(8);
@@ -269,12 +329,17 @@ describe('import fuzzer testid allowlists', () => {
     // it are never exercised at all.
     const screens = new Set(GENERATORS.flatMap((generator) => [...generator.screens]));
     const uncovered = [...IN_FLOW_SCREENS].filter((screen) => !screens.has(screen));
-    // The exceptions are named rather than tolerated. `wiz-init` and
-    // `wiz-blank` are transient wizard phases that render no control of their
-    // own, and `first-run` is the telemetry modal, whose only choice the
+    // The exceptions are named rather than tolerated. `wiz-init`, `wiz-blank`
+    // and `wiz-no-suggest` are transient wizard phases that render no control of
+    // their own, and `first-run` is the telemetry modal, whose only choice the
     // scenario makes once at startup - so progress forcing is the only thing
-    // that ever acts on any of the three.
-    expect(uncovered.sort()).toEqual(['first-run', 'wiz-blank', 'wiz-init']);
+    // that ever acts on any of the four.
+    //
+    // `wiz-no-suggest` joined that list deliberately: the bridge's settle
+    // predicate waits through it, because it is the sub-paint gap between the
+    // suggestion pool running dry and `manual_placing` starting, and the walk is
+    // better spent on `wiz-manual`, where the placement options actually live.
+    expect(uncovered.sort()).toEqual(['first-run', 'wiz-blank', 'wiz-init', 'wiz-no-suggest']);
     for (const screen of NON_FLOW_SCREENS) {
       expect(screens.has(screen), `${screen} needs a generator too`).toBe(true);
     }
@@ -314,6 +379,184 @@ describe('import fuzzer testid allowlists', () => {
     } finally {
       if (before === undefined) delete process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT;
       else process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT = before;
+    }
+  });
+
+  it('keeps the zero-datum GPS draw passable at least half the time', () => {
+    // The floor is the whole point. `zero-datum-config-confirm` is
+    // `disabled={!gpsCoords}`, so a run whose GPS corpus never parses cannot
+    // complete the zero-datum screen at all - which is what the 130-cell corpus
+    // campaign measured (395 steps on the screen, zero `zdc:confirm`).
+    const before = process.env.STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P;
+    try {
+      delete process.env.STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P;
+      expect(gpsPassableProbability()).toBeGreaterThanOrEqual(0.5);
+      for (const [raw, want] of [
+        ['0', 0.5],
+        ['0.25', 0.5],
+        ['1', 1],
+        ['4', 1],
+        ['nonsense', 0.6],
+        ['0.75', 0.75],
+      ] as const) {
+        process.env.STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P = raw;
+        expect(gpsPassableProbability(), `raw=${raw}`).toBe(want);
+      }
+    } finally {
+      if (before === undefined) delete process.env.STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P;
+      else process.env.STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P = before;
+    }
+    // Both corpora stay non-empty: the passable half is an addition to the
+    // hostile one, not a replacement for it.
+    expect(GPS_PASSABLE.length).toBeGreaterThan(4);
+    expect(GPS_HOSTILE.length).toBeGreaterThan(4);
+  });
+
+  it('reads the corpus draw share at call time and clamps it', () => {
+    // 1.0 is the value that matters: it is how a campaign says "import nothing
+    // but real files". It stays a SHARE and not a switch, so a run with no
+    // corpus configured still falls through to a generated file.
+    const before = process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P;
+    try {
+      delete process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P;
+      expect(corpusDrawProbability()).toBe(CORPUS_DRAW_P);
+      for (const [raw, want] of [
+        ['1', 1],
+        ['0', 0],
+        ['0.4', 0.4],
+        ['nonsense', CORPUS_DRAW_P],
+        ['2', CORPUS_DRAW_P],
+        ['-1', CORPUS_DRAW_P],
+      ] as const) {
+        process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P = raw;
+        expect(corpusDrawProbability(), `raw=${raw}`).toBe(want);
+      }
+    } finally {
+      if (before === undefined) delete process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P;
+      else process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P = before;
+    }
+  });
+
+  it('carries the two new shares in a trace header but never the corpus root', () => {
+    // The share reproduces; the directory does not. `STALAGMIGHT_FUZZ_CORPUS_DIR`
+    // names a tree this process would walk and copy out of, so a trace does not
+    // get to choose it - which is the v3 privacy rule, and it has to keep
+    // holding now that a sibling knob with the same prefix exists.
+    const restored = restoreTraceEnv({
+      STALAGMIGHT_FUZZ_CORPUS_DRAW_P: '1',
+      STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P: '0',
+      STALAGMIGHT_FUZZ_CORPUS_DIR: '/somebody/elses/surveys',
+    });
+    try {
+      expect(restored.applied.map(([key]) => key).sort()).toEqual([
+        'STALAGMIGHT_FUZZ_CORPUS_DRAW_P',
+        'STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P',
+      ]);
+      expect(restored.refused).toEqual(['STALAGMIGHT_FUZZ_CORPUS_DIR']);
+      expect(corpusDrawProbability()).toBe(1);
+    } finally {
+      delete process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P;
+      delete process.env.STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P;
+    }
+  });
+
+  it('registers redactions at EVERY corpus materialization site', async () => {
+    // The recording path registered them and the REPLAY path did not, so
+    // replaying a corpus trace put real basenames - which the app echoes back in
+    // its own messages - into `fail()` output, the trace and the printed detail.
+    // A structural check rather than a behavioural one because the helper lives
+    // inside the scenario's closure and has no seam: what has to hold is that no
+    // call site can materialize without registering, which is a property of the
+    // SOURCE.
+    const fs = await import('fs');
+    const scenario = fs.readFileSync(new URL('../scenarios/importDialogFuzz.ts', import.meta.url), 'utf8');
+    const lines = scenario.split('\n');
+    const sites = lines
+      .map((line, index) => ({ line, index }))
+      .filter((entry) => /\bmaterializeCorpusEntry\(/.test(entry.line) && !entry.line.trimStart().startsWith('*'));
+    // Both known sites: the generator draw and the replayed `corpusFile` step.
+    expect(sites.length).toBeGreaterThanOrEqual(2);
+    for (const site of sites) {
+      // The registration follows within the same block - it needs the
+      // `copied.names` the call returns, so it cannot precede it. The window is
+      // generous because the generator site explains its skip reasons first.
+      const window = lines.slice(site.index, site.index + 22).join('\n');
+      expect(
+        window,
+        `materializeCorpusEntry at line ${site.index + 1} must register redactions`,
+      ).toContain('registerCorpusRedactions(');
+    }
+  });
+
+  it('spends a winning corpus draw on a format the corpus can actually serve', () => {
+    // The bug: the format was picked FIRST and the corpus only consulted after,
+    // so an enabled format the corpus has nothing for fell through to a
+    // generated spec even at a draw share of 1. Measured on a `FORMAT=dmp,tml`
+    // run over 11 `.dmp` and one `.tml`: `tmlu` is enabled, the corpus has none,
+    // and a third of the draws took the synthetic path silently.
+    const before = {
+      format: process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT,
+      share: process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P,
+    };
+    try {
+      // `tml` enables BOTH `tml` and `tmlu`; the corpus below has only `tml`.
+      process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT = 'dmp,tml';
+      process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P = '1';
+      const corpus = {
+        dmp: [{ relPath: 'a/one.dmp', id: 'aaaaa', pathHash: 'h1', format: 'dmp' }],
+        tml: [{ relPath: 'a/two.tml', id: 'bbbbb', pathHash: 'h2', format: 'tml' }],
+        tmlu: [],
+      } as unknown as Parameters<typeof drawFileSource>[0]['corpus'];
+
+      let rngCalls = 0;
+      const env = {
+        ctx: { rng: () => ((rngCalls += 1) * 0.37) % 1, randInt: () => 0 },
+        digest: {},
+        filesRel: 'fuzz-files',
+        fileSeq: 1,
+        corpus,
+      } as unknown as Parameters<typeof drawFileSource>[0];
+
+      // Every draw at share 1 must be a corpus draw, and never a `tmlu` one.
+      for (let i = 0; i < 60; i += 1) {
+        const source = drawFileSource(env);
+        expect(source.origin, `draw ${i}`).toBe('corpus');
+        if (source.origin === 'corpus') {
+          expect(['a/one.dmp', 'a/two.tml']).toContain(source.corpusRel);
+        }
+      }
+    } finally {
+      if (before.format === undefined) delete process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT;
+      else process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT = before.format;
+      if (before.share === undefined) delete process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P;
+      else process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P = before.share;
+    }
+  });
+
+  it('falls through to a generated file when the corpus serves NO enabled format', () => {
+    // Narrower, not failed - and the shell counts it. The draw must still
+    // produce a usable file rather than throwing on an empty intersection.
+    const before = {
+      format: process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT,
+      share: process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P,
+    };
+    try {
+      process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT = 'gpx';
+      process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P = '1';
+      const env = {
+        ctx: { rng: () => 0.5, randInt: () => 0 },
+        digest: {},
+        filesRel: 'fuzz-files',
+        fileSeq: 2,
+        corpus: { gpx: [] },
+      } as unknown as Parameters<typeof drawFileSource>[0];
+      const source = drawFileSource(env);
+      expect(source.origin).toBe('gen');
+    } finally {
+      if (before.format === undefined) delete process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT;
+      else process.env.STALAGMIGHT_FUZZ_IMPORT_FORMAT = before.format;
+      if (before.share === undefined) delete process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P;
+      else process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P = before.share;
     }
   });
 

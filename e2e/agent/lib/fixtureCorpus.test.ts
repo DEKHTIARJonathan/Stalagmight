@@ -20,6 +20,7 @@ import {
   MAX_MATERIALIZED_BYTES,
   MAX_MATERIALIZED_DEPTH,
   MAX_MATERIALIZED_FILES,
+  MAX_WALK_DEPTH,
   corpusAvailable,
   corpusDir,
   corpusEntryFor,
@@ -29,6 +30,7 @@ import {
   describeCorpus,
   discoverCorpus,
   materializeCorpusEntry,
+  type CorpusEntry,
 } from './fixtureCorpus';
 
 let root = '';
@@ -220,6 +222,168 @@ describe('discoverCorpus', () => {
       expect(entry.relPath).not.toMatch(/^[0-9a-f]{5}$/);
       expect(entry.relPath).not.toMatch(/^[0-9a-f]{16}$/);
     }
+  });
+});
+
+describe('the discovery walk bounds', () => {
+  /**
+   * A single synthetic chain, pinning the depth bound from BOTH sides.
+   *
+   * `at-bound.srv` sits at exactly `MAX_WALK_DEPTH` directory levels below the
+   * root and `past-bound.srv` one level further, so an off-by-one in either
+   * direction shows up here as a missing file or an extra one - a test that
+   * only had the "deep file is found" half would pass just as happily with no
+   * bound at all, and one that only had the "too deep is refused" half would
+   * pass with the bound set anywhere.
+   *
+   * Invented names, invented shape. The real corpus is never read by a test;
+   * that it happened to grow past the old bound is the reason this exists and
+   * not something any assertion here depends on.
+   */
+  const levelNames = (levels: number): string[] => Array.from({ length: levels }, (_, i) => `L${i + 1}`);
+  const relOf = (levels: number, name: string): string => [...levelNames(levels), name].join('/');
+  const AT_BOUND = relOf(MAX_WALK_DEPTH, 'at-bound.srv');
+  const PAST_BOUND = relOf(MAX_WALK_DEPTH + 1, 'past-bound.srv');
+
+  beforeEach(() => {
+    const past = path.join(root, ...levelNames(MAX_WALK_DEPTH + 1));
+    fs.mkdirSync(past, { recursive: true });
+    fs.writeFileSync(path.join(root, ...levelNames(MAX_WALK_DEPTH), 'at-bound.srv'), 'A1 A2 10 90 0');
+    fs.writeFileSync(path.join(past, 'past-bound.srv'), 'B1 B2 10 90 0');
+    // A second file behind the same refused door, so the counter's unit is
+    // pinned as DIRECTORIES not descended into rather than files not seen.
+    fs.writeFileSync(path.join(past, 'past-bound-two.srv'), 'C1 C2 10 90 0');
+    process.env[CORPUS_DIR_ENV] = root;
+  });
+
+  it('finds a file at exactly the depth bound', () => {
+    const inventory = discoverCorpus();
+    expect(inventory.entries.map((entry) => entry.relPath)).toContain(AT_BOUND);
+    expect(corpusEntryFor(AT_BOUND)?.format).toBe('srv');
+  });
+
+  it('refuses the level below it - and COUNTS the refusal instead of hiding it', () => {
+    // The bug this whole change is about: an undiscovered file leaves no trace
+    // anywhere, so a walk that is one level too shallow reports a smaller
+    // corpus with total confidence and nothing in the output distinguishes
+    // "this is all there is" from "this is all I looked at".
+    const inventory = discoverCorpus();
+    expect(inventory.entries.map((entry) => entry.relPath)).not.toContain(PAST_BOUND);
+    // ONE, with two importable files behind it: the unit is doors not opened,
+    // because counting the files would mean walking what the bound refused.
+    expect(inventory.tooDeep).toBe(1);
+    // And it is its own counter, not folded into the general skip count, so a
+    // corpus that has outgrown the bound is distinguishable from an unreadable
+    // directory - the two have completely different answers.
+    expect(inventory.skipped).toBe(0);
+  });
+
+  it('says it in the one line a run prints, without naming anything', () => {
+    const line = describeCorpus(discoverCorpus());
+    expect(line).toContain(`deeper than ${MAX_WALK_DEPTH} levels`);
+    expect(line).toContain('lower bound');
+    for (const segment of PAST_BOUND.split('/')) expect(line).not.toContain(segment);
+  });
+
+  it('walks exactly as deep as the materialization copy, deliberately and not by luck', () => {
+    // Discovery and materialization are two halves of one operation. Shallower
+    // discovery hides files the copy would take; deeper discovery draws entries
+    // the copy then refuses on every iteration. Pinned here so moving one alone
+    // fails rather than silently producing one of those two.
+    expect(MAX_WALK_DEPTH).toBe(MAX_MATERIALIZED_DEPTH);
+  });
+
+  /**
+   * The case the depth counter was BUILT for, and the one it could not report.
+   *
+   * A corpus organised one folder deeper than the bound yields zero entries.
+   * `available` was the only flag, so zero entries read as "no corpus", the
+   * describe line said `unset or empty`, and the `tooDeep` warning - the single
+   * piece of output that would tell the owner their files exist and the walk
+   * refused to look - was unreachable in exactly that case. The failure mode is
+   * silent and total: the run does everything it would do with no corpus at
+   * all, and says so in a way that sends the reader to check an env var that is
+   * already correct.
+   */
+  describe('when EVERY file is behind the bound', () => {
+    let deepRoot = '';
+
+    beforeEach(() => {
+      deepRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-deep-corpus-'));
+      const past = path.join(deepRoot, ...levelNames(MAX_WALK_DEPTH + 1));
+      fs.mkdirSync(past, { recursive: true });
+      fs.writeFileSync(path.join(past, 'only-file.srv'), 'A1 A2 10 90 0');
+      process.env[CORPUS_DIR_ENV] = deepRoot;
+    });
+
+    afterEach(() => {
+      fs.rmSync(deepRoot, { recursive: true, force: true });
+    });
+
+    it('is configured-and-empty, which is not the same state as unset', () => {
+      const inventory = discoverCorpus();
+      expect(inventory.entries).toEqual([]);
+      expect(inventory.available).toBe(false);
+      // The distinction the whole fix turns on. `root` is set because there was
+      // somewhere to look; `available` is false because looking found nothing.
+      expect(inventory.configured).toBe(true);
+      expect(inventory.root).toBe(deepRoot);
+      expect(inventory.tooDeep).toBe(1);
+    });
+
+    it('SAYS the depth bound refused it, instead of claiming no corpus is set', () => {
+      const line = describeCorpus(discoverCorpus());
+      expect(line).toContain(`deeper than ${MAX_WALK_DEPTH} levels`);
+      expect(line).toContain('lower bound');
+      // The regression itself: the message that sent the reader to the env var.
+      expect(line).not.toContain('unset');
+      expect(line).toContain('0 file(s)');
+    });
+
+    it('still reports no corpus when the knob names nothing', () => {
+      // The other side of the same branch, so `configured` cannot be pinned
+      // true by accident and swallow the genuinely-unset case with it.
+      delete process.env[CORPUS_DIR_ENV];
+      const inventory = discoverCorpus();
+      expect(inventory.configured).toBe(false);
+      expect(describeCorpus(inventory)).toContain('none');
+    });
+  });
+
+  it('stays bounded: nothing it yields is deeper than the bound', () => {
+    for (const entry of discoverCorpus().entries) {
+      expect(entry.relPath.split('/').length - 1).toBeLessThanOrEqual(MAX_WALK_DEPTH);
+    }
+  });
+
+  it('does not follow a symlink, to a directory or to a file', () => {
+    // A corpus is somebody's data directory; a link out of it would put the
+    // walk somewhere they did not point us, and everything discovered here is
+    // later COPIED. The deeper walk changes nothing about that.
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-corpus-outside-'));
+    try {
+      fs.writeFileSync(path.join(outside, 'secret.srv'), 'not ours');
+      fs.symlinkSync(outside, path.join(root, 'linked'), 'dir');
+      fs.symlinkSync(path.join(outside, 'secret.srv'), path.join(root, 'linked.srv'), 'file');
+      const relPaths = discoverCorpus().entries.map((entry) => entry.relPath);
+      expect(relPaths).not.toContain('linked/secret.srv');
+      expect(relPaths).not.toContain('linked.srv');
+      expect(relPaths.some((rel) => rel.includes('secret'))).toBe(false);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('terminates on a link that points back at the corpus root', () => {
+    // Not following links is also what makes the recursion terminate without a
+    // visited set. A followed self-link would re-walk the whole tree at every
+    // level until the depth bound stopped it, yielding the same files over and
+    // over under different paths - so "no duplicates" is the observable form of
+    // "this walk cannot be made to spin".
+    fs.symlinkSync(root, path.join(root, 'self'), 'dir');
+    const relPaths = discoverCorpus().entries.map((entry) => entry.relPath);
+    expect(new Set(relPaths).size).toBe(relPaths.length);
+    expect(relPaths.some((rel) => rel.startsWith('self/'))).toBe(false);
   });
 });
 
@@ -446,5 +610,32 @@ describe('materializeCorpusEntry', () => {
     const entry = corpusEntryFor('device/alpha.dmp')!;
     delete process.env[CORPUS_DIR_ENV];
     expect(() => materializeCorpusEntry(entry, root)).toThrow(new RegExp(CORPUS_DIR_ENV));
+  });
+
+  it('names an unreadable entry by its ID and its errno, never by its path', () => {
+    // Node builds an fs error message out of the full path it tried - "ENOENT:
+    // no such file or directory, stat '/home/.../<a real cave name>/...'" - and
+    // this throw is NOT caught by the scenario's `sourceOnDisk`, so it escapes
+    // into the failure payload before any redaction for the entry exists, and
+    // from there into the printed detail and the campaign report.
+    const entry = corpusEntryFor('device/alpha.dmp')!;
+    const vanished: CorpusEntry = { ...entry, relPath: 'device-that-is-gone/secret-cave-name.dmp' };
+
+    let message = '';
+    try {
+      materializeCorpusEntry(vanished, path.join(root, 'out'));
+    } catch (err) {
+      message = (err as Error).message;
+    }
+
+    expect(message).not.toBe('');
+    expect(message).toContain(entry.id);
+    // The two segments of the path it failed on, and the separator itself.
+    expect(message).not.toContain('device-that-is-gone');
+    expect(message).not.toContain('secret-cave-name');
+    expect(message).not.toContain(root);
+    expect(message).not.toContain(path.sep);
+    // The errno still comes through, so the failure is still diagnosable.
+    expect(message).toMatch(/\((ENOENT|ENOTDIR|EACCES|io)\)$/);
   });
 });

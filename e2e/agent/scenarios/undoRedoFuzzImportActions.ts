@@ -80,14 +80,35 @@
  * one of them an absolute or escaping path, for the same reason `rel` is checked
  * on every other v2 step kind.
  *
- * ## What is deliberately NOT here
+ * ## What is deliberately NOT here, stated accurately
  *
- * `suggest_orphan_placements` is NOT a `projectStore` action - `App.tsx` and the
- * three import dialogs call it through `invokeIpc` directly, and this scenario
- * dispatches store actions by name. Adding an IPC-by-name path to the bridge
- * would widen what a recorded trace can reach for one read-only probe, which is
- * not a trade worth making; the probe is covered by `import-dialog-fuzz`, which
- * drives the dialogs that call it.
+ * `suggest_orphan_placements` and `suggest_all_import_placements` are NOT
+ * `projectStore` actions - `App.tsx`, the three import dialogs and the DMP
+ * wizard call them through `invokeIpc` directly, and this scenario dispatches
+ * store actions by name. Neither can be reached from here without either an
+ * IPC-by-name path in the bridge (which widens what a recorded trace can reach,
+ * for two read-only probes) or a `projectStore` action with no product caller
+ * (dead product code kept alive by a test). Both are worse than the gap.
+ *
+ * An earlier version of this note said "the probe is covered by
+ * `import-dialog-fuzz`, which drives the dialogs that call it". That was true of
+ * INVOCATION and false of depth, and the distinction matters. The 130-cell
+ * corpus campaign opened the wizard often enough to call
+ * `suggest_all_import_placements` on every one of them and completed 429
+ * imports, each of which calls `suggest_orphan_placements` - but the wizard's
+ * suggestion pool came back empty essentially every time (47 steps on
+ * `wiz-suggest` out of 13,781) and `orphan-placement` was never reached at all.
+ * So both commands were exercised only on their EMPTY return.
+ *
+ * What makes the claim true is the suggestion-bearing DMP shape
+ * (`surveyFileSpecs.suggestiveDmpSpec`) and the zero-datum GPS fix, which
+ * together give the wizard something to suggest. The counters that hold the
+ * claim honest are `screen:wiz-suggest` and `screen:orphan-placement`; if either
+ * goes back to zero, this note is wrong again.
+ *
+ * `suggest_import_placement` DOES have a store action, and its non-empty return
+ * is reached from here - see `createMotifSection` / `probeSuggestMotif` at the
+ * end of the catalog.
  */
 import type { ScenarioContext } from './framework';
 import type { TargetingDigest } from '../lib/fuzzOracleCore';
@@ -817,9 +838,128 @@ export const IMPORT_ACTION_GENERATORS: readonly ActionGenerator[] = [
       return { action: 'saveAfterImport', args: [], label: 'saveAfterImport()' };
     },
   },
+  // --- the two below are APPENDED, and that is load-bearing -----------------
+  //
+  // A v1 or v2 run filters every `since: 'v3'` entry out before it builds the
+  // weighted array, so both of those streams are byte-identical to what they
+  // were. A v3 run's array grows at the END, which is the same discipline v3
+  // itself followed when it joined v2 - see `streamV3` in
+  // `undoRedoFuzzActions.ts`. The v3 metric-for-metric replay record in
+  // `undoRedoFuzz.ts`'s header predates these two.
+  {
+    /**
+     * Create a section whose shots are a MOTIF the suggestion probe can match.
+     *
+     * `probeSuggestPlacement` feeds `suggest_import_placement` freshly random
+     * shots, and the suggester matches shot-for-shot inside hard cutoffs - 25
+     * degrees of azimuth, `max(3% of length, 0.4 m)` of length, 0.30 m of depth
+     * per point, over a 0.45 aggregate floor. Independently random shots clear
+     * none of that, so that probe has only ever exercised the EMPTY return: the
+     * scoring loop, the merge-offset search and the crossing-clearance guard
+     * behind it have never once run at the store tier.
+     *
+     * This half plants the target. The motif is derived from a small integer
+     * `key` so its partner can rebuild the same run without any shared state -
+     * generators have to stay pure, because the shrinker re-derives every step.
+     */
+    name: 'createMotifSection',
+    weight: 2,
+    since: 'v3',
+    build(ctx) {
+      const key = ctx.randInt(0, MOTIF_KEYS - 1);
+      const shots = motifShots(key, 0);
+      return {
+        action: 'createSection',
+        args: [
+          {
+            name: `motif-${key}`,
+            surveyor: null,
+            date: '2026-01-01',
+            color: '#3388ff',
+            direction: 'in',
+            quality: 3,
+            shots,
+          },
+        ],
+        label: `createSection(motif=${key}, shots=${shots.length})`,
+      };
+    },
+  },
+  {
+    /**
+     * Ask for a placement using a motif some `createMotifSection` may have
+     * planted, jittered well inside the cutoffs above.
+     *
+     * Returns an empty list until its partner has run, which is fine and is the
+     * same contract every other probe here keeps: the value is that on the runs
+     * where both fired, the command has something to find.
+     */
+    name: 'probeSuggestMotif',
+    weight: 2,
+    since: 'v3',
+    build(ctx) {
+      const key = ctx.randInt(0, MOTIF_KEYS - 1);
+      const drift = ctx.randInt(-2, 2);
+      const shots = motifShots(key, drift);
+      return {
+        action: 'suggestImportPlacement',
+        args: [shots],
+        label: `suggestImportPlacement(motif=${key}, drift=${drift}, n=${shots.length})`,
+      };
+    },
+  },
 ];
 
 /** Names in this group, for the allowlist test and for documentation. */
 export function importGeneratorNames(): string[] {
   return IMPORT_ACTION_GENERATORS.map((generator) => generator.name);
+}
+
+// ---------------------------------------------------------------------------
+// Motifs: a target the suggestion probe can actually match
+// ---------------------------------------------------------------------------
+
+/** How many distinct motifs `createMotifSection` and `probeSuggestMotif` share. */
+export const MOTIF_KEYS = 4;
+
+/**
+ * The shots of motif `key`, optionally drifted by `drift` tenths of a unit.
+ *
+ * PURE and closed over nothing but its two integers, so the planting generator
+ * and the probing generator produce the same run without any shared state -
+ * which they must, because the shrinker re-derives every step from the trace and
+ * a generator that remembered something between calls would derive a different
+ * one. It also consumes NO draws, so neither caller's position in the stream
+ * depends on the motif it picked.
+ *
+ * `drift` moves azimuth by 0.2 degrees, length by 1 cm and depth by 1 cm per
+ * step, over a range of +/-2 - far inside the suggester's 25 degree / 0.4 m /
+ * 0.30 m cutoffs, so the match survives while the values are not identical.
+ */
+export function motifShots(key: number, drift: number): Record<string, unknown>[] {
+  const azimuth0 = 20 + key * 37;
+  const out: Record<string, unknown>[] = [];
+  for (let i = 0; i < 4; i++) {
+    const azimuth = Number((((azimuth0 + i * 11 + drift * 0.2) % 360) + 360).toFixed(1)) % 360;
+    const depthIn = Number((3 + key * 0.5 + i * 0.9 + drift * 0.01).toFixed(2));
+    const depthOut = Number((depthIn + 0.9).toFixed(2));
+    out.push({
+      azimuth_in: azimuth,
+      azimuth_out: azimuth,
+      length: Number((5 + key * 0.3 + i * 0.7 + drift * 0.01).toFixed(2)),
+      depth_in: depthIn,
+      depth_out: depthOut,
+      pitch_in: null,
+      pitch_out: null,
+      left: null,
+      right: null,
+      up: null,
+      down: null,
+      comment: null,
+      kind: 'Normal',
+      marker_index: null,
+      temperature: null,
+    });
+  }
+  return out;
 }

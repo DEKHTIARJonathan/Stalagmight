@@ -345,7 +345,7 @@
  *
  * ## v3: the import group, opt-in
  *
- * `STALAGMIGHT_FUZZ_STREAM=v3` is v2 PLUS the thirteen generators in
+ * `STALAGMIGHT_FUZZ_STREAM=v3` is v2 PLUS the fifteen generators in
  * `undoRedoFuzzImportActions.ts`: synthetic `ImportSectionConfig` batches across
  * all six placement variants, the null-in-a-required-f64 family, the DMP
  * wizard's `existing_shot_updates`, the four file importers on files built by
@@ -436,11 +436,23 @@
  *
  * ## What v3 does NOT reach, and why
  *
- * `suggest_orphan_placements` is not a `projectStore` action - `App.tsx` and the
- * three import dialogs invoke it directly - and this scenario dispatches store
- * actions by name. Widening the bridge to dispatch IPC commands by name for one
- * read-only probe would give a recorded trace a much larger surface; the probe
- * is covered by `import-dialog-fuzz`, which drives the dialogs that call it.
+ * `suggest_orphan_placements` and `suggest_all_import_placements` are not
+ * `projectStore` actions - `App.tsx`, the three import dialogs and the DMP
+ * wizard invoke them directly - and this scenario dispatches store actions by
+ * name. Reaching them would take either an IPC-by-name path in the bridge, which
+ * gives a recorded trace a much larger surface for two read-only probes, or a
+ * store action with no product caller, which is dead product code kept alive by
+ * a test. `import-dialog-fuzz` drives the dialogs that call them, and the
+ * counters that say whether it reaches them for real - rather than only on their
+ * empty return - are `screen:wiz-suggest` and `screen:orphan-placement`. See the
+ * fuller note in `undoRedoFuzzImportActions.ts`, which records what the corpus
+ * campaign actually measured.
+ *
+ * `suggest_import_placement` is a store action and IS reached, including its
+ * non-empty return: `createMotifSection` plants a run and `probeSuggestMotif`
+ * asks for a placement using a jittered copy of it. Both are appended at the END
+ * of the v3 group, so v1 and v2 arrays are unchanged; the metric-for-metric v3
+ * replay record above predates them.
  *
  * There is no Rust-tier analogue of this group in
  * `src-tauri/src/core/state/fuzz_undo_tests.rs`, and adding one is a design

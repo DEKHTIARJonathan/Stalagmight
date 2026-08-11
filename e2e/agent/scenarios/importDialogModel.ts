@@ -309,6 +309,7 @@ export const TESTID_INVENTORY: readonly string[] = [
   'shot-editor-context-clear',
   'shot-editor-context-fill-down',
   'shot-editor-context-copy',
+  'shot-editor-context-cut',
   'shot-editor-context-paste',
   // --- new project for import ----------------------------------------------
   'new-project-for-import-dialog',
@@ -369,6 +370,11 @@ export const VIRTUAL_SHOT_MODES: readonly string[] = ['Auto', 'AllJumps', 'AllRe
  * `gpx-import-confirm` when only waypoints are selected and
  * `gpx-continue-button` otherwise, and they are opposite branches of one
  * ternary. The walk plays the first entry that is actionable.
+ *
+ * An entry ending in `*` is a PREFIX PATTERN, expanded against the live digest
+ * exactly as `TESTID_INVENTORY`'s patterns are: `zero-datum-select` advances by
+ * picking a section CARD, and the card ids carry an index this table cannot
+ * know. The shell plays the lowest-indexed actionable member.
  */
 export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, readonly string[]>>> = {
   'dmp-select': ['continue-button'],
@@ -380,11 +386,40 @@ export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, readonly string[]>>
   walls: ['walls-import-confirm', 'walls-import-cancel'],
   'gpx-select': ['gpx-continue-button', 'gpx-import-confirm', 'gpx-selection-cancel'],
   'gpx-place': ['gpx-import-confirm'],
-  'zero-datum-select': ['zero-datum-selection-skip'],
+  // PICK A SECTION first, and only skip if there is none to pick.
+  //
+  // Skipping is not advancing this screen, it is declining its whole purpose:
+  // behind a picked card sits `zero-datum-config`, which owns a station select,
+  // a GPS parser, a shot table and the confirm that starts the wizard WITH an
+  // anchor. Routing every stalled visit to Skip meant the forced advance walked
+  // around that surface every time. Measured on the naharon campaign: 27 samples
+  // on this screen, 7 picks against 8 skips, and the anchored wizard entry
+  // behind it almost never reached.
+  //
+  // The `*` is a PREFIX the shell expands against the digest - the cards are
+  // `zero-datum-section-card-N` and the model cannot know N.
+  'zero-datum-select': ['zero-datum-section-card-*', 'zero-datum-selection-skip'],
   'zero-datum-config': ['zero-datum-config-confirm'],
   'wiz-suggest': ['confirm-button'],
-  'wiz-no-suggest': ['cancel-button'],
-  'wiz-manual': ['segment-place-button'],
+  // No entry for `wiz-no-suggest`: the bridge's settle predicate waits through
+  // that frame now (see `busy()` in importDialogBridge.ts), so the walk arrives
+  // at `wiz-manual` instead - which is where the placement options actually are.
+  // A frame that OUTLASTS the settle cap still reaches the digest, is still
+  // classified, and is still escapable through the entry below; it just has no
+  // advancing move, which is honest, because the app is mid-transition and there
+  // is nothing on it to press.
+  // PLACE ON MAP first, then the footer's Place, then Skip.
+  //
+  // `segment-place-button` alone could not advance this screen. It is
+  // `disabled={!isSegmentPlacementValid}`, and that memo returns FALSE for the
+  // default mode `'manual'` - "must use Place on Map" is written into the
+  // branch - so on entry the footer primary is always off and the forced
+  // advance always missed. Measured: `gen:man:place` fired ZERO times over 130
+  // cells and 94 steps on this screen, and the walk left by burning to the
+  // escape budget instead. `segment-place-on-map-button` is the control the
+  // default mode actually offers, is never disabled, and starts the real map
+  // placement - which `map:click` and `map:escape` then finish.
+  'wiz-manual': ['segment-place-on-map-button', 'segment-place-button', 'segment-skip-button'],
   'wiz-done': ['cancel-button'],
   'wiz-error': ['retry-button'],
   'wiz-confirm': ['cancel-confirm-continue'],

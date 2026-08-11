@@ -1095,3 +1095,47 @@ describe('Plan/Export display isolation', () => {
     });
   });
 });
+
+describe('Placement mode forces stations visible (#518)', () => {
+  const sectionData = { name: 'S', surveyor: null, date: null, color: '#fff', direction: 'in', quality: 1, shots: [] };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useUIStore.setState({ showStations: false, placementMode: null });
+  });
+
+  it('turns stations on when a placement starts', () => {
+    expect(useUIStore.getState().showStations).toBe(false);
+    useUIStore.getState().startPlacementMode(sectionData as never, 0);
+    // MapCanvas cancels an active placement whenever showStations is false, so a
+    // placement that started with the toggle off died before the first click.
+    expect(useUIStore.getState().showStations).toBe(true);
+    expect(useUIStore.getState().placementMode).not.toBeNull();
+  });
+
+  it('does NOT persist the forcing to the saved display settings', async () => {
+    useUIStore.getState().startPlacementMode(sectionData as never, 0);
+    await new Promise((r) => setTimeout(r, 20));
+    // A prerequisite of a transient mode is not a preference: `toggleDisplay`
+    // would have written it through `saveDisplaySetting`.
+    //
+    // The 20 ms is a bound on the ABSENCE of a call, so it is best-effort by
+    // nature: it catches a synchronous or microtask-scheduled write, which is
+    // what `saveDisplaySetting` does. What makes the assertion trustworthy is
+    // not the window but the code - `startPlacementMode` calls `set` directly
+    // and has no IPC path at all.
+    const wrote = (invoke as unknown as { mock: { calls: unknown[][] } }).mock.calls.some(
+      ([cmd, args]) => cmd === 'save_display_setting' && (args as { key?: string })?.key === 'showStations',
+    );
+    expect(wrote).toBe(false);
+  });
+
+  it('leaves stations on when the placement ends, like every other mode exit', () => {
+    useUIStore.getState().startPlacementMode(sectionData as never, 0);
+    useUIStore.getState().cancelPlacementMode();
+    // One-way, exactly as the gas exit and the measure clear are: re-hiding them
+    // would take away the thing the user just placed against.
+    expect(useUIStore.getState().showStations).toBe(true);
+    expect(useUIStore.getState().placementMode).toBeNull();
+  });
+});

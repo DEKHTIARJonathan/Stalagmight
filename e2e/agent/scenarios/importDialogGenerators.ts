@@ -49,6 +49,7 @@ import {
   HOSTILE_COMMENTS,
   SURVEY_FORMAT_FAMILIES,
   randomSurveyFileSpec,
+  suggestiveDmpSpec,
   type GeneratedFileSpec,
   type Rng,
   type SurveyFileFormat,
@@ -64,8 +65,15 @@ import { OVERLAP_MODES, VIRTUAL_SHOT_MODES, type ScreenId } from './importDialog
 
 /** Where an input file comes from. */
 export type FileSource =
-  /** Built here from a spec; the SPEC travels in the trace, never the bytes. */
-  | { origin: 'gen'; spec: GeneratedFileSpec; rel: string }
+  /**
+   * Built here from a spec; the SPEC travels in the trace, never the bytes.
+   *
+   * `shape` names the non-default generator the spec came out of, so a run can
+   * COUNT them (`file:shape:*`) and a label can say which one a flow used. Not
+   * part of the recorded step: a replay re-renders from the spec itself, which
+   * already carries everything the shape decided.
+   */
+  | { origin: 'gen'; spec: GeneratedFileSpec; rel: string; shape?: 'suggestive' }
   /** A tracked fixture, materialized by `ctx.fixturePath` under `fixtures/`. */
   | { origin: 'fixture'; name: string; rel: string }
   /**
@@ -224,6 +232,9 @@ export const DATE_BOUNDARIES: readonly string[] = [
  * `section_offsets`' dust rule turns on, `'91,181'` is out of range on both
  * axes, and the RLO/PDF pair is a bidi override that reorders whatever a table
  * cell renders after it. The 512-character entry looks for a length clamp.
+ *
+ * Exactly ONE entry here parses (`'0,0'`), which is the whole reason
+ * `GPS_PASSABLE` exists - see its header.
  */
 export const GPS_HOSTILE: readonly string[] = [
   '',
@@ -237,6 +248,53 @@ export const GPS_HOSTILE: readonly string[] = [
   '‮abc مرحبا‬',
   'x'.repeat(512),
 ];
+
+/**
+ * GPS strings that PARSE, so the zero-datum screen can actually be confirmed.
+ *
+ * `zero-datum-config-confirm` is `disabled={!gpsCoords}`
+ * (`ZeroDatumConfigDialog.tsx`), and `gpsCoords` is set only by a `parseGps`
+ * that succeeded inside `handleGpsInputChange`. With a purely hostile corpus the
+ * confirm is disabled forever: the 130-cell corpus campaign spent 395 steps on
+ * that screen and fired `zdc:confirm` ZERO times, so the DMP wizard's whole
+ * zero-datum entry - the anchor import, the snap-fit, and every suggestion that
+ * follows it - was never once reached. The advancing move
+ * (`ADVANCE_MOVE['zero-datum-config']`) names the same disabled button, so the
+ * screen could not be force-advanced either and burned to the escape budget
+ * instead.
+ *
+ * Every entry below was verified against `src/utils/gps.ts`'s `parseGps` and is
+ * still a boundary rather than a nominal value: `'0,0'` is null island and the
+ * dust-rule zero, `'90,180'` is both axes at their limit, `'-0.0001,-0.0001'` is
+ * just past zero on the negative side, and the DMS entry takes a different
+ * parser branch from the DD ones.
+ */
+export const GPS_PASSABLE: readonly string[] = [
+  '0,0',
+  '90,180',
+  '-0.0001,-0.0001',
+  '20.4567,-87.0231',
+  '48.8583, 2.2944',
+  '-33.8688 151.2093',
+  '19.5876,-88.0412',
+  '20 12 34 N 87 27 24 W',
+];
+
+/**
+ * Share of zero-datum GPS draws taken from `GPS_PASSABLE`.
+ *
+ * A floor, not a target: the hostile half still contains `'0,0'`, so the
+ * effective share of draws that leave the confirm enabled is higher than this.
+ * Read at CALL time like every other knob, so a replay's restored environment
+ * reaches it, and clamped to `[0.5, 1]` - below a half the screen stops being
+ * reliably completable, which is the exact failure this constant was added to
+ * end.
+ */
+export function gpsPassableProbability(): number {
+  const raw = Number(process.env.STALAGMIGHT_FUZZ_IMPORT_GPS_PASSABLE_P);
+  if (!Number.isFinite(raw)) return 0.6;
+  return Math.min(1, Math.max(0.5, raw));
+}
 
 /** Numeric strings a shot cell has to accept, clamp or reject without crashing. */
 export const CELL_BOUNDARIES: readonly string[] = [
@@ -294,8 +352,45 @@ export function malformedProbability(): number {
   return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.2;
 }
 
-/** Share of drawn files taken from the private corpus, when one is configured. */
+/**
+ * Share of well-formed `.dmp` draws built as a SUGGESTION-BEARING file.
+ *
+ * `suggestiveDmpSpec` is the only generated shape whose sections overlap each
+ * other closely enough for `suggest_all_import_placements` to return anything,
+ * and therefore the only one that reaches `wiz-suggest` at all without a corpus
+ * or a tracked fixture - see that function's header for the measurement.
+ * Applies to the well-formed branch only: a corrupted file is drawn to break the
+ * parser, and a corrupted overlap is just a file that does not parse.
+ */
+export function suggestiveProbability(): number {
+  const raw = Number(process.env.STALAGMIGHT_FUZZ_IMPORT_SUGGESTIVE_P);
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
+}
+
+/** Default share of drawn files taken from the corpus, when one is configured. */
 export const CORPUS_DRAW_P = 0.25;
+
+/**
+ * Share of drawn files taken from the corpus, from
+ * `STALAGMIGHT_FUZZ_CORPUS_DRAW_P`.
+ *
+ * At 1.0 a run imports NOTHING but real files, which is the only way to fuzz
+ * against survey data whose sections genuinely overlap without generating the
+ * overlap first. It is still a share and not a switch: with no corpus
+ * configured, or with none of this run's enabled formats present in it, the draw
+ * falls through to a generated file and counts `corpus:absent`, which is a
+ * narrower run and not a failed one.
+ *
+ * Read at CALL time like every other knob, clamped to `[0, 1]`, and carried in a
+ * trace header by the `STALAGMIGHT_FUZZ_` prefix rule (`fuzzTrace.ts`) - unlike
+ * `STALAGMIGHT_FUZZ_CORPUS_DIR`, which names a directory tree and is on the
+ * never-restored list for exactly that reason. A replay therefore reproduces the
+ * SHARE while its own operator still chooses the corpus.
+ */
+export function corpusDrawProbability(): number {
+  const raw = Number(process.env.STALAGMIGHT_FUZZ_CORPUS_DRAW_P);
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : CORPUS_DRAW_P;
+}
 /** Share of DMP draws taken from a tracked fixture. */
 const FIXTURE_DRAW_P = 0.25;
 
@@ -328,18 +423,32 @@ export function enabledFormats(): SurveyFileFormat[] {
  * Draw one input file: a generated spec (valid-biased or corrupted), a tracked
  * fixture, or a private-corpus entry.
  *
- * The corpus is drawn FIRST and only from entries whose format this run is
- * allowed to use, so a `--axis STALAGMIGHT_FUZZ_IMPORT_FORMAT=gpx` cell does not
- * quietly import somebody's `.srv` collection. When no corpus is configured the
- * caller counts `corpus:absent` once and this returns a generated file, which is
- * a narrower run and not a failed one.
+ * The corpus is drawn FIRST, and the format is chosen from the INTERSECTION of
+ * "formats this run may use" and "formats the corpus actually has entries for".
+ * Both halves matter. The enabled set is what stops a
+ * `--axis STALAGMIGHT_FUZZ_IMPORT_FORMAT=gpx` cell quietly importing somebody's
+ * `.srv` collection; the corpus-bearing set is what stops a corpus-only campaign
+ * spending draws on synthetic input. Picking the format FIRST and only then
+ * looking for a corpus - which is what this did - meant an enabled format the
+ * corpus has nothing for fell straight through to a generated spec even at
+ * `STALAGMIGHT_FUZZ_CORPUS_DRAW_P=1`. Measured: a `FORMAT=dmp,tml` run over a
+ * corpus of 11 `.dmp` and one `.tml` enables `dmp,tml,tmlu`, and every `tmlu`
+ * draw - a third of them - took the synthetic path silently.
+ *
+ * When the intersection is EMPTY the draw falls through to a generated file,
+ * which is a narrower run and not a failed one; the shell counts `corpus:absent`
+ * for it once at startup and says so loudly if the run asked for corpus-only.
  */
 export function drawFileSource(env: GenEnv): FileSource {
   const rng = () => env.ctx.rng();
-  const format = pickFrom(rng, enabledFormats()) as SurveyFileFormat;
+  const enabled = enabledFormats();
+  // The intersection, computed BEFORE the dice: a format the corpus cannot serve
+  // must not be able to win a corpus draw and then quietly fall through.
+  const corpusFormats = enabled.filter((candidate) => (env.corpus[candidate]?.length ?? 0) > 0);
 
-  const corpus = env.corpus[format];
-  if (corpus !== undefined && corpus.length > 0 && rng() < CORPUS_DRAW_P) {
+  if (corpusFormats.length > 0 && rng() < corpusDrawProbability()) {
+    const format = pickFrom(rng, corpusFormats) as SurveyFileFormat;
+    const corpus = env.corpus[format] as readonly CorpusEntry[];
     const entry = pickFrom(rng, corpus) as CorpusEntry;
     const dirRel = `${env.filesRel}/corpus-${env.fileSeq}`;
     // `relPath` is POSIX by construction (`discoverCorpus` joins on '/').
@@ -354,6 +463,8 @@ export function drawFileSource(env: GenEnv): FileSource {
     };
   }
 
+  const format = pickFrom(rng, enabled) as SurveyFileFormat;
+
   // Tracked fixtures are all `.dmp`; there are none for the other formats, and
   // the repo forbids adding any.
   if (format === 'dmp' && rng() < FIXTURE_DRAW_P) {
@@ -363,6 +474,13 @@ export function drawFileSource(env: GenEnv): FileSource {
 
   const malformed = rng() < malformedProbability();
   const profile = malformed ? 'malformed' : 'valid';
+  // Drawn BEFORE the ordinary spec so the suggestive branch does not consume a
+  // whole `randomSurveyFileSpec` it then throws away.
+  if (!malformed && format === 'dmp' && rng() < suggestiveProbability()) {
+    const dmp = suggestiveDmpSpec(rng);
+    const spec: GeneratedFileSpec = { format: 'dmp', name: `fuzz-${env.fileSeq}-suggestive.dmp`, profile: 'valid', dmp };
+    return { origin: 'gen', spec, rel: `${env.filesRel}/${spec.name}`, shape: 'suggestive' };
+  }
   const clean = randomSurveyFileSpec(rng, profile, format);
   let spec: GeneratedFileSpec = { ...clean, name: `fuzz-${env.fileSeq}.${format}` };
   if (malformed) {
@@ -377,7 +495,10 @@ export function drawFileSource(env: GenEnv): FileSource {
 
 /** How a source is named in a log line, a metric key or a failure payload. */
 export function describeSource(source: FileSource): string {
-  if (source.origin === 'gen') return `${source.spec.profile} ${source.spec.format}`;
+  if (source.origin === 'gen') {
+    const shape = source.shape === undefined ? '' : ` (${source.shape})`;
+    return `${source.spec.profile} ${source.spec.format}${shape}`;
+  }
   if (source.origin === 'fixture') return `fixture ${source.name}`;
   if (source.origin === 'corpus') return `corpus #${source.id}`;
   return `disk ${source.rel}`;
@@ -990,12 +1111,55 @@ const ZERO_DATUM_CONFIG: Generator[] = [
     },
   },
   {
+    /**
+     * UNBLOCK the confirm: type a GPS that parses, but only while the confirm is
+     * present and DISABLED.
+     *
+     * The passable share alone is not enough on its own. `zero-datum-config` has
+     * a 125-weight pool (the shot table and the metadata form are both mounted
+     * on it), so `zdc:gps` is about 6% of draws - and a visit is 8 steps before
+     * the walk force-advances and 16 before it escapes. Measured on a pre-flight
+     * cell: 17 steps on the screen, no GPS typed, `forcedAdvanceUnavailable`
+     * eight times. The screen's ONLY exit forward is gated on a field, so the
+     * walk needs a move that aims at the gate rather than at the screen.
+     *
+     * Aimed with `presentButOff`, so it cannot fire once the confirm is enabled
+     * and cannot dilute anything else. `zdc:gps` keeps the hostile corpus and
+     * keeps its own weight: the point is to reach what is BEHIND the screen as
+     * well as to hammer the screen.
+     *
+     * The weight is high for the same structural reason, not for taste: a visit
+     * is 8 steps before the walk force-advances, and every step spent before the
+     * gate opens is a step the forced advance cannot use. At 20 of a ~145 pool
+     * the gate opens inside about four steps; the generator then stops building
+     * and costs nothing but a redraw.
+     */
+    name: 'zdc:gps-unblock',
+    weight: 20,
+    screens: ['zero-datum-config'],
+    build: (env) => {
+      if (!presentButOff(env.digest, 'zero-datum-config-confirm')) return null;
+      if (!actionable(env.digest, 'zero-datum-gps-input')) return null;
+      const value = pickFrom(() => env.ctx.rng(), GPS_PASSABLE) as string;
+      return type('zero-datum-gps-input', value, `gps (unblock)=${JSON.stringify(value.slice(0, 24))}`);
+    },
+  },
+  {
+    /**
+     * Type a GPS position. At least half the draws PARSE, so the confirm below
+     * is reachable - see `GPS_PASSABLE`.
+     *
+     * Two rng calls, always in the same order, so the share can be retuned
+     * without shifting which string a given draw lands on relative to the rest
+     * of the stream.
+     */
     name: 'zdc:gps',
     weight: 8,
     screens: ['zero-datum-config'],
     build: (env) => {
       if (!actionable(env.digest, 'zero-datum-gps-input')) return null;
-      const value = pickFrom(() => env.ctx.rng(), GPS_HOSTILE) as string;
+      const passable = env.ctx.rng() < gpsPassableProbability();
+      const value = pickFrom(() => env.ctx.rng(), passable ? GPS_PASSABLE : GPS_HOSTILE) as string;
       return type('zero-datum-gps-input', value, `gps=${JSON.stringify(value.slice(0, 24))}`);
     },
   },
@@ -1085,7 +1249,10 @@ const WIZARD_SUGGEST: Generator[] = [
   {
     name: 'wiz:back',
     weight: 3,
-    screens: ['wiz-suggest', 'wiz-manual', 'wiz-no-suggest'],
+    // `wiz-no-suggest` is deliberately NOT here - the bridge's settle predicate
+    // now waits through that frame, because it is a sub-paint transition into
+    // `wiz-manual` and not a screen. See `busy()` in importDialogBridge.ts.
+    screens: ['wiz-suggest', 'wiz-manual'],
     build: (env) => (actionable(env.digest, 'back-button') ? click('back-button', 'wizard back') : null),
   },
   {
@@ -1115,7 +1282,7 @@ const WIZARD_SUGGEST: Generator[] = [
   {
     name: 'wiz:cancel',
     weight: 2,
-    screens: ['wiz-suggest', 'wiz-manual', 'wiz-no-suggest', 'wiz-done', 'wiz-error'],
+    screens: ['wiz-suggest', 'wiz-manual', 'wiz-done', 'wiz-error'],
     build: (env) => (actionable(env.digest, 'cancel-button') ? click('cancel-button', 'wizard cancel') : null),
   },
 ];
@@ -1393,6 +1560,27 @@ const SHOT_TABLE: Generator[] = [
     build: (env) => (env.digest.rows > 0 ? click('shot-editor-context-paste', 'paste into grid') : null),
   },
   {
+    /**
+     * Blank the selected cells in place.
+     *
+     * The one grid mutation that can leave a row PRESENT but incomplete, which
+     * is what `refuseIncompleteShots` refuses a confirm on
+     * (`DmpNewImportDialog.tsx`): every other mutator either fills a cell or
+     * removes the row. Allowlisted since wave 2 and, until now, never driven.
+     */
+    name: 'grid:clear',
+    weight: 5,
+    screens: SHOT_TABLE_SCREENS,
+    build: (env) => (env.digest.rows > 0 ? click('shot-editor-context-clear', 'clear grid selection') : null),
+  },
+  {
+    /** Copy AND clear in one gesture - the other half of the clipboard pair. */
+    name: 'grid:cut',
+    weight: 4,
+    screens: SHOT_TABLE_SCREENS,
+    build: (env) => (env.digest.rows > 0 ? click('shot-editor-context-cut', 'cut grid selection') : null),
+  },
+  {
     name: 'grid:fill-down',
     weight: 2,
     screens: SHOT_TABLE_SCREENS,
@@ -1422,6 +1610,42 @@ const SHOT_TABLE: Generator[] = [
       return click(`shot-editor-cell-${last[0]}-length`, `open trailing row ${last[0]} (append)`, true);
     },
   },
+  {
+    /**
+     * Grow and shrink the table band.
+     *
+     * `shot-editor-expand` only renders where the HOST passes `onToggleExpand`,
+     * and of the import screens that is `ZeroDatumConfigDialog` alone - the DMP
+     * wizard owns its own layout and does not. Scoped accordingly rather than
+     * offered on all three shot-table screens, where it would be a permanent
+     * skip. Allowlisted since wave 2 and never driven until now.
+     */
+    name: 'grid:expand',
+    weight: 3,
+    screens: ['zero-datum-config'],
+    build: (env) => (actionable(env.digest, 'shot-editor-expand') ? click('shot-editor-expand', 'toggle table size') : null),
+  },
+];
+
+/**
+ * `DialogWrapper`'s discard-confirm overlay.
+ *
+ * An ESCAPE always plays `dirty-dialog-discard` - it is trying to leave - so the
+ * other button was allowlisted and never clicked. Keeping editing is the branch
+ * that puts the walk BACK into a dirty dialog it had already asked to close,
+ * which is the state the overlay exists to protect and the one nothing has
+ * exercised.
+ */
+const DIRTY_OVERLAY: Generator[] = [
+  {
+    name: 'dirty:keep-editing',
+    weight: 5,
+    screens: ['dmp-select', 'tml-config', 'new-project'],
+    build: (env) =>
+      actionable(env.digest, 'dirty-dialog-keep-editing')
+        ? click('dirty-dialog-keep-editing', 'keep editing (discard overlay)')
+        : null,
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -1430,19 +1654,39 @@ const SHOT_TABLE: Generator[] = [
 
 const PLACEMENT: Generator[] = [
   {
+    /**
+     * Land the placement, NEAR the survey or well away from it.
+     *
+     * An OFFSET from the map centre, which is where the survey is: the shell
+     * resolves it against the live centre at dispatch. An absolute draw would
+     * land in the Gulf of Guinea and be refused before it reached the app.
+     *
+     * The two ranges are different code paths, not two flavours of the same
+     * one. A click within snapping distance of a station commits a
+     * `manual_snap` placement, which MERGES the segment onto what it snapped to;
+     * a click far from everything commits a plain `manual` placement, which
+     * merges onto nothing and leaves the segment as its own component with no
+     * zero datum. That second outcome is the only thing this fuzzer can build an
+     * ORPHAN out of (`Project::suggest_orphan_placements` wants a component with
+     * no datum and no newly-imported member), and with the tight jitter alone
+     * essentially every placement snapped: 214 campaign cells, zero orphans.
+     *
+     * The far range stays well inside a normal viewport, and one that lands
+     * outside is refused by `lib/controls.ts` and counted as `mapSkip:*` like
+     * any other impossible move.
+     */
     name: 'map:click',
     weight: 12,
     screens: ['map-placement'],
     build: (env) => {
-      // An OFFSET from the map centre, which is where the survey is: the shell
-      // resolves it against the live centre at dispatch. An absolute draw would
-      // land in the Gulf of Guinea and be refused before it reached the app.
-      const jitter = (): number => (env.ctx.rng() - 0.5) * 0.0008;
+      const far = env.ctx.rng() < 0.5;
+      const span = far ? 0.005 : 0.0008;
+      const jitter = (): number => (env.ctx.rng() - 0.5) * span;
       return {
         kind: 'mapClick',
         lngLat: [jitter(), jitter()],
         relative: true,
-        label: 'place near the map centre',
+        label: far ? 'place well away from the survey' : 'place near the map centre',
       };
     },
   },
@@ -1530,6 +1774,31 @@ const TERMINALS: Generator[] = [
       if (testid === null) return null;
       return click(testid, 'confirm the cancel/back');
     },
+  },
+  {
+    /**
+     * The THIRD answer #394 gave the cancel overlay: close AND withdraw the
+     * sections the wizard already imported, in one batched undoable step.
+     *
+     * The model carries the id and the escape path names it as something "the
+     * walk reaches through the generators rather than while trying to leave" -
+     * this is that generator. It self-gates: the button only renders once
+     * `pendingWithdrawCount > 0`, so it cannot fire on a wizard that has
+     * imported nothing.
+     *
+     * Weighted BELOW keep-and-close (8) deliberately, and not for taste: a
+     * withdrawal removes the very sections the post-import surfaces need, so a
+     * walk that withdrew every time it cancelled would starve the receipt, the
+     * orphan dialog and the F1 undo roundtrip of the state they measure. Four is
+     * enough to exercise the path often without owning the flow's ending.
+     */
+    name: 'confirm:cancel-remove',
+    weight: 4,
+    screens: ['wiz-confirm'],
+    build: (env) =>
+      actionable(env.digest, 'cancel-remove-button')
+        ? click('cancel-remove-button', 'cancel AND remove what was imported')
+        : null,
   },
   {
     name: 'blocked:choose',
@@ -1635,6 +1904,7 @@ export const GENERATORS: readonly Generator[] = [
   ...METADATA,
   ...WIZARD_MANUAL,
   ...SHOT_TABLE,
+  ...DIRTY_OVERLAY,
   ...PLACEMENT,
   ...TERMINALS,
   ...NEW_PROJECT,

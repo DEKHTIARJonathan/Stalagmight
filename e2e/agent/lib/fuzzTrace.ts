@@ -149,6 +149,26 @@ export type TraceStep =
    * of it, so the replayer rebuilds the identical file without the trace
    * carrying a fixture (which the repo forbids) or a megabyte of base64.
    */
+  /**
+   * The start of one EPISODE, and whether it ran with no project open.
+   *
+   * A replay used to be one pass over the whole step list, so every step
+   * belonged to episode 0 whatever it was recorded under - a later episode's
+   * headless choice could never apply to its own steps. These markers are what
+   * let a replay rebuild the recording's episode structure instead of guessing
+   * it. Same precedent as `reload`: a step that carries control flow rather than
+   * a move.
+   */
+  | { kind: 'episode'; index: number; headless: boolean; label: string }
+  /**
+   * The start of one FLOW inside the current episode.
+   *
+   * F3 compares a receipt against the delta of ITS OWN flow. Without these a
+   * replay has no flow boundaries at all - a recording that imported three
+   * times replayed as one flow - and the comparison is between things that are
+   * not each other's pair.
+   */
+  | { kind: 'flow'; index: number; label: string }
   | { kind: 'genFile'; spec: unknown; rel: string; label: string }
   /**
    * An input file taken from the replayer's OWN private corpus and copied to
@@ -255,10 +275,195 @@ export interface FuzzTrace {
   recordedAt: string;
   /** Null when the run passed and the trace was written because of the env var. */
   failure: { message: string; signature: FailureSignature } | null;
+  /**
+   * Episode indices the recording ran with NO PROJECT OPEN, in order.
+   *
+   * A per-episode coin toss, and one that changes which import flow the SAME
+   * file steps drive: with nothing loaded a `.dmp` routes through
+   * `new-project-for-import`, and with the fixture open it goes straight to the
+   * selection dialog. Restoring `STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P` is not
+   * enough - it restores the ODDS, and a replay does not re-draw them.
+   *
+   * OPTIONAL, and absent means "assume the fixture stayed open", which is what
+   * every replay did before this field existed. Refusing such a trace was the
+   * alternative and it is the wrong trade: it would invalidate every trace
+   * already kept for shrinking, to fix a gap that only bites a recording whose
+   * episodes actually went headless. The scenario warns instead, and only when
+   * the restored odds say the recording COULD have had one.
+   */
+  noProjectEpisodes?: number[];
   steps: TraceStep[];
 }
 
-/** Env knobs that change what a run does, and so belong in a trace header. */
+/** One replayed episode: its no-project state and its flows, each a step list. */
+export interface ReplayEpisode {
+  headless: boolean;
+  flows: TraceStep[][];
+}
+
+/**
+ * Rebuild a recording's EPISODE and FLOW structure from its boundary steps.
+ *
+ * A replay used to be one pass over the whole step list against a single global
+ * cursor, so episode 0 drained everything and every later episode replayed
+ * nothing. Two things broke on that: a later episode's headless choice could
+ * never reach the steps recorded under it, and F3 had no flow boundaries, so it
+ * compared one receipt's claim against the delta of every import in the trace.
+ *
+ * A trace WITHOUT markers - anything recorded before they existed - folds into a
+ * single episode holding every step, which is exactly what the old replay did,
+ * so those traces keep replaying the way they always have. Its headless state
+ * comes from the header's `noProjectEpisodes` when it has one.
+ */
+export function planReplay(trace: Pick<FuzzTrace, 'steps' | 'noProjectEpisodes'>): ReplayEpisode[] {
+  const headlessHeader = new Set(trace.noProjectEpisodes ?? []);
+  const episodes: ReplayEpisode[] = [];
+  for (const step of trace.steps) {
+    if (step.kind === 'episode') {
+      episodes.push({ headless: step.headless, flows: [[]] });
+      continue;
+    }
+    if (episodes.length === 0) {
+      episodes.push({ headless: headlessHeader.has(0), flows: [[]] });
+    }
+    const current = episodes[episodes.length - 1] as ReplayEpisode;
+    if (step.kind === 'flow') {
+      current.flows.push([]);
+      continue;
+    }
+    (current.flows[current.flows.length - 1] as TraceStep[]).push(step);
+  }
+  for (const episode of episodes) {
+    // A marker at the very end of an episode would otherwise replay as an empty
+    // flow and be measured as one.
+    episode.flows = episode.flows.filter((flow) => flow.length > 0);
+    if (episode.flows.length === 0) episode.flows = [[]];
+  }
+  return episodes;
+}
+
+/**
+ * Are this trace's flow boundaries WELL FORMED - every step inside a marked flow?
+ *
+ * "Some step is a flow marker" was the old test and it is not strong enough,
+ * because a shrink hands this function step lists nobody recorded. ddmin tries
+ * arbitrary subsequences, so a candidate could delete the marker that opened the
+ * FAILING flow while keeping a later one: any-marker-present still said yes, F3
+ * stayed armed, and `planReplay` folded the now-unmarked steps into whatever
+ * flow preceded them. F3's failure headline normalizes every run of digits, so a
+ * merged-delta accounting failure carries the SAME signature as the recorded one
+ * - which is exactly the check that is supposed to stop a shrink wandering, and
+ * it cannot see this. ddmin would then accept a minimized trace that fails on a
+ * boundary the recording never had.
+ *
+ * `shrinkableSteps` is the other half and the primary fix: markers travel with
+ * their segment, so a shrink cannot produce this shape at all. This is the
+ * defense in depth, for the step lists that do not come from there - a
+ * hand-edited trace, an older tool, a file somebody mailed.
+ *
+ * A trace with no markers at all is unbounded, not partially bounded, and
+ * returns false the same way it always did: F3 disarms and every other oracle
+ * runs.
+ */
+export function traceHasWellFormedFlows(trace: Pick<FuzzTrace, 'steps'>): boolean {
+  let insideMarkedFlow = false;
+  let sawFlowMarker = false;
+  for (const step of trace.steps) {
+    if (step.kind === 'episode') {
+      // An episode opens no flow of its own: its first flow needs its own
+      // marker, which is what the recorder writes.
+      insideMarkedFlow = false;
+      continue;
+    }
+    if (step.kind === 'flow') {
+      insideMarkedFlow = true;
+      sawFlowMarker = true;
+      continue;
+    }
+    if (!insideMarkedFlow) return false;
+  }
+  return sawFlowMarker;
+}
+
+/**
+ * A trace split into the steps a shrink may DELETE and the structure it may not.
+ *
+ * `episode` and `flow` steps are not moves; they are the grouping the replay is
+ * rebuilt from, and the oracles measure per group. Handing them to ddmin as
+ * ordinary elements let it delete a boundary and merge two flows into one - a
+ * trace shape the recorder cannot produce, measuring a delta no run ever had.
+ *
+ * So ddmin runs over `payload` (the real moves) and `rebuild` puts the structure
+ * back: each marker survives exactly when something it scopes survived. The
+ * grouping of the steps that remain is therefore always the recorded grouping,
+ * restricted to survivors. It is also a strictly smaller search space, so this
+ * costs nothing in replays.
+ *
+ * TWO asymmetries, both deliberate:
+ *
+ * - An empty `flow` marker is DROPPED, because `planReplay` already filters
+ *   empty flows; keeping it would change nothing and read as a flow that ran.
+ * - A HEADLESS `episode` marker is kept even with nothing left inside it. It is
+ *   not just a label: the replay closes the project on it, and that outlives the
+ *   episode. A non-headless empty episode does nothing and is dropped.
+ */
+export interface ShrinkableSteps {
+  /** Indices into the original list, one per non-marker step, in order. */
+  payload: number[];
+  /** A well-formed step list from any subset of `payload`. */
+  rebuild(kept: readonly number[]): TraceStep[];
+}
+
+export function shrinkableSteps(steps: readonly TraceStep[]): ShrinkableSteps {
+  const payload: number[] = [];
+  const flowMarkerOf = new Map<number, number>();
+  const episodeMarkerOf = new Map<number, number>();
+  const alwaysKeep = new Set<number>();
+  let openFlow = -1;
+  let openEpisode = -1;
+  steps.forEach((step, index) => {
+    if (step.kind === 'episode') {
+      openEpisode = index;
+      openFlow = -1;
+      if (step.headless) alwaysKeep.add(index);
+      return;
+    }
+    if (step.kind === 'flow') {
+      openFlow = index;
+      return;
+    }
+    payload.push(index);
+    if (openFlow >= 0) flowMarkerOf.set(index, openFlow);
+    if (openEpisode >= 0) episodeMarkerOf.set(index, openEpisode);
+  });
+
+  const rebuild = (kept: readonly number[]): TraceStep[] => {
+    const keep = new Set(kept);
+    const markers = new Set(alwaysKeep);
+    for (const index of keep) {
+      const flow = flowMarkerOf.get(index);
+      if (flow !== undefined) markers.add(flow);
+      const episode = episodeMarkerOf.get(index);
+      if (episode !== undefined) markers.add(episode);
+    }
+    return steps.filter((step, index) =>
+      step.kind === 'episode' || step.kind === 'flow' ? markers.has(index) : keep.has(index),
+    );
+  };
+
+  return { payload, rebuild };
+}
+
+/**
+ * Env knobs that change what a run does, and so belong in a trace header.
+ *
+ * These prefixes define a CLOSED SET, and that is load-bearing on the restoring
+ * side: within them, a trace's `env` is the complete truth, and a key it does
+ * not carry is one the recording did not have. So a knob must be named with one
+ * of these prefixes to be honoured on replay - and adding a knob outside them
+ * makes it invisible to record/replay, which is a silent divergence rather than
+ * a missing feature. See `restoreTraceEnv` for the other half.
+ */
 const RECORDED_ENV_PREFIXES = ['STALAGMIGHT_FUZZ_', 'STALAGMIGHT_PERSIST_FUZZ_'];
 
 /**
@@ -303,6 +508,7 @@ const NEVER_RESTORED = [
 export function restoreTraceEnv(recorded: Readonly<Record<string, string>>): {
   applied: [string, string][];
   refused: string[];
+  cleared: string[];
 } {
   const applied: [string, string][] = [];
   const refused: string[] = [];
@@ -318,7 +524,32 @@ export function restoreTraceEnv(recorded: Readonly<Record<string, string>>): {
       refused.push(key);
     }
   }
-  return { applied, refused };
+  // The recorded env is the WHOLE truth about restorable knobs, so a knob the
+  // recording did not have is unset here rather than inherited.
+  //
+  // Only SET keys are recorded, so a run on a knob's DEFAULT writes no entry for
+  // it - and restoring "every key the trace has" then leaves a shell override in
+  // place. That is a divergence with no signal anywhere: a trace recorded with
+  // the default replays against the override and silently is not the recording.
+  // The instance that surfaced it is `STALAGMIGHT_FUZZ_IMPORT_FORCE_STATIONS`
+  // (default on; a replay shell with `0` skips `ensureStationsVisible` and the
+  // walk falls into the cancel loop), but it is a property of the mechanism, not
+  // of that knob: EVERY knob whose default differs from a shell value has it.
+  //
+  // Clearing here fixes the whole class in one place and needs no list of knobs
+  // or defaults - unset restores the default by construction, which is what the
+  // recording ran on. `NEVER_RESTORED` is exempt in both directions: those name
+  // an output or input PATH the CALLER owns (where to write a trace, what to
+  // replay next, which corpus tree to walk), so a file must neither set them nor
+  // take them away.
+  const cleared: string[] = [];
+  for (const key of Object.keys(process.env)) {
+    if (key in recorded || NEVER_RESTORED.includes(key)) continue;
+    if (!RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
+    delete process.env[key];
+    cleared.push(key);
+  }
+  return { applied, refused, cleared };
 }
 
 function recordedEnv(): Record<string, string> {
@@ -443,6 +674,8 @@ export class TraceRecorder {
     fixture: string;
     stream: string;
     failure: { message: string } | null;
+    /** Episode indices that ran with no project open; omitted when none did. */
+    noProjectEpisodes?: readonly number[];
   }): FuzzTrace {
     return {
       v: TRACE_VERSION,
@@ -457,6 +690,12 @@ export class TraceRecorder {
       failure: meta.failure
         ? { message: meta.failure.message, signature: failureSignature(meta.failure.message) }
         : null,
+      // Omitted rather than written empty: absent and "none of them" mean the
+      // same thing on replay, and an always-present empty array would make every
+      // trace look like it carried the field when older ones cannot.
+      ...(meta.noProjectEpisodes && meta.noProjectEpisodes.length > 0
+        ? { noProjectEpisodes: [...meta.noProjectEpisodes] }
+        : {}),
       steps: this.snapshot(),
     };
   }
@@ -501,6 +740,8 @@ export function writeTrace(filePath: string, trace: FuzzTrace): string {
 
 /** Every `kind` a step may carry. Anything else is not a step this build runs. */
 const STEP_KINDS = new Set([
+  'episode',
+  'flow',
   'mutate',
   'undo',
   'redo',
@@ -663,6 +904,21 @@ function validateStep(step: unknown, index: number, filePath: string): void {
       const paths = Array.isArray(rel) ? rel : [rel];
       if (paths.length === 0) throw new Error(`${where} answers the dialog with an empty path list`);
       paths.forEach((entry, at) => requireSessionRelative(entry, `rel[${at}]`, where));
+    }
+  }
+  if (candidate.kind === 'episode') {
+    requireText(candidate.label, 'label', where);
+    if (typeof candidate.index !== 'number' || !Number.isInteger(candidate.index) || candidate.index < 0) {
+      throw new Error(`${where}: episode index must be a non-negative integer`);
+    }
+    if (typeof candidate.headless !== 'boolean') {
+      throw new Error(`${where}: episode headless must be a boolean`);
+    }
+  }
+  if (candidate.kind === 'flow') {
+    requireText(candidate.label, 'label', where);
+    if (typeof candidate.index !== 'number' || !Number.isInteger(candidate.index) || candidate.index < 0) {
+      throw new Error(`${where}: flow index must be a non-negative integer`);
     }
   }
   if (candidate.kind === 'genFile') {
@@ -841,6 +1097,10 @@ function describeStep(step: TraceStep): string {
         step.rel === null ? 'cancel' : Array.isArray(step.rel) ? `${step.rel.length} file(s)` : step.rel;
       return `${step.dialog}-dialog via ${step.trigger} -> ${answer} - ${step.label}`;
     }
+    case 'episode':
+      return `episode ${step.index}${step.headless ? ' (no project)' : ''}`;
+    case 'flow':
+      return `flow ${step.index}`;
     case 'genFile':
       return `genFile ${step.rel} - ${step.label}`;
     case 'corpusFile':

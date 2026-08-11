@@ -178,6 +178,11 @@ export const CLICKABLE_TESTIDS: ReadonlySet<string> = new Set([
   'shot-editor-context-clear',
   'shot-editor-context-fill-down',
   'shot-editor-context-copy',
+  // CUT is a copy plus a clear, and it is the grid mutation with the most to say
+  // about the wizard's frozen rows: `GridContextMenu` renders it
+  // unconditionally, so a selection made entirely of overlap-frozen shots can be
+  // aimed at it exactly like `delete-rows` can.
+  'shot-editor-context-cut',
   'shot-editor-context-paste',
   // new project for import
   'new-project-for-import-cancel',
@@ -313,6 +318,48 @@ export interface StepOutcome {
   performed: boolean;
   /** Null when performed; otherwise why not. */
   reason: SkipReason | null;
+  /**
+   * The target's disabled state read IMMEDIATELY BEFORE the dispatch gate, or
+   * null when there was no element to read (absent, or a `key:` chord).
+   *
+   * The digest's `live` map cannot answer this. It is taken one round trip
+   * earlier, and the gap is exactly where the wizards' async enables land - the
+   * Walls dialog holds Import disabled behind `!hashChecked` and flips it when a
+   * hash + duplicate-check round trip returns, which the settle marker does not
+   * track by design (closing that window would retire the race generators). So
+   * "the digest said disabled" and "it was disabled when we clicked" are
+   * different facts, and only this one describes what the app was asked to do.
+   */
+  offAtDispatch: boolean | null;
+  /**
+   * `uiStore.activeDialog` read IMMEDIATELY BEFORE a `key:` chord is dispatched;
+   * null for every other move kind, and for a chord pressed with no dialog up.
+   *
+   * `useKeyboardShortcuts` gates on `useUIStore.getState().activeDialog` inside
+   * the keydown handler, so this is the value the app's own gate consulted. The
+   * digest's `screen` is a round trip older, and an import that completes in
+   * that gap closes its dialog - which is how EXPORT CHORD came to blame the
+   * shortcut dispatcher for a chord it swallowed correctly.
+   */
+  dialogAtDispatch: string | null;
+  /**
+   * The OTHER two gates the same keydown handler consults, read on the same
+   * tick; null for every move kind that is not a `key:` chord.
+   *
+   * `activeDialog` is not the whole gate and treating it as such left a hole.
+   * `useKeyboardShortcuts` returns early for a non-Escape key while a dialog is
+   * open, and then - for a configurable action like `export` - returns again on
+   * `placementModeActive && !PLACEMENT_MODE_ALLOWED_SHORTCUTS.has(action)` and
+   * on `dataTableFullScreen && !FULLSCREEN_TABLE_ALLOWED_SHORTCUTS.has(action)`.
+   * `export` is in neither allowlist, so all three gates swallow Ctrl+E, and an
+   * oracle that only knew about the first would score a regression on the other
+   * two as a legal chord at idle.
+   *
+   * Map placement is the live case: the dialog is CLOSED and placement is on,
+   * which is exactly the state the import flow spends its map clicks in.
+   */
+  placementAtDispatch: boolean | null;
+  fullscreenAtDispatch: boolean | null;
   /** Value read back after a `type`/`select` (what the control actually took). */
   valueAfter: string | null;
   digest: ImportScreenDigest;
@@ -368,6 +415,20 @@ const HELPERS = `
    * progress marker that OUTLASTS the settle cap is a hang, and the digest then
    * reports a screen whose controls are all disabled, which is what the WEDGE
    * oracle is for.
+   * \`wizard-no-suggestions\` is here for the same reason and is worth spelling
+   * out, because it LOOKS like a screen and is not one. It renders while
+   * \`phase === 'suggesting'\` with no current suggestion, which happens only in
+   * the gap between the pool running dry and \`transitionToPlacingOrManual\`
+   * setting \`isImporting\` - and that call sets it synchronously, so the frame
+   * rarely survives a paint. It carries no control of its own either: the footer
+   * renders nothing for a suggestion-less \`suggesting\` phase, leaving the
+   * wizard's standing Cancel and Back. The real "nothing could be placed
+   * automatically" surface is \`manual_placing\`, which is where this transition
+   * lands and which has four placement modes, a map placement and a shot table
+   * on it. Waiting through the gap sends the walk THERE instead of spending
+   * steps on an empty pane. Measured: over 130 cells the digest never once
+   * sampled this frame, so the two generators that named it never ran.
+   *
    * That last one is \`DialogWrapper\`'s \`hidden\` prop, which
    * \`DmpNewImportDialog\` sets while \`autoStartManualPlacementPending\` is true:
    * for a frame or two the dialog is \`display:none\` and \`placementMode\` is not
@@ -375,6 +436,10 @@ const HELPERS = `
    * here the digest catches that gap and the S1 oracle reports an unknown screen
    * for a transition the app is entitled to make. If it ever OUTLASTS the settle
    * cap it is a genuine wedge, and S1 then says so.
+   *
+   * Every marker in this list is a WAIT, never a suppression: one that outlasts
+   * the cap still reaches the digest, still gets classified, and is still judged
+   * by the escape and wedge oracles.
    *
    * The dmp-selection hash-settling window is deliberately NOT waited for -
    * that window is what \`race-continue\` exists to hit.
@@ -384,6 +449,7 @@ const HELPERS = `
     shown('wizard-importing-zero-datum') ||
     shown('wizard-early-importing') ||
     shown('wizard-placing') ||
+    shown('wizard-no-suggestions') ||
     shown('tml-import-progress') ||
     (!!q('dmp-new-import-dialog') && !shown('dmp-new-import-dialog'));
   const marker = () => {
@@ -472,6 +538,13 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
     let performed = false;
     let reason = null;
     let valueAfter = null;
+    // Set by every branch that has an element to read, immediately before that
+    // branch's gate. See StepOutcome.offAtDispatch for why the digest's own
+    // reading is not a substitute.
+    let offAtDispatch = null;
+    let dialogAtDispatch = null;
+    let placementAtDispatch = null;
+    let fullscreenAtDispatch = null;
     const actionStarted = Date.now();
 
     if (req.kind === 'ui' && req.testid.indexOf('key:') === 0) {
@@ -489,6 +562,15 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
         cancelable: true,
         composed: true,
       };
+      // Read here, not from the digest: this is the value the app's own gate
+      // consults, one statement later, on the same tick.
+      const ui = window.__E2E_TEST__ && window.__E2E_TEST__.uiStore ? window.__E2E_TEST__.uiStore.getState() : null;
+      dialogAtDispatch = ui && ui.activeDialog !== undefined && ui.activeDialog !== null ? ui.activeDialog : null;
+      // The same tick, for the same reason: all three are read inside the
+      // handler one statement from now, and only these readings describe what
+      // the app's gate actually saw.
+      placementAtDispatch = !!(ui && ui.placementMode);
+      fullscreenAtDispatch = !!(ui && ui.dataTableFullScreen);
       target.dispatchEvent(new KeyboardEvent('keydown', init));
       target.dispatchEvent(new KeyboardEvent('keyup', init));
       performed = true;
@@ -515,9 +597,10 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
           }
         }
       }
+      offAtDispatch = el ? isOff(el) : null;
       if (reason === null) {
         if (!el) reason = 'absent';
-        else if (!isVisible(el) || isOff(el)) reason = 'not-actionable';
+        else if (!isVisible(el) || offAtDispatch) reason = 'not-actionable';
         else {
           dispatchClick(el, false, req.double === true);
           performed = true;
@@ -525,8 +608,9 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
       }
     } else if (req.mode === 'type') {
       const el = q(req.testid);
+      offAtDispatch = el ? isOff(el) : null;
       if (!el) reason = 'absent';
-      else if (!isVisible(el) || isOff(el)) reason = 'not-actionable';
+      else if (!isVisible(el) || offAtDispatch) reason = 'not-actionable';
       else if (!setReactValue(el, req.value)) reason = 'not-typeable';
       else {
         // The grid's cell editor is a textarea that commits on BLUR
@@ -539,8 +623,9 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
       }
     } else if (req.mode === 'select') {
       const trigger = q(req.testid);
+      offAtDispatch = trigger ? isOff(trigger) : null;
       if (!trigger) reason = 'absent';
-      else if (!isVisible(trigger) || isOff(trigger)) reason = 'not-actionable';
+      else if (!isVisible(trigger) || offAtDispatch) reason = 'not-actionable';
       else if (trigger.tagName.toLowerCase() === 'select') {
         const before = trigger.value;
         trigger.value = req.value;
@@ -572,8 +657,9 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
       }
     } else {
       const el = q(req.testid);
+      offAtDispatch = el ? isOff(el) : null;
       if (!el) reason = 'absent';
-      else if (!isVisible(el) || isOff(el)) reason = 'not-actionable';
+      else if (!isVisible(el) || offAtDispatch) reason = 'not-actionable';
       else {
         const want = req.value === 'true';
         if (el.checked === want) reason = 'no-change';
@@ -597,6 +683,10 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
       performed: performed,
       reason: reason,
       valueAfter: valueAfter,
+      offAtDispatch: offAtDispatch,
+      dialogAtDispatch: dialogAtDispatch,
+      placementAtDispatch: placementAtDispatch,
+      fullscreenAtDispatch: fullscreenAtDispatch,
       digest: digest,
       timing: { actionMs: actionMs, settleMs: settleMs, digestMs: digestMs },
     };
@@ -856,13 +946,39 @@ export async function dismissFirstRunModal(ctx: ScenarioContext): Promise<boolea
  * from every driver-visible entry point, which is exactly the guard this
  * scenario's mid-flow interjection exists to test).
  */
-export async function routeFile(ctx: ScenarioContext, absolutePath: string): Promise<boolean> {
-  return ctx.eval<boolean>(
+/** What `routeOpenedFile`'s guard was looking at when it was called. */
+export interface RouteOutcome {
+  /** Did the E2E hook exist and get called at all? */
+  routed: boolean;
+  /**
+   * `uiStore.activeDialog` and `placementMode`, read on the same tick as the
+   * call - which is when `importFlowOwnsScreen` reads them.
+   *
+   * The pre-move digest is a round trip older, and an import that completes in
+   * the gap closes its dialog: the router then legally accepts the file, and an
+   * oracle judging by the digest calls that a broken guard. Comparing these two
+   * against the digest's own values is how the caller tells "the guard should
+   * have fired" from "the screen moved under us".
+   */
+  dialogAtDispatch: string | null;
+  placementAtDispatch: boolean;
+}
+
+export async function routeFile(ctx: ScenarioContext, absolutePath: string): Promise<RouteOutcome> {
+  return ctx.eval<RouteOutcome>(
     `
     const route = window.__E2E_TEST__ && window.__E2E_TEST__.routeOpenedFile;
-    if (typeof route !== 'function') return false;
+    const store = window.__E2E_TEST__ && window.__E2E_TEST__.uiStore;
+    const ui = store ? store.getState() : null;
+    const out = {
+      routed: false,
+      dialogAtDispatch: ui && ui.activeDialog !== undefined && ui.activeDialog !== null ? ui.activeDialog : null,
+      placementAtDispatch: !!(ui && ui.placementMode),
+    };
+    if (typeof route !== 'function') return out;
     await route(args[0], 'Import Failed');
-    return true;
+    out.routed = true;
+    return out;
   `,
     [absolutePath],
   );

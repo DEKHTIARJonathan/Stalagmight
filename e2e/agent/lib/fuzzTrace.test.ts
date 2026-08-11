@@ -17,12 +17,15 @@ import {
   TRACE_VERSION,
   type FuzzTrace,
   type TraceStep,
+  traceHasWellFormedFlows,
   TraceRecorder,
   describeSteps,
   failureSignature,
+  planReplay,
   readTrace,
   restoreTraceEnv,
   sameSignature,
+  shrinkableSteps,
   writeTrace,
 } from './fuzzTrace';
 
@@ -808,5 +811,314 @@ describe('restoreTraceEnv', () => {
       'STALAGMIGHT_AGENT_RELEASE',
       'STALAGMIGHT_OTHER_TEST',
     ]);
+  });
+
+  /**
+   * The default-not-recorded divergence, which is a property of the MECHANISM
+   * and not of any one knob.
+   *
+   * Only SET keys are recorded, so a run on a knob's default writes no entry for
+   * it. Restoring "every key the trace has" then leaves a shell override in
+   * place, and the replay silently is not the recording - with no signal
+   * anywhere, because nothing was dropped or refused, just never mentioned.
+   * `STALAGMIGHT_FUZZ_IMPORT_FORCE_STATIONS` is the instance that surfaced it
+   * (default on; a `0` in the replay shell skips the station forcing and the
+   * walk falls into the cancel loop), and every knob with a default has it.
+   */
+  it('CLEARS a restorable knob the recording did not have, so its default applies', () => {
+    process.env.STALAGMIGHT_FUZZ_TEST_KNOB = 'from the shell';
+    process.env.STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB = 'also from the shell';
+
+    const { cleared } = restoreTraceEnv({});
+
+    expect(process.env.STALAGMIGHT_FUZZ_TEST_KNOB).toBeUndefined();
+    expect(process.env.STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB).toBeUndefined();
+    expect(cleared).toEqual(expect.arrayContaining(['STALAGMIGHT_FUZZ_TEST_KNOB']));
+  });
+
+  it('leaves a knob the recording DID have at the recorded value, not cleared', () => {
+    process.env.STALAGMIGHT_FUZZ_TEST_KNOB = 'from the shell';
+
+    const { applied, cleared } = restoreTraceEnv({ STALAGMIGHT_FUZZ_TEST_KNOB: 'from the trace' });
+
+    expect(process.env.STALAGMIGHT_FUZZ_TEST_KNOB).toBe('from the trace');
+    expect(applied).toEqual([['STALAGMIGHT_FUZZ_TEST_KNOB', 'from the trace']]);
+    expect(cleared).not.toContain('STALAGMIGHT_FUZZ_TEST_KNOB');
+  });
+
+  it('never clears a NEVER_RESTORED path knob, which the CALLER owns', () => {
+    // Symmetry with the refusal: a trace may not set where this process writes,
+    // what it replays next, or which tree it walks - and it may not take those
+    // away either. `fuzz-shrink` sets `_REPLAY` and `_TRACE` before restoring,
+    // and the corpus root can only come from the shell.
+    process.env.STALAGMIGHT_FUZZ_TRACE = '/tmp/mine/out.json';
+    process.env[CORPUS_DIR_ENV] = '/my/corpus';
+    try {
+      const { cleared } = restoreTraceEnv({});
+      expect(process.env.STALAGMIGHT_FUZZ_TRACE).toBe('/tmp/mine/out.json');
+      expect(process.env[CORPUS_DIR_ENV]).toBe('/my/corpus');
+      expect(cleared).not.toContain('STALAGMIGHT_FUZZ_TRACE');
+      expect(cleared).not.toContain(CORPUS_DIR_ENV);
+    } finally {
+      delete process.env.STALAGMIGHT_FUZZ_TRACE;
+      delete process.env[CORPUS_DIR_ENV];
+    }
+  });
+
+  it('leaves keys outside the prefixes alone: it clears knobs, not the environment', () => {
+    const before = process.env.PATH;
+    process.env.STALAGMIGHT_OTHER_TEST = 'not a knob';
+    restoreTraceEnv({});
+    expect(process.env.PATH).toBe(before);
+    expect(process.env.STALAGMIGHT_OTHER_TEST).toBe('not a knob');
+  });
+});
+
+describe('noProjectEpisodes (replay determinism for headless episodes)', () => {
+  const meta = {
+    scenario: 'import-dialog-fuzz',
+    seed: 5,
+    iterations: 3,
+    fixture: 'naharon.stalx',
+    stream: 'import-v3',
+    failure: null,
+  };
+
+  it('carries the episodes that ran with no project open', () => {
+    const recorder = new TraceRecorder();
+    const trace = recorder.build({ ...meta, noProjectEpisodes: [0, 2] });
+    expect(trace.noProjectEpisodes).toEqual([0, 2]);
+  });
+
+  it('OMITS the field when no episode was headless', () => {
+    // Absent and "none of them" mean the same on replay, and an always-present
+    // empty array would make every trace look like it carried the field when
+    // older ones cannot.
+    const recorder = new TraceRecorder();
+    expect(recorder.build({ ...meta, noProjectEpisodes: [] }).noProjectEpisodes).toBeUndefined();
+    expect(recorder.build(meta).noProjectEpisodes).toBeUndefined();
+  });
+
+  it('round-trips through write and read', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-noproj-'));
+    try {
+      const target = path.join(dir, 'trace.json');
+      const recorder = new TraceRecorder();
+      writeTrace(target, recorder.build({ ...meta, noProjectEpisodes: [1] }));
+      const read = readTrace(target);
+      expect(read.noProjectEpisodes).toEqual([1]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reads a trace written BEFORE the field as simply not carrying it', () => {
+    // The compatibility contract: an older trace still loads, and the scenario
+    // treats a missing field as "the fixture stayed open" while warning that it
+    // cannot know. Refusing these would invalidate every trace kept for
+    // shrinking, to fix a gap that only bites a recording that went headless.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-noproj-old-'));
+    try {
+      const target = path.join(dir, 'trace.json');
+      const recorder = new TraceRecorder();
+      const built = recorder.build(meta) as unknown as Record<string, unknown>;
+      delete built.noProjectEpisodes;
+      fs.writeFileSync(target, JSON.stringify(built), 'utf8');
+      const read = readTrace(target);
+      expect(read.noProjectEpisodes).toBeUndefined();
+      expect(read.steps).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('planReplay (episode and flow boundaries)', () => {
+  const ui = (label: string): TraceStep => ({ kind: 'ui', testid: 'cancel-button', label });
+  const ep = (index: number, headless: boolean): TraceStep => ({
+    kind: 'episode',
+    index,
+    headless,
+    label: `episode ${index + 1}`,
+  });
+  const fl = (index: number): TraceStep => ({ kind: 'flow', index, label: `flow ${index + 1}` });
+
+  it('keeps a LATER episode headless choice on its own steps', () => {
+    // The defect: the replay drained the whole step list inside episode 0, so a
+    // headless episode after the first never applied to the steps recorded under
+    // it - a `.dmp` that originally entered `new-project-for-import` replayed
+    // against an open project and silently took the selection flow.
+    const plan = planReplay({
+      steps: [
+        ep(0, false),
+        fl(0),
+        ui('a'),
+        ep(1, true),
+        fl(0),
+        ui('b'),
+        ui('c'),
+      ],
+    });
+
+    expect(plan).toHaveLength(2);
+    expect(plan[0]!.headless).toBe(false);
+    expect(plan[0]!.flows).toHaveLength(1);
+    expect(plan[0]!.flows[0]!.map((s) => ('label' in s ? s.label : s.kind))).toEqual(['a']);
+    // The one that used to be lost.
+    expect(plan[1]!.headless).toBe(true);
+    expect(plan[1]!.flows[0]!.map((s) => ('label' in s ? s.label : s.kind))).toEqual(['b', 'c']);
+  });
+
+  it('segments an episode into its recorded flows', () => {
+    // What F3 measures against: a receipt belongs to the delta of ITS OWN flow.
+    const plan = planReplay({
+      steps: [ep(0, false), fl(0), ui('a'), ui('b'), fl(1), ui('c')],
+    });
+    expect(plan).toHaveLength(1);
+    expect(plan[0]!.flows).toHaveLength(2);
+    expect(plan[0]!.flows[0]!.map((s) => ('label' in s ? s.label : s.kind))).toEqual(['a', 'b']);
+    expect(plan[0]!.flows[1]!.map((s) => ('label' in s ? s.label : s.kind))).toEqual(['c']);
+  });
+
+  it('drops a trailing flow marker that scopes no steps', () => {
+    const plan = planReplay({ steps: [ep(0, false), fl(0), ui('a'), fl(1)] });
+    expect(plan[0]!.flows).toHaveLength(1);
+    expect(plan[0]!.flows[0]!.map((s) => ('label' in s ? s.label : s.kind))).toEqual(['a']);
+  });
+
+  it('folds a LEGACY trace into one episode holding every step', () => {
+    // Anything recorded before the markers existed replays the way it always
+    // did: one pass over the whole list.
+    const plan = planReplay({ steps: [ui('a'), ui('b')] });
+    expect(plan).toHaveLength(1);
+    expect(plan[0]!.headless).toBe(false);
+    expect(plan[0]!.flows[0]!.map((s) => ('label' in s ? s.label : s.kind))).toEqual(['a', 'b']);
+  });
+
+  it('takes a legacy episode-0 headless state from the header field', () => {
+    const plan = planReplay({ steps: [ui('a')], noProjectEpisodes: [0] });
+    expect(plan[0]!.headless).toBe(true);
+  });
+
+  it('reports whether a trace can give F3 its flow boundaries', () => {
+    // The narrowing that keeps record/replay/shrink able to reproduce an F3 red:
+    // only a trace that cannot say where a flow began is skipped.
+    expect(traceHasWellFormedFlows({ steps: [ep(0, false), fl(0), ui('a')] })).toBe(true);
+    expect(traceHasWellFormedFlows({ steps: [ui('a')] })).toBe(false);
+  });
+
+  it('refuses a PARTIALLY bounded step list, which is what a shrink can produce', () => {
+    // The exact shape ddmin used to be able to build: delete the marker that
+    // opened flow 0 and keep the one that opened flow 1. Some step is still a
+    // flow marker, so the old any-marker test said yes - and `planReplay` then
+    // merges `a` into an implicit unmarked flow. F3's headline normalizes every
+    // run of digits, so the accounting failure that merge produces signs the
+    // same as the recorded one and the divergence check cannot reject it.
+    const orphaned = [ep(0, false), ui('a'), fl(1), ui('b')];
+    expect(orphaned.some((step) => step.kind === 'flow')).toBe(true);
+    expect(traceHasWellFormedFlows({ steps: orphaned })).toBe(false);
+    // And this is the merge it would have measured against, spelled out.
+    const plan = planReplay({ steps: orphaned });
+    expect(plan[0]!.flows[0]!.map((s) => ('label' in s ? s.label : s.kind))).toEqual(['a']);
+  });
+
+  describe('holding trace STRUCTURE out of a shrink', () => {
+    const steps = [ep(0, false), fl(0), ui('a'), ui('b'), fl(1), ui('c'), ep(1, true), fl(0), ui('d')];
+    const moveAt = (index: number): string => {
+      const step = steps[index]!;
+      return 'label' in step ? step.label : step.kind;
+    };
+    const labelsOf = (out: TraceStep[]): string[] => out.map((s) => ('label' in s ? s.label : `<${s.kind}>`));
+
+    it('offers ddmin the moves and never the boundaries', () => {
+      const { payload } = shrinkableSteps(steps);
+      expect(payload.map(moveAt)).toEqual(['a', 'b', 'c', 'd']);
+    });
+
+    it('keeps every marker that still scopes something', () => {
+      const { payload, rebuild } = shrinkableSteps(steps);
+      expect(labelsOf(rebuild(payload))).toEqual([
+        'episode 1',
+        'flow 1',
+        'a',
+        'b',
+        'flow 2',
+        'c',
+        'episode 2',
+        'flow 1',
+        'd',
+      ]);
+    });
+
+    it('drops a flow marker whose every move was cut, instead of orphaning the next', () => {
+      // Cut `a` and `b` - flow 1 is now empty, so its marker goes with them, and
+      // `c` stays inside the flow it was RECORDED in rather than sliding into an
+      // unmarked one.
+      const { rebuild } = shrinkableSteps(steps);
+      expect(labelsOf(rebuild([5, 8]))).toEqual(['episode 1', 'flow 2', 'c', 'episode 2', 'flow 1', 'd']);
+    });
+
+    it('THE REGRESSION: no subset of moves can produce a merged flow', () => {
+      // The property, over the whole candidate space rather than one example:
+      // 2^4 subsets, every one of them well formed. This is what makes the F3
+      // gate a second line of defense instead of the only one.
+      const { payload, rebuild } = shrinkableSteps(steps);
+      for (let mask = 0; mask < 1 << payload.length; mask += 1) {
+        const kept = payload.filter((_, bit) => (mask & (1 << bit)) !== 0);
+        const out = rebuild(kept);
+        const moves = out.filter((step) => step.kind !== 'episode' && step.kind !== 'flow');
+        expect(moves.map((step) => ('label' in step ? step.label : step.kind))).toEqual(kept.map(moveAt));
+        // Empty candidate aside - it has no steps to bound - every rebuild is a
+        // list F3 will accept and measure per recorded flow.
+        if (kept.length > 0) expect(traceHasWellFormedFlows({ steps: out })).toBe(true);
+      }
+    });
+
+    it('keeps a HEADLESS episode marker even when nothing is left inside it', () => {
+      // Not a label: the replay closes the project on it, and a closed project
+      // outlives the episode. A non-headless empty episode does nothing and goes.
+      const { rebuild } = shrinkableSteps(steps);
+      const out = rebuild([2]);
+      expect(labelsOf(out)).toEqual(['episode 1', 'flow 1', 'a', 'episode 2']);
+      expect(out[3]).toMatchObject({ kind: 'episode', headless: true });
+      // And the replay it plans really does run that empty headless episode.
+      const plan = planReplay({ steps: out });
+      expect(plan).toHaveLength(2);
+      expect(plan[1]!.headless).toBe(true);
+    });
+
+    it('leaves a LEGACY marker-less trace exactly as it was', () => {
+      const legacy = [ui('a'), ui('b')];
+      const { payload, rebuild } = shrinkableSteps(legacy);
+      expect(payload).toEqual([0, 1]);
+      expect(rebuild([1])).toEqual([legacy[1]]);
+    });
+  });
+
+  it('round-trips the boundary steps through write and read', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-bounds-'));
+    try {
+      const target = path.join(dir, 'trace.json');
+      const recorder = new TraceRecorder();
+      recorder.record(ep(0, true));
+      recorder.record(fl(0));
+      recorder.record(ui('a'));
+      writeTrace(
+        target,
+        recorder.build({
+          scenario: 'import-dialog-fuzz',
+          seed: 1,
+          iterations: 1,
+          fixture: 'naharon.stalx',
+          stream: 'import-v3',
+          failure: null,
+        }),
+      );
+      const read = readTrace(target);
+      expect(read.steps.map((s) => s.kind)).toEqual(['episode', 'flow', 'ui']);
+      expect(planReplay(read)[0]!.headless).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
