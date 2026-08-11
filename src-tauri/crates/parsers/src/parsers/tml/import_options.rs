@@ -119,21 +119,6 @@ impl TmlImportOptions {
         }
     }
 
-    /// The index of the section that will be placed as the ROOT: the lowest
-    /// selected index, or 0 when nothing is filtered.
-    ///
-    /// Deliberately NOT "the first section that survived shot filtering". A
-    /// section whose shots are all excluded is dropped later in the conversion,
-    /// and promoting its successor to root would silently drop the
-    /// "disconnected, placed at the origin" warning that case has always
-    /// produced. Only an explicit deselection moves the root.
-    pub(super) fn root_section_index(&self) -> u32 {
-        match &self.selected_sections {
-            Some(sel) => sel.iter().copied().min().unwrap_or(0),
-            None => 0,
-        }
-    }
-
     /// Selection entries that name no section in this file, so a caller passing
     /// junk indices over IPC gets told rather than silently importing nothing.
     pub(super) fn out_of_range_selection(&self, section_count: usize) -> usize {
@@ -163,9 +148,18 @@ pub(super) struct PlacementInput<'a> {
     /// Shot ids that WOULD have resolved above had their section been selected.
     /// Only used to say why a section lost its anchor.
     pub deselected_ids: &'a HashSet<i64>,
-    /// The section the selection makes root, from
-    /// [`TmlImportOptions::root_section_index`].
-    pub root_section_index: u32,
+    /// Whether this is the first section the import will CREATE.
+    ///
+    /// The one definition of "root", and it is deliberately a fact the caller
+    /// observes (`configs.is_empty()` at the moment of the call) rather than a
+    /// number anyone recomputes. Three parties needed the answer - this
+    /// function, the dialog's placement step and the preview layout - and while
+    /// two of them derived it from the selection alone ("lowest selected
+    /// index") they disagreed with the loop that actually builds the configs:
+    /// a lowest-selected section whose every shot is excluded is dropped BEFORE
+    /// placement runs, so the user's typed datum was attached to a section that
+    /// was never created and silently vanished.
+    pub is_root: bool,
     /// The user's explicit choice for the root section.
     pub root_placement: Option<TmlRootPlacement>,
 }
@@ -182,7 +176,7 @@ pub(super) fn determine_placement(
     // The root section: the user's answer wins, then the file's own GPS, then
     // the origin. Before #425 only the last two existed and neither was said
     // out loud.
-    if input.section_index == input.root_section_index {
+    if input.is_root {
         if let Some(choice) = input.root_placement {
             return Ok((choice.to_placement()?, None));
         }
@@ -248,20 +242,39 @@ pub(super) fn determine_placement(
     Ok((ImportPlacement::Origin, Some(warning)))
 }
 
-/// A zero-datum placement from the section's own first shot, when it carries
-/// one. Ariane writes the survey's GPS anchor onto a shot, and `0.0/0.0` is its
-/// no-data value (Null Island is not a cave).
+/// A zero-datum placement from the section's own first shot, when it carries a
+/// USABLE one. Ariane writes the survey's GPS anchor onto a shot, and `0.0/0.0`
+/// is its no-data value (Null Island is not a cave).
+///
+/// The file is untrusted input, so the numbers go through
+/// `GpsCoordinates::new` - the app's one coordinate validator - exactly like
+/// the ones a user types into the placement step. This is not theoretical: the
+/// null-island guard below is a pair of `<=` comparisons, and EVERY comparison
+/// against NaN is false, so a crafted `<Latitude>NaN</Latitude>` sailed past it
+/// and was written into the project verbatim as a datum. A refusal falls
+/// through to the caller's next option (topology, then the origin with the
+/// disconnected warning) rather than failing the import: the rest of the
+/// section's measurements are still perfectly good.
 fn gps_placement(section: &TmlSection) -> Option<ImportPlacement> {
     let first_shot = section.shots.first()?;
     if first_shot.latitude.abs() <= f64::EPSILON && first_shot.longitude.abs() <= f64::EPSILON {
         return None;
     }
+    let coordinates =
+        match crate::models::GpsCoordinates::new(first_shot.latitude, first_shot.longitude, 0.0) {
+            Ok(coordinates) => coordinates,
+            Err(reason) => {
+                tracing::warn!(
+                    section = %section.name,
+                    %reason,
+                    purpose = "import Ariane TML/TMLU",
+                    "Ignoring an unusable GPS anchor in the file"
+                );
+                return None;
+            }
+        };
     Some(ImportPlacement::ZeroDatum {
-        coordinates: crate::models::GpsCoordinates {
-            latitude: first_shot.latitude,
-            longitude: first_shot.longitude,
-            depth_reference: 0.0,
-        },
+        coordinates,
         station_index: 0,
     })
 }
@@ -320,7 +333,7 @@ mod tests {
     use super::super::{convert_tml_with_options, TmlFile, TmlShot, TmlUnit};
     use super::*;
 
-    fn shot(id: i64, from_id: i64) -> TmlShot {
+    pub(super) fn shot(id: i64, from_id: i64) -> TmlShot {
         TmlShot {
             id,
             uuid: None,
@@ -347,7 +360,7 @@ mod tests {
         }
     }
 
-    fn section(name: &str, start_ariane_id: i64, shots: Vec<TmlShot>) -> TmlSection {
+    pub(super) fn section(name: &str, start_ariane_id: i64, shots: Vec<TmlShot>) -> TmlSection {
         let end_ariane_id = shots.last().map_or(-1, |s| s.id);
         TmlSection {
             name: name.to_string(),
@@ -362,7 +375,7 @@ mod tests {
         }
     }
 
-    fn file(sections: Vec<TmlSection>) -> TmlFile {
+    pub(super) fn file(sections: Vec<TmlSection>) -> TmlFile {
         TmlFile {
             cave_name: "T".to_string(),
             unit: TmlUnit::Metric,
@@ -378,7 +391,7 @@ mod tests {
     }
 
     /// A → B → C, each hanging off the previous section's last shot.
-    fn chain_of_three() -> TmlFile {
+    pub(super) fn chain_of_three() -> TmlFile {
         file(vec![
             section("A", 0, vec![shot(1, 0), shot(2, 1)]),
             section("B", 2, vec![shot(3, 2), shot(4, 3)]),
@@ -648,8 +661,12 @@ mod tests {
 
         let (_, closures, warnings) = convert_tml_with_options(&tml, &selection(&[0])).unwrap();
         assert!(closures.is_empty());
+        // "Silent" means SILENT, not "does not happen to contain this phrase":
+        // a substring check passes for any wording that misses it, including a
+        // future one. Deselecting B removes B entirely, so the conversion has
+        // nothing at all to report here.
         assert!(
-            !warnings.iter().any(|w| w.contains("loop closure")),
+            warnings.is_empty(),
             "a closure in a section the user removed is not news: {warnings:?}"
         );
     }
@@ -756,5 +773,226 @@ mod tests {
             );
             assert!(result.is_err(), "{what} must be refused");
         }
+    }
+}
+
+// ============================================================================
+// Review round 2: one definition of "root", and validated coordinates
+// ============================================================================
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod root_and_coordinate_tests {
+    use super::super::{convert_tml_with_options, TmlFile};
+    use super::tests::{chain_of_three, file, section, shot};
+    use super::*;
+
+    const TYPED_DATUM: TmlRootPlacement = TmlRootPlacement::ZeroDatum {
+        latitude: 20.5,
+        longitude: -87.1,
+    };
+
+    fn with_datum() -> TmlImportOptions {
+        TmlImportOptions {
+            root_placement: Some(TYPED_DATUM),
+            ..Default::default()
+        }
+    }
+
+    /// A file whose FIRST section is emptied by the exclusion filter.
+    ///
+    /// The lowest index and the first section that actually gets created are
+    /// then different sections, which is the whole point: the two used to be
+    /// separate definitions of "root" and the placement went to the one that
+    /// was never built.
+    fn first_section_all_excluded() -> TmlFile {
+        let mut excluded = shot(1, 0);
+        excluded.excluded = true;
+        file(vec![
+            section("Dropped", 0, vec![excluded]),
+            section("Survivor", 1, vec![shot(2, 1), shot(3, 2)]),
+        ])
+    }
+
+    /// The user typed coordinates, the section they were shown as belonging to
+    /// was emptied by a filter they also set, and the coordinates went nowhere:
+    /// the survivor took the topology path, found its parent missing, and landed
+    /// at the origin with a warning blaming the FILE.
+    #[test]
+    fn a_typed_datum_survives_the_first_section_being_filtered_away() {
+        let tml = first_section_all_excluded();
+
+        // Premise: the first section really is dropped, so "lowest index" and
+        // "first created" disagree here.
+        let (configs, warnings) = convert_tml_with_options(&tml, &TmlImportOptions::default())
+            .map(|(c, _, w)| (c, w))
+            .unwrap();
+        assert_eq!(configs.len(), 1, "premise: only the survivor is created");
+        assert_eq!(configs[0].section_index, 1);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("had no shots after filtering")),
+            "premise: the drop is reported, got {warnings:?}"
+        );
+
+        let (configs, _, _) = convert_tml_with_options(&tml, &with_datum()).unwrap();
+        assert_eq!(configs.len(), 1);
+        let ImportPlacement::ZeroDatum {
+            coordinates,
+            station_index,
+        } = configs[0].placement
+        else {
+            panic!(
+                "the typed datum must reach the section that is actually created, got {:?}",
+                configs[0].placement
+            );
+        };
+        assert_eq!(station_index, 0);
+        assert!((coordinates.latitude - 20.5).abs() < 1e-9);
+    }
+
+    /// The same disagreement, reached through the section FILTER rather than the
+    /// shot filter: index 1 is selected but empty, so index 2 is the root.
+    #[test]
+    fn the_root_is_the_first_created_section_not_the_lowest_selected() {
+        let mut tml = chain_of_three();
+        for s in &mut tml.sections[1].shots {
+            s.excluded = true;
+        }
+
+        let opts = TmlImportOptions {
+            selected_sections: Some([1, 2].into_iter().collect()),
+            root_placement: Some(TYPED_DATUM),
+            ..Default::default()
+        };
+        let (configs, _, _) = convert_tml_with_options(&tml, &opts).unwrap();
+        assert_eq!(configs.len(), 1, "only C survives the two filters");
+        assert_eq!(configs[0].section_index, 2);
+        assert!(
+            matches!(configs[0].placement, ImportPlacement::ZeroDatum { .. }),
+            "got {:?}",
+            configs[0].placement
+        );
+    }
+
+    /// Defense in depth for the same class of bug: if the placement is ever
+    /// dropped on the floor again, the receipt says so instead of the survey
+    /// quietly appearing at (0, 0).
+    #[test]
+    fn an_unconsumed_root_placement_is_reported() {
+        // Nothing at all is imported, so nothing can carry the placement.
+        let (configs, _, warnings) = convert_tml_with_options(
+            &chain_of_three(),
+            &TmlImportOptions {
+                selected_sections: Some(HashSet::new()),
+                root_placement: Some(TYPED_DATUM),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(configs.is_empty());
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("placement you chose was not applied")),
+            "expected an unconsumed-placement warning, got: {warnings:?}"
+        );
+    }
+
+    /// And it stays quiet when the placement DID land, so the warning keeps
+    /// meaning something.
+    #[test]
+    fn a_consumed_root_placement_is_not_reported() {
+        let (_, _, warnings) = convert_tml_with_options(&chain_of_three(), &with_datum()).unwrap();
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.contains("placement you chose was not applied")),
+            "the placement landed; nothing to report: {warnings:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // File-supplied coordinates are untrusted too
+    // -----------------------------------------------------------------
+
+    fn with_gps(latitude: f64, longitude: f64) -> TmlFile {
+        let mut first = shot(1, 0);
+        first.latitude = latitude;
+        first.longitude = longitude;
+        file(vec![section("A", 0, vec![first, shot(2, 1)])])
+    }
+
+    /// A crafted `.tml` must not be able to write a junk datum into a project.
+    /// NaN is the sharp case: every comparison against it is false, so it slips
+    /// straight through the `abs() <= EPSILON` null-island guard.
+    #[test]
+    fn a_file_supplied_coordinate_that_fails_validation_is_refused() {
+        assert!(
+            !(f64::NAN.abs() <= f64::EPSILON),
+            "premise: NaN passes the null-island guard, so only validation can stop it"
+        );
+
+        for (latitude, longitude, what) in [
+            (f64::NAN, 10.0, "NaN latitude"),
+            (10.0, f64::NAN, "NaN longitude"),
+            (1e300, 10.0, "latitude past the pole"),
+            (10.0, 1e300, "longitude past the antimeridian"),
+            (f64::INFINITY, 10.0, "infinite latitude"),
+        ] {
+            let (configs, _, _) = convert_tml_with_options(
+                &with_gps(latitude, longitude),
+                &TmlImportOptions::default(),
+            )
+            .unwrap();
+            assert!(
+                matches!(configs[0].placement, ImportPlacement::Origin),
+                "{what} must fall back to the origin, got {:?}",
+                configs[0].placement
+            );
+        }
+    }
+
+    /// The valid case still anchors, so the refusal above is not just "GPS never
+    /// works any more".
+    #[test]
+    fn a_valid_file_supplied_coordinate_still_anchors() {
+        let (configs, _, _) =
+            convert_tml_with_options(&with_gps(20.5, -87.1), &TmlImportOptions::default()).unwrap();
+        assert!(
+            matches!(configs[0].placement, ImportPlacement::ZeroDatum { .. }),
+            "got {:?}",
+            configs[0].placement
+        );
+    }
+
+    /// A non-root section with junk coordinates falls back the same way, and
+    /// says the file disconnected it rather than silently anchoring on NaN.
+    #[test]
+    fn a_non_root_section_with_junk_coordinates_falls_back_with_a_warning() {
+        let mut orphan = shot(9, 999);
+        orphan.latitude = f64::NAN;
+        orphan.longitude = f64::NAN;
+        let tml = file(vec![
+            section("A", 0, vec![shot(1, 0)]),
+            section("Orphan", 999, vec![orphan]),
+        ]);
+
+        let (configs, _, warnings) =
+            convert_tml_with_options(&tml, &TmlImportOptions::default()).unwrap();
+        let orphan_config = configs
+            .iter()
+            .find(|c| c.section_index == 1)
+            .expect("the orphan is imported");
+        assert!(
+            matches!(orphan_config.placement, ImportPlacement::Origin),
+            "got {:?}",
+            orphan_config.placement
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("was disconnected")),
+            "expected the disconnected warning, got: {warnings:?}"
+        );
     }
 }

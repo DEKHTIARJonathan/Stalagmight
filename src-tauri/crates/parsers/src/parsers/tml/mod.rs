@@ -1363,7 +1363,6 @@ pub fn convert_tml_with_options(
         id_to_import_loc,
         deselected_ids,
     } = build_selection_index(&tml.sections, opts);
-    let root_section_index = opts.root_section_index();
 
     let mut configs: Vec<ImportSectionConfig> = Vec::new();
     let mut zero_shot_sections_dropped: u32 = 0;
@@ -1419,7 +1418,16 @@ pub fn convert_tml_with_options(
                 effective_start_id,
                 id_to_import_loc: &id_to_import_loc,
                 deselected_ids: &deselected_ids,
-                root_section_index,
+                // THE definition of root: the first section this loop actually
+                // creates. Every early `continue` above - a deselected section,
+                // a section the shot filter emptied - is already behind us, so
+                // an empty `configs` means nothing has been placed yet.
+                // Deriving it from the selection instead (the "lowest selected
+                // index" this used to compute) disagreed with the loop exactly
+                // when the lowest-selected section was dropped for having no
+                // shots, and the user's typed datum went to a section that was
+                // never built.
+                is_root: configs.is_empty(),
                 root_placement: opts.root_placement,
             },
         )
@@ -1583,6 +1591,18 @@ pub fn convert_tml_with_options(
                 closures_with_excluded_endpoints += 1;
             }
         }
+    }
+
+    // Defense in depth for the class of bug the `is_root` comment above
+    // describes. The placement is applied by exactly one section, so if this
+    // conversion built no section at all it went nowhere - and a survey quietly
+    // appearing at (0, 0) after the user typed coordinates is the one outcome
+    // that must never be silent. Reachable today only via an empty import
+    // (nothing selected, or every section filtered away), where the receipt is
+    // otherwise empty and this is the only line explaining it.
+    if opts.root_placement.is_some() && configs.is_empty() {
+        warnings
+            .push("Nothing was imported, so the placement you chose was not applied".to_string());
     }
 
     if zero_shot_sections_dropped > 0 {
