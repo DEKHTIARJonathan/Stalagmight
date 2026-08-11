@@ -30,7 +30,9 @@ mod linearize;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_helpers;
 
-use linearize::{join_contiguous_chains, linearize_section};
+use linearize::{
+    collapsed_trip_report, join_contiguous_chains, linearize_section, split_runs_at_trip_boundaries,
+};
 
 // ============================================================================
 // IPC-visible types
@@ -567,6 +569,97 @@ fn foreign_shot_uuid(shot_id: i64, raw: Option<&str>) -> Option<String> {
     Some(raw.to_owned())
 }
 
+/// How the two halves of Ariane's one people-field are rejoined. `" / "` is
+/// what the compound values in real files already use, so a file that arrives
+/// with `"nh / ds"` leaves this app unchanged, and one that arrives in the
+/// element form leaves it in the form Ariane's own users write.
+const EXPLORER_SURVEYOR_SEPARATOR: &str = " / ";
+
+/// Ariane's placeholder for a half nobody filled in. Dropped per HALF, so
+/// `<Explorer>unknown</Explorer><Surveyor>ds</Surveyor>` keeps `ds` instead of
+/// throwing the whole field away (#427). Case-insensitive: the placeholder is
+/// a word this format writes, not a value, and `Unknown` is the same word.
+fn is_explorer_placeholder(value: &str) -> bool {
+    value.is_empty() || value.eq_ignore_ascii_case("None") || value.eq_ignore_ascii_case("unknown")
+}
+
+/// The text of `<tag>…</tag>` inside an already-unescaped field value, with the
+/// byte offset of its OPENING tag so the caller can keep DOCUMENT order and see
+/// what came before it.
+fn tagged_half<'a>(raw: &'a str, tag: &str) -> Option<(usize, &'a str)> {
+    let open = format!("<{tag}>");
+    let opens_at = raw.find(&open)?;
+    let rest = &raw[opens_at + open.len()..];
+    // An unterminated half keeps everything after the open tag - the same
+    // recovery the previous single-half reader did.
+    Some((
+        opens_at,
+        rest.split_once(format!("</{tag}>").as_str())
+            .map_or(rest, |(text, _)| text),
+    ))
+}
+
+/// Read Ariane's `Explorer`, which is ONE element holding TWO roles.
+///
+/// Two encodings occur: a plain compound string (`"nh / ds"` - the form every
+/// file in the #411 survey used) and an entity-escaped element pair
+/// (`"<Explorer>nh</Explorer><Surveyor>ds</Surveyor>"`). Both halves are kept:
+/// the surveyor half used to be dropped outright, and an `"unknown"` explorer
+/// half took the surveyor down with it (#427).
+///
+/// Splitting a compound value into PEOPLE is [#329], not this: the halves are
+/// rejoined into the single string `Section::surveyor` holds, which the TML
+/// export writes straight back into `Explorer`, so the round trip is stable and
+/// idempotent: a re-import splits the plain form on the same separator, applies
+/// the same per-half rules, and rejoins - and anything that survived those rules
+/// once survives them again unchanged. Identical halves collapse to one - "the
+/// same person did both" is not two names.
+///
+/// Halves come out in DOCUMENT order, and any text before the first tag is a
+/// half of its own: this field is a person's name in a file nobody validates,
+/// so the reader keeps what is there rather than deciding which part of it was
+/// meant.
+///
+/// [#329]: https://github.com/Stalagmight/Stalagmight/issues/329
+fn parse_explorer_field(raw: &str) -> Option<String> {
+    let halves: Vec<&str> = if raw.contains("<Explorer>") || raw.contains("<Surveyor>") {
+        let mut found: Vec<(usize, &str)> = ["Explorer", "Surveyor"]
+            .iter()
+            .filter_map(|tag| tagged_half(raw, tag))
+            .collect();
+        // Text before the first opening tag is somebody's name that lost its
+        // element, not noise to drop on the floor.
+        if let Some(first_tag) = found.iter().map(|(at, _)| *at).min() {
+            let lead = &raw[..first_tag];
+            if !lead.trim().is_empty() {
+                found.push((0, lead));
+            }
+        }
+        found.sort_by_key(|(at, _)| *at);
+        found.into_iter().map(|(_, text)| text).collect()
+    } else {
+        // The plain compound form gets the SAME per-half treatment, on the same
+        // separator this rejoins with. Splitting it verbatim instead let
+        // "unknown / ds" carry Ariane's placeholder into `Section::surveyor`
+        // and back out through the export, while the element form dropped it.
+        raw.split(EXPLORER_SURVEYOR_SEPARATOR).collect()
+    };
+
+    let mut kept: Vec<&str> = Vec::with_capacity(halves.len());
+    for half in halves {
+        let half = half.trim();
+        if !is_explorer_placeholder(half) && !kept.contains(&half) {
+            kept.push(half);
+        }
+    }
+
+    if kept.is_empty() {
+        None
+    } else {
+        Some(kept.join(EXPLORER_SURVEYOR_SEPARATOR))
+    }
+}
+
 /// Build a `RawShot` from parsed field map.
 fn build_raw_shot(
     fields: &HashMap<&str, String>,
@@ -608,22 +701,9 @@ fn build_raw_shot(
         .get("comment")
         .filter(|c| !c.is_empty() && *c != "None")
         .cloned();
-    // Explorer field may contain entity-escaped XML like
-    // "<Explorer>name</Explorer><Surveyor>...</Surveyor>".
-    // Extract just the explorer name if present.
-    let explorer = fields.get("explorer").and_then(|e| {
-        if e.is_empty() {
-            return None;
-        }
-        if let Some(rest) = e.strip_prefix("<Explorer>") {
-            rest.split("</Explorer>")
-                .next()
-                .filter(|s| !s.is_empty() && *s != "unknown")
-                .map(String::from)
-        } else {
-            Some(e.clone()).filter(|s| s != "None" && s != "unknown")
-        }
-    });
+    let explorer = fields
+        .get("explorer")
+        .and_then(|e| parse_explorer_field(e.as_str()));
 
     Ok(RawShot {
         id,
@@ -901,6 +981,23 @@ fn build_sections(mut raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosu
     let joins = join_contiguous_chains(&mut sections, count_duplicate_shot_ids(&raw_shots));
     if joins > 0 {
         tracing::debug!(joins, "Joined contiguous TML chains");
+    }
+
+    // Then give each TRIP its own run: Ariane writes surveyor/date/colour on
+    // every shot row, a run carries only its FIRST shot's, and the rest used to
+    // be dropped without a word (#427).
+    //
+    // Strictly AFTER the join, which is decided on the chain ends the FILE has.
+    // A cut end is not one of those - it has an in-section successor by
+    // construction - and offering it to the join let an unrelated branch at that
+    // junction splice onto the mainline's head, taking its name while the real
+    // continuation stayed a separate run. The cost is that a cut tail cannot
+    // absorb a same-trip chain continuing it under another name; that is the
+    // behaviour this file already had, and the join's contract is worth more
+    // than the extra merge.
+    let trip_cuts = split_runs_at_trip_boundaries(&mut sections);
+    if trip_cuts > 0 {
+        tracing::debug!(trip_cuts, "Split TML runs where the survey trip changed");
     }
 
     // Extract closures: find CLOSURE shots and map to section:station indices
@@ -1209,6 +1306,11 @@ pub fn convert_tml_to_import_configs(
 
     if let Some(anomalies) = tml.parse_anomalies {
         push_parse_anomaly_warnings(anomalies, &mut warnings);
+    }
+
+    // What the per-trip section cut could not express (#427).
+    if let Some(note) = collapsed_trip_report(&tml.sections, include_excluded) {
+        warnings.push(note);
     }
 
     // #438: azimuths are copied VERBATIM - the fast path this convention was
@@ -1918,6 +2020,7 @@ fn determine_placement(
     clippy::print_stderr
 )]
 mod tests {
+    use super::linearize::{MAX_TRIP_CUTS_PER_FILE, MAX_TRIP_CUTS_PER_RUN};
     use super::test_helpers::*;
     use super::*;
 
@@ -5382,7 +5485,13 @@ mod tests {
     /// two-shot chain from the entrance, "B" continues from A's LAST shot.
     /// Every refusal test below is this same shape with one thing changed, so
     /// what the test is about is the difference and nothing else.
+    ///
+    /// B's tail inherits `b_head`'s trip so that B stays ONE trip whatever a
+    /// test does to its head: a per-trip cut (#427) would otherwise split B
+    /// itself, and a join-refusal test would be reporting that instead of the
+    /// refusal it is about.
     fn series_a_b(a_tail: TripShot<'_>, b_head: TripShot<'_>) -> TmlFile {
+        let (explorer, date, color) = (b_head.explorer, b_head.date, b_head.color);
         let shots = [
             TripShot {
                 id: 1,
@@ -5399,6 +5508,9 @@ mod tests {
                 from_id: 3,
                 section: "B",
                 depth: 12.0,
+                explorer,
+                date,
+                color,
                 ..TripShot::default()
             }
             .xml(),
@@ -5488,6 +5600,809 @@ mod tests {
             "different trip metadata must not be merged away"
         );
         assert_eq!(tml.sections[1].surveyor.as_deref(), Some("Somebody Else"));
+    }
+
+    /// One declared Ariane section, two trips: a chain surveyed by a second
+    /// team on a second day used to import entirely under the FIRST shot's
+    /// surveyor, date and colour, with the rest dropped silently (#427).
+    #[test]
+    fn a_run_that_changes_trip_mid_chain_is_cut_into_one_section_per_trip() {
+        let second_trip = TripShot {
+            section: "A",
+            explorer: "Ada Lovelace",
+            date: "2025-03-04",
+            color: "0x11223344",
+            ..TripShot::default()
+        };
+        let shots = [
+            TripShot {
+                id: 1,
+                from_id: -1,
+                section: "A",
+                depth: 5.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "A",
+                depth: 9.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 3,
+                from_id: 2,
+                depth: 11.0,
+                ..second_trip
+            }
+            .xml(),
+            TripShot {
+                id: 4,
+                from_id: 3,
+                depth: 12.0,
+                ..second_trip
+            }
+            .xml(),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        assert_eq!(section_names(&tml), vec!["A", "A (trip 2)"]);
+        assert_eq!(tml.sections[0].surveyor.as_deref(), Some("Tester"));
+        assert_eq!(tml.sections[1].surveyor.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(
+            tml.sections[1].date,
+            NaiveDate::from_ymd_opt(2025, 3, 4),
+            "the second trip keeps its own date, not the chain head's"
+        );
+        assert_ne!(
+            tml.sections[0].color, tml.sections[1].color,
+            "and its own colour"
+        );
+        assert_eq!(tml.sections[0].shots.len(), 2);
+        assert_eq!(tml.sections[1].shots.len(), 2);
+
+        let (configs, _, warnings) =
+            convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        assert_eq!(configs.len(), 2);
+        assert!(
+            matches!(
+                configs[1].placement,
+                ImportPlacement::FromImporting {
+                    import_station: 0,
+                    target_section_index: 0,
+                    target_station_index: 2,
+                }
+            ),
+            "the cut part hangs off the station the cut was made at: {:?}",
+            configs[1].placement
+        );
+        assert!(
+            (configs[1].shots[0].depth_in - 9.0).abs() < f64::EPSILON,
+            "and rebases its first DepthIn on that station's depth, not on the \
+             run's original start; got {}",
+            configs[1].shots[0].depth_in
+        );
+
+        // Including excluded shots removes `determine_placement`'s
+        // `effective_start_id` fallback, so this run resolves through the cut
+        // part's OWN start id or not at all.
+        let (unfiltered, _, _) = convert_tml_to_import_configs(&tml, true, false).expect("cvt");
+        assert!(
+            matches!(
+                unfiltered[1].placement,
+                ImportPlacement::FromImporting {
+                    target_section_index: 0,
+                    target_station_index: 2,
+                    ..
+                }
+            ),
+            "the cut part carries its own start id: {:?}",
+            unfiltered[1].placement
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("recorded a different")),
+            "nothing was collapsed, so nothing to report: {warnings:?}"
+        );
+    }
+
+    /// A trip that changes across a shot the import filters out has no station
+    /// seam to cut at - the child's `from_id` would resolve to a shot that is
+    /// not in the import, placing it at the origin. So it is reported instead,
+    /// and only when the toggle actually imports the shot that lost its values.
+    #[test]
+    fn a_trip_change_with_no_station_seam_is_reported_rather_than_cut() {
+        let shots = [
+            TripShot {
+                id: 1,
+                from_id: -1,
+                section: "A",
+                depth: 5.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "A",
+                excluded: true,
+                explorer: "Ada Lovelace",
+                date: "2025-03-04",
+                depth: 9.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "A",
+                depth: 11.0,
+                ..TripShot::default()
+            }
+            .xml(),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        assert_eq!(
+            section_names(&tml),
+            vec!["A"],
+            "an excluded shot is not a station, so it is no seam to cut at"
+        );
+
+        let (_, _, kept) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        assert!(
+            !kept.iter().any(|w| w.contains("recorded a different")),
+            "the shot that disagrees is not being imported, so nothing was lost: {kept:?}"
+        );
+
+        let (_, _, included) = convert_tml_to_import_configs(&tml, true, false).expect("cvt");
+        let note = included
+            .iter()
+            .find(|w| w.contains("recorded a different"))
+            .expect("importing it does lose its values, which the receipt must say");
+        assert!(
+            note.starts_with(
+                "1 shot at 1 trip change in 1 section recorded a different surveyor or date"
+            ),
+            "the report names the counts and the fields: {note}"
+        );
+    }
+
+    /// A chain of `count` shots under one declared name, whose `trip_of`
+    /// picks each shot's `(explorer, date)`. Ids and `from_id`s run 1..=count.
+    fn one_chain(count: i64, trip_of: impl Fn(i64) -> (String, String)) -> TmlFile {
+        let shots: Vec<String> = (1..=count)
+            .map(|id| {
+                let (explorer, date) = trip_of(id);
+                TripShot {
+                    id,
+                    from_id: id - 1,
+                    section: "A",
+                    explorer: &explorer,
+                    date: &date,
+                    depth: id as f64,
+                    ..TripShot::default()
+                }
+                .xml()
+            })
+            .collect();
+        parse_synthetic_tmlu(&wrap_xml(&shots.join("\n")))
+    }
+
+    /// A date per shot ROW - a data-entry timestamp, or a crafted file - would
+    /// mint one section per shot from one declared name. The cut is capped, and
+    /// what the cap refuses to cut is reported rather than dropped.
+    #[test]
+    fn the_cut_is_capped_and_the_rest_is_reported() {
+        let rows = MAX_TRIP_CUTS_PER_RUN as i64 + 11;
+        // 28-day "months" keep every generated date valid without date arithmetic.
+        let tml = one_chain(rows, |id| {
+            (
+                "Tester".to_owned(),
+                format!("2024-{:02}-{:02}", 1 + id / 28, 1 + id % 28),
+            )
+        });
+
+        assert_eq!(
+            tml.sections.len(),
+            MAX_TRIP_CUTS_PER_RUN + 1,
+            "one part per cut, plus the head - never one per shot"
+        );
+        assert_eq!(
+            tml.sections[MAX_TRIP_CUTS_PER_RUN].shots.len(),
+            11,
+            "everything past the cap stays on the last part"
+        );
+        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+
+        let (configs, _, warnings) =
+            convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        assert_eq!(configs.len(), MAX_TRIP_CUTS_PER_RUN + 1);
+        let note = warnings
+            .iter()
+            .find(|w| w.contains("recorded a different"))
+            .expect("the uncut trips must reach the receipt");
+        assert!(
+            note.starts_with("10 shots at 10 trip changes in 1 section recorded a different date"),
+            "the report names what the cap left behind: {note}"
+        );
+    }
+
+    /// The per-run cap alone bounds the wrong denominator: a file chooses how
+    /// many RUNS it has as well as how many trips each holds. Sections are the
+    /// numerator of the `section_id * FEATURE_ID_STRIDE` shot-id encode, which
+    /// holds only below 42_950 sections, so the budget is file-wide too.
+    #[test]
+    fn the_cut_budget_is_file_wide_not_only_per_run() {
+        // Enough runs that the per-run cap alone would let them all through:
+        // 20 x 256 = 5120 cuts against a 4096 budget.
+        let runs = 20;
+        let per_run = MAX_TRIP_CUTS_PER_RUN as i64 + 1;
+        let mut shots: Vec<String> = Vec::new();
+        for run in 0..runs {
+            for seq in 0..per_run {
+                let id = run * 1000 + seq + 1;
+                shots.push(
+                    TripShot {
+                        id,
+                        // Each run starts from the entrance, so they are
+                        // separate runs rather than one chain.
+                        from_id: if seq == 0 { -1 } else { id - 1 },
+                        section: "A",
+                        explorer: "Tester",
+                        date: &format!("2024-{:02}-{:02}", 1 + seq / 28, 1 + seq % 28),
+                        depth: seq as f64,
+                        ..TripShot::default()
+                    }
+                    .xml(),
+                );
+            }
+        }
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots.join("\n")));
+
+        let cuts = tml.sections.len() - runs as usize;
+        assert_eq!(
+            cuts,
+            MAX_TRIP_CUTS_PER_FILE,
+            "the file-wide budget is spent exactly once, however many runs ask \
+             for it (got {} sections over {runs} runs)",
+            tml.sections.len()
+        );
+        assert!(
+            tml.sections.len() < 42_950,
+            "and the result stays inside the shot-id encode's section range"
+        );
+        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+
+        let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        let note = warnings
+            .iter()
+            .find(|w| w.contains("recorded a different"))
+            .expect("what the budget refused to cut must reach the receipt");
+        assert!(
+            note.contains("trip changes in"),
+            "and it names how many places were collapsed: {note}"
+        );
+    }
+
+    /// The budget also never spends id space the file has already used. Driven
+    /// as a pure function because the interesting inputs are tens of thousands
+    /// of runs, which is a fixture nobody should build to assert arithmetic.
+    #[test]
+    fn the_cut_budget_never_spends_id_space_the_file_already_used() {
+        assert_eq!(linearize::cut_budget(0), MAX_TRIP_CUTS_PER_FILE);
+        // 42_949 - 4_096: the last run count that can still afford a full budget.
+        assert_eq!(linearize::cut_budget(38_853), MAX_TRIP_CUTS_PER_FILE);
+        assert_eq!(linearize::cut_budget(38_854), MAX_TRIP_CUTS_PER_FILE - 1);
+        assert_eq!(linearize::cut_budget(42_949), 0);
+        assert_eq!(
+            linearize::cut_budget(usize::MAX),
+            0,
+            "a file already past the boundary gets no cuts, and no underflow"
+        );
+
+        // The property the constants exist for: a shot id is
+        // `section_id * FEATURE_ID_STRIDE + seq`, so the sections a file ends
+        // up with must stay inside the u32 encode.
+        for runs in [0, 1, 100, 38_000, 38_853, 40_000, 42_948, 42_949, 60_000] {
+            let total = runs + linearize::cut_budget(runs);
+            assert!(
+                total <= 42_949 || runs > 42_949,
+                "{runs} runs + {} cuts = {total} sections, past the id space",
+                linearize::cut_budget(runs)
+            );
+        }
+    }
+
+    /// Three trips in one run: the parts are cut back to front and each one
+    /// rebases on the PREVIOUS part's tail, so a two-part test cannot see a
+    /// chaining mistake.
+    #[test]
+    fn a_run_holding_three_trips_is_cut_into_three_rebased_parts() {
+        let tml = one_chain(6, |id| {
+            let trip = (id - 1) / 2 + 1; // 1,1,2,2,3,3
+            (format!("Team {trip}"), format!("2025-0{trip}-01"))
+        });
+
+        assert_eq!(
+            section_names(&tml),
+            vec!["A", "A (trip 2)", "A (trip 3)"],
+            "the suffix counts parts, and the head keeps the declared name"
+        );
+        let ids: Vec<Vec<i64>> = tml
+            .sections
+            .iter()
+            .map(|s| s.shots.iter().map(|shot| shot.id).collect())
+            .collect();
+        assert_eq!(ids, vec![vec![1, 2], vec![3, 4], vec![5, 6]]);
+        assert_eq!(tml.sections[2].surveyor.as_deref(), Some("Team 3"));
+
+        let (configs, _, warnings) =
+            convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        assert!(
+            !warnings.iter().any(|w| w.contains("recorded a different")),
+            "every trip got its own section, so nothing collapsed: {warnings:?}"
+        );
+        // `one_chain` gives shot N depth N, so part 3 must rebase on shot 4.
+        assert!(
+            (configs[2].shots[0].depth_in - 4.0).abs() < f64::EPSILON,
+            "part 3 rebases on part 2's tail, not on part 1's or the run's start; got {}",
+            configs[2].shots[0].depth_in
+        );
+        assert!(
+            matches!(
+                configs[2].placement,
+                ImportPlacement::FromImporting {
+                    target_section_index: 1,
+                    target_station_index: 2,
+                    ..
+                }
+            ),
+            "and hangs off part 2's last station: {:?}",
+            configs[2].placement
+        );
+    }
+
+    /// A run that is ALREADY a "(branch N)" split is cut like any other, and
+    /// stays a branch: the wizard's branch marker is about topology, which the
+    /// cut does not touch.
+    #[test]
+    fn cutting_a_branch_run_keeps_its_branch_marker_and_its_own_parent() {
+        let mainline: Vec<String> = (1..=3)
+            .map(|id| tml_shot_xml_az_len(id, id - 1, "Main", 90.0, 10.0))
+            .collect();
+        // A stub off shot 1, whose second shot is a second trip.
+        let stub = [
+            tml_shot_xml_az_len(20, 1, "Main", 0.0, 2.0),
+            tml_shot_xml_az_len(21, 20, "Main", 0.0, 2.0)
+                .replace("<Explorer>Tester</Explorer>", "<Explorer>Ada</Explorer>"),
+        ];
+        let xml = wrap_xml(
+            &[
+                vec![tml_shot_xml(0, -1, "START", "Start")],
+                mainline,
+                stub.to_vec(),
+            ]
+            .concat()
+            .join("\n"),
+        );
+        let tml = parse_synthetic_tmlu(&xml);
+
+        assert_eq!(
+            section_names(&tml),
+            vec!["Main", "Main (branch 2)", "Main (branch 2) (trip 2)"]
+        );
+        assert!(
+            tml.sections[2].is_branch_split,
+            "a cut part of a branch is still that branch"
+        );
+        assert_eq!(tml.sections[2].surveyor.as_deref(), Some("Ada"));
+
+        let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        let cut = configs
+            .iter()
+            .position(|c| c.name.as_deref() == Some("Main (branch 2) (trip 2)"))
+            .expect("the cut part is imported");
+        let branch = configs
+            .iter()
+            .position(|c| c.name.as_deref() == Some("Main (branch 2)"))
+            .expect("so is the branch it came from");
+        assert!(
+            matches!(
+                configs[cut].placement,
+                ImportPlacement::FromImporting { target_section_index, target_station_index: 1, .. }
+                    if target_section_index as usize == branch
+            ),
+            "the cut part hangs off the BRANCH's own tail, not the mainline: {:?}",
+            configs[cut].placement
+        );
+    }
+
+    /// A file may itself declare a section called "A (trip 2)". Nothing in the
+    /// import keys on a section NAME - grouping keys on the file's own
+    /// `<Section>` text before any suffix exists, placement and closures key on
+    /// Ariane ids, and `simplify_lone_branch_names` only rewrites "(branch N)"
+    /// names - so the collision is accepted and shown as-is, exactly as a file
+    /// declaring two sections with one name always has been.
+    #[test]
+    fn a_declared_name_that_collides_with_a_cut_suffix_is_accepted() {
+        let shots = [
+            TripShot {
+                id: 1,
+                from_id: -1,
+                section: "A",
+                depth: 5.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "A",
+                explorer: "Ada",
+                depth: 9.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "A (trip 2)",
+                explorer: "Ada",
+                depth: 11.0,
+                ..TripShot::default()
+            }
+            .xml(),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        assert_eq!(
+            section_names(&tml),
+            vec!["A", "A (trip 2)", "A (trip 2)"],
+            "the minted suffix collides with the declared name, and both stand"
+        );
+        let ids: Vec<Vec<i64>> = tml
+            .sections
+            .iter()
+            .map(|s| s.shots.iter().map(|shot| shot.id).collect())
+            .collect();
+        assert_eq!(ids, vec![vec![1], vec![2], vec![3]]);
+
+        let (configs, _, _) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        assert_eq!(configs.len(), 3, "each is its own config");
+        assert!(
+            matches!(
+                configs[2].placement,
+                ImportPlacement::FromImporting {
+                    target_section_index: 1,
+                    target_station_index: 1,
+                    ..
+                }
+            ),
+            "the declared section resolves onto the CUT part by Ariane id, not \
+             onto whichever section shares its name: {:?}",
+            configs[2].placement
+        );
+    }
+
+    /// A run whose HEAD shot is excluded must not be named after it: under the
+    /// default toggle that shot is not imported, so every shot that IS imported
+    /// disagreed with its own section and the receipt reported a loss that had
+    /// not happened.
+    #[test]
+    fn a_run_takes_its_trip_from_the_first_shot_that_can_be_a_station() {
+        let shots = [
+            TripShot {
+                id: 1,
+                from_id: -1,
+                section: "A",
+                excluded: true,
+                explorer: "T1",
+                date: "2025-01-01",
+                depth: 5.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "A",
+                explorer: "T2",
+                date: "2025-02-02",
+                depth: 9.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "A",
+                explorer: "T2",
+                date: "2025-02-02",
+                depth: 11.0,
+                ..TripShot::default()
+            }
+            .xml(),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        assert_eq!(section_names(&tml), vec!["A"]);
+        assert_eq!(
+            tml.sections[0].surveyor.as_deref(),
+            Some("T2"),
+            "the excluded head names nothing"
+        );
+        let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        assert!(
+            !warnings.iter().any(|w| w.contains("recorded a different")),
+            "and no phantom collapse is reported: {warnings:?}"
+        );
+    }
+
+    /// One uncuttable boundary that strands a long tail is ONE place the file
+    /// lost a value, not one per shot: the report counts trip CHANGES beside
+    /// the shots, so a 3-shot stretch does not read as three findings.
+    #[test]
+    fn a_collapsed_stretch_is_reported_as_one_trip_change() {
+        let on_trip = |id: i64, excluded: bool, explorer: &str| {
+            TripShot {
+                id,
+                from_id: id - 1,
+                section: "A",
+                excluded,
+                explorer,
+                depth: id as f64,
+                ..TripShot::default()
+            }
+            .xml()
+        };
+        let shots = [
+            on_trip(1, false, "Team One"),
+            // No station seam here, so the three shots after it cannot be cut off.
+            on_trip(2, true, "Team One"),
+            on_trip(3, false, "Team Two"),
+            on_trip(4, false, "Team Two"),
+            on_trip(5, false, "Team Two"),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        assert_eq!(section_names(&tml), vec!["A"]);
+        assert_eq!(tml.sections[0].surveyor.as_deref(), Some("Team One"));
+
+        let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        let note = warnings
+            .iter()
+            .find(|w| w.contains("recorded a different"))
+            .expect("three shots did lose their surveyor");
+        assert!(
+            note.starts_with("3 shots at 1 trip change in 1 section recorded a different surveyor"),
+            "three shots on ONE collapsed trip is one change: {note}"
+        );
+    }
+
+    /// A mainline running through a T, with a stub written at the junction.
+    /// `retrip` moves everything past the T onto a second trip.
+    fn mainline_through_a_t(retrip: bool) -> TmlFile {
+        let retripped = |xml: String| {
+            if !retrip {
+                return xml;
+            }
+            let out = xml.replace("<Explorer>Tester</Explorer>", "<Explorer>Ada</Explorer>");
+            assert_ne!(out, xml, "the fixture's explorer element moved");
+            out
+        };
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml_az_len(1, 0, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(2, 1, "Main", 90.0, 10.0),
+                tml_shot_xml_az_len(20, 2, "Main", 0.0, 2.0),
+                tml_shot_xml_az_len(21, 20, "Main", 0.0, 2.0),
+                retripped(tml_shot_xml_az_len(3, 2, "Main", 90.0, 10.0)),
+                retripped(tml_shot_xml_az_len(4, 3, "Main", 90.0, 10.0)),
+            ]
+            .join("\n"),
+        );
+        parse_synthetic_tmlu(&xml)
+    }
+
+    /// The #504 mainline must be untouched by the cut when the file records one
+    /// trip - and cut in exactly one place when it does not.
+    #[test]
+    fn the_trip_cut_leaves_a_single_trip_mainline_whole() {
+        let one_trip = mainline_through_a_t(false);
+        assert_eq!(
+            section_names(&one_trip),
+            vec!["Main", "Main (branch 2)"],
+            "the mainline survives its T uncut and the stub stays a branch"
+        );
+        assert_eq!(
+            one_trip.sections[0]
+                .shots
+                .iter()
+                .map(|s| s.id)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+
+        let two_trips = mainline_through_a_t(true);
+        assert_eq!(
+            section_names(&two_trips),
+            vec!["Main", "Main (trip 2)", "Main (branch 2)"],
+            "one cut, where the trip changed"
+        );
+        assert_eq!(two_trips.sections[1].surveyor.as_deref(), Some("Ada"));
+        assert_eq!(
+            two_trips.sections[1]
+                .shots
+                .iter()
+                .map(|s| s.id)
+                .collect::<Vec<_>>(),
+            vec![3, 4]
+        );
+    }
+
+    /// The cut runs AFTER the join, because a cut end is not a chain end: it
+    /// has an in-section successor by construction. Offering it to the join let
+    /// the stub at the junction splice onto the mainline's head - taking the
+    /// mainline's name, with the real continuation left as a separate run.
+    #[test]
+    fn a_cut_end_is_not_offered_to_the_join_as_a_chain_end() {
+        let tml = mainline_through_a_t(true);
+
+        assert!(
+            !tml.sections.iter().any(|s| s.name.contains(" + ")),
+            "nothing in this file is a series continuation: {:?}",
+            section_names(&tml)
+        );
+        assert_eq!(
+            tml.sections[2]
+                .shots
+                .iter()
+                .map(|s| s.id)
+                .collect::<Vec<_>>(),
+            vec![20, 21],
+            "the stub stays its own branch instead of being absorbed"
+        );
+        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+    }
+
+    /// The cost of that order, pinned so it is a decision and not a surprise: a
+    /// chain continuing a CUT tail under its own name is no longer joinable to
+    /// it, because the join saw the run before the cut and compared its head.
+    #[test]
+    fn a_chain_continuing_a_cut_tail_stays_its_own_section() {
+        let second_trip = TripShot {
+            explorer: "Ada Lovelace",
+            date: "2025-03-04",
+            ..TripShot::default()
+        };
+        let shots = [
+            TripShot {
+                id: 1,
+                from_id: -1,
+                section: "A",
+                depth: 5.0,
+                ..TripShot::default()
+            }
+            .xml(),
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "A",
+                depth: 9.0,
+                ..second_trip
+            }
+            .xml(),
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "B",
+                depth: 11.0,
+                ..second_trip
+            }
+            .xml(),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        assert_eq!(section_names(&tml), vec!["A", "A (trip 2)", "B"]);
+        assert_eq!(tml.sections[1].surveyor.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(tml.sections[2].surveyor.as_deref(), Some("Ada Lovelace"));
+        assert_eq!(linearize::first_linearity_violation(&tml.sections), None);
+    }
+
+    /// Ariane's `Explorer` is one element holding two roles. The surveyor half
+    /// used to be dropped, and an `unknown` explorer half took the surveyor
+    /// down with it (#427).
+    #[test]
+    fn both_halves_of_the_combined_explorer_field_survive() {
+        let surveyor_of = |explorer: &str| {
+            let xml = wrap_xml(
+                &TripShot {
+                    id: 1,
+                    from_id: -1,
+                    section: "A",
+                    explorer,
+                    ..TripShot::default()
+                }
+                .xml(),
+            );
+            parse_synthetic_tmlu(&xml).sections[0].surveyor.clone()
+        };
+        let elements = |explorer: &str, surveyor: &str| {
+            format!("&lt;Explorer&gt;{explorer}&lt;/Explorer&gt;&lt;Surveyor&gt;{surveyor}&lt;/Surveyor&gt;")
+        };
+
+        assert_eq!(
+            surveyor_of(&elements("nh", "ds")).as_deref(),
+            Some("nh / ds"),
+            "both halves, joined the way real files write a compound value"
+        );
+        assert_eq!(
+            surveyor_of(&elements("unknown", "ds")).as_deref(),
+            Some("ds"),
+            "an unfilled explorer half must not take the surveyor with it"
+        );
+        assert_eq!(
+            surveyor_of(&elements("nh", "unknown")).as_deref(),
+            Some("nh")
+        );
+        assert_eq!(surveyor_of(&elements("unknown", "unknown")), None);
+        assert_eq!(
+            surveyor_of(&elements("nh", "nh")).as_deref(),
+            Some("nh"),
+            "one person in both roles is one name"
+        );
+        assert_eq!(
+            surveyor_of("nh / ds").as_deref(),
+            Some("nh / ds"),
+            "and the plain compound form - what the export writes back - is \
+             returned unchanged, so the round trip is idempotent"
+        );
+        assert_eq!(
+            surveyor_of("&lt;Surveyor&gt;ds&lt;/Surveyor&gt;&lt;Explorer&gt;nh&lt;/Explorer&gt;")
+                .as_deref(),
+            Some("ds / nh"),
+            "halves come out in DOCUMENT order, not in the order this reader \
+             happens to look for the tags"
+        );
+        assert_eq!(
+            surveyor_of("bare&lt;Surveyor&gt;ds&lt;/Surveyor&gt;").as_deref(),
+            Some("bare / ds"),
+            "a name that lost its element is still a name"
+        );
+        assert_eq!(
+            surveyor_of(&elements("Unknown", "ds")).as_deref(),
+            Some("ds"),
+            "the placeholder is a word, so its capitalisation does not decide"
+        );
+        assert_eq!(surveyor_of("NONE"), None);
+
+        // The PLAIN compound form gets the same per-half rules. It used to be
+        // kept verbatim, so Ariane's placeholder rode into the section surveyor
+        // and back out through the export.
+        assert_eq!(
+            surveyor_of("nh / ds").as_deref(),
+            Some("nh / ds"),
+            "a compound with no placeholder half is unchanged"
+        );
+        assert_eq!(surveyor_of("unknown / ds").as_deref(), Some("ds"));
+        assert_eq!(surveyor_of("ds / unknown").as_deref(), Some("ds"));
+        assert_eq!(surveyor_of("Unknown / None").as_deref(), None);
+        // Idempotence, on the value this app itself writes back out: whatever
+        // survives the filter must survive it again.
+        for once in ["nh / ds", "unknown / ds", "ds / unknown", "nh"] {
+            let first = surveyor_of(once);
+            let second = first.as_deref().and_then(surveyor_of);
+            assert_eq!(second, first, "re-reading {once:?} must not change it");
+        }
     }
 
     /// With duplicate shot ids in the file, a chain END no longer names a

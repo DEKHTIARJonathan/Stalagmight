@@ -24,9 +24,21 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
 
 ### Per-section
 - Section name (with `SectionDescription` suffix stripped)
-- Surveyor / explorer, taken from the section's first shot
+- Surveyor / explorer, taken from the section's first shot. Ariane's `Explorer`
+  is ONE element holding two roles, in two encodings: a plain compound string
+  (`"nh / ds"`) or an entity-escaped element pair
+  (`<Explorer>nh</Explorer><Surveyor>ds</Surveyor>`). Both halves are kept and
+  rejoined with `" / "` - the form real files already use, and the form export
+  writes back - so the round trip is idempotent. Splitting the compound into
+  people is [#329](https://github.com/Stalagmight/Stalagmight/issues/329) and is
+  not done here. A half spelled `unknown`, `None` or empty is dropped on its
+  own, so an unfilled explorer no longer takes the surveyor with it (#427).
 - Survey date, taken from the section's first shot
 - Section color (converted from Ariane's integer RGB format), taken from the section's first shot
+
+Those three are the section's **trip**, and Ariane records them on EVERY shot
+row - see [The trip cut](#the-trip-cut) for what happens when they change
+mid-chain.
 
 ### Per-shot
 - Azimuth (normalized to 0-360; Ariane stores a single forward azimuth, not a backsight pair)
@@ -92,6 +104,92 @@ Ariane stores survey data as a flat list of shots with `FromID` linkage. The par
 2. Detecting branch points where multiple shots share the same `FromID`
 3. Splitting branches into separate sections with parent-child placement relationships
 4. Resolving cross-section connections via a shot ID → (section index, station index) mapping
+
+### The trip cut
+
+A `Section` holds ONE surveyor, one date and one colour; a `Shot` holds none of
+the three. Ariane writes all three on every shot row, so a chain surveyed by two
+teams over three days used to import entirely under its FIRST shot's values,
+with the rest discarded silently (#427).
+
+Each linearized run is therefore **cut where the trip changes between two
+adjacent stations**, and each part keeps its own surveyor, date and colour. The
+parts after the first are named `"<name> (trip N)"` - backend-owned English, the
+same as the `(branch N)` suffix beside it (`linearize.rs`, `format!("{section_name}
+(branch {branch_number})")`); the only translated string in this area is the
+wizard's `(branch)` BADGE, which is driven by `is_branch_split` and not by a
+name. Each part hangs off the station it was cut at (`FromImporting`), so the
+geometry is byte-for-byte what the uncut run produced. This is the same
+(surveyor, date, colour) triple `join_contiguous_chains` refuses to merge
+across, applied to the cut side.
+
+A run takes those three values from its first shot that could be a STATION of it
+(non-CLOSURE, non-excluded), not simply its first shot: a run headed by an
+excluded shot was otherwise named after a shot the default import does not keep,
+and every shot it did keep then read as a collapsed trip that never happened.
+
+Three rules bound it, the first two mirroring the join:
+
+- **A cut needs a station on both sides.** A trip that changes across a CLOSURE
+  or excluded shot is not cut, because that shot is not in the import's station
+  index and the part after it would resolve to no parent - and whether it does
+  would depend on the include-excluded toggle, which sectioning must be
+  invariant to. What cannot be cut is counted and named on the receipt instead
+  ("N shots in M sections recorded a different surveyor/date/colour...").
+- **The cut runs AFTER the join.** A cut end is not a chain end - it has an
+  in-section successor by construction - and offering it to the join let an
+  unrelated branch at that junction splice onto the mainline's head. The cost,
+  pinned by `a_chain_continuing_a_cut_tail_stays_its_own_section`, is that a
+  chain continuing a cut tail under its own name is not absorbed into it.
+- **A cut budget, per run AND per file.** The trip is file-controlled and
+  written on every row, so a file carrying a per-ROW date - a data-entry
+  timestamp, or a crafted file - would otherwise mint one section per shot from
+  a single declared name. `MAX_TRIP_CUTS_PER_RUN` (256) sits far above real
+  multi-trip surveys (about five years of WEEKLY survey days under one declared
+  name; the largest real file measured cuts none at all) and far below
+  degeneracy. It is not enough on its own, because a file chooses how many RUNS
+  it has too, so `MAX_TRIP_CUTS_PER_FILE` (4096 = 16 runs at the per-run cap)
+  bounds the total, and the budget is further clamped to the id space the file
+  has not already used (below). Past either bound the remaining trips stay on
+  the last part and are named on the receipt, so the bounds cost reporting, not
+  data.
+
+#### Why sections are budgeted at all
+
+A shot id is `section_id * FEATURE_ID_STRIDE + sequence_order` with a stride of
+100_000, in `u32`. The last shot of section `id` encodes as `id * 100_000 +
+99_999`, so the encode holds up to **42_949 sections**; past that a site either
+panics (debug) or saturates, and saturating ALIASES distinct shots onto one id,
+which silently moves the station cross-references anchored on them. The cut's
+budget is therefore also clamped to `42_949 - (runs the file already has)`, so
+importing a file can never use the CUT to cross that line.
+
+Reaching it without the cut - by declaring tens of thousands of sections in the
+file - predates this work and is not guarded. The encode sites, and what each
+does at the boundary:
+
+| Site | Behaviour past 42_949 sections |
+|------|-------------------------------|
+| `models/section.rs` `Section::new` (`next_shot_id`) | unchecked multiply - panics in debug, wraps in release |
+| `core/state/project_io.rs` (uuid index, twice) | unchecked multiply - same |
+| `persistence/sqlite/read.rs` (shot id, `next_shot_id`) | saturating (#427) - no panic, ids alias |
+| `models/shot.rs` `shot_display_position` | saturating (#413) - display only |
+| `src/utils/ids.ts` `encodeFeatureId` | JS doubles, exact past 2^32 - no wrap |
+
+Closing that off properly means bounding the section count at the import
+boundary rather than at each encode, which is its own change.
+
+The suffix can collide with a name the file itself declares (a file with both
+`A` and `A (trip 2)`). That is accepted, not disambiguated: nothing in the
+import resolves a section by name - grouping keys on the file's own `<Section>`
+text before any suffix exists, placement and closures key on Ariane ids, and
+`simplify_lone_branch_names` only rewrites `(branch N)` names - so the result is
+two sections sharing a label, exactly as a file declaring one name twice has
+always produced (`a_declared_name_that_collides_with_a_cut_suffix_is_accepted`).
+
+Measured on a large real-world survey (14 declared names): 17 configs, median 14
+shots - identical to the pre-cut numbers, because no declared section in it
+changes trip mid-chain.
 
 ## Unit Conversion
 
@@ -211,7 +309,21 @@ Parsed but dropped:
   then the trim removes it - so writing `&#13;` would not help either. Interior whitespace, and the
   U+200B station-comment separator (not whitespace in Unicode terms), are unaffected. CSV export is
   lossless here by contrast; this is a property of the XML text format, not of the comment.
-- **Per-shot surveyor / date / color collapse to the chain head.** A section takes those three fields from its FIRST shot, so a chain surveyed by several people over several days lands under one surveyor, one date and one color ([#427](https://github.com/Stalagmight/Stalagmight/issues/427)).
+- **Per-shot surveyor / date / color survive as far as the section model allows.**
+  A run is cut per trip ([The trip cut](#the-trip-cut)), so several teams over
+  several days arrive as several sections rather than one. What a cut cannot
+  express - a trip that changes across a CLOSURE or excluded shot, with no
+  station seam to cut at - still collapses to the run head, and is counted on
+  the receipt rather than dropped in silence ([#427](https://github.com/Stalagmight/Stalagmight/issues/427)).
+- **Ariane 26.3's separate `XMLExplorer` / `XMLSurveyor` elements are not read.**
+  The survey behind #427 found them synthesized EMPTY on a resave of our own
+  export, with the legacy combined `Explorer` still carrying the data, so
+  reading them would change nothing on any file seen so far; preferring them
+  when non-empty belongs with [#329](https://github.com/Stalagmight/Stalagmight/issues/329),
+  which is where the element names can be confirmed against a file that fills
+  them.
+- **Dates parse strictly as `%Y-%m-%d`.** Any other spelling reads as no date at
+  all, with nothing said (#427 records this; it is not yet fixed).
 
 Structural:
 

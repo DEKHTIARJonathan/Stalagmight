@@ -12,8 +12,15 @@
 //! deferred into runs of their own. `choose_continuation` decides which,
 //! so that the run that continues is the mainline rather than whichever
 //! successor happened to be written first.
+//!
+//! This module also owns the TRIP rule - the (surveyor, date, colour) triple a
+//! `models::Section` can carry one of. Ariane records it per shot, so the same
+//! triple decides where runs may merge (`join_contiguous_chains`) and where a
+//! run has to be cut (`split_runs_at_trip_boundaries`).
 
 use std::collections::HashMap;
+
+use chrono::NaiveDate;
 
 use super::{RawShot, TmlSection, TmlShot, TmlShotType};
 
@@ -334,6 +341,336 @@ pub(super) fn first_linearity_violation(sections: &[TmlSection]) -> Option<Strin
     None
 }
 
+/// The trip a run is attributed to: one surveyor, one date, one colour, which
+/// is all a `models::Section` can hold. Ariane writes all three on EVERY shot
+/// row, so a run can change trip halfway down.
+type Trip<'a> = (Option<&'a str>, Option<NaiveDate>, &'a str);
+
+fn trip_of(shot: &TmlShot) -> Trip<'_> {
+    (shot.explorer.as_deref(), shot.date, shot.color.as_str())
+}
+
+/// Whether this shot can be the station on one side of a cut.
+///
+/// CLOSURE shots never import, and excluded ones import only under the
+/// include-excluded toggle - which the parse does not know, because sectioning
+/// has to be invariant to it. `join_contiguous_chains` refuses a seam on either
+/// for exactly that reason, and a cut needs the same guarantee in the other
+/// direction: the child run's station 0 is resolved through the parent's LAST
+/// shot (`determine_placement` looks its `from_id` up in the filtered
+/// id -> station index), so cutting after a shot the filter may drop would place
+/// the child at the origin whenever the toggle drops it.
+fn is_station_shot(shot: &TmlShot) -> bool {
+    shot.shot_type != TmlShotType::Closure && !shot.excluded
+}
+
+/// The shot a run takes its surveyor, date and colour from: the first one that
+/// could be a station OF that run.
+///
+/// Not simply the first shot. A run whose head is EXCLUDED was named after a
+/// shot the default import does not keep, so every shot it does keep disagreed
+/// with its own section and [`collapsed_trip_report`] reported a loss that had
+/// not happened. Falls back to the raw first shot when a run holds no station
+/// shot at all - that is what it carried before, and such a run imports as
+/// nothing anyway.
+fn trip_head(shots: &[TmlShot]) -> Option<&TmlShot> {
+    shots
+        .iter()
+        .find(|shot| is_station_shot(shot))
+        .or_else(|| shots.first())
+}
+
+/// Most cuts one run may be given.
+///
+/// Ariane writes the trip on every shot row, so a file whose rows carry a
+/// per-ROW date (a data-entry timestamp, or a crafted file) would otherwise
+/// mint one section per shot from a single declared name - unbounded
+/// amplification of file-controlled input into project objects, each with its
+/// own name, placement and undo entry.
+///
+/// 256 is chosen to sit far above real multi-trip surveys and far below
+/// degeneracy: it is about five years of WEEKLY survey days recorded under one
+/// declared section name, and the largest real file measured (14 declared
+/// names, 17 runs) cuts zero. Past the cap the remaining trips stay on the last
+/// part and are named on the receipt by [`collapsed_trip_report`], so the
+/// bound costs reporting rather than data.
+pub(super) const MAX_TRIP_CUTS_PER_RUN: usize = 256;
+
+/// Most cuts one FILE may be given, across every run in it.
+///
+/// [`MAX_TRIP_CUTS_PER_RUN`] alone bounds the wrong denominator: a file
+/// controls how many runs it has as well as how many trips each one holds, so
+/// 170 crafted runs of 257 trips would still mint 43k sections while obeying
+/// the per-run cap.
+///
+/// Sections are the numerator of the shot-id encode. Ids are handed out
+/// sequentially from 0 (`Project::add_section`), and `Section::new` computes
+/// `next_shot_id = id * FEATURE_ID_STRIDE` (100_000) as a plain `u32` multiply,
+/// so the encode holds only while `section_id <= 42_949`
+/// (42_949 x 100_000 = 4_294_900_000 <= `u32::MAX`). Past that the multiply
+/// panics in debug and, where a site saturates instead, distinct shots ALIAS
+/// onto one id - which silently moves station cross-references.
+///
+/// 4_096 is 16 runs at the per-run cap: under a tenth of that headroom,
+/// leaving ~38_850 for the file's declared names and branch splits (both of
+/// which predate this cut and are bounded only by the file itself - see
+/// `docs/ariane-import.md`). Cuts past the budget are not made, and the trips
+/// they would have separated are named on the receipt by
+/// [`collapsed_trip_report`] like any other uncut boundary.
+pub(super) const MAX_TRIP_CUTS_PER_FILE: usize = 4_096;
+
+/// Sections whose shot ids all fit the `section_id * FEATURE_ID_STRIDE + seq`
+/// encode, as a COUNT.
+///
+/// The last shot of section `id` encodes as `id * 100_000 + 99_999`, so the
+/// largest usable id is `(u32::MAX - 99_999) / 100_000` = 42_948, i.e. 42_949
+/// sections. (Not 42_950: id 42_949 fits the multiply on its own but overflows
+/// as soon as the section holds shots.)
+///
+/// The cut spends at most whatever is left of this after the runs the file
+/// already declared, so a file cannot use the cut to cross the boundary - only
+/// to approach it. Getting there WITHOUT the cut, by declaring tens of
+/// thousands of sections, predates this work and is unguarded; the encode sites
+/// that would then wrap are listed in `docs/ariane-import.md`.
+const MAX_SECTIONS_IN_ID_SPACE: usize = 42_949;
+
+/// How many cuts a file with `existing_runs` runs may be given.
+///
+/// Never more than the id space it has not already spent, so
+/// `existing_runs + cut_budget(existing_runs) <= MAX_SECTIONS_IN_ID_SPACE`
+/// holds for every input - which is the property that keeps the cut from
+/// carrying a file over the encode boundary. Saturating, so a file that is
+/// already past it gets no cuts rather than an underflow.
+pub(super) fn cut_budget(existing_runs: usize) -> usize {
+    MAX_TRIP_CUTS_PER_FILE.min(MAX_SECTIONS_IN_ID_SPACE.saturating_sub(existing_runs))
+}
+
+/// Cut each run where the trip changes between two ADJACENT stations (#427).
+///
+/// A run takes its metadata from its first shot (see `linearize_section`), so
+/// before this a chain surveyed by two teams over three days imported entirely
+/// under the first team and the first date, and the other values were dropped
+/// on the floor with nothing said. Cutting gives each trip its own run, which
+/// is the only place the model has to put them - `Section` carries one of each
+/// and `Shot` carries none.
+///
+/// This is the SAME rule `join_contiguous_chains` applies from the other side
+/// ("only chains that agree on all three merge"), so the two cannot fight over
+/// a seam. It runs AFTER the join all the same: see the call site for what
+/// offering a cut end to the join costs.
+///
+/// **Adjacency is the whole rule.** A trip change across a non-station shot is
+/// not cut at all: there is no seam there the import could resolve (see
+/// `is_station_shot`), and cutting at the next station instead would put a
+/// boundary somewhere the file does not have one. What stays uncut - including
+/// everything past [`MAX_TRIP_CUTS_PER_RUN`] - is counted and reported by
+/// [`collapsed_trip_report`] rather than lost quietly.
+///
+/// Returns the number of cuts made.
+pub(super) fn split_runs_at_trip_boundaries(sections: &mut Vec<TmlSection>) -> usize {
+    let mut out: Vec<TmlSection> = Vec::with_capacity(sections.len());
+    let mut cuts_made = 0;
+    let mut clamped_runs = 0;
+    let mut budget = cut_budget(sections.len());
+
+    for section in sections.drain(..) {
+        let mut cuts = trip_cut_points(&section.shots);
+        // Both caps at once: a file may not buy its way past the file-wide
+        // budget by spreading the same trip churn over more runs.
+        let allowed = cuts.len().min(MAX_TRIP_CUTS_PER_RUN).min(budget);
+        if allowed < cuts.len() {
+            clamped_runs += 1;
+            cuts.truncate(allowed);
+        }
+        if cuts.is_empty() {
+            out.push(section);
+            continue;
+        }
+        budget -= cuts.len();
+        cuts_made += cuts.len();
+        out.extend(cut_run(section, &cuts));
+    }
+
+    if clamped_runs > 0 {
+        // One line per file, not per run: the receipt already carries the
+        // per-shot consequence.
+        tracing::warn!(
+            runs = clamped_runs,
+            per_run_cap = MAX_TRIP_CUTS_PER_RUN,
+            per_file_cap = MAX_TRIP_CUTS_PER_FILE,
+            cuts_made,
+            "TML runs changed trip more times than the caps allow; the rest of their \
+             per-shot values were left on the last part of each"
+        );
+    }
+
+    *sections = out;
+    cuts_made
+}
+
+/// Indices where a new run starts, ascending.
+fn trip_cut_points(shots: &[TmlShot]) -> Vec<usize> {
+    (1..shots.len())
+        .filter(|&i| {
+            is_station_shot(&shots[i - 1])
+                && is_station_shot(&shots[i])
+                && trip_of(&shots[i]) != trip_of(&shots[i - 1])
+        })
+        .collect()
+}
+
+/// Split one run into `cuts.len() + 1` runs, each carrying its own trip.
+///
+/// The parent keeps the declared name; every later part is suffixed rather than
+/// renamed, so the file's own name is still readable in the wizard's list. The
+/// suffix is deliberately NOT "(branch N)": nothing branched, and that label
+/// already means something else here.
+fn cut_run(section: TmlSection, cuts: &[usize]) -> Vec<TmlSection> {
+    let TmlSection {
+        name,
+        mut shots,
+        is_branch_split,
+        start_ariane_id,
+        start_depth,
+        ..
+    } = section;
+
+    // Split from the back so each `split_off` leaves the earlier parts intact.
+    let mut parts: Vec<Vec<TmlShot>> = Vec::with_capacity(cuts.len() + 1);
+    for &cut in cuts.iter().rev() {
+        parts.push(shots.split_off(cut));
+    }
+    parts.push(shots);
+    parts.reverse();
+
+    let mut out: Vec<TmlSection> = Vec::with_capacity(parts.len());
+    // The station a cut part hangs off: the previous part's last shot, whose
+    // cumulative depth is what `resolve_tml_depth_in` rebases the part's first
+    // `DepthIn` against. Both are the values `linearize_section` would have
+    // computed had the file declared these shots under their own section name.
+    let mut previous_end_depth = start_depth;
+
+    for (index, part) in parts.into_iter().enumerate() {
+        let (Some(first), Some(tail)) = (part.first(), part.last()) else {
+            continue;
+        };
+        // Metadata from the part's first STATION shot, exactly as
+        // `linearize_section` names a run; the start id is the first shot's
+        // whatever it is, because that is where the part attaches.
+        let head = trip_head(&part).unwrap_or(first);
+        let (surveyor, date, color) = (head.explorer.clone(), head.date, head.color.clone());
+        // The run is linear (`first_linearity_violation`), so a cut part's first
+        // `from_id` IS the previous part's last shot id.
+        let (start_ariane_id, start_depth) = if index == 0 {
+            (start_ariane_id, start_depth)
+        } else {
+            (first.from_id, previous_end_depth)
+        };
+        let end_ariane_id = tail.id;
+        previous_end_depth = tail.depth;
+
+        out.push(TmlSection {
+            name: if index == 0 {
+                name.clone()
+            } else {
+                format!("{name} (trip {})", index + 1)
+            },
+            shots: part,
+            surveyor,
+            date,
+            color,
+            // A cut part of a branch is still that branch; a cut of the mainline
+            // is not a branch, and must not pick up the wizard's branch marker.
+            is_branch_split,
+            start_ariane_id,
+            end_ariane_id,
+            start_depth,
+        });
+    }
+
+    out
+}
+
+/// One line naming the per-shot trip values that a section could not carry, or
+/// `None` when nothing was dropped (#427).
+///
+/// After [`split_runs_at_trip_boundaries`] the only shots left disagreeing with
+/// their own section are the ones whose trip changed where there was no seam to
+/// cut. They still import - under the section's trip, not their own - so this
+/// is the receipt's record of what was collapsed.
+///
+/// Counts against the toggle the import will actually run with: a shot the
+/// filter drops takes its metadata out of the project with it, and reporting
+/// that as a loss would name a shot the user is not importing.
+pub(super) fn collapsed_trip_report(
+    sections: &[TmlSection],
+    include_excluded: bool,
+) -> Option<String> {
+    let mut shots = 0usize;
+    let mut changes = 0usize;
+    let mut sections_hit = 0usize;
+    let (mut any_surveyor, mut any_date, mut any_color) = (false, false, false);
+
+    for section in sections {
+        let mut hit = false;
+        // The trip of the previous IMPORTABLE shot, while it was one this
+        // section could not carry. A thousand shots on one collapsed trip are
+        // one place the file lost a value, not a thousand.
+        let mut collapsed_run: Option<Trip<'_>> = None;
+        for shot in &section.shots {
+            if shot.shot_type == TmlShotType::Closure || (!include_excluded && shot.excluded) {
+                continue;
+            }
+            let surveyor = shot.explorer != section.surveyor;
+            let date = shot.date != section.date;
+            let color = shot.color != section.color;
+            if !(surveyor || date || color) {
+                collapsed_run = None;
+                continue;
+            }
+            any_surveyor |= surveyor;
+            any_date |= date;
+            any_color |= color;
+            shots += 1;
+            hit = true;
+            if collapsed_run != Some(trip_of(shot)) {
+                changes += 1;
+                collapsed_run = Some(trip_of(shot));
+            }
+        }
+        sections_hit += usize::from(hit);
+    }
+
+    if shots == 0 {
+        return None;
+    }
+
+    let mut fields: Vec<&str> = Vec::with_capacity(3);
+    if any_surveyor {
+        fields.push("surveyor");
+    }
+    if any_date {
+        fields.push("date");
+    }
+    if any_color {
+        fields.push("colour");
+    }
+    let fields = match fields.as_slice() {
+        [one] => (*one).to_string(),
+        [first, second] => format!("{first} or {second}"),
+        _ => "surveyor, date or colour".to_string(),
+    };
+
+    Some(format!(
+        "{shots} shot{} at {changes} trip change{} in {sections_hit} section{} recorded a \
+         different {fields} from the section importing them; Ariane records those per shot, a \
+         section holds one of each, and there was no station boundary to split on",
+        if shots == 1 { "" } else { "s" },
+        if changes == 1 { "" } else { "s" },
+        if sections_hit == 1 { "" } else { "s" },
+    ))
+}
+
 /// Linearize a group of shots belonging to one section name.
 /// Splits into multiple sub-sections if branching is detected.
 pub(super) fn linearize_section(
@@ -561,9 +898,6 @@ pub(super) fn linearize_section(
 
         let first_shot = &chain[0];
         let last_shot = &chain[chain.len() - 1];
-        let surveyor = first_shot.explorer.clone();
-        let date = first_shot.date;
-        let color = first_shot.color.clone();
 
         let tml_shots: Vec<TmlShot> = chain
             .iter()
@@ -598,6 +932,13 @@ pub(super) fn linearize_section(
         let start_depth = all_shots
             .get(&first_shot.from_id)
             .map_or(0.0, |parent| parent.depth);
+
+        // The trip comes from the first shot that can be a STATION of this run,
+        // not simply the first shot: see `trip_head`.
+        let head = trip_head(&tml_shots);
+        let surveyor = head.and_then(|shot| shot.explorer.clone());
+        let date = head.and_then(|shot| shot.date);
+        let color = head.map(|shot| shot.color.clone()).unwrap_or_default();
 
         result.push(TmlSection {
             name,

@@ -83,7 +83,7 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | Internal field | TML element | Notes |
 |----------------|-------------|-------|
 | `section.name` | `Section` / `SC` | Falls back to `"Section {id}"` if unnamed |
-| `section.surveyor` | `Explorer` / `EX` | `"unknown"` if unset |
+| `section.surveyor` | `Explorer` / `EX` | `"unknown"` if unset. Written VERBATIM, so a compound value the import built from Ariane's two-role field (`"nh / ds"` - see [Ariane import](ariane-import.md#per-section)) goes back out in the plain compound form real files use, and re-imports unchanged. A file that arrived in the entity-escaped `<Explorer>…</Explorer><Surveyor>…</Surveyor>` encoding is normalised to that plain form, not restored to the escaped one. |
 | `section.date` | `Date` / `DT` | `"2000-01-01"` if unset |
 | `section.color` (`#RRGGBB`) | `Color` / `CL` | Converted to Ariane format `0xRRGGBBff` |
 

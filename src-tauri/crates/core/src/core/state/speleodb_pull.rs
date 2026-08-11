@@ -2235,6 +2235,7 @@ mod tests {
     };
     use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::core::state::AppState;
+    use crate::parsers::tml::test_helpers::{parse_synthetic_tmlu, wrap_xml, TripShot};
     use crate::parsers::tml::{TmlFile, TmlSection, TmlShot, TmlShotType, TmlUnit};
     use crate::speleodb::dump::Dump;
     use crate::speleodb::SpeleoDbError;
@@ -2962,6 +2963,109 @@ mod tests {
         );
     }
 
+    /// A synthetic remote file, PARSED - not hand-built like `adopt_tml`: the
+    /// per-trip cut (#427) happens during the parse, so a `TmlFile` literal
+    /// cannot exercise it and a test built on one would pass whatever the cut
+    /// did. Production adoption parses the downloaded bytes, so this is the
+    /// shape that path actually hands `adopt_convert`.
+    fn parsed_remote(shots: &[TripShot<'_>]) -> TmlFile {
+        let xml: Vec<String> = shots.iter().map(TripShot::xml).collect();
+        parse_synthetic_tmlu(&wrap_xml(&xml.join("\n")))
+    }
+
+    /// The adopted `.tml` gets the same per-trip cut the wizard import does -
+    /// adoption runs the same parse and converter, and a remote file surveyed
+    /// by two teams must not land under one of them.
+    #[test]
+    fn an_adopted_file_is_cut_per_trip_like_any_other() {
+        let tml = parsed_remote(&[
+            TripShot {
+                id: 1,
+                from_id: -1,
+                section: "S",
+                explorer: "Team One",
+                ..TripShot::default()
+            },
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "S",
+                explorer: "Team Two",
+                ..TripShot::default()
+            },
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "S",
+                explorer: "Team Two",
+                ..TripShot::default()
+            },
+        ]);
+
+        let (configs, _, warnings) = adopt_convert(&tml).expect("the conversion succeeds");
+        assert_eq!(
+            configs
+                .iter()
+                .map(|c| (c.name.clone().unwrap_or_default(), c.surveyor.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("S".to_owned(), Some("Team One".to_owned())),
+                ("S (trip 2)".to_owned(), Some("Team Two".to_owned())),
+            ],
+            "each trip is adopted as its own section, with its own surveyor"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("recorded a different")),
+            "and nothing was collapsed, so nothing is reported: {warnings:?}"
+        );
+    }
+
+    /// A trip change with no station seam to cut at is reported instead - and
+    /// the excluded line still comes FIRST, because `cap_warnings` truncates
+    /// from the tail (see this module's doc comment).
+    #[test]
+    fn the_collapsed_trip_line_follows_the_excluded_line_it_must_not_displace() {
+        let tml = parsed_remote(&[
+            TripShot {
+                id: 1,
+                from_id: -1,
+                section: "S",
+                explorer: "Team One",
+                ..TripShot::default()
+            },
+            // Excluded, so neither seam around it is a station boundary.
+            TripShot {
+                id: 2,
+                from_id: 1,
+                section: "S",
+                excluded: true,
+                explorer: "Team One",
+                ..TripShot::default()
+            },
+            TripShot {
+                id: 3,
+                from_id: 2,
+                section: "S",
+                explorer: "Team Two",
+                ..TripShot::default()
+            },
+        ]);
+
+        let (configs, _, warnings) = adopt_convert(&tml).expect("the conversion succeeds");
+        assert_eq!(configs.len(), 1, "there was no seam to cut at");
+        assert_eq!(
+            warnings.first().map(String::as_str),
+            Some("1 excluded shot in the remote file was not imported"),
+            "the excluded line keeps its place at the front: {warnings:?}"
+        );
+        assert!(
+            warnings[1..]
+                .iter()
+                .any(|w| w.starts_with("1 shot at 1 trip change in 1 section recorded a different")),
+            "and the collapsed trip is reported behind it: {warnings:?}"
+        );
+    }
+
     /// One shot of a synthetic remote `.tml`, chained onto its predecessor.
     fn adopt_shot(id: i64, excluded: bool, shot_type: TmlShotType) -> TmlShot {
         TmlShot {
@@ -2996,12 +3100,19 @@ mod tests {
     /// One section of a synthetic remote `.tml`.
     fn adopt_section(name: &str, start_ariane_id: i64, shots: Vec<TmlShot>) -> TmlSection {
         let end_ariane_id = shots.last().map_or(start_ariane_id, |s| s.id);
+        // The colour comes from the head shot, as `linearize_section` builds it.
+        // A section that disagrees with its own shots is a shape the parser
+        // cannot emit since #427, and the converter reports it as a collapsed
+        // trip - which would be this fixture lying, not a finding.
+        let color = shots
+            .first()
+            .map_or_else(|| "#ff0000".to_owned(), |shot| shot.color.clone());
         TmlSection {
             name: name.to_owned(),
             shots,
             surveyor: None,
             date: None,
-            color: "#ff0000".to_owned(),
+            color,
             is_branch_split: false,
             start_ariane_id,
             end_ariane_id,
