@@ -5,6 +5,7 @@ import {
   bindVec2,
   bindFloat,
   bindColor,
+  bindIntU8,
 } from '../glProgram';
 import { FakeGl, FakeWebGLBuffer, asGl } from './fakeGl';
 
@@ -94,5 +95,24 @@ describe('attribute binders', () => {
       b.bind(asGl(gl), -1, new FakeWebGLBuffer() as unknown as WebGLBuffer);
       expect(gl.calls).toEqual({});
     }
+  });
+
+  it('bindIntU8 goes through the INTEGER entry point as (1, UNSIGNED_BYTE)', () => {
+    const gl = new FakeGl();
+    const buf = new FakeWebGLBuffer() as unknown as WebGLBuffer;
+    bindIntU8(asGl(gl), 3, buf);
+    expect(gl.count('bindBuffer')).toBe(1);
+    expect(gl.bufferBinds[0]).toEqual({ target: gl.ARRAY_BUFFER, buffer: buf });
+    expect(gl.count('enableVertexAttribArray')).toBe(1);
+    expect(gl.attribIPointers).toEqual([{ loc: 3, size: 1, type: gl.UNSIGNED_BYTE }]);
+    // vertexAttribPointer converts to float; an `in uint` attribute read that way
+    // is undefined behaviour, so the plain entry point must stay untouched.
+    expect(gl.count('vertexAttribPointer')).toBe(0);
+  });
+
+  it('bindIntU8 is a complete no-op for a dropped attribute (loc < 0)', () => {
+    const gl = new FakeGl();
+    bindIntU8(asGl(gl), -1, new FakeWebGLBuffer() as unknown as WebGLBuffer);
+    expect(gl.calls).toEqual({});
   });
 });

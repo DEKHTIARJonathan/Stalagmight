@@ -136,3 +136,11 @@ export function bindColor(gl: WebGL2RenderingContext, loc: number, buf: WebGLBuf
   gl.enableVertexAttribArray(loc);
   gl.vertexAttribPointer(loc, 4, gl.UNSIGNED_BYTE, true, 0, 0);
 }
+
+/** Bind a UNSIGNED_BYTE INTEGER attribute (`in uint`) with `vertexAttribIPointer`. */
+export function bindIntU8(gl: WebGL2RenderingContext, loc: number, buf: WebGLBuffer): void {
+  if (loc < 0) return;
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribIPointer(loc, 1, gl.UNSIGNED_BYTE, 0, 0);
+}

@@ -29,6 +29,14 @@ export interface AttribPointerCall {
   normalized: boolean;
 }
 
+/** One recorded `vertexAttribIPointer` call (integer attributes take no
+ *  `normalized` flag - that is the whole point of the separate entry point). */
+export interface AttribIPointerCall {
+  loc: number;
+  size: number;
+  type: number;
+}
+
 export class FakeGl {
   // Real GL enum values, so a swapped constant cannot pass unnoticed.
   readonly VERTEX_SHADER = 0x8b31;
@@ -62,6 +70,7 @@ export class FakeGl {
   readonly uniformQueries: string[] = [];
   readonly attribQueries: string[] = [];
   readonly attribPointers: AttribPointerCall[] = [];
+  readonly attribIPointers: AttribIPointerCall[] = [];
   readonly bufferBinds: { target: number; buffer: unknown }[] = [];
 
   private readonly uniformLocations = new Map<string, object>();
@@ -201,6 +210,11 @@ export class FakeGl {
   ): void {
     this.bump('vertexAttribPointer');
     this.attribPointers.push({ loc, size, type, normalized });
+  }
+
+  vertexAttribIPointer(loc: number, size: number, type: number, _stride: number, _offset: number): void {
+    this.bump('vertexAttribIPointer');
+    this.attribIPointers.push({ loc, size, type });
   }
 
   uniformMatrix4fv(_loc: unknown, _transpose: boolean, _value: unknown): void {
