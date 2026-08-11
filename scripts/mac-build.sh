@@ -171,13 +171,17 @@ if [[ "$TEST_E2E" == true ]]; then
   ok "E2E debug binary built"
 fi
 
-# ── Step 5b: Run the agent-harness journeys (optional) ────────────────
-# The WDIO suite this used to run was retired in #549; the journey tier is
-# the real-app equivalent.
+# ── Step 5b: Run the agent-harness journeys + stress tier (optional) ──
+# The WDIO suite this used to run was retired in #549; the journeys plus the
+# fractal-stress scenario are the real-app equivalent (the old run included
+# the large-survey stress spec, so keep that coverage in this preflight too).
 if [[ "$TEST_E2E" == true ]]; then
   info "Running agent-harness journeys"
   (cd "$PROJECT_DIR" && pnpm agent:journeys)
   ok "Agent-harness journeys passed"
+  info "Running fractal-stress (iter 4)"
+  (cd "$PROJECT_DIR" && pnpm agent:scenario fractal-stress --iterations 4)
+  ok "fractal-stress passed"
 fi
 
 # ── Step 6: Production build ────────────────────────────────────────────────

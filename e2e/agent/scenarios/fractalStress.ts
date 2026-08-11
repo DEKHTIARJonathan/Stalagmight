@@ -16,6 +16,9 @@
  * during the section/merge loops, so a hung backend fails loudly with a phase
  * name instead of stalling the session.
  */
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import type { Scenario, ScenarioContext } from './framework';
 import { hasProject } from './common';
 import {
@@ -129,6 +132,32 @@ export const fractalStress: Scenario = {
     checkBudget('merges');
 
     await verifyAgainstBackend(ctx, sections.length, merges, sectionIdMap);
+    checkBudget('backend verification');
+
+    // The retired WDIO tier also SAVED the generated survey - serialization of
+    // a large merge graph is its own failure surface. Write to a temp path,
+    // require the file, and clean up (close first: deleting a live SQLite
+    // database under the backend's open handle is the documented SIGBUS
+    // hazard).
+    const saveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fractal-stress-'));
+    const savePath = path.join(saveDir, `fractal-iter${iterations}.stalx`);
+    try {
+      const saved = (await ctx.callAction('project', 'saveProject', [savePath])) as {
+        ok: boolean;
+        result?: { success?: boolean; error?: string | null };
+      };
+      if (!saved.ok || saved.result?.success !== true) {
+        throw new Error(`saveProject failed: ${saved.result?.error ?? 'unknown'}`);
+      }
+      if (!fs.existsSync(savePath)) {
+        throw new Error(`save reported success but nothing landed at ${savePath}`);
+      }
+      ctx.setMetric('savedBytes', fs.statSync(savePath).size);
+    } finally {
+      await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
+      fs.rmSync(saveDir, { recursive: true, force: true });
+    }
+    checkBudget('save');
     ctx.setMetric('totalMs', Date.now() - start);
   },
 };
