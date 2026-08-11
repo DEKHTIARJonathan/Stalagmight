@@ -56,3 +56,12 @@ This guide captures the current UI conventions and design tokens for Stalagmight
 ## Accessibility
 - Icon-only buttons must include `aria-label`.
 - Keep `data-testid` attributes consistent for UI tests.
+- A resize divider is a WAI-ARIA window splitter, not a decorative div:
+  `role="separator"`, `aria-orientation`, `aria-label`, `aria-valuenow/min/max`
+  in the same units the drag clamps to, `tabIndex={0}`, and
+  `focus:outline-none focus-visible:ring-1 focus-visible:ring-accent`. Arrow
+  keys nudge, Shift+Arrow steps coarsely, Home/End jump to the bounds, and the
+  keys persist through the same path the drag's release uses (debounced, so a
+  burst of taps is one write). `WizardMapPanel` is the reference
+  implementation; the SingleSystemView resizers have not been retrofitted yet
+  (#396).
