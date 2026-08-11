@@ -1677,7 +1677,8 @@
       "failed": "Export failed - try a different folder or file name",
       "notes": {
         "azimuth-rotated-to-true": "Bearings rotated to true north for Ariane",
-        "azimuth-mixed-unresolved": "Some sections have no declination - Ariane will re-correct all"
+        "azimuth-mixed-unresolved": "Some sections have no declination - Ariane will re-correct all",
+        "gps-anchors-not-written": "Some GPS anchors are not at an entrance and were not written to the file"
       }
     },
     "tmlUnanchoredWarning": {

@@ -301,15 +301,17 @@ fn zero_datums_are_stable_across_export_import_cycles() {
 
     fn two_entrance_project(datums: &[(u32, f64, f64)]) -> Project {
         let mut project = Project::new("Cycle".to_string(), None);
-        for name in ["North", "South"] {
+        for (name, shot_count) in [("North", 1), ("South", 2)] {
             project.add_section(SectionData {
                 name: Some(name.to_string()),
                 color: "#ff0000".to_string(),
-                shots: vec![ShotData {
-                    length: 5.0,
-                    azimuth_in: 90.0,
-                    ..Default::default()
-                }],
+                shots: (0..shot_count)
+                    .map(|_| ShotData {
+                        length: 5.0,
+                        azimuth_in: 90.0,
+                        ..Default::default()
+                    })
+                    .collect(),
                 ..Default::default()
             });
         }
@@ -386,15 +388,47 @@ fn zero_datums_are_stable_across_export_import_cycles() {
     let once = import_cycle(&original, dir.path(), "one-anchor-once");
     let after_first = anchor_set(&once);
     assert_eq!(
-        after_first.len(),
-        2,
-        "the unanchored entrance gains its placement datum on the first cycle"
+        after_first,
+        vec![(20_250_000, -87_500_000), (20_250_000, -87_500_000)],
+        "the unanchored entrance gains its placement datum on the first cycle, \
+         at the FRAME datum's coordinates - anything else (0,0 in particular) \
+         is the null-island regression"
     );
     let twice = import_cycle(&once, dir.path(), "one-anchor-twice");
     assert_eq!(
         anchor_set(&twice),
         after_first,
         "the anchor set must be stable from the first re-import onward"
+    );
+
+    // A mid-section datum on a detached entrance: the export SPLITS that
+    // section at the datum (forward + pre-zero-datum legs), so the first cycle
+    // legitimately turns 2 datums into 3 sections/3 datums - all at the two
+    // original coordinates - and from then on the set holds still. Splitting is
+    // structurally lossy (the root's datum split always was); what this pins is
+    // that the COORDINATES never drift and the growth stops after one cycle.
+    let mut original = two_entrance_project(&[(0, 20.25, -87.5)]);
+    original.zero_datums.push(ZeroDatum {
+        station_ref: StationRef {
+            section_id: 1,
+            station_index: 1,
+        }
+        .into(),
+        gps: GpsCoordinates::new(20.31, -87.42, 0.0).unwrap(),
+    });
+    let once = import_cycle(&original, dir.path(), "mid-datum-once");
+    let after_first = anchor_set(&once);
+    for anchor in &after_first {
+        assert!(
+            anchor == &(20_250_000, -87_500_000) || anchor == &(20_310_000, -87_420_000),
+            "a cycled anchor must carry one of the survey's own coordinates, got {anchor:?}"
+        );
+    }
+    let twice = import_cycle(&once, dir.path(), "mid-datum-twice");
+    assert_eq!(
+        anchor_set(&twice),
+        after_first,
+        "the mid-section-split shape must be stable from the first re-import onward"
     );
 }
 
