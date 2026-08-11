@@ -1305,15 +1305,17 @@ export const exportRoundtripFuzz: Scenario = {
       // scenario departs from the app's default (`executeTmlImport` sends
       // `?? true`).
       //
-      // With it on, the importer moves a shot comment onto the shot's
-      // to-STATION (`core::comment_split::split`) - and `ProjectIpc`
+      // With it on, anything the source file carries as a STATION comment
+      // lands in `project.station_comments` - and `ProjectIpc`
       // (`models/project.rs:585-602`) serializes 16 fields, none of them
       // `station_comments`, so `get_project_state` cannot show them and X6's
-      // text check would read every moved comment as lost. Measured on naharon:
-      // both of its shot comments read as gone, and its 74 station comments
-      // were never visible in the first place. Keeping the comments on shots is
-      // a real user-facing import option, not a fabricated state, and it is what
-      // makes the text half of X6 an assertion rather than a formality.
+      // text check would read every one as lost. Measured on naharon: its 74
+      // station comments were never visible over IPC. (Shot comments used to
+      // move to stations too - #564 fixed that by marking every exported shot
+      // comment - but the station-comment blindness alone still forces `false`
+      // here.) Keeping every comment on a shot is a real user-facing import
+      // option, not a fabricated state, and it is what makes the text half of
+      // X6 an assertion rather than a formality.
       const imported = await callProjectAction(ctx, 'executeTmlImport', [file, null, false, false, null]);
       if (!imported.ok) {
         return { ok: false, error: imported.err ?? 'import failed', projectPath };
