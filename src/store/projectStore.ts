@@ -2502,9 +2502,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // copy for must show as the code, never as the i18n key path, which is
       // what a bare `t()` renders for a miss.
       const key = `dialogs.export.notes.${code}`;
+      // Keyed per CODE: one export can return several notes (#378 added a
+      // second possible code), and a shared key would let the second toast
+      // replace the first inside the burst window.
       useUIStore.getState().showToast(
         i18n.exists(key) ? i18n.t(key) : code,
-        TOAST_KEYS.EXPORT_NOTE,
+        `${TOAST_KEYS.EXPORT_NOTE}:${code}`,
         'warning',
       );
     }

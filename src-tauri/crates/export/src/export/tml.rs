@@ -5094,6 +5094,90 @@ mod tests {
     }
 
     #[test]
+    fn a_disconnected_component_roots_at_its_datum_section() {
+        // #378 review follow-up: a detached gallery of three merged sections
+        // with the datum on the MIDDLE one must make that section the
+        // component's entrance - rooting at the first section in project order
+        // would anchor the whole gallery at the frame datum's coordinates
+        // while its own datum went unwritten.
+        let mut project = Project::new("Datum Root".to_string(), None);
+        let shot = || ShotData {
+            length: 5.0,
+            azimuth_in: 90.0,
+            ..Default::default()
+        };
+        for name in ["Main", "Gallery A", "Gallery B", "Gallery C"] {
+            project.add_section(SectionData {
+                name: Some(name.to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![shot()],
+                ..Default::default()
+            });
+        }
+        // Chain the galleries (1-2-3) to each other, none to Main (0).
+        for (a, b) in [(1, 2), (2, 3)] {
+            project.station_merges.push(StationMerge {
+                station_a: StationRef {
+                    section_id: a,
+                    station_index: 1,
+                }
+                .into(),
+                station_b: StationRef {
+                    section_id: b,
+                    station_index: 0,
+                }
+                .into(),
+                merged_at: chrono::Utc::now(),
+            });
+        }
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 0,
+                station_index: 0,
+            }
+            .into(),
+            gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
+        });
+        // The gallery's own anchor sits on its MIDDLE section's first station.
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 2,
+                station_index: 0,
+            }
+            .into(),
+            gps: GpsCoordinates::new(20.31, -87.42, 0.0).unwrap(),
+        });
+
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
+        let starts: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "START").collect();
+        assert_eq!(starts.len(), 2, "one entrance per component");
+        let gallery_start = starts.iter().find(|s| s.section == "Gallery B");
+        assert!(
+            gallery_start.is_some(),
+            "the datum-carrying section must be the component's entrance; STARTs: {:?}",
+            starts
+                .iter()
+                .map(|s| s.section.as_str())
+                .collect::<Vec<_>>()
+        );
+        let gallery_start = gallery_start.unwrap();
+        assert!(
+            (gallery_start.latitude - 20.31).abs() < f64::EPSILON
+                && (gallery_start.longitude - -87.42).abs() < f64::EPSILON,
+            "the component's START carries its own datum, got {},{}",
+            gallery_start.latitude,
+            gallery_start.longitude
+        );
+        assert!(
+            shots
+                .iter()
+                .all(|s| s.from_id != -1 || s.shot_type == "START"),
+            "re-rooting must leave no orphan: every non-START chains"
+        );
+        assert!(ensure_rooted_chain(&shots, TmlProfile::User).is_ok());
+    }
+
+    #[test]
     fn the_rooted_chain_error_caps_its_section_list() {
         // #378 item (g): section names come from imported files, so the refusal
         // message must not scale with their count or length, and must not carry

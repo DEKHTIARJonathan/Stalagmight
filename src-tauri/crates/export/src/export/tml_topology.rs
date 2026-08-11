@@ -142,15 +142,29 @@ pub(super) fn build_parent_map(
             }
         }
 
-        // `project.sections` order, so which section becomes the component's entrance is
-        // deterministic and the export stays byte-stable. A section with no merges at all
-        // is not in `adjacency` and is left out of the map deliberately: it is an
-        // entrance in its own right.
+        // A component's entrance prefers a section holding a resolvable datum -
+        // the same rule the MAIN root follows via `frame_datum` (#378 review):
+        // GPS lands only on entrance STARTs, so rooting a datum-carrying
+        // component at some other section would export it anchored to the frame
+        // datum's coordinates while its own datum went unwritten. Within each
+        // preference tier, `project.sections` order keeps the choice
+        // deterministic and the export byte-stable. A section with no merges at
+        // all is not in `adjacency` and is left out of the map deliberately: it
+        // is an entrance in its own right.
+        let candidate = |id: &SectionId| !visited.contains(id) && adjacency.contains_key(id);
         let Some(next_root) = project
             .sections
             .iter()
             .map(|section| section.id)
-            .find(|id| !visited.contains(id) && adjacency.contains_key(id))
+            .filter(candidate)
+            .find(|id| section_datum(project, *id).is_some())
+            .or_else(|| {
+                project
+                    .sections
+                    .iter()
+                    .map(|section| section.id)
+                    .find(candidate)
+            })
         else {
             break;
         };
