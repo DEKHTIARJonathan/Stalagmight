@@ -57,9 +57,11 @@ export const TOAST_KEYS = {
    */
   EXPORT_FAILED: 'export-failed',
   /*
-   * One key for every #438 azimuth export note. They are mutually exclusive per
-   * export - `AzimuthExport::note_code` returns at most one - so a shared key is
-   * the right dedup unit: two exports in a row collapse into one line.
+   * PREFIX for export notes: the shown key is `export-note:<code>`, one per
+   * note code. An export can return more than one code since #378 (an azimuth
+   * note plus the GPS-anchors note), and a shared literal key would let the
+   * second toast replace the first inside the burst window - silencing one
+   * file-level compromise. Same code across two exports still collapses.
    */
   EXPORT_NOTE: 'export-note',
   WARNING_RESOLVE: 'warning-resolve',

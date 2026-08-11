@@ -45,14 +45,16 @@ describe('exportTml surfaces the backend azimuth notes', () => {
     expect(showToastMock).not.toHaveBeenCalled();
   });
 
-  it('raises a warning toast per note, translated, under the shared key', async () => {
+  it('raises a warning toast per note, translated, keyed per code', async () => {
     invokeIpcMock.mockResolvedValue(['azimuth-rotated-to-true']);
 
     await useProjectStore.getState().exportTml('/tmp/cave.tml');
 
     expect(showToastMock).toHaveBeenCalledTimes(1);
     const [message, key, kind] = showToastMock.mock.calls[0] as [string, string, string];
-    expect(key).toBe(TOAST_KEYS.EXPORT_NOTE);
+    // Per CODE, not the bare shared key: two notes from one export must not
+    // dedup into a single toast (#378 added a second possible code).
+    expect(key).toBe(`${TOAST_KEYS.EXPORT_NOTE}:azimuth-rotated-to-true`);
     // `warning`, per docs/notifications.md: the export SUCCEEDED, with a caveat.
     expect(kind).toBe('warning');
     // Translated, not the raw code - a code on screen is the defect this asserts
@@ -81,6 +83,17 @@ describe('exportTml surfaces the backend azimuth notes', () => {
 
     const [message] = showToastMock.mock.calls[0] as [string];
     expect(message).toBe('azimuth-something-new');
+  });
+
+  /** Two notes from ONE export keep distinct keys, so neither replaces the other. */
+  it('keeps two simultaneous notes on distinct toast keys', async () => {
+    invokeIpcMock.mockResolvedValue(['azimuth-rotated-to-true', 'gps-anchors-not-written']);
+
+    await useProjectStore.getState().exportTml('/tmp/cave.tml');
+
+    expect(showToastMock).toHaveBeenCalledTimes(2);
+    const keys = showToastMock.mock.calls.map((call) => call[1] as string);
+    expect(new Set(keys).size).toBe(2);
   });
 
   /** A command that returns nothing at all (an older backend) is not a crash. */

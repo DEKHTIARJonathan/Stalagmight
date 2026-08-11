@@ -25,9 +25,12 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
 use crate::models::comment_split;
-use crate::models::{normalize_azimuth, Project, Section, SectionId, Shot, StationRef};
+use crate::models::{normalize_azimuth, Project, SectionId, Shot, StationRef};
 
 use super::tml_azimuth::AzimuthExport;
+use super::tml_topology::{
+    build_parent_map, choose_default_root_section_id, section_datum, station_depth,
+};
 
 // ============================================================================
 // Element-name map (long vs. short)
@@ -308,7 +311,14 @@ fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<(Vec<u
         );
         notes.push(code.to_string());
     }
-    let shots = build_export_shots(project, profile, azimuth_export);
+    let (shots, unwritten_datums) =
+        build_export_shots_with_report(project, profile, azimuth_export);
+    // Same contract as the azimuth notes above (#438): a fact the FILE carries
+    // and the project does not must reach the user, not just the log. The
+    // detailed warn lives in the GPS pass; this is its UI-facing code.
+    if unwritten_datums > 0 {
+        notes.push("gps-anchors-not-written".to_string());
+    }
     ensure_rooted_chain(&shots, profile)?;
 
     let mut buf = Vec::new();
@@ -556,7 +566,10 @@ fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> 
     let mut sections: Vec<&str> = orphans.iter().map(|s| s.section.as_str()).collect();
     sections.sort_unstable();
     sections.dedup();
-    let listed = sections.join(", ");
+    // Section names come from imported third-party files, so neither their count
+    // nor their length is ours to trust - and this string reaches both the log
+    // and the UI (#378 item g). Cap the list and truncate each name.
+    let listed = list_capped(&sections);
 
     // Without a closure Ariane never runs the loop solve, so the orphan is inert and
     // the file draws. Say so once and let the export through.
@@ -579,6 +592,38 @@ fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> 
         first.id,
         first.shot_type,
     )
+}
+
+/// How many section names an error/warning lists before summarising, and how
+/// long each shown name may be. Imported files decide both, so the message must
+/// not scale with them.
+const LISTED_SECTIONS_MAX: usize = 5;
+const LISTED_SECTION_NAME_MAX: usize = 60;
+
+fn list_capped(names: &[&str]) -> String {
+    let mut shown: Vec<String> = names
+        .iter()
+        .take(LISTED_SECTIONS_MAX)
+        .map(|name| {
+            // Control characters would let an imported name forge log lines or
+            // steer the terminal; the length caps alone don't stop that.
+            let clean: String = name
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(LISTED_SECTION_NAME_MAX + 1)
+                .collect();
+            if clean.chars().count() > LISTED_SECTION_NAME_MAX {
+                let cut: String = clean.chars().take(LISTED_SECTION_NAME_MAX).collect();
+                format!("{cut}...")
+            } else {
+                clean
+            }
+        })
+        .collect();
+    if names.len() > LISTED_SECTIONS_MAX {
+        shown.push(format!("and {} more", names.len() - LISTED_SECTIONS_MAX));
+    }
+    shown.join(", ")
 }
 
 // ============================================================================
@@ -646,13 +691,25 @@ fn remint_duplicate_uuids(shots: &mut [ExportShot]) {
     }
 }
 
+/// The shot list alone; see [`build_export_shots_with_report`] for the variant
+/// `build_xml` uses to surface unwritten GPS anchors as an export note.
 fn build_export_shots(
     project: &Project,
     profile: TmlProfile,
     azimuth_export: AzimuthExport,
 ) -> Vec<ExportShot> {
+    build_export_shots_with_report(project, profile, azimuth_export).0
+}
+
+/// Returns the shots plus how many of the project's GPS anchors ended up on no
+/// START (the count behind the `gps-anchors-not-written` note).
+fn build_export_shots_with_report(
+    project: &Project,
+    profile: TmlProfile,
+    azimuth_export: AzimuthExport,
+) -> (Vec<ExportShot>, usize) {
     if project.sections.is_empty() {
-        return Vec::new();
+        return (Vec::new(), 0);
     }
 
     // Pick the section the topology hangs off. A survey can emit more than one START
@@ -687,6 +744,10 @@ fn build_export_shots(
     let mut blocks: Vec<SectionBlock> = Vec::new();
     // Map: (section_id, station_index) → ariane_id
     let mut station_to_ariane: HashMap<(SectionId, u32), i64> = HashMap::new();
+    // Every START and the station it stands on: (ariane id, section, station index).
+    // The GPS pass below resolves each entrance's own datum through this, instead
+    // of stamping one datum onto every START (#378 item e).
+    let mut start_anchors: Vec<(i64, SectionId, u32)> = Vec::new();
 
     for section in &project.sections {
         let is_root = section.id == root_section_id;
@@ -701,8 +762,20 @@ fn build_export_shots(
         // do exactly that (`chanchemuyil_sur.tml` ships two). Leaving the first shot
         // parentless instead produces an orphan root, which makes Ariane abandon the
         // loop solve and draw an empty map for the WHOLE survey once any closure
-        // exists. Zero-datum splitting below stays root-only; this is just about who
-        // owns a START.
+        // exists. Zero-datum splitting below applies to every entrance (#378 item
+        // e), so a START coincides with its own datum station wherever one exists.
+        //
+        // Deliberately NOT profile-gated (#378 item c): the SpeleoDB sidecar carries
+        // the same extra STARTs, and the server side supports that. Verified in
+        // OpenSpeleo/pytool_openspeleo_lib @ 4d5e9e106365 (2026-07-17),
+        // openspeleo_lib/geojson.py: `find_valid_shot_ids` and
+        // `propagate_coordinates` BFS from ALL anchor shots ("Found %d anchor
+        // shots") - with zero anchors the former warns and drops every shot while
+        // the latter raises - and the Ariane decoder never counts STARTs. One trap encoded there: `is_geolocation_known()` treats
+        // |lat| or |lon| within ~1e-6 of zero as UNKNOWN, so a START left at 0,0
+        // is not an anchor and its whole component is dropped as orphans - which
+        // is why every START must be GPS-stamped below whenever a datum exists.
+        // Guarded by `the_sidecar_accepts_multiple_starts`.
         let is_entrance = is_root || !parent_map.contains_key(&section.id);
 
         let section_name = section
@@ -714,9 +787,22 @@ fn build_export_shots(
         let explorer = section.surveyor.clone();
         let date = section.date.map(|d| d.format("%Y-%m-%d").to_string());
 
-        let split_root_at = if is_root {
-            primary_datum
-                .filter(|datum| datum.station_ref.section_id == section.id)
+        // Which datum this entrance's START sits on. The root uses the FRAME datum
+        // (see `root_section_id` above); any other entrance uses its own section's
+        // first resolvable datum (#378 item e). GPS lands only on START shots, so
+        // an entrance whose datum is mid-section must SPLIT there - stamping that
+        // datum's GPS onto a station-0 START would displace the whole component by
+        // the station-to-datum vector, silently.
+        let entrance_datum = if is_root {
+            primary_datum.filter(|datum| datum.station_ref.section_id == section.id)
+        } else if is_entrance {
+            section_datum(project, section.id)
+        } else {
+            None
+        };
+
+        let split_entrance_at = if is_entrance {
+            entrance_datum
                 .and_then(|datum| project.resolve_key(&datum.station_ref))
                 .and_then(|sr| {
                     let idx = sr.station_index as usize;
@@ -738,10 +824,11 @@ fn build_export_shots(
             None
         };
 
-        if let Some(split_idx) = split_root_at {
+        if let Some(split_idx) = split_entrance_at {
             let start_id = next_id;
             next_id += 1;
             let start_depth = station_depth(section, split_idx);
+            start_anchors.push((start_id, section.id, split_idx as u32));
 
             let mut root_shots = Vec::new();
             root_shots.push(ExportShot {
@@ -1118,6 +1205,7 @@ fn build_export_shots(
             // The root, and any section not merged into it, each get a START shot
             let start_id = next_id;
             next_id += 1;
+            start_anchors.push((start_id, section.id, 0));
 
             let start_depth = if let Some(first_shot) = section.shots.first() {
                 first_shot.depth_in
@@ -1531,27 +1619,78 @@ fn build_export_shots(
     // Final pass: Ariane stores GPS on the START shots.
     //
     // There can be more than one - the root, plus any section that never merges into
-    // it - and Ariane repeats the same coordinates on each; its own files do exactly
-    // that. Anchoring only the first leaves the rest at 0,0, which drops those
-    // sections on null island thousands of kilometres from the survey, and a
-    // zoom-to-fit then shows half a hemisphere.
+    // it. Each entrance carries its OWN datum's GPS when it has one (#378 item e;
+    // the entrance split above put its START on that datum's station), and the
+    // frame datum's otherwise - a START left at 0,0 drops its component on null
+    // island thousands of kilometres from the survey, and a zoom-to-fit then shows
+    // half a hemisphere.
+    let mut unwritten_datums = 0usize;
     if let Some(primary_datum) = primary_datum {
-        let (latitude, longitude) = match profile {
-            TmlProfile::User => (primary_datum.gps.latitude, primary_datum.gps.longitude),
-            TmlProfile::SpeleoDbSidecar => {
-                speleodb_anchor(primary_datum.gps.latitude, primary_datum.gps.longitude)
+        // First-that-resolves per station: a second datum on the SAME station is
+        // a conflict this file shape cannot carry, so it counts as unwritten
+        // below rather than silently aliasing the one that won.
+        let mut datum_by_station: HashMap<(SectionId, u32), usize> = HashMap::new();
+        let mut resolved = 0usize;
+        for (index, datum) in project.zero_datums.iter().enumerate() {
+            if let Some(sr) = project.resolve_key(&datum.station_ref) {
+                resolved += 1;
+                datum_by_station
+                    .entry((sr.section_id, sr.station_index))
+                    .or_insert(index);
             }
-        };
-        for shot in all_shots.iter_mut().filter(|s| s.shot_type == "START") {
-            shot.latitude = latitude;
-            shot.longitude = longitude;
+        }
+        let start_index_by_id: HashMap<i64, usize> = all_shots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.shot_type == "START")
+            .map(|(i, s)| (s.id, i))
+            .collect();
+
+        let mut written_datums: HashSet<usize> = HashSet::new();
+        // The frame datum anchors every entrance that has no datum of its own, so
+        // one fallback stamp writes its coordinates even when its own station
+        // carries no START (e.g. it stopped resolving onto one).
+        let frame_index = project
+            .zero_datums
+            .iter()
+            .position(|d| std::ptr::eq(d, primary_datum));
+        for (start_id, section_id, station_index) in &start_anchors {
+            let own = datum_by_station
+                .get(&(*section_id, *station_index))
+                .copied();
+            let gps = match own {
+                Some(index) => {
+                    written_datums.insert(index);
+                    &project.zero_datums[index].gps
+                }
+                None => {
+                    written_datums.extend(frame_index);
+                    &primary_datum.gps
+                }
+            };
+            let (latitude, longitude) = match profile {
+                TmlProfile::User => (gps.latitude, gps.longitude),
+                TmlProfile::SpeleoDbSidecar => speleodb_anchor(gps.latitude, gps.longitude),
+            };
+            if let Some(&shot_index) = start_index_by_id.get(start_id) {
+                all_shots[shot_index].latitude = latitude;
+                all_shots[shot_index].longitude = longitude;
+            }
         }
 
-        if project.zero_datums.len() > 1 {
+        // More than one datum is representable now, so account per DATUM: one is
+        // unwritten when no START carries its coordinates - it sits mid-way
+        // through a child section, lost its station, or collided with another
+        // datum on the same station.
+        unwritten_datums = project.zero_datums.len() - written_datums.len();
+        if unwritten_datums > 0 {
             tracing::warn!(
                 datum_count = project.zero_datums.len(),
-                "Ariane export supports only one GPS anchor; using the frame datum \
-                 (the first one that resolves)"
+                resolved,
+                unwritten = unwritten_datums,
+                "Ariane stores GPS on entrance START stations only; {unwritten_datums} GPS \
+                 anchor(s) were not written. Entrances without their own datum are \
+                 anchored at the frame datum's coordinates."
             );
         }
     }
@@ -1563,7 +1702,7 @@ fn build_export_shots(
         TmlProfile::User => remint_duplicate_uuids(&mut all_shots),
     }
 
-    all_shots
+    (all_shots, unwritten_datums)
 }
 
 /// Decimal places `format_f64` writes. Every check that has to agree with what a
@@ -2058,161 +2197,12 @@ fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ParentLink {
-    parent_station: StationRef,
-    child_station_index: u32,
-}
-
-/// Pick a deterministic root using the legacy "lowest section ID wins parent"
-/// heuristic so exports without zero datums remain stable.
-fn choose_default_root_section_id(project: &Project) -> SectionId {
-    let mut child_sections: HashSet<SectionId> = HashSet::new();
-    for merge in &project.station_merges {
-        let child = if merge.station_a.section_id <= merge.station_b.section_id {
-            merge.station_b.section_id
-        } else {
-            merge.station_a.section_id
-        };
-        child_sections.insert(child);
-    }
-
-    project
-        .sections
-        .iter()
-        .map(|s| s.id)
-        .find(|id| !child_sections.contains(id))
-        .unwrap_or(project.sections[0].id)
-}
-
-fn station_depth(section: &Section, station_index: usize) -> f64 {
-    if section.shots.is_empty() {
-        return 0.0;
-    }
-    if station_index == 0 {
-        section.shots[0].depth_in
-    } else if station_index >= section.shots.len() {
-        section.shots[section.shots.len() - 1].depth_out
-    } else {
-        section.shots[station_index].depth_in
-    }
-}
-
 /// Compute azimuth for the generated pre-zero-datum reverse segment.
 ///
 /// Ariane does not provide a backsight field, so `azimuth_out` from Stalagmight
 /// must not be interpreted as an Ariane backsight during export.
 fn reverse_pre_zero_azimuth(azimuth_in: f64) -> f64 {
     normalize_azimuth(azimuth_in + 180.0)
-}
-
-/// Build a parent map from station_merges.
-///
-/// Returns: child_section_id → (parent_station_ref, child_station_index)
-///
-/// Parent links are chosen by traversing the merge graph from `root_section_id`.
-fn build_parent_map(
-    project: &Project,
-    root_section_id: SectionId,
-) -> HashMap<SectionId, ParentLink> {
-    #[derive(Debug, Clone, Copy)]
-    struct NeighborLink {
-        neighbor_section_id: SectionId,
-        parent_station: StationRef,
-        child_station_index: u32,
-    }
-
-    let mut adjacency: HashMap<SectionId, Vec<NeighborLink>> = HashMap::new();
-    for merge in &project.station_merges {
-        let (Some(a), Some(b)) = (
-            project.resolve_key(&merge.station_a),
-            project.resolve_key(&merge.station_b),
-        ) else {
-            continue;
-        };
-        adjacency
-            .entry(a.section_id)
-            .or_default()
-            .push(NeighborLink {
-                neighbor_section_id: b.section_id,
-                parent_station: a,
-                child_station_index: b.station_index,
-            });
-        adjacency
-            .entry(b.section_id)
-            .or_default()
-            .push(NeighborLink {
-                neighbor_section_id: a.section_id,
-                parent_station: b,
-                child_station_index: a.station_index,
-            });
-    }
-
-    for links in adjacency.values_mut() {
-        links.sort_by_key(|l| {
-            (
-                l.neighbor_section_id,
-                l.child_station_index,
-                l.parent_station.station_index,
-            )
-        });
-    }
-
-    let mut map: HashMap<SectionId, ParentLink> = HashMap::new();
-    let mut visited: HashSet<SectionId> = HashSet::new();
-    let mut queue = VecDeque::new();
-    visited.insert(root_section_id);
-    queue.push_back(root_section_id);
-
-    // Traverse from the export root, then from one section per REMAINING merge-connected
-    // component. Seeding only from `root_section_id` leaves every section outside that
-    // component absent from `map`, and the caller reads absence as "this is an entrance"
-    // - so a gallery of sections merged to each other exported as that many disconnected
-    // STARTs stacked on one anchor, with the merges between them never applied. One root
-    // per component instead: that component's first section is the entrance, and the rest
-    // resolve their parent links normally.
-    loop {
-        while let Some(parent_section_id) = queue.pop_front() {
-            let Some(links) = adjacency.get(&parent_section_id) else {
-                continue;
-            };
-            for link in links {
-                if visited.insert(link.neighbor_section_id) {
-                    map.insert(
-                        link.neighbor_section_id,
-                        ParentLink {
-                            parent_station: link.parent_station,
-                            child_station_index: link.child_station_index,
-                        },
-                    );
-                    queue.push_back(link.neighbor_section_id);
-                }
-            }
-        }
-
-        // `project.sections` order, so which section becomes the component's entrance is
-        // deterministic and the export stays byte-stable. A section with no merges at all
-        // is not in `adjacency` and is left out of the map deliberately: it is an
-        // entrance in its own right.
-        let Some(next_root) = project
-            .sections
-            .iter()
-            .map(|section| section.id)
-            .find(|id| !visited.contains(id) && adjacency.contains_key(id))
-        else {
-            break;
-        };
-
-        tracing::debug!(
-            section_id = next_root,
-            root_section_id,
-            "Rooting a merge component that is disconnected from the export root"
-        );
-        visited.insert(next_root);
-        queue.push_back(next_root);
-    }
-
-    map
 }
 
 /// Convert `#RRGGBB` to Ariane's `0xRRGGBBff` format.
@@ -4962,6 +4952,357 @@ mod tests {
         );
         let sidecar_closure = sidecar.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
         assert_eq!(format_f64(sidecar_closure.length), "1.300001");
+        assert_written_chain_satisfies_speleodb(&sidecar);
+    }
+
+    #[test]
+    fn each_entrance_carries_its_own_datum() {
+        // #378 item (e): two detached galleries with distinct GPS anchors used to
+        // both get the first datum's coordinates - plausibly wrong, so likelier
+        // shipped unnoticed than the old 0,0 null-island form.
+        let mut project = Project::new("Two Anchors".to_string(), None);
+        for name in ["North", "South"] {
+            project.add_section(SectionData {
+                name: Some(name.to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        }
+        for (section_id, latitude, longitude) in [(0, 20.25, -87.5), (1, 20.31, -87.42)] {
+            project.zero_datums.push(ZeroDatum {
+                station_ref: StationRef {
+                    section_id,
+                    station_index: 0,
+                }
+                .into(),
+                gps: GpsCoordinates::new(latitude, longitude, 0.0).unwrap(),
+            });
+        }
+
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
+        let start_of = |name: &str| {
+            shots
+                .iter()
+                .find(|s| s.shot_type == "START" && s.section == name)
+                .unwrap()
+        };
+        let north = start_of("North");
+        assert!(
+            (north.latitude - 20.25).abs() < f64::EPSILON
+                && (north.longitude - -87.5).abs() < f64::EPSILON
+        );
+        let south = start_of("South");
+        assert!(
+            (south.latitude - 20.31).abs() < f64::EPSILON
+                && (south.longitude - -87.42).abs() < f64::EPSILON,
+            "the second entrance must carry its own datum, got {},{}",
+            south.latitude,
+            south.longitude
+        );
+
+        // Same resolution, sidecar profile: applied per entrance BEFORE the
+        // speleodb_anchor transform, so both entrances stay distinct there too.
+        let sidecar = build_export_shots(
+            &project,
+            TmlProfile::SpeleoDbSidecar,
+            AzimuthExport::decide(&project),
+        );
+        let starts: Vec<&ExportShot> = sidecar.iter().filter(|s| s.shot_type == "START").collect();
+        assert_eq!(starts.len(), 2);
+        assert!(
+            (starts[0].latitude - starts[1].latitude).abs() > 1e-6
+                || (starts[0].longitude - starts[1].longitude).abs() > 1e-6,
+            "sidecar entrances collapsed onto one anchor"
+        );
+    }
+
+    #[test]
+    fn a_detached_entrance_with_a_mid_section_datum_splits_there() {
+        // #378 item (e), the geometric half: GPS lands only on a START, so an
+        // entrance whose datum is mid-section must split at the datum station -
+        // stamping that datum's GPS onto a station-0 START would displace the
+        // whole component by the station-to-datum vector. The root already did
+        // this; detached entrances now share the path.
+        let mut project = Project::new("Mid Datum".to_string(), None);
+        let shot = || ShotData {
+            length: 5.0,
+            azimuth_in: 90.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        };
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![shot()],
+            ..Default::default()
+        });
+        project.add_section(SectionData {
+            name: Some("Gallery".to_string()),
+            color: "#00ff00".to_string(),
+            shots: vec![shot(), shot()],
+            ..Default::default()
+        });
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 0,
+                station_index: 0,
+            }
+            .into(),
+            gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
+        });
+        // The detached gallery's datum sits on its MIDDLE station (index 1).
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 1,
+                station_index: 1,
+            }
+            .into(),
+            gps: GpsCoordinates::new(20.31, -87.42, 0.0).unwrap(),
+        });
+
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
+        let gallery_start = shots
+            .iter()
+            .find(|s| s.shot_type == "START" && s.section == "Gallery")
+            .unwrap();
+        assert!(
+            (gallery_start.latitude - 20.31).abs() < f64::EPSILON
+                && (gallery_start.longitude - -87.42).abs() < f64::EPSILON,
+            "the gallery START carries the gallery's own datum"
+        );
+        // The split exists: a reversed pre-datum leg means the section name shows
+        // up in both its forms, and every shot still chains (no orphan roots).
+        assert!(
+            shots
+                .iter()
+                .any(|s| s.section == "Gallery (pre-zero-datum)"),
+            "mid-section datum must split the entrance so the START sits on it"
+        );
+        assert!(
+            shots
+                .iter()
+                .all(|s| s.from_id != -1 || s.shot_type == "START"),
+            "no shot may be left parentless by the entrance split"
+        );
+        assert!(ensure_rooted_chain(&shots, TmlProfile::User).is_ok());
+    }
+
+    #[test]
+    fn a_disconnected_component_roots_at_its_datum_section() {
+        // #378 review follow-up: a detached gallery of three merged sections
+        // with the datum on the MIDDLE one must make that section the
+        // component's entrance - rooting at the first section in project order
+        // would anchor the whole gallery at the frame datum's coordinates
+        // while its own datum went unwritten.
+        let mut project = Project::new("Datum Root".to_string(), None);
+        let shot = || ShotData {
+            length: 5.0,
+            azimuth_in: 90.0,
+            ..Default::default()
+        };
+        for name in ["Main", "Gallery A", "Gallery B", "Gallery C"] {
+            project.add_section(SectionData {
+                name: Some(name.to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![shot()],
+                ..Default::default()
+            });
+        }
+        // Chain the galleries (1-2-3) to each other, none to Main (0).
+        for (a, b) in [(1, 2), (2, 3)] {
+            project.station_merges.push(StationMerge {
+                station_a: StationRef {
+                    section_id: a,
+                    station_index: 1,
+                }
+                .into(),
+                station_b: StationRef {
+                    section_id: b,
+                    station_index: 0,
+                }
+                .into(),
+                merged_at: chrono::Utc::now(),
+            });
+        }
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 0,
+                station_index: 0,
+            }
+            .into(),
+            gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
+        });
+        // The gallery's own anchor sits on its MIDDLE section's first station.
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 2,
+                station_index: 0,
+            }
+            .into(),
+            gps: GpsCoordinates::new(20.31, -87.42, 0.0).unwrap(),
+        });
+
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
+        let starts: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "START").collect();
+        assert_eq!(starts.len(), 2, "one entrance per component");
+        let gallery_start = starts.iter().find(|s| s.section == "Gallery B");
+        assert!(
+            gallery_start.is_some(),
+            "the datum-carrying section must be the component's entrance; STARTs: {:?}",
+            starts
+                .iter()
+                .map(|s| s.section.as_str())
+                .collect::<Vec<_>>()
+        );
+        let gallery_start = gallery_start.unwrap();
+        assert!(
+            (gallery_start.latitude - 20.31).abs() < f64::EPSILON
+                && (gallery_start.longitude - -87.42).abs() < f64::EPSILON,
+            "the component's START carries its own datum, got {},{}",
+            gallery_start.latitude,
+            gallery_start.longitude
+        );
+        assert!(
+            shots
+                .iter()
+                .all(|s| s.from_id != -1 || s.shot_type == "START"),
+            "re-rooting must leave no orphan: every non-START chains"
+        );
+        assert!(ensure_rooted_chain(&shots, TmlProfile::User).is_ok());
+    }
+
+    #[test]
+    fn the_rooted_chain_error_caps_its_section_list() {
+        // #378 item (g): section names come from imported files, so the refusal
+        // message must not scale with their count or length, and must not carry
+        // control characters a crafted name could forge log lines with.
+        let long = "L".repeat(500);
+        let names: Vec<&str> = vec!["A", "B", "C", "D", "E", "F", "G", &long];
+        let listed = list_capped(&names);
+        assert!(
+            listed.ends_with("and 3 more"),
+            "8 sections must summarise the tail: {listed}"
+        );
+        assert!(
+            listed.len() < 120,
+            "capped list stays bounded, got {} chars",
+            listed.len()
+        );
+
+        let shown = list_capped(&[&long]);
+        assert!(
+            shown.len() <= LISTED_SECTION_NAME_MAX + "...".len(),
+            "a single long name is truncated: {} chars",
+            shown.len()
+        );
+        assert!(shown.ends_with("..."));
+
+        // Multibyte: the cap is in CHARS, so the byte budget is chars x 4 at
+        // worst - bounded either way, and no char-boundary panic.
+        let wide = "é".repeat(500);
+        let shown = list_capped(&[&wide]);
+        assert_eq!(shown.chars().count(), LISTED_SECTION_NAME_MAX + "...".len());
+        assert!(shown.len() <= LISTED_SECTION_NAME_MAX * 4 + "...".len());
+
+        // Control characters are stripped, not merely truncated around: the
+        // newline and the ESC go; the (printable) SGR remnant stays inert.
+        assert_eq!(
+            list_capped(&["A\nERROR forged line\x1b[31m"]),
+            "AERROR forged line[31m"
+        );
+
+        // The common case stays verbatim - no cap artifacts in a normal message.
+        assert_eq!(list_capped(&["Main", "Side"]), "Main, Side");
+
+        // And the cap is actually wired into the refusal the user sees: an
+        // orphan REAL alongside a CLOSURE takes the bail path, whose message
+        // must carry the summarised list, not every name.
+        let mut shots: Vec<ExportShot> = Vec::new();
+        shots.push(geometry_shot(0, -1, 0.0, 0.0, 0.0, false));
+        for i in 0..8_i64 {
+            let mut orphan = geometry_shot(100 + i, -1, 0.0, 0.0, 5.0, false);
+            orphan.shot_type = "REAL";
+            orphan.section = format!("Orphan {i}");
+            shots.push(orphan);
+        }
+        let mut closure = geometry_shot(200, 0, 0.0, 0.0, 0.0, false);
+        closure.shot_type = "CLOSURE";
+        shots.push(closure);
+        let refusal = ensure_rooted_chain(&shots, TmlProfile::User);
+        assert!(refusal.is_err(), "orphans + closure must refuse the export");
+        let error = refusal.unwrap_err().to_string();
+        assert!(
+            error.contains("and 3 more"),
+            "the refusal must use the capped list: {error}"
+        );
+        assert!(
+            !error.contains("Orphan 7"),
+            "the tail must be summarised: {error}"
+        );
+    }
+
+    #[test]
+    fn the_sidecar_accepts_multiple_starts() {
+        // #378 item (c): `is_entrance` is not profile-gated, so a project with a
+        // detached section ships a multi-START sidecar to SpeleoDB. The server's
+        // converter supports that (see the comment at `is_entrance`), PROVIDED
+        // each START is a usable anchor: `is_geolocation_known()` there reads a
+        // coordinate within ~1e-6 of zero as unknown, and a component with no
+        // anchor is dropped from the GeoJSON wholesale.
+        let mut project = Project::new("Two Entrances".to_string(), None);
+        for name in ["Main", "Detached"] {
+            project.add_section(SectionData {
+                name: Some(name.to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    depth_in: 0.0,
+                    depth_out: 2.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        }
+        // No station_merges: two components, two entrances.
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 0,
+                station_index: 0,
+            }
+            .into(),
+            gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
+        });
+
+        let sidecar = build_export_shots(
+            &project,
+            TmlProfile::SpeleoDbSidecar,
+            AzimuthExport::decide(&project),
+        );
+        let starts: Vec<&ExportShot> = sidecar.iter().filter(|s| s.shot_type == "START").collect();
+        assert_eq!(starts.len(), 2, "the sidecar keeps one START per entrance");
+        for start in &starts {
+            assert!(
+                start.latitude.abs() > 1e-6 && start.longitude.abs() > 1e-6,
+                "START in {:?} is at {},{} - below openspeleo_lib's anchor \
+                 threshold, so its whole component would be dropped as orphans",
+                start.section,
+                start.latitude,
+                start.longitude,
+            );
+        }
+        assert!(
+            sidecar
+                .iter()
+                .all(|s| s.from_id != -1 || s.shot_type == "START"),
+            "a parentless non-START shot would read as an orphan root"
+        );
         assert_written_chain_satisfies_speleodb(&sidecar);
     }
 
