@@ -21,6 +21,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { ImportScreenDigest } from './importScreenDigest';
 import {
+  captureReceipt,
+  emptyReceiptCapture,
   ImportOracleError,
   MAX_VISIBLE_WARNINGS,
   checkAccounting,
@@ -338,5 +340,50 @@ describe('checkIpcContract (S6)', () => {
     const reported = ['WARN import_sections returned success=false: no valid sections found'];
     expect(ipcArgRejections(reported)).toEqual([]);
     expect(() => checkIpcContract(reported, 'walls import')).not.toThrow();
+  });
+});
+
+describe('captureReceipt (F3 capture ordering)', () => {
+  const digestWith = (
+    summary: string | null,
+    sections: number,
+    shots: number,
+  ): ImportScreenDigest =>
+    ({
+      receipt: summary === null ? null : { summary, shown: 0, more: 0, hasDetails: false, unitConversion: false },
+      sections,
+      shots,
+    }) as unknown as ImportScreenDigest;
+
+  it('takes the counts on the SAME step as the claim', () => {
+    // The whole point. Reading them at the end of the flow compares the receipt
+    // against a project that later moved - a second import, an undo
+    // interjection - and F3 then reports a receipt that was telling the truth.
+    const captured = captureReceipt(emptyReceiptCapture(), digestWith('2 sections - 9 shots', 12, 40), false);
+    expect(captured.claim?.sections).toBe(2);
+    expect(captured.atReceipt).toEqual({ sections: 12, shots: 40 });
+  });
+
+  it('FIRST wins: a second receipt in one flow does not overwrite the first', () => {
+    const first = captureReceipt(emptyReceiptCapture(), digestWith('2 sections - 9 shots', 12, 40), false);
+    const second = captureReceipt(first, digestWith('7 sections - 70 shots', 99, 500), true);
+    expect(second).toBe(first);
+    expect(second.claim?.sections).toBe(2);
+    expect(second.atReceipt).toEqual({ sections: 12, shots: 40 });
+    expect(second.historyTouchedBeforeReceipt).toBe(false);
+  });
+
+  it('records whether history had already been touched when the receipt appeared', () => {
+    // If an undo or a save ran first, the counts are not the ones the import
+    // produced, and F3 skips rather than guesses.
+    const touched = captureReceipt(emptyReceiptCapture(), digestWith('1 section - 3 shots', 5, 8), true);
+    expect(touched.historyTouchedBeforeReceipt).toBe(true);
+    const clean = captureReceipt(emptyReceiptCapture(), digestWith('1 section - 3 shots', 5, 8), false);
+    expect(clean.historyTouchedBeforeReceipt).toBe(false);
+  });
+
+  it('is inert on a step with no receipt on screen', () => {
+    const start = emptyReceiptCapture();
+    expect(captureReceipt(start, digestWith(null, 3, 3), true)).toBe(start);
   });
 });

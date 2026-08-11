@@ -624,11 +624,10 @@ export function suggestiveDmpSpec(rng: Rng): DmpSpec {
 
   for (const kind of kinds) {
     const jitter = SUGGESTIVE_JITTER[kind];
-    const replay = motif;
     const shots =
       kind === 'tail'
-        ? [...turnAwayRun(rng, randInt(rng, 1, 2), heading0, depth0), ...replay]
-        : [...replay, ...turnAwayRun(rng, randInt(rng, 1, 2), lastHeading, lastDepth)];
+        ? [...turnAwayRun(rng, randInt(rng, 1, 2), heading0, depth0), ...motif]
+        : [...motif, ...turnAwayRun(rng, randInt(rng, 1, 2), lastHeading, lastDepth)];
     sections.push(suggestiveSection(rng, letter(sections.length), shots, jitter));
   }
 

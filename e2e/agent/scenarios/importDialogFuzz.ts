@@ -420,6 +420,7 @@ import {
   checkTempFiles,
   ImportOracleError,
   leftoverTempNames,
+  captureReceipt,
   receiptClaimFrom,
   type CountedProject,
   type FlowBounds,
@@ -1903,11 +1904,18 @@ export const importDialogFuzz: Scenario = {
           // make an idle walk look like a flow that imported nothing - see
           // NON_FLOW_SCREENS.
           if (digest.screen !== 'idle' && !NON_FLOW_SCREENS.has(digest.screen)) leftIdle = true;
-          if (digest.receipt && receipt === null) {
-            receipt = receiptClaimFrom(digest);
-            if (receipt) {
-              atReceipt = { sections: digest.sections, shots: digest.shots };
-              historyTouchedBeforeReceipt = historyTouched;
+          {
+            // FIRST WINS, and the counts are read on the SAME step as the claim -
+            // see `captureReceipt`, which owns that rule and is tested for it.
+            const grown = captureReceipt(
+              { claim: receipt, atReceipt, historyTouchedBeforeReceipt },
+              digest,
+              historyTouched,
+            );
+            if (grown.claim !== null && receipt === null) {
+              receipt = grown.claim;
+              atReceipt = grown.atReceipt;
+              historyTouchedBeforeReceipt = grown.historyTouchedBeforeReceipt;
               guarded(() => checkReceipt(receipt as ReceiptClaim));
             }
           }
@@ -2475,6 +2483,31 @@ export const importDialogFuzz: Scenario = {
       await runEpisodes();
     } finally {
       await forceClean();
+    }
+
+    // SUGGESTER DRIFT. `suggestiveDmpSpec` is calibrated against a THREE-WAY
+    // mirror of the Rust suggester's cutoffs - the spec generator, the offline
+    // test's copy of the per-shot rule, and the product. The offline test pins
+    // the first two to each other and cannot see the third, so the day the
+    // product retunes `PlacementSuggestionConfig` the tests stay green while the
+    // pool silently comes back empty and every suggestion-shaped counter goes to
+    // zero. This is the only place that notices.
+    //
+    // WARNED, not failed, on the same argument `corpusDirsTooDeep` makes: a
+    // suggestion needs sections to score against, and a run whose flows all
+    // cancelled early legitimately never opens the wizard. Failing here would
+    // red a cell for the walk being unlucky. The metric is what a summary
+    // carries, and the log line is what a human reads.
+    const suggestiveDrawn = ctx.metrics['file:shape:suggestive'] ?? 0;
+    const suggestSamples = ctx.metrics['screen:wiz-suggest'] ?? 0;
+    if (suggestiveDrawn > 0 && suggestSamples === 0) {
+      ctx.setMetric('suggesterDrift', suggestiveDrawn);
+      ctx.log(
+        `SUGGESTER DRIFT: ${suggestiveDrawn} suggestion-bearing .dmp file(s) were imported and the wizard ` +
+          'never once reached `wiz-suggest`. Either every flow was abandoned before the wizard opened, or ' +
+          "`suggestiveDmpSpec`'s calibration no longer clears the product's cutoffs - re-check it against " +
+          '`PlacementSuggestionConfig` and the mirror in `lib/surveyFileSpecs.test.ts`.',
+      );
     }
 
     if (traceOut) {

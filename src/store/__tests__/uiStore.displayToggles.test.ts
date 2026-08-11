@@ -1118,6 +1118,12 @@ describe('Placement mode forces stations visible (#518)', () => {
     await new Promise((r) => setTimeout(r, 20));
     // A prerequisite of a transient mode is not a preference: `toggleDisplay`
     // would have written it through `saveDisplaySetting`.
+    //
+    // The 20 ms is a bound on the ABSENCE of a call, so it is best-effort by
+    // nature: it catches a synchronous or microtask-scheduled write, which is
+    // what `saveDisplaySetting` does. What makes the assertion trustworthy is
+    // not the window but the code - `startPlacementMode` calls `set` directly
+    // and has no IPC path at all.
     const wrote = (invoke as unknown as { mock: { calls: unknown[][] } }).mock.calls.some(
       ([cmd, args]) => cmd === 'save_display_setting' && (args as { key?: string })?.key === 'showStations',
     );

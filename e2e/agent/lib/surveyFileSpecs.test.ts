@@ -121,8 +121,15 @@ describe('randomDmpSpec (valid)', () => {
  * numbers". If the product ever retunes them this mirror goes stale, and the
  * failure mode is the honest one: this test keeps passing while the scenario
  * stops finding suggestions, which the campaign's `screen:wiz-suggest` counter
- * is what actually watches. The mirror is here to catch the generator drifting,
- * which is the far likelier direction.
+ * is what actually watches - and `suggesterDrift`, which the scenario now emits
+ * when suggestion-bearing files were imported and the wizard never reached
+ * `wiz-suggest`. The mirror is here to catch the generator drifting, which is
+ * the far likelier direction.
+ *
+ * These are the DEFAULTS. `PlacementSuggestionConfig` is serde-backed and
+ * user-configurable, so a project that retuned it would score differently; the
+ * calibration holds because a harness session runs on a fresh profile and never
+ * writes those keys.
  */
 const PS = {
   azimuthSigma: 18,

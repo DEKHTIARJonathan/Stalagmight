@@ -135,6 +135,55 @@ export function receiptClaimFrom(digest: ImportScreenDigest): ReceiptClaim | nul
   };
 }
 
+/** What F3 has captured about this flow's receipt so far. */
+export interface ReceiptCapture {
+  /** The claim, taken from the FIRST receipt the flow showed. */
+  claim: ReceiptClaim | null;
+  /** Section and shot counts read at the same moment as the claim. */
+  atReceipt: CountedProject | null;
+  /** Had an undo/redo/save/close already run when the receipt appeared? */
+  historyTouchedBeforeReceipt: boolean;
+}
+
+/** The empty capture a flow starts from. */
+export function emptyReceiptCapture(): ReceiptCapture {
+  return { claim: null, atReceipt: null, historyTouchedBeforeReceipt: false };
+}
+
+/**
+ * Fold one step's digest into the capture. FIRST WINS, and it must.
+ *
+ * F3 compares the receipt's claim against the project as it stood WHEN THE
+ * RECEIPT WAS MADE. Reading the counts at the end of the flow instead compares
+ * the claim against a project that later moves - another import in the same
+ * flow, an undo interjection - and the oracle then reports a receipt that was
+ * telling the truth. That is why the counts are taken on the same step as the
+ * claim rather than at the end, and why a second receipt in one flow does not
+ * overwrite the first.
+ *
+ * `historyTouchedBeforeReceipt` is the other half: if an undo or a save had
+ * already run before the receipt appeared, the counts it describes are not the
+ * ones the import produced, and F3 skips rather than guesses.
+ *
+ * Pure, and separate from the scenario, so the ordering is pinned by a test
+ * instead of by the position of a call in a 2000-line walk.
+ */
+export function captureReceipt(
+  previous: ReceiptCapture,
+  digest: ImportScreenDigest,
+  historyTouched: boolean,
+): ReceiptCapture {
+  if (previous.claim !== null) return previous;
+  if (!digest.receipt) return previous;
+  const claim = receiptClaimFrom(digest);
+  if (claim === null) return previous;
+  return {
+    claim,
+    atReceipt: { sections: digest.sections, shots: digest.shots },
+    historyTouchedBeforeReceipt: historyTouched,
+  };
+}
+
 /** `MAX_VISIBLE_WARNINGS` in `src/components/Dialogs/ImportReceiptDialog.tsx`. */
 export const MAX_VISIBLE_WARNINGS = 3;
 
