@@ -17,7 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { agentBuildMode, binaryPathFor } from '../lib/env';
 import { checkDisplayAvailable, startXvfb, type XvfbHandle } from '../lib/display';
-import { checkBuildFreshness, buildApp } from './lib/build';
+import { builtFromFor, checkBuildFreshness, buildApp } from './lib/build';
 import { DEFAULT_XVFB_DISPLAYS, parseDisplayPool } from './lib/displayPool';
 import { findFreePort, isPidAlive, recordPid, reapPidsFromFile, waitForPortListening } from './lib/procs';
 import { SessionCore, gitHead, safeMtime } from './lib/sessionCore';
@@ -84,12 +84,18 @@ export class AppSession extends SessionCore {
     // the launch disagree about which binary they mean.
     const buildMode = agentBuildMode();
     let buildAction: StartResult['buildAction'] = 'skipped';
+    let rebuildReasons: string[] | undefined;
     if (build !== 'skip') {
       const freshness = checkBuildFreshness({ mode: buildMode });
       if (build === 'force' || !freshness.fresh) {
         this.state = 'building';
         if (build !== 'force' && freshness.reasons.length > 0) {
           process.stderr.write(`Rebuilding: ${freshness.reasons.join('; ')}\n`);
+          // Reported alongside the result too: the stderr line is invisible to
+          // an MCP client, and "why did that take four minutes" (and, since
+          // #488, "whose binary was I about to drive") is exactly what a caller
+          // needs to see.
+          rebuildReasons = freshness.reasons;
         }
         buildApp((line) => process.stderr.write(`${line}\n`), buildMode);
         buildAction = 'built';
@@ -97,6 +103,10 @@ export class AppSession extends SessionCore {
         buildAction = 'fresh';
       }
     }
+    // After a build this reads the stamp that build just wrote; on 'skipped' it
+    // reports whoever built the binary we are about to attach to (null if that
+    // was not this harness).
+    const builtFrom = builtFromFor(buildMode);
 
     this.state = 'launching';
 
@@ -255,6 +265,8 @@ export class AppSession extends SessionCore {
       display: this.display,
       profileDir: profileRoot,
       buildAction,
+      builtFrom,
+      ...(rebuildReasons ? { rebuildReasons } : {}),
       buildMode,
       sessionDir: this.recorder.dir,
     };

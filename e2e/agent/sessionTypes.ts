@@ -35,6 +35,18 @@ export interface StartResult {
   display: string;
   profileDir: string;
   buildAction: 'skipped' | 'built' | 'fresh';
+  /**
+   * Which source tree built the binary being driven, per its E2E build stamp;
+   * null when there is no stamp (`build: "skip"` over a foreign binary). The
+   * cargo target dir is shared across worktrees, so "which tree is this" is not
+   * answerable from the session's own cwd - see issue #488.
+   */
+  builtFrom: { repoRoot: string; gitHead: string } | null;
+  /**
+   * Why the binary was rebuilt, when staleness (not `build: "force"`) triggered
+   * it. Absent when nothing was rebuilt or the caller forced the build.
+   */
+  rebuildReasons?: string[];
   /** Cargo profile this session is driving ('release' only when opted in). */
   buildMode: 'debug' | 'release';
   sessionDir: string;
