@@ -18,10 +18,12 @@ import { WizardMapPanel } from './WizardMapPanel';
 import { WIZARD_MAP_PANEL_MAX_WIDTH as MAP_PANEL_MAX_WIDTH } from '../SingleSystemView/layoutConstants';
 import { WizardScrollBody } from './WizardScrollBody';
 import SectionPreview, { type MergePreviewConfig, type DmpMergePreviewConfig, type ContextSectionGeometry, computeStationsFromDmpShots, computeStationsFromShots } from './SectionPreview';
-import { Select, type SelectOption } from '../common/Select';
+import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
+import { SuggestionSectionSettings } from './SuggestionSectionSettings';
+import { SegmentPlacementModes } from './SegmentPlacementModes';
 import {
   buildZeroDatumSectionConfig,
   DMP_AZIMUTH_REFERENCE,
@@ -137,7 +139,7 @@ export type DirectPlacement = {
   placement: ImportPlacement;   // origin, zero_datum, manual, manual_snap, or from_existing
 };
 
-type SkippedSuggestionPlacement = {
+export type SkippedSuggestionPlacement = {
   suggestion: CrossSectionSuggestion;
   mergeImportStation: number;
   mergeExistingStation: number;
@@ -3939,48 +3941,14 @@ export default function DmpNewImportDialog({
               {/* Section Settings */}
               {/* #61 embedding slot: section-name + SectionMetadataForm + ShotTableEditor.
                   Consumed as-is here; the reusable focus-mode section-edit surface
-                  (fields-right / table-bottom) drops in here later. Do not refactor. */}
+                  (fields-right / table-bottom) drops in here later. Do not refactor.
+                  #567 item 2: wrapped in a collapsed-by-default disclosure so it
+                  stops competing with the connection card/confidence badge above -
+                  the wrapped content itself is unchanged. */}
               {editState && (
-                <>
-                  <div className="border-t border-border" />
-                  <div className="text-sm font-medium">
-                    {t('dialogs.dmpNewImport.sectionSettings')}
-                  </div>
-                  <div>
-                    <label className="block text-sm text-text-secondary mb-1" data-testid="section-name-label">
-                      {t('common.labels.name')}
-                    </label>
-                    <input
-                      type="text"
-                      value={editState.name}
-                      onChange={(e) => handleMetadataChange('name', e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded"
-                      placeholder={t('sectionMetadata.placeholders.name')}
-                      data-testid="section-name-input"
-                    />
-                  </div>
-                  <div className="space-y-4" data-testid="wizard-editable-rest">
-                    <SectionMetadataForm
-                      name={editState.name}
-                      surveyor={editState.surveyor}
-                      date={editState.date}
-                      color={editState.color}
-                      direction={editState.direction}
-                      quality={editState.quality}
-                      onNameChange={(v) => handleMetadataChange('name', v)}
-                      onSurveyorChange={(v) => handleMetadataChange('surveyor', v)}
-                      onDateChange={(v) => handleMetadataChange('date', v)}
-                      onColorChange={(v) => handleMetadataChange('color', v)}
-                      onDirectionChange={(v) => handleMetadataChange('direction', v)}
-                      onQualityChange={(v) => handleMetadataChange('quality', v)}
-                      reverse={editState.reverse}
-                      onReverseChange={(v) => handleMetadataChange('reverse', v)}
-                      showName={false}
-                      showDirection
-                      showReverse
-                    />
-                  </div>
-                </>
+                <div className="border-t border-border pt-3">
+                  <SuggestionSectionSettings editState={editState} onMetadataChange={handleMetadataChange} />
+                </div>
               )}
             </div>
             </div>
@@ -4037,243 +4005,25 @@ export default function DmpNewImportDialog({
               </div>
 
               {/* Placement mode radio group */}
-              <div className="space-y-2" data-testid="segment-placement-modes">
-                <div className="text-xs font-medium text-text-secondary">
-                  {t('dialogs.dmpNewImport.manualPlacing.placementMode')}
-                </div>
-
-                {/* Suggestion option (only if available) */}
-                {segmentSkippedSuggestion && (
-                  <label className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="segmentPlacementMode"
-                      data-testid="segment-mode-suggestion-input"
-                      checked={segmentPlacementMode === 'suggestion'}
-                      onChange={() => setSegmentPlacementMode('suggestion')}
-                      className="mt-0.5"
-                    />
-                    <div className="text-sm">
-                      <div className="font-medium">{t('dialogs.dmpNewImport.manualPlacing.suggestion')}</div>
-                      <div className="text-xs text-text-secondary">
-                        → {segmentSkippedSuggestion.suggestion.existingSectionName} stn {segmentSkippedSuggestion.mergeExistingStation}
-                        {' · '}{segmentSkippedSuggestion.suggestion.matchedShots} shots matched
-                      </div>
-                    </div>
-                  </label>
-                )}
-
-                {/* From existing station */}
-                <label
-                  className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer"
-                  data-testid="segment-mode-from-existing"
-                >
-                  <input
-                    type="radio"
-                    name="segmentPlacementMode"
-                    data-testid="segment-mode-from-existing-input"
-                    checked={segmentPlacementMode === 'fromExisting'}
-                    onChange={() => setSegmentPlacementMode('fromExisting')}
-                    className="mt-0.5"
-                  />
-                  <div className="text-sm flex-1">
-                    <div>{t('dialogs.dmpNewImport.manualPlacing.fromExisting')}</div>
-                    {segmentPlacementMode === 'fromExisting' && (
-                      <div className="mt-2 space-y-2">
-                        {/* Import side: segment section + station */}
-                        <div className="text-xs font-medium text-text-secondary mt-1">Import station</div>
-                        {currentSegment && currentSegment.length > 1 && (
-                          <div className="flex items-center gap-2">
-                            <label className="text-xs text-text-secondary whitespace-nowrap">Section</label>
-                            <Select
-                              value={String(segmentAnchor?.sectionIndex ?? '')}
-                              onChange={(v) => {
-                                const idx = Number(v);
-                                commitSegmentAnchor({ sectionIndex: idx, stationIndex: 0 });
-                              }}
-                              options={currentSegment.map((idx): SelectOption => ({
-                                value: String(idx),
-                                label: sectionEditsRef.current.get(idx)?.name ?? dmpFile.sections[idx]?.name ?? `Section ${idx}`,
-                              }))}
-                              className="flex-1"
-                              data-testid="from-existing-import-section-select"
-                              onOptionHover={handleAnchorSectionHover}
-                            />
-                          </div>
-                        )}
-                        <div className="flex items-center gap-2">
-                          <label className="text-xs text-text-secondary whitespace-nowrap">Station</label>
-                          <Select
-                            value={String(segmentAnchor?.stationIndex ?? 0)}
-                            onChange={(v) => {
-                              const current = segmentAnchorRef.current;
-                              if (!current) return;
-                              commitSegmentAnchor({ sectionIndex: current.sectionIndex, stationIndex: Number(v) });
-                            }}
-                            options={(() => {
-                              const secIdx = segmentAnchor?.sectionIndex;
-                              const secEdits = secIdx != null ? sectionEditsRef.current.get(secIdx) : undefined;
-                              const sec = secIdx != null ? dmpFile.sections[secIdx] : null;
-                              const count = secEdits
-                                ? secEdits.shots.filter(s => !s.isDeleted).length + 1
-                                : sec ? sec.shots.filter(s => s.shot_type === 'Standard').length + 1 : 0;
-                              return Array.from({ length: count }, (_, i): SelectOption => ({
-                                value: String(i),
-                                label: `Station ${i}`,
-                              }));
-                            })()}
-                            className="flex-1"
-                            data-testid="from-existing-import-station-select"
-                            onOptionHover={handleAnchorStationHover}
-                          />
-                        </div>
-
-                        {/* Target side: existing project section + station */}
-                        <div className="text-xs font-medium text-text-secondary mt-1">Target station</div>
-                        {projectSections.length > 0 ? (
-                          <>
-                            <div className="flex items-center gap-2">
-                              <label className="text-xs text-text-secondary whitespace-nowrap">Section</label>
-                              <Select
-                                value={fromExistingSectionId != null ? String(fromExistingSectionId) : ''}
-                                onChange={(v) => {
-                                  const val = v ? Number(v) : null;
-                                  setFromExistingSectionId(val);
-                                  setFromExistingStationIdx(0);
-                                }}
-                                options={[
-                                  { value: '', label: '-' } as SelectOption,
-                                  ...projectSections.map((s): SelectOption => ({
-                                    value: String(s.id),
-                                    label: s.name ?? `Section ${s.id}`,
-                                  })),
-                                ]}
-                                className="flex-1"
-                                data-testid="from-existing-section-select"
-                              />
-                            </div>
-                            {fromExistingSectionId != null && (
-                              <div className="flex items-center gap-2">
-                                <label className="text-xs text-text-secondary whitespace-nowrap">Station</label>
-                                <Select
-                                  value={String(fromExistingStationIdx)}
-                                  onChange={(v) => setFromExistingStationIdx(Number(v))}
-                                  options={Array.from({ length: fromExistingStationCount }, (_, i): SelectOption => ({
-                                    value: String(i),
-                                    label: `Station ${i}`,
-                                  }))}
-                                  className="flex-1"
-                                  data-testid="from-existing-station-select"
-                                />
-                              </div>
-                            )}
-                          </>
-                        ) : (
-                          <div className="text-xs text-text-secondary italic">
-                            {t('dialogs.dmpNewImport.manualPlacing.noSections')}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </label>
-
-                {/* Manual placement */}
-                <label
-                  className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer"
-                  data-testid="segment-mode-manual"
-                >
-                  <input
-                    type="radio"
-                    name="segmentPlacementMode"
-                    data-testid="segment-mode-manual-input"
-                    checked={segmentPlacementMode === 'manual'}
-                    onChange={() => setSegmentPlacementMode('manual')}
-                    className="mt-0.5"
-                  />
-                  <div className="text-sm flex-1">
-                    <div>{t('dialogs.dmpNewImport.manualPlacing.manual')}</div>
-                    {segmentPlacementMode === 'manual' && (
-                      <div className="mt-2 space-y-2">
-                        {currentSegment && currentSegment.length > 1 && (
-                          <div className="flex items-center gap-2">
-                            <label className="text-xs text-text-secondary whitespace-nowrap">Section</label>
-                            <Select
-                              value={String(segmentAnchor?.sectionIndex ?? '')}
-                              onChange={(v) => {
-                                const idx = Number(v);
-                                commitSegmentAnchor({ sectionIndex: idx, stationIndex: 0 });
-                              }}
-                              options={currentSegment.map((idx): SelectOption => ({
-                                value: String(idx),
-                                label: sectionEditsRef.current.get(idx)?.name ?? dmpFile.sections[idx]?.name ?? `Section ${idx}`,
-                              }))}
-                              className="flex-1"
-                              data-testid="manual-import-section-select"
-                              onOptionHover={handleAnchorSectionHover}
-                            />
-                          </div>
-                        )}
-                        <div className="flex items-center gap-2">
-                          <label className="text-xs text-text-secondary whitespace-nowrap">Station</label>
-                          <Select
-                            value={String(segmentAnchor?.stationIndex ?? 0)}
-                            onChange={(v) => {
-                              const current = segmentAnchorRef.current;
-                              if (!current) return;
-                              commitSegmentAnchor({ sectionIndex: current.sectionIndex, stationIndex: Number(v) });
-                            }}
-                            options={(() => {
-                              const secIdx = segmentAnchor?.sectionIndex;
-                              const secEdits = secIdx != null ? sectionEditsRef.current.get(secIdx) : undefined;
-                              const sec = secIdx != null ? dmpFile.sections[secIdx] : null;
-                              const count = secEdits
-                                ? secEdits.shots.filter(s => !s.isDeleted).length + 1
-                                : sec ? sec.shots.filter(s => s.shot_type === 'Standard').length + 1 : 0;
-                              return Array.from({ length: count }, (_, i): SelectOption => ({
-                                value: String(i),
-                                label: `Station ${i}`,
-                              }));
-                            })()}
-                            className="flex-1"
-                            data-testid="manual-import-station-select"
-                            onOptionHover={handleAnchorStationHover}
-                          />
-                        </div>
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          onClick={handlePlaceOnMapClick}
-                          data-testid="segment-place-on-map-button"
-                        >
-                          {t('dialogs.dmpNewImport.manualPlacing.placeOnMap')}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </label>
-
-                {/* Do not place (discard) */}
-                <label
-                  className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer"
-                  data-testid="segment-mode-discard"
-                >
-                  <input
-                    type="radio"
-                    name="segmentPlacementMode"
-                    data-testid="segment-mode-discard-input"
-                    checked={segmentPlacementMode === 'discard'}
-                    onChange={() => setSegmentPlacementMode('discard')}
-                    className="mt-0.5"
-                  />
-                  <div className="text-sm">
-                    <div>{t('dialogs.dmpNewImport.manualPlacing.doNotPlace')}</div>
-                    <div className="text-xs text-text-secondary">
-                      {t('dialogs.dmpNewImport.manualPlacing.doNotPlaceDescription')}
-                    </div>
-                  </div>
-                </label>
-              </div>
+              <SegmentPlacementModes
+                segmentSkippedSuggestion={segmentSkippedSuggestion}
+                placementMode={segmentPlacementMode}
+                onPlacementModeChange={setSegmentPlacementMode}
+                currentSegment={currentSegment}
+                segmentAnchor={segmentAnchor}
+                onCommitSegmentAnchor={commitSegmentAnchor}
+                sectionEdits={sectionEditsRef.current}
+                dmpSections={dmpFile.sections}
+                onAnchorSectionHover={handleAnchorSectionHover}
+                onAnchorStationHover={handleAnchorStationHover}
+                projectSections={projectSections}
+                fromExistingSectionId={fromExistingSectionId}
+                onFromExistingSectionChange={setFromExistingSectionId}
+                fromExistingStationIdx={fromExistingStationIdx}
+                onFromExistingStationChange={setFromExistingStationIdx}
+                fromExistingStationCount={fromExistingStationCount}
+                onPlaceOnMap={handlePlaceOnMapClick}
+              />
 
               {/* Section settings (same editing surface as section connection / zero datum flows) */}
               {/* #61 embedding slot: section-edit surface goes here later. Do not refactor. */}
