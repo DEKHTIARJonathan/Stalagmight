@@ -6053,6 +6053,48 @@ mod tests {
         );
     }
 
+    /// One uncuttable boundary that strands a long tail is ONE place the file
+    /// lost a value, not one per shot: the report counts trip CHANGES beside
+    /// the shots, so a 3-shot stretch does not read as three findings.
+    #[test]
+    fn a_collapsed_stretch_is_reported_as_one_trip_change() {
+        let on_trip = |id: i64, excluded: bool, explorer: &str| {
+            TripShot {
+                id,
+                from_id: id - 1,
+                section: "A",
+                excluded,
+                explorer,
+                depth: id as f64,
+                ..TripShot::default()
+            }
+            .xml()
+        };
+        let shots = [
+            on_trip(1, false, "Team One"),
+            // No station seam here, so the three shots after it cannot be cut off.
+            on_trip(2, true, "Team One"),
+            on_trip(3, false, "Team Two"),
+            on_trip(4, false, "Team Two"),
+            on_trip(5, false, "Team Two"),
+        ]
+        .join("\n");
+        let tml = parse_synthetic_tmlu(&wrap_xml(&shots));
+
+        assert_eq!(section_names(&tml), vec!["A"]);
+        assert_eq!(tml.sections[0].surveyor.as_deref(), Some("Team One"));
+
+        let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        let note = warnings
+            .iter()
+            .find(|w| w.contains("recorded a different"))
+            .expect("three shots did lose their surveyor");
+        assert!(
+            note.starts_with("3 shots at 1 trip change in 1 section recorded a different surveyor"),
+            "three shots on ONE collapsed trip is one change: {note}"
+        );
+    }
+
     /// A mainline running through a T, with a stub written at the junction.
     /// `retrip` moves everything past the T onto a second trip.
     fn mainline_through_a_t(retrip: bool) -> TmlFile {
