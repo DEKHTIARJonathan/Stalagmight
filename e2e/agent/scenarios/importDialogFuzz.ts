@@ -1114,8 +1114,14 @@ export const importDialogFuzz: Scenario = {
        * read. Null for every other move, and whenever no dialog was up.
        */
       dialogAtDispatch: string | null;
-      /** `placementMode !== null` at the same instant. Only read on a `route`. */
+      /**
+       * `placementMode !== null` at the same instant: on a `route`, what
+       * `importFlowOwnsScreen` read; on a `key:` chord, one of the three gates
+       * `useKeyboardShortcuts` reads. Null on every other move.
+       */
       placementAtDispatch: boolean | null;
+      /** `dataTableFullScreen` at the same instant. `key:` chords only. */
+      fullscreenAtDispatch: boolean | null;
     }
 
     /** Run one move, record it if it happened, and report the screen after. */
@@ -1126,6 +1132,7 @@ export const importDialogFuzz: Scenario = {
       let offAtDispatch: boolean | null = null;
       let dialogAtDispatch: string | null = null;
       let placementAtDispatch: boolean | null = null;
+      let fullscreenAtDispatch: boolean | null = null;
       let digest: ImportScreenDigest;
 
       if (move.kind === 'ui') {
@@ -1134,6 +1141,8 @@ export const importDialogFuzz: Scenario = {
         skip = outcome.reason;
         offAtDispatch = outcome.offAtDispatch;
         dialogAtDispatch = outcome.dialogAtDispatch;
+        placementAtDispatch = outcome.placementAtDispatch;
+        fullscreenAtDispatch = outcome.fullscreenAtDispatch;
         digest = outcome.digest;
         noteBridgeTiming(outcome.timing);
         if (record && performed) {
@@ -1276,7 +1285,15 @@ export const importDialogFuzz: Scenario = {
       inFlight = null;
       history.push(`${move.label}${performed ? '' : ` -> SKIPPED (${skip ?? 'unknown'})`} [${digest.screen}]`);
       ctx.metric(performed ? 'movesPerformed' : `skip:${skip ?? 'unknown'}`);
-      return { digest, performed, skip, offAtDispatch, dialogAtDispatch, placementAtDispatch };
+      return {
+        digest,
+        performed,
+        skip,
+        offAtDispatch,
+        dialogAtDispatch,
+        placementAtDispatch,
+        fullscreenAtDispatch,
+      };
     };
 
     // ---- per-step oracles ------------------------------------------------
@@ -2259,14 +2276,31 @@ export const importDialogFuzz: Scenario = {
           }
           if (exportChord && outcome.performed) {
             ctx.metric(`exportChord:${screenBefore}`);
-            // The app's own gate: both keyboard dispatchers read
-            // `useUIStore.getState().activeDialog` INSIDE the keydown handler and
-            // return early for every non-Escape key while one is open, so Ctrl+E
-            // must be inert on top of an import screen. An export modal that
-            // opened there would sit over a flow that still owns the state under
-            // it.
+            // The app's own gate, in full. `useKeyboardShortcuts` reads THREE
+            // pieces of store state inside the keydown handler, and Ctrl+E is
+            // swallowed by any of them:
             //
-            // Judged on `dialogAtDispatch` - the value that gate read - and not
+            //   activeDialog        -> returns early for every non-Escape key
+            //   placementModeActive -> `export` is not in PLACEMENT_MODE_ALLOWED_SHORTCUTS
+            //   dataTableFullScreen -> nor in FULLSCREEN_TABLE_ALLOWED_SHORTCUTS
+            //
+            // Reading only the first was a hole with a live case behind it: on
+            // MAP PLACEMENT the dialog is CLOSED and placement is on, which is
+            // where this scenario spends its map clicks. A regression letting
+            // the chord through there would have been recorded as
+            // `exportChordAfterDialogClosed` - a counter - instead of failing.
+            // An export modal opened behind any of the three sits over a flow
+            // that still owns the state under it.
+            //
+            // The handler's two remaining early returns - `defaultPrevented`,
+            // and focus sitting in an input or contenteditable - are deliberately
+            // NOT read. Both are conditions under which the app swallows MORE
+            // chords, never fewer, so neither can turn a legal export modal into
+            // a failure here; and a chord they swallow opens nothing to assert
+            // on. They are properties of the event and its target rather than of
+            // app state, which is also why the store cannot answer for them.
+            //
+            // Judged at dispatch - the values that gate read - and not
             // on `screenBefore`, which is a round trip older. An import that
             // completes in that gap closes its dialog, and the chord then lands
             // at idle and is entitled to open the modal. Measured, on the corpus
@@ -2274,10 +2308,14 @@ export const importDialogFuzz: Scenario = {
             // `walls` with the import still running, the next move was the Ctrl+E
             // interjection, and the failure blamed the dispatcher for a chord it
             // had swallowed correctly - the dialog was simply gone by then.
-            if (outcome.dialogAtDispatch !== null && digest.screen === 'export-modal') {
+            const gatesAtDispatch: string[] = [];
+            if (outcome.dialogAtDispatch !== null) gatesAtDispatch.push(`activeDialog="${outcome.dialogAtDispatch}"`);
+            if (outcome.placementAtDispatch === true) gatesAtDispatch.push('placementMode active');
+            if (outcome.fullscreenAtDispatch === true) gatesAtDispatch.push('dataTableFullScreen');
+            if (gatesAtDispatch.length > 0 && digest.screen === 'export-modal') {
               fail(
-                `EXPORT CHORD: Ctrl+E opened the export modal on top of "${outcome.dialogAtDispatch}"`,
-                `  screen ${screenBefore} -> ${digest.screen}; that dialog was up when the keydown was ` +
+                `EXPORT CHORD: Ctrl+E opened the export modal behind ${gatesAtDispatch.join(' + ')}`,
+                `  screen ${screenBefore} -> ${digest.screen}; that gate was on when the keydown was ` +
                   'dispatched, so the shortcut dispatcher must swallow the chord',
               );
             } else if (screenBefore !== 'idle' && digest.screen === 'export-modal') {

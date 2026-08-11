@@ -342,6 +342,24 @@ export interface StepOutcome {
    * shortcut dispatcher for a chord it swallowed correctly.
    */
   dialogAtDispatch: string | null;
+  /**
+   * The OTHER two gates the same keydown handler consults, read on the same
+   * tick; null for every move kind that is not a `key:` chord.
+   *
+   * `activeDialog` is not the whole gate and treating it as such left a hole.
+   * `useKeyboardShortcuts` returns early for a non-Escape key while a dialog is
+   * open, and then - for a configurable action like `export` - returns again on
+   * `placementModeActive && !PLACEMENT_MODE_ALLOWED_SHORTCUTS.has(action)` and
+   * on `dataTableFullScreen && !FULLSCREEN_TABLE_ALLOWED_SHORTCUTS.has(action)`.
+   * `export` is in neither allowlist, so all three gates swallow Ctrl+E, and an
+   * oracle that only knew about the first would score a regression on the other
+   * two as a legal chord at idle.
+   *
+   * Map placement is the live case: the dialog is CLOSED and placement is on,
+   * which is exactly the state the import flow spends its map clicks in.
+   */
+  placementAtDispatch: boolean | null;
+  fullscreenAtDispatch: boolean | null;
   /** Value read back after a `type`/`select` (what the control actually took). */
   valueAfter: string | null;
   digest: ImportScreenDigest;
@@ -525,6 +543,8 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
     // reading is not a substitute.
     let offAtDispatch = null;
     let dialogAtDispatch = null;
+    let placementAtDispatch = null;
+    let fullscreenAtDispatch = null;
     const actionStarted = Date.now();
 
     if (req.kind === 'ui' && req.testid.indexOf('key:') === 0) {
@@ -546,6 +566,11 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
       // consults, one statement later, on the same tick.
       const ui = window.__E2E_TEST__ && window.__E2E_TEST__.uiStore ? window.__E2E_TEST__.uiStore.getState() : null;
       dialogAtDispatch = ui && ui.activeDialog !== undefined && ui.activeDialog !== null ? ui.activeDialog : null;
+      // The same tick, for the same reason: all three are read inside the
+      // handler one statement from now, and only these readings describe what
+      // the app's gate actually saw.
+      placementAtDispatch = !!(ui && ui.placementMode);
+      fullscreenAtDispatch = !!(ui && ui.dataTableFullScreen);
       target.dispatchEvent(new KeyboardEvent('keydown', init));
       target.dispatchEvent(new KeyboardEvent('keyup', init));
       performed = true;
@@ -660,6 +685,8 @@ export async function runUiStep(ctx: ScenarioContext, move: Move): Promise<StepO
       valueAfter: valueAfter,
       offAtDispatch: offAtDispatch,
       dialogAtDispatch: dialogAtDispatch,
+      placementAtDispatch: placementAtDispatch,
+      fullscreenAtDispatch: fullscreenAtDispatch,
       digest: digest,
       timing: { actionMs: actionMs, settleMs: settleMs, digestMs: digestMs },
     };
