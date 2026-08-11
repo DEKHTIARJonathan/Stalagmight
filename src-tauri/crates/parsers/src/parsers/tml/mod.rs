@@ -5655,6 +5655,23 @@ mod tests {
              run's original start; got {}",
             configs[1].shots[0].depth_in
         );
+
+        // Including excluded shots removes `determine_placement`'s
+        // `effective_start_id` fallback, so this run resolves through the cut
+        // part's OWN start id or not at all.
+        let (unfiltered, _, _) = convert_tml_to_import_configs(&tml, true, false).expect("cvt");
+        assert!(
+            matches!(
+                unfiltered[1].placement,
+                ImportPlacement::FromImporting {
+                    target_section_index: 0,
+                    target_station_index: 2,
+                    ..
+                }
+            ),
+            "the cut part carries its own start id: {:?}",
+            unfiltered[1].placement
+        );
         assert!(
             !warnings.iter().any(|w| w.contains("recorded a different")),
             "nothing was collapsed, so nothing to report: {warnings:?}"
