@@ -588,7 +588,10 @@ fn tagged_half<'a>(raw: &'a str, tag: &str) -> Option<&'a str> {
     let rest = &raw[raw.find(&open)? + open.len()..];
     // An unterminated half keeps everything after the open tag - the same
     // recovery the previous single-half reader did.
-    Some(rest.split_once(format!("</{tag}>").as_str()).map_or(rest, |(text, _)| text))
+    Some(
+        rest.split_once(format!("</{tag}>").as_str())
+            .map_or(rest, |(text, _)| text),
+    )
 }
 
 /// Read Ariane's `Explorer`, which is ONE element holding TWO roles.
@@ -5635,7 +5638,8 @@ mod tests {
         assert_eq!(tml.sections[0].shots.len(), 2);
         assert_eq!(tml.sections[1].shots.len(), 2);
 
-        let (configs, _, warnings) = convert_tml_to_import_configs(&tml, false, false).expect("cvt");
+        let (configs, _, warnings) =
+            convert_tml_to_import_configs(&tml, false, false).expect("cvt");
         assert_eq!(configs.len(), 2);
         assert!(
             matches!(

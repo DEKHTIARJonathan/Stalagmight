@@ -2996,12 +2996,19 @@ mod tests {
     /// One section of a synthetic remote `.tml`.
     fn adopt_section(name: &str, start_ariane_id: i64, shots: Vec<TmlShot>) -> TmlSection {
         let end_ariane_id = shots.last().map_or(start_ariane_id, |s| s.id);
+        // The colour comes from the head shot, as `linearize_section` builds it.
+        // A section that disagrees with its own shots is a shape the parser
+        // cannot emit since #427, and the converter reports it as a collapsed
+        // trip - which would be this fixture lying, not a finding.
+        let color = shots
+            .first()
+            .map_or_else(|| "#ff0000".to_owned(), |shot| shot.color.clone());
         TmlSection {
             name: name.to_owned(),
             shots,
             surveyor: None,
             date: None,
-            color: "#ff0000".to_owned(),
+            color,
             is_branch_split: false,
             start_ariane_id,
             end_ariane_id,

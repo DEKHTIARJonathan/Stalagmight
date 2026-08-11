@@ -24,9 +24,21 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
 
 ### Per-section
 - Section name (with `SectionDescription` suffix stripped)
-- Surveyor / explorer, taken from the section's first shot
+- Surveyor / explorer, taken from the section's first shot. Ariane's `Explorer`
+  is ONE element holding two roles, in two encodings: a plain compound string
+  (`"nh / ds"`) or an entity-escaped element pair
+  (`<Explorer>nh</Explorer><Surveyor>ds</Surveyor>`). Both halves are kept and
+  rejoined with `" / "` - the form real files already use, and the form export
+  writes back - so the round trip is idempotent. Splitting the compound into
+  people is [#329](https://github.com/Stalagmight/Stalagmight/issues/329) and is
+  not done here. A half spelled `unknown`, `None` or empty is dropped on its
+  own, so an unfilled explorer no longer takes the surveyor with it (#427).
 - Survey date, taken from the section's first shot
 - Section color (converted from Ariane's integer RGB format), taken from the section's first shot
+
+Those three are the section's **trip**, and Ariane records them on EVERY shot
+row - see [The trip cut](#the-trip-cut) for what happens when they change
+mid-chain.
 
 ### Per-shot
 - Azimuth (normalized to 0-360; Ariane stores a single forward azimuth, not a backsight pair)
@@ -92,6 +104,38 @@ Ariane stores survey data as a flat list of shots with `FromID` linkage. The par
 2. Detecting branch points where multiple shots share the same `FromID`
 3. Splitting branches into separate sections with parent-child placement relationships
 4. Resolving cross-section connections via a shot ID → (section index, station index) mapping
+
+### The trip cut
+
+A `Section` holds ONE surveyor, one date and one colour; a `Shot` holds none of
+the three. Ariane writes all three on every shot row, so a chain surveyed by two
+teams over three days used to import entirely under its FIRST shot's values,
+with the rest discarded silently (#427).
+
+Each linearized run is therefore **cut where the trip changes between two
+adjacent stations**, and each part keeps its own surveyor, date and colour. The
+parts after the first are named `"<name> (trip N)"`; each hangs off the station
+it was cut at (`FromImporting`), so the geometry is byte-for-byte what the uncut
+run produced. This is the same (surveyor, date, colour) triple
+`join_contiguous_chains` refuses to merge across, applied to the cut side.
+
+Two rules bound it, both mirroring the join:
+
+- **A cut needs a station on both sides.** A trip that changes across a CLOSURE
+  or excluded shot is not cut, because that shot is not in the import's station
+  index and the part after it would resolve to no parent - and whether it does
+  would depend on the include-excluded toggle, which sectioning must be
+  invariant to. What cannot be cut is counted and named on the receipt instead
+  ("N shots in M sections recorded a different surveyor/date/colour...").
+- **The cut runs AFTER the join.** A cut end is not a chain end - it has an
+  in-section successor by construction - and offering it to the join let an
+  unrelated branch at that junction splice onto the mainline's head. The cost,
+  pinned by `a_chain_continuing_a_cut_tail_stays_its_own_section`, is that a
+  chain continuing a cut tail under its own name is not absorbed into it.
+
+Measured on the committed Naharon file: 17 configs, median 14 shots - identical
+to the pre-cut numbers, because no declared section in it changes trip
+mid-chain.
 
 ## Unit Conversion
 
@@ -211,7 +255,21 @@ Parsed but dropped:
   then the trim removes it - so writing `&#13;` would not help either. Interior whitespace, and the
   U+200B station-comment separator (not whitespace in Unicode terms), are unaffected. CSV export is
   lossless here by contrast; this is a property of the XML text format, not of the comment.
-- **Per-shot surveyor / date / color collapse to the chain head.** A section takes those three fields from its FIRST shot, so a chain surveyed by several people over several days lands under one surveyor, one date and one color ([#427](https://github.com/Stalagmight/Stalagmight/issues/427)).
+- **Per-shot surveyor / date / color survive as far as the section model allows.**
+  A run is cut per trip ([The trip cut](#the-trip-cut)), so several teams over
+  several days arrive as several sections rather than one. What a cut cannot
+  express - a trip that changes across a CLOSURE or excluded shot, with no
+  station seam to cut at - still collapses to the run head, and is counted on
+  the receipt rather than dropped in silence ([#427](https://github.com/Stalagmight/Stalagmight/issues/427)).
+- **Ariane 26.3's separate `XMLExplorer` / `XMLSurveyor` elements are not read.**
+  The survey behind #427 found them synthesized EMPTY on a resave of our own
+  export, with the legacy combined `Explorer` still carrying the data, so
+  reading them would change nothing on any file seen so far; preferring them
+  when non-empty belongs with [#329](https://github.com/Stalagmight/Stalagmight/issues/329),
+  which is where the element names can be confirmed against a file that fills
+  them.
+- **Dates parse strictly as `%Y-%m-%d`.** Any other spelling reads as no date at
+  all, with nothing said (#427 records this; it is not yet fixed).
 
 Structural:
 

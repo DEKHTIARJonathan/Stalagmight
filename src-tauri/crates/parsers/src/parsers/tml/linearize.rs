@@ -543,12 +543,11 @@ pub(super) fn collapsed_trip_report(
     };
 
     Some(format!(
-        "{shots} shot{} in {sections_hit} section{} recorded a different {fields} than the \
-         section {} import into; Ariane records those per shot, a section holds one of each, \
+        "{shots} shot{} in {sections_hit} section{} recorded a different {fields} from the \
+         section importing them; Ariane records those per shot, a section holds one of each, \
          and there was no station boundary to split on",
         if shots == 1 { "" } else { "s" },
         if sections_hit == 1 { "" } else { "s" },
-        if shots == 1 { "it" } else { "they" },
     ))
 }
 
