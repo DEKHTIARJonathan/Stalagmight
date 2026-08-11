@@ -376,6 +376,9 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     // Disable rotation
     map.current.dragRotate.disable();
     map.current.touchPitch.disable();
+    // Two-finger twist rotates by default; the global view is a top-down plan,
+    // so a pinch must zoom only.
+    map.current.touchZoomRotate.disableRotation();
 
     // Disable MapLibre's built-in keyboard handler to prevent conflicts with our shortcuts
     // Per memory: disable the map library's built-in keyboard handler to prevent double-zoom

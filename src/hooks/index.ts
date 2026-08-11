@@ -10,5 +10,6 @@ export { useSyntacticHighlighting } from './useSyntacticHighlighting';
 export { useAutoSave } from './useAutoSave';
 export type { AutoSaveStatus, AutoSaveState } from './useAutoSave';
 export { useLongPress } from './useLongPress';
+export { useTouchContextMenu } from './useTouchContextMenu';
 export { useUiScale } from './useUiScale';
 export { useScreenOccupant } from './useScreenOccupant';

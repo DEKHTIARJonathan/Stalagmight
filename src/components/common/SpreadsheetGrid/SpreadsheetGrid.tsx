@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { useTouchContextMenu } from '../../../hooks/useTouchContextMenu';
 import './SpreadsheetGrid.css';
 import {
   type GridColumn,
@@ -1906,6 +1907,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       window.removeEventListener('scroll', close, true);
     };
   }, [ctxMenu]);
+
+  useTouchContextMenu(scrollRef);
 
   // --- Column reorder --------------------------------------------------------
   // Move the selected column block [fromC0..fromC1] to insertion index `dropIdx`

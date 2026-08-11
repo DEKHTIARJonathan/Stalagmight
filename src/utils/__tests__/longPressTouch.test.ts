@@ -50,6 +50,23 @@ describe('attachLongPressTouch', () => {
     detach();
   });
 
+  it('reports what the finger landed on, not the element the listeners sit on', () => {
+    // Callers resolve the press against what was under it, and the listener
+    // lives on a container whose children are the interesting part.
+    const child = document.createElement('span');
+    target.appendChild(child);
+    const onLongPress = vi.fn((_start: { target: EventTarget | null }) => true);
+    const detach = attachLongPressTouch(target, { onLongPress });
+
+    dispatch(child, 'touchstart', [touchAt(30, 40)]);
+    vi.advanceTimersByTime(500);
+
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+    expect(onLongPress.mock.calls[0]![0]!.target).toBe(child);
+
+    detach();
+  });
+
   it('swallows the touchend that ends a press which opened a menu', () => {
     // The preventDefault is what stops the compatibility mouse events from
     // running the tool underneath the menu that just opened.
@@ -127,6 +144,24 @@ describe('attachLongPressTouch', () => {
     vi.advanceTimersByTime(500);
 
     expect(onLongPress).not.toHaveBeenCalled();
+    detach();
+  });
+
+  it('drops a pending press when a second finger joins it', () => {
+    // A pinch usually starts one finger at a time. The first finger then sits
+    // still through the whole gesture, so the wobble-cancel never sees it and
+    // the touch count is the only thing that can call the press off.
+    const onLongPress = vi.fn(() => true);
+    const detach = attachLongPressTouch(target, { onLongPress });
+
+    dispatch(target, 'touchstart', [touchAt(10, 10)]);
+    vi.advanceTimersByTime(300);
+    dispatch(target, 'touchstart', [touchAt(10, 10), touchAt(80, 80)]);
+    vi.advanceTimersByTime(500);
+
+    expect(onLongPress).not.toHaveBeenCalled();
+    expect(dispatch(target, 'touchend', []).defaultPrevented).toBe(false);
+
     detach();
   });
 

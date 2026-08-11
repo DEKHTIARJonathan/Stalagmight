@@ -16,11 +16,11 @@ function makeSurvey(): SurveyData {
     },
   ];
   d.shotCount = 2;
-  d.shotIds = new Int32Array([0, 1]);
-  d.shotSectionIds = new Int32Array([1, 1]);
+  d.shotIds = new Uint32Array([0, 1]);
+  d.shotSectionIds = new Uint32Array([1, 1]);
   d.shotFlags = new Uint8Array([0, 0]);
   d.stationCount = 3;
-  d.stationSectionIds = new Int32Array([1, 1, 1]);
+  d.stationSectionIds = new Uint32Array([1, 1, 1]);
   d.stationIndices = new Uint32Array([0, 1, 2]);
   d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 10, 10, -2]);
   d.stationFlags = new Uint8Array([0, 0, 0]);
