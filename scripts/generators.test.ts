@@ -388,6 +388,36 @@ describe('generate-repro-report.mjs', () => {
           type: 'action', v: 1, seq: 7, ts: ts(7), tool: 'map_view', mutating: false,
           params: {}, outcome: { ok: true, durationMs: 10 },
         }),
+        // The os_ family no longer rides a prefix rule, so each member's
+        // classification has to be pinned individually: consent is a step,
+        // capturing pixels is not.
+        record({
+          type: 'action', v: 1, seq: 8, ts: ts(8), tool: 'os_grant', mutating: true,
+          params: {}, outcome: { ok: true, durationMs: 10 },
+        }),
+        record({
+          type: 'action', v: 1, seq: 9, ts: ts(9), tool: 'os_screenshot', mutating: false,
+          params: { name: 'after-drag' }, outcome: { ok: true, durationMs: 10 },
+        }),
+        // A survey filename names a real cave, and reports get pasted into
+        // public issues - so this one sits under $HOME, where the prefix
+        // scrubber would still leave the basename exposed.
+        record({
+          type: 'action', v: 1, seq: 10, ts: ts(10), tool: 'file_dialog_answer', mutating: true,
+          params: {
+            triggerTestid: 'open-button',
+            kind: 'open',
+            path: `${process.env.HOME ?? '/home/someone'}/Documents/Secret Sump Cave.stalx`,
+          },
+          outcome: { ok: true, durationMs: 10 },
+        }),
+        // Params are bare strings: a newline or a backtick would break out of
+        // the markdown list item in a report headed for a public issue.
+        record({
+          type: 'action', v: 1, seq: 11, ts: ts(11), tool: 'click', mutating: true,
+          params: { testid: 'evil\n## Injected heading\n<img src=x onerror=alert(1)> `code`' },
+          outcome: { ok: true, durationMs: 10 },
+        }),
       ];
       fs.writeFileSync(path.join(v2Dir, 'actions.jsonl'), `${lines.join('\n')}\n`);
     });
@@ -400,7 +430,7 @@ describe('generate-repro-report.mjs', () => {
 
       // Present AND described - a bare tool name is not a reproducible step.
       expect(md).toContain('`drag` testid=station-a -> testid=station-b');
-      expect(md).toContain('open dialog answered "/caves/survey.dmp"');
+      expect(md).toContain('open dialog answered <file.dmp>');
       expect(md).toContain('`scroll` testid=warnings-content by (0,400)');
       expect(md).toContain('`select_option` testid=select-number-format = "en-US"');
       expect(md).toContain('`map_feature_click` shot id=17 in section 2');
@@ -410,12 +440,50 @@ describe('generate-repro-report.mjs', () => {
 
     it('drops an action the record says is not mutating, even though the legacy list names it', () => {
       execFileSync(process.execPath, [reportGen, v2Dir], { encoding: 'utf8' });
-      const steps = fs
-        .readFileSync(path.join(v2Dir, 'report.md'), 'utf8')
-        .split('## Steps to reproduce')[1]
-        .split('Automated replay')[0];
+      const steps = reproSteps();
 
       expect(steps).not.toContain('map_view');
     });
+
+    // The os_ prefix used to decide this for the whole family. It doesn't now,
+    // so each member needs its own pin - os_grant is the consent every later
+    // os_* step depends on, os_screenshot changes nothing.
+    it('keeps os_grant as a step and drops os_screenshot, per member not per prefix', () => {
+      execFileSync(process.execPath, [reportGen, v2Dir], { encoding: 'utf8' });
+      const steps = reproSteps();
+
+      expect(steps).toContain('os_grant');
+      expect(steps).not.toContain('os_screenshot');
+    });
+
+    // Reports are pasted into public issues, and in this project a survey
+    // filename names a real cave. `scrub` only rewrites the $HOME prefix, so
+    // the basename has to be dropped at the point of rendering.
+    it('redacts a chosen file to its extension, leaking neither the name nor the directory', () => {
+      execFileSync(process.execPath, [reportGen, v2Dir], { encoding: 'utf8' });
+      const md = fs.readFileSync(path.join(v2Dir, 'report.md'), 'utf8');
+
+      expect(md).toContain('open dialog answered <file.stalx>');
+      expect(md).not.toContain('Secret Sump Cave');
+      expect(md).not.toContain('Documents');
+    });
+
+    // A step is one markdown list item. A param that escapes it can forge
+    // headings, hide later steps behind a <details>, or smuggle HTML.
+    it('neutralizes markdown and newlines in caller-supplied params', () => {
+      execFileSync(process.execPath, [reportGen, v2Dir], { encoding: 'utf8' });
+      const steps = reproSteps();
+
+      expect(steps).not.toContain('\n## Injected heading');
+      expect(steps).not.toContain('<img');
+      expect(steps).toContain('&lt;img');
+    });
+
+    function reproSteps(): string {
+      return fs
+        .readFileSync(path.join(v2Dir, 'report.md'), 'utf8')
+        .split('## Steps to reproduce')[1]
+        .split('Automated replay')[0];
+    }
   });
 });

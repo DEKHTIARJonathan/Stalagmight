@@ -39,6 +39,34 @@ const scrub = (s) => {
   return out;
 };
 
+/**
+ * Render a chosen file as its EXTENSION only. `scrub` rewrites the $HOME prefix
+ * but keeps every segment after it, and in this project the basename is the
+ * sensitive part: survey filenames name real caves, and the repo bans cave data
+ * leaving it. The extension is what a repro actually needs - it selects the
+ * importer - so it is the whole of the reproducible signal here.
+ */
+const redactPath = (value) => {
+  const one = (p) => `<file${path.extname(String(p)) || ''}>`;
+  if (value == null) return '<none>';
+  if (Array.isArray(value)) {
+    return value.length === 1 ? one(value[0]) : `<${value.length} files${path.extname(String(value[0] ?? '')) || ''}>`;
+  }
+  return one(value);
+};
+
+/**
+ * Neutralize a caller-supplied string for a markdown list item. Tool params are
+ * bare strings, and a newline or a backtick in a testid or selector escapes the
+ * step and injects arbitrary markdown into a report headed for a public issue.
+ * Also capped: nothing here is worth unbounded width.
+ */
+const mdInline = (s, max = 80) => {
+  const flat = String(s).replace(/[\r\n]+/g, ' ');
+  const clipped = flat.length > max ? `${flat.slice(0, max)}...` : flat;
+  return clipped.replace(/[`<>|]/g, (c) => ({ '`': "'", '<': '&lt;', '>': '&gt;', '|': '\\|' })[c]);
+};
+
 const records = fs
   .readFileSync(jsonlPath, 'utf8')
   .split('\n')
@@ -183,7 +211,7 @@ function describeAction(a) {
   switch (a.tool) {
     case 'click':
     case 'map_click':
-      return p.testid ? `testid=${p.testid}` : p.selector ? `selector=${p.selector}` : p.lngLat ? `lngLat=${JSON.stringify(p.lngLat)}` : `coords=(${p.x},${p.y})`;
+      return p.testid ? `testid=${mdInline(p.testid)}` : p.selector ? `selector=${mdInline(p.selector)}` : p.lngLat ? `lngLat=${JSON.stringify(p.lngLat)}` : `coords=(${p.x},${p.y})`;
     case 'map_feature_click': {
       const which =
         p.featureType === 'station'
@@ -192,35 +220,38 @@ function describeAction(a) {
       return `${which} in section ${p.sectionId}${p.button === 'right' ? ' (right)' : ''}`;
     }
     case 'type_text':
-      return `"${String(p.text ?? '').slice(0, 40)}"${p.testid ? ` into ${p.testid}` : ''}`;
+      return `"${mdInline(p.text ?? '', 40)}"${p.testid ? ` into ${mdInline(p.testid)}` : ''}`;
     case 'hover':
-      return p.testid ? `testid=${p.testid}` : `selector=${p.selector}`;
+      return p.testid ? `testid=${mdInline(p.testid)}` : `selector=${mdInline(p.selector)}`;
     case 'drag': {
-      const from = p.fromTestid
-        ? `testid=${p.fromTestid}`
-        : p.fromSelector
-          ? `selector=${p.fromSelector}`
-          : `(${p.fromX},${p.fromY})`;
-      const to = p.toTestid
-        ? `testid=${p.toTestid}`
-        : p.toSelector
-          ? `selector=${p.toSelector}`
-          : `(${p.toX},${p.toY})`;
+      const end = (kindTestid, kindSelector, x, y) =>
+        kindTestid
+          ? `testid=${mdInline(kindTestid)}`
+          : kindSelector
+            ? `selector=${mdInline(kindSelector)}`
+            : `(${x},${y})`;
+      const from = end(p.fromTestid, p.fromSelector, p.fromX, p.fromY);
+      const to = end(p.toTestid, p.toSelector, p.toX, p.toY);
       return `${from} -> ${to}${p.button && p.button !== 'left' ? ` (${p.button})` : ''}`;
     }
     case 'scroll': {
-      const target = p.testid ? `testid=${p.testid}` : p.selector ? `selector=${p.selector}` : 'window';
+      const target = p.testid
+        ? `testid=${mdInline(p.testid)}`
+        : p.selector
+          ? `selector=${mdInline(p.selector)}`
+          : 'window';
       // Two modes on one tool: a pixel delta, or scroll-into-view.
       return p.deltaX != null || p.deltaY != null
         ? `${target} by (${p.deltaX ?? 0},${p.deltaY ?? 0})`
         : `${target} into view`;
     }
     case 'select_option':
-      return `${p.testid ? `testid=${p.testid}` : `selector=${p.selector}`} = "${p.value}"`;
+      return `${p.testid ? `testid=${mdInline(p.testid)}` : `selector=${mdInline(p.selector)}`} = "${mdInline(p.value)}"`;
     case 'file_dialog_answer':
+      // The chosen path is redacted to its extension - see redactPath.
       return p.cancel
-        ? `${p.kind} dialog cancelled (trigger ${p.triggerTestid})`
-        : `${p.kind} dialog answered ${JSON.stringify(p.paths ?? p.path ?? null)} (trigger ${p.triggerTestid})`;
+        ? `${p.kind} dialog cancelled (trigger ${mdInline(p.triggerTestid)})`
+        : `${p.kind} dialog answered ${redactPath(p.paths ?? p.path)} (trigger ${mdInline(p.triggerTestid)})`;
     case 'press_keys':
       return JSON.stringify(p.keys ?? []);
     case 'eval':

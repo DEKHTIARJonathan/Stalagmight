@@ -715,11 +715,11 @@ define(
         answerFileDialog(session.browser, args.triggerTestid, args.kind, value),
       );
       return { result: { consumed: true, kind: args.kind, triggerTestid: args.triggerTestid }, resolved };
-      // Answering a native dialog commits an open/save - decisive in a repro,
-      // and frequently the step a report most needs to show. It skips the
-      // oracle sweep only because the app is mid-dialog, not because it is
-      // observation.
-    }, { mutates: true }),
+    },
+    // Answering a native dialog commits an open/save - decisive in a repro, and
+    // frequently the step a report most needs to show. It skips the oracle
+    // sweep only because the app is mid-dialog, not because it is observation.
+    { mutates: true }),
 );
 
 // ------------------------------------------------------------ escape hatches
@@ -1017,7 +1017,12 @@ defineDarwin(
       return {
         result: { granted: true, note: 'valid until this MCP server exits', permissions },
       };
-    }),
+    },
+    // Not a change to app state, but the comment above is the contract: every
+    // later os_* step depends on this consent, so the repro has to show it.
+    // The sweep flag cannot express that - granting is not worth an oracle
+    // pass - so it is declared.
+    { mutates: true }),
 );
 
 defineDarwin(
@@ -1062,6 +1067,9 @@ defineDarwin(
   { name: z.string().regex(/^[\w.-]{1,64}$/).optional() },
   async (args) => {
     try {
+      // Observation, despite the os_ prefix: capturing real pixels changes
+      // nothing, so it is not a step in a repro. Declared rather than left to
+      // the default, because the prefix makes the opposite look plausible.
       const { base64, meta } = await record('os_screenshot', args, async (seq) => {
         const file = path.join(
           session.recorder.dir,

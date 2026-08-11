@@ -1149,7 +1149,7 @@ Added under a small, always-safe surface:
 
 ```jsonc
 {"type":"session-start","v":1,"sessionId":"...","gitHead":"...","binaryPath":"...","display":":89","headed":false,"profileDir":"...","freshProfile":true}
-{"type":"action","v":1,"seq":12,"ts":"...","tool":"click","params":{...},"resolved":{"selector":"...","point":{"x":412,"y":333}},"outcome":{"ok":true,"durationMs":184},"result":{...},"artifacts":{"screenshot":"screenshots/0012-shot.png"},"post":{"view":"single","dialog":null,"activeTool":"select","projectName":"...","projectOpen":true}}
+{"type":"action","v":1,"seq":12,"ts":"...","tool":"click","mutating":true,"params":{...},"resolved":{"selector":"...","point":{"x":412,"y":333}},"outcome":{"ok":true,"durationMs":184},"result":{...},"artifacts":{"screenshot":"screenshots/0012-shot.png"},"post":{"view":"single","dialog":null,"activeTool":"select","projectName":"...","projectOpen":true}}
 {"type":"event","v":1,"seq":40,"ts":"...","event":"finding|crash-detected|scenario-log","detail":{...}}
 {"type":"session-end","v":1,"ts":"...","reason":"app_stop","actions":57}
 ```
@@ -1157,6 +1157,16 @@ Added under a small, always-safe surface:
 `resolved` carries the concrete selector/coords the replay generator needs;
 `eval`/`ipc`/`store_action` embed their full script/command/args. Generators
 tolerate a truncated final line.
+
+`mutating` says whether the call changed application state, decided by the tool
+that made it - repro reports use it to pick the steps to reproduce, so a tool
+declares it once at its definition instead of every consumer keeping a name
+list. It stays `v:1` because it is optional: sessions recorded before the field
+existed simply lack it, and `generate-repro-report.mjs` falls back to a frozen
+legacy name list for those. A few calls are deliberately non-obvious -
+`map_view` is mutating only in its setting form, `os_grant` is recorded as
+mutating because every later `os_*` step depends on that consent, and
+`os_screenshot` is observation despite the `os_` prefix.
 
 ## Replay + report
 

@@ -213,12 +213,16 @@ Ungranted or unpreflighted calls fail with instructions, before touching the mac
 
 ### 5.3 Recorder / replay
 
-os_* actions are recorded to `actions.jsonl` like any tool (they mutate app state; repro
-reports need them), but `scripts/generate-replay.mjs` emits them as
+os_* actions are recorded to `actions.jsonl` like any tool, but
+`scripts/generate-replay.mjs` emits them as
 `(OS-level; not replayable)` comments, extending the existing observation-comment arm.
 Trusted-input replay would need TCC grants, a frontmost desktop and pixel determinism -
 none portable. When an os_* step is load-bearing for a repro, it is hand-converted to a
 Tier 1 equivalent; the comment preserves intent.
+
+Repro reports select steps from the recorded `mutating` flag, not from the `os_` prefix:
+`os_click`/`os_keys` are mutating, `os_screenshot` is observation, and `os_grant` is
+recorded as mutating because every later os_* step depends on that consent.
 
 ### 5.4 As-built notes (PR 4)
 
