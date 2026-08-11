@@ -177,12 +177,13 @@ interface SectionPreviewProps {
 
 /**
  * A minimal MapLibre preview component for showing section shape.
- * - Configurable size (default 250x250)
+ * - Configurable size: square at `size` (default 250), or `size` x `height`
  * - Station dots + shot lines
  * - Zoom (wheel, 0.25x to 4x) + pan (drag)
  * - Click on station to select (optional callback)
  * - Selected station shows highlight ring
- * - Auto-fits bounds when section changes
+ * - Auto-fits bounds when the section changes (NOT on resize: a bigger box
+ *   shows more cave at the same zoom, it does not rescale the drawing)
  * - No labels (minimal view)
  * - Shows merge preview with both sections when mergePreview is provided
  * - Shows connection line when existingStation is provided (legacy mode)

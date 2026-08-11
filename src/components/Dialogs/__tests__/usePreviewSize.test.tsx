@@ -14,7 +14,7 @@
  * hook's, not the browser's.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, renderHook, screen, act } from '@testing-library/react';
 import { useCallback } from 'react';
 
 import { usePreviewSize } from '../usePreviewSize';
@@ -92,6 +92,14 @@ afterEach(() => {
 });
 
 describe('usePreviewSize', () => {
+  it('seeds at the minimum, so the frame before the first measurement cannot overflow', () => {
+    // Nothing attached yet: this is what a caller renders with on frame one.
+    // At `max` that frame is a 900px box inside a ~600px column.
+    const { result } = renderHook(() => usePreviewSize(MAX));
+
+    expect(result.current[1]).toEqual({ width: MIN, height: MIN });
+  });
+
   it('fills both axes of the column, not the smaller one twice', () => {
     render(<Harness />);
     // A wide, short column: 1024x640 window, divider dragged near its 900 max.

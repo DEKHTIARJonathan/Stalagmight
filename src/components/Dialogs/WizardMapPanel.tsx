@@ -19,7 +19,15 @@
  * persists through the SAME `savePanelSizes` call the drag's release uses,
  * debounced so a burst of taps is one write.
  */
-import { useCallback, useEffect, useRef, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { useResizeHandle } from '../SingleSystemView/useResizeHandle';
 import { useUIStore } from '../../store/uiStore';
@@ -75,6 +83,51 @@ export function WizardMapPanel({
 }: WizardMapPanelProps) {
   const { t } = useTranslation();
   const savePanelSizes = useUIStore((s) => s.savePanelSizes);
+
+  // The widest this column can actually RENDER right now. `maxWidth` below
+  // reserves `WIZARD_SETTINGS_MIN_WIDTH` for the settings beside it, so on a
+  // narrow window the render stops short of the stored width - and a keyboard
+  // that kept stepping past that point would climb `aria-valuenow` toward 900,
+  // and persist, while the divider sat still. Measured from the parent the
+  // `calc(100% - ...)` resolves against rather than assumed, and observed so a
+  // window resize updates it without a layout read on every render. Seeded (and
+  // fallen back to) at the absolute max, which is the honest answer when there
+  // is no layout to measure - first paint, or a zero-layout test environment.
+  const [renderCap, setRenderCap] = useState(MAP_PANEL_MAX_WIDTH);
+  const capObserverRef = useRef<ResizeObserver | null>(null);
+  // React calls this with null on unmount and before every re-attach, so the
+  // disconnect at the top is the whole teardown story.
+  const setPanelRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      capObserverRef.current?.disconnect();
+      capObserverRef.current = null;
+      panelRef(el);
+      const parent = el?.parentElement;
+      if (!parent) return;
+      const measure = () => {
+        const available = parent.clientWidth;
+        setRenderCap(
+          available > 0
+            ? clampRound(
+                available - WIZARD_SETTINGS_MIN_WIDTH,
+                MAP_PANEL_MIN_WIDTH,
+                MAP_PANEL_MAX_WIDTH,
+              )
+            : MAP_PANEL_MAX_WIDTH,
+        );
+      };
+      measure();
+      capObserverRef.current = new ResizeObserver(measure);
+      capObserverRef.current.observe(parent);
+    },
+    [panelRef],
+  );
+
+  /** Where the separator actually IS: the stored width, or the render cap when
+   *  the window is too narrow to honor it. Both the ARIA value and the keyboard
+   *  work from this, so a key always moves the divider the user can see (and
+   *  never reports a width that is not on screen). */
+  const currentWidth = Math.min(width, renderCap);
 
   // A keyboard resize persists on a trailing debounce - the keyboard's
   // equivalent of the drag's release - so a burst of arrow taps is one write.
@@ -140,10 +193,10 @@ export function WizardMapPanel({
       let next: number;
       switch (e.key) {
         case 'ArrowLeft':
-          next = width - step;
+          next = currentWidth - step;
           break;
         case 'ArrowRight':
-          next = width + step;
+          next = currentWidth + step;
           break;
         case 'Home':
           next = MAP_PANEL_MIN_WIDTH;
@@ -157,18 +210,23 @@ export function WizardMapPanel({
       // Claim the key before the no-op check below: at the bounds these would
       // otherwise scroll the wizard body behind the divider.
       e.preventDefault();
-      next = clampRound(next, MAP_PANEL_MIN_WIDTH, MAP_PANEL_MAX_WIDTH);
+      // `renderCap`, not the absolute max: past the cap nothing moves, so
+      // stepping there would be a value change and a config write with no
+      // effect on screen. A narrow window therefore does write the smaller
+      // width back - the user is resizing THIS window, exactly as a drag here
+      // would - but only when they press a key, never on restore.
+      next = clampRound(next, MAP_PANEL_MIN_WIDTH, renderCap);
       // Already at that bound - no render, and nothing to persist.
-      if (next === width) return;
+      if (next === currentWidth) return;
       onWidthChange(next);
       schedulePersist(next);
     },
-    [width, onWidthChange, schedulePersist],
+    [currentWidth, renderCap, onWidthChange, schedulePersist],
   );
 
   return (
     <div
-      ref={panelRef}
+      ref={setPanelRef}
       className="sticky top-0 self-start relative shrink-0 flex flex-col items-center justify-center p-4 border-r border-border"
       // `maxWidth` is the settings column's floor, and it is CSS rather than a
       // clamp on the stored number on purpose: the width persists across
@@ -186,17 +244,19 @@ export function WizardMapPanel({
           far (#396 covers the rest), reachable by keyboard: a focusable
           `separator` is the WAI-ARIA window-splitter pattern.
 
-          `aria-valuenow` reports the STORED width, not the rendered one. The
-          `maxWidth` above can cap the render on a narrow window, but the value
-          the user is steering (and the one that persists) is this number - the
-          same thing the drag sets. */}
+          The reported value is where the separator IS, and the reported max is
+          how far it can go on THIS window - both capped by `renderCap` rather
+          than by the stored width and the absolute 900, so the announced
+          numbers can never describe a position the divider is not in. The
+          stored width itself is left alone (that is #404's whole point): it is
+          only rewritten when the user presses a key. */}
       <div
         role="separator"
         aria-orientation="vertical"
         aria-label={t('common.a11y.wizardMapResize')}
-        aria-valuenow={width}
+        aria-valuenow={currentWidth}
         aria-valuemin={MAP_PANEL_MIN_WIDTH}
-        aria-valuemax={MAP_PANEL_MAX_WIDTH}
+        aria-valuemax={renderCap}
         tabIndex={0}
         onKeyDown={onKeyDown}
         className={`absolute right-0 top-0 h-full w-1 -mr-0.5 cursor-ew-resize px-1 transition-colors hover:bg-accent-50 focus:outline-none focus-visible:bg-accent-50 focus-visible:ring-1 focus-visible:ring-accent ${
