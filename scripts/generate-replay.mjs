@@ -254,7 +254,7 @@ push('');
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, lines.join('\n'));
 process.stdout.write(`wrote ${outPath} (${actions.length} actions)\n`);
-process.stdout.write(`wrote ${outPath} (no in-repo runner yet - see e2e/agent/replays/README.md)\n`);
+process.stdout.write('note: no in-repo runner yet - see e2e/agent/replays/README.md\n');
 
 // Recorded params inlined into a one-line comment. JSON never contains a raw
 // newline, so the comment cannot break out of its line; the cap keeps a long

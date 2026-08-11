@@ -6,7 +6,7 @@
 // strip to EOF. Both are silent UNDER-counts - the dangerous direction for a
 // ratchet - so they get first-class fixtures here.
 //
-// Pure Node, no test framework (mirrors scripts/reap-tracked.test.sh's on-demand
+// Pure Node, no test framework (same style as the other scripts/*.test.mjs
 // style). Run: node scripts/check-rust-file-size.test.mjs  (also a CI `check` step).
 
 import assert from 'node:assert/strict';

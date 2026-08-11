@@ -33,7 +33,11 @@ export const fractalStress: Scenario = {
   // L-system depth 3 (~85 sections); pass --iterations 4 for the ~300-section tier.
   defaultIterations: 3,
   async run(ctx, { iterations }) {
-    const budgetMs = Number(process.env.STALAGMIGHT_FRACTAL_BUDGET_MS ?? DEFAULT_BUDGET_MS);
+    // Parse defensively: `Number("abc")` is NaN and every `elapsed > NaN` is
+    // false, which would turn the fail-loudly budget into fail-open.
+    const budgetEnv = Number(process.env.STALAGMIGHT_FRACTAL_BUDGET_MS);
+    const budgetMs =
+      Number.isFinite(budgetEnv) && budgetEnv > 0 ? budgetEnv : DEFAULT_BUDGET_MS;
     const start = Date.now();
     const checkBudget = (phase: string) => {
       const elapsed = Date.now() - start;
@@ -80,15 +84,28 @@ export const fractalStress: Scenario = {
     checkBudget('section creation');
 
     // Creation order is array order, so local fractal index -> backend id maps
-    // straight off the project's section list.
-    const backendIds = await ctx.eval<number[]>(
-      'return window.__E2E_TEST__.projectStore.getState().project.sections.map((s) => s.id);',
+    // off the project's section list - but assert the NAME at each position
+    // matches before trusting it, or a mis-mapping would produce wrong merges
+    // AND a matching expectation (the verify below uses this same map).
+    const backendSections = await ctx.eval<{ id: number; name: string | null }[]>(
+      'return window.__E2E_TEST__.projectStore.getState().project.sections.map((s) => ({ id: s.id, name: s.name }));',
     );
-    if (backendIds.length !== sections.length) {
-      throw new Error(`expected ${sections.length} sections in the store, found ${backendIds.length}`);
+    if (backendSections.length !== sections.length) {
+      throw new Error(
+        `expected ${sections.length} sections in the store, found ${backendSections.length}`,
+      );
     }
     const sectionIdMap = new Map<number, number>();
-    backendIds.forEach((id, index) => sectionIdMap.set(index, id));
+    backendSections.forEach((backend, index) => {
+      const expectedName = sections[index]?.name;
+      if (backend.name !== expectedName) {
+        throw new Error(
+          `section order diverged at index ${index}: store has "${backend.name}", ` +
+            `the generator made "${expectedName}" - the index->id map would lie`,
+        );
+      }
+      sectionIdMap.set(index, backend.id);
+    });
 
     for (const [index, merge] of merges.entries()) {
       const a = {

@@ -128,10 +128,11 @@ signature match does and does not distinguish.
    left; otherwise find the shortest action prefix that still triggers it.
 3. **Generate the replay**:
    `node scripts/generate-replay.mjs <sessionDir> --assert-final`
-4. **Verify it reproduces**:
-   `REPLAY_SPEC=<sessionDir>/replay.spec.ts pnpm test:e2e:replay`
-   If it does not reproduce, the repro depends on state you did not capture -
-   note that in the report.
+4. **Verify it reproduces**: re-drive the recorded steps through the live
+   harness session (the spec maps 1:1 to them). There is no spec runner today -
+   #549 retired the WDIO one and the #466 replay-runner phase replaces it (see
+   `e2e/agent/replays/README.md`). If it does not reproduce, the repro depends
+   on state you did not capture - note that in the report.
 5. **Write the report**:
    `node scripts/generate-repro-report.mjs <sessionDir>` -> `report.md`
    (paths are scrubbed of `$HOME` for public issues). Fill in expected-vs-actual.

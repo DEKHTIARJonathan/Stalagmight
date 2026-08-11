@@ -14,10 +14,10 @@ release build: pass `--release` (journeys) or set `STALAGMIGHT_AGENT_RELEASE=1`
 - [ ] `pnpm agent:journeys -- --release --ledger` is green at the RC commit.
 - [ ] `STALAGMIGHT_AGENT_RELEASE=1 pnpm agent:scenarios` is green at the RC
       commit.
-- [ ] The stress tier has run at the RC commit when the release touched
-      import/merge scale: `pnpm agent:scenario fractal-stress --iterations 4`
-      (the retired WDIO suite's residual coverage lives in the journeys above
-      plus this scenario - #549).
+- [ ] The stress tier has run at the RC commit:
+      `pnpm agent:scenario fractal-stress --iterations 4` (~15 s; the retired
+      WDIO suite's residual coverage lives in the journeys above plus this
+      scenario - #549. It is SMOKE_EXCLUDED, so nothing else runs it).
 
 ## macOS (Apple Silicon)
 
