@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useReducer, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useState, useCallback, useEffect, useMemo, useReducer, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { blockedByIncompleteShots, countIncompleteShots } from '../common/incompleteShots';
 import { blankEditableShot } from '../common/editableShot';
@@ -364,6 +364,20 @@ export default function ZeroDatumConfigDialog({
   const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(initialConfig?.gps ? 'DD' : null);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
+  // Depth/elevation of the zero-datum point relative to the surface (#524).
+  // Optional: blank keeps today's behaviour (`depth_reference: 0`, "not
+  // recorded"). Meters, +down - the same `GpsCoordinates.depth_reference`
+  // frame `EditStationDialog` already writes from `station.coordinates.z`
+  // (docs/inclination.md), and the OPPOSITE sign from #465's project-level
+  // "entrance elevation" (+up from sea level) - the two are different
+  // reference points and must not be confused.
+  const initialDepthReferenceRef = useRef(
+    initialConfig?.gps?.depth_reference ? String(initialConfig.gps.depth_reference) : ''
+  );
+  const [depthReferenceInput, setDepthReferenceInput] = useState(initialDepthReferenceRef.current);
+  const depthReferenceParsed = depthReferenceInput.trim() === '' ? 0 : Number(depthReferenceInput);
+  const depthReferenceValid = Number.isFinite(depthReferenceParsed);
+
   // Metadata state. Each field keeps an initial-value ref alongside it, so the
   // dirty guard (#F9) can tell "touched" from "still what the dialog opened
   // with" without re-deriving the same expression twice - and on a re-entry
@@ -457,6 +471,7 @@ export default function ZeroDatumConfigDialog({
   // behaviour (including its tolerance of whitespace-only input) is unchanged.
   const isDirty =
     gpsInput.trim() !== initialGpsInputRef.current.trim() ||
+    depthReferenceInput.trim() !== initialDepthReferenceRef.current.trim() ||
     name !== initialNameRef.current ||
     surveyor !== initialSurveyorRef.current ||
     date !== initialDateRef.current ||
@@ -532,8 +547,10 @@ export default function ZeroDatumConfigDialog({
     dispatch({ type: 'hover', index: value === null ? null : parseInt(value, 10) });
   }, []);
 
-  // GPS input handler
-  const handleGpsInputChange = useCallback((value: string) => {
+  // GPS input handler. Takes the depth reference explicitly (rather than
+  // closing over state) so it stays correct both on a text edit and, via the
+  // re-parse effect below, on a depth-only edit of already-parsed text.
+  const handleGpsInputChange = useCallback((value: string, depthReference: number) => {
     setGpsInput(value);
     if (!value.trim()) {
       setGpsCoords(null);
@@ -543,7 +560,7 @@ export default function ZeroDatumConfigDialog({
     }
     const detected = detectFormat(value);
     setGpsFormat(detected || null);
-    const result = parseGps(value);
+    const result = parseGps(value, depthReference);
     if ('coordinates' in result) {
       setGpsCoords(result.coordinates);
       setGpsError(null);
@@ -552,6 +569,23 @@ export default function ZeroDatumConfigDialog({
       setGpsError(result.message);
     }
   }, []);
+
+  // Depth-reference input handler: just stages the text. The effect below
+  // re-parses already-entered GPS text against the new value, so a datum's
+  // depth can be filled in before OR after its coordinates.
+  const handleDepthReferenceInputChange = useCallback((value: string) => {
+    setDepthReferenceInput(value);
+  }, []);
+
+  // Re-run the GPS parse whenever the depth reference changes, so a depth
+  // typed after the coordinates still lands in `gpsCoords.depth_reference`
+  // instead of being stuck at whatever the coordinates parsed with.
+  useEffect(() => {
+    if (gpsInput.trim()) {
+      handleGpsInputChange(gpsInput, depthReferenceValid ? depthReferenceParsed : 0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [depthReferenceParsed, depthReferenceValid]);
 
   // Shot editing handlers. Each is one dispatch: the reducer derives the new
   // rows and the re-anchored pick from the same `prev`, so `stationIndex`
@@ -611,6 +645,7 @@ export default function ZeroDatumConfigDialog({
 
   const handleConfirm = useCallback(() => {
     if (!gpsCoords) return;
+    if (!depthReferenceValid) return;
     if (blockedByIncompleteShots(incompleteShots, t, TOAST_KEYS.ZERO_DATUM_INCOMPLETE)) return;
     onConfirm({
       sectionIndex,
@@ -627,7 +662,7 @@ export default function ZeroDatumConfigDialog({
       },
       shots,
     });
-  }, [gpsCoords, onConfirm, sectionIndex, stationIndex, name, surveyor, date, color, direction, reverse, shots, incompleteShots, showToast, t]);
+  }, [gpsCoords, depthReferenceValid, onConfirm, sectionIndex, stationIndex, name, surveyor, date, color, direction, reverse, shots, incompleteShots, showToast, t]);
 
   if (!section) return null;
 
@@ -710,7 +745,12 @@ export default function ZeroDatumConfigDialog({
                 <input
                   type="text"
                   value={gpsInput}
-                  onChange={(e) => handleGpsInputChange(e.target.value)}
+                  onChange={(e) =>
+                    handleGpsInputChange(
+                      e.target.value,
+                      depthReferenceValid ? depthReferenceParsed : 0,
+                    )
+                  }
                   placeholder={t('dialogs.zeroDatumConfig.gpsPlaceholder')}
                   className="flex-1 px-2 py-1.5 bg-background border border-border rounded text-sm"
                   data-testid="zero-datum-gps-input"
@@ -743,6 +783,34 @@ export default function ZeroDatumConfigDialog({
               {gpsTransposedWarning && (
                 <div className="text-xs text-warning pl-1" data-testid="zero-datum-gps-transposed-warning">
                   {t('dialogs.zeroDatumConfig.transposedWarning')}
+                </div>
+              )}
+            </div>
+
+            {/* Depth/elevation reference (#524) - optional, meters, +down
+                (docs/inclination.md). Blank keeps today's behaviour: the
+                datum's depth is recorded as 0 ("not recorded"). */}
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-text-secondary shrink-0">
+                  {t('dialogs.zeroDatumConfig.depthReferenceLabel')}:
+                </label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={depthReferenceInput}
+                  onChange={(e) => handleDepthReferenceInputChange(e.target.value)}
+                  placeholder={t('dialogs.zeroDatumConfig.depthReferencePlaceholder')}
+                  className="flex-1 px-2 py-1.5 bg-background border border-border rounded text-sm"
+                  data-testid="zero-datum-depth-reference-input"
+                />
+              </div>
+              <div className="text-xs text-text-secondary pl-1">
+                {t('dialogs.zeroDatumConfig.depthReferenceHint')}
+              </div>
+              {!depthReferenceValid && (
+                <div className="text-xs text-error pl-1" data-testid="zero-datum-depth-reference-error">
+                  {t('dialogs.zeroDatumConfig.depthReferenceError')}
                 </div>
               )}
             </div>
@@ -820,7 +888,7 @@ export default function ZeroDatumConfigDialog({
         <Button
           variant="primary"
           onClick={handleConfirm}
-          disabled={!gpsCoords}
+          disabled={!gpsCoords || !depthReferenceValid}
           data-testid="zero-datum-config-confirm"
         >
           {t('dialogs.zeroDatumConfig.confirm')}
