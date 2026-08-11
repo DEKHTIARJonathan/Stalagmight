@@ -451,7 +451,11 @@ mod tests {
         .join()
         .expect("the adopting writer did not panic");
         assert!(landed, "and it is still writable: {}", path.display());
-        assert!(path.starts_with(&dir), "into that same dir: {}", path.display());
+        assert!(
+            path.starts_with(&dir),
+            "into that same dir: {}",
+            path.display()
+        );
 
         drop(handoff);
         // Unix only, for the reason the sibling test above gives.
@@ -480,7 +484,10 @@ mod tests {
         .expect("the adopting writer did not panic");
 
         assert!(theirs_landed, "precondition: the worker's save landed");
-        assert_eq!(theirs, ours, "an adopted worker resolves to the parent's file");
+        assert_eq!(
+            theirs, ours,
+            "an adopted worker resolves to the parent's file"
+        );
         assert!(
             Config::load()
                 .expect("read our config back")
