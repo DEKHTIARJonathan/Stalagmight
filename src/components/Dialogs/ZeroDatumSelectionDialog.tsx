@@ -156,7 +156,6 @@ export default function ZeroDatumSelectionDialog({
         <span>{t('dialogs.zeroDatumSelection.subtitle')}</span>
         <HelpTooltip
           text={t('dialogs.zeroDatumSelection.helpTooltip')}
-          ariaLabel={t('dialogs.zeroDatumSelection.helpTooltip')}
           className="mt-0.5 shrink-0"
           iconTestId="zero-datum-selection-help-icon"
           tooltipTestId="zero-datum-selection-help-tooltip"
@@ -192,7 +191,7 @@ export default function ZeroDatumSelectionDialog({
         </div>
       </div>
 
-      <div className="flex justify-between pt-3 border-t border-border mt-1 shrink-0">
+      <div className="flex items-center justify-between pt-3 border-t border-border mt-1 shrink-0">
         <div className="flex gap-2">
           <Button variant="secondary" onClick={onCancel} data-testid="zero-datum-selection-cancel">
             {t('common.actions.cancel')}
