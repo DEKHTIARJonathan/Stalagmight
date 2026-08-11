@@ -32,6 +32,7 @@ import {
   checkResidue,
   checkRoundtripState,
   checkTempFiles,
+  errorGraceVerdict,
   ipcArgRejections,
   leftoverTempNames,
   parseReceiptSummary,
@@ -385,5 +386,72 @@ describe('captureReceipt (F3 capture ordering)', () => {
   it('is inert on a step with no receipt on screen', () => {
     const start = emptyReceiptCapture();
     expect(captureReceipt(start, digestWith(null, 3, 3), true)).toBe(start);
+  });
+});
+
+/**
+ * S4's grace window, which exists ONLY for a result that can land late.
+ *
+ * Every case below is a move that was performed and is exempt - so the old
+ * "arm on shape" rule opened the window for all of them - and handed no file to
+ * anything. Each one bought the NEXT move a free error dialog, reported as
+ * `s4LateErrorCarried` rather than as the S4 failure it was. That is a
+ * false-negative generator in the oracle, so the tests are written as the four
+ * ways a move can take an action and start nothing.
+ */
+describe('errorGraceVerdict', () => {
+  const armed = { arms: true, withheld: null };
+
+  it('arms on a file the entry point actually accepted', () => {
+    expect(errorGraceVerdict({ exempt: true, performed: true, cancel: false, handoff: 'accepted' })).toEqual(armed);
+  });
+
+  it('arms on an ERROR_PRODUCING confirm, which dispatches a real command', () => {
+    // Not a file entry point, so no handoff to read - the dispatch is the work.
+    expect(errorGraceVerdict({ exempt: true, performed: true, cancel: false, handoff: null })).toEqual(armed);
+  });
+
+  it('withholds on a SWALLOWED picker: the chord dispatched and nothing opened', () => {
+    // Ctrl+O with a dialog already up. `useKeyboardShortcuts` returns early for
+    // every non-Escape key, so the picker is never armed and the answer is
+    // never consumed - but the bridge still reports `performed: true`, because
+    // the keydown really was dispatched.
+    expect(errorGraceVerdict({ exempt: true, performed: true, cancel: false, handoff: 'unconsumed' })).toEqual({
+      arms: false,
+      withheld: 'unconsumed',
+    });
+  });
+
+  it('withholds on a GATE-REFUSED route', () => {
+    // `routeOpenedFile` raises the import-gate toast and returns before parsing
+    // whenever a dialog is up or placement is on. The harness sets
+    // `performed = true` unconditionally on a route, so only the handoff can
+    // tell this from an import that started.
+    expect(errorGraceVerdict({ exempt: true, performed: true, cancel: false, handoff: 'gate-refused' })).toEqual({
+      arms: false,
+      withheld: 'gate-refused',
+    });
+  });
+
+  it('withholds on a picker cancel, whatever else is true of it', () => {
+    expect(errorGraceVerdict({ exempt: true, performed: true, cancel: true, handoff: null })).toEqual({
+      arms: false,
+      withheld: 'cancel',
+    });
+  });
+
+  it('withholds on a move that did not happen, and on one that was never exempt', () => {
+    expect(errorGraceVerdict({ exempt: true, performed: false, cancel: false, handoff: 'accepted' }).arms).toBe(false);
+    expect(errorGraceVerdict({ exempt: false, performed: true, cancel: false, handoff: 'accepted' }).arms).toBe(false);
+  });
+
+  it('THE REGRESSION: no handoff short of `accepted` can open the window', () => {
+    // The property rather than the three examples: whatever else is true, a
+    // file entry point that did not land a file does not grant grace.
+    for (const handoff of ['unconsumed', 'gate-refused'] as const) {
+      for (const cancel of [false, true]) {
+        expect(errorGraceVerdict({ exempt: true, performed: true, cancel, handoff }).arms).toBe(false);
+      }
+    }
   });
 });

@@ -102,6 +102,71 @@ function fail(headline: string, detail: string[] = []): never {
 }
 
 /**
+ * What a file ENTRY POINT actually did with the path it was handed.
+ *
+ * `accepted` is the only one where a parse started, and so the only one that can
+ * report a failure LATE. The other two took the move - the click landed, the
+ * chord dispatched - and handed nothing on:
+ *
+ * - `unconsumed`: the picker was never answered. A Ctrl+O the shortcut
+ *   dispatcher swallowed (a dialog was open), or a trigger click that opened no
+ *   picker at all. Read from the app's own consumption record, not inferred.
+ * - `gate-refused`: `routeOpenedFile` refused the file. Both of its refusals
+ *   (`importFlowOwnsScreen(ui)`, and any other `ui.activeDialog`) raise
+ *   `TOAST_KEYS.IMPORT_IN_PROGRESS` and `return` before anything is parsed, so
+ *   between them they are exactly "a dialog was up, or placement was on".
+ */
+export type FileHandoff = 'accepted' | 'unconsumed' | 'gate-refused';
+
+/** Why a move that MIGHT raise an error dialog did not open S4's grace window. */
+export type GraceWithheld = 'not-performed' | 'cancel' | FileHandoff;
+
+export type GraceVerdict = { arms: true; withheld: null } | { arms: false; withheld: GraceWithheld };
+
+/**
+ * Does this move open S4's one-move grace window?
+ *
+ * The window exists for ONE shape: a move hands a file to async parsing, the
+ * settle loop cannot wait for a result that changes no observable state until it
+ * lands, and the error dialog therefore appears on the NEXT move, which is then
+ * blamed for it. So the question is not "could this move raise an error" - that
+ * is the exemption, and it is a different question - but "did this move actually
+ * start something that can report late".
+ *
+ * Answering the first question instead was a false-negative generator, twice
+ * over. A picker CANCEL resolves with no path. A SWALLOWED Ctrl+O, an
+ * unconsumed dialog answer and a GATE-REFUSED route all take the move and hand
+ * nothing over. Each of them still armed a full grace move, and the next move's
+ * genuinely unexpected error dialog was counted as `s4LateErrorCarried` instead
+ * of failing S4.
+ *
+ * `handoff` is null for every move that is not a file entry point; an
+ * ERROR_PRODUCING confirm arms on being performed, because that is a real
+ * command dispatch.
+ *
+ * One acknowledged gap: `unconsumed` is read after a bounded wait, so an app
+ * that answered the picker in the microseconds between that deadline and the
+ * harness withdrawing the answer would be scored `unconsumed` while a parse was
+ * genuinely in flight. That window is the settle cap wide of any real picker
+ * open, and the alternative is the false negative above.
+ */
+export function errorGraceVerdict(input: {
+  /** `mayRaiseError`: may this move kind legitimately raise the error dialog? */
+  exempt: boolean;
+  performed: boolean;
+  /** True for a picker cancel, which resolves with no path and parses nothing. */
+  cancel: boolean;
+  handoff: FileHandoff | null;
+}): GraceVerdict {
+  if (!input.exempt || !input.performed) return { arms: false, withheld: 'not-performed' };
+  if (input.cancel) return { arms: false, withheld: 'cancel' };
+  if (input.handoff !== null && input.handoff !== 'accepted') {
+    return { arms: false, withheld: input.handoff };
+  }
+  return { arms: true, withheld: null };
+}
+
+/**
  * The receipt's summary, parsed.
  *
  * `importReceiptSummaryParts` joins i18n'd fragments with ' - ', so the numbers

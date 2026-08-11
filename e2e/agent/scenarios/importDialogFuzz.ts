@@ -421,11 +421,13 @@ import {
   checkResidue,
   checkRoundtripState,
   checkTempFiles,
+  errorGraceVerdict,
   ImportOracleError,
   leftoverTempNames,
   captureReceipt,
   receiptClaimFrom,
   type CountedProject,
+  type FileHandoff,
   type FlowBounds,
   type FlowShape,
   type ReceiptClaim,
@@ -587,28 +589,16 @@ function mayRaiseError(move: FuzzMove): boolean {
 }
 
 /**
- * Of those, the ones that hand a file to ASYNC work - and so may report it late.
+ * Is this move a picker CANCEL - the one exempt move that hands over no path?
  *
- * The grace window exists for one shape: a move starts a parse or an import,
- * the settle loop cannot wait for something that changes no observable state
- * until it lands, and the error dialog therefore appears on the NEXT move,
- * which then gets blamed for it. That is a property of moves that started
- * async work, and `mayRaiseError` is not that set.
- *
- * A picker cancel is the counterexample and the reason this exists.
- * `answerFileDialogInPage(..., null)` resolves the dialog with NO PATH, so
- * nothing is parsed, nothing is imported, and no result can land late - yet a
- * cancel armed a full grace move, and the next move's genuinely unexpected
- * error dialog was swallowed as `s4LateErrorCarried` instead of failing S4.
- * The oracle was weaker than it was written to be; this is the tightening.
- *
- * A cancel stays EXEMPT for its own step (that is `mayRaiseError`, unchanged):
- * being unable to raise an error and not being blamed for one are two different
- * claims, and only the first is being narrowed here.
+ * The rest of the "did this actually start async work" decision needs the
+ * move's OUTCOME, not just its shape, and lives in `errorGraceVerdict`.
+ * `mayRaiseError` stays what it was: whether a move may legitimately raise the
+ * error dialog on its own step. Being unable to raise one and not being blamed
+ * for one are different claims, and only the first is narrowed by any of this.
  */
-function armsErrorGrace(move: FuzzMove): boolean {
-  if (move.kind === 'cancelDialog') return false;
-  return mayRaiseError(move);
+function isPickerCancel(move: FuzzMove): boolean {
+  return move.kind === 'cancelDialog';
 }
 
 /**
@@ -1122,6 +1112,15 @@ export const importDialogFuzz: Scenario = {
       placementAtDispatch: boolean | null;
       /** `dataTableFullScreen` at the same instant. `key:` chords only. */
       fullscreenAtDispatch: boolean | null;
+      /**
+       * What a file entry point did with the path. Null for every other move.
+       *
+       * The distinction S4's grace window turns on - see `errorGraceVerdict`.
+       * A move can be `performed` and still have handed nothing over: a chord
+       * the dispatcher swallowed, a trigger that opened no picker, a route the
+       * import gate refused.
+       */
+      handoff: FileHandoff | null;
     }
 
     /** Run one move, record it if it happened, and report the screen after. */
@@ -1133,6 +1132,7 @@ export const importDialogFuzz: Scenario = {
       let dialogAtDispatch: string | null = null;
       let placementAtDispatch: boolean | null = null;
       let fullscreenAtDispatch: boolean | null = null;
+      let handoff: FileHandoff | null = null;
       let digest: ImportScreenDigest;
 
       if (move.kind === 'ui') {
@@ -1188,6 +1188,15 @@ export const importDialogFuzz: Scenario = {
             performed = true;
             dialogAtDispatch = routed.dialogAtDispatch;
             placementAtDispatch = routed.placementAtDispatch;
+            // `routeOpenedFile` returns void, so acceptance is read off the two
+            // values its guards consulted on the same tick. Those guards are
+            // `importFlowOwnsScreen(ui)` (an import-flow dialog, or placement)
+            // and `ui.activeDialog && !swapConfirmed` (any other dialog, and the
+            // E2E hook never passes opts) - between them exactly "a dialog was
+            // up, or placement was on". Both raise the import-gate toast and
+            // return before anything is parsed.
+            handoff =
+              routed.dialogAtDispatch !== null || routed.placementAtDispatch ? 'gate-refused' : 'accepted';
             if (record) recorder.record({ kind: 'route', rel, label: move.label });
             digest = await observeScreen(ctx);
           } else {
@@ -1195,6 +1204,7 @@ export const importDialogFuzz: Scenario = {
             performed = answered.performed;
             skip = answered.reason;
             digest = answered.digest;
+            handoff = answered.consumed ? 'accepted' : 'unconsumed';
             if (performed && !answered.consumed) ctx.metric('dialogAnswerUnconsumed');
             if (record && performed) {
               recorder.record({ kind: 'fileDialog', trigger: live.trigger, dialog: 'open', rel, label: move.label });
@@ -1216,6 +1226,7 @@ export const importDialogFuzz: Scenario = {
           // A chord the dispatcher swallowed (it returns early whenever a
           // dialog is open) leaves the answer unconsumed. That is the app's
           // documented gate, so it is counted rather than asserted.
+          handoff = answered.consumed ? 'accepted' : 'unconsumed';
           ctx.metric(answered.consumed ? 'keyPickerConsumed' : 'keyPickerSwallowed');
           if (record && performed) {
             recorder.record({
@@ -1293,6 +1304,7 @@ export const importDialogFuzz: Scenario = {
         dialogAtDispatch,
         placementAtDispatch,
         fullscreenAtDispatch,
+        handoff,
       };
     };
 
@@ -1325,6 +1337,7 @@ export const importDialogFuzz: Scenario = {
       digest: ImportScreenDigest,
       screenBefore: ScreenId,
       performed: boolean,
+      handoff: FileHandoff | null,
     ): Promise<void> => {
       if (digest.boundary) {
         fail('S2 ERROR BOUNDARY: the React tree crashed', `  after: ${move.label}`);
@@ -1371,12 +1384,24 @@ export const importDialogFuzz: Scenario = {
         }
       }
       // Counted AFTER the check, so an exempt move's own error does not spend
-      // the grace it is granting. Armed on the NARROWER set - see
-      // `armsErrorGrace`: being exempt is not the same as having started
-      // something that can report late, and a picker cancel is neither.
-      const armsNow = armsErrorGrace(move) && performed;
-      if (armsNow) ctx.metric('s4GraceArmed');
-      errorGrace = armsNow ? ERROR_GRACE_MOVES : Math.max(0, errorGrace - 1);
+      // the grace it is granting. Armed on OUTCOME, not on move shape - see
+      // `errorGraceVerdict`: being exempt is not the same as having started
+      // something that can report late, and a cancel, a swallowed chord, an
+      // unconsumed picker and a gate-refused route are none of them.
+      //
+      // Both sides counted, so a campaign can see the split rather than infer
+      // it from an absence: a `s4GraceWithheld:*` that dominates would mean the
+      // entry points are mostly not landing, which is worth knowing on its own.
+      const graceVerdict = errorGraceVerdict({
+        exempt: exemptNow,
+        performed,
+        cancel: isPickerCancel(move),
+        handoff,
+      });
+      if (exemptNow && performed) {
+        ctx.metric(graceVerdict.arms ? 's4GraceArmed' : `s4GraceWithheld:${graceVerdict.withheld}`);
+      }
+      errorGrace = graceVerdict.arms ? ERROR_GRACE_MOVES : Math.max(0, errorGrace - 1);
       if (digest.screen !== 'idle' && !WEDGE_EXEMPT_SCREENS.has(digest.screen) && actionableCount(digest) === 0) {
         fail(
           `S5 WEDGE on "${digest.screen}": no actionable control anywhere in the inventory`,
@@ -1480,7 +1505,7 @@ export const importDialogFuzz: Scenario = {
         const screenBefore = digest.screen;
         const outcome = await execute(move, true);
         digest = outcome.digest;
-        await stepOracles(move, digest, screenBefore, outcome.performed);
+        await stepOracles(move, digest, screenBefore, outcome.performed, outcome.handoff);
       }
       if (isEscaped(digest.screen, digest.placement)) return digest;
       fail(
@@ -2039,7 +2064,7 @@ export const importDialogFuzz: Scenario = {
         const afterMove = async (move: FuzzMove, outcome: Executed): Promise<void> => {
           const screenBefore = digest.screen;
           digest = outcome.digest;
-          await stepOracles(move, digest, screenBefore, outcome.performed);
+          await stepOracles(move, digest, screenBefore, outcome.performed, outcome.handoff);
           if (move.kind === 'undo' || move.kind === 'redo' || move.kind === 'save') historyTouched = true;
           if (move.kind === 'closeProject') historyTouched = true;
           // The export modal is not an import screen, so opening it must not
