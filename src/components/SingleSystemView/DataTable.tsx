@@ -1868,7 +1868,7 @@ export default function DataTable({ sections }: DataTableProps) {
               </ul>
             </>
           )}
-          {(connMenu.station.closures_with?.length ?? 0) > 0 && (
+          {connMenu.station.closures_with && connMenu.station.closures_with.length > 0 && (
             <>
               <div className="px-1 pb-1 text-text-secondary">{t('dataTable.connMenu.closures')}</div>
               <ul className="space-y-0.5">

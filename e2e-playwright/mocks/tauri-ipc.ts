@@ -1104,7 +1104,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               is_zero_datum: boolean;
               gps_coordinates: { latitude: number; longitude: number; depth_reference: number } | null;
               merged_with: Array<{ section_id: number; station_index: number }>;
-              closures_with: Array<{
+              // Optional, exactly like the generated `Station` type: the backend
+              // omits `closures_with` when empty (#441), so the mock must too -
+              // a present-but-empty array is a wire shape the app never sees.
+              closures_with?: Array<{
                 closure_id: bigint;
                 station_ref: { section_id: number; station_index: number };
                 via_station: { section_id: number; station_index: number } | null;
@@ -1210,7 +1213,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   is_zero_datum: !!loadDatum,
                   gps_coordinates: loadDatum ? loadDatum.gps : null,
                   merged_with: mergedWith,
-                  closures_with: closuresWith,
+                  ...(closuresWith.length > 0 ? { closures_with: closuresWith } : {}),
                 });
               }
             }
@@ -1592,7 +1595,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               is_zero_datum: boolean;
               gps_coordinates: { latitude: number; longitude: number; depth_reference: number } | null;
               merged_with: Array<{ section_id: number; station_index: number }>;
-              closures_with: Array<{
+              // Optional, exactly like the generated `Station` type: the backend
+              // omits `closures_with` when empty (#441), so the mock must too -
+              // a present-but-empty array is a wire shape the app never sees.
+              closures_with?: Array<{
                 closure_id: bigint;
                 station_ref: { section_id: number; station_index: number };
                 via_station: { section_id: number; station_index: number } | null;
@@ -1691,7 +1697,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     is_zero_datum: !!matchingDatum,
                     gps_coordinates: matchingDatum ? matchingDatum.gps : null,
                     merged_with: mergedWith,
-                    closures_with: closuresWith,
+                    ...(closuresWith.length > 0 ? { closures_with: closuresWith } : {}),
                     ...(storedComment !== undefined ? { comment: storedComment } : {}),
                   });
                 }

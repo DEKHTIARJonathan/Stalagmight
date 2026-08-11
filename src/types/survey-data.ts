@@ -463,13 +463,14 @@ export function surveyDataFromLegacy(
     data.stationCoords[i * 3 + 2] = s.coordinates.z;
     data.stationFlags[i] = s.is_zero_datum ? STATION_FLAG_IS_ZERO_DATUM : 0;
     if (s.gps_coordinates) data.stationGps.set(i, s.gps_coordinates);
-    // Rust's `Station` serializer skips `merged_with` / `closures_with`
-    // when the vec is empty (see #[serde(skip_serializing_if =
-    // "Vec::is_empty")] on src-tauri/src/models/station.rs), so the
-    // JSON IPC path (`get_project_state`) hands back stations with
-    // those fields *missing* - not empty arrays.  Treat undefined as
-    // empty.  The binary IPC path always sets them via the sparse
-    // pair maps so this only matters for the legacy JSON path.
+    // Rust's `Station` serializer skips `closures_with` when it is empty
+    // (`skip_serializing_if = "Option::is_none"` in
+    // src-tauri/crates/models/src/station.rs), so the JSON IPC path
+    // (`get_project_state`) hands back stations with that field *missing* - not
+    // an empty array. The generated type says so too (`closures_with?:`, #441).
+    // `merged_with` is NOT skipped and is always present; the guard below is
+    // kept anyway because it costs nothing and the two read alike. The binary
+    // IPC path sets both via the sparse pair maps.
     const mergedWith = s.merged_with;
     if (mergedWith && mergedWith.length > 0) {
       data.stationMergedWith.set(i, mergedWith);

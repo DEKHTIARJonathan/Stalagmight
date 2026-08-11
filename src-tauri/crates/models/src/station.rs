@@ -330,9 +330,24 @@ pub struct Station {
     pub gps_coordinates: Option<GpsCoordinates>,
     /// Other stations merged with this one
     pub merged_with: Vec<StationRef>,
-    /// Loop closures involving this station
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub closures_with: Vec<ClosureRef>,
+    /// Loop closures involving this station; `None` when there are none.
+    ///
+    /// `Option<Vec<_>>` rather than `Vec<_>` for the sake of the GENERATED TYPE
+    /// (#441). ts-rs 7 emits `field?:` only for an `Option<T>` - `optional` is
+    /// rejected on any other type - so a `skip_serializing_if` `Vec` would
+    /// generate as a required `Array<ClosureRef>` that the wire does not always
+    /// carry, and `tsc` would be blind to every bare `station.closures_with.map`.
+    ///
+    /// The skip stays (unlike [`crate::CommandResult::section_ids`], which drops
+    /// it) because this one is paid PER STATION: `get_project_state` re-serializes
+    /// every station as JSON on each refresh, and that payload is already ~25 MB
+    /// for the 89k-station projects the binary loader exists for. Always sending
+    /// an empty array there is not free; sending it once per command result is.
+    ///
+    /// `None` and `Some(vec![])` mean the same thing; producers go through
+    /// [`Station::closures_mut`] so the empty case stays `None` and off the wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closures_with: Option<Vec<ClosureRef>>,
     /// User comment for this station
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
@@ -346,7 +361,7 @@ impl Station {
             is_zero_datum: false,
             gps_coordinates: None,
             merged_with: Vec::new(),
-            closures_with: Vec::new(),
+            closures_with: None,
             comment: None,
         }
     }
@@ -358,9 +373,22 @@ impl Station {
             is_zero_datum: false,
             gps_coordinates: None,
             merged_with: Vec::new(),
-            closures_with: Vec::new(),
+            closures_with: None,
             comment: None,
         }
+    }
+
+    /// The loop closures involving this station; empty when the field is absent.
+    /// Read through this rather than matching the `Option`: `None` and an empty
+    /// `Vec` are the same fact (see the field's doc comment).
+    pub fn closures(&self) -> &[ClosureRef] {
+        self.closures_with.as_deref().unwrap_or_default()
+    }
+
+    /// The closure list for writing, created on first use. Going through this
+    /// keeps the "`None` when empty" invariant that keeps the key off the wire.
+    pub fn closures_mut(&mut self) -> &mut Vec<ClosureRef> {
+        self.closures_with.get_or_insert_with(Vec::new)
     }
 }
 
@@ -458,6 +486,51 @@ mod tests {
     fn station_ref_display_formats_as_section_and_index() {
         let station = StationRef::new(2, 3);
         assert_eq!(station.to_string(), "2:3");
+    }
+
+    /// #441: a field the wire can omit must be DECLARED omittable.
+    ///
+    /// ts-rs 7 emits `foo?:` only for an `Option<T>`, so `closures_with` has to be
+    /// `Option<Vec<_>>` to keep its `skip_serializing_if` (worth keeping: the skip
+    /// is paid per station on every `get_project_state`). `merged_with` is the
+    /// control - same element shape, no skip, so it must stay required.
+    ///
+    /// Turns red if `closures_with` goes back to a plain `Vec` (declaration loses
+    /// the `?` while the key still vanishes) or if the skip is dropped without
+    /// retyping (the empty station starts carrying `"closures_with": []`).
+    #[test]
+    fn closures_with_is_omitted_when_empty_and_declared_optional() {
+        use ts_rs::TS;
+
+        let empty = serde_json::to_value(Station::new(StationRef::new(1, 0))).unwrap();
+        assert!(
+            !empty.as_object().unwrap().contains_key("closures_with"),
+            "a station with no closures must omit the key, not send []: {empty}"
+        );
+
+        let mut linked = Station::new(StationRef::new(1, 0));
+        linked.closures_mut().push(ClosureRef {
+            closure_id: 7,
+            station_ref: StationRef::new(2, 0),
+            via_station: None,
+            is_transitive: false,
+        });
+        let linked = serde_json::to_value(linked).unwrap();
+        assert!(
+            linked.as_object().unwrap().contains_key("closures_with"),
+            "a station WITH closures must carry them: {linked}"
+        );
+
+        let decl = Station::decl();
+        assert!(
+            decl.contains("closures_with?:"),
+            "closures_with leaves the wire when empty, so its declaration must carry \
+             the `?`: {decl}"
+        );
+        assert!(
+            decl.contains("merged_with: Array<StationRef>"),
+            "merged_with is always serialized, so it must stay required: {decl}"
+        );
     }
 
     #[test]

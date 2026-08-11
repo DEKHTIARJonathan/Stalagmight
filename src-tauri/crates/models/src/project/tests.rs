@@ -3968,7 +3968,7 @@ fn transitive_closure_computation_correct() {
         .find(|s| s.station_ref == StationRef::new(a, 1))
         .unwrap();
     let a1_direct = a1
-        .closures_with
+        .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(c, 0) && !cr.is_transitive);
     assert!(a1_direct.is_some(), "A.1 should have direct closure to C.0");
@@ -3981,7 +3981,7 @@ fn transitive_closure_computation_correct() {
         .find(|s| s.station_ref == StationRef::new(b, 0))
         .unwrap();
     let b0_transitive = b0
-        .closures_with
+        .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(c, 0) && cr.is_transitive);
     assert!(
@@ -3999,14 +3999,14 @@ fn transitive_closure_computation_correct() {
         .find(|s| s.station_ref == StationRef::new(c, 0))
         .unwrap();
     let c0_direct = c0
-        .closures_with
+        .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(a, 1) && !cr.is_transitive);
     assert!(c0_direct.is_some(), "C.0 should have direct closure to A.1");
 
     // C.0: transitive closure to B.0 via A.1 (B.0 is merged with A.1)
     let c0_transitive = c0
-        .closures_with
+        .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(b, 0) && cr.is_transitive);
     assert!(
@@ -4092,23 +4092,23 @@ fn transitive_closure_both_endpoints_merged() {
         .find(|s| s.station_ref == StationRef::new(a, 1))
         .unwrap();
     assert!(
-        a1.closures_with
+        a1.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(c, 0)
                 && !cr.is_transitive
                 && cr.closure_id == closure_id),
         "A.1 should have direct closure to C.0, got: {:?}",
-        a1.closures_with
+        a1.closures()
     );
     // A.1: transitive closure to B.1 (via C.0, since B.1 is in C.0's group)
     assert!(
-        a1.closures_with
+        a1.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(b, 1)
                 && cr.is_transitive
                 && cr.via_station == Some(StationRef::new(c, 0))),
         "A.1 should have transitive closure to B.1 (via C.0), got: {:?}",
-        a1.closures_with
+        a1.closures()
     );
 
     // B.0: transitive closure to C.0 (via A.1, since B.0 is in A.1's group)
@@ -4117,23 +4117,23 @@ fn transitive_closure_both_endpoints_merged() {
         .find(|s| s.station_ref == StationRef::new(b, 0))
         .unwrap();
     assert!(
-        b0.closures_with
+        b0.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(c, 0)
                 && cr.is_transitive
                 && cr.via_station == Some(StationRef::new(a, 1))),
         "B.0 should have transitive closure to C.0 (via A.1), got: {:?}",
-        b0.closures_with
+        b0.closures()
     );
     // B.0: transitive closure to B.1 (via C.0)
     assert!(
-        b0.closures_with
+        b0.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(b, 1)
                 && cr.is_transitive
                 && cr.via_station == Some(StationRef::new(c, 0))),
         "B.0 should have transitive closure to B.1 (via C.0), got: {:?}",
-        b0.closures_with
+        b0.closures()
     );
 
     // C.0: direct closure to A.1
@@ -4142,23 +4142,23 @@ fn transitive_closure_both_endpoints_merged() {
         .find(|s| s.station_ref == StationRef::new(c, 0))
         .unwrap();
     assert!(
-        c0.closures_with
+        c0.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(a, 1)
                 && !cr.is_transitive
                 && cr.closure_id == closure_id),
         "C.0 should have direct closure to A.1, got: {:?}",
-        c0.closures_with
+        c0.closures()
     );
     // C.0: transitive closure to B.0 (via A.1)
     assert!(
-        c0.closures_with
+        c0.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(b, 0)
                 && cr.is_transitive
                 && cr.via_station == Some(StationRef::new(a, 1))),
         "C.0 should have transitive closure to B.0 (via A.1), got: {:?}",
-        c0.closures_with
+        c0.closures()
     );
 
     // B.1: transitive closure to A.1 (via C.0, since B.1 is in C.0's group)
@@ -4167,23 +4167,23 @@ fn transitive_closure_both_endpoints_merged() {
         .find(|s| s.station_ref == StationRef::new(b, 1))
         .unwrap();
     assert!(
-        b1.closures_with
+        b1.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(a, 1)
                 && cr.is_transitive
                 && cr.via_station == Some(StationRef::new(c, 0))),
         "B.1 should have transitive closure to A.1 (via C.0), got: {:?}",
-        b1.closures_with
+        b1.closures()
     );
     // B.1: transitive closure to B.0 (via A.1)
     assert!(
-        b1.closures_with
+        b1.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(b, 0)
                 && cr.is_transitive
                 && cr.via_station == Some(StationRef::new(a, 1))),
         "B.1 should have transitive closure to B.0 (via A.1), got: {:?}",
-        b1.closures_with
+        b1.closures()
     );
 
     // A.0 and C.1 should have NO closures (they're not closure endpoints or merged with one)
@@ -4192,9 +4192,9 @@ fn transitive_closure_both_endpoints_merged() {
         .find(|s| s.station_ref == StationRef::new(a, 0))
         .unwrap();
     assert!(
-        a0.closures_with.is_empty(),
+        a0.closures().is_empty(),
         "A.0 should have no closures, got: {:?}",
-        a0.closures_with
+        a0.closures()
     );
 
     let c1 = stations
@@ -4202,9 +4202,9 @@ fn transitive_closure_both_endpoints_merged() {
         .find(|s| s.station_ref == StationRef::new(c, 1))
         .unwrap();
     assert!(
-        c1.closures_with.is_empty(),
+        c1.closures().is_empty(),
         "C.1 should have no closures, got: {:?}",
-        c1.closures_with
+        c1.closures()
     );
 }
 
@@ -4268,16 +4268,16 @@ fn transitive_closure_through_create_loop_closure_api() {
         .find(|s| s.station_ref == StationRef::new(a, 0))
         .unwrap();
     assert!(
-        a0.closures_with
+        a0.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(c, 1)
                 && !cr.is_transitive
                 && cr.closure_id == closure.id),
         "A.0 should have direct closure to C.1, got: {:?}",
-        a0.closures_with
+        a0.closures()
     );
     assert_eq!(
-        a0.closures_with.len(),
+        a0.closures().len(),
         1,
         "A.0 should have exactly 1 closure ref (no transitive since A.0 not merged)"
     );
@@ -4288,16 +4288,16 @@ fn transitive_closure_through_create_loop_closure_api() {
         .find(|s| s.station_ref == StationRef::new(c, 1))
         .unwrap();
     assert!(
-        c1.closures_with
+        c1.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(a, 0)
                 && !cr.is_transitive
                 && cr.closure_id == closure.id),
         "C.1 should have direct closure to A.0, got: {:?}",
-        c1.closures_with
+        c1.closures()
     );
     assert_eq!(
-        c1.closures_with.len(),
+        c1.closures().len(),
         1,
         "C.1 should have exactly 1 closure ref"
     );
@@ -4312,10 +4312,10 @@ fn transitive_closure_through_create_loop_closure_api() {
             .find(|s| s.station_ref == StationRef::new(section_id, station_index))
             .unwrap();
         assert!(
-            station.closures_with.is_empty(),
+            station.closures().is_empty(),
             "{} should have no closures (endpoint not in its merge group), got: {:?}",
             label,
-            station.closures_with
+            station.closures()
         );
     }
 }
@@ -4396,22 +4396,22 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
         .find(|s| s.station_ref == StationRef::new(b, 1))
         .unwrap();
     let b1_to_a0 = b1
-        .closures_with
+        .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(a, 0) && !cr.is_transitive);
     assert!(
         b1_to_a0.is_some(),
         "B.1 should have direct closure to A.0, got: {:?}",
-        b1.closures_with
+        b1.closures()
     );
     let b1_to_c1 = b1
-        .closures_with
+        .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(c, 1) && !cr.is_transitive);
     assert!(
         b1_to_c1.is_some(),
         "B.1 should have direct closure to C.1, got: {:?}",
-        b1.closures_with
+        b1.closures()
     );
 
     // A.0: should have direct closure to B.1 AND transitive closure to C.1 (via B.1)
@@ -4420,22 +4420,22 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
         .find(|s| s.station_ref == StationRef::new(a, 0))
         .unwrap();
     let a0_direct = a0
-        .closures_with
+        .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(b, 1) && !cr.is_transitive);
     assert!(
         a0_direct.is_some(),
         "A.0 should have direct closure to B.1, got: {:?}",
-        a0.closures_with
+        a0.closures()
     );
     let a0_transitive = a0
-        .closures_with
+        .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(c, 1) && cr.is_transitive);
     assert!(
         a0_transitive.is_some(),
         "A.0 should have transitive closure to C.1 (via B.1), got: {:?}",
-        a0.closures_with
+        a0.closures()
     );
     assert_eq!(
         a0_transitive.unwrap().via_station,
@@ -4454,22 +4454,22 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
         .find(|s| s.station_ref == StationRef::new(c, 1))
         .unwrap();
     let c1_direct = c1
-        .closures_with
+        .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(b, 1) && !cr.is_transitive);
     assert!(
         c1_direct.is_some(),
         "C.1 should have direct closure to B.1, got: {:?}",
-        c1.closures_with
+        c1.closures()
     );
     let c1_transitive = c1
-        .closures_with
+        .closures()
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(a, 0) && cr.is_transitive);
     assert!(
         c1_transitive.is_some(),
         "C.1 should have transitive closure to A.0 (via B.1), got: {:?}",
-        c1.closures_with
+        c1.closures()
     );
     assert_eq!(
         c1_transitive.unwrap().via_station,
@@ -4572,7 +4572,7 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
         .find(|s| s.station_ref == StationRef::new(sec_main, 0))
         .unwrap();
     let x_directs: Vec<_> = x
-        .closures_with
+        .closures()
         .iter()
         .filter(|cr| !cr.is_transitive)
         .collect();
@@ -4580,7 +4580,7 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
         x_directs.len(),
         3,
         "X should have 3 direct closures, got: {:?}",
-        x.closures_with
+        x.closures()
     );
 
     // A.1 should have: direct to X, transitive to B.1 (via X), transitive to C.1 (via X)
@@ -4589,30 +4589,30 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
         .find(|s| s.station_ref == StationRef::new(sec_a, 1))
         .unwrap();
     assert!(
-        a1.closures_with
+        a1.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(sec_main, 0) && !cr.is_transitive),
         "A.1 direct to X"
     );
     assert!(
-        a1.closures_with
+        a1.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(sec_b, 1)
                 && cr.is_transitive
                 && cr.via_station == Some(StationRef::new(sec_main, 0))
                 && cr.closure_id == cl_b.id),
         "A.1 transitive to B.1 via X, got: {:?}",
-        a1.closures_with
+        a1.closures()
     );
     assert!(
-        a1.closures_with
+        a1.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(sec_c, 1)
                 && cr.is_transitive
                 && cr.via_station == Some(StationRef::new(sec_main, 0))
                 && cr.closure_id == cl_c.id),
         "A.1 transitive to C.1 via X, got: {:?}",
-        a1.closures_with
+        a1.closures()
     );
 
     // B.1 should have: direct to X, transitive to A.1 (via X), transitive to C.1 (via X)
@@ -4621,22 +4621,22 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
         .find(|s| s.station_ref == StationRef::new(sec_b, 1))
         .unwrap();
     assert!(
-        b1.closures_with
+        b1.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(sec_a, 1)
                 && cr.is_transitive
                 && cr.closure_id == cl_a.id),
         "B.1 transitive to A.1 via X, got: {:?}",
-        b1.closures_with
+        b1.closures()
     );
     assert!(
-        b1.closures_with
+        b1.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(sec_c, 1)
                 && cr.is_transitive
                 && cr.closure_id == cl_c.id),
         "B.1 transitive to C.1 via X, got: {:?}",
-        b1.closures_with
+        b1.closures()
     );
 
     // C.1 should have: direct to X, transitive to A.1 (via X), transitive to B.1 (via X)
@@ -4645,22 +4645,22 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
         .find(|s| s.station_ref == StationRef::new(sec_c, 1))
         .unwrap();
     assert!(
-        c1.closures_with
+        c1.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(sec_a, 1)
                 && cr.is_transitive
                 && cr.closure_id == cl_a.id),
         "C.1 transitive to A.1 via X, got: {:?}",
-        c1.closures_with
+        c1.closures()
     );
     assert!(
-        c1.closures_with
+        c1.closures()
             .iter()
             .any(|cr| cr.station_ref == StationRef::new(sec_b, 1)
                 && cr.is_transitive
                 && cr.closure_id == cl_b.id),
         "C.1 transitive to B.1 via X, got: {:?}",
-        c1.closures_with
+        c1.closures()
     );
 }
 
