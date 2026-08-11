@@ -585,6 +585,14 @@ fn buffered_sort_key(path: &Path) -> (u128, u32) {
 /// the directory itself kept growing.
 #[cfg(feature = "telemetry")]
 fn prune_buffer_dir(dir: &Path) {
+    // Self-safe against a symlinked buffer dir rather than trusting the caller:
+    // this function DELETES, so a symlinked `dir` would evict `.json` files
+    // from the target - unrelated user data. `buffer_payload_at` also refuses
+    // one before writing, but the guard belongs here too so the deletion path
+    // is safe on its own (#520 review).
+    if buffer_dir_is_symlink(dir) {
+        return;
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -1211,6 +1219,20 @@ mod tests {
         // No payload of ours was written into the target either.
         let count = fs::read_dir(&target).expect("read target").count();
         assert_eq!(count, 1, "only the pre-existing file remains");
+
+        // And the prune itself is self-safe: filling the target past the cap
+        // and pruning through the symlink must delete nothing (Codex's exact
+        // scenario - foreign names would sort oldest and be evicted).
+        for millis in 100..(100 + MAX_BUFFERED_FILES as u128 + 5) {
+            fs::write(target.join(format!("{millis}-0.json")), "{}").expect("target payload");
+        }
+        let before = fs::read_dir(&target).expect("read target").count();
+        prune_buffer_dir(&link);
+        let after = fs::read_dir(&target).expect("read target").count();
+        assert_eq!(
+            before, after,
+            "pruning through a symlinked buffer dir must not delete the target's files"
+        );
     }
 
     /// The read-back size guard is on the OPEN file (fstat), so an oversized
