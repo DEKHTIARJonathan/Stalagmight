@@ -36,10 +36,15 @@ export interface StartResult {
   profileDir: string;
   buildAction: 'skipped' | 'built' | 'fresh';
   /**
-   * Which source tree built the binary being driven, per its E2E build stamp;
-   * null when there is no stamp (`build: "skip"` over a foreign binary). The
-   * cargo target dir is shared across worktrees, so "which tree is this" is not
-   * answerable from the session's own cwd - see issue #488.
+   * Which source tree built the binary being driven, per its E2E build stamp.
+   * The cargo target dir is shared across worktrees, so "which tree is this" is
+   * not answerable from the session's own cwd - see issue #488.
+   *
+   * Null means NO STAMP VOUCHES FOR THE BINARY ON DISK, which is more than
+   * "somebody else built it": no stamp at all, a v1/v2/corrupt one, a stamp our
+   * own build failed to write, or a stamp whose recorded binary mtime no longer
+   * matches the file (`./scripts/dev.sh` relinked it in place). Null is "cannot
+   * say", never "not this tree".
    */
   builtFrom: { repoRoot: string; gitHead: string } | null;
   /**

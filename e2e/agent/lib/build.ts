@@ -25,21 +25,26 @@ import { fileURLToPath } from 'url';
 import { agentBuildMode, binaryPathFor, cargoTargetDir, type AgentBuildMode } from '../../lib/env';
 import { isDarwinTarget } from './platform';
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-
 /**
- * `repoRoot` with symlinks resolved, which is the form the stamp records and
- * compares. Two paths naming the same tree (a symlinked checkout, /tmp vs
- * /private/tmp on darwin) must not read as two different trees, or every start
- * through the other name would rebuild forever.
+ * A path as the filesystem canonically names it, so ONE checkout reached by two
+ * names (a symlinked home, `/tmp` -> `/private/tmp` on macOS) stays one checkout
+ * and does not read as somebody else's worktree. Falls back to the resolved path
+ * when the target cannot be resolved, which is the pre-canonical behavior.
  */
-function realRepoRoot(): string {
+function canonical(dir: string): string {
   try {
-    return fs.realpathSync(repoRoot);
+    return fs.realpathSync(dir);
   } catch {
-    return repoRoot;
+    return dir;
   }
 }
+
+/**
+ * This checkout, canonical ONCE at module load. One const rather than a call at
+ * each site: the stamp writer and the freshness check must record and compare
+ * the same string by construction, not because two call sites happen to agree.
+ */
+const repoRoot = canonical(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..'));
 
 /**
  * Short HEAD of the tree at `root`, or 'unknown'. Always `git -C <root>`, never
@@ -396,17 +401,41 @@ export interface Freshness {
   reasons: string[];
   binaryPath: string;
   /**
-   * Which tree built the binary, per its stamp; null when there is no valid
-   * stamp. Surfaced so a caller can report builder identity without re-reading
+   * Which tree built the binary, per its stamp; null when no stamp vouches for
+   * it. Surfaced so a caller can report builder identity without re-reading
    * (and re-validating) the stamp itself.
    */
-  builtFrom: { repoRoot: string; gitHead: string } | null;
+  builtFrom: BuiltFrom;
 }
 
-/** Builder identity recorded in `mode`'s stamp, or null when there is none. */
-export function builtFromFor(mode: AgentBuildMode): { repoRoot: string; gitHead: string } | null {
-  const stamp = readBuildStamp(buildStampPathFor(mode));
-  return stamp ? { repoRoot: stamp.repoRoot, gitHead: stamp.gitHead } : null;
+/** Builder identity, or null when no valid stamp vouches for this binary. */
+export type BuiltFrom = { repoRoot: string; gitHead: string } | null;
+
+/**
+ * Who built the binary for `mode`, per the stamp beside it.
+ *
+ * Null when NO STAMP VOUCHES FOR THE BINARY THAT IS THERE - which covers a
+ * missing stamp, a v1/v2/corrupt one, a stamp our own build failed to write,
+ * and the case this guard exists for: a stamp whose `binaryMtimeMs` no longer
+ * matches the file. `./scripts/dev.sh` or a plain `pnpm tauri build` relinks the
+ * binary in place and leaves the old stamp sitting next to it; the stamper did
+ * not build THAT binary, so answering with its identity would be a confident
+ * lie. Callers are told to trust this on the `build: "skip"` path, where it is
+ * the only thing standing between them and a foreign binary, so it says nothing
+ * rather than something wrong.
+ *
+ * `stampFile`/`binaryFile` default to the real paths and exist so the guard is
+ * testable against a temp pair, the same convention `readBuildStamp` follows.
+ */
+export function builtFromFor(
+  mode: AgentBuildMode,
+  stampFile: string = buildStampPathFor(mode),
+  binaryFile: string = binaryPathFor(mode),
+): BuiltFrom {
+  const stamp = readBuildStamp(stampFile);
+  if (!stamp) return null;
+  if (stamp.binaryMtimeMs !== mtimeOf(binaryFile)) return null;
+  return { repoRoot: stamp.repoRoot, gitHead: stamp.gitHead };
 }
 
 export interface FreshnessOptions {
@@ -436,9 +465,18 @@ export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
   }
 
   // Read ONCE: the staleness decision and the reported builder identity must be
-  // the same stamp, not two reads that a concurrent build could split.
+  // the same stamp, not two reads that a concurrent build could split. Callers
+  // are expected to take `builtFrom` from here on the fresh path rather than ask
+  // again (see session.ts) - that is what makes this single read hold.
   const stamp = readBuildStamp(buildStampPathFor(mode));
-  const builtFrom = stamp ? { repoRoot: stamp.repoRoot, gitHead: stamp.gitHead } : null;
+  // Same rule as `builtFromFor`: a stamp only speaks for the binary whose mtime
+  // it recorded. On the fresh path the two are equal by construction (a
+  // mismatch is one of the reasons below); saying null otherwise keeps one
+  // meaning for `builtFrom` across both entry points.
+  const builtFrom: BuiltFrom =
+    stamp && stamp.binaryMtimeMs === binMtime
+      ? { repoRoot: stamp.repoRoot, gitHead: stamp.gitHead }
+      : null;
   reasons.push(
     ...stampStaleReasons(stamp, {
       viteE2E: requireE2E,
@@ -447,7 +485,7 @@ export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
       distIndexHash: hashDistIndex(),
       // Production always knows which tree it is, and a shared CARGO_TARGET_DIR
       // means another worktree's binary must not pass as fresh.
-      repoRoot: realRepoRoot(),
+      repoRoot,
       mode,
       features: featureKey(mode),
     }),
@@ -598,7 +636,6 @@ function writeBuildStamp(
 ): void {
   const now = Date.now();
   const stampPath = buildStampPathFor(info.mode);
-  const root = realRepoRoot();
   const stamp: E2EBuildStamp = {
     v: 3,
     mode: info.mode,
@@ -608,8 +645,8 @@ function writeBuildStamp(
     viteMode: info.viteMode,
     binaryMtimeMs: mtimeOf(binaryPathFor(info.mode)),
     distIndexHash: hashDistIndex(),
-    repoRoot: root,
-    gitHead: gitHeadFor(root),
+    repoRoot,
+    gitHead: gitHeadFor(repoRoot),
     builtAtMs: now,
     builtAtIso: new Date(now).toISOString(),
   };

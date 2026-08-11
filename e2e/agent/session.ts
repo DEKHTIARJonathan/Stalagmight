@@ -17,7 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { agentBuildMode, binaryPathFor } from '../lib/env';
 import { checkDisplayAvailable, startXvfb, type XvfbHandle } from '../lib/display';
-import { builtFromFor, checkBuildFreshness, buildApp } from './lib/build';
+import { builtFromFor, checkBuildFreshness, buildApp, type BuiltFrom } from './lib/build';
 import { DEFAULT_XVFB_DISPLAYS, parseDisplayPool } from './lib/displayPool';
 import { findFreePort, isPidAlive, recordPid, reapPidsFromFile, waitForPortListening } from './lib/procs';
 import { SessionCore, gitHead, safeMtime } from './lib/sessionCore';
@@ -85,6 +85,12 @@ export class AppSession extends SessionCore {
     const buildMode = agentBuildMode();
     let buildAction: StartResult['buildAction'] = 'skipped';
     let rebuildReasons: string[] | undefined;
+    // Who built the binary this session will drive. Taken from the freshness
+    // result on the `fresh` path - the stamp it already read is the same stamp,
+    // and asking again would be the second read that comment forbids. The other
+    // two paths have no such stamp in hand: a build has just REWRITTEN it, and
+    // `build: "skip"` never computed freshness at all.
+    let builtFrom: BuiltFrom = null;
     if (build !== 'skip') {
       const freshness = checkBuildFreshness({ mode: buildMode });
       if (build === 'force' || !freshness.fresh) {
@@ -99,14 +105,14 @@ export class AppSession extends SessionCore {
         }
         buildApp((line) => process.stderr.write(`${line}\n`), buildMode);
         buildAction = 'built';
+        builtFrom = builtFromFor(buildMode);
       } else {
         buildAction = 'fresh';
+        builtFrom = freshness.builtFrom;
       }
+    } else {
+      builtFrom = builtFromFor(buildMode);
     }
-    // After a build this reads the stamp that build just wrote; on 'skipped' it
-    // reports whoever built the binary we are about to attach to (null if that
-    // was not this harness).
-    const builtFrom = builtFromFor(buildMode);
 
     this.state = 'launching';
 
