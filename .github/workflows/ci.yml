@@ -185,6 +185,19 @@ jobs:
         run: cargo clippy --workspace --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets
         env:
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      # Release-profile compile check (#541): nothing else in the merge gate
+      # compiles with debug_assertions off - the first release build of any
+      # change otherwise happens in release.yml's tag-push matrix, after the
+      # paid three-platform build has started. The class this catches is real:
+      # a call whose only target is #[cfg(any(debug_assertions, test))]-gated
+      # still has its arguments type-checked in release (debug_assert! expands
+      # to `if cfg!(debug_assertions) { assert!(..) }`), so every debug gate
+      # stays green while `pnpm tauri build` cannot compile. `check`, not
+      # `build`: type resolution needs no codegen or linking.
+      - name: Release-profile compile check
+        run: cargo check --release --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
+        env:
+          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
       # sccache health on the self-hosted path (the cache that replaces rust-cache
       # on the ephemeral runner). Skipped on hosted. !cancelled() (not always()):
       # still report on cargo FAILURE, but skip on a superseded/cancelled run.
