@@ -149,6 +149,23 @@ export function readBundleIdentifier(confPath: string): string {
   if (typeof identifier !== 'string' || identifier.length === 0) {
     throw new Error(`Tauri config at ${confPath} has no string "identifier" field`);
   }
+  // The identifier becomes a directory component of a config.toml this module
+  // later WRITES to, so refuse anything that could escape the profile root or
+  // resolve somewhere unintended. A malformed manifest should fail loudly here
+  // rather than silently rewrite a file outside the isolated profile.
+  if (
+    identifier.includes('/') ||
+    identifier.includes('\\') ||
+    identifier.includes('\0') ||
+    identifier === '.' ||
+    identifier === '..'
+  ) {
+    throw new Error(
+      `Tauri config at ${confPath} has an unusable "identifier" (${JSON.stringify(identifier)}): ` +
+        'it is used as a path component, so it must not contain path separators or NUL, ' +
+        'nor be "." or ".."',
+    );
+  }
   return identifier;
 }
 
@@ -190,6 +207,15 @@ export function bundleIdentifier(): string {
 export function configTomlPath(env: Record<string, string | undefined> = process.env): string {
   const identifier = bundleIdentifier();
   if (isWindows) {
+    // KNOWN LIMITATION (harness-side best effort). `dirs` asks the Win32
+    // known-folder API for RoamingAppData, which does NOT consult the `APPDATA`
+    // environment variable - so the temp-APPDATA isolation `isolatedEnv` sets up
+    // does not redirect the REAL app's config on Windows, and the path computed
+    // here can differ from the one the running app actually writes. Consequence:
+    // `clearRecentProjects` can miss on Windows and leave stale recents behind.
+    // Correct on Linux (XDG_CONFIG_HOME is honored end to end) and macOS (HOME is);
+    // best effort here. Left as-is deliberately: keying off APPDATA is still the
+    // closest approximation available without querying the known folder itself.
     const configRoot = env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
     return path.join(configRoot, identifier, 'config.toml');
   }
@@ -262,8 +288,14 @@ function clearRecentProjectsIn(configPath: string): void {
 /**
  * Blank out `recent_projects` in the config to force clean test state. Reads
  * the config paths from `env` (defaults to `process.env`) so the agent can
- * target its isolated profile. Best-effort: missing/unreadable config is a
- * no-op.
+ * target its isolated profile.
+ *
+ * Best-effort per FILE: a missing or unreadable config.toml is a no-op. Not
+ * best-effort about WHICH file, though - resolving the paths goes through
+ * `bundleIdentifier`/`readBundleIdentifier`, which throws outside the per-file
+ * try/catch if `src-tauri/tauri.conf.json` is missing, malformed, or carries an
+ * unusable identifier. That fail-loud is intended: a broken harness checkout
+ * must not degrade into silently clearing nothing.
  *
  * Clears BOTH config locations - the bundle-identifier path the running app
  * writes, and the `directories`-crate fallback a pre-setup code path can write -

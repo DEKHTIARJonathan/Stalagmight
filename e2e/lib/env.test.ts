@@ -38,30 +38,46 @@ function isolatedConfigEnv(root: string): Record<string, string> {
   return { XDG_CONFIG_HOME: root };
 }
 
-/** Expected app-written config path under `root` for this platform. */
-function expectedIdentifierPath(root: string, identifier: string): string {
-  if (process.platform === 'darwin') {
-    return path.join(root, 'Library', 'Application Support', identifier, 'config.toml');
+/**
+ * Expected config paths under `root`, spelled out as literal strings per
+ * platform.
+ *
+ * Deliberately NOT rebuilt with `path.join` over the same branching env.ts uses:
+ * a helper that mirrors the implementation lets a wrong-but-self-consistent shape
+ * pass both. These literals pin the crate-derived shapes as data - the tauri
+ * `app_config_dir` layout (`<config root>/<bundle identifier>`) and the
+ * `directories` 5.0.1 `ProjectDirs::from("com", "stalagmight", "Stalagmight")`
+ * layout - so a change to either shape must be made here on purpose.
+ */
+function expectedPaths(root: string): { appWritten: string; fallback: string } {
+  if (process.platform === 'win32') {
+    return {
+      appWritten: `${root}\\com.stalagmight.desktop\\config.toml`,
+      fallback: `${root}\\stalagmight\\Stalagmight\\config\\config.toml`,
+    };
   }
-  // Linux: $XDG_CONFIG_HOME/<id>; Windows: %APPDATA%\<id>
-  return path.join(root, identifier, 'config.toml');
+  if (process.platform === 'darwin') {
+    return {
+      appWritten: `${root}/Library/Application Support/com.stalagmight.desktop/config.toml`,
+      fallback: `${root}/Library/Application Support/com.stalagmight.Stalagmight/config.toml`,
+    };
+  }
+  return {
+    appWritten: `${root}/com.stalagmight.desktop/config.toml`,
+    fallback: `${root}/stalagmight/config.toml`,
+  };
 }
 
-/** Expected `directories`-crate fallback path under `root` for this platform. */
-function expectedFallbackPath(root: string): string {
-  if (process.platform === 'win32') {
-    return path.join(root, 'stalagmight', 'Stalagmight', 'config', 'config.toml');
+/** Write a throwaway `tauri.conf.json` and run `body` against its path. */
+function withTempConf(contents: string, body: (confPath: string) => void): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-env-conf-'));
+  const confPath = path.join(dir, 'tauri.conf.json');
+  fs.writeFileSync(confPath, contents);
+  try {
+    body(confPath);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
-  if (process.platform === 'darwin') {
-    return path.join(
-      root,
-      'Library',
-      'Application Support',
-      'com.stalagmight.Stalagmight',
-      'config.toml',
-    );
-  }
-  return path.join(root, 'stalagmight', 'config.toml');
 }
 
 const CONFIG_WITH_RECENTS = [
@@ -75,7 +91,20 @@ const CONFIG_WITH_RECENTS = [
 ].join('\n');
 
 describe('bundle identifier', () => {
-  it('comes from src-tauri/tauri.conf.json, not a hardcoded constant', () => {
+  it('is actually parsed out of the given conf file, not a hardcoded constant', () => {
+    // The load-bearing test for "not hardcoded": a conf carrying a DIFFERENT
+    // identifier must come back verbatim. An implementation that returned
+    // 'com.stalagmight.desktop' unconditionally would satisfy every assertion
+    // that only compares against the repo's own manifest, but fails here.
+    withTempConf(JSON.stringify({ identifier: 'org.example.other' }), (conf) => {
+      expect(readBundleIdentifier(conf)).toBe('org.example.other');
+    });
+    withTempConf(JSON.stringify({ identifier: 'net.example.another-app' }), (conf) => {
+      expect(readBundleIdentifier(conf)).toBe('net.example.another-app');
+    });
+  });
+
+  it('reads src-tauri/tauri.conf.json in production', () => {
     const conf = JSON.parse(
       fs.readFileSync(path.join(repoRoot, 'src-tauri', 'tauri.conf.json'), 'utf-8'),
     ) as { identifier: string };
@@ -91,26 +120,28 @@ describe('bundle identifier', () => {
   });
 
   it('throws loudly when the config is not JSON', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-env-conf-'));
-    const bad = path.join(dir, 'tauri.conf.json');
-    fs.writeFileSync(bad, '{ not json');
-    try {
+    withTempConf('{ not json', (bad) => {
       expect(() => readBundleIdentifier(bad)).toThrow(/not valid JSON/);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    });
   });
 
   it('throws loudly when the config has no identifier', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-env-conf-'));
-    const bad = path.join(dir, 'tauri.conf.json');
-    fs.writeFileSync(bad, JSON.stringify({ productName: 'stalagmight' }));
-    try {
+    withTempConf(JSON.stringify({ productName: 'stalagmight' }), (bad) => {
       expect(() => readBundleIdentifier(bad)).toThrow(/no string "identifier" field/);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    });
   });
+
+  // The identifier becomes a directory component of a config.toml this module
+  // WRITES to, so a traversing or otherwise unusable value must be refused
+  // rather than joined into a path.
+  it.each(['../../evil', '..', '.', 'com/stalagmight', 'com\\stalagmight', 'com\0desktop'])(
+    'rejects %j as a path component',
+    (identifier) => {
+      withTempConf(JSON.stringify({ identifier }), (bad) => {
+        expect(() => readBundleIdentifier(bad)).toThrow(/unusable "identifier"/);
+      });
+    },
+  );
 });
 
 describe('configTomlPath', () => {
@@ -122,9 +153,7 @@ describe('configTomlPath', () => {
 
   it('resolves the platform shape from the env override', () => {
     const root = path.join(os.tmpdir(), 'profile-root');
-    expect(configTomlPath(isolatedConfigEnv(root))).toBe(
-      expectedIdentifierPath(root, 'com.stalagmight.desktop'),
-    );
+    expect(configTomlPath(isolatedConfigEnv(root))).toBe(expectedPaths(root).appWritten);
   });
 
   it('falls back to the home directory when the env override is absent', () => {
@@ -138,7 +167,7 @@ describe('configTomlPath', () => {
 describe('configTomlFallbackPath', () => {
   it('matches the directories-crate ProjectDirs shape for this platform', () => {
     const root = path.join(os.tmpdir(), 'profile-root');
-    expect(configTomlFallbackPath(isolatedConfigEnv(root))).toBe(expectedFallbackPath(root));
+    expect(configTomlFallbackPath(isolatedConfigEnv(root))).toBe(expectedPaths(root).fallback);
   });
 
   it('is a different location than the app-written config path', () => {

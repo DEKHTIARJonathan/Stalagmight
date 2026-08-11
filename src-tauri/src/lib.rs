@@ -1734,7 +1734,8 @@ pub fn run() {
             // forever. Runs here because the config is only readable after
             // `AppState::new`; it sweeps the directory `logging::init()`
             // recorded, not `log_directory()` (which now resolves elsewhere -
-            // see `ACTIVE_LOG_DIR`). Sub-millisecond at this scale, so inline,
+            // see `ACTIVE_LOG_DIR`). Inline rather than spawned: the work is
+            // one stat pass over a directory holding a handful of log files,
             // and a failure must never block startup.
             if let Err(err) =
                 logging::cleanup_logs(state.get_config().logging.max_directory_size_mb)

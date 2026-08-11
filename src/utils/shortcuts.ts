@@ -380,7 +380,14 @@ export const RESERVED_CTRL_DESCRIPTIONS: Readonly<Record<string, string>> = {
  * 2. Any shortcut using Ctrl plus a key in RESERVED_CTRL_KEYS - A, ',' and the
  *    UI-zoom keys Equal/Plus/Minus/_/0 (regardless of additional modifiers)
  *
- * This matches the runtime behavior where reserved handlers fire even with extra modifiers.
+ * The "regardless of additional modifiers" part is DELIBERATELY broader than the
+ * runtime handlers, not a mirror of them. The UI-zoom listener in
+ * src/hooks/useUiScale.ts bails on Alt (`if (!(event.ctrlKey || event.metaKey) ||
+ * event.altKey) return;`), so Ctrl+Alt+Equal never actually zooms - yet the editor
+ * still refuses it. That over-block is intentional and conservative: it keeps the
+ * refusal rule stated in terms of the key rather than a modifier matrix that would
+ * have to track each handler's guards, and it matches how Ctrl+Alt+A is already
+ * refused for Select all.
  *
  * @param shortcut - Shortcut string (will be normalized before checking)
  * @returns Object with isReserved flag and reason string, or null if not reserved

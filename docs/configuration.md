@@ -396,11 +396,24 @@ The following shortcuts are reserved and cannot be reassigned:
 | `?` | Keyboard shortcuts overlay |
 
 `Ctrl+=` / `Ctrl+-` / `Ctrl+0` zoom the interface in / out / reset, and the
-Settings dialog both lists and enforces them as reserved: `RESERVED_CTRL_KEYS`
-holds `Equal`, `Plus`, `Minus`, `_` and `0` alongside `A` and `,`, so the editor
-refuses to bind any of them (with or without extra modifiers) to an action.
-Only the `Ctrl` forms are blocked - the bare `=` / `+` / `-` map-zoom defaults
-above stay bindable.
+Settings dialog lists them as reserved: `RESERVED_CTRL_KEYS` holds `Equal`,
+`Plus`, `Minus`, `_` and `0` alongside `A` and `,`, so the shortcut editor
+refuses to record them for an action. Only the `Ctrl` forms are blocked - the
+bare `=` / `+` / `-` map-zoom defaults above stay bindable.
+
+Two caveats on that refusal:
+
+- **The block is deliberately broader than the zoom handler.** The listener in
+  `src/hooks/useUiScale.ts` ignores Alt-modified presses, so `Ctrl+Alt+=` never
+  zooms the interface - but the editor still refuses the whole `Ctrl` family for
+  these keys rather than tracking the handler's modifier guards. This is the same
+  conservative posture that already refuses `Ctrl+Alt+A`.
+- **Enforcement covers newly recorded bindings only.** The check runs when the
+  editor records a keypress; nothing re-validates bindings already persisted in
+  `config.toml`. A binding saved before this enforcement existed, or hand-edited
+  into the file, is not stripped on load - it stays active, and the UI-zoom
+  listener fires alongside it. (Same pre-existing posture as `Ctrl+A` and
+  `Ctrl+,`.)
 
 ### Shortcut Feedback
 
@@ -487,8 +500,12 @@ Level and the directory size cap are the `[logging]` settings above.
 `max_directory_size_mb` is enforced **once per launch**: the Tauri `setup` hook
 calls `logging::cleanup_logs`, which deletes oldest-first - rotated
 `stalagmight.log.*` files and `crash-*.json` panic markers alike - until the
-directory fits under the cap. Unrelated files in the directory are left alone,
-and a failed sweep is logged at `warn` and never blocks startup.
+directory fits under the cap. Two deliberate softenings: the newest log file
+(the one the appender currently holds open) is never deleted, so the cap can be
+overshot by that one file; and the configured value is floored to 1 MB, so a
+hand-edited `0` cannot wipe the directory on every launch. Unrelated files in
+the directory are left alone, and a failed sweep is logged at `warn` and never
+blocks startup.
 
 The sweep targets the directory `logging::init()` recorded in `ACTIVE_LOG_DIR`,
 not whatever `log_directory()` resolves to when it runs. The two differ: once
