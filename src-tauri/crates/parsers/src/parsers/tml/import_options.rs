@@ -567,7 +567,9 @@ mod tests {
         let (configs, warnings) = convert(&chain_of_three(), &selection(&[]));
         assert!(configs.is_empty());
         assert!(
-            !warnings.iter().any(|w| w.contains("no shots after filtering")),
+            !warnings
+                .iter()
+                .any(|w| w.contains("no shots after filtering")),
             "a deselected section was not 'dropped by filtering': {warnings:?}"
         );
     }
@@ -609,11 +611,14 @@ mod tests {
 
         let (_, closures, warnings) =
             convert_tml_with_options(&tml, &TmlImportOptions::default()).unwrap();
-        assert_eq!(closures.len(), 1, "premise: unfiltered, the closure resolves");
+        assert_eq!(
+            closures.len(),
+            1,
+            "premise: unfiltered, the closure resolves"
+        );
         assert!(warnings.is_empty(), "premise: and warns about nothing");
 
-        let (_, closures, warnings) =
-            convert_tml_with_options(&tml, &selection(&[0])).unwrap();
+        let (_, closures, warnings) = convert_tml_with_options(&tml, &selection(&[0])).unwrap();
         assert!(closures.is_empty(), "the far endpoint is not imported");
         assert!(
             warnings
