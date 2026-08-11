@@ -23,7 +23,7 @@ import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { SuggestionSectionSettings } from './SuggestionSectionSettings';
-import { SegmentPlacementModes } from './SegmentPlacementModes';
+import { SegmentPlacementModes, type SegmentPlacementMode } from './SegmentPlacementModes';
 import {
   buildZeroDatumSectionConfig,
   DMP_AZIMUTH_REFERENCE,
@@ -964,9 +964,7 @@ export default function DmpNewImportDialog({
   const [segmentQueue, setSegmentQueue] = useState<number[][]>(saved?.segmentQueue ?? []);
   const currentSegment = segmentQueue[0] ?? null;
 
-  const [segmentPlacementMode, setSegmentPlacementMode] = useState<
-    'suggestion' | 'origin' | 'fromExisting' | 'manual' | 'discard'
-  >('manual');
+  const [segmentPlacementMode, setSegmentPlacementMode] = useState<SegmentPlacementMode>('manual');
   const [segmentAnchor, setSegmentAnchor] = useState<{
     sectionIndex: number; stationIndex: number;
   } | null>(saved?.segmentAnchor ?? null);
