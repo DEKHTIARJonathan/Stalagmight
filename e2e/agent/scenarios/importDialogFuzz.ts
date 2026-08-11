@@ -2067,6 +2067,39 @@ export const importDialogFuzz: Scenario = {
               ctx.metric(`replay:unsupported:${step.kind}`);
               continue;
             }
+            // OBSERVE BEFORE ACTING, on a replay only.
+            //
+            // The walk otherwise sees the screen only AFTER each move, so a
+            // dialog that opens in the async tail of move N and is dismissed by
+            // move N+1 is never sampled. Measured on a recorded F3 red: the
+            // recording's steps 29-30 are `zero-datum-config-confirm` then
+            // `import-receipt-continue`, and on replay the post-confirm digest
+            // read `wiz-done` (the modal had not opened yet) while the next step
+            // dispatched successfully against `import-receipt-continue` and left
+            // `idle`. The receipt existed only between the two moves. F3 reads
+            // its claim off that modal, so it had nothing to compare and a
+            // recorded F3 failure replayed green.
+            //
+            // A live walk does not need this - it keeps drawing moves and meets
+            // the dialog on a later step - and must not have it: the race
+            // generators depend on dispatching against the screen the digest
+            // already classified.
+            const beforeStep = await observeScreen(ctx, false);
+            {
+              const seen = captureReceipt(
+                { claim: receipt, atReceipt, historyTouchedBeforeReceipt },
+                beforeStep,
+                historyTouched,
+              );
+              if (seen.claim !== null && receipt === null) {
+                receipt = seen.claim;
+                atReceipt = seen.atReceipt;
+                historyTouchedBeforeReceipt = seen.historyTouchedBeforeReceipt;
+                ctx.metric('replay:receiptSeenBetweenSteps');
+                guarded(() => checkReceipt(receipt as ReceiptClaim));
+              }
+              if (beforeStep.receipt !== null) sawReceipt = true;
+            }
             await afterMove(move, await execute(move, false));
             continue;
           }
