@@ -337,7 +337,22 @@ dir serves every worktree, so that binary is not this tree's
 
 `app_start` also returns `builtFrom: { repoRoot, gitHead } | null` (who built the
 binary being driven, per its stamp) and, when staleness triggered the rebuild,
-`rebuildReasons`.
+`rebuildReasons`. `builtFrom` is null whenever no stamp vouches for the binary
+actually on disk - no stamp, an old-schema or corrupt one, or one whose recorded
+binary mtime no longer matches (something relinked it) - so null reads as "cannot
+say", never as "not this tree".
+
+**The cost.** Alternating `app_start` between two worktrees that share one
+`$CARGO_TARGET_DIR` now rebuilds on every switch: each tree correctly refuses the
+other's binary. That is the design, not a regression - the alternative is the
+silent wrong-code run. Point the trees at per-worktree `CARGO_TARGET_DIR`s if the
+thrash costs more than the disk.
+
+**The race the stamp does not close.** Nothing serializes builds across trees. A
+`buildApp` in another worktree can relink the shared binary and overwrite the
+stamp while a session from this tree is already attached, and the `builtFrom` that
+session was handed at start is stale from that moment on. Freshness is checked
+once, before attach; it is not a lease.
 
 **Daemon-root caveat, which the stamp cannot fix.** `.mcp.json` starts the server
 with no cwd pinning, so the MCP daemon builds, stamps and serves whichever tree

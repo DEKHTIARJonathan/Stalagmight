@@ -8,6 +8,7 @@
  * WHICH source tree built the binary, because several worktrees share one
  * CARGO_TARGET_DIR and mtimes cannot tell one builder from another.
  */
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -16,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   FEATURES_FOR_MODE,
   buildStampPathFor,
+  builtFromFor,
   featuresFor,
   gitHeadFor,
   hashDistIndex,
@@ -154,12 +156,14 @@ describe('stampStaleReasons', () => {
   });
 
   it('reports a missing dist once, not also as a hash mismatch', () => {
-    // The two dist cases are exclusive (if/else if): '' is not a hash that
-    // "differs", and reporting both would double-count one fact.
-    const reasons = stampStaleReasons({ ...E2E_STAMP, distIndexHash: '' }, {
-      ...wantMatching,
-      distIndexHash: '',
-    });
+    // The stamp records a REAL hash and the want is '': the two dist cases are
+    // exclusive (if/else if), so this must produce the missing-dist reason
+    // alone. Degrade that else-if to a plain if and this case reports twice,
+    // which a stamp/want pair that both said '' could never have caught.
+    const reasons = stampStaleReasons(
+      { ...E2E_STAMP, distIndexHash: 'abc' },
+      { ...wantMatching, distIndexHash: '' },
+    );
     expect(reasons).toHaveLength(1);
     expect(reasons[0]).toContain('dist/index.html is missing');
   });
@@ -245,18 +249,44 @@ describe('isPluginAclChurn', () => {
 // machine - or to none.
 describe('gitHeadFor', () => {
   it('reads the HEAD of the tree it is pointed at, not the process cwd', () => {
-    const head = gitHeadFor(HARNESS_ROOT_REAL);
-    expect(head).not.toBe('unknown');
-    expect(head).toMatch(/^[0-9a-f]{7,40}$/);
+    // A SECOND repo, because vitest's cwd is already this one: asserting only
+    // that gitHeadFor(harnessRoot) returns a sha would pass just as happily if
+    // the `-C <root>` were dropped and git answered about the cwd.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-otherrepo-'));
+    try {
+      execFileSync('git', ['init', '-q', dir]);
+      execFileSync('git', [
+        '-C',
+        dir,
+        '-c',
+        'user.name=t',
+        '-c',
+        'user.email=t@t',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'x',
+      ]);
+      const expected = execFileSync('git', ['-C', dir, 'rev-parse', '--short', 'HEAD'], {
+        encoding: 'utf8',
+      }).trim();
+
+      expect(gitHeadFor(dir)).toBe(expected);
+      // And it is genuinely a different answer from this tree's, so the `-C`
+      // is doing the work rather than coinciding with the cwd.
+      expect(gitHeadFor(dir)).not.toBe(gitHeadFor(HARNESS_ROOT_REAL));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('returns "unknown" rather than throwing when the path is not a git tree', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-nogit-'));
     try {
-      // Not a repo, but even if some ancestor of the tmpdir were one, `git -C`
-      // would still be answering about a DIFFERENT tree than the harness - the
-      // assertion that matters is that we never throw out of a session start.
+      // The tmpdir is not inside any repo here, so the fallback is observable:
+      // a session start must survive an unreadable HEAD, not throw out of it.
       expect(() => gitHeadFor(dir)).not.toThrow();
+      expect(gitHeadFor(dir)).toBe('unknown');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -345,6 +375,62 @@ describe('readBuildStamp', () => {
     const stamp = readBuildStamp(write(JSON.stringify(E2E_STAMP)));
     expect(stamp).not.toBeNull();
     expect(stampStaleReasons(stamp, wantMatching)).toEqual([]);
+  });
+});
+
+// `builtFromFor` is what a session reports on the `build: "skip"` path, where it
+// is the only thing between the caller and a foreign binary. It must therefore
+// answer for the binary that is THERE, not for whatever the stamp remembers.
+describe('builtFromFor', () => {
+  let dir: string;
+  let stampFile: string;
+  let binaryFile: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-builtfrom-'));
+    stampFile = path.join(dir, 'stamp.json');
+    binaryFile = path.join(dir, 'stalagmight');
+    fs.writeFileSync(binaryFile, 'not really a binary');
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Write a stamp that vouches for `binaryFile` as it stands right now. */
+  function stampFor(binary: string): void {
+    const stamp: E2EBuildStamp = { ...E2E_STAMP, binaryMtimeMs: fs.statSync(binary).mtimeMs };
+    fs.writeFileSync(stampFile, JSON.stringify(stamp));
+  }
+
+  it('reports the builder when the stamp vouches for the binary on disk', () => {
+    stampFor(binaryFile);
+    expect(builtFromFor('debug', stampFile, binaryFile)).toEqual({
+      repoRoot: E2E_STAMP.repoRoot,
+      gitHead: E2E_STAMP.gitHead,
+    });
+  });
+
+  it('says nothing once the binary is relinked behind the stamp', () => {
+    stampFor(binaryFile);
+    // What `./scripts/dev.sh` or a plain `pnpm tauri build` does: the binary is
+    // replaced in place and the old stamp is left sitting next to it. The
+    // stamper did not build THAT binary, so claiming its identity would be a
+    // confident lie on the one path that has nothing else to check.
+    const later = new Date(Date.now() + 60_000);
+    fs.utimesSync(binaryFile, later, later);
+
+    expect(builtFromFor('debug', stampFile, binaryFile)).toBeNull();
+  });
+
+  it('says nothing when there is no stamp at all', () => {
+    expect(builtFromFor('debug', path.join(dir, 'absent.json'), binaryFile)).toBeNull();
+  });
+
+  it('says nothing when the binary is gone', () => {
+    stampFor(binaryFile);
+    fs.rmSync(binaryFile);
+    expect(builtFromFor('debug', stampFile, binaryFile)).toBeNull();
   });
 });
 
