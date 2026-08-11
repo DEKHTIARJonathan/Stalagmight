@@ -216,7 +216,7 @@ export function useSpeleoActions(): SpeleoActions {
       const result = await invokeIpc<StartEditingResult>('speleodb_start_editing');
       const routed = await routeStartEditingResult(result, true, issuedFor);
       if (!routed.landed) return false;
-      if (routed.treeReplaced && !(await applySpeleoTreeReplacement(issuedFor))) {
+      if (routed.treeReplaced && !(await applySpeleoTreeReplacement(issuedFor, true))) {
         return false;
       }
       return routed.editing;
@@ -246,7 +246,15 @@ export function useSpeleoActions(): SpeleoActions {
           ? await routeStartEditingResult(result, false, issuedFor)
           : null;
         if (routed && !routed.landed) return 'stale';
-        if (!(await applySpeleoTreeReplacement(issuedFor))) return 'stale';
+        // [#473] ALWAYS a tree replacement, whatever `result` is. Discard runs
+        // `speleodb_return_to_tip_discarding` - "replace the local copy with the server
+        // tip, throwing away whatever it held" - UNCONDITIONALLY, and only afterwards
+        // decides whether to hand the lock back (`speleodb_push.rs`). So a `null` result
+        // means "released AND swapped", not "nothing happened": gating on `result !== null`
+        // here skipped the discarded-history re-read on the very flow that replaced the
+        // bytes, which is silent loss of the banner in one direction and a stale banner
+        // over the new tip in the other.
+        if (!(await applySpeleoTreeReplacement(issuedFor, true))) return 'stale';
         if (!result) return 'released';
         return routed?.editing ? 'editing' : 'discarded_without_lock';
       } finally {
@@ -306,7 +314,7 @@ export function useSpeleoActions(): SpeleoActions {
             const loaded = await loadProject(result.local_path);
             if (!loaded.success) break;
           }
-          await applySpeleoTreeReplacement(issuedFor);
+          await applySpeleoTreeReplacement(issuedFor, true);
           break;
         case 'divergence_needed':
           break;
@@ -526,7 +534,7 @@ export function useSpeleoActions(): SpeleoActions {
       // the divergence dialog doesn't close over a project the user left.
       const { success } = await loadProject(localPath);
       if (!success) return false;
-      if (!(await applySpeleoTreeReplacement(issuedFor))) return false;
+      if (!(await applySpeleoTreeReplacement(issuedFor, true))) return false;
       showToast(t('speleodb.editBar.toasts.tookRemote'), TOAST_KEYS.SPELEODB_TOOK_REMOTE, 'success');
       return true;
     } catch (e) {

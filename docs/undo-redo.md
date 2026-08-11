@@ -429,6 +429,112 @@ Undo and redo stacks are serialized to the SQLite database synchronously on proj
 - On project close, stacks are cleared from memory (DB retains persisted entries)
 - Files written before schema v7 get their persisted stacks dropped on open: pre-v7 builds serialized untouched nullable `ShotUpdates` fields as explicit `null`s, which the v7 `double_option` semantics would replay as "clear the field" (see `UNDO_FORMAT_SAFE_VERSION` / `drop_legacy_undo_history` in `persistence/sqlite.rs`)
 
+### What bounds a history LOAD (#469, #473)
+
+A `.stalx` is a file the user opens and nothing in the schema bounds `undo_stack` /
+`redo_stack`, so both tables are attacker-controlled. Three separate bounds apply to a
+load, and the reason there are three is that the first two multiply rather than compose:
+
+| Bound | Constant | What it bounds |
+|---|---|---|
+| Row count | `MAX_PERSISTED_HISTORY_ROWS` (65536) | how many rows one load reads |
+| Per blob | `MAX_DECOMPRESSED_BLOB_BYTES` (256 MiB) | how far ONE blob may inflate - gzip or legacy |
+| Per open | `MAX_HISTORY_LOAD_BYTES` (1 GiB) | the total across BOTH stacks of one open |
+
+The third is not redundant. With only the first two, the default 100-row count window
+allows 100 x 2 x 256 MiB = 50 GiB, and Full mode's row ceiling makes it 32 TiB nominal.
+That was measured, not theorised: six rows whose blobs each declared 250 MiB, every one
+inside the per-blob ceiling, came out of a 14 MB file as 3.1 GB of `String` and the load
+returned `Ok`.
+
+**"Per open", not "per stack"** - an open reads undo, then redo, and holds both results at
+once, so a budget scoped to one stack bounds the pair at 2 GiB. `Database::load_history_budget`
+exists so the open creates one `InflationBudget` and both loads share it; the
+`*_within` loader variants are the ones that take it.
+
+Mechanically, and in the order the checks actually fire:
+
+1. **The declared-size pre-scan is what stops a hostile file.** Every blob states its
+   inflated size in gzip's ISIZE trailer, so the whole window is priced by walking rows
+   sqlite already read - refusing at zero allocation, naming the real problem ("this file
+   claims 50 GiB of history"). It is checked against what the budget has LEFT, so the
+   second stack only gets what the first did not spend.
+2. **The declared size is attacker-controlled, so it is trusted only in the refusing
+   direction.** What makes `actual <= declared` hold for every row - and therefore
+   `actual total <= the sum the pre-scan approved` - is NOT the same mechanism in both
+   branches, and the difference matters to anyone editing either:
+   - **gzip**: the read is capped at exactly what the blob claimed, so one that
+     understates and then inflates past its own claim trips that cap.
+   - **legacy plain-UTF-8**: there is no read cap. The bound holds because the declared
+     size IS the arithmetic worst case for `from_utf8_lossy` (3 bytes of U+FFFD per input
+     byte), so no input can exceed it. Change how legacy blobs are decoded and this bound
+     goes with it.
+
+   The per-blob ceiling binds both branches - it is checked before they diverge - so a
+   legacy blob is bound by it at its REAL `from_utf8_lossy` output - the row's own length
+   when it is valid UTF-8, and up to 3x only when it is not.
+3. **The running `InflationBudget` is defense in depth, not the mechanism.** Given the
+   pre-scan it is unreachable by construction - `sum(declared) <= remaining` is
+   established before any row reserves its own `declared`. It is kept because it is what
+   still bounds a future caller that reaches `decompress_json_under` without a pre-scan,
+   and it is what carries the spend from the first stack into the second. Do not describe
+   it as the thing that stops the attack.
+
+1 GiB is derived from what a save can legitimately produce - and note WHICH knob bounds
+that, because there are two and swapping them changes the answer by 5x. What a
+count-window (non-SpeleoDB) project WRITES is bounded by `undo_persist_limit`, **default
+20** (read in `project_io.rs::rows_to_persist`). `undo_history_limit` (100) is the
+in-memory/read window and never reaches disk. So the honest worst case is 20
+`ProjectSnapshotPair` entries on a 20,000-shot survey at ~17 MB each = ~340 MB per stack,
+~680 MB for the pair - under the ceiling, which is the point.
+
+The residual: that is a COUNT bound, not a byte one, so a user who raises
+`undo_persist_limit` far past its default can author more history than this will read
+back. Bounding the writer in bytes, so the read ceiling can tighten without ever refusing
+real work, is the outstanding follow-up.
+
+The number bounds RESERVATIONS, not process RSS. Two terms sit on top of it, and the
+second is not small: `read_to_end` doubles its buffer, so one blob transiently costs
+~1.5-2x what it reserved; and the whole window's COMPRESSED rows are materialised by
+`newest_history_rows` before the pre-scan can price them, bounded only by the row cap
+times sqlite's own `SQLITE_MAX_LENGTH`. That second term is linear in file size rather
+than amplified - no bomb - but on a multi-gigabyte `.stalx` it dominates, and it is
+#469's residual rather than something this ceiling addresses.
+
+A guard for that second term was written and then **reverted**, which is worth recording
+so the next attempt starts further along. It summed `length(command_json) +
+length(undo_data_json)` over `(SELECT ... ORDER BY sequence DESC LIMIT ?1)`. sqlite's
+header-only `length()` optimisation needs a DIRECT table-column reference; against a
+subquery output it cannot flatten, so the co-routine materialised every blob and the
+whole history was read TWICE per open - a measured **46,616 us against 11 us** for the
+equivalent `WHERE id IN (SELECT id ... LIMIT ?1)` on a 400 MB history, for identical
+sums. Any future version must use the id-set shape, charge the shared `InflationBudget`
+rather than the bare constant (otherwise it is per-stack and an open reaches 2x),
+propagate its error instead of failing open, use `octet_length` (plain `length` counts
+CHARACTERS on a TEXT-typed row), and carry a test. Streaming the sum inside the existing
+row loop avoids the second read altogether.
+
+### What the banner does NOT cover
+
+It fires when a stack could not be READ at all. It does not fire when the row cap
+(`history_load_row_cap`) silently drops the oldest entries of a very deep history: that
+is a bounded, by-design trim of rows the restore's own `enforce_depth_limit` would have
+evicted anyway, not a failure. The asymmetry is deliberate but easy to misread, because
+both outcomes end with the user holding less history than the file contains.
+
+Tripping any of them fails the WHOLE load, and the project then opens with empty history
+rather than not opening. That is deliberate, and since #473 it is no longer silent: a
+discarded history raises a persistent banner (`history-discarded-banner`), because losing
+every undo AND redo entry behind a log line is the silent state change
+[notifications.md](notifications.md) forbids.
+
+`AppState::history_discarded` is what the banner reads. It is written under the same
+`project` mutex acquisition that commits the project it describes, so it cannot outlive
+or mis-attribute one - and **every** project-slot commit must write it, loads and creates
+alike. A create that forgets leaves the previous project's verdict standing and puts a
+data-loss banner over a brand-new empty project; that regression is pinned by
+`creating_a_project_clears_a_previous_projects_discarded_history_flag`.
+
 ### What the round trip does NOT preserve
 
 Two things survive the write and die on the read. Both are open on

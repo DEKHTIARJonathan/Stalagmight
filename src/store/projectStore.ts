@@ -56,6 +56,7 @@ import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
+import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
 import { runProjectSwitch } from '../utils/projectTransition';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
@@ -124,6 +125,7 @@ function nextProjectTreeGeneration(): number {
 // must not clobber the newer result (e.g. a manual save's check racing a Repair's
 // check on the same project, where the project-identity guard can't tell them apart).
 let integrityCheckSeq = 0;
+
 
 /**
  * Parsed error from Tauri backend.
@@ -206,7 +208,7 @@ export interface LoadProjectOutcome {
   superseded?: boolean;
 }
 
-export interface ProjectStore extends ProjectConfigActions {
+export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState {
   // State
   project: Project | null;
   /**
@@ -627,6 +629,7 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
     integrityDismissed: false,
     integritySaveBlocked: false,
     integrityDialogOpen: false,
+    ...HISTORY_BANNER_CLEARED,
   });
   // Losing a project bypasses the setView() cleanup funnel, so drop the gas
   // sub-mode (#38) here too - a stale overlay/panel must not outlive the project.
@@ -881,6 +884,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   integrityDismissed: false,
   integritySaveBlocked: false,
   integrityDialogOpen: false,
+  ...HISTORY_BANNER_CLEARED,
   config: null,
   loading: { ...initialLoadingState },
   autosaveFailure: null,
@@ -892,6 +896,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // Config (loadConfig / updateConfig / updateGasConfig / setConfig live in projectConfigActions.ts)
   ...createProjectConfigActions(set, get),
+  ...createProjectHistoryBannerActions(set, get),
 
   // Loading state actions
   startLoading: (projectName: string, projectPath: string) => {
@@ -1071,6 +1076,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           integrityDismissed: false,
           integritySaveBlocked: false,
           integrityDialogOpen: false,
+          ...HISTORY_BANNER_CLEARED,
         });
         const tSetDone = performance.now();
         recordPerfTiming('store set(project+stations)', tSetDone - tSetStart);
@@ -1323,6 +1329,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         integrityDismissed: false,
         integritySaveBlocked: false,
         integrityDialogOpen: false,
+        ...HISTORY_BANNER_CLEARED,
       });
 
       // #270: a freshly created project is local by construction - it has no
@@ -1776,6 +1783,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // issue set actually changes. Keeping the issues populated also lets the
   // Review & Repair dialog still open them.
   dismissIntegrityIssues: () => set({ integrityDismissed: true }),
+
 
   openIntegrityDialog: () => set({ integrityDialogOpen: true }),
   closeIntegrityDialog: () => set({ integrityDialogOpen: false }),

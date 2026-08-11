@@ -507,6 +507,11 @@ describe('SpeleoQuitDialog - the unwound-push confirmation carries the quit', ()
     useProjectStore.setState({
       refreshProjectState: vi.fn(async () => {}) as never,
       checkProjectIntegrity: vi.fn(async () => []) as never,
+      // [#473] Stubbed like its two siblings above. Discard replaces the tree even when
+      // it returns null (it fast-forwards to the tip BEFORE deciding whether to release
+      // the lock), so the seam re-reads the discarded-history flag here and the exact-IPC
+      // assertion below is about the discard flow's own calls, not the reconciliation.
+      checkHistoryDiscarded: vi.fn(async () => {}) as never,
     });
     useSpeleoStore.setState({ refreshLinkStatus: vi.fn(async () => {}) as never });
     invokeIpcMock.mockResolvedValue(null);

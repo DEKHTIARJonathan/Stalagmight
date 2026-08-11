@@ -796,7 +796,7 @@ impl Database {
     }
 
     /// Migrate undo/redo tables from TEXT to BLOB columns (schema v2→v3).
-    /// Existing TEXT data is CAST to BLOB; on read, `decompress_json` detects
+    /// Existing TEXT data is CAST to BLOB; on read, `decompress_json_under` detects
     /// whether content is gzip-compressed or plain UTF-8, so old entries remain
     /// readable without re-encoding.
     pub(super) fn migrate_undo_redo_to_blob(&self) -> Result<()> {

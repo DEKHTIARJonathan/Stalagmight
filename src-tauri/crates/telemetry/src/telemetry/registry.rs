@@ -91,6 +91,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.get_tile_fetch_stats",
     "command.get_tile_providers",
     "command.get_undo_stack",
+    "command.history_discarded",
     "command.import_dmp",
     "command.import_sections",
     "command.list_backups",
@@ -1104,7 +1105,10 @@ mod tests {
         //   + 1 entrance elevation became editable in Project Settings (#465):
         //       command.set_surface_elevation = 735.
         //   + 1 command.count_unanchored_sections (#446) = 736.
-        assert_eq!(EVENT_NAMES.len(), 736);
+        //   + 1 the discarded-history banner (#473) asks the backend whether the
+        //       project it just opened could read its edit history at all:
+        //       command.history_discarded = 737.
+        assert_eq!(EVENT_NAMES.len(), 737);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -51,6 +51,10 @@ function App() {
   const integrityDialogOpen = useProjectStore((s) => s.integrityDialogOpen);
   const openIntegrityDialog = useProjectStore((s) => s.openIntegrityDialog);
   const closeIntegrityDialog = useProjectStore((s) => s.closeIntegrityDialog);
+  const historyDiscarded = useProjectStore((s) => s.historyDiscarded);
+  const historyDiscardedDismissed = useProjectStore((s) => s.historyDiscardedDismissed);
+  const checkHistoryDiscarded = useProjectStore((s) => s.checkHistoryDiscarded);
+  const dismissHistoryDiscarded = useProjectStore((s) => s.dismissHistoryDiscarded);
   const autosaveFailure = useProjectStore((s) => s.autosaveFailure);
   const autosaveFailureKind = useProjectStore((s) => s.autosaveFailureKind);
   const clearAutosaveFailure = useProjectStore((s) => s.clearAutosaveFailure);
@@ -215,6 +219,39 @@ function App() {
       void checkProjectIntegrity();
     }
   }, [project?.file_path, loading.isLoading, checkProjectIntegrity]);
+
+  // [#473] ...and whether that load could read the project's edit history at all.
+  // Same key as the integrity check, for the same reason: both describe the file
+  // that just finished loading, and asking before it settles would describe the
+  // previous one.
+  //
+  // The backend can also reopen a project WITHOUT a frontend load - the SpeleoDB
+  // replace/pull/revision paths close and reopen internally - and neither dep here
+  // changes when it does. Those routes are covered, but NOT all by this effect:
+  //   - The adopt and update flows finish with a real `loadProject`
+  //     (`useSpeleoActions.ts`), which toggles `isLoading` and re-fires this effect.
+  //   - The in-place REVISION swap does not, and cannot: it reopens different bytes at
+  //     the SAME path, and `loadProject` would short-circuit on the already-open
+  //     project. It re-asks through `applySpeleoTreeReplacement` instead, which is the
+  //     chokepoint every in-place tree replacement passes through.
+  //   - The adopt reopen (`speleodb_pull.rs`, right after the staged file is renamed
+  //     over the destination) is NEW bytes, not a rollback - it is covered because
+  //     adoption ends in a full `loadProject`, not because the bytes are unchanged.
+  //   - The ROLLBACK reopens are byte-identical and owe nothing, and there are FOUR of
+  //     them, not one: `speleodb_cache.rs` x3 (after the staged download is deleted,
+  //     `dest` never having been touched) and `speleodb_pull.rs` x2 - the post-promote
+  //     arm that reopens `previous` when the adopt failed to open, and
+  //     `adopt_abandon_staging`, which runs only before or instead of the promote. An
+  //     earlier version of this comment said "only `speleodb_cache.rs`" and silently
+  //     omitted the latter two, which is the same shape of enumeration error that let
+  //     the `discardChanges` route go unnoticed.
+  // A future path that reopens DIFFERENT bytes with no frontend load must re-ask, and
+  // the tree-replacement seam is where it should do it.
+  useEffect(() => {
+    if (project?.file_path && !loading.isLoading) {
+      void checkHistoryDiscarded();
+    }
+  }, [project?.file_path, loading.isLoading, checkHistoryDiscarded]);
 
   // Hide splash once config has loaded (or immediately if splash is disabled)
   useEffect(() => {
@@ -576,6 +613,35 @@ function App() {
               Dismiss
             </button>
           )}
+        </div>
+      )}
+
+      {/* [#473] Discarded-history banner. A history table the backend could not read
+          is replaced by an empty stack so the project still opens - the right call -
+          but that silently costs the user every undo AND redo entry they had, which
+          docs/notifications.md names as a "silent state change" and forbids. Banner
+          rather than toast because it is an ongoing condition (the project has no
+          history for as long as it is open), and it carries no action button: there
+          is nothing the user can do about it, only something they must know. */}
+      {historyDiscarded && !historyDiscardedDismissed && project && !loading.isLoading && (
+        <div
+          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
+          role="status"
+          data-testid="history-discarded-banner"
+        >
+          <span className="text-warning font-medium flex-1 min-w-0">
+            {t('banners.historyDiscarded.lead')}{' '}
+            <span className="text-text-secondary font-normal">
+              {t('banners.historyDiscarded.detail')}
+            </span>
+          </span>
+          <button
+            onClick={dismissHistoryDiscarded}
+            className="px-2 py-1 text-text-secondary hover:text-text text-xs"
+            data-testid="history-discarded-dismiss-button"
+          >
+            {t('banners.historyDiscarded.dismiss')}
+          </button>
         </div>
       )}
 

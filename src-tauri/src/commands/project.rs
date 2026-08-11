@@ -423,6 +423,26 @@ pub fn take_unrecognised_shot_kinds(
     found
 }
 
+/// [#473] Whether the open project's edit history was unreadable and discarded.
+///
+/// The load paths substitute an empty stack for a history they cannot read - corrupt,
+/// truncated, or crafted past the decompression bounds - because opening the project
+/// without its history beats not opening it. Until this command existed, the only
+/// record of that was a `tracing::warn!`, so the user's entire undo AND redo history
+/// disappeared with nothing on screen to say so.
+///
+/// Peeking, not taking, unlike [`take_unrecognised_shot_kinds`]: that one drives a
+/// one-shot prompt the user answers, this describes an ongoing condition that lasts as
+/// long as the project is open (docs/notifications.md: banner-class). Dismissal is
+/// frontend state, as it is for the integrity banner.
+///
+/// No `loading_id` for the same reason: the flag is written under the same `project`
+/// mutex acquisition that commits the project, so it cannot describe a different one.
+#[tauri::command]
+pub fn history_discarded(state: State<'_, AppState>) -> bool {
+    state.history_discarded()
+}
+
 #[tauri::command]
 pub async fn create_project_full(
     app_handle: tauri::AppHandle,

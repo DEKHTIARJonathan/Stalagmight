@@ -476,33 +476,138 @@ mod tests {
         });
     }
 
-    /// [#469] Both load paths read the persisted history through the CAPPED loader, and
-    /// resolve the cap before they read.
+    /// [#473] A load that CANNOT read the history sets the flag the banner renders from.
     ///
-    /// Structural because the failure is invisible in behaviour: an uncapped read
+    /// The link the whole feature hangs on, and until this test nothing asserted it: the
+    /// state tests covered create-clears and close-clears, the persistence tests covered
+    /// the loader returning `Err`, and the Playwright specs drive a mock. Nothing joined
+    /// "the loader failed" to "the user is told".
+    ///
+    /// Goes through `open_project` because `do_load_project_full` needs an `AppHandle`
+    /// and has no unit entry point; the structural assertions below are what keep the two
+    /// paths from diverging.
+    #[test]
+    fn a_history_that_cannot_be_read_sets_the_discarded_flag() {
+        with_isolated_config(|| {
+            let temp_dir = TempDir::new().expect("temp dir");
+            let path = temp_dir.path().join("broken-history.stalx");
+            {
+                let mut db = Database::open(&path).expect("open database");
+                db.save_project(&crate::models::Project::new("Broken".to_owned(), None))
+                    .expect("save project");
+            }
+            {
+                // A blob whose gzip trailer claims far more than one row may inflate to.
+                // Refused on the DECLARED size, which the loader reads straight from the
+                // last four bytes - so the decoder is never invoked and the bytes in
+                // between never have to be a valid deflate stream. Hand-assembled rather
+                // than produced with `flate2`, which this crate does not depend on: a
+                // gzip magic pair, filler, and a forged ISIZE is the entire hostile
+                // shape, and writing it out makes that explicit. Written through a bare
+                // connection because it is precisely what `Database`'s own writers will
+                // not produce.
+                let mut liar = vec![0x1f, 0x8b, 0x08, 0x00];
+                liar.extend_from_slice(&[0_u8; 8]);
+                liar.extend_from_slice(&u32::MAX.to_le_bytes());
+                let conn = rusqlite::Connection::open(&path).expect("raw connection");
+                conn.execute(
+                    "INSERT INTO undo_stack (sequence, command_json, undo_data_json, \
+                     executed_at) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![0_i64, liar.clone(), liar, "2026-08-08T00:00:00+00:00"],
+                )
+                .expect("insert hostile row");
+            }
+
+            let state = state();
+            assert!(state.open_project(path).success, "the project still opens");
+            assert!(
+                state.history_discarded(),
+                "an unreadable history must be recorded, or the banner never appears"
+            );
+        });
+    }
+
+    /// ...and a load that CAN read it clears a flag the previous project left set.
+    #[test]
+    fn a_readable_history_clears_the_discarded_flag() {
+        with_isolated_config(|| {
+            let temp_dir = TempDir::new().expect("temp dir");
+            let path = temp_dir.path().join("intact-history.stalx");
+            {
+                let mut db = Database::open(&path).expect("open database");
+                db.save_project(&crate::models::Project::new("Intact".to_owned(), None))
+                    .expect("save project");
+            }
+
+            let state = state();
+            state.set_history_discarded(true);
+            assert!(state.open_project(path).success);
+            assert!(
+                !state.history_discarded(),
+                "every commit writes the flag, so a clean load clears a stale one"
+            );
+        });
+    }
+
+    /// [#469, #473] Both load paths read the persisted history through the row-capped,
+    /// budget-sharing loader, resolve the cap before they read, and share ONE budget
+    /// across the two stacks.
+    ///
+    /// Structural because both failures are invisible in behaviour: an uncapped read
     /// produces the same restored stack as a capped one - the trim afterwards sees to
-    /// that - and differs only in how much of a hostile file it gunzipped into memory
-    /// first. `do_load_project_full` needs an `AppHandle`, so it has no unit-test entry
-    /// point of its own; this is what keeps the two paths from drifting.
+    /// that - and a per-stack budget produces the same stack as a shared one, on every
+    /// file except a hostile one. They differ only in how much of that hostile file
+    /// reaches memory. `do_load_project_full` needs an `AppHandle`, so it has no
+    /// unit-test entry point of its own; this is what keeps the two paths from drifting.
     #[test]
     fn both_load_paths_read_the_history_under_a_cap() {
         let src = include_str!("project_load.rs");
         assert_eq!(
-            src.matches("load_undo_stack_with_timestamps_capped(")
+            src.matches("load_undo_stack_with_timestamps_within(")
                 .count(),
             2,
-            "both load paths read the undo table through the capped loader"
+            "both load paths read the undo table through the capped, budget-sharing loader"
         );
         assert_eq!(
-            src.matches("load_redo_stack_with_timestamps_capped(")
+            src.matches("load_redo_stack_with_timestamps_within(")
                 .count(),
             2,
-            "both load paths read the redo table through the capped loader"
+            "both load paths read the redo table through the capped, budget-sharing loader"
         );
         assert!(
             !src.contains("load_undo_stack_with_timestamps()")
                 && !src.contains("load_redo_stack_with_timestamps()"),
             "an unwindowed history read is exactly what #469 removed from this file"
+        );
+        // [#473] Exactly one budget per load path. Two would mean the undo and redo
+        // stacks each got a full one, bounding an open at 2x the constant while every
+        // comment says 1x - the defect this pins.
+        assert_eq!(
+            src.matches("Database::load_history_budget()").count(),
+            2,
+            "each load path creates ONE budget and hands it to both stacks"
+        );
+
+        // [#473] BOTH project-slot commits in project_create.rs clear the discarded-
+        // history flag. Only `create_project` has a behavioural test - the other,
+        // `do_create_project_full`, needs an `AppHandle` and so has no unit-test entry
+        // point, which is exactly the asymmetry that let the flag be forgotten in the
+        // first place. A stale `true` here puts a data-loss banner over a new project.
+        let create_src = include_str!("project_create.rs");
+        assert_eq!(
+            create_src.matches("set_history_discarded(false)").count(),
+            2,
+            "every project-slot commit in project_create.rs must clear the flag"
+        );
+        // [#473] ...and BOTH load paths write it from what their own load actually did.
+        // `a_history_that_cannot_be_read_sets_the_discarded_flag` covers `open_project`
+        // behaviourally; `do_load_project_full` needs an `AppHandle` and cannot be unit
+        // tested, so this count is what keeps it from silently losing the write.
+        assert_eq!(
+            src.matches("set_history_discarded(history_discarded)")
+                .count(),
+            2,
+            "both load paths must record whether their history survived"
         );
 
         for func in ["fn open_project", "pub fn do_load_project_full"] {
@@ -527,7 +632,7 @@ mod tests {
                 .find("history_load_row_cap(")
                 .unwrap_or_else(|| panic!("{func} resolves a load cap"));
             let read = body
-                .find("load_undo_stack_with_timestamps_capped(")
+                .find("load_undo_stack_with_timestamps_within(")
                 .unwrap_or_else(|| panic!("{func} reads the undo table"));
             assert!(
                 cap < read,
@@ -535,6 +640,196 @@ mod tests {
                  the rows past it are never fetched"
             );
         }
+    }
+
+    /// [#473] No PRODUCTION code anywhere in this crate calls a history loader that mints
+    /// its own `InflationBudget`.
+    ///
+    /// Six `Database::load_*` loaders do, and each bounds only itself - so two of them in
+    /// one open is 2x the documented ceiling. While the backend was a single crate they
+    /// carried `#[cfg(test)]`, which made a production caller a COMPILE error. The
+    /// workspace split ended that (`cfg(test)` is per-crate, and other crates' tests call
+    /// them across the boundary), and the first replacement was a source scan of
+    /// `project_load.rs` alone - blind to a new caller in any other file, which is exactly
+    /// what the compile error had covered.
+    ///
+    /// So this walks the whole crate's source, cutting each file at its `#[cfg(test)]`
+    /// boundary so test code may keep using them. Still weaker than a compile error - it
+    /// cannot see the other crates - but it covers every file a history reader would
+    /// plausibly be added to.
+    /// Does this `#[cfg(test)]` gate a `mod`, rather than a gated `use` or fn?
+    ///
+    /// `from` starts AT the attribute. Skips its own line, then any blank or attribute
+    /// lines, and answers on the first line that is neither. This crate puts `#[expect]`
+    /// lint waivers between the gate and the module, and those waivers are usually
+    /// MULTI-LINE, so the skip has to balance brackets rather than test for a `#[` prefix:
+    /// a waiver's continuation line (`clippy::unwrap_used,`) looks like ordinary code and
+    /// ended the scan early, which is what made a first version of this report every
+    /// `#[expect]`-waivered test module in the crate as production.
+    fn gates_a_module(from: &str) -> bool {
+        let bracket_delta = |line: &str| -> i32 {
+            let opens = i32::try_from(line.matches('[').count()).unwrap_or(0);
+            let closes = i32::try_from(line.matches(']').count()).unwrap_or(0);
+            opens - closes
+        };
+        let mut depth = 0_i32;
+        for line in from.lines().skip(1) {
+            if depth > 0 {
+                depth += bracket_delta(line);
+                continue;
+            }
+            let trimmed = line.trim_start();
+            // Blank, comment, or attribute lines all sit BETWEEN the gate and the module.
+            // The comment case is not hypothetical: `speleodb/sync.rs` explains its
+            // `#[expect]` waiver in three `//` lines between the two, and leaving them out
+            // meant that file was never cut - its whole test module counted as production,
+            // which both risks a false offender and inflates `production_bytes`, the one
+            // number that is supposed to notice a bad cut.
+            if trimmed.is_empty() || trimmed.starts_with("//") {
+                continue;
+            }
+            if trimmed.starts_with("#[") {
+                depth += bracket_delta(line);
+                continue;
+            }
+            // An INLINE module (`mod tests {`) ends the production region. A DECLARATION
+            // (`mod adversarial_tests;`) does not: its body is a separate file the walk
+            // visits on its own, while the rest of THIS file is still production.
+            // `core/state/mod.rs` opens with fourteen such declarations and closes with
+            // `pub use app_state::AppState;` - treating the first one as the boundary
+            // discarded every production line after it, in the module root of the very
+            // directory this guard exists to watch.
+            let is_mod = trimmed.starts_with("mod ") || trimmed.starts_with("pub mod ");
+            return is_mod && !trimmed.trim_end().ends_with(';');
+        }
+        false
+    }
+
+    #[test]
+    fn no_production_caller_mints_its_own_history_budget() {
+        // The bare names. The trailing `(` in each form below separates them from the
+        // budget-SHARING `_within(` variants, which share every one of these prefixes.
+        const BUDGET_MINTING: [&str; 6] = [
+            "load_undo_stack",
+            "load_undo_stack_capped",
+            "load_undo_stack_with_timestamps",
+            "load_undo_stack_with_timestamps_capped",
+            "load_redo_stack_with_timestamps",
+            "load_redo_stack_with_timestamps_capped",
+        ];
+        // BOTH call syntaxes. Method position (`db.load_undo_stack(`) is what anyone
+        // writes, but UFCS (`Database::load_undo_stack(&db, ..)`) is the same function
+        // with the same 2x-budget consequence and matched nothing while the needle
+        // required a leading dot. Neither form matches the `pub fn` that DEFINES a
+        // loader, which is what keeps the workspace-wide walk from reporting the
+        // persistence crate against itself.
+        let call_forms = |name: &str| [format!(".{name}("), format!("Database::{name}(")];
+        // POSITIVE CONTROL, first, because everything below is a negative assertion and a
+        // negative assertion over stale needles passes forever while guarding nothing.
+        // These names live in another crate, so renaming one there is not a compile error
+        // here - it would just quietly retire this test. Pinning them against the defining
+        // source makes that rename fail loudly instead.
+        let defining_src = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../persistence/src/persistence/sqlite/undo.rs"
+        ));
+        for needle in BUDGET_MINTING {
+            assert!(
+                defining_src.contains(&format!("pub fn {needle}(")),
+                "{needle} no longer names a loader in persistence/sqlite/undo.rs - this \
+                 test is guarding a symbol that does not exist"
+            );
+        }
+
+        let mut offenders = Vec::new();
+        let mut scanned = 0_usize;
+        let mut production_bytes = 0_usize;
+        let mut total_bytes = 0_usize;
+        // The WHOLE workspace, not this crate. Rooting at `CARGO_MANIFEST_DIR/src` covered
+        // `crates/core` alone, which left the entire Tauri command surface in
+        // `src-tauri/src/` unwatched - and that is where a new IPC command reading history
+        // would land. Two levels up is `src-tauri/`, whose `crates/*/src` and `src` are
+        // every Rust source that can reach these loaders.
+        let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let mut stack = vec![workspace.join("src"), workspace.join("crates")];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read crate source dir") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|ext| ext != "rs") {
+                    continue;
+                }
+                // WHOLE-file test modules carry no inner `#[cfg(test)]` - the attribute is
+                // on the `mod` declaration in the parent - so the split below cannot see
+                // they are test code. Same set `scripts/check-rust-file-size.mjs` excludes,
+                // and leaving it out is not theoretical: it fired on `core/state/tests.rs`
+                // the first time this test ran.
+                // The loaders' OWN module delegates among them (`load_undo_stack` calls
+                // `self.load_undo_stack_capped`), which is the family's internal business,
+                // not a caller minting a stray budget. The positive control above already
+                // pins this file, so skipping it here costs no coverage.
+                if path.ends_with("persistence/sqlite/undo.rs") {
+                    continue;
+                }
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name == "tests.rs"
+                    || name == "test_helpers.rs"
+                    || name.ends_with("_tests.rs")
+                    || name.ends_with("_fuzz.rs")
+                {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("read source file");
+                // Cut at the test MODULE, not at the first `#[cfg(test)]` of any kind.
+                // Splitting on the bare attribute looks equivalent and is catastrophically
+                // not: a `#[cfg(test)] use ...;` at the top of a file ends the scan there.
+                // `commands.rs` has one on LINE 2 of 1425, so the whole `AppState` command
+                // surface - the likeliest place a new history read lands - was invisible,
+                // and `speleodb_push.rs` was cut at line 308 of 1159.
+                //
+                // The module is not always the NEXT line either: this crate's convention
+                // puts `#[expect(...)]` lint waivers between the gate and the `mod`, so the
+                // cut walks forward over any further attribute lines and requires a `mod`
+                // at the end of them. Anything else (a gated `use`, a gated fn) is not a
+                // module boundary and does not end the production region.
+                let production = text
+                    .match_indices("#[cfg(test)]")
+                    .find(|&(at, _)| gates_a_module(&text[at..]))
+                    .map_or(text.as_str(), |(at, _)| &text[..at]);
+                scanned += 1;
+                production_bytes += production.len();
+                total_bytes += text.len();
+                for name in BUDGET_MINTING {
+                    for needle in call_forms(name) {
+                        if production.contains(&needle) {
+                            offenders.push(format!("{}: {needle}", path.display()));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(scanned > 50, "the walk must actually reach the sources");
+        // ...and actually reach their CONTENT. `scanned` counts files OPENED, so it stayed
+        // happy while the cut was throwing away 99% of the bytes it was counting. A RATIO
+        // rather than a floor, because a floor is satisfied by whatever the tree happens
+        // to be big enough to leak: the first version asserted 500 KB while the real
+        // figure was ~1.6 MB, so a regression discarding two thirds of production would
+        // still have passed.
+        assert!(
+            production_bytes * 10 > total_bytes * 6,
+            "the walk retained {production_bytes} of {total_bytes} bytes across {scanned} \
+             files - the test-module cut is discarding real code"
+        );
+        assert!(
+            offenders.is_empty(),
+            "production code must share the open's budget through the `_within` loaders \
+             (see Database::load_history_budget), never mint its own: {offenders:?}"
+        );
     }
 
     #[test]

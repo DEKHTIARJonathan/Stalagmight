@@ -159,6 +159,34 @@ pub struct AppState {
     /// onto whatever shots in B happen to share those ids.
     pub(super) unrecognised_shot_kinds:
         Mutex<Option<(u64, Vec<crate::models::UnrecognisedShotKind>)>>,
+    /// [#473] True when the OPEN project's persisted undo/redo history could not be
+    /// read and was replaced by an empty stack.
+    ///
+    /// The load paths already degrade gracefully - a corrupt, truncated or hostile
+    /// history table logs and continues with `Vec::new()`, because opening the project
+    /// without its history beats not opening it. What they did NOT do is tell anyone:
+    /// the user's entire undo AND redo history vanished behind a `tracing::warn!` in a
+    /// file they will never read, which docs/notifications.md names as a "silent state
+    /// change" and forbids. This flag is what the banner in `App.tsx` renders from.
+    ///
+    /// Written ONLY inside the load's non-cancellable finalize section, under the same
+    /// `project` mutex acquisition that commits the project it describes. That is what
+    /// keeps it honest under overlapping loads: a cancelled load never reaches finalize,
+    /// so it cannot leave its verdict on the project the user actually opened. Every
+    /// commit writes it, so a clean load clears a previous project's flag by assignment
+    /// rather than by anyone remembering to reset it.
+    ///
+    /// ONE flag for TWO stacks, deliberately, and the banner copy is written to match.
+    /// The undo and redo loads fail independently, so `true` means "at least one stack
+    /// could not be read" - it cannot say which. That is not hypothetical: both stacks
+    /// now share a single inflation budget, so a large-but-legitimate undo history can
+    /// leave the redo pre-scan nothing to spend. Copy that named both stacks was
+    /// therefore false in exactly that case, and now says only what this flag knows.
+    /// Splitting it in two is the change to make if the copy ever needs to be specific.
+    ///
+    /// Transient, never persisted: it describes THIS read of the file, and the next save
+    /// overwrites the unreadable rows anyway.
+    pub(super) history_discarded: AtomicBool,
     /// Memoized closure-adjusted station coordinates for the display-mode toggle.
     /// See [`AdjustedStationsCache`]. Transient; never persisted.
     pub(super) adjusted_cache: Mutex<Option<AdjustedStationsCache>>,
@@ -240,6 +268,8 @@ impl AppState {
             event_sink: Mutex::new(None),
             active_loading: Mutex::new(None),
             unrecognised_shot_kinds: Mutex::new(None),
+            // Default-false: no project is open, so no history has been discarded.
+            history_discarded: AtomicBool::new(false),
             adjusted_cache: Mutex::new(None),
             adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),
@@ -930,5 +960,26 @@ impl AppState {
             }
             _ => Vec::new(),
         }
+    }
+
+    /// [#473] Record whether the just-committed project's history survived its load.
+    ///
+    /// Unconditional assignment, not a set-on-failure: see [`Self::history_discarded`]
+    /// for why every commit must write it.
+    pub fn set_history_discarded(&self, discarded: bool) {
+        self.history_discarded
+            .store(discarded, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// [#473] Whether the open project lost its edit history on load.
+    ///
+    /// A plain read rather than a take, unlike [`Self::take_unrecognised_shot_kinds`]:
+    /// that one drives a one-shot prompt the user answers, this one describes an ongoing
+    /// condition (docs/notifications.md: banner-class), so re-asking must keep returning
+    /// the same answer for as long as the project is open. Dismissal is the frontend's
+    /// business, exactly as it is for the integrity banner.
+    pub fn history_discarded(&self) -> bool {
+        self.history_discarded
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 }
