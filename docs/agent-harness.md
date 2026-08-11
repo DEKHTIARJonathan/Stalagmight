@@ -298,13 +298,15 @@ not rebuild.
 2. **E2E build stamp** - `buildApp` writes
    `$CARGO_TARGET_DIR/<profile>/.stalagmight-e2e-build-stamp.json` after a
    successful build, recording the profile, its cargo features, `viteE2E`, the
-   vite mode, and the mtime of the binary it produced. A missing stamp, a stamp
-   whose profile / features / `viteE2E` disagree with what the start needs, or a
-   binary whose mtime no longer matches the stamp (`./scripts/dev.sh` or a plain
-   `pnpm tauri build` relinked it) is stale. One stamp per profile, beside the
-   binary it vouches for, is what lets debug and release coexist without
-   thrashing rebuilds or running the wrong binary; a pre-release-mode `v1` stamp
-   cannot name its profile and is treated as absent (one rebuild, once).
+   vite mode, the mtime of the binary it produced, and (since `v: 3`) the
+   `repoRoot` + `gitHead` of the source tree the build ran in. A missing stamp, a
+   stamp whose profile / features / `viteE2E` / `repoRoot` disagree with what the
+   start needs, or a binary whose mtime no longer matches the stamp
+   (`./scripts/dev.sh` or a plain `pnpm tauri build` relinked it) is stale. One
+   stamp per profile, beside the binary it vouches for, is what lets debug and
+   release coexist without thrashing rebuilds or running the wrong binary; a
+   pre-release-mode `v1` stamp cannot name its profile and a `v2` stamp cannot
+   name its tree, so both are treated as absent (one rebuild per bump, once).
 
 mtimes alone cannot see *how* a binary was built, so before the stamp a
 `dev.sh`-built binary looked fresh and `auto` attached to a hookless dist, only
@@ -313,13 +315,41 @@ to fail the post-attach `__E2E_TEST__` check - a full attach cycle plus a manual
 (a build output, gitignored / outside the repo), never in the source tree. The
 post-attach `__E2E_TEST__` check remains the definitive backstop.
 
+### Cross-worktree identity (`repoRoot`, issue #488)
+
+Binary AND stamp live in `$CARGO_TARGET_DIR`, which several git worktrees of this
+repo routinely share. mtimes cannot tell one builder from another - worktree A's
+sources are typically OLDER than a binary worktree B just built - so A's
+freshness check passed and A drove B's app, silently testing somebody else's
+code. `v: 3` closes that: the stamp records the realpath of the building tree,
+`checkBuildFreshness` compares it against its own tree, and a mismatch is stale
+with a reason naming both roots and the builder's HEAD:
+
+```
+Rebuilding: the binary was built from a different source tree
+(/path/to/other/worktree @ 1a2b3c4), current tree is /path/to/this/worktree
+```
+
+`app_start` also returns `builtFrom: { repoRoot, gitHead } | null` (who built the
+binary being driven, per its stamp) and, when staleness triggered the rebuild,
+`rebuildReasons`.
+
+**Daemon-root caveat, which the stamp cannot fix.** `.mcp.json` starts the server
+with no cwd pinning, so the MCP daemon builds, stamps and serves whichever tree
+it was launched from. That is self-consistent - its stamp names its own root and
+never looks stale - so a session driven through a daemon rooted in a DIFFERENT
+worktree still runs that other tree's code, and nothing here will say so (check
+the returned `builtFrom` if in doubt). When working in a worktree, drive
+`e2e/agent` via `pnpm exec tsx` from that worktree rather than through a daemon
+someone else started.
+
 ## Tools
 
 Lifecycle:
 
 | Tool | Purpose |
 |---|---|
-| `app_start(build?, headed?, freshProfile?)` | Build if stale, launch, attach, verify hooks. `build`: auto/skip/force. Staleness = source mtimes newer than the binary **or** the E2E build stamp not vouching for it (see below). Default is headless on Xvfb even when a desktop display exists (no window pops up, no focus stealing); `headed: true` shows the window on the real display. |
+| `app_start(build?, headed?, freshProfile?)` | Build if stale, launch, attach, verify hooks. `build`: auto/skip/force. Staleness = source mtimes newer than the binary **or** the E2E build stamp not vouching for it - wrong profile/features/`viteE2E`, relinked behind our back, or built from a different worktree (see above). Returns `builtFrom` (which tree built the binary) and `rebuildReasons` when staleness forced a rebuild. Default is headless on Xvfb even when a desktop display exists (no window pops up, no focus stealing); `headed: true` shows the window on the real display. |
 | `app_stop` | Close app + driver, reap the process group. |
 | `app_restart(freshProfile?=false)` | Restart keeping the profile (persisted-state repros). |
 | `app_status` | Liveness: state, uptime, driverAlive, sessionDir, node. |
