@@ -130,7 +130,7 @@ async function main(): Promise<void> {
         .filter(([key, value]) => process.env[key] !== value)
         .map(([key]) => key),
     );
-    const { applied, refused } = restoreTraceEnv(trace.env);
+    const { applied, refused, cleared } = restoreTraceEnv(trace.env);
     process.env.STALAGMIGHT_FUZZ_REPLAY = tracePath;
     const restored = applied.filter(([key]) => changed.has(key));
     process.stdout.write(
@@ -138,6 +138,14 @@ async function main(): Promise<void> {
         `(seed ${trace.seed}, rev ${trace.gitRev.slice(0, 12)})\n` +
         (restored.length > 0
           ? `  restored from the trace: ${restored.map(([key, value]) => `${key}=${value}`).join(' ')}\n`
+          : '') +
+        // Printed for the same reason `restored` is: a knob the shell set and
+        // the recording did not is a difference between this run and that one,
+        // and silently dropping it would be a replay that quietly is not the
+        // recording. The recording ran on those knobs' DEFAULTS.
+        (cleared.length > 0
+          ? `  cleared ${cleared.length} knob(s) the recording did not have, back to their defaults: ` +
+            `${cleared.join(', ')}\n`
           : '') +
         (refused.length > 0
           ? `  REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.join(', ')}\n`

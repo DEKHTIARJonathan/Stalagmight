@@ -104,10 +104,19 @@ async function main(): Promise<number> {
   // rather than inheriting whatever shell the shrink was started from - through
   // the recorder's own prefix filter, because a trace is a file from wherever
   // the user got it and this process goes on to invoke cargo and launch the app.
-  const { refused } = restoreTraceEnv(trace.env);
+  const { refused, cleared } = restoreTraceEnv(trace.env);
   if (refused.length > 0) {
     process.stdout.write(
       `REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.join(', ')}\n`,
+    );
+  }
+  if (cleared.length > 0) {
+    // A knob this shell set and the recording did not. Unset here so the
+    // recording's DEFAULT applies - said out loud, because it is a difference
+    // between the two runs and every replay in the shrink inherits it.
+    process.stdout.write(
+      `CLEARED ${cleared.length} knob(s) the recording did not have, back to their defaults: ` +
+        `${cleared.join(', ')}\n`,
     );
   }
 

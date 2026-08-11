@@ -812,6 +812,66 @@ describe('restoreTraceEnv', () => {
       'STALAGMIGHT_OTHER_TEST',
     ]);
   });
+
+  /**
+   * The default-not-recorded divergence, which is a property of the MECHANISM
+   * and not of any one knob.
+   *
+   * Only SET keys are recorded, so a run on a knob's default writes no entry for
+   * it. Restoring "every key the trace has" then leaves a shell override in
+   * place, and the replay silently is not the recording - with no signal
+   * anywhere, because nothing was dropped or refused, just never mentioned.
+   * `STALAGMIGHT_FUZZ_IMPORT_FORCE_STATIONS` is the instance that surfaced it
+   * (default on; a `0` in the replay shell skips the station forcing and the
+   * walk falls into the cancel loop), and every knob with a default has it.
+   */
+  it('CLEARS a restorable knob the recording did not have, so its default applies', () => {
+    process.env.STALAGMIGHT_FUZZ_TEST_KNOB = 'from the shell';
+    process.env.STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB = 'also from the shell';
+
+    const { cleared } = restoreTraceEnv({});
+
+    expect(process.env.STALAGMIGHT_FUZZ_TEST_KNOB).toBeUndefined();
+    expect(process.env.STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB).toBeUndefined();
+    expect(cleared).toEqual(expect.arrayContaining(['STALAGMIGHT_FUZZ_TEST_KNOB']));
+  });
+
+  it('leaves a knob the recording DID have at the recorded value, not cleared', () => {
+    process.env.STALAGMIGHT_FUZZ_TEST_KNOB = 'from the shell';
+
+    const { applied, cleared } = restoreTraceEnv({ STALAGMIGHT_FUZZ_TEST_KNOB: 'from the trace' });
+
+    expect(process.env.STALAGMIGHT_FUZZ_TEST_KNOB).toBe('from the trace');
+    expect(applied).toEqual([['STALAGMIGHT_FUZZ_TEST_KNOB', 'from the trace']]);
+    expect(cleared).not.toContain('STALAGMIGHT_FUZZ_TEST_KNOB');
+  });
+
+  it('never clears a NEVER_RESTORED path knob, which the CALLER owns', () => {
+    // Symmetry with the refusal: a trace may not set where this process writes,
+    // what it replays next, or which tree it walks - and it may not take those
+    // away either. `fuzz-shrink` sets `_REPLAY` and `_TRACE` before restoring,
+    // and the corpus root can only come from the shell.
+    process.env.STALAGMIGHT_FUZZ_TRACE = '/tmp/mine/out.json';
+    process.env[CORPUS_DIR_ENV] = '/my/corpus';
+    try {
+      const { cleared } = restoreTraceEnv({});
+      expect(process.env.STALAGMIGHT_FUZZ_TRACE).toBe('/tmp/mine/out.json');
+      expect(process.env[CORPUS_DIR_ENV]).toBe('/my/corpus');
+      expect(cleared).not.toContain('STALAGMIGHT_FUZZ_TRACE');
+      expect(cleared).not.toContain(CORPUS_DIR_ENV);
+    } finally {
+      delete process.env.STALAGMIGHT_FUZZ_TRACE;
+      delete process.env[CORPUS_DIR_ENV];
+    }
+  });
+
+  it('leaves keys outside the prefixes alone: it clears knobs, not the environment', () => {
+    const before = process.env.PATH;
+    process.env.STALAGMIGHT_OTHER_TEST = 'not a knob';
+    restoreTraceEnv({});
+    expect(process.env.PATH).toBe(before);
+    expect(process.env.STALAGMIGHT_OTHER_TEST).toBe('not a knob');
+  });
 });
 
 describe('noProjectEpisodes (replay determinism for headless episodes)', () => {

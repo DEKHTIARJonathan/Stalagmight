@@ -454,7 +454,16 @@ export function shrinkableSteps(steps: readonly TraceStep[]): ShrinkableSteps {
   return { payload, rebuild };
 }
 
-/** Env knobs that change what a run does, and so belong in a trace header. */
+/**
+ * Env knobs that change what a run does, and so belong in a trace header.
+ *
+ * These prefixes define a CLOSED SET, and that is load-bearing on the restoring
+ * side: within them, a trace's `env` is the complete truth, and a key it does
+ * not carry is one the recording did not have. So a knob must be named with one
+ * of these prefixes to be honoured on replay - and adding a knob outside them
+ * makes it invisible to record/replay, which is a silent divergence rather than
+ * a missing feature. See `restoreTraceEnv` for the other half.
+ */
 const RECORDED_ENV_PREFIXES = ['STALAGMIGHT_FUZZ_', 'STALAGMIGHT_PERSIST_FUZZ_'];
 
 /**
@@ -499,6 +508,7 @@ const NEVER_RESTORED = [
 export function restoreTraceEnv(recorded: Readonly<Record<string, string>>): {
   applied: [string, string][];
   refused: string[];
+  cleared: string[];
 } {
   const applied: [string, string][] = [];
   const refused: string[] = [];
@@ -514,7 +524,32 @@ export function restoreTraceEnv(recorded: Readonly<Record<string, string>>): {
       refused.push(key);
     }
   }
-  return { applied, refused };
+  // The recorded env is the WHOLE truth about restorable knobs, so a knob the
+  // recording did not have is unset here rather than inherited.
+  //
+  // Only SET keys are recorded, so a run on a knob's DEFAULT writes no entry for
+  // it - and restoring "every key the trace has" then leaves a shell override in
+  // place. That is a divergence with no signal anywhere: a trace recorded with
+  // the default replays against the override and silently is not the recording.
+  // The instance that surfaced it is `STALAGMIGHT_FUZZ_IMPORT_FORCE_STATIONS`
+  // (default on; a replay shell with `0` skips `ensureStationsVisible` and the
+  // walk falls into the cancel loop), but it is a property of the mechanism, not
+  // of that knob: EVERY knob whose default differs from a shell value has it.
+  //
+  // Clearing here fixes the whole class in one place and needs no list of knobs
+  // or defaults - unset restores the default by construction, which is what the
+  // recording ran on. `NEVER_RESTORED` is exempt in both directions: those name
+  // an output or input PATH the CALLER owns (where to write a trace, what to
+  // replay next, which corpus tree to walk), so a file must neither set them nor
+  // take them away.
+  const cleared: string[] = [];
+  for (const key of Object.keys(process.env)) {
+    if (key in recorded || NEVER_RESTORED.includes(key)) continue;
+    if (!RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
+    delete process.env[key];
+    cleared.push(key);
+  }
+  return { applied, refused, cleared };
 }
 
 function recordedEnv(): Record<string, string> {
