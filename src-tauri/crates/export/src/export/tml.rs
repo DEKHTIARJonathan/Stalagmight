@@ -1386,90 +1386,95 @@ fn build_export_shots_with_report(
         }
     }
 
-    // Fold station comments into the TML <Comment> field of the shot whose
-    // `to` station matches. The shot side of the comment is ZWSP-prefixed; the
-    // station side is written verbatim. Multiple StationRefs that alias the
-    // same Ariane shot (parent <-> merged child) have their comments joined
-    // by '\n'. See `models::comment_split` for the marker convention.
-    if !project.station_comments.is_empty() {
-        // ariane_id -> list of (StationRef, comment), in a deterministic
-        // order (sorted by section_id then station_index) so the joined
-        // output is reproducible across exports.
-        let mut comments_by_ariane: HashMap<i64, Vec<(StationRef, &str)>> = HashMap::new();
-        let mut entries: Vec<(StationRef, &str)> = project
-            .station_comments
-            .iter()
-            .filter(|(_, v)| !v.is_empty())
-            .filter_map(|(k, v)| project.resolve_key(k).map(|sr| (sr, v.as_str())))
-            .collect();
-        entries.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
-        for (sr, text) in entries {
-            let Some(&ariane_id) = station_to_ariane.get(&(sr.section_id, sr.station_index)) else {
-                tracing::debug!(
-                    section_id = sr.section_id,
-                    station_index = sr.station_index,
-                    "Station comment dropped from .tml export: no Ariane shot represents this station"
-                );
-                continue;
-            };
-            comments_by_ariane
-                .entry(ariane_id)
-                .or_default()
-                .push((sr, text));
-        }
-
-        // Apply to each block's REAL/VIRTUAL shots (skip START so its
-        // hardcoded "START" content stays untouched; skip CLOSURE as it has
-        // no `to` station in the create-station sense).
-        //
-        // `remove`, not `get`: an Ariane id belongs to exactly one emitted shot, so
-        // taking the entry can never steal it from another shot - and what is LEFT
-        // in the map once every block has been walked is precisely the set of
-        // station comments this export dropped, which the loop below reports. That
-        // is the only way the START-aliased drops become visible at all: the START
-        // shot's id IS the id `station_to_ariane` holds for root station 0, and for
-        // the primary zero datum's station when the root is split there, so the
-        // lookup that reports "no Ariane shot represents this station" above
-        // succeeds and the comment is then discarded HERE, by a shot-type skip that
-        // used to run before the lookup and say nothing.
-        for block in &mut blocks {
-            for shot in &mut block.shots {
-                if shot.shot_type != "REAL" && shot.shot_type != "VIRTUAL" {
-                    continue;
-                }
-                let Some(attachments) = comments_by_ariane.remove(&shot.id) else {
-                    continue;
-                };
-                let joined_station: String = attachments
-                    .iter()
-                    .map(|(_, t)| *t)
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                shot.comment = comment_split::merge(shot.comment.as_deref(), Some(&joined_station));
-            }
-        }
-
-        // Anything still in the map named an Ariane node that no fold-eligible shot
-        // carries - a START, or (defensively) an id `station_to_ariane` holds with
-        // no shot of its own. Those comments are simply absent from the file, and
-        // WHICH ones is not derivable from the output, so the drop has to be said
-        // out loud here or it is unobservable. Sorted so the log reads the same on
-        // every export, like the fold itself.
-        let mut dropped: Vec<(StationRef, i64)> = comments_by_ariane
-            .into_iter()
-            .flat_map(|(ariane_id, attachments)| {
-                attachments.into_iter().map(move |(sr, _)| (sr, ariane_id))
-            })
-            .collect();
-        dropped.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
-        for (sr, ariane_id) in dropped {
+    // Fold comments into the TML <Comment> field. The shot side is ZWSP-marked
+    // on EVERY REAL/VIRTUAL shot, not only when a station comment rides along:
+    // the importer routes unmarked lines to the station (the default), so an
+    // unmarked shot comment this exporter wrote would be indistinguishable from
+    // text an Ariane user typed and would come back on the wrong side (#564).
+    // Station comments attach to the shot whose `to` station matches, written
+    // verbatim after the marked lines. Multiple StationRefs that alias the same
+    // Ariane shot (parent <-> merged child) have their comments joined by '\n'.
+    // See `models::comment_split` for the marker convention.
+    //
+    // ariane_id -> list of (StationRef, comment), in a deterministic order
+    // (sorted by section_id then station_index) so the joined output is
+    // reproducible across exports.
+    let mut comments_by_ariane: HashMap<i64, Vec<(StationRef, &str)>> = HashMap::new();
+    let mut entries: Vec<(StationRef, &str)> = project
+        .station_comments
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .filter_map(|(k, v)| project.resolve_key(k).map(|sr| (sr, v.as_str())))
+        .collect();
+    entries.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
+    for (sr, text) in entries {
+        let Some(&ariane_id) = station_to_ariane.get(&(sr.section_id, sr.station_index)) else {
             tracing::debug!(
                 section_id = sr.section_id,
                 station_index = sr.station_index,
-                ariane_id,
-                "Station comment dropped from .tml export: the Ariane shot representing this station takes no station comment (START, or no shot of its own)"
+                "Station comment dropped from .tml export: no Ariane shot represents this station"
             );
+            continue;
+        };
+        comments_by_ariane
+            .entry(ariane_id)
+            .or_default()
+            .push((sr, text));
+    }
+
+    // Apply to each block's REAL/VIRTUAL shots (skip START so its
+    // hardcoded "START" content stays untouched and unmarked - the importer
+    // drops START shots entirely; skip CLOSURE as it has no `to` station in
+    // the create-station sense).
+    //
+    // `remove`, not `get`: an Ariane id belongs to exactly one emitted shot, so
+    // taking the entry can never steal it from another shot - and what is LEFT
+    // in the map once every block has been walked is precisely the set of
+    // station comments this export dropped, which the loop below reports. That
+    // is the only way the START-aliased drops become visible at all: the START
+    // shot's id IS the id `station_to_ariane` holds for root station 0, and for
+    // the primary zero datum's station when the root is split there, so the
+    // lookup that reports "no Ariane shot represents this station" above
+    // succeeds and the comment is then discarded HERE, by a shot-type skip that
+    // used to run before the lookup and say nothing.
+    for block in &mut blocks {
+        for shot in &mut block.shots {
+            if shot.shot_type != "REAL" && shot.shot_type != "VIRTUAL" {
+                continue;
+            }
+            let joined_station: Option<String> = comments_by_ariane.remove(&shot.id).map(
+                |attachments| {
+                    attachments
+                        .iter()
+                        .map(|(_, t)| *t)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                },
+            );
+            shot.comment = comment_split::merge(shot.comment.as_deref(), joined_station.as_deref());
         }
+    }
+
+    // Anything still in the map named an Ariane node that no fold-eligible shot
+    // carries - a START, or (defensively) an id `station_to_ariane` holds with
+    // no shot of its own. Those comments are simply absent from the file, and
+    // WHICH ones is not derivable from the output, so the drop has to be said
+    // out loud here or it is unobservable. Sorted so the log reads the same on
+    // every export, like the fold itself.
+    let mut dropped: Vec<(StationRef, i64)> = comments_by_ariane
+        .into_iter()
+        .flat_map(|(ariane_id, attachments)| {
+            attachments.into_iter().map(move |(sr, _)| (sr, ariane_id))
+        })
+        .collect();
+    dropped.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
+    for (sr, ariane_id) in dropped {
+        tracing::debug!(
+            section_id = sr.section_id,
+            station_index = sr.station_index,
+            ariane_id,
+            "Station comment dropped from .tml export: the Ariane shot representing this station takes no station comment (START, or no shot of its own)"
+        );
     }
 
     // Third pass: generate CLOSURE shots from loop_closures

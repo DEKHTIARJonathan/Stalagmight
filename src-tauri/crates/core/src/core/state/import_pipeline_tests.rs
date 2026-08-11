@@ -432,6 +432,106 @@ fn zero_datums_are_stable_across_export_import_cycles() {
     );
 }
 
+/// #564: a shot comment with no station comment beside it used to export
+/// UNMARKED, and the default import routes unmarked lines to the station -
+/// so the text silently changed side on every default round trip. Cover the
+/// three shapes: shot comment alone, station comment alone, and both on one
+/// shot (the shape that always worked, which is why the bug hid).
+#[test]
+fn comments_keep_their_side_across_a_default_reimport() {
+    use crate::core::state::{AppState, VirtualShotMode};
+    use crate::core::Command;
+    use crate::models::{Project, SectionData, ShotData, StationRef};
+
+    let mut original = Project::new("Comments".to_string(), None);
+    original.add_section(SectionData {
+        name: Some("Main".to_string()),
+        color: "#ff0000".to_string(),
+        shots: (0..3)
+            .map(|i| ShotData {
+                length: 5.0,
+                azimuth_in: 90.0,
+                comment: match i {
+                    0 => Some("broken tape".to_string()),
+                    2 => Some("silty here".to_string()),
+                    _ => None,
+                },
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    });
+    // Station comments away from station 0 (the START alias documentedly
+    // drops a comment there): shot 1's to-station carries one alone, shot 2's
+    // to-station rides beside that shot's own comment.
+    original.station_comments.insert(
+        StationRef {
+            section_id: 0,
+            station_index: 2,
+        }
+        .into(),
+        "junction with main".to_string(),
+    );
+    original.station_comments.insert(
+        StationRef {
+            section_id: 0,
+            station_index: 3,
+        }
+        .into(),
+        "beware silt".to_string(),
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("comments.tmlu");
+    crate::export::tml::export_tml(&original, &path).unwrap();
+    let tml = parse_tml(&path).unwrap();
+    // `true` = comments-on-stations, the import dialog's default - the exact
+    // setting under which the missing marker moved shot comments.
+    let (sections, closures, _) = convert_tml_to_import_configs(&tml, false, true).unwrap();
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "comments-reimport".to_string(),
+        location: None,
+    });
+    let result = state.execute_tml_import_sections(
+        sections,
+        closures,
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+        None,
+    );
+    assert!(result.success, "import failed: {:?}", result.error);
+    let reimported = state.get_project_state().unwrap();
+
+    assert_eq!(reimported.sections.len(), 1, "one section must come back");
+    let section = &reimported.sections[0];
+    let shot_comments: Vec<Option<&str>> =
+        section.shots.iter().map(|s| s.comment.as_deref()).collect();
+    assert_eq!(
+        shot_comments,
+        vec![Some("broken tape"), None, Some("silty here")],
+        "shot comments must come back on their shots, not move to stations"
+    );
+
+    let mut station_comments: Vec<(u32, &str)> = reimported
+        .station_comments
+        .iter()
+        .filter_map(|(k, v)| {
+            reimported
+                .resolve_key(k)
+                .map(|sr| (sr.station_index, v.as_str()))
+        })
+        .collect();
+    station_comments.sort_unstable();
+    assert_eq!(
+        station_comments,
+        vec![(2, "junction with main"), (3, "beware silt")],
+        "station comments must come back on their stations and nowhere else"
+    );
+}
+
 /// Every shot in the project, cross-checked with the real validator - the
 /// same call `command_shot.rs` makes.
 fn inclination_depth_mismatch_count(project: &crate::models::Project) -> usize {

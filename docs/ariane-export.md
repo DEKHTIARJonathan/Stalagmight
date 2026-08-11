@@ -252,6 +252,11 @@ through Ariane, the exporter packs both into the shot's `<Comment>`:
 - Shot vs station lines inside the resulting Comment are distinguished by a
   zero-width-space (`U+200B`) prefix: lines prefixed with `ZWSP` are shot
   comments; lines without the prefix are station comments.
+- The marker goes on **every** exported shot comment, whether or not a station
+  comment rides along. An unmarked line is indistinguishable from text an
+  Ariane user typed, and the default import routes it to the station - before
+  #564 a lone shot comment therefore silently became a station comment on a
+  default re-import.
 - The marker is invisible in any editor, including Ariane's, so a reader sees
   a single readable Comment block.
 
