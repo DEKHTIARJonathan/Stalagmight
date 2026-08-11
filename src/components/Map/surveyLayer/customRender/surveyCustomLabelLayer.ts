@@ -25,6 +25,15 @@ import { LABEL_VERTEX_SRC, LABEL_FRAGMENT_SRC } from './labelShaders';
 import { SDF_FONT_SIZE, SDF_RADIUS, type GlyphAtlas } from './glyphAtlas';
 import { computeLabelUniforms, type LabelStyleInputs } from './labelStyle';
 import type { LabelBuffers } from './labelTessellate';
+import {
+  type ProgramBundle,
+  linkProgramBundle,
+  deleteProgramBundle,
+  bindVec2,
+  bindFloat,
+  bindColor,
+  bindIntU8,
+} from './glProgram';
 
 /** See {@link import('./surveyCustomLayer').SelfDisableCallback}. */
 export type LabelSelfDisableCallback = (reason: string) => void;
@@ -55,37 +64,37 @@ interface LabelGpu {
   count: number;
 }
 
-function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader | null {
-  const sh = gl.createShader(type);
-  if (!sh) return null;
-  gl.shaderSource(sh, src);
-  gl.compileShader(sh);
-  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-    console.warn('[customRender] label shader compile failed:', gl.getShaderInfoLog(sh));
-    gl.deleteShader(sh);
-    return null;
-  }
-  return sh;
-}
+/** Uniform / attribute names of the label program, resolved once at link time
+ *  ({@link ProgramBundle}). Each list must match the GLSL declarations in
+ *  labelShaders.ts; `__tests__/programNames.test.ts` pins that. `u_text_size_px`
+ *  and the other per-kind arrays are queried by their BARE name, exactly as the
+ *  per-frame lookups did. */
+export const LABEL_UNIFORMS = [
+  'u_matrix',
+  'u_viewport',
+  'u_atlas_size',
+  'u_font_size',
+  'u_sdf_radius',
+  'u_zoom',
+  'u_text_size_px',
+  'u_opacity',
+  'u_kind_visible',
+  'u_halo_color',
+  'u_halo_width_px',
+  'u_hide_reference',
+  'u_hide_jump',
+  'u_atlas',
+] as const;
 
-function link(gl: WebGL2RenderingContext, vsSrc: string, fsSrc: string): WebGLProgram | null {
-  const vs = compile(gl, gl.VERTEX_SHADER, vsSrc);
-  const fs = compile(gl, gl.FRAGMENT_SHADER, fsSrc);
-  if (!vs || !fs) return null;
-  const prog = gl.createProgram();
-  if (!prog) return null;
-  gl.attachShader(prog, vs);
-  gl.attachShader(prog, fs);
-  gl.linkProgram(prog);
-  gl.deleteShader(vs);
-  gl.deleteShader(fs);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-    console.warn('[customRender] label program link failed:', gl.getProgramInfoLog(prog));
-    gl.deleteProgram(prog);
-    return null;
-  }
-  return prog;
-}
+export const LABEL_ATTRIBS = [
+  'a_anchor',
+  'a_offset_em',
+  'a_uv',
+  'a_color',
+  'a_kind',
+  'a_reveal_zoom',
+  'a_flags',
+] as const;
 
 function makeBuffer(gl: WebGL2RenderingContext, target: number, data: ArrayBufferView): WebGLBuffer {
   const buf = gl.createBuffer()!;
@@ -112,7 +121,7 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
 
   private map: MaplibreMap | null = null;
   private gl: WebGL2RenderingContext | null = null;
-  private program: WebGLProgram | null = null;
+  private bundle: ProgramBundle<typeof LABEL_UNIFORMS, typeof LABEL_ATTRIBS> | null = null;
   private gpu: LabelGpu | null = null;
   private tex: WebGLTexture | null = null;
   /** Atlas dims currently allocated in `tex` (0 = not yet uploaded). */
@@ -160,8 +169,11 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
     this.gl = gl;
     this.disabled = false;
     this.disabledReason = null;
-    this.program = link(gl, LABEL_VERTEX_SRC, LABEL_FRAGMENT_SRC);
-    if (!this.program) {
+    // linkProgramBundle() already logs getShaderInfoLog / getProgramInfoLog ungated.
+    this.bundle = linkProgramBundle(
+      gl, LABEL_VERTEX_SRC, LABEL_FRAGMENT_SRC, LABEL_UNIFORMS, LABEL_ATTRIBS, '[customRender] label',
+    );
+    if (!this.bundle) {
       console.warn('[customRender] label program link failed; disabling custom label layer');
       this.disabled = true;
       this.disabledReason = 'program-link-failed';
@@ -290,46 +302,48 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
   render(gl: WebGLRenderingContext | WebGL2RenderingContext, options: CustomRenderMethodInput): void {
     if (this.disabled || !(gl instanceof WebGL2RenderingContext)) return;
     const data = this.data;
-    if (!data || !this.program || !this.gpu || !this.tex) return;
+    if (!data || !this.bundle || !this.gpu || !this.tex) return;
     const mainMatrix = options.defaultProjectionData.mainMatrix as ArrayLike<number> | undefined;
     if (!mainMatrix) return;
     const matrix = composeAnchorMatrix(mainMatrix, data.anchorX, data.anchorY);
     const zoom = this.map?.getZoom?.() ?? 0;
     const u = computeLabelUniforms(zoom, this.style);
-    const prog = this.program;
+    // `uloc`, not the sibling layers' `u`: that name already holds this frame's
+    // computed uniform VALUES here.
+    const { program, uniforms: uloc, attribs: a } = this.bundle;
     const g = this.gpu;
 
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
-    gl.useProgram(prog);
+    gl.useProgram(program);
 
-    gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'u_matrix'), false, matrix);
-    gl.uniform2f(gl.getUniformLocation(prog, 'u_viewport'), gl.drawingBufferWidth, gl.drawingBufferHeight);
-    gl.uniform2f(gl.getUniformLocation(prog, 'u_atlas_size'), this.texWidth, this.texHeight);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_font_size'), SDF_FONT_SIZE);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_sdf_radius'), SDF_RADIUS);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_zoom'), zoom);
-    gl.uniform1fv(gl.getUniformLocation(prog, 'u_text_size_px'), u.textSizePx);
-    gl.uniform1fv(gl.getUniformLocation(prog, 'u_opacity'), u.opacity);
-    gl.uniform1fv(gl.getUniformLocation(prog, 'u_kind_visible'), u.kindVisible);
-    gl.uniform4fv(gl.getUniformLocation(prog, 'u_halo_color'), u.haloColor);
-    gl.uniform1fv(gl.getUniformLocation(prog, 'u_halo_width_px'), u.haloWidthPx);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_reference'), u.hideReference);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_jump'), u.hideJump);
+    gl.uniformMatrix4fv(uloc.u_matrix, false, matrix);
+    gl.uniform2f(uloc.u_viewport, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.uniform2f(uloc.u_atlas_size, this.texWidth, this.texHeight);
+    gl.uniform1f(uloc.u_font_size, SDF_FONT_SIZE);
+    gl.uniform1f(uloc.u_sdf_radius, SDF_RADIUS);
+    gl.uniform1f(uloc.u_zoom, zoom);
+    gl.uniform1fv(uloc.u_text_size_px, u.textSizePx);
+    gl.uniform1fv(uloc.u_opacity, u.opacity);
+    gl.uniform1fv(uloc.u_kind_visible, u.kindVisible);
+    gl.uniform4fv(uloc.u_halo_color, u.haloColor);
+    gl.uniform1fv(uloc.u_halo_width_px, u.haloWidthPx);
+    gl.uniform1f(uloc.u_hide_reference, u.hideReference);
+    gl.uniform1f(uloc.u_hide_jump, u.hideJump);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.uniform1i(gl.getUniformLocation(prog, 'u_atlas'), 0);
+    gl.uniform1i(uloc.u_atlas, 0);
 
-    this.bindVec2(gl, prog, 'a_anchor', g.anchor);
-    this.bindVec2(gl, prog, 'a_offset_em', g.offsetEm);
-    this.bindVec2(gl, prog, 'a_uv', g.uv);
-    this.bindColor(gl, prog, 'a_color', g.color);
-    this.bindIntU8(gl, prog, 'a_kind', g.kind);
-    this.bindFloat(gl, prog, 'a_reveal_zoom', g.revealZoom);
-    this.bindIntU8(gl, prog, 'a_flags', g.flags);
+    bindVec2(gl, a.a_anchor, g.anchor);
+    bindVec2(gl, a.a_offset_em, g.offsetEm);
+    bindVec2(gl, a.a_uv, g.uv);
+    bindColor(gl, a.a_color, g.color);
+    bindIntU8(gl, a.a_kind, g.kind);
+    bindFloat(gl, a.a_reveal_zoom, g.revealZoom);
+    bindIntU8(gl, a.a_flags, g.flags);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
 
@@ -358,39 +372,6 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
     }
   }
 
-  private bindVec2(gl: WebGL2RenderingContext, prog: WebGLProgram, name: string, buf: WebGLBuffer): void {
-    const loc = gl.getAttribLocation(prog, name);
-    if (loc < 0) return;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-  }
-
-  private bindFloat(gl: WebGL2RenderingContext, prog: WebGLProgram, name: string, buf: WebGLBuffer): void {
-    const loc = gl.getAttribLocation(prog, name);
-    if (loc < 0) return;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 1, gl.FLOAT, false, 0, 0);
-  }
-
-  private bindColor(gl: WebGL2RenderingContext, prog: WebGLProgram, name: string, buf: WebGLBuffer): void {
-    const loc = gl.getAttribLocation(prog, name);
-    if (loc < 0) return;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 4, gl.UNSIGNED_BYTE, true, 0, 0);
-  }
-
-  /** Bind a UNSIGNED_BYTE INTEGER attribute (`in uint`) with `vertexAttribIPointer`. */
-  private bindIntU8(gl: WebGL2RenderingContext, prog: WebGLProgram, name: string, buf: WebGLBuffer): void {
-    const loc = gl.getAttribLocation(prog, name);
-    if (loc < 0) return;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribIPointer(loc, 1, gl.UNSIGNED_BYTE, 0, 0);
-  }
-
   private freeGpu(): void {
     const gl = this.gl;
     if (!gl || !this.gpu) return;
@@ -406,12 +387,12 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
     this.freeGpu();
     if (gl) {
       if (this.tex) gl.deleteTexture(this.tex);
-      if (this.program) gl.deleteProgram(this.program);
+      deleteProgramBundle(gl, this.bundle);
     }
     this.tex = null;
     this.texWidth = 0;
     this.texHeight = 0;
-    this.program = null;
+    this.bundle = null;
     this.gl = null;
     this.map = null;
   }

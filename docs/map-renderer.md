@@ -29,9 +29,10 @@ upload, draw).
 The Global View is a **parallel implementation**, not a reuse: its own
 tessellator, shaders, and hit index live under
 `src/components/GlobalView/customRender/`, sharing the small pure helpers -
-`colorPack.ts`, the `SHOT_ALPHA_*` constants, and the anchor-matrix math in
-`mercator.ts`. A fix in the tessellator, shaders, or hit index of one is not a
-fix in the other.
+`colorPack.ts`, the `SHOT_ALPHA_*` constants, the anchor-matrix math in
+`mercator.ts`, and the GL program plumbing in `glProgram.ts` (compile/link plus
+the link-time uniform/attribute location cache, #339). A fix in the
+tessellator, shaders, or hit index of one is not a fix in the other.
 
 Still ordinary MapLibre, on small GeoJSON sources built in
 `SurveyLayer.initializeSources`: loop closures, the gas route highlight, merge
@@ -182,7 +183,10 @@ absorbed. Three paths reach it:
 
 - **`onAdd`**: no WebGL2 context (`webgl2-unavailable`) or a program that will
   not link (`program-link-failed`). The controller sees `isDisabled()` right
-  after `addLayer`, removes the dead layer, and latches fatal.
+  after `addLayer`, removes the dead layer, and latches fatal. A successful
+  link also resolves the program's uniform/attribute locations into its bundle
+  (`glProgram.ts`), so a context restore - which re-runs `onAdd` - rebuilds
+  the program and its location cache together.
 - **Mid-render**: each layer calls `gl.getError()` after its draws for the first
   5 frames only (a `getError` is a pipeline stall, and WebKitGTK can drop a
   layer silently), self-disabling with a `gl-error-0x<code>` reason. This fires
