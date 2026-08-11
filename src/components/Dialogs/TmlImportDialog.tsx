@@ -21,7 +21,7 @@ import { DialogWrapper } from './DialogWrapper';
 import { WizardMapPanel } from './WizardMapPanel';
 import { WizardScrollBody } from './WizardScrollBody';
 import { WIZARD_MAP_PANEL_MAX_WIDTH } from '../SingleSystemView/layoutConstants';
-import { usePreviewSquareSize } from './usePreviewSquareSize';
+import { usePreviewSize } from './usePreviewSize';
 import SectionPreview from './SectionPreview';
 import { TmlSectionTable } from './TmlSectionTable';
 import {
@@ -149,12 +149,12 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     setPlacement(next);
   }, []);
 
-  // The map column, and the square the preview draws into. Width and its
-  // persistence are owned by uiStore/WizardMapPanel (#404).
+  // The map column, and the box the preview draws into (it fills the column,
+  // #567). Width and its persistence are owned by uiStore/WizardMapPanel (#404).
   const mapPanelWidth = useUIStore((s) => s.wizardMapPanelWidth);
   const setMapPanelWidth = useUIStore((s) => s.setWizardMapPanelWidth);
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const [previewRef, previewSize] = usePreviewSquareSize(WIZARD_MAP_PANEL_MAX_WIDTH);
+  const [previewRef, previewSize] = usePreviewSize(WIZARD_MAP_PANEL_MAX_WIDTH);
 
   // What the import will build, in one frame, under the current toggles. The
   // preview and the section rows' "moved to origin" flags both read this, so
@@ -572,7 +572,8 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         >
           <SectionPreview
             segmentSections={previewSections}
-            size={previewSize}
+            size={previewSize.width}
+            height={previewSize.height}
           />
         </WizardMapPanel>
 
