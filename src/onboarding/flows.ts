@@ -17,13 +17,8 @@ export interface OnboardingStepDefinition {
   interaction?: OnboardingInteraction;
   tooltipMaxWidth?: number;
   tooltipOffsetX?: number;
-  tooltipOffsetY?: number;
-  tooltipAnchorY?: 'auto' | 'top' | 'bottom';
   tooltipTargetSelector?: string;
   illustration?: OnboardingIllustration;
-  scrollContainerSelector?: string;
-  scrollTargetSelector?: string;
-  scrollAlignment?: 'top' | 'nearest';
 }
 
 export interface OnboardingContext {
