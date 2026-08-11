@@ -147,6 +147,24 @@ describe('attachLongPressTouch', () => {
     detach();
   });
 
+  it('drops a pending press when a second finger joins it', () => {
+    // A pinch usually starts one finger at a time. The first finger then sits
+    // still through the whole gesture, so the wobble-cancel never sees it and
+    // the touch count is the only thing that can call the press off.
+    const onLongPress = vi.fn(() => true);
+    const detach = attachLongPressTouch(target, { onLongPress });
+
+    dispatch(target, 'touchstart', [touchAt(10, 10)]);
+    vi.advanceTimersByTime(300);
+    dispatch(target, 'touchstart', [touchAt(10, 10), touchAt(80, 80)]);
+    vi.advanceTimersByTime(500);
+
+    expect(onLongPress).not.toHaveBeenCalled();
+    expect(dispatch(target, 'touchend', []).defaultPrevented).toBe(false);
+
+    detach();
+  });
+
   it('drops a pending press on touchcancel, and clears the swallow flag', () => {
     const onLongPress = vi.fn(() => true);
     const detach = attachLongPressTouch(target, { onLongPress });

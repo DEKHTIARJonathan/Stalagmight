@@ -78,7 +78,7 @@ scroll container serves every cell (see `useTouchContextMenu` below).
 |---|---|---|
 | Delay | `delay` option, default 500 ms (`useLongPress.ts:121`) | `LONG_PRESS_MS` = 500 ms |
 | Move cancel | `moveThreshold` option, default 10 px | `MOVE_CANCEL_PX` = 10 px, compared squared |
-| Multi-touch | not checked | ignored unless `e.touches.length === 1` |
+| Multi-touch | not checked | armed only at `e.touches.length === 1`, and a second finger cancels a press already pending |
 | Events | pointer events, spread onto an element | raw `touch*` listeners on the element |
 
 The canvas constants used to be inline literals in a state machine each map

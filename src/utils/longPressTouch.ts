@@ -84,7 +84,15 @@ export function attachLongPressTouch(
   };
 
   const handleTouchStart = (e: TouchEvent) => {
-    if (e.touches.length !== 1) return;
+    // A second finger is a pinch, and it ends any press already pending: a
+    // pinch that starts one finger at a time leaves the first finger sitting
+    // still, so the wobble-cancel would never see it and the hold would fire
+    // mid-gesture. `fired` is deliberately untouched - a press that already
+    // opened a menu still owns the `touchend` that ends it.
+    if (e.touches.length !== 1) {
+      clearPending();
+      return;
+    }
     if (options.isEnabled?.() === false) return;
     const touch = e.touches[0]!;
     const start: LongPressStart = {
