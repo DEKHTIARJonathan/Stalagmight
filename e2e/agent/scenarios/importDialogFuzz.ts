@@ -52,11 +52,12 @@
  *     or the step budget runs out (`STALAGMIGHT_FUZZ_IMPORT_MAX_FLOW_STEPS`,
  *     default 140 - exhausting the cap is a METRIC, not a failure)
  *
- * ## Why `screen:orphan-placement` is zero, and what would change it
+ * ## Why `screen:orphan-placement` was zero, and what fixed it
  *
- * Not a coverage gap. `App.tsx`'s DMP `onComplete` asks for orphan placements
- * only `if (newSectionIds?.length)`, and on any flow that used MAP PLACEMENT
- * that array is empty by the time it is read:
+ * FIXED - kept here because the surface stayed dark for 242 cells and the
+ * reason was not a coverage gap. `App.tsx`'s DMP `onComplete` asks for orphan
+ * placements only `if (newSectionIds?.length)`, and on any flow that used MAP
+ * PLACEMENT that array used to be empty by the time it was read:
  *
  *   - `importPlacedSegmentNow` imports the placed segment and pushes its ids
  *     into `importedSectionIdsRef` (`DmpNewImportDialog.tsx`);
@@ -77,11 +78,18 @@
  * suggestion (4 matched shots, score 1.42, direction reverse). The data was
  * there; the frontend did not ask.
  *
- * This scenario deliberately does NOT work around it. `unanchoredComponents:*`
- * measures the precondition so the two failures stay distinguishable, and the
- * day the call site is fixed `screen:orphan-placement` should start moving on
- * its own - the fuzzer already produces the state it needs (106 of 291 flows in
- * the o1 phase left an unanchored component behind).
+ * Two product commits closed it: the accumulators moved to a run-scoped record
+ * that a remount cannot empty (`utils/dmpWizardRun.ts`, #523), and
+ * `startPlacementMode` now turns on the stations a placement needs, without
+ * which every placement was cancelled before its first click (#518). The same
+ * hand-driven sequence then raised the dialog - "Connect Orphaned Sections,
+ * Section 1 of 2", one suggestion at High confidence, 5 shots matched - and the
+ * screenshot and log are kept under `.agent-artifacts/orphan-proof-20260811/`.
+ *
+ * The scenario never worked around either defect. `unanchoredComponents:*` still
+ * measures the precondition, so "no orphan component existed" stays
+ * distinguishable from "the geometry did not match", and the ORPHAN PLACEMENT
+ * check above now holds both of the dialog's answers to account.
  *
  * ## `wiz-no-suggest` is a transition, not a screen
  *
@@ -115,12 +123,14 @@
  *   plus `check_project_integrity` after any step that pushed an undo entry -
  *   `save_blocked`, or a non-finite-geometry message, is a hard failure
  *
- * Six inline expected-behaviour checks ride along with the moves that provoke
+ * Seven inline expected-behaviour checks ride along with the moves that provoke
  * them, because each one is only meaningful against the state immediately
  * before its own move:
  *   FROZEN DELETE    an all-frozen selection must survive, and must say so
  *   INCOMPLETE SHOTS a wizard commit the incomplete-shot guard refused must
  *                    import nothing, push no undo entry, and leave the wizard up
+ *   ORPHAN PLACEMENT declining must not touch the project at all; accepting may
+ *                    only JOIN components, and if it did, it must be undoable
  *   OVERLAP MODES    the two unconditional overlap treatments must always be
  *                    offered, and changing the treatment - which writes the
  *                    GLOBAL CONFIG mid-import - must not move the undo stack
@@ -611,6 +621,19 @@ const INCOMPLETE_GUARDED_MOVES: ReadonlySet<string> = new Set([
 
 /** `TOAST_KEYS.DMP_WIZARD_INCOMPLETE` - the key, which is i18n-independent. */
 const TOAST_INCOMPLETE = 'dmp-wizard-incomplete';
+
+/**
+ * The orphan dialog's two kinds of button, and what each one owes the project.
+ *
+ * Written from the dialog as OBSERVED, not from its source: a hand-driven run
+ * (`.agent-artifacts/orphan-proof-20260811/`) raised it with two suggestions
+ * queued - "Connect Orphaned Sections / Section 1 of 2", one suggested
+ * connection with a merge-station picker and an overlap mode, and four enabled
+ * buttons. Accepting joins the orphan to a newly imported section; skipping and
+ * closing only move through the queue.
+ */
+const ORPHAN_ACCEPTS: ReadonlySet<string> = new Set(['orphan-accept', 'orphan-accept-all']);
+const ORPHAN_DECLINES: ReadonlySet<string> = new Set(['orphan-skip', 'orphan-close']);
 
 /**
  * Overlap treatments NO guard in the wizard disables.
@@ -1993,6 +2016,14 @@ export const importDialogFuzz: Scenario = {
               : null;
           const sectionsBefore = digest.sections;
           const undoBefore = digest.undo;
+          const orphanMove =
+            move.kind === 'ui' &&
+            screenBefore === 'orphan-placement' &&
+            (ORPHAN_ACCEPTS.has(move.testid) || ORPHAN_DECLINES.has(move.testid))
+              ? move.testid
+              : null;
+          // Only paid for on an orphan move: it is an extra `get_project_state`.
+          const unanchoredBefore = orphanMove !== null && digest.hasProject ? await countUnanchoredComponents() : -1;
 
           const outcome = await execute(move, true);
           steps += 1;
@@ -2149,6 +2180,63 @@ export const importDialogFuzz: Scenario = {
                 'INCOMPLETE SHOTS: the refusal closed the wizard',
                 `  after: ${move.label}\n  screen ${screenBefore} -> ${digest.screen}`,
               );
+            }
+          }
+          // ORPHAN PLACEMENT. The dialog offers to connect a section that was
+          // left floating - no zero datum, merged to nothing - to something the
+          // import just landed. Both of its answers are accountable.
+          if (orphanMove !== null && outcome.performed) {
+            ctx.metric(`orphanChoice:${orphanMove}`);
+            const unanchoredAfter = digest.hasProject ? await countUnanchoredComponents() : -1;
+            // Neither answer creates or destroys a section. Accepting MERGES two
+            // that already exist; declining moves through the queue.
+            if (sectionsBefore >= 0 && digest.sections !== sectionsBefore) {
+              fail(
+                `ORPHAN PLACEMENT: "${orphanMove}" changed the section count`,
+                `  after: ${move.label}\n  sections ${sectionsBefore} -> ${digest.sections}; ` +
+                  'the dialog connects sections that already exist, it does not import any',
+              );
+            }
+            if (ORPHAN_DECLINES.has(orphanMove)) {
+              // Pure navigation. Skip advances the queue and Skip All closes it;
+              // neither may touch the project, or a user who declined every
+              // suggestion would still have been charged for one.
+              if (undoBefore >= 0 && digest.undo !== undoBefore) {
+                fail(
+                  `ORPHAN PLACEMENT: declining with "${orphanMove}" moved the undo stack`,
+                  `  after: ${move.label}\n  undo depth ${undoBefore} -> ${digest.undo}`,
+                );
+              }
+              if (unanchoredBefore >= 0 && unanchoredAfter >= 0 && unanchoredAfter !== unanchoredBefore) {
+                fail(
+                  `ORPHAN PLACEMENT: declining with "${orphanMove}" changed the survey's shape`,
+                  `  after: ${move.label}\n  unanchored components ${unanchoredBefore} -> ${unanchoredAfter}`,
+                );
+              }
+            } else {
+              // Accepting is a merge, so it may only ever JOIN components - the
+              // count can fall (the orphan found a home) or hold (this queue
+              // entry was refused), never rise. A rise would mean the connection
+              // broke something apart, which no merge can do.
+              if (unanchoredBefore >= 0 && unanchoredAfter > unanchoredBefore) {
+                fail(
+                  `ORPHAN PLACEMENT: accepting with "${orphanMove}" left MORE unanchored components`,
+                  `  after: ${move.label}\n  unanchored components ${unanchoredBefore} -> ${unanchoredAfter}; ` +
+                    'a merge can only join components, never split them',
+                );
+              }
+              if (unanchoredBefore >= 0 && unanchoredAfter >= 0 && unanchoredAfter < unanchoredBefore) {
+                // It landed, so it is a project mutation and must be undoable -
+                // the same rule F1 holds every import to.
+                ctx.metric('orphanAccepted');
+                if (undoBefore >= 0 && digest.undo <= undoBefore) {
+                  fail(
+                    'ORPHAN PLACEMENT: an accepted connection pushed no undo entry',
+                    `  after: ${move.label}\n  unanchored ${unanchoredBefore} -> ${unanchoredAfter} ` +
+                      `but undo depth ${undoBefore} -> ${digest.undo}`,
+                  );
+                }
+              }
             }
           }
           if (overlapMode !== null) {
