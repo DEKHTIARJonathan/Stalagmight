@@ -8,22 +8,22 @@ maintained.
 
 ## Reporting a vulnerability
 
-**Please do not open a public issue for security vulnerabilities.**
+**Please do not put vulnerability details in a public issue.**
 
-Report privately through **GitHub's private vulnerability reporting**, if the
-button is available:
+Report privately through **GitHub's private vulnerability reporting**:
 
 1. Go to the repository's **Security** tab.
 2. Click **Report a vulnerability**.
 3. Describe the issue, affected version/platform, and reproduction steps.
 
-This routes the report privately to the maintainers. If the **Report a
-vulnerability** button is not there (GitHub only offers it on public
-repositories, and it must be switched on by the maintainers), or private
-reporting is otherwise unavailable to you, use the fallback: open a minimal
-public issue that says only that you have a security report and asks for a
-private contact channel - **do not include details** in that issue. A
-maintainer will reply with a private way to reach them.
+This routes the report privately to the maintainers. If you do not see the
+**Report a vulnerability** button (GitHub offers it only on public
+repositories, and the maintainers must switch it on), or private reporting is
+otherwise unavailable to you, fall back to a contentless public issue: state
+only that you have a security report and ask for a private contact channel,
+and a maintainer will follow up. Do not name the affected component, importer,
+file format, or version in that issue - for a parser bug that is most of the
+exploit hint - and do not include reproduction details.
 
 Please include, where possible:
 

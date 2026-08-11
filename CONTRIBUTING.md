@@ -8,7 +8,7 @@ you open a pull request.
 If you would like to get started, we have an active and maintained [issue tracker](https://github.com/Stalagmight/Stalagmight/issues?q=is%3Aissue%20state%3Aopen%20no%3Aassignee) -- please check for open, unassigned bugs there!
 
 Please also read [SECURITY.md](SECURITY.md) for how to report vulnerabilities
-(don't open a public issue for those).
+(never put vulnerability details in a public issue).
 
 
 ---
