@@ -57,6 +57,11 @@ pub struct CompassFile {
     pub cave_name: String,
     pub survey_count: u32,
     pub shot_count: u32,
+    /// How many of `shot_count` are flagged `X` (total exclusion) and so are
+    /// dropped by the converter under the default `include_excluded=false`
+    /// toggle (#437). `shot_count - excluded_shot_count` is what a default
+    /// import actually lands.
+    pub excluded_shot_count: u32,
     pub has_backsights: bool,
     pub datum: Option<String>,
     pub utm_zone: Option<i32>,
@@ -78,6 +83,9 @@ pub struct CompassSurveySummary {
     pub date: String,
     pub team: Option<String>,
     pub shot_count: u32,
+    /// See `CompassFile::excluded_shot_count`; same accounting, scoped to
+    /// this survey.
+    pub excluded_shot_count: u32,
     pub declination: f64,
 }
 
@@ -450,12 +458,28 @@ pub fn preview_scalars(parsed: &ParsedCompass) -> (u32, Option<String>) {
     (parsed.surveys.len() as u32, length_unit)
 }
 
+/// Number of a survey's shots flagged `X` (total exclusion), i.e. the shots
+/// `convert` drops under the default `include_excluded=false` toggle. Mirrors
+/// the `parse_flags` + `exclude_all` check `convert` itself runs.
+fn excluded_shot_count(survey: &Survey) -> u32 {
+    survey
+        .shots
+        .iter()
+        .filter(|shot| parse_flags(shot.flags.as_ref()).exclude_all)
+        .count() as u32
+}
+
 pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
     let shot_count = parsed
         .surveys
         .iter()
         .map(|s| s.survey.shots.len())
         .sum::<usize>() as u32;
+    let excluded_shot_count_total = parsed
+        .surveys
+        .iter()
+        .map(|s| excluded_shot_count(&s.survey))
+        .sum::<u32>();
     let has_backsights = parsed
         .surveys
         .iter()
@@ -469,6 +493,7 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
             date: s.survey.date.to_string(),
             team: non_empty(&s.survey.team),
             shot_count: s.survey.shots.len() as u32,
+            excluded_shot_count: excluded_shot_count(&s.survey),
             // Preview-only field, but it crosses IPC as a ts-rs `number`;
             // a NaN would serialize as JSON null (#275).
             declination: finite_or_zero(s.survey.parameters.declination),
@@ -478,6 +503,7 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
         cave_name: parsed.cave_name.clone(),
         survey_count,
         shot_count,
+        excluded_shot_count: excluded_shot_count_total,
         has_backsights,
         datum: parsed.datum.map(|d| format!("{d:?}")),
         utm_zone: parsed.utm_zone.map(i32::from),
@@ -1837,6 +1863,55 @@ mod tests {
                 "{name}: length_unit must match build_preview"
             );
         }
+    }
+
+    /// #437: `build_preview`'s `shot_count` was the raw shot count, but the
+    /// default `include_excluded=false` toggle drops `X`-flagged shots at
+    /// import time, so the number the dialog showed did not match what
+    /// landed. `excluded_shot_count` must name exactly the shots the default
+    /// conversion drops - both at the file level and per survey - so
+    /// `shot_count - excluded_shot_count` is honest without a second parse.
+    ///
+    /// Injection: revert `excluded_shot_count` to always return 0 (as if the
+    /// preview never accounted for exclusions) and this fails, because the
+    /// synthetic survey below has one excluded shot out of three.
+    #[test]
+    fn preview_excluded_shot_count_matches_what_default_toggles_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let dat = format!(
+            "Synthetic Cave\r\n\
+             SURVEY NAME: A\r\n\
+             SURVEY DATE: 7 10 1979\r\n\
+             SURVEY TEAM:\r\n\
+             Nobody\r\n\
+             DECLINATION: 0.00  FORMAT: DMMDLRUDLADN  CORRECTIONS: 0.00 0.00 0.00\r\n\
+             \r\n\
+             FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS\r\n\
+             \r\n\
+             A1 A2 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n\
+             A2 A3 10.00 90.00 0.00 1.00 2.00 3.00 4.00 #|X#\r\n\
+             A3 A4 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n"
+        );
+        let path = dir.path().join("excluded.dat");
+        std::fs::write(&path, &dat).unwrap();
+
+        let parsed = parse_compass(&path).unwrap();
+        let preview = build_preview(&parsed);
+        assert_eq!(preview.shot_count, 3, "raw shot count");
+        assert_eq!(preview.excluded_shot_count, 1, "one shot is #|X#-flagged");
+        assert_eq!(preview.surveys.len(), 1);
+        assert_eq!(preview.surveys[0].shot_count, 3);
+        assert_eq!(preview.surveys[0].excluded_shot_count, 1);
+
+        // What the default (`include_excluded: false`) toggle actually lands
+        // must equal shot_count - excluded_shot_count.
+        let (configs, _, _) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        assert_eq!(
+            total_shots(&configs) as u32,
+            preview.shot_count - preview.excluded_shot_count,
+            "landed shot count must match the honest preview count"
+        );
     }
 
     #[test]

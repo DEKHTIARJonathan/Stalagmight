@@ -52,6 +52,14 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
 
   const fileName = useMemo(() => extractFilename(filePath), [filePath]);
 
+  // What the CURRENT `includeExcluded` toggle will actually land, not the raw
+  // parsed count - a Compass file's `X`-flagged shots are dropped by the
+  // converter under the default toggle, and the preview used to quote the raw
+  // count regardless (#437).
+  const landingShotCount = includeExcluded
+    ? compassFile.shot_count
+    : compassFile.shot_count - compassFile.excluded_shot_count;
+
   const handleImport = useCallback(async () => {
     setIsImporting(true);
     // Show the loading overlay so the user sees Reading -> Converting ->
@@ -144,8 +152,20 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
             <div className="text-sm font-medium">{compassFile.survey_count}</div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary">{t('dialogs.compassImport.stats.shots')}</div>
-            <div className="text-sm font-medium">{compassFile.shot_count}</div>
+            <div className="text-xs text-text-tertiary" title={t('dialogs.compassImport.stats.shotsTooltip')}>
+              {t('dialogs.compassImport.stats.shots')}
+            </div>
+            <div className="text-sm font-medium">
+              {landingShotCount}
+              {!includeExcluded && compassFile.excluded_shot_count > 0 && (
+                <span className="text-text-tertiary font-normal">
+                  {' '}
+                  {t('dialogs.compassImport.stats.excludedSuffix', {
+                    count: compassFile.excluded_shot_count,
+                  })}
+                </span>
+              )}
+            </div>
           </div>
           <div>
             <div className="text-xs text-text-tertiary">{t('dialogs.compassImport.stats.datum')}</div>
@@ -177,7 +197,9 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
               {compassFile.surveys.map((survey, i) => (
                 <tr key={i} className="border-t border-border">
                   <td className="px-3 py-1.5">{survey.name}</td>
-                  <td className="px-3 py-1.5">{survey.shot_count}</td>
+                  <td className="px-3 py-1.5">
+                    {includeExcluded ? survey.shot_count : survey.shot_count - survey.excluded_shot_count}
+                  </td>
                   <td className="px-3 py-1.5 text-text-secondary">{survey.team ?? '-'}</td>
                   <td className="px-3 py-1.5 text-text-secondary">{survey.date}</td>
                   <td className="px-3 py-1.5 text-text-secondary">{survey.declination}°</td>

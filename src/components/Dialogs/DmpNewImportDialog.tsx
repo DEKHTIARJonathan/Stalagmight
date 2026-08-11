@@ -774,8 +774,24 @@ export function buildBatchImport(
   // conditions"), unlike the trace-only diagnostics above. Index/count only,
   // never a section NAME or `JSON.stringify`'d connection - both are
   // file-controlled content that must not reach a production console log.
+  //
+  // #535: `!emittedPosition.has(idx)` alone is a superset of "gap" - it is
+  // ALSO true of every section that was legitimately handled elsewhere:
+  // already emitted in an earlier batch (`alreadyImported`, skipped before
+  // `emittedPosition.set` at the top of the loop), deliberately deferred to a
+  // later joint placement (`deferredImportSet`), or reachable but empty
+  // (`emptySections`, already surfaced via `reportEmptySections`). Manual
+  // placement calls `buildBatchImport` fresh on every step with the FULL
+  // accumulated graph, so `alreadyImported` alone grows by one on every
+  // successful step - counting it here made the warning fire on every healthy
+  // incremental placement, climbing with each step instead of naming a gap.
   const unemittedReachableCount = reachableOrder.filter(
-    (idx) => idx !== zeroDatumIndex && !emittedPosition.has(idx),
+    (idx) =>
+      idx !== zeroDatumIndex &&
+      !emittedPosition.has(idx) &&
+      !alreadyImported?.has(idx) &&
+      !deferredImportSet.has(idx) &&
+      !emptySections.has(idx),
   ).length;
   if (unemittedReachableCount > 0) {
     console.warn(

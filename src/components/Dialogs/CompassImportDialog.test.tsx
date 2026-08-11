@@ -47,6 +47,7 @@ const compassFile: CompassFile = {
   cave_name: 'Test Cave',
   survey_count: 0,
   shot_count: 0,
+  excluded_shot_count: 0,
   has_backsights: false,
   datum: null,
   utm_zone: null,

@@ -1447,6 +1447,8 @@
       "stats": {
         "surveys": "Surveys",
         "shots": "Shots",
+        "shotsTooltip": "Shots that will actually be imported under the current toggles",
+        "excludedSuffix": "({{count}} excluded)",
         "datum": "Datum",
         "georeference": "Georeference",
         "noGeoreference": "None"
