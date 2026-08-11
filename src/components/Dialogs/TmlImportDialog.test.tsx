@@ -952,3 +952,59 @@ describe('TmlImportDialog root agreement (#425 review)', () => {
     expect(screen.getByTestId('tml-placement-origin')).toBeChecked();
   });
 });
+
+describe('TmlImportDialog reads the ids the wire actually delivers (#566)', () => {
+  /**
+   * Every other fixture in this file builds `BigInt` ids because that is what
+   * the GENERATED types say. Tauri's IPC is JSON and serde writes an `i64` as a
+   * JSON number, so the shipped app hands this dialog plain numbers - and a
+   * lookup that only worked for bigints made every non-root section look
+   * stranded the moment the dialog opened.
+   */
+  const wireIds: TmlFile = {
+    ...tmlFile,
+    sections: [
+      {
+        name: 'A',
+        shots: [{ ...shot(), id: 1 as unknown as bigint, from_id: 0 as unknown as bigint }],
+        surveyor: null,
+        date: null,
+        color: '#3b82f6',
+        is_branch_split: false,
+        start_ariane_id: 0 as unknown as bigint,
+        end_ariane_id: 1 as unknown as bigint,
+        start_depth: 0,
+      },
+      {
+        name: 'B',
+        shots: [{ ...shot(), id: 2 as unknown as bigint, from_id: 1 as unknown as bigint }],
+        surveyor: null,
+        date: null,
+        color: '#ef4444',
+        is_branch_split: false,
+        start_ariane_id: 1 as unknown as bigint,
+        end_ariane_id: 2 as unknown as bigint,
+        start_depth: 0,
+      },
+    ],
+  };
+
+  it('does not call a connected section stranded on a file straight off the wire', async () => {
+    render(<TmlImportDialog tmlFile={wireIds} filePath="/tmp/cave.tml" />);
+
+    await screen.findByTestId('tml-placement-step');
+    // B hangs off A and both are selected, so nothing is going to the origin.
+    // Before the fix this notice was on screen for every multi-section file the
+    // real app opened, contradicting an import that connected them fine.
+    expect(screen.queryByTestId('tml-reanchored-notice')).toBeNull();
+    expect(screen.queryByTestId('tml-section-reanchored-1')).toBeNull();
+  });
+
+  it('still flags a genuinely stranded section on wire ids', async () => {
+    render(<TmlImportDialog tmlFile={wireIds} filePath="/tmp/cave.tml" />);
+
+    // Deselecting A leaves B as the new root, which is not stranded...
+    await userEvent.click(await screen.findByTestId('tml-section-0'));
+    expect(screen.queryByTestId('tml-reanchored-notice')).toBeNull();
+  });
+});

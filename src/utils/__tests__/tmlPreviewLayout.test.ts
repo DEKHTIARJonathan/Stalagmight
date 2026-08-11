@@ -300,3 +300,91 @@ describe('computeTmlPreviewLayout agrees with the backend about placement', () =
     expect(layout.reanchoredCount).toBe(0);
   });
 });
+
+/**
+ * The shape the layout ACTUALLY receives in the shipped app.
+ *
+ * `parse_tml` crosses Tauri's JSON IPC, and serde writes an `i64` as a JSON
+ * number - so every field ts-rs types as `bigint` arrives as a plain `number`
+ * at runtime. The e2e mock encodes the same truth in its own `TmlWire<T>`
+ * helper (e2e-playwright/mocks/tauri-ipc.ts), and `loadProjectBinary.ts`
+ * normalizes `bigint | number` for the one path where bigints are real.
+ *
+ * Every fixture above builds `BigInt` ids, which is the shape the TYPES promise
+ * and not the shape the wire delivers - so a lookup that only works for one of
+ * them stayed green here and was dead in the app.
+ */
+function toWire<T>(value: T): T {
+  if (typeof value === 'bigint') return Number(value) as unknown as T;
+  if (Array.isArray(value)) return value.map(toWire) as unknown as T;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, toWire(v)])
+    ) as T;
+  }
+  return value;
+}
+
+describe('computeTmlPreviewLayout reads the ids the wire actually delivers', () => {
+  it('links the chain when the ids are plain numbers', () => {
+    const wire = toWire(chainOfThree());
+
+    // Premise: this really is the other runtime shape.
+    expect(typeof wire.sections[1]!.start_ariane_id).toBe('number');
+    expect(typeof wire.sections[0]!.shots[0]!.id).toBe('number');
+
+    const layout = computeTmlPreviewLayout(wire, all);
+    // Identical to the bigint fixture's expectations: each section starts where
+    // the previous one ended. A dropped lookup shows up as every section stacked
+    // at the origin and flagged as connecting to nothing.
+    expect(offsets(layout)).toEqual([
+      [0, 0],
+      [20, 0],
+      [40, 0],
+    ]);
+    expect(layout.reanchoredCount).toBe(0);
+  });
+
+  it('still links the chain when the ids are bigints', () => {
+    // The types' shape, kept pinned so a normalization that only handles the
+    // wire shape cannot silently break the other one.
+    const layout = computeTmlPreviewLayout(chainOfThree(), all);
+    expect(offsets(layout)).toEqual([
+      [0, 0],
+      [20, 0],
+      [40, 0],
+    ]);
+    expect(layout.reanchoredCount).toBe(0);
+  });
+
+  it('keeps the selection semantics on wire-shaped ids', () => {
+    // The re-anchor rules are what the dialog draws its badges from, so they
+    // have to survive the id shape too: deselecting the middle section strands
+    // the one that hung off it.
+    const layout = computeTmlPreviewLayout(toWire(chainOfThree()), {
+      includeExcluded: false,
+      selected: new Set([0, 2]),
+    });
+    expect(layout.sections.find((s) => s.index === 2)!.reanchored).toBe(true);
+    expect(layout.reanchoredCount).toBe(1);
+
+    // ...and deselecting the head promotes its child without stranding anything.
+    const promoted = computeTmlPreviewLayout(toWire(chainOfThree()), {
+      includeExcluded: false,
+      selected: new Set([1, 2]),
+    });
+    expect(promoted.reanchoredCount).toBe(0);
+    expect(offsets(promoted)).toEqual([
+      [0, 0],
+      [20, 0],
+    ]);
+  });
+
+  it('treats a negative wire id as "names nothing", like a negative bigint', () => {
+    const orphan = toWire(
+      file([section('A', 0, [shot(1, 0)]), section('Orphan', -1, [shot(2, -1)])])
+    );
+    const layout = computeTmlPreviewLayout(orphan, all);
+    expect(layout.sections.find((s) => s.index === 1)!.reanchored).toBe(true);
+  });
+});
