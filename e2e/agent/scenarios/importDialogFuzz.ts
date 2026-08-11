@@ -739,7 +739,12 @@ export const importDialogFuzz: Scenario = {
       // without one is exactly as valid, just narrower. Counted so a run that
       // MEANT to use one can tell that it did not.
       ctx.metric('corpus:absent');
-      if (!inventory.available) ctx.log(`corpus: set ${CORPUS_DIR_ENV} to widen this run's inputs`);
+      // Only the UNCONFIGURED case gets told to set the knob. A corpus that is
+      // set and yielded nothing has a different problem, and `describeCorpus`
+      // has already printed which one (a depth bound, a skip, no importable
+      // format) on the line above - repeating "set this variable" there sends
+      // the reader to check something that is already correct.
+      if (!inventory.configured) ctx.log(`corpus: set ${CORPUS_DIR_ENV} to widen this run's inputs`);
     }
 
     const replayPath = replayTracePath();

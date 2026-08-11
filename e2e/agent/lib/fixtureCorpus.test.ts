@@ -293,6 +293,63 @@ describe('the discovery walk bounds', () => {
     expect(MAX_WALK_DEPTH).toBe(MAX_MATERIALIZED_DEPTH);
   });
 
+  /**
+   * The case the depth counter was BUILT for, and the one it could not report.
+   *
+   * A corpus organised one folder deeper than the bound yields zero entries.
+   * `available` was the only flag, so zero entries read as "no corpus", the
+   * describe line said `unset or empty`, and the `tooDeep` warning - the single
+   * piece of output that would tell the owner their files exist and the walk
+   * refused to look - was unreachable in exactly that case. The failure mode is
+   * silent and total: the run does everything it would do with no corpus at
+   * all, and says so in a way that sends the reader to check an env var that is
+   * already correct.
+   */
+  describe('when EVERY file is behind the bound', () => {
+    let deepRoot = '';
+
+    beforeEach(() => {
+      deepRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-deep-corpus-'));
+      const past = path.join(deepRoot, ...levelNames(MAX_WALK_DEPTH + 1));
+      fs.mkdirSync(past, { recursive: true });
+      fs.writeFileSync(path.join(past, 'only-file.srv'), 'A1 A2 10 90 0');
+      process.env[CORPUS_DIR_ENV] = deepRoot;
+    });
+
+    afterEach(() => {
+      fs.rmSync(deepRoot, { recursive: true, force: true });
+    });
+
+    it('is configured-and-empty, which is not the same state as unset', () => {
+      const inventory = discoverCorpus();
+      expect(inventory.entries).toEqual([]);
+      expect(inventory.available).toBe(false);
+      // The distinction the whole fix turns on. `root` is set because there was
+      // somewhere to look; `available` is false because looking found nothing.
+      expect(inventory.configured).toBe(true);
+      expect(inventory.root).toBe(deepRoot);
+      expect(inventory.tooDeep).toBe(1);
+    });
+
+    it('SAYS the depth bound refused it, instead of claiming no corpus is set', () => {
+      const line = describeCorpus(discoverCorpus());
+      expect(line).toContain(`deeper than ${MAX_WALK_DEPTH} levels`);
+      expect(line).toContain('lower bound');
+      // The regression itself: the message that sent the reader to the env var.
+      expect(line).not.toContain('unset');
+      expect(line).toContain('0 file(s)');
+    });
+
+    it('still reports no corpus when the knob names nothing', () => {
+      // The other side of the same branch, so `configured` cannot be pinned
+      // true by accident and swallow the genuinely-unset case with it.
+      delete process.env[CORPUS_DIR_ENV];
+      const inventory = discoverCorpus();
+      expect(inventory.configured).toBe(false);
+      expect(describeCorpus(inventory)).toContain('none');
+    });
+  });
+
   it('stays bounded: nothing it yields is deeper than the bound', () => {
     for (const entry of discoverCorpus().entries) {
       expect(entry.relPath.split('/').length - 1).toBeLessThanOrEqual(MAX_WALK_DEPTH);

@@ -95,7 +95,25 @@ export interface CorpusEntry {
 }
 
 export interface CorpusInventory {
+  /**
+   * Are there entries to draw from? The question every CALLER asks.
+   *
+   * Not the same question as `configured`, and conflating the two is what hid
+   * the bound this module counts: a corpus whose every file sits below
+   * `MAX_WALK_DEPTH` discovers zero entries, so `available` is false and the
+   * run reported "corpus: none (unset or empty)" - the one message that is
+   * wrong in exactly the case `tooDeep` exists to announce. A reader told the
+   * knob was unset never looks at the depth bound.
+   */
   available: boolean;
+  /**
+   * Did the knob name a directory this process could walk?
+   *
+   * True the moment discovery got somewhere to look, whatever it found there.
+   * `configured && !available` is the interesting state - it is "your corpus is
+   * set and yielded nothing", and it is the one that has to print WHY.
+   */
+  configured: boolean;
   /** Absolute corpus root, or null when the knob is unset or unusable. */
   root: string | null;
   entries: CorpusEntry[];
@@ -241,6 +259,7 @@ export function discoverCorpus(): CorpusInventory {
   const root = corpusDir();
   const empty: CorpusInventory = {
     available: false,
+    configured: false,
     root: null,
     entries: [],
     byFormat: emptyByFormat(),
@@ -325,7 +344,16 @@ export function discoverCorpus(): CorpusInventory {
     .map(([id]) => id)
     .sort();
 
-  return { available: entries.length > 0, root, entries, byFormat, skipped, tooDeep, idCollisions };
+  return {
+    available: entries.length > 0,
+    configured: true,
+    root,
+    entries,
+    byFormat,
+    skipped,
+    tooDeep,
+    idCollisions,
+  };
 }
 
 /** What a lookup did. `ambiguous` is a crc20 collision and is never a guess. */
@@ -617,11 +645,18 @@ export function materializeCorpusEntry(
  * not told cannot interpret the number they were given.
  */
 export function describeCorpus(inventory: CorpusInventory): string {
-  if (!inventory.available) return `corpus: none (${CORPUS_DIR_ENV} unset or empty)`;
+  // Gated on `configured`, NOT on `available`. A corpus that was walked and
+  // yielded nothing still has to report why it yielded nothing, and the depth
+  // note below is the whole reason `tooDeep` is counted separately: the case it
+  // was built for - every importable file one level too deep - is precisely the
+  // case that produces zero entries, so an `available` gate here made the
+  // warning unreachable exactly when it was needed.
+  if (!inventory.configured) return `corpus: none (${CORPUS_DIR_ENV} unset, missing or unreadable)`;
   const counts = (Object.keys(inventory.byFormat) as CorpusFormat[])
     .filter((format) => inventory.byFormat[format].length > 0)
     .map((format) => `${format}=${inventory.byFormat[format].length}`)
     .join(' ');
+  const formats = counts === '' ? 'no importable format' : counts;
   const notes: string[] = [];
   if (inventory.skipped > 0) notes.push(`${inventory.skipped} dir(s) skipped`);
   if (inventory.tooDeep > 0) {
@@ -631,7 +666,7 @@ export function describeCorpus(inventory: CorpusInventory): string {
     );
   }
   return (
-    `corpus: ${inventory.entries.length} file(s) [${counts}]` +
+    `corpus: ${inventory.entries.length} file(s) [${formats}]` +
     (notes.length > 0 ? ` (${notes.join('; ')})` : '') +
     (inventory.idCollisions.length > 0
       ? ` WARNING: ${inventory.idCollisions.length} crc20 id(s) name more than one file ` +
