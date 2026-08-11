@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MIN_COL_WIDTH, MAX_COL_WIDTH } from '../../components/common/SpreadsheetGrid/useColumnWidths';
 import { PANEL_SIZE_BOUNDS } from '../../components/SingleSystemView/layoutConstants';
+import { MAX_DEPTH_REFERENCE_M } from '../../utils/gpsBounds';
 
 /**
  * Cross-language numeric-bounds mirror (issue #357 item 18).
@@ -15,7 +16,10 @@ import { PANEL_SIZE_BOUNDS } from '../../components/SingleSystemView/layoutConst
  *     src-tauri/crates/core/src/config/column_widths.rs vs
  *     `MIN_COL_WIDTH`/`MAX_COL_WIDTH`
  *     in src/components/common/SpreadsheetGrid/useColumnWidths.ts.
- *   - panel sizes: the three `.clamp(a, b)` calls in
+ *   - zero-datum depth reference: `MAX_DEPTH_REFERENCE_M` in
+ *     src-tauri/crates/models/src/station.rs vs the same name in
+ *     src/utils/gpsBounds.ts.
+ *   - panel sizes: the four `.clamp(a, b)` calls in
  *     `PanelsConfig::normalize` (src-tauri/crates/core/src/config/panels.rs) vs
  *     `PANEL_SIZE_BOUNDS` in src/components/SingleSystemView/layoutConstants.ts.
  *
@@ -32,6 +36,7 @@ const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../../../');
 const COLUMN_WIDTHS_RS = path.join(REPO_ROOT, 'src-tauri/crates/core/src/config/column_widths.rs');
 const PANELS_RS = path.join(REPO_ROOT, 'src-tauri/crates/core/src/config/panels.rs');
+const STATION_RS = path.join(REPO_ROOT, 'src-tauri/crates/models/src/station.rs');
 
 function parseRustConst(source: string, name: string, file: string): number {
   const re = new RegExp(`const ${name}:\\s*u32\\s*=\\s*(\\d+)\\s*;`);
@@ -84,6 +89,7 @@ describe('cross-language numeric bounds mirror (#357 item 18)', () => {
     const rustSections = parseRustClamp(rustSource, 'sections_panel_width', 'panels.rs');
     const rustDetail = parseRustClamp(rustSource, 'detail_panel_width', 'panels.rs');
     const rustDataTable = parseRustClamp(rustSource, 'data_table_height', 'panels.rs');
+    const rustWizardMap = parseRustClamp(rustSource, 'wizard_map_panel_width', 'panels.rs');
 
     expect(
       rustSections,
@@ -100,5 +106,35 @@ describe('cross-language numeric bounds mirror (#357 item 18)', () => {
       `data_table_height bounds drift: Rust clamp=${JSON.stringify(rustDataTable)} but TS ` +
         `PANEL_SIZE_BOUNDS['data-table']=${JSON.stringify(PANEL_SIZE_BOUNDS['data-table'])}. Change both together.`,
     ).toEqual(PANEL_SIZE_BOUNDS['data-table']);
+    expect(
+      rustWizardMap,
+      `wizard_map_panel_width bounds drift: Rust clamp=${JSON.stringify(rustWizardMap)} but TS ` +
+        `PANEL_SIZE_BOUNDS['wizard-map']=${JSON.stringify(PANEL_SIZE_BOUNDS['wizard-map'])}. Change both together.`,
+    ).toEqual(PANEL_SIZE_BOUNDS['wizard-map']);
+  });
+
+  // #524 review: both sides checked only `isFinite`, so a 1e300 depth reference
+  // was accepted end to end - through the zero-datum dialog, into the geometry,
+  // and into every distance derived from it.
+  it('depth-reference bound agrees: MAX_DEPTH_REFERENCE_M (Rust) vs the TS constant', () => {
+    const rustSource = fs.readFileSync(STATION_RS, 'utf8');
+    const match = /const MAX_DEPTH_REFERENCE_M:\s*f64\s*=\s*([\d_]+(?:\.\d+)?)\s*;/.exec(
+      rustSource,
+    );
+    if (!match) {
+      throw new Error(
+        'Could not find `const MAX_DEPTH_REFERENCE_M: f64 = N;` in station.rs. ' +
+          'If it was renamed or reformatted, update this tripwire to match.',
+      );
+    }
+    const rustMax = Number(match[1]!.replace(/_/g, ''));
+
+    expect(
+      rustMax,
+      `Depth-reference bound drift: Rust MAX_DEPTH_REFERENCE_M=${rustMax} but TS ` +
+        `MAX_DEPTH_REFERENCE_M=${MAX_DEPTH_REFERENCE_M}. A one-sided bump makes the dialog ` +
+        'accept a value the backend then refuses, so Confirm fails at the far end. ' +
+        'Change both together.',
+    ).toBe(MAX_DEPTH_REFERENCE_M);
   });
 });

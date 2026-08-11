@@ -255,6 +255,39 @@ describe('zero-datum-config Back-to-selection carry (#534)', () => {
   });
 
   /**
+   * #566 review 3: the depth/elevation box (#524) is the only in-progress
+   * field this hop used to drop. It exists nowhere but the raw text until a
+   * confirm mints `gps.depth_reference`, so a depth typed beside an unparsed
+   * GPS entry had nothing to be reconstructed from.
+   *
+   * Driven through the SAME production carry functions as the GPS text above,
+   * so it also pins that App.tsx relays the new field untouched: the carry is
+   * opaque (`readCarriedZeroDatumConfig` casts the stored object whole), and a
+   * relay that rebuilt the draft field-by-field would drop this and go red.
+   */
+  it('carries the raw depth text through Back even when the GPS never parsed', () => {
+    useUIStore.getState().openDialog('zero-datum-config', {
+      dmpFile: dmpFile(),
+      selectionConfig,
+      zeroDatumSectionIndex: 0,
+    });
+    render(<Harness />);
+
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), {
+      target: { value: 'not a coordinate' },
+    });
+    fireEvent.change(screen.getByTestId('zero-datum-depth-reference-input'), {
+      target: { value: '-12.5' },
+    });
+
+    clickBack();
+    fireEvent.click(screen.getByTestId('zero-datum-section-card-0'));
+
+    expect(screen.getByTestId('zero-datum-depth-reference-input')).toHaveValue('-12.5');
+    expect(screen.getByTestId('zero-datum-gps-input')).toHaveValue('not a coordinate');
+  });
+
+  /**
    * Injection: seed `dialogData` with a leftover carry on `openDialog`'s
    * first-visit call (i.e. drop `openDialog`'s wholesale `dialogData` reset
    * in `uiStore.ts`) - a genuine first visit would then show stale values.

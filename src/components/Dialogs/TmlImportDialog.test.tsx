@@ -21,6 +21,20 @@ vi.mock('../../utils/telemetry', async (importOriginal) => ({
   trackDialogComplete: vi.fn(),
   setSource: vi.fn(),
 }));
+// SectionPreview and the map panel pull maplibre-gl (WebGL) at module load,
+// which jsdom cannot execute. What the map DRAWS is covered by
+// utils/__tests__/tmlPreviewLayout.test.ts, on the pure layout function.
+vi.mock('./SectionPreview', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./SectionPreview')>()),
+  default: () => null,
+}));
+vi.mock('maplibre-gl', () => ({ default: {} }));
+vi.mock('./WizardMapPanel', () => ({
+  WizardMapPanel: () => null,
+  MAP_PANEL_DEFAULT_WIDTH: 480,
+  MAP_PANEL_MIN_WIDTH: 280,
+  MAP_PANEL_MAX_WIDTH: 900,
+}));
 // invokeIpc is used here only for suggest_orphan_placements; mock it so the
 // orphan branch resolves and we can assert whether it ran.
 vi.mock('../../utils/ipc', async (importOriginal) => ({
@@ -628,5 +642,369 @@ describe('TmlImportDialog failure after unmount (#411 fix round)', () => {
     // recorded as a cancel while the router records a complete for the same event.
     expect(await screen.findByTestId('tml-import-residue-dialog')).toBeInTheDocument();
     expect(trackDialogCompleteMock).toHaveBeenCalledWith('tml-import');
+  });
+});
+
+/**
+ * #425: the section filter and the placement step. The topology consequences
+ * are covered on both sides of the wire (import_options.rs, tmlPreviewLayout);
+ * these pin what the DIALOG sends and what it refuses to send.
+ */
+describe('TmlImportDialog section selection and placement (#425)', () => {
+  /** Two sections, the second hanging off the first's only shot. */
+  const twoSections = (over: Partial<TmlShot> = {}): TmlFile => ({
+    ...tmlFile,
+    sections: [
+      {
+        name: 'A',
+        shots: [shot({ id: 1n, from_id: 0n, ...over })],
+        surveyor: null,
+        date: null,
+        color: '#3b82f6',
+        is_branch_split: false,
+        start_ariane_id: 0n,
+        end_ariane_id: 1n,
+        start_depth: 0,
+      },
+      {
+        name: 'B',
+        shots: [shot({ id: 2n, from_id: 1n })],
+        surveyor: null,
+        date: null,
+        color: '#ef4444',
+        is_branch_split: false,
+        start_ariane_id: 1n,
+        end_ariane_id: 2n,
+        start_depth: 0,
+      },
+    ],
+  });
+
+  const lastImportArgs = (): unknown[] =>
+    executeTmlImport.mock.calls[executeTmlImport.mock.calls.length - 1] ?? [];
+
+  it('sends no section list while every section is ticked', async () => {
+    executeTmlImport.mockResolvedValue(ok([], [1]));
+    render(<TmlImportDialog tmlFile={twoSections()} filePath="/tmp/cave.tml" />);
+
+    await clickImport();
+    // arg 5 is selectedSections: null keeps a full import unfiltered on the wire.
+    expect(lastImportArgs()[5]).toBeNull();
+  });
+
+  it('sends the remaining indices once a section is unticked', async () => {
+    executeTmlImport.mockResolvedValue(ok([], [1]));
+    render(<TmlImportDialog tmlFile={twoSections()} filePath="/tmp/cave.tml" />);
+
+    await userEvent.click(await screen.findByTestId('tml-section-0'));
+    await clickImport();
+    expect(lastImportArgs()[5]).toEqual([1]);
+  });
+
+  it('does not call the NEW root re-anchored when the old root is unticked', async () => {
+    executeTmlImport.mockResolvedValue(ok([], [1]));
+    render(<TmlImportDialog tmlFile={twoSections()} filePath="/tmp/cave.tml" />);
+
+    // B hangs off A; unticking A leaves B as the new ROOT, which is not a lost
+    // anchor - so nothing is flagged.
+    await userEvent.click(await screen.findByTestId('tml-section-0'));
+    expect(screen.queryByTestId('tml-reanchored-notice')).toBeNull();
+
+    // Unticking A's child instead cannot strand anything either.
+    await userEvent.click(await screen.findByTestId('tml-section-0'));
+    await userEvent.click(await screen.findByTestId('tml-section-1'));
+    expect(screen.queryByTestId('tml-reanchored-notice')).toBeNull();
+  });
+
+  it('flags the section stranded by a deselected middle section', async () => {
+    const three: TmlFile = {
+      ...tmlFile,
+      sections: [
+        ...twoSections().sections,
+        {
+          name: 'C',
+          shots: [shot({ id: 3n, from_id: 2n })],
+          surveyor: null,
+          date: null,
+          color: '#22c55e',
+          is_branch_split: false,
+          start_ariane_id: 2n,
+          end_ariane_id: 3n,
+          start_depth: 0,
+        },
+      ],
+    };
+    render(<TmlImportDialog tmlFile={three} filePath="/tmp/cave.tml" />);
+
+    // Drop B: C hangs off B, and A is still the root, so C is stranded.
+    await userEvent.click(await screen.findByTestId('tml-section-1'));
+    expect(await screen.findByTestId('tml-reanchored-notice')).toBeInTheDocument();
+    expect(screen.getByTestId('tml-section-reanchored-2')).toBeInTheDocument();
+  });
+
+  it('disables Import when every section is unticked', async () => {
+    render(<TmlImportDialog tmlFile={twoSections()} filePath="/tmp/cave.tml" />);
+
+    await userEvent.click(await screen.findByTestId('tml-select-all'));
+    expect(await screen.findByTestId('tml-import-empty')).toBeInTheDocument();
+    expect((screen.getByTestId('tml-import-confirm') as HTMLButtonElement).disabled).toBe(true);
+    expect(executeTmlImport).not.toHaveBeenCalled();
+  });
+
+  it('sends an explicit origin placement for a file with no georeference', async () => {
+    executeTmlImport.mockResolvedValue(ok([], [1]));
+    render(<TmlImportDialog tmlFile={twoSections()} filePath="/tmp/cave.tml" />);
+
+    // No GPS anywhere, so the file option is not even offered.
+    expect(screen.queryByTestId('tml-placement-file')).toBeNull();
+    await clickImport();
+    // arg 6 is rootPlacement: the choice is now stated rather than defaulted
+    // into silently.
+    expect(lastImportArgs()[6]).toEqual({ type: 'origin' });
+  });
+
+  it("offers the file's own coordinates and sends them as a zero datum", async () => {
+    executeTmlImport.mockResolvedValue(ok([], [1]));
+    render(
+      <TmlImportDialog
+        tmlFile={twoSections({ latitude: 20.5, longitude: -87.1 })}
+        filePath="/tmp/cave.tml"
+      />
+    );
+
+    expect((await screen.findByTestId('tml-placement-file')) as HTMLInputElement).toBeChecked();
+    await clickImport();
+    expect(lastImportArgs()[6]).toEqual({
+      type: 'zero_datum',
+      latitude: 20.5,
+      longitude: -87.1,
+    });
+  });
+
+  it('holds Import while typed coordinates do not parse, and releases it when they do', async () => {
+    executeTmlImport.mockResolvedValue(ok([], [1]));
+    render(<TmlImportDialog tmlFile={twoSections()} filePath="/tmp/cave.tml" />);
+
+    await userEvent.click(await screen.findByTestId('tml-placement-manual'));
+    // Chosen but empty: not an answer, so the button must not offer to send one.
+    expect((screen.getByTestId('tml-import-confirm') as HTMLButtonElement).disabled).toBe(true);
+
+    await userEvent.type(screen.getByTestId('tml-placement-latitude'), '91');
+    await userEvent.type(screen.getByTestId('tml-placement-longitude'), '0');
+    expect(screen.getByTestId('tml-placement-error')).toBeInTheDocument();
+    expect((screen.getByTestId('tml-import-confirm') as HTMLButtonElement).disabled).toBe(true);
+
+    await userEvent.clear(screen.getByTestId('tml-placement-latitude'));
+    await userEvent.type(screen.getByTestId('tml-placement-latitude'), '20.5');
+    expect(screen.queryByTestId('tml-placement-error')).toBeNull();
+
+    await clickImport();
+    expect(lastImportArgs()[6]).toEqual({
+      type: 'zero_datum',
+      latitude: 20.5,
+      longitude: 0,
+    });
+  });
+});
+
+describe('TmlImportDialog placement is not walked over by other controls (#425)', () => {
+  const geoFile: TmlFile = {
+    ...tmlFile,
+    sections: [
+      {
+        name: 'A',
+        shots: [shot({ id: 1n, from_id: 0n, latitude: 20.5, longitude: -87.1 })],
+        surveyor: null,
+        date: null,
+        color: '#3b82f6',
+        is_branch_split: false,
+        start_ariane_id: 0n,
+        end_ariane_id: 1n,
+        start_depth: 0,
+      },
+      {
+        name: 'B',
+        shots: [shot({ id: 2n, from_id: 1n })],
+        surveyor: null,
+        date: null,
+        color: '#ef4444',
+        is_branch_split: false,
+        start_ariane_id: 1n,
+        end_ariane_id: 2n,
+        start_depth: 0,
+      },
+    ],
+  };
+
+  it('keeps an explicit Origin choice when a section is unticked afterwards', async () => {
+    executeTmlImport.mockResolvedValue(ok([], [1]));
+    render(<TmlImportDialog tmlFile={geoFile} filePath="/tmp/cave.tml" />);
+
+    // The file offers coordinates, so 'file' is the seeded default; override it.
+    await userEvent.click(await screen.findByTestId('tml-placement-origin'));
+    // Unticking B recomputes the root's anchor - which used to re-seed the
+    // default and silently put the survey back on the file's coordinates.
+    await userEvent.click(screen.getByTestId('tml-section-1'));
+
+    expect((screen.getByTestId('tml-placement-origin') as HTMLInputElement)).toBeChecked();
+    await clickImport();
+    expect(executeTmlImport.mock.calls[executeTmlImport.mock.calls.length - 1]?.[6]).toEqual({
+      type: 'origin',
+    });
+  });
+
+  it('falls back to Origin when the section carrying the coordinates is unticked', async () => {
+    executeTmlImport.mockResolvedValue(ok([], [1]));
+    render(<TmlImportDialog tmlFile={geoFile} filePath="/tmp/cave.tml" />);
+
+    expect((await screen.findByTestId('tml-placement-file')) as HTMLInputElement).toBeChecked();
+    await userEvent.click(screen.getByTestId('tml-section-0'));
+
+    // The option is gone with its section; leaving `choice` on it would disable
+    // Import with nothing on screen explaining why.
+    expect(screen.queryByTestId('tml-placement-file')).toBeNull();
+    expect((screen.getByTestId('tml-placement-origin') as HTMLInputElement)).toBeChecked();
+    await clickImport();
+    expect(executeTmlImport.mock.calls[executeTmlImport.mock.calls.length - 1]?.[6]).toEqual({
+      type: 'origin',
+    });
+  });
+});
+
+describe('TmlImportDialog root agreement (#425 review)', () => {
+  /** Section 0 is emptied by the exclusion filter, so it is never created. */
+  const firstSectionAllExcluded: TmlFile = {
+    ...tmlFile,
+    sections: [
+      {
+        name: 'Dropped',
+        shots: [shot({ id: 1n, from_id: 0n, excluded: true })],
+        surveyor: null,
+        date: null,
+        color: '#3b82f6',
+        is_branch_split: false,
+        start_ariane_id: 0n,
+        end_ariane_id: 1n,
+        start_depth: 0,
+      },
+      {
+        name: 'Survivor',
+        shots: [shot({ id: 2n, from_id: 1n })],
+        surveyor: null,
+        date: null,
+        color: '#ef4444',
+        is_branch_split: false,
+        start_ariane_id: 1n,
+        end_ariane_id: 2n,
+        start_depth: 0,
+      },
+    ],
+  };
+
+  it('anchors the placement step to the surviving section and does not also call it stranded', async () => {
+    executeTmlImport.mockResolvedValue(ok([], [1]));
+    render(<TmlImportDialog tmlFile={firstSectionAllExcluded} filePath="/tmp/cave.tml" />);
+
+    // The step names the section the import will actually create...
+    expect(await screen.findByTestId('tml-placement-step')).toHaveTextContent('Survivor');
+    // ...and cannot simultaneously badge it as landing at the origin for want
+    // of a connection. Both used to be on screen at once, because the preview
+    // layout still called section 0 the root.
+    expect(screen.queryByTestId('tml-reanchored-notice')).toBeNull();
+    expect(screen.queryByTestId('tml-section-reanchored-1')).toBeNull();
+  });
+
+  it('sends the typed datum, which the backend applies to that same section', async () => {
+    executeTmlImport.mockResolvedValue(ok([], [1]));
+    render(<TmlImportDialog tmlFile={firstSectionAllExcluded} filePath="/tmp/cave.tml" />);
+
+    await userEvent.click(await screen.findByTestId('tml-placement-manual'));
+    await userEvent.type(screen.getByTestId('tml-placement-latitude'), '20.5');
+    await userEvent.type(screen.getByTestId('tml-placement-longitude'), '-87.1');
+    await clickImport();
+
+    expect(executeTmlImport.mock.calls[executeTmlImport.mock.calls.length - 1]?.[6]).toEqual({
+      type: 'zero_datum',
+      latitude: 20.5,
+      longitude: -87.1,
+    });
+  });
+
+  it('does not offer coordinates the backend would refuse', async () => {
+    // A crafted file with NaN on the root's first shot. `Math.abs(NaN) > 0` is
+    // false, so a non-zero test alone reports it as an anchor - the same hole
+    // the Rust null-island guard had.
+    const crafted: TmlFile = {
+      ...tmlFile,
+      sections: [
+        {
+          ...firstSectionAllExcluded.sections[1]!,
+          name: 'Crafted',
+          shots: [shot({ id: 1n, from_id: 0n, latitude: Number.NaN, longitude: Number.NaN })],
+          start_ariane_id: 0n,
+        },
+      ],
+    };
+    render(<TmlImportDialog tmlFile={crafted} filePath="/tmp/cave.tml" />);
+
+    await screen.findByTestId('tml-placement-step');
+    expect(screen.queryByTestId('tml-placement-file')).toBeNull();
+    expect(screen.getByTestId('tml-placement-origin')).toBeChecked();
+  });
+});
+
+describe('TmlImportDialog reads the ids the wire actually delivers (#566)', () => {
+  /**
+   * Every other fixture in this file builds `BigInt` ids because that is what
+   * the GENERATED types say. Tauri's IPC is JSON and serde writes an `i64` as a
+   * JSON number, so the shipped app hands this dialog plain numbers - and a
+   * lookup that only worked for bigints made every non-root section look
+   * stranded the moment the dialog opened.
+   */
+  const wireIds: TmlFile = {
+    ...tmlFile,
+    sections: [
+      {
+        name: 'A',
+        shots: [{ ...shot(), id: 1 as unknown as bigint, from_id: 0 as unknown as bigint }],
+        surveyor: null,
+        date: null,
+        color: '#3b82f6',
+        is_branch_split: false,
+        start_ariane_id: 0 as unknown as bigint,
+        end_ariane_id: 1 as unknown as bigint,
+        start_depth: 0,
+      },
+      {
+        name: 'B',
+        shots: [{ ...shot(), id: 2 as unknown as bigint, from_id: 1 as unknown as bigint }],
+        surveyor: null,
+        date: null,
+        color: '#ef4444',
+        is_branch_split: false,
+        start_ariane_id: 1 as unknown as bigint,
+        end_ariane_id: 2 as unknown as bigint,
+        start_depth: 0,
+      },
+    ],
+  };
+
+  it('does not call a connected section stranded on a file straight off the wire', async () => {
+    render(<TmlImportDialog tmlFile={wireIds} filePath="/tmp/cave.tml" />);
+
+    await screen.findByTestId('tml-placement-step');
+    // B hangs off A and both are selected, so nothing is going to the origin.
+    // Before the fix this notice was on screen for every multi-section file the
+    // real app opened, contradicting an import that connected them fine.
+    expect(screen.queryByTestId('tml-reanchored-notice')).toBeNull();
+    expect(screen.queryByTestId('tml-section-reanchored-1')).toBeNull();
+  });
+
+  it('still flags a genuinely stranded section on wire ids', async () => {
+    render(<TmlImportDialog tmlFile={wireIds} filePath="/tmp/cave.tml" />);
+
+    // Deselecting A leaves B as the new root, which is not stranded...
+    await userEvent.click(await screen.findByTestId('tml-section-0'));
+    expect(screen.queryByTestId('tml-reanchored-notice')).toBeNull();
   });
 });

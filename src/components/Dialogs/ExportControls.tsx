@@ -120,6 +120,11 @@ export default function ExportControls({
   );
 
   const handleExport = async (options?: { skipTmlAnchorCheck?: boolean }) => {
+    // Only a chosen path counts as a completed export; a cancelled OS save
+    // picker must leave the dialog open with options intact and must NOT
+    // fire `trackDialogComplete` (which would suppress the dialog-cancel
+    // telemetry for a dialog the user never actually finished).
+    let pathWasChosen = false;
     try {
       if (exportType === 'data') {
         const isTml = dataFormat === 'tml';
@@ -172,6 +177,7 @@ export default function ExportControls({
         );
 
         if (selected) {
+          pathWasChosen = true;
           // For TML, preserve the extension the OS dialog appended.
           // If the path already has .tmlu or .tml, keep it as-is;
           // otherwise default to .tml.
@@ -212,6 +218,7 @@ export default function ExportControls({
         );
 
         if (selected) {
+          pathWasChosen = true;
           const finalPath = ensureExtension(selected, extension);
           // Register listener BEFORE starting export to avoid race condition with early events
           // Uses shared loading-progress events for consistency with LoadingProgress infrastructure
@@ -255,7 +262,7 @@ export default function ExportControls({
         }
       }
 
-      if (isMountedRef.current) {
+      if (pathWasChosen && isMountedRef.current) {
         // `trackDialogComplete` pairs with a dialog close (it suppresses the
         // dialog-cancel telemetry). The panel isn't a dialog, so firing it there
         // would leave `_dialogCompleted` stuck - only track for the dialog variant

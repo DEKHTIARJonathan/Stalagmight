@@ -15,7 +15,7 @@ use crate::models::placement_suggest::{
 use crate::models::{AzimuthReference, ShotData};
 use crate::parsers::compass::{CompassFile, CompassImportOptions};
 use crate::parsers::gpx::{GpxFile, GpxSectionPlacement};
-use crate::parsers::tml::TmlFile;
+use crate::parsers::tml::{TmlFile, TmlImportOptions, TmlRootPlacement};
 use crate::parsers::walls::{WallsFile, WallsImportOptions};
 use crate::parsers::DmpFile;
 
@@ -294,6 +294,11 @@ pub fn parse_tml(path: PathBuf) -> Result<TmlFile, String> {
 
 /// Parse a TML/TMLU file, convert to import configs, and execute the import.
 #[tauri::command]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one parameter per import-dialog control; grouping them into a \
+              struct would put a second, hand-written shape on the IPC wire"
+)]
 pub fn execute_tml_import(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -302,6 +307,8 @@ pub fn execute_tml_import(
     include_excluded: bool,
     comments_on_stations: bool,
     virtual_shot_mode: Option<VirtualShotMode>,
+    selected_sections: Option<Vec<u32>>,
+    root_placement: Option<TmlRootPlacement>,
 ) -> CommandResult {
     tracing::info!(
         path = ?path,
@@ -327,12 +334,19 @@ pub fn execute_tml_import(
     emitter.complete_phase(LoadingPhase::ImportParsing);
 
     emitter.start_phase(LoadingPhase::ImportConverting);
+    let opts = TmlImportOptions {
+        include_excluded,
+        comments_on_stations,
+        // `None` ⇒ import every section; `Some(list)` ⇒ only the chosen section
+        // indices (into the preview's `TmlFile::sections`, which the dialog
+        // lists 1:1). An empty list imports nothing and lands the empty
+        // receipt, exactly like a file whose every shot was filtered out.
+        selected_sections: selected_sections.map(|v| v.into_iter().collect()),
+        // `None` ⇒ the pre-#425 silent default (the file's GPS, else origin).
+        root_placement,
+    };
     let (sections, closures, converter_warnings) =
-        match crate::parsers::tml::convert_tml_to_import_configs(
-            &tml,
-            include_excluded,
-            comments_on_stations,
-        ) {
+        match crate::parsers::tml::convert_tml_with_options(&tml, &opts) {
             Ok(result) => result,
             Err(e) => {
                 tracing::error!(

@@ -61,22 +61,42 @@ CLOSURE-type shots in Ariane encode loop closure metadata. During import these a
 
 ## Import Workflow
 
-Unlike the DMP wizard, the Ariane import is a single dialog with no map preview, no per-section toggles and no placement step. It always creates a NEW project - importing a `.tml` into an open project is not supported (the unified router offers to close the current project first).
+The Ariane import is a single dialog (not the DMP wizard's multi-step flow), but since #425 it reuses the wizard's pieces: the same resizable map column (`WizardMapPanel`, whose width is shared with the DMP wizard and persisted - see [#404 / `panels.wizard_map_panel_width`](configuration.md)), per-section toggles, and a placement step. It always creates a NEW project - importing a `.tml` into an open project is not supported (the unified router offers to close the current project first).
 
 1. **Pick the file** - the unified-picker entry points (the hamburger's Open / Import row, Ctrl+O, drag-drop, and Ctrl+I with no project open) route through `routeOpenedFile`, which parses the file (`parse_tml`) and marks the flow as a new-project import. The in-project Import affordances (toolbar button, hamburger Import row, Ctrl+I) offer `.dmp` only, since a `.tml` cannot be imported into an open project (#508) - drag-drop still accepts one and offers to close the project first.
 2. **Name the project** - `NewProjectForImportDialog` creates the project BEFORE the import is confirmed. For a project created without an explicit save path the initial save is deferred, so nothing is on disk yet.
-3. **Confirm the import** - `TmlImportDialog` shows the file's cave name, the sections table and the counts that will actually import under the current toggles (excluded shots, comment placement, virtual-shot classification), then runs `execute_tml_import`.
+3. **Confirm the import** - `TmlImportDialog` shows the file's cave name, a map preview of the file laid out as the import will build it, the sections table with a checkbox per section, and the counts that will actually import under the current selection and toggles (excluded shots, comment placement, virtual-shot classification). It then runs `execute_tml_import`.
 4. **Receipt** - a successful import opens the import receipt (sections, shots, loops, unit conversion, any converter warnings).
 5. **Orphan placement (optional)** - if the newly imported sections suggest connections to existing ones, the orphan-placement dialog opens INSTEAD of the receipt handoff, and the receipt follows it.
 
 Cancelling the dialog - or a terminal failure - leaves the project created in step 2 behind, so the dialog asks whether to keep that empty project or discard it (discard closes a deferred project, or deletes the `.stalx` if one was written).
 
-### Placement
+### Section selection (#425)
 
-There is no manual placement step and no map to place on. Placement is decided by the parser (`determine_placement`):
+Each section has a checkbox; the selection travels as `selected_sections: Option<Vec<u32>>` (indices into `TmlFile::sections`), `None` meaning "all", mirroring the Walls importer's `selected_surveys`. Filtering is by the ORIGINAL index - `ImportSectionConfig::section_index`, the `FromImporting` targets and the closure endpoints all address that numbering, and `execute_import_sections` resolves them through a map, so a sparse selection needs no renumbering.
 
-- The first section anchors to a zero datum when its first shot carries non-zero latitude/longitude, and otherwise falls back **silently** to the project origin - nothing in the UI reports which of the two happened.
-- Every other section attaches to the station its `FromID` chain resolves to in an already-imported section; a section whose parent cannot be resolved falls back to the origin with a converter warning that reaches the receipt.
+The topology rules, in `build_selection_index` / `determine_placement`
+(`crates/parsers/src/parsers/tml/import_options.rs`):
+
+- The Ariane-id index is built over the SELECTED sections only. A parent in a deselected section therefore resolves to nothing, so no surviving section can emit a `FromImporting` onto a section that is never created - which is a hard, whole-import rollback in `execute_import_sections`, not a skip.
+- The ROOT is the lowest SELECTED index (not "the first section that survived shot filtering" - promoting a successor would silently drop the disconnected-section warning that case has always produced).
+- A section that had a parent and lost it to the selection falls back to the origin with its own warning ("attached to a section you did not select"), kept distinct from the file-orphan warning ("was disconnected") so the receipt names the right cause.
+- A loop closure whose far endpoint is in a deselected section is skipped and counted separately from one whose endpoint was EXCLUDED - two different toggles, two different messages.
+- A deselected section produces no "no shots after filtering" warning: the user said no, which is not an anomaly to report back at them.
+
+### Placement (#425)
+
+Placement of every section but the root is still decided by the file's topology: each attaches to the station its `FromID` chain resolves to in an already-imported section.
+
+The ROOT is a user choice, taken in the dialog and sent as `root_placement: Option<TmlRootPlacement>` (`None` keeps the pre-#425 behaviour for callers with no user in front of them, e.g. the SpeleoDB adoption path):
+
+- **Use the position in the file** - offered when the root section's own first shot carries non-zero latitude/longitude (what the importer would have picked anyway, now visible), or when the file has a `geo_coding` on some OTHER section, which the importer otherwise ignores entirely.
+- **Place at the origin** - what a file with no georeference used to get in silence.
+- **Enter coordinates** - typed latitude/longitude, validated through `GpsCoordinates::new` in the converter, so a NaN or an out-of-range value fails the import rather than landing in a project.
+
+The typed datum deliberately carries `depth_reference: 0` ("not recorded"), the same value the file-derived anchor uses: Ariane states a surface position, not a datum depth. The zero-datum config dialog's own depth/elevation field (#524) is the eventual home for that number if this step ever needs to collect it - it is not a second convention, just a field this step does not ask for yet. Both magnitudes are bounded by `MAX_DEPTH_REFERENCE_M` (11 000 m, mirrored in `src/utils/gpsBounds.ts`).
+
+Deliberately NOT the DMP wizard's manual-placement engine: this dialog only ever opens on a brand-new, empty project (Ariane is a new-project-only format in `openOrImport.ts`), so there is no existing station to attach to and nothing on the map to drag against. A fuller step would need the dialog to be reachable with a project open, which is a separate change to the import router.
 
 ### Excluded shots
 

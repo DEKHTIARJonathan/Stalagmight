@@ -725,7 +725,7 @@ fn test_update_gas_config_normalizes_and_leaves_other_sections_alone() {
         let app = app_with_state();
         // A value inside the 100..500 clamp, so anything other than 321 coming
         // back means the write was lost rather than clamped.
-        config::update_panel_sizes_impl(state(&app).inner(), None, None, Some(321))
+        config::update_panel_sizes_impl(state(&app).inner(), None, None, Some(321), None)
             .expect("update panel sizes");
 
         let mut gas = config::get_config(state(&app)).gas;
@@ -856,7 +856,7 @@ fn test_update_panel_sizes_sections_only() {
         let app = app_with_state();
         with_restored_config(&app, || {
             let before = config::get_config(state(&app));
-            config::update_panel_sizes(state(&app), Some(333), None, None).unwrap();
+            config::update_panel_sizes(state(&app), Some(333), None, None, None).unwrap();
             let after = config::get_config(state(&app));
             assert_eq!(after.panels.sections_panel_width, 333);
             assert_eq!(
@@ -877,7 +877,7 @@ fn test_update_panel_sizes_detail_only() {
         let app = app_with_state();
         with_restored_config(&app, || {
             let before = config::get_config(state(&app));
-            config::update_panel_sizes(state(&app), None, Some(444), None).unwrap();
+            config::update_panel_sizes(state(&app), None, Some(444), None, None).unwrap();
             let after = config::get_config(state(&app));
             assert_eq!(after.panels.detail_panel_width, 444);
             assert_eq!(
@@ -905,7 +905,7 @@ fn test_update_panel_sizes_data_only() {
             // "the write path normalizes nothing" behaviour as the spec: the value
             // reached disk out of range and was repaired on the NEXT load instead.
             // Clamping on the way in is covered by its own test below.
-            config::update_panel_sizes(state(&app), None, None, Some(400)).unwrap();
+            config::update_panel_sizes(state(&app), None, None, Some(400), None).unwrap();
             let after = config::get_config(state(&app));
             assert_eq!(after.panels.data_table_height, 400);
             assert_eq!(
@@ -925,14 +925,17 @@ fn test_update_panel_sizes_all() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            // All three IN RANGE (150..400, 200..500, 100..500) - see the note in
-            // `test_update_panel_sizes_data_only`. The old 111 for a field with a
-            // 150 floor made this assert that an out-of-range value survives.
-            config::update_panel_sizes(state(&app), Some(200), Some(222), Some(333)).unwrap();
+            // All four IN RANGE (150..400, 200..500, 100..500, 280..900) - see
+            // the note in `test_update_panel_sizes_data_only`. The old 111 for a
+            // field with a 150 floor made this assert that an out-of-range value
+            // survives.
+            config::update_panel_sizes(state(&app), Some(200), Some(222), Some(333), Some(600))
+                .unwrap();
             let after = config::get_config(state(&app));
             assert_eq!(after.panels.sections_panel_width, 200);
             assert_eq!(after.panels.detail_panel_width, 222);
             assert_eq!(after.panels.data_table_height, 333);
+            assert_eq!(after.panels.wizard_map_panel_width, 600);
         });
     });
 }
@@ -950,10 +953,12 @@ fn test_update_panel_sizes_clamps_out_of_range_values() {
         let app = app_with_state();
         with_restored_config(&app, || {
             // Below the 150 floor, above the 500 ceiling.
-            config::update_panel_sizes(state(&app), Some(1), None, Some(9999)).unwrap();
+            config::update_panel_sizes(state(&app), Some(1), None, Some(9999), Some(9999)).unwrap();
             let after = config::get_config(state(&app));
             assert_eq!(after.panels.sections_panel_width, 150);
             assert_eq!(after.panels.data_table_height, 500);
+            // The wizard map column clamps to 280..900, not 100..500.
+            assert_eq!(after.panels.wizard_map_panel_width, 900);
         });
     });
 }
@@ -964,7 +969,7 @@ fn test_update_panel_sizes_none_keeps_values() {
         let app = app_with_state();
         with_restored_config(&app, || {
             let before = config::get_config(state(&app));
-            config::update_panel_sizes(state(&app), None, None, None).unwrap();
+            config::update_panel_sizes(state(&app), None, None, None, None).unwrap();
             let after = config::get_config(state(&app));
             assert_eq!(
                 after.panels.sections_panel_width,
@@ -5850,7 +5855,7 @@ fn test_concurrent_partial_config_updates_do_not_lose_writes() {
                 for i in 0..ITERS {
                     let width = 150 + trial * 10 + (i % 10);
                     retrying(|| {
-                        config::update_panel_sizes_impl(a.as_ref(), Some(width), None, None)
+                        config::update_panel_sizes_impl(a.as_ref(), Some(width), None, None, None)
                     });
                 }
             });

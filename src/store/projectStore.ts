@@ -43,7 +43,7 @@ import type { ReversedSection } from '../types/ipc/ReversedSection';
 import type { SpeleoManagedFile } from '../types/ipc/SpeleoManagedFile';
 import type { Config } from '../types/config';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, TmlRootPlacement, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 
 /** Additive import-receipt provenance (#391) - see `import_sections` (Rust) for the fields' meaning. */
 export interface ImportReceiptProvenance {
@@ -445,7 +445,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
 
   importDmp: (path: string) => Promise<DmpFile>;
   parseTml: (path: string) => Promise<TmlFile>;
-  executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean, virtualShotMode?: VirtualShotMode) => Promise<CommandResult>;
+  executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean, virtualShotMode?: VirtualShotMode, selectedSections?: number[] | null, rootPlacement?: TmlRootPlacement | null) => Promise<CommandResult>;
   parseCompass: (path: string) => Promise<CompassFile>;
   executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   parseWalls: (path: string) => Promise<WallsFile>;
@@ -2250,7 +2250,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     });
   },
 
-  executeTmlImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean, virtualShotMode?: VirtualShotMode) => {
+  executeTmlImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean, virtualShotMode?: VirtualShotMode, selectedSections?: number[] | null, rootPlacement?: TmlRootPlacement | null) => {
     const s = peekProjectActionSource();
     if (s) setSource(s);
     try {
@@ -2263,6 +2263,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           commentsOnStations: commentsOnStations ?? true,
           // #27: null lets the backend default to Auto (the chain rule).
           virtualShotMode: virtualShotMode ?? null,
+          // #425: null on either means "no filter" / "decide the root placement
+          // the way you always did", so an older caller behaves unchanged.
+          selectedSections: selectedSections ?? null,
+          rootPlacement: rootPlacement ?? null,
         },
         { purpose: 'import Ariane TML/TMLU', fields: { path } }
       );

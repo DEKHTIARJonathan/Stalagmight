@@ -1339,7 +1339,28 @@
         "surveyor": "Surveyor",
         "date": "Date",
         "color": "Color",
-        "branch": "(branch)"
+        "branch": "(branch)",
+        "reanchored": "(moved to origin)"
+      },
+      "sectionsToImport": "Sections to import",
+      "selectedCount": "{{selected}} of {{total}} selected",
+      "selectAllLabel": "Select all sections",
+      "importSectionLabel": "Import section {{name}}",
+      "reanchored_one": "{{count}} section connects to nothing else being imported, so it will be placed at the origin.",
+      "reanchored_other": "{{count}} sections connect to nothing else being imported, so they will be placed at the origin.",
+      "placement": {
+        "heading": "Where does this survey go?",
+        "appliesTo": "Applies to \"{{section}}\", the first section imported. Everything else follows the connections recorded in the file.",
+        "appliesToNothing": "Nothing is selected to import yet.",
+        "useFile": "Use the position in the file",
+        "useFileHint": "{{latitude}}, {{longitude}} - recorded on this section.",
+        "useFileElsewhereHint": "{{latitude}}, {{longitude}} - recorded elsewhere in the file, and not normally used on import.",
+        "origin": "Place at the origin",
+        "originHint": "Local coordinates. You can georeference the survey later.",
+        "manual": "Enter coordinates",
+        "latitude": "Latitude",
+        "longitude": "Longitude",
+        "invalid": "Enter a latitude between -90 and 90 and a longitude between -180 and 180."
       },
       "empty": "This file has nothing to import under the current options.",
       "closures_one": "{{count}} loop closure detected",
@@ -1640,6 +1661,10 @@
       "gpsPlaceholder": "e.g. 48.8584, 2.2945",
       "gpsEmptyHint": "Enter coordinates to set the zero datum - Confirm stays disabled until it parses.",
       "transposedWarning": "Latitude and longitude may be swapped - check the format.",
+      "depthReferenceLabel": "Depth below surface",
+      "depthReferencePlaceholder": "e.g. 12.5 (optional)",
+      "depthReferenceHint": "Meters, positive = below the surface. Leave blank if unknown.",
+      "depthReferenceError": "Depth below surface must be a number.",
       "backConfirm": {
         "message": "You have unsaved changes. They come back if you return to this section, but are lost if you pick a different one or leave.",
         "discard": "Go Back"

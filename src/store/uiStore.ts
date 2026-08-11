@@ -1,7 +1,10 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
 import { clampRound } from '../utils/clamp';
-import { PANEL_SIZE_BOUNDS } from '../components/SingleSystemView/layoutConstants';
+import {
+  PANEL_SIZE_BOUNDS,
+  WIZARD_MAP_PANEL_DEFAULT_WIDTH,
+} from '../components/SingleSystemView/layoutConstants';
 import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackPanelMode, trackSelect, trackSelectAdd, clearProjectActionSource, isPersistSuppressed } from '../utils/telemetry';
 import type { Coordinates, DistanceField, PathShot, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 
@@ -170,6 +173,14 @@ export type PanelMode = 'hover' | 'pin';
 
 /** Identifies one of the three in-project panels (matches telemetry PanelName). */
 export type PanelId = 'sections' | 'detail' | 'data-table';
+
+/**
+ * A panel whose SIZE persists. Wider than {@link PanelId}: the import wizards'
+ * map column (#404) is dragged and remembered like the others, but it has no
+ * open/hover state - it is shown for as long as its wizard step is - so it is
+ * not a `PanelId` and takes no part in `setPanelOpen`/`setPanelMode`.
+ */
+export type SizedPanelId = PanelId | 'wizard-map';
 
 /**
  * A transient "ghost" geometry overlay shown on the map (in survey meters),
@@ -459,6 +470,10 @@ interface UIStore {
   dataTableOpen: boolean;
   dataTableMode: PanelMode;
   dataTableHeight: number;
+  /** Width of the import wizards' map column (#404). Lives here rather than in
+   *  each wizard's local state so a drag in one is honoured by the next, and so
+   *  `initPanels` can seed it from the persisted config. */
+  wizardMapPanelWidth: number;
   /** Bumped to transiently reveal the Details panel: in hover mode SingleSystemView
    *  floats it open (like a hover, with an auto-close) instead of pinning, so a
    *  programmatic reveal (e.g. jump-to-warning) never clobbers the user's persisted
@@ -480,8 +495,12 @@ interface UIStore {
   setSectionsPanelWidth: (width: number) => void;
   setDetailPanelWidth: (width: number) => void;
   setDataTableHeight: (height: number) => void;
+  /** Live width of the import wizards' map column (#404). One value for every
+   *  wizard that shows one, so the map does not resize as the user steps
+   *  between them; persisted on divider release by `WizardMapPanel`. */
+  setWizardMapPanelWidth: (width: number) => void;
   initPanels: (panels: PanelsConfig) => void;
-  savePanelSizes: (panel: PanelId, size: number) => Promise<void>;
+  savePanelSizes: (panel: SizedPanelId, size: number) => Promise<void>;
   /** Persist the full per-panel reveal layout (open + mode) globally. */
   savePanelLayout: () => Promise<void>;
 
@@ -936,6 +955,18 @@ export const PANEL_FIELDS = {
 } as const satisfies Record<PanelId, { open: string; mode: string; width: string }>;
 
 /**
+ * The store/config field each SIZED panel's width persists through. The three
+ * reveal panels reuse `PANEL_FIELDS`' own `width` so there is still one name per
+ * panel; the wizard map column has no reveal state and so appears only here.
+ */
+export const PANEL_WIDTH_FIELDS = {
+  sections: PANEL_FIELDS.sections.width,
+  detail: PANEL_FIELDS.detail.width,
+  'data-table': PANEL_FIELDS['data-table'].width,
+  'wizard-map': 'wizardMapPanelWidth',
+} as const satisfies Record<SizedPanelId, string>;
+
+/**
  * Does a modal own the screen right now - the single `activeDialog` slot, a
  * placement flow, or an independent top-layer overlay registered via
  * `useScreenOccupant`? The one predicate for "is it safe to open something
@@ -1179,6 +1210,7 @@ export const useUIStore = create<UIStore>((set) => ({
   dataTableOpen: false,
   dataTableMode: 'pin',
   dataTableHeight: 200,
+  wizardMapPanelWidth: WIZARD_MAP_PANEL_DEFAULT_WIDTH,
   detailRevealNonce: 0,
   // Keyboard shortcuts / menu items are deliberate commands → pin open/close
   // (mode forced to 'pin' so the panel reflows and stays). Manually changing the
@@ -1255,12 +1287,19 @@ export const useUIStore = create<UIStore>((set) => ({
   setSectionsPanelWidth: (sectionsPanelWidth) => set({ sectionsPanelWidth }),
   setDetailPanelWidth: (detailPanelWidth) => set({ detailPanelWidth }),
   setDataTableHeight: (dataTableHeight) => set({ dataTableHeight }),
+  setWizardMapPanelWidth: (wizardMapPanelWidth) => set({ wizardMapPanelWidth }),
   initPanels: (panels: PanelsConfig) => {
     const asMode = (m: string): PanelMode => (m === 'hover' ? 'hover' : 'pin');
     set({
       sectionsPanelWidth: panels.sections_panel_width,
       detailPanelWidth: panels.detail_panel_width,
       dataTableHeight: panels.data_table_height,
+      // Defaulted defensively for the same reason as the open booleans below:
+      // the Rust config supplies it via a serde default, but a partial config
+      // object that bypasses serde (the e2e mock, or a config written before
+      // #404) would otherwise set the width to `undefined` and collapse the
+      // wizard map column to nothing.
+      wizardMapPanelWidth: panels.wizard_map_panel_width ?? WIZARD_MAP_PANEL_DEFAULT_WIDTH,
       // Default the open booleans defensively. The Rust config supplies them via
       // serde defaults, but a partial config object that bypasses serde (the e2e
       // mock, or an older persisted shape) would otherwise write `undefined`,
@@ -1282,7 +1321,7 @@ export const useUIStore = create<UIStore>((set) => ({
     // persisted (which would reload the panel collapsed - there is no "unset"
     // sentinel, the stored u32 is taken at face value).
     const { min, max } = PANEL_SIZE_BOUNDS[panel];
-    const fields = { [PANEL_FIELDS[panel].width]: clampRound(size, min, max) };
+    const fields = { [PANEL_WIDTH_FIELDS[panel]]: clampRound(size, min, max) };
     try {
       await invokeIpc('update_panel_sizes', fields, { purpose: 'persist panel layout', fields });
     } catch (e) {

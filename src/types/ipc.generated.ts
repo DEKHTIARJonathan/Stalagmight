@@ -105,6 +105,7 @@ export * from './ipc/TmlUnit';
 export * from './ipc/TmlGeoCoding';
 export * from './ipc/TmlClosure';
 export * from './ipc/TmlParseAnomalies';
+export * from './ipc/TmlRootPlacement';
 export * from './ipc/CompassFile';
 export * from './ipc/CompassSurveySummary';
 export * from './ipc/InvalidShotCounts';

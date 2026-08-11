@@ -162,6 +162,21 @@ pub struct GpsCoordinates {
     pub depth_reference: f64,
 }
 
+/// Largest magnitude a zero datum's depth reference may carry, in meters.
+///
+/// Finiteness alone is not a range: `1e300` is finite, and it reached the
+/// project end to end - through the zero-datum dialog, into the geometry, and
+/// into every distance derived from it. The bound is deliberately generous
+/// rather than diving-realistic (Challenger Deep is ~10 935 m below the surface
+/// and Everest ~8 849 m above it, and the field is signed because a datum can
+/// sit above the surface), so it refuses only values that are meaningless for
+/// any point on Earth.
+///
+/// Mirrored by `MAX_DEPTH_REFERENCE_M` in
+/// src/components/Dialogs/ZeroDatumConfigDialog.tsx; the pair is pinned by
+/// src/test/__tests__/configBoundsMirror.test.ts, which parses this constant.
+pub const MAX_DEPTH_REFERENCE_M: f64 = 11_000.0;
+
 impl GpsCoordinates {
     /// Creates new GPS coordinates after validation
     /// Returns Err if values are non-finite or out of range
@@ -187,6 +202,11 @@ impl GpsCoordinates {
         if !depth_reference.is_finite() {
             return Err(format!(
                 "Depth reference must be finite, got {depth_reference}"
+            ));
+        }
+        if !(-MAX_DEPTH_REFERENCE_M..=MAX_DEPTH_REFERENCE_M).contains(&depth_reference) {
+            return Err(format!(
+                "Depth reference must be in [-{MAX_DEPTH_REFERENCE_M}, {MAX_DEPTH_REFERENCE_M}] meters, got {depth_reference}"
             ));
         }
         if !(-90.0..=90.0).contains(&latitude) {
@@ -510,6 +530,39 @@ mod tests {
     fn station_ref_display_formats_as_section_and_index() {
         let station = StationRef::new(2, 3);
         assert_eq!(station.to_string(), "2:3");
+    }
+
+    /// #524 review: `is_finite` was the ONLY check on the depth reference, and
+    /// finiteness is not a range - `1e300` is finite, and it reached the
+    /// geometry and every distance derived from it.
+    #[test]
+    fn a_depth_reference_outside_any_earthly_range_is_refused() {
+        assert!(
+            1e300_f64.is_finite(),
+            "premise: the old finiteness check accepts this"
+        );
+
+        for depth in [1e300, -1e300, MAX_DEPTH_REFERENCE_M + 1.0] {
+            assert!(
+                GpsCoordinates::new(10.0, 20.0, depth).is_err(),
+                "{depth} m must be refused"
+            );
+        }
+
+        // The bound itself, and ordinary values on both sides of the surface,
+        // still pass - a datum ABOVE the surface is a negative depth.
+        for depth in [
+            0.0,
+            -MAX_DEPTH_REFERENCE_M,
+            MAX_DEPTH_REFERENCE_M,
+            -120.0,
+            85.0,
+        ] {
+            assert!(
+                GpsCoordinates::new(10.0, 20.0, depth).is_ok(),
+                "{depth} m must still be accepted"
+            );
+        }
     }
 
     /// #441: a field the wire can omit must be DECLARED omittable.

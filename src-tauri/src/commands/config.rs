@@ -49,12 +49,14 @@ pub fn update_panel_sizes(
     sections_panel_width: Option<u32>,
     detail_panel_width: Option<u32>,
     data_table_height: Option<u32>,
+    wizard_map_panel_width: Option<u32>,
 ) -> Result<(), String> {
     update_panel_sizes_impl(
         state.inner(),
         sections_panel_width,
         detail_panel_width,
         data_table_height,
+        wizard_map_panel_width,
     )
 }
 
@@ -286,6 +288,7 @@ pub(crate) fn update_panel_sizes_impl(
     sections_panel_width: Option<u32>,
     detail_panel_width: Option<u32>,
     data_table_height: Option<u32>,
+    wizard_map_panel_width: Option<u32>,
 ) -> Result<(), String> {
     // One critical section, same reason as `update_data_table_view_impl`: this is
     // the OTHER half of the pair that raced. `savePanelSizes` fires undebounced on
@@ -301,6 +304,9 @@ pub(crate) fn update_panel_sizes_impl(
             }
             if let Some(h) = data_table_height {
                 config.panels.data_table_height = h;
+            }
+            if let Some(w) = wizard_map_panel_width {
+                config.panels.wizard_map_panel_width = w;
             }
             Ok(())
         })

@@ -18,10 +18,24 @@ import { formatNumber } from '../../i18n/format';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
+import { WizardMapPanel } from './WizardMapPanel';
+import { WizardScrollBody } from './WizardScrollBody';
+import { WIZARD_MAP_PANEL_MAX_WIDTH } from '../SingleSystemView/layoutConstants';
+import { usePreviewSquareSize } from './usePreviewSquareSize';
+import SectionPreview from './SectionPreview';
+import { TmlSectionTable } from './TmlSectionTable';
+import {
+  TmlPlacementStep,
+  EMPTY_PLACEMENT,
+  placementPayload,
+  type TmlFileAnchor,
+  type TmlPlacementState,
+} from './TmlPlacementStep';
 import type { TmlFile, OrphanPlacementSuggestion } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import type { VirtualShotMode } from '../../types/project';
-import { computeTmlImportStats, importableShots } from '../../utils/tmlImportStats';
+import { computeTmlImportStats } from '../../utils/tmlImportStats';
+import { computeTmlPreviewLayout, isOfferableCoordinate } from '../../utils/tmlPreviewLayout';
 
 interface TmlImportDialogProps {
   tmlFile: TmlFile;
@@ -94,6 +108,136 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   // Reference by default. A user who knows the file can override it here.
   const [virtualShotMode, setVirtualShotMode] = useState<VirtualShotMode>('Auto');
 
+  // Section indices (into `tmlFile.sections`) to import - same shape as the
+  // Walls dialog's `selectedSurveys`. Default: everything, so the import
+  // matches prior behavior until the user unticks something.
+  const allIndices = useMemo(
+    () => tmlFile.sections.map((_, i) => i),
+    [tmlFile.sections]
+  );
+  const [selectedSections, setSelectedSections] = useState<Set<number>>(
+    () => new Set(allIndices)
+  );
+  useEffect(() => {
+    setSelectedSections(new Set(allIndices));
+  }, [allIndices]);
+  const allSelected =
+    allIndices.length > 0 && allIndices.every((i) => selectedSections.has(i));
+  const toggleSection = useCallback((i: number) => {
+    setSelectedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  }, []);
+  const toggleAllSections = useCallback(() => {
+    setSelectedSections((prev) => {
+      const on = allIndices.length > 0 && allIndices.every((i) => prev.has(i));
+      return on ? new Set() : new Set(allIndices);
+    });
+  }, [allIndices]);
+
+  const [placement, setPlacement] = useState<TmlPlacementState>(EMPTY_PLACEMENT);
+  // Whether the user has answered the placement question themselves. Without
+  // it, the default-seeding effect below would re-run on every section toggle
+  // (the anchor is recomputed from the new root) and silently overwrite an
+  // answer they had already given.
+  const [placementTouched, setPlacementTouched] = useState(false);
+  const choosePlacement = useCallback((next: TmlPlacementState) => {
+    setPlacementTouched(true);
+    setPlacement(next);
+  }, []);
+
+  // The map column, and the square the preview draws into. Width and its
+  // persistence are owned by uiStore/WizardMapPanel (#404).
+  const mapPanelWidth = useUIStore((s) => s.wizardMapPanelWidth);
+  const setMapPanelWidth = useUIStore((s) => s.setWizardMapPanelWidth);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const [previewRef, previewSize] = usePreviewSquareSize(WIZARD_MAP_PANEL_MAX_WIDTH);
+
+  // What the import will build, in one frame, under the current toggles. The
+  // preview and the section rows' "moved to origin" flags both read this, so
+  // the picture and the annotations cannot disagree.
+  const layout = useMemo(
+    () =>
+      computeTmlPreviewLayout(tmlFile, {
+        includeExcluded,
+        selected: selectedSections,
+      }),
+    [tmlFile, includeExcluded, selectedSections]
+  );
+  const previewSections = useMemo(
+    () =>
+      layout.sections.map((s) => ({
+        section: s.section,
+        color: s.color,
+        sectionIndex: s.index,
+        offsetX: s.offsetX,
+        offsetY: s.offsetY,
+      })),
+    [layout]
+  );
+  const reanchoredIndices = useMemo(
+    () => new Set(layout.sections.filter((s) => s.reanchored).map((s) => s.index)),
+    [layout]
+  );
+
+  // The section the placement choice applies to: the first one the import will
+  // CREATE - selected AND still holding shots after the exclusion filter.
+  //
+  // That is now the ONE definition of root, shared verbatim with
+  // `computeTmlPreviewLayout` (whose first entry this is) and with the backend,
+  // where the conversion loop reports it as `is_root: configs.is_empty()`. It
+  // used to be three definitions: the backend and the preview layout each said
+  // "lowest selected index", which disagrees with this one whenever the
+  // exclusion filter empties that section - and the placement collected here
+  // was then applied to a section that was never built, so it vanished.
+  const rootSection = layout.sections[0] ?? null;
+
+  /**
+   * The coordinates the file offers for the root, and where they came from.
+   *
+   * `root`: the root section's own first shot carries them, which is exactly
+   * what the importer picks with no override - choosing this option changes
+   * nothing but makes it visible.
+   * `elsewhere`: the file has a georeference, but on a section that is not the
+   * root. The importer IGNORES that today (`determine_placement` only ever
+   * looks at the section's own first shot), so offering it is new reach, not a
+   * restatement.
+   */
+  const fileAnchor: TmlFileAnchor | null = useMemo(() => {
+    const first = rootSection ? tmlFile.sections[rootSection.index]?.shots[0] : undefined;
+    // Validity, not just non-zero: the backend runs both of these through
+    // `GpsCoordinates::new`, so offering coordinates it will refuse would put
+    // an option on screen that disables the Import button when chosen.
+    if (first && isOfferableCoordinate(first.latitude, first.longitude)) {
+      return { latitude: first.latitude, longitude: first.longitude, source: 'root' };
+    }
+    const geo = tmlFile.geo_coding;
+    if (geo && isOfferableCoordinate(geo.latitude, geo.longitude)) {
+      return { latitude: geo.latitude, longitude: geo.longitude, source: 'elsewhere' };
+    }
+    return null;
+  }, [rootSection, tmlFile.sections, tmlFile.geo_coding]);
+
+  const hasFileAnchor = fileAnchor !== null;
+  // Seed the default: the file's own answer when it has one, the origin
+  // otherwise. Keyed on the BOOLEAN, not the anchor object, and skipped once
+  // the user has answered - both so that toggling sections cannot walk over
+  // their choice.
+  useEffect(() => {
+    if (placementTouched) return;
+    setPlacement((prev) => ({ ...prev, choice: hasFileAnchor ? 'file' : 'origin' }));
+  }, [hasFileAnchor, placementTouched]);
+  // A CORRECTION, not a default: deselecting the section that carried the
+  // coordinates withdraws the option the user picked, and leaving `choice` on
+  // it would disable Import with no visible reason (the radio is gone too).
+  useEffect(() => {
+    if (hasFileAnchor) return;
+    setPlacement((prev) => (prev.choice === 'file' ? { ...prev, choice: 'origin' } : prev));
+  }, [hasFileAnchor]);
+
   // An import in flight outlives this component when something else takes the
   // dialog slot (dropping another importable file re-routes it), so the failure
   // path has to know whether its in-component surface can still land.
@@ -123,12 +267,24 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     return extractFilename(filePath);
   }, [filePath]);
 
+  // Every figure tracks the SELECTION, not the file: unticking the last
+  // shot-bearing section has to disable Import and say the import is empty,
+  // exactly as unticking "include excluded shots" would (same rule as the Walls
+  // dialog's selected counts).
   const stats = useMemo(
+    () => computeTmlImportStats(tmlFile, includeExcluded, selectedSections),
+    [tmlFile, includeExcluded, selectedSections]
+  );
+  const fileStats = useMemo(
     () => computeTmlImportStats(tmlFile, includeExcluded),
     [tmlFile, includeExcluded]
   );
 
   const isEmptyImport = stats.totalShots === 0;
+  // The placement payload the backend will get, or null while the user's typed
+  // coordinates do not parse - which is a reason to hold the Import button, not
+  // to send "you decide".
+  const rootPlacement = placementPayload(placement, fileAnchor);
 
   // `clamp` passes NaN through, and an unseeded/garbled progress event would
   // then render as "NaN%" and an invalid bar width.
@@ -137,7 +293,14 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     : 0;
 
   // Escape / backdrop must not silently drop the option choices the user made.
-  const optionsChanged = includeExcluded || !commentsOnStations || virtualShotMode !== 'Auto';
+  // The placement choice counts only once it diverges from the default this
+  // file would have taken anyway, so merely opening the dialog is not "dirty".
+  const optionsChanged =
+    includeExcluded ||
+    !commentsOnStations ||
+    virtualShotMode !== 'Auto' ||
+    !allSelected ||
+    placementTouched;
 
   const handleImport = useCallback(async () => {
     setIsImporting(true);
@@ -193,7 +356,20 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       surfaceImportFailure('tml-import', importUi, failure);
     };
     try {
-      const result = await executeTmlImport(filePath, fileHash, includeExcluded, commentsOnStations, virtualShotMode);
+      // Omit (null) the section list when everything is ticked, so a full
+      // import stays unfiltered on the wire - same convention as Walls.
+      const sectionSelection = allSelected
+        ? null
+        : [...selectedSections].sort((a, b) => a - b);
+      const result = await executeTmlImport(
+        filePath,
+        fileHash,
+        includeExcluded,
+        commentsOnStations,
+        virtualShotMode,
+        sectionSelection,
+        rootPlacement
+      );
       resetLoading();
 
       if (!result.success) {
@@ -251,7 +427,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       resetLoading();
       reportFailure({ phase: 'transport', error: e, format: 'TML' });
     }
-  }, [executeTmlImport, filePath, fileHash, includeExcluded, commentsOnStations, virtualShotMode, tmlFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
+  }, [executeTmlImport, filePath, fileHash, includeExcluded, commentsOnStations, virtualShotMode, allSelected, selectedSections, rootPlacement, tmlFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
 
   const handleCancel = useCallback(() => {
     if (isImporting) return;
@@ -373,11 +549,34 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     <DialogWrapper
       title={t('dialogs.tmlImport.title')}
       onClose={handleCancel}
-      size="lg"
+      size="5xl"
+      overflow="hidden"
+      bodyClassName="flex-1 flex flex-col p-0 min-h-0"
       isDirty={optionsChanged}
       data-testid="tml-import-dialog"
     >
-      <div className="space-y-4">
+      <div className="flex-1 flex flex-col min-h-0">
+      <WizardScrollBody bodyRef={bodyRef}>
+        {(bandHeight) => (
+      <div className="flex" style={{ minHeight: bandHeight }}>
+        {/* Map column: the file laid out as the import will build it, so the
+            section toggles and the placement choice are answered by looking
+            rather than by imagining. Same panel (and now the same remembered
+            width, #404) as the mNemo wizard's. */}
+        <WizardMapPanel
+          width={mapPanelWidth}
+          onWidthChange={setMapPanelWidth}
+          bodyRef={bodyRef}
+          panelRef={previewRef}
+          height={bandHeight}
+        >
+          <SectionPreview
+            segmentSections={previewSections}
+            size={previewSize}
+          />
+        </WizardMapPanel>
+
+      <div className="flex-1 min-w-0 p-4 space-y-4">
         {/* Header info */}
         <div className="space-y-1">
           <div className="text-sm text-text-secondary">{fileName}</div>
@@ -423,51 +622,38 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           </div>
         )}
 
-        {/* Section list */}
-        <div className="max-h-64 overflow-y-auto border border-border rounded">
-          <table className="w-full text-sm">
-            <thead className="bg-surface-alt sticky top-0">
-              <tr className="text-left text-text-tertiary text-xs">
-                <th className="px-3 py-1.5">{t('dialogs.tmlImport.table.section')}</th>
-                <th className="px-3 py-1.5">{t('dialogs.tmlImport.table.shots')}</th>
-                <th className="px-3 py-1.5">{t('dialogs.tmlImport.table.surveyor')}</th>
-                <th className="px-3 py-1.5">{t('dialogs.tmlImport.table.date')}</th>
-                <th className="px-3 py-1.5 w-6">{t('dialogs.tmlImport.table.color')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tmlFile.sections.map((section, i) => (
-                <tr
-                  key={i}
-                  className="border-t border-border"
-                  data-testid={`tml-section-row-${i}`}
-                >
-                  <td className="px-3 py-1.5">
-                    {section.name}
-                    {section.is_branch_split && (
-                      <span className="ml-1 text-xs text-text-tertiary">
-                        {t('dialogs.tmlImport.table.branch')}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3 py-1.5">{importableShots(section, includeExcluded).length}</td>
-                  <td className="px-3 py-1.5 text-text-secondary">
-                    {section.surveyor ?? t('dialogs.tmlImport.stats.none')}
-                  </td>
-                  <td className="px-3 py-1.5 text-text-secondary">
-                    {section.date ?? t('dialogs.tmlImport.stats.none')}
-                  </td>
-                  <td className="px-3 py-1.5">
-                    <div
-                      className="w-4 h-4 rounded"
-                      style={{ backgroundColor: section.color }}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        {/* Section list, with a checkbox per row (#425) */}
+        <TmlSectionTable
+          tmlFile={tmlFile}
+          includeExcluded={includeExcluded}
+          selected={selectedSections}
+          onToggle={toggleSection}
+          onToggleAll={toggleAllSections}
+          reanchored={reanchoredIndices}
+          disabled={isImporting}
+        />
+
+        {/* Sections whose parent is not being imported land at the origin
+            rather than where the file put them. Said once here as well as
+            per-row, because it is a consequence of the selection the user just
+            made, not a property of any one row. */}
+        {layout.reanchoredCount > 0 && (
+          <div
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-sm"
+            data-testid="tml-reanchored-notice"
+          >
+            {t('dialogs.tmlImport.reanchored', { count: layout.reanchoredCount })}
+          </div>
+        )}
+
+        {/* Placement step (#425) */}
+        <TmlPlacementStep
+          state={placement}
+          onChange={choosePlacement}
+          anchor={fileAnchor}
+          rootSectionName={rootSection?.name ?? null}
+          disabled={isImporting}
+        />
 
         {/* Closures info */}
         {tmlFile.closures.length > 0 && (
@@ -476,8 +662,11 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           </div>
         )}
 
-        {/* Excluded shots toggle */}
-        {stats.excludedCount > 0 && (
+        {/* Excluded shots toggle. Gated on the FILE's count, not the
+            selection's: a toggle that vanishes because the sections holding the
+            excluded shots are unticked would be unreachable exactly when the
+            user goes looking for it. The LABEL still quotes the selection. */}
+        {fileStats.excludedCount > 0 && (
           <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
             <input
               type="checkbox"
@@ -489,8 +678,8 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           </label>
         )}
 
-        {/* Comments placement toggle */}
-        {stats.commentCount > 0 && (
+        {/* Comments placement toggle - gated on the file for the same reason. */}
+        {fileStats.commentCount > 0 && (
           <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
             <input
               type="checkbox"
@@ -549,17 +738,17 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           </div>
         )}
 
-        {/* Footer - sticky at the bottom of the scrolling body so the primary
-            action stays reachable without scrolling past the section table.
-            This establishes the repo's sticky-footer idiom (mirrored by
-            CompassImportDialog/WallsImportDialog): `-bottom-4 -mx-4 -mb-4`
-            bleeds the sticky element to the DialogWrapper body's scroll-
-            container edges and `bg-panel` covers content scrolling behind it.
-            It assumes the body keeps DialogWrapper's default `bodyClassName`
-            (`p-4`) - a dialog that overrides that padding would need matching
-            offsets here too. No `mt-4`: the parent's `space-y-4` already
-            supplies the gap above the footer, so an explicit one is dead. */}
-        <div className="sticky -bottom-4 -mx-4 -mb-4 flex justify-end gap-2 px-4 py-4 border-t border-border bg-panel">
+      </div>
+      </div>
+        )}
+      </WizardScrollBody>
+
+      {/* Footer. The dialog now owns its own scroller (WizardScrollBody), so
+          this is a flex SIBLING of it rather than the sticky-inside-the-body
+          idiom the smaller import dialogs use - it is outside the scroll, which
+          is what keeps the primary action reachable however long the section
+          list gets. */}
+        <div className="flex justify-end gap-2 px-4 py-4 border-t border-border bg-panel">
           <Button onClick={handleCancel} disabled={isImporting} data-testid="tml-import-cancel">
             {t('dialogs.tmlImport.cancel')}
           </Button>
@@ -567,7 +756,11 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
             data-primary-action=""
             data-testid="tml-import-confirm"
             onClick={handleImport}
-            disabled={isImporting || isEmptyImport}
+            // `rootPlacement === null` is the placement step refusing to answer
+            // (coordinates typed but unparseable), NOT "let the backend decide"
+            // - holding the button is the only way to say so without discarding
+            // what the user typed.
+            disabled={isImporting || isEmptyImport || rootPlacement === null}
           >
             {isImporting ? t('dialogs.tmlImport.importing') : t('dialogs.tmlImport.import')}
           </Button>

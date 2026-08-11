@@ -26,8 +26,18 @@ export interface TmlImportStats {
  * Section/shot counts under the given toggles - the single source of truth for
  * every screen that quotes a TML file's size, so the create-project promise and
  * the import dialog's own numbers cannot drift apart (#411).
+ *
+ * `selected` (#425) narrows every figure to the sections the user kept ticked;
+ * `null` - what the pre-dialog screens pass, having no selection to speak of -
+ * counts the whole file. Note `excludedCount` and `commentCount` narrow too:
+ * they drive the dialog's two option toggles, which are pointless when the only
+ * rows they would affect are in sections that are not being imported.
  */
-export function computeTmlImportStats(tmlFile: TmlFile, includeExcluded: boolean): TmlImportStats {
+export function computeTmlImportStats(
+  tmlFile: TmlFile,
+  includeExcluded: boolean,
+  selected: ReadonlySet<number> | null = null
+): TmlImportStats {
   let totalSections = 0;
   let totalShots = 0;
   let totalLength = 0;
@@ -37,7 +47,8 @@ export function computeTmlImportStats(tmlFile: TmlFile, includeExcluded: boolean
   let commentCount = 0;
   let virtualCount = 0;
 
-  for (const section of tmlFile.sections) {
+  for (const [index, section] of tmlFile.sections.entries()) {
+    if (selected !== null && !selected.has(index)) continue;
     // A section left with no shots by the toggles is dropped by the converter
     // ("no shots after filtering"), so it must not be counted as arriving.
     let sectionShots = 0;

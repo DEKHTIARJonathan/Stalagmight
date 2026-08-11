@@ -237,6 +237,7 @@ impl Default for PanelsConfig {
             sections_panel_width: 250,
             detail_panel_width: 300,
             data_table_height: 200,
+            wizard_map_panel_width: 480,
             data_table_shot_column_order: Vec::new(),
             data_table_shot_hidden_columns: vec!["section_id".to_string(), "shot_id".to_string()],
             data_table_shot_column_widths: std::collections::BTreeMap::new(),

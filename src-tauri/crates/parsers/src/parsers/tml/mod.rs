@@ -20,9 +20,12 @@ use crate::models::shot::implied_pitch_deg;
 use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig, ShotData, ShotKind};
 
 use azimuth::tml_azimuth_reference;
+use import_options::{build_selection_index, determine_placement, PlacementInput};
+pub use import_options::{TmlImportOptions, TmlRootPlacement};
 
 mod azimuth;
 mod decode;
+mod import_options;
 mod linearize;
 // `test-support` (never on in production builds) keeps these fixture builders
 // compiled for the root crate's tests, which can no longer see a dependency's
@@ -1292,7 +1295,41 @@ pub fn convert_tml_to_import_configs(
     include_excluded: bool,
     comments_on_stations: bool,
 ) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>)> {
+    convert_tml_with_options(
+        tml,
+        &TmlImportOptions::basic(include_excluded, comments_on_stations),
+    )
+}
+
+/// [`convert_tml_to_import_configs`] with the whole option set: the per-section
+/// filter and the root-placement choice the import dialog collects (#425).
+///
+/// Not a second implementation - the shorter entry point above delegates
+/// straight here, the same way `execute_import_sections` delegates to
+/// `execute_import_sections_inner`. It exists because the callers that have no
+/// user in front of them (the SpeleoDB adoption path, every round-trip test)
+/// have no selection and no placement to express, and threading two `None`s
+/// through them would say nothing.
+pub fn convert_tml_with_options(
+    tml: &TmlFile,
+    opts: &TmlImportOptions,
+) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>)> {
+    let include_excluded = opts.include_excluded;
+    let comments_on_stations = opts.comments_on_stations;
     let mut warnings: Vec<String> = Vec::new();
+
+    // A selection naming sections this file does not have is not fatal - it
+    // simply selects nothing - but silence would leave an empty import with no
+    // account of itself. Unreachable from the dialog, which builds the indices
+    // from the very file it is previewing.
+    let out_of_range = opts.out_of_range_selection(tml.sections.len());
+    if out_of_range > 0 {
+        warnings.push(format!(
+            "{out_of_range} selected section{} did not exist in this file and {} ignored",
+            plural_s(out_of_range as u32),
+            was_were(out_of_range as u32)
+        ));
+    }
 
     if let Some(note) = &tml.encoding_warning {
         warnings.push(note.clone());
@@ -1318,36 +1355,27 @@ pub fn convert_tml_to_import_configs(
     // declared north reference instead of arithmetic on every shot.
     let azimuth_reference = tml_azimuth_reference(tml, &mut warnings);
 
-    // Build a mapping from Ariane shot ID → (section_index, station_index)
-    // to resolve topology connections between sections.
-    //
-    // Station index = the station at the END of a shot. In Stalagmight,
-    // station 0 is the section start, shot 0 goes from station 0 → 1, etc.
-    // So shot at index `i` ends at station `i + 1`.
-    //
-    // We must also account for CLOSURE shots being filtered out of the
-    // import data, so we count only non-CLOSURE shots to get the correct index.
-    let mut id_to_import_loc: HashMap<i64, (u32, u32)> = HashMap::new();
-    for (si, section) in tml.sections.iter().enumerate() {
-        let mut import_shot_idx: u32 = 0;
-        for shot in &section.shots {
-            if shot.shot_type == TmlShotType::Closure {
-                continue; // CLOSURE shots are excluded from import
-            }
-            if !include_excluded && shot.excluded {
-                continue; // Excluded shots are filtered out by default
-            }
-            // This shot ends at station (import_shot_idx + 1)
-            id_to_import_loc.insert(shot.id, (si as u32, import_shot_idx + 1));
-            import_shot_idx += 1;
-        }
-    }
+    // Ariane shot ID → (section_index, station_index) for the SELECTED
+    // sections, plus the ids a deselection dropped. Station index = the station
+    // at the END of a shot: station 0 is the section start, shot 0 goes from
+    // station 0 → 1, so shot `i` ends at station `i + 1`.
+    let import_options::SelectionIndex {
+        id_to_import_loc,
+        deselected_ids,
+    } = build_selection_index(&tml.sections, opts);
 
     let mut configs: Vec<ImportSectionConfig> = Vec::new();
     let mut zero_shot_sections_dropped: u32 = 0;
 
     for (si, section) in tml.sections.iter().enumerate() {
         let section_index = si as u32;
+
+        // A deselected section contributes nothing at all - not a config, not a
+        // dropped-section warning. The user said no; that is not an anomaly to
+        // report back to them.
+        if !opts.includes_section(si) {
+            continue;
+        }
 
         // Convert shots to ShotData, using start_depth for correct rebasing
         let shot_data =
@@ -1379,17 +1407,31 @@ pub fn convert_tml_to_import_configs(
             eff.filter(|&id| id != section.start_ariane_id)
         };
 
-        // Determine placement: try start_ariane_id first (preserves original
-        // topology), then effective_start_id as fallback when the original
-        // from_id was excluded and can't be resolved.
+        // Determine placement: the user's root choice, then start_ariane_id
+        // (preserves original topology), then effective_start_id as fallback
+        // when the original from_id was excluded and can't be resolved.
         let (placement, placement_warning) = determine_placement(
             section,
-            section_index,
-            section.start_ariane_id,
-            effective_start_id,
-            &id_to_import_loc,
-            tml.geo_coding.as_ref(),
-        );
+            &PlacementInput {
+                section_index,
+                start_ariane_id: section.start_ariane_id,
+                effective_start_id,
+                id_to_import_loc: &id_to_import_loc,
+                deselected_ids: &deselected_ids,
+                // THE definition of root: the first section this loop actually
+                // creates. Every early `continue` above - a deselected section,
+                // a section the shot filter emptied - is already behind us, so
+                // an empty `configs` means nothing has been placed yet.
+                // Deriving it from the selection instead (the "lowest selected
+                // index" this used to compute) disagreed with the loop exactly
+                // when the lowest-selected section was dropped for having no
+                // shots, and the user's typed datum went to a section that was
+                // never built.
+                is_root: configs.is_empty(),
+                root_placement: opts.root_placement,
+            },
+        )
+        .map_err(|e| anyhow!("{e}"))?;
         if let Some(w) = placement_warning {
             warnings.push(w);
         }
@@ -1497,7 +1539,13 @@ pub fn convert_tml_to_import_configs(
     let mut import_closures = Vec::new();
     let mut closures_with_excluded_endpoints: u32 = 0;
     let mut closures_to_entrance: u32 = 0;
-    for section in &tml.sections {
+    let mut closures_to_deselected: u32 = 0;
+    for (si, section) in tml.sections.iter().enumerate() {
+        // A CLOSURE row inside a section the user deselected is not theirs to
+        // hear about: nothing at either end of it is being imported.
+        if !opts.includes_section(si) {
+            continue;
+        }
         for shot in &section.shots {
             if shot.shot_type != TmlShotType::Closure || shot.closure_to_id < 0 {
                 continue;
@@ -1511,6 +1559,18 @@ pub fn convert_tml_to_import_configs(
                     to_section_index: to_si,
                     to_station_index: to_st,
                 });
+            } else if deselected_ids.contains(&shot.from_id)
+                || deselected_ids.contains(&shot.closure_to_id)
+            {
+                // Checked BEFORE the exclusion arm: a deselected endpoint is
+                // the user's own live choice, undone by re-selecting the
+                // section, and blaming their exclusion filter for it would send
+                // them to the wrong toggle.
+                tracing::warn!(
+                    section = ?section.name,
+                    "Loop closure referenced a deselected section and was skipped"
+                );
+                closures_to_deselected = closures_to_deselected.saturating_add(1);
             } else if (from.is_none() && entrance_ids.contains(&shot.from_id))
                 || (to.is_none() && entrance_ids.contains(&shot.closure_to_id))
             {
@@ -1531,6 +1591,18 @@ pub fn convert_tml_to_import_configs(
                 closures_with_excluded_endpoints += 1;
             }
         }
+    }
+
+    // Defense in depth for the class of bug the `is_root` comment above
+    // describes. The placement is applied by exactly one section, so if this
+    // conversion built no section at all it went nowhere - and a survey quietly
+    // appearing at (0, 0) after the user typed coordinates is the one outcome
+    // that must never be silent. Reachable today only via an empty import
+    // (nothing selected, or every section filtered away), where the receipt is
+    // otherwise empty and this is the only line explaining it.
+    if opts.root_placement.is_some() && configs.is_empty() {
+        warnings
+            .push("Nothing was imported, so the placement you chose was not applied".to_string());
     }
 
     if zero_shot_sections_dropped > 0 {
@@ -1570,6 +1642,14 @@ pub fn convert_tml_to_import_configs(
              reconstructed",
             plural_s(closures_to_entrance),
             was_were(closures_to_entrance)
+        ));
+    }
+    if closures_to_deselected > 0 {
+        warnings.push(format!(
+            "{closures_to_deselected} loop closure{} referenced a section you did not select and \
+             {} skipped",
+            plural_s(closures_to_deselected),
+            was_were(closures_to_deselected)
         ));
     }
 
@@ -1914,98 +1994,6 @@ fn convert_shots_to_shot_data(
     }
 
     result
-}
-
-/// Determine placement for a section based on topology and GPS data.
-///
-/// `start_ariane_id` is the raw first shot's `from_id` (original topology).
-/// `effective_start_id` is an optional fallback - the `from_id` of the first
-/// non-excluded shot, used when excluded leading shots make `start_ariane_id`
-/// unresolvable. We try both, preferring the original.
-fn determine_placement(
-    section: &TmlSection,
-    section_index: u32,
-    start_ariane_id: i64,
-    effective_start_id: Option<i64>,
-    id_to_import_loc: &HashMap<i64, (u32, u32)>,
-    _geo_coding: Option<&TmlGeoCoding>,
-) -> (ImportPlacement, Option<String>) {
-    // First section → Origin
-    if section_index == 0 {
-        // Check if first shot has GPS data
-        if let Some(first_shot) = section.shots.first() {
-            if first_shot.latitude.abs() > f64::EPSILON || first_shot.longitude.abs() > f64::EPSILON
-            {
-                return (
-                    ImportPlacement::ZeroDatum {
-                        coordinates: crate::models::GpsCoordinates {
-                            latitude: first_shot.latitude,
-                            longitude: first_shot.longitude,
-                            depth_reference: 0.0,
-                        },
-                        station_index: 0,
-                    },
-                    None,
-                );
-            }
-        }
-        return (ImportPlacement::Origin, None);
-    }
-
-    // Try to connect to an already-imported section. First try the original
-    // start_ariane_id, then fall back to effective_start_id (from the first
-    // non-excluded shot) if the original was excluded and can't be resolved.
-    let candidates = std::iter::once(Some(start_ariane_id))
-        .chain(std::iter::once(effective_start_id))
-        .flatten()
-        .filter(|&id| id >= 0);
-
-    for from_id in candidates {
-        if let Some(&(target_section, target_station)) = id_to_import_loc.get(&from_id) {
-            // Allow forward references - configs will be topologically sorted
-            // afterward so that the target section is created first.
-            if target_section != section_index {
-                return (
-                    ImportPlacement::FromImporting {
-                        import_station: 0, // First station of this section
-                        target_section_index: target_section,
-                        target_station_index: target_station,
-                    },
-                    None,
-                );
-            }
-        }
-    }
-
-    // Check for GPS data on first shot
-    if let Some(first_shot) = section.shots.first() {
-        if first_shot.latitude.abs() > f64::EPSILON || first_shot.longitude.abs() > f64::EPSILON {
-            return (
-                ImportPlacement::ZeroDatum {
-                    coordinates: crate::models::GpsCoordinates {
-                        latitude: first_shot.latitude,
-                        longitude: first_shot.longitude,
-                        depth_reference: 0.0,
-                    },
-                    station_index: 0,
-                },
-                None,
-            );
-        }
-    }
-
-    // Disconnected section → Origin with warning
-    tracing::warn!(
-        section = %section.name,
-        "Section has no topology link or GPS data, placing at origin"
-    );
-    (
-        ImportPlacement::Origin,
-        Some(format!(
-            "Section \"{}\" was disconnected from the rest of the survey and was placed at the origin",
-            section.name
-        )),
-    )
 }
 
 // ============================================================================

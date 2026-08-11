@@ -7,18 +7,28 @@
  * budget - anything added there has to come out somewhere, and a props-in /
  * children-out panel is the natural seam.
  *
- * The panel owns only its drag; the WIDTH lives in the wizard, so a drag on one
- * step is remembered on the other and the dialog does not change shape as the
- * user steps between them.
+ * The panel owns only its drag; the WIDTH lives in `uiStore`, so a drag on one
+ * step is remembered on the other - and, since #404, across sessions and across
+ * wizards: the drag's release persists it here rather than in each caller, so a
+ * new wizard that renders this panel gets the memory for free.
  */
 import type { ReactNode, RefObject } from 'react';
 import { useResizeHandle } from '../SingleSystemView/useResizeHandle';
+import { useUIStore } from '../../store/uiStore';
+import {
+  WIZARD_MAP_PANEL_DEFAULT_WIDTH,
+  WIZARD_MAP_PANEL_MIN_WIDTH,
+  WIZARD_MAP_PANEL_MAX_WIDTH,
+  WIZARD_SETTINGS_MIN_WIDTH,
+} from '../SingleSystemView/layoutConstants';
 
-/** Starting width, and the bounds the divider clamps to. The max also caps the
- *  preview square, so widening the column really does make the map bigger. */
-export const MAP_PANEL_DEFAULT_WIDTH = 480;
-export const MAP_PANEL_MIN_WIDTH = 280;
-export const MAP_PANEL_MAX_WIDTH = 900;
+/** Starting width, and the bounds the divider clamps to. Defined in
+ *  `layoutConstants` (the width is persisted, so the numbers sit with the other
+ *  panel bounds and under the Rust/TS bounds mirror) and re-exported here under
+ *  the names this panel's callers already use. */
+export const MAP_PANEL_DEFAULT_WIDTH = WIZARD_MAP_PANEL_DEFAULT_WIDTH;
+export const MAP_PANEL_MIN_WIDTH = WIZARD_MAP_PANEL_MIN_WIDTH;
+export const MAP_PANEL_MAX_WIDTH = WIZARD_MAP_PANEL_MAX_WIDTH;
 
 export interface WizardMapPanelProps {
   width: number;
@@ -41,6 +51,7 @@ export function WizardMapPanel({
   panelRef,
   children,
 }: WizardMapPanelProps) {
+  const savePanelSizes = useUIStore((s) => s.savePanelSizes);
   const resize = useResizeHandle({
     direction: 'horizontal',
     handlePosition: 'end',
@@ -48,13 +59,24 @@ export function WizardMapPanel({
     maxSize: MAP_PANEL_MAX_WIDTH,
     measureRef: bodyRef,
     onResize: onWidthChange,
+    // Persist on release only, like the app's other dividers: `savePanelSizes`
+    // is undebounced, and a per-frame write during the drag would be one config
+    // round-trip per pointermove.
+    onResizeEnd: (size) => void savePanelSizes('wizard-map', size),
   });
 
   return (
     <div
       ref={panelRef}
       className="sticky top-0 self-start relative shrink-0 flex flex-col items-center justify-center p-4 border-r border-border"
-      style={{ width, height }}
+      // `maxWidth` is the settings column's floor, and it is CSS rather than a
+      // clamp on the stored number on purpose: the width persists across
+      // sessions now (#404), so a column dragged wide on a large monitor is
+      // restored on a laptop, where an absolute 900px would leave the settings
+      // beside it a few dozen pixels wide with no way to grab the divider back.
+      // Capping the RENDER leaves the user's number intact - widen the window
+      // and the map is wide again - which a clamp on the value could not do.
+      style={{ width, height, maxWidth: `calc(100% - ${WIZARD_SETTINGS_MIN_WIDTH}px)` }}
       data-testid="segment-preview-panel"
     >
       {children}

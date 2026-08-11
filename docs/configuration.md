@@ -207,6 +207,7 @@ base_sigma_depth_m = 0.05           # Per-shot depth sigma (meters)
 sections_panel_width = 250          # Pixels (clamped to 150-400 on load)
 detail_panel_width = 300            # Pixels (clamped to 200-500)
 data_table_height = 200             # Pixels (clamped to 100-500)
+wizard_map_panel_width = 480        # Import wizards' map column, px (clamped to 280-900)
 sections_panel_open = true          # Pinned open at startup
 sections_panel_mode = "pin"         # "pin" (click to open, stays open) or "hover"
 detail_panel_open = true

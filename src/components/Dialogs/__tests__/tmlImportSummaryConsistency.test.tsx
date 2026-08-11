@@ -6,8 +6,23 @@
  * closure row, and a section that empties out under default filtering has to
  * land on identical numbers on both screens.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+
+// The TML dialog gained a map column in #425; SectionPreview and the panel pull
+// maplibre-gl (WebGL) at module load, which jsdom cannot execute. This suite is
+// about the two screens' NUMBERS, nothing drawn.
+vi.mock('../SectionPreview', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../SectionPreview')>()),
+  default: () => null,
+}));
+vi.mock('maplibre-gl', () => ({ default: {} }));
+vi.mock('../WizardMapPanel', () => ({
+  WizardMapPanel: () => null,
+  MAP_PANEL_DEFAULT_WIDTH: 480,
+  MAP_PANEL_MIN_WIDTH: 280,
+  MAP_PANEL_MAX_WIDTH: 900,
+}));
 
 import NewProjectForImportDialog from '../NewProjectForImportDialog';
 import TmlImportDialog from '../TmlImportDialog';

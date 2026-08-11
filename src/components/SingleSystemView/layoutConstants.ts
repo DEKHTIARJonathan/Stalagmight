@@ -9,6 +9,35 @@ export const DATA_TABLE_MIN_HEIGHT = 100;
 export const DATA_TABLE_MAX_HEIGHT = 500;
 
 /**
+ * The import wizards' map column (#404): starting width, and the bounds its
+ * divider clamps to. The max also caps the preview square, so widening the
+ * column really does make the map bigger.
+ *
+ * Here rather than in `WizardMapPanel.tsx` (which re-exports them under its
+ * historical `MAP_PANEL_*` names) because the width is now PERSISTED, which
+ * puts these numbers in `PANEL_SIZE_BOUNDS` below and therefore under the
+ * Rust/TS bounds mirror - and a dialog component is not somewhere `uiStore`
+ * should have to import from.
+ */
+export const WIZARD_MAP_PANEL_DEFAULT_WIDTH = 480;
+export const WIZARD_MAP_PANEL_MIN_WIDTH = 280;
+export const WIZARD_MAP_PANEL_MAX_WIDTH = 900;
+
+/**
+ * Width (px) the settings column beside a wizard map must keep, whatever the
+ * map column's stored width says. Same argument as `MAP_MIN_WIDTH` below, with
+ * the sides swapped: the map is the sized element and the settings are the
+ * remainder, so without a floor the remainder absorbs every shortfall.
+ *
+ * Sized from the widest row those columns hold: the mNemo wizard's paired
+ * "Section" + "Station" selects with their labels (~300px before the selects
+ * start truncating their option text), plus the card padding they sit in.
+ * It bites only when the window is narrower than
+ * `stored width + this` - at the 480px default that is a window under ~800px.
+ */
+export const WIZARD_SETTINGS_MIN_WIDTH = 320;
+
+/**
  * Per-panel resize bounds (px). Single source of truth shared by the
  * ResizablePanel `minSize`/`maxSize` props (SingleSystemView) and the
  * `savePanelSizes` persist-clamp (uiStore). Persisting a value below the minimum
@@ -25,7 +54,11 @@ export const PANEL_SIZE_BOUNDS = {
   sections: { min: 150, max: 400 },
   detail: { min: 200, max: 500 },
   'data-table': { min: DATA_TABLE_MIN_HEIGHT, max: DATA_TABLE_MAX_HEIGHT },
-} as const satisfies Record<'sections' | 'detail' | 'data-table', { min: number; max: number }>;
+  'wizard-map': { min: WIZARD_MAP_PANEL_MIN_WIDTH, max: WIZARD_MAP_PANEL_MAX_WIDTH },
+} as const satisfies Record<
+  'sections' | 'detail' | 'data-table' | 'wizard-map',
+  { min: number; max: number }
+>;
 
 /**
  * Minimum width (px, CSS pixels) the map column must keep (#260).
