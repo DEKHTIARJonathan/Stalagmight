@@ -26,6 +26,14 @@ import {
   CIRCLE_VERTEX_SRC,
   CIRCLE_FRAGMENT_SRC,
 } from './shaders';
+import {
+  type ProgramBundle,
+  linkProgramBundle,
+  deleteProgramBundle,
+  bindVec2,
+  bindFloat,
+  bindColor,
+} from './glProgram';
 
 /**
  * Notified when the layer disables itself mid-render (a GL error surfaced by
@@ -91,37 +99,56 @@ interface CircleGpu {
   count: number;
 }
 
-function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader | null {
-  const sh = gl.createShader(type);
-  if (!sh) return null;
-  gl.shaderSource(sh, src);
-  gl.compileShader(sh);
-  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-    console.warn('[customRender] shader compile failed:', gl.getShaderInfoLog(sh));
-    gl.deleteShader(sh);
-    return null;
-  }
-  return sh;
-}
+/** Uniform / attribute names of the two programs, resolved once at link time
+ *  ({@link ProgramBundle}). Each list must match the GLSL declarations in
+ *  shaders.ts; `__tests__/programNames.test.ts` pins that. */
+export const LINE_UNIFORMS = [
+  'u_matrix',
+  'u_viewport',
+  'u_half_width',
+  'u_aa',
+  'u_hide_reference',
+  'u_hide_jump',
+  'u_hover_width_mul',
+  'u_select_width_mul',
+] as const;
 
-function link(gl: WebGL2RenderingContext, vsSrc: string, fsSrc: string): WebGLProgram | null {
-  const vs = compile(gl, gl.VERTEX_SHADER, vsSrc);
-  const fs = compile(gl, gl.FRAGMENT_SHADER, fsSrc);
-  if (!vs || !fs) return null;
-  const prog = gl.createProgram();
-  if (!prog) return null;
-  gl.attachShader(prog, vs);
-  gl.attachShader(prog, fs);
-  gl.linkProgram(prog);
-  gl.deleteShader(vs);
-  gl.deleteShader(fs);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-    console.warn('[customRender] program link failed:', gl.getProgramInfoLog(prog));
-    gl.deleteProgram(prog);
-    return null;
-  }
-  return prog;
-}
+export const LINE_ATTRIBS = [
+  'a_pos_a',
+  'a_pos_b',
+  'a_endpoint',
+  'a_side',
+  'a_color_from',
+  'a_color_to',
+  'a_reference',
+  'a_dim',
+  'a_hide',
+  'a_highlight',
+] as const;
+
+export const CIRCLE_UNIFORMS = [
+  'u_matrix',
+  'u_viewport',
+  'u_radius',
+  'u_stroke_width',
+  'u_aa',
+  'u_hide_reference',
+  'u_hide_jump',
+  'u_hover_size_mul',
+  'u_select_size_mul',
+] as const;
+
+export const CIRCLE_ATTRIBS = [
+  'a_center',
+  'a_corner',
+  'a_fill',
+  'a_stroke',
+  'a_size_mul',
+  'a_all_reference',
+  'a_dim',
+  'a_hide',
+  'a_highlight',
+] as const;
 
 function makeBuffer(
   gl: WebGL2RenderingContext,
@@ -140,8 +167,8 @@ export class SurveyCustomLayer implements CustomLayerInterface {
   readonly renderingMode = '2d' as const;
 
   private gl: WebGL2RenderingContext | null = null;
-  private lineProgram: WebGLProgram | null = null;
-  private circleProgram: WebGLProgram | null = null;
+  private lineBundle: ProgramBundle<typeof LINE_UNIFORMS, typeof LINE_ATTRIBS> | null = null;
+  private circleBundle: ProgramBundle<typeof CIRCLE_UNIFORMS, typeof CIRCLE_ATTRIBS> | null = null;
   private lineGpu: LineGpu | null = null;
   private circleGpu: CircleGpu | null = null;
   private disabled = false;
@@ -219,10 +246,14 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     this.gl = gl;
     this.disabled = false;
     this.disabledReason = null;
-    // compile()/link() already log getShaderInfoLog / getProgramInfoLog ungated.
-    this.lineProgram = link(gl, LINE_VERTEX_SRC, LINE_FRAGMENT_SRC);
-    this.circleProgram = link(gl, CIRCLE_VERTEX_SRC, CIRCLE_FRAGMENT_SRC);
-    if (!this.lineProgram || !this.circleProgram) {
+    // linkProgramBundle() already logs getShaderInfoLog / getProgramInfoLog ungated.
+    this.lineBundle = linkProgramBundle(
+      gl, LINE_VERTEX_SRC, LINE_FRAGMENT_SRC, LINE_UNIFORMS, LINE_ATTRIBS, '[customRender]',
+    );
+    this.circleBundle = linkProgramBundle(
+      gl, CIRCLE_VERTEX_SRC, CIRCLE_FRAGMENT_SRC, CIRCLE_UNIFORMS, CIRCLE_ATTRIBS, '[customRender]',
+    );
+    if (!this.lineBundle || !this.circleBundle) {
       console.warn('[customRender] shader program link failed; disabling custom layer');
       this.disabled = true;
       this.disabledReason = 'program-link-failed';
@@ -416,7 +447,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
   render(gl: WebGLRenderingContext | WebGL2RenderingContext, options: CustomRenderMethodInput): void {
     if (this.disabled || !(gl instanceof WebGL2RenderingContext)) return;
     const data = this.data;
-    if (!data || !this.lineProgram || !this.circleProgram || !this.lineGpu || !this.circleGpu) return;
+    if (!data || !this.lineBundle || !this.circleBundle || !this.lineGpu || !this.circleGpu) return;
 
     // MapLibre 5.16's options.modelViewProjectionMatrix maps WORLD-PIXEL space
     // (0..worldSize) to clip space; the mercator [0,1] -> clip matrix that a
@@ -481,27 +512,27 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     viewport: [number, number],
     data: CustomRenderData,
   ): void {
-    const prog = this.lineProgram!;
+    const { program, uniforms: u, attribs: a } = this.lineBundle!;
     const g = this.lineGpu!;
-    gl.useProgram(prog);
-    gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'u_matrix'), false, matrix);
-    gl.uniform2f(gl.getUniformLocation(prog, 'u_viewport'), viewport[0], viewport[1]);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_half_width'), data.lineHalfWidthPx);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_aa'), data.aaPx);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_reference'), this.hideReference ? 1 : 0);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_jump'), this.hideJump ? 1 : 0);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_hover_width_mul'), data.lineHoverWidthMul);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_select_width_mul'), data.lineSelectWidthMul);
-    this.bindVec2(gl, prog, 'a_pos_a', g.posA);
-    this.bindVec2(gl, prog, 'a_pos_b', g.posB);
-    this.bindFloat(gl, prog, 'a_endpoint', g.endpoint);
-    this.bindFloat(gl, prog, 'a_side', g.side);
-    this.bindColor(gl, prog, 'a_color_from', g.colorFrom);
-    this.bindColor(gl, prog, 'a_color_to', g.colorTo);
-    this.bindFloat(gl, prog, 'a_reference', g.reference);
-    this.bindFloat(gl, prog, 'a_dim', g.dim);
-    this.bindFloat(gl, prog, 'a_hide', g.hide);
-    this.bindFloat(gl, prog, 'a_highlight', g.highlight);
+    gl.useProgram(program);
+    gl.uniformMatrix4fv(u.u_matrix, false, matrix);
+    gl.uniform2f(u.u_viewport, viewport[0], viewport[1]);
+    gl.uniform1f(u.u_half_width, data.lineHalfWidthPx);
+    gl.uniform1f(u.u_aa, data.aaPx);
+    gl.uniform1f(u.u_hide_reference, this.hideReference ? 1 : 0);
+    gl.uniform1f(u.u_hide_jump, this.hideJump ? 1 : 0);
+    gl.uniform1f(u.u_hover_width_mul, data.lineHoverWidthMul);
+    gl.uniform1f(u.u_select_width_mul, data.lineSelectWidthMul);
+    bindVec2(gl, a.a_pos_a, g.posA);
+    bindVec2(gl, a.a_pos_b, g.posB);
+    bindFloat(gl, a.a_endpoint, g.endpoint);
+    bindFloat(gl, a.a_side, g.side);
+    bindColor(gl, a.a_color_from, g.colorFrom);
+    bindColor(gl, a.a_color_to, g.colorTo);
+    bindFloat(gl, a.a_reference, g.reference);
+    bindFloat(gl, a.a_dim, g.dim);
+    bindFloat(gl, a.a_hide, g.hide);
+    bindFloat(gl, a.a_highlight, g.highlight);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
   }
@@ -512,53 +543,29 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     viewport: [number, number],
     data: CustomRenderData,
   ): void {
-    const prog = this.circleProgram!;
+    const { program, uniforms: u, attribs: a } = this.circleBundle!;
     const g = this.circleGpu!;
-    gl.useProgram(prog);
-    gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'u_matrix'), false, matrix);
-    gl.uniform2f(gl.getUniformLocation(prog, 'u_viewport'), viewport[0], viewport[1]);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_radius'), data.circleRadiusPx);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_stroke_width'), data.circleStrokePx);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_aa'), data.aaPx);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_reference'), this.hideReference ? 1 : 0);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_jump'), this.hideJump ? 1 : 0);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_hover_size_mul'), data.circleHoverSizeMul);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_select_size_mul'), data.circleSelectSizeMul);
-    this.bindVec2(gl, prog, 'a_center', g.center);
-    this.bindVec2(gl, prog, 'a_corner', g.corner);
-    this.bindColor(gl, prog, 'a_fill', g.fill);
-    this.bindColor(gl, prog, 'a_stroke', g.stroke);
-    this.bindFloat(gl, prog, 'a_size_mul', g.sizeMul);
-    this.bindFloat(gl, prog, 'a_all_reference', g.allReference);
-    this.bindFloat(gl, prog, 'a_dim', g.dim);
-    this.bindFloat(gl, prog, 'a_hide', g.hide);
-    this.bindFloat(gl, prog, 'a_highlight', g.highlight);
+    gl.useProgram(program);
+    gl.uniformMatrix4fv(u.u_matrix, false, matrix);
+    gl.uniform2f(u.u_viewport, viewport[0], viewport[1]);
+    gl.uniform1f(u.u_radius, data.circleRadiusPx);
+    gl.uniform1f(u.u_stroke_width, data.circleStrokePx);
+    gl.uniform1f(u.u_aa, data.aaPx);
+    gl.uniform1f(u.u_hide_reference, this.hideReference ? 1 : 0);
+    gl.uniform1f(u.u_hide_jump, this.hideJump ? 1 : 0);
+    gl.uniform1f(u.u_hover_size_mul, data.circleHoverSizeMul);
+    gl.uniform1f(u.u_select_size_mul, data.circleSelectSizeMul);
+    bindVec2(gl, a.a_center, g.center);
+    bindVec2(gl, a.a_corner, g.corner);
+    bindColor(gl, a.a_fill, g.fill);
+    bindColor(gl, a.a_stroke, g.stroke);
+    bindFloat(gl, a.a_size_mul, g.sizeMul);
+    bindFloat(gl, a.a_all_reference, g.allReference);
+    bindFloat(gl, a.a_dim, g.dim);
+    bindFloat(gl, a.a_hide, g.hide);
+    bindFloat(gl, a.a_highlight, g.highlight);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
-  }
-
-  private bindVec2(gl: WebGL2RenderingContext, prog: WebGLProgram, name: string, buf: WebGLBuffer): void {
-    const loc = gl.getAttribLocation(prog, name);
-    if (loc < 0) return;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-  }
-
-  private bindFloat(gl: WebGL2RenderingContext, prog: WebGLProgram, name: string, buf: WebGLBuffer): void {
-    const loc = gl.getAttribLocation(prog, name);
-    if (loc < 0) return;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 1, gl.FLOAT, false, 0, 0);
-  }
-
-  private bindColor(gl: WebGL2RenderingContext, prog: WebGLProgram, name: string, buf: WebGLBuffer): void {
-    const loc = gl.getAttribLocation(prog, name);
-    if (loc < 0) return;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 4, gl.UNSIGNED_BYTE, true, 0, 0);
   }
 
   private freeGpu(): void {
@@ -579,11 +586,11 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     const gl = this.gl;
     this.freeGpu();
     if (gl) {
-      if (this.lineProgram) gl.deleteProgram(this.lineProgram);
-      if (this.circleProgram) gl.deleteProgram(this.circleProgram);
+      deleteProgramBundle(gl, this.lineBundle);
+      deleteProgramBundle(gl, this.circleBundle);
     }
-    this.lineProgram = null;
-    this.circleProgram = null;
+    this.lineBundle = null;
+    this.circleBundle = null;
     this.gl = null;
   }
 }
