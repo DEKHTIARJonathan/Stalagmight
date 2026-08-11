@@ -18,6 +18,7 @@ import {
   buildStampPathFor,
   featuresFor,
   gitHeadFor,
+  hashDistIndex,
   isPluginAclChurn,
   needsE2eFeature,
   readBuildStamp,
@@ -36,23 +37,35 @@ const E2E_STAMP: E2EBuildStamp = {
   features: '',
   viteE2E: true,
   e2eFeature: false,
-  repoRoot: '/repo/a',
-  gitHead: 'abc1234',
   viteMode: 'production',
   binaryMtimeMs: 1_700_000_000_000,
+  distIndexHash: 'd41d8cd98f00b204e9800998ecf8427e',
+  repoRoot: '/repo/a',
+  gitHead: 'abc1234',
   builtAtMs: 1_700_000_000_500,
   builtAtIso: '2023-11-14T22:13:20.500Z',
 };
 
+// `distIndexHash` and `repoRoot` are MANDATORY in the want: a caller that cannot
+// say which bundle is on disk or which checkout it is has not asked a question
+// the stamp can answer, and defaulting either would silently skip a check.
 const wantMatching = {
   viteE2E: true,
   e2eFeature: false,
   binaryMtimeMs: E2E_STAMP.binaryMtimeMs,
+  distIndexHash: E2E_STAMP.distIndexHash,
+  repoRoot: E2E_STAMP.repoRoot,
 };
 
 describe('stampStaleReasons', () => {
   it('treats a missing stamp as stale (binary not built by the harness)', () => {
-    const reasons = stampStaleReasons(null, { viteE2E: true, e2eFeature: false, binaryMtimeMs: 1 });
+    const reasons = stampStaleReasons(null, {
+      viteE2E: true,
+      e2eFeature: false,
+      binaryMtimeMs: 1,
+      distIndexHash: 'abc',
+      repoRoot: '/repo/a',
+    });
     expect(reasons).toHaveLength(1);
     expect(reasons[0]).toContain('no E2E build stamp');
   });
@@ -112,17 +125,43 @@ describe('stampStaleReasons', () => {
     expect(reasons).toHaveLength(1);
     expect(reasons[0]).toContain('/repo/a');
     expect(reasons[0]).toContain('/repo/b');
+    // The builder's HEAD rides along in the reason: "which tree" alone does not
+    // tell you what code you were about to drive.
     expect(reasons[0]).toContain(E2E_STAMP.gitHead);
+    expect(reasons[0]).toContain('one cargo target dir serves every worktree');
   });
 
   it('accepts a stamp written by the tree that is asking', () => {
     expect(stampStaleReasons(E2E_STAMP, { ...wantMatching, repoRoot: E2E_STAMP.repoRoot })).toEqual([]);
   });
 
-  it('skips the tree comparison when the caller does not say which tree it is', () => {
-    // `repoRoot` is optional in the same way `mode`/`features` are: omitted
-    // means "do not compare", not "compare against undefined".
-    expect(stampStaleReasons({ ...E2E_STAMP, repoRoot: '/repo/z' }, wantMatching)).toEqual([]);
+  // The bundle half of the same hazard: the binary embeds a dist, and a dist
+  // rebuilt behind it is invisible to every other field in the stamp.
+  it('treats a bundle that moved since the build as stale', () => {
+    const reasons = stampStaleReasons(E2E_STAMP, { ...wantMatching, distIndexHash: 'ffff0000' });
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('the frontend bundle moved since the build');
+    expect(reasons[0]).toContain('ffff0000');
+    expect(reasons[0]).toContain(E2E_STAMP.distIndexHash);
+  });
+
+  it('treats a missing dist as stale rather than assuming the bundle is fine', () => {
+    const reasons = stampStaleReasons(E2E_STAMP, { ...wantMatching, distIndexHash: '' });
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toBe(
+      'dist/index.html is missing, so the bundle this binary embeds cannot be verified',
+    );
+  });
+
+  it('reports a missing dist once, not also as a hash mismatch', () => {
+    // The two dist cases are exclusive (if/else if): '' is not a hash that
+    // "differs", and reporting both would double-count one fact.
+    const reasons = stampStaleReasons({ ...E2E_STAMP, distIndexHash: '' }, {
+      ...wantMatching,
+      distIndexHash: '',
+    });
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('dist/index.html is missing');
   });
 });
 
@@ -253,10 +292,11 @@ describe('readBuildStamp', () => {
     expect(readBuildStamp(write(JSON.stringify({ ...E2E_STAMP, v: 4 })))).toBeNull();
   });
 
-  it('returns null for a v2 stamp (cannot name the tree that built it - one forced rebuild)', () => {
+  it('returns null for a v2 stamp (cannot name the tree or the bundle - one forced rebuild)', () => {
     const v2 = { ...E2E_STAMP, v: 2 } as Record<string, unknown>;
     delete v2['repoRoot'];
     delete v2['gitHead'];
+    delete v2['distIndexHash'];
     expect(readBuildStamp(write(JSON.stringify(v2)))).toBeNull();
   });
 
@@ -266,8 +306,17 @@ describe('readBuildStamp', () => {
     expect(readBuildStamp(write(JSON.stringify(noRoot)))).toBeNull();
   });
 
-  it('returns null when repoRoot is not a string', () => {
+  it('returns null when repoRoot is not a string, or is the empty string', () => {
     expect(readBuildStamp(write(JSON.stringify({ ...E2E_STAMP, repoRoot: 7 })))).toBeNull();
+    // '' is not a checkout: it would compare unequal to every real root and so
+    // rebuild forever, which reads as a broken harness rather than a bad stamp.
+    expect(readBuildStamp(write(JSON.stringify({ ...E2E_STAMP, repoRoot: '' })))).toBeNull();
+  });
+
+  it('returns null for a v3 stamp missing distIndexHash', () => {
+    const noHash = { ...E2E_STAMP } as Record<string, unknown>;
+    delete noHash['distIndexHash'];
+    expect(readBuildStamp(write(JSON.stringify(noHash)))).toBeNull();
   });
 
   it('defaults a missing gitHead to "unknown" (informational, never load-bearing)', () => {
@@ -299,6 +348,108 @@ describe('readBuildStamp', () => {
   });
 });
 
+describe('hashDistIndex', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-dist-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('returns "" when there is no bundle to hash', () => {
+    expect(hashDistIndex(dir)).toBe('');
+  });
+
+  it('hashes dist/index.html, stably and by content', () => {
+    fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
+    const index = path.join(dir, 'dist', 'index.html');
+    fs.writeFileSync(index, '<!doctype html><script src="/assets/index-abc123.js"></script>');
+
+    const first = hashDistIndex(dir);
+    // A literal, cross-checked against coreutils - `printf '%s' <the string> |
+    // md5sum` gives this same digest. That is the actual claim being pinned:
+    // scripts/wdio.sh computes .e2e-build-marker with the shell tool, so the two
+    // tiers only agree about "this bundle" if both digests are plain md5 of the
+    // file bytes.
+    expect(first).toBe('d14f063eb4fdcd3e0a81ab448bae9fe9');
+    expect(hashDistIndex(dir)).toBe(first);
+
+    // A vite rebuild renames the chunk, and index.html references it by name.
+    fs.writeFileSync(index, '<!doctype html><script src="/assets/index-def456.js"></script>');
+    expect(hashDistIndex(dir)).not.toBe(first);
+  });
+});
+
+// The two halves of the shared cargo target dir: this branch and the fuzzer
+// branch both write `v: 3`, with field sets that differ by `gitHead`. Each
+// reader must accept the other's stamps, or the two would rebuild over each
+// other on every start - the exact thrash the stamp exists to prevent.
+describe('cross-schema readability', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-cross-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reads a stamp shaped like the sibling branch writes (no gitHead)', () => {
+    const theirs = {
+      v: 3,
+      mode: 'debug',
+      features: '',
+      viteE2E: true,
+      e2eFeature: false,
+      viteMode: 'production',
+      binaryMtimeMs: E2E_STAMP.binaryMtimeMs,
+      distIndexHash: E2E_STAMP.distIndexHash,
+      repoRoot: '/repo/b',
+      builtAtMs: E2E_STAMP.builtAtMs,
+      builtAtIso: E2E_STAMP.builtAtIso,
+    };
+    const file = path.join(dir, 'theirs.json');
+    fs.writeFileSync(file, JSON.stringify(theirs, null, 2));
+
+    const parsed = readBuildStamp(file);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.repoRoot).toBe('/repo/b');
+    expect(parsed?.gitHead).toBe('unknown');
+    // And it still decides: a foreign root is stale, HEAD or no HEAD.
+    expect(stampStaleReasons(parsed, wantMatching)).toHaveLength(1);
+  });
+
+  it('writes a stamp the sibling branch validation would accept', () => {
+    // Their rules, replicated rather than imported (their tree is not ours to
+    // depend on): v3, every load-bearing field present and typed, repoRoot
+    // non-empty. `gitHead` is an extra key, which JSON validation ignores.
+    const acceptedByTheirRules = (raw: unknown): boolean => {
+      if (typeof raw !== 'object' || raw === null) return false;
+      const c = raw as Record<string, unknown>;
+      return (
+        c['v'] === 3 &&
+        (c['mode'] === 'debug' || c['mode'] === 'release') &&
+        typeof c['features'] === 'string' &&
+        typeof c['viteE2E'] === 'boolean' &&
+        typeof c['e2eFeature'] === 'boolean' &&
+        typeof c['binaryMtimeMs'] === 'number' &&
+        typeof c['distIndexHash'] === 'string' &&
+        typeof c['repoRoot'] === 'string' &&
+        c['repoRoot'] !== ''
+      );
+    };
+
+    expect(acceptedByTheirRules(JSON.parse(JSON.stringify(E2E_STAMP)))).toBe(true);
+    // Guard the guard: the same predicate must reject a v2 stamp, or it would
+    // "accept" anything and prove nothing.
+    expect(acceptedByTheirRules({ ...E2E_STAMP, v: 2 })).toBe(false);
+  });
+});
+
 describe('build modes', () => {
   it('keeps one stamp per profile, beside the binary it vouches for', () => {
     const debugStamp = buildStampPathFor('debug');
@@ -314,6 +465,8 @@ describe('build modes', () => {
       viteE2E: true,
       e2eFeature: featuresFor('release').includes('e2e'),
       binaryMtimeMs: E2E_STAMP.binaryMtimeMs,
+      distIndexHash: E2E_STAMP.distIndexHash,
+      repoRoot: E2E_STAMP.repoRoot,
       mode: 'release',
       features: 'e2e',
     });
@@ -344,6 +497,8 @@ describe('build modes', () => {
         viteE2E: true,
         e2eFeature: featuresFor('release').includes('e2e'),
         binaryMtimeMs: releaseStamp.binaryMtimeMs,
+        distIndexHash: releaseStamp.distIndexHash,
+        repoRoot: releaseStamp.repoRoot,
         mode: 'release',
         features: 'e2e',
       }),
@@ -390,9 +545,10 @@ describe('build modes', () => {
           viteE2E: asBuilt.viteE2E,
           e2eFeature: featuresFor(mode).includes('e2e'),
           binaryMtimeMs: asBuilt.binaryMtimeMs,
+          distIndexHash: asBuilt.distIndexHash,
+          repoRoot: HARNESS_ROOT_REAL,
           mode,
           features: features.join(','),
-          repoRoot: HARNESS_ROOT_REAL,
         }),
         `${mode}: a freshly written stamp must satisfy its own freshness check`,
       ).toEqual([]);

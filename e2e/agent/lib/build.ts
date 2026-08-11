@@ -18,6 +18,7 @@
  * backstop; this is the cheap pre-flight.
  */
 import { execFileSync, execSync } from 'child_process';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -113,6 +114,28 @@ function mtimeOf(file: string): number {
 }
 
 /**
+ * The frontend bundle's identity: md5 of `dist/index.html`, which is exactly
+ * what `scripts/wdio.sh` writes into `.e2e-build-marker` and compares on its own
+ * freshness path. `''` when there is no readable bundle to hash.
+ *
+ * md5 is a CHANGE DETECTOR here, not a security primitive - the file is a local
+ * build output and the only thing being asked is "is this the one the build
+ * embedded". Same digest as the shell marker so the two tiers agree.
+ *
+ * index.html alone, not the tree and not the binary: vite hashes every emitted
+ * chunk into its filename and index.html references them by name, so a changed
+ * chunk changes this file. Hashing more would cost a full read of the bundle (or
+ * of a 200 MB debug binary) per start for signal this already carries.
+ */
+export function hashDistIndex(root: string = repoRoot): string {
+  try {
+    return createHash('md5').update(fs.readFileSync(path.join(root, 'dist', 'index.html'))).digest('hex');
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Stamp written by `buildApp` beside the binary it produced. Lives in the cargo
  * target dir (a build output, never the source tree, and outside the repo under
  * the default `~/.cargo_build`), so it is not something git can pick up.
@@ -121,20 +144,13 @@ function mtimeOf(file: string): number {
  * `CARGO_TARGET_DIR`, so the binary a stamp vouches for may have been built from
  * a different tree than the one asking. mtimes cannot see that either - worktree
  * A's sources are typically older than a binary B just built, so the check
- * passed and A drove B's app (issue #488). Since `v: 3` the stamp therefore
- * records WHICH tree built it, and a mismatch is stale.
+ * passed and A drove B's app (issues #488, #554). Since `v: 3` the stamp
+ * therefore records WHICH tree built it and WHICH bundle that build embedded,
+ * and a mismatch in either is stale.
  */
 export interface E2EBuildStamp {
   /** Stamp schema version; an unknown version is treated as no stamp. */
   v: 3;
-  /**
-   * Absolute, realpath-normalized root of the source tree this build ran in.
-   * Load-bearing: it is the whole cross-worktree defence, so a stamp without it
-   * is not a stamp.
-   */
-  repoRoot: string;
-  /** Short HEAD of `repoRoot` at build time. Informational (shown in reasons). */
-  gitHead: string;
   /** Cargo profile this binary was built with. */
   mode: AgentBuildMode;
   /**
@@ -160,6 +176,30 @@ export interface E2EBuildStamp {
   viteMode: string;
   /** mtime (ms) of the binary right after the build that wrote this stamp. */
   binaryMtimeMs: number;
+  /**
+   * md5 of the `dist/index.html` this build embedded (`''` if it was unreadable).
+   *
+   * The CONTENT backstop under the mtime heuristic, and the guard `scripts/wdio.sh`
+   * has had all along: a frontend rebuilt after the binary (a stray `pnpm build`,
+   * a `dev.sh` run, a vitest that emitted a bundle) leaves the binary serving the
+   * assets it was linked with while `dist/` holds different ones, which is the
+   * "Could not connect to localhost" attach failure. An mtime cannot see it
+   * whenever the clock says the binary is still the newer file.
+   */
+  distIndexHash: string;
+  /**
+   * Absolute, canonical path of the CHECKOUT this build was run from.
+   *
+   * One cargo target dir serves every worktree on the machine (issues #488,
+   * #554), so without this a stamp written by worktree A vouches, field for
+   * field, for a start in worktree B - same profile, same features, same
+   * VITE_E2E, and a binary mtime that matches because it is literally the same
+   * file. B then fuzzes A's code and reports the findings against B's diff.
+   * Load-bearing, so a stamp without it is not a stamp.
+   */
+  repoRoot: string;
+  /** Short HEAD of `repoRoot` at build time. Informational (shown in reasons). */
+  gitHead: string;
   builtAtMs: number;
   builtAtIso: string;
 }
@@ -247,26 +287,35 @@ export function readBuildStamp(file: string = buildStampPath): E2EBuildStamp | n
   const candidate = parsed as Partial<E2EBuildStamp>;
   // A v1 stamp predates BOTH the e2eFeature field and the release mode, so it
   // can say neither whether the binary carries the WebDriver plugin nor which
-  // profile it is; a v2 stamp cannot say which SOURCE TREE built the binary,
-  // which is the one thing a shared CARGO_TARGET_DIR makes ambiguous. Either is
-  // treated as no stamp: one rebuild per machine per bump, once.
+  // profile it is. A v2 stamp predates the bundle hash and the checkout path, so
+  // it cannot answer "is this dist the one you embedded" or "was it even this
+  // worktree that built you". Both are treated as no stamp - one rebuild per
+  // machine, once - rather than read leniently: a field a file does not carry is
+  // a check that silently does not run, which is the shape of #488 itself.
+  //
+  // `gitHead` is the one exception, and deliberately so: it decides nothing, and
+  // a stamp written by a sibling branch that does not record it must still be
+  // READABLE here, or the two halves of a shared target dir would rebuild over
+  // each other on every start.
   if (candidate.v !== 3) return null;
   if (candidate.mode !== 'debug' && candidate.mode !== 'release') return null;
   if (typeof candidate.features !== 'string') return null;
   if (typeof candidate.viteE2E !== 'boolean') return null;
   if (typeof candidate.e2eFeature !== 'boolean') return null;
-  if (typeof candidate.repoRoot !== 'string') return null;
   if (typeof candidate.binaryMtimeMs !== 'number') return null;
+  if (typeof candidate.distIndexHash !== 'string') return null;
+  if (typeof candidate.repoRoot !== 'string' || candidate.repoRoot === '') return null;
   return {
     v: 3,
     mode: candidate.mode,
     features: candidate.features,
     viteE2E: candidate.viteE2E,
     e2eFeature: candidate.e2eFeature,
-    repoRoot: candidate.repoRoot,
-    gitHead: typeof candidate.gitHead === 'string' ? candidate.gitHead : 'unknown',
     viteMode: typeof candidate.viteMode === 'string' ? candidate.viteMode : 'unknown',
     binaryMtimeMs: candidate.binaryMtimeMs,
+    distIndexHash: candidate.distIndexHash,
+    repoRoot: candidate.repoRoot,
+    gitHead: typeof candidate.gitHead === 'string' ? candidate.gitHead : 'unknown',
     builtAtMs: typeof candidate.builtAtMs === 'number' ? candidate.builtAtMs : 0,
     builtAtIso: typeof candidate.builtAtIso === 'string' ? candidate.builtAtIso : '',
   };
@@ -283,10 +332,12 @@ export function stampStaleReasons(
     viteE2E: boolean;
     e2eFeature: boolean;
     binaryMtimeMs: number;
+    /** md5 of the bundle on disk NOW; `''` when there is none to hash. */
+    distIndexHash: string;
+    /** Canonical path of the checkout this start runs from. */
+    repoRoot: string;
     mode?: AgentBuildMode;
     features?: string;
-    /** Realpath of the tree asking. Omitted = do not compare (tests, callers that cannot know). */
-    repoRoot?: string;
   },
 ): string[] {
   if (!stamp) {
@@ -295,12 +346,6 @@ export function stampStaleReasons(
   const reasons: string[] = [];
   if (want.mode !== undefined && stamp.mode !== want.mode) {
     reasons.push(`build stamp is for the ${stamp.mode} profile but this start needs ${want.mode}`);
-  }
-  if (want.repoRoot !== undefined && stamp.repoRoot !== want.repoRoot) {
-    reasons.push(
-      `the binary was built from a different source tree (${stamp.repoRoot} @ ${stamp.gitHead}), ` +
-        `current tree is ${want.repoRoot}`,
-    );
   }
   if (want.features !== undefined && stamp.features !== want.features) {
     reasons.push(
@@ -323,6 +368,25 @@ export function stampStaleReasons(
   }
   if (stamp.binaryMtimeMs !== want.binaryMtimeMs) {
     reasons.push('the binary was rebuilt outside the harness since the E2E build stamp');
+  }
+  if (stamp.repoRoot !== want.repoRoot) {
+    reasons.push(
+      `build stamp was produced by the checkout at ${stamp.repoRoot} (@ ${stamp.gitHead}) but this ` +
+        `start runs from ${want.repoRoot} - one cargo target dir serves every worktree, so that ` +
+        `binary is not this tree's`,
+    );
+  }
+  if (want.distIndexHash === '') {
+    // Not "assume it is fine": the binary embeds a bundle, and with nothing on
+    // disk to hash there is no way to tell WHICH one. `scripts/wdio.sh` refuses
+    // the same way ("Frontend dist not found"), and the cost is one rebuild for
+    // whoever deleted `dist/`.
+    reasons.push('dist/index.html is missing, so the bundle this binary embeds cannot be verified');
+  } else if (stamp.distIndexHash !== want.distIndexHash) {
+    reasons.push(
+      `the frontend bundle moved since the build: dist/index.html hashes to ${want.distIndexHash} ` +
+        `but the stamp records distIndexHash ${stamp.distIndexHash || '(none)'}`,
+    );
   }
   return reasons;
 }
@@ -380,11 +444,12 @@ export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
       viteE2E: requireE2E,
       e2eFeature: featuresFor(mode).includes('e2e'),
       binaryMtimeMs: binMtime,
+      distIndexHash: hashDistIndex(),
+      // Production always knows which tree it is, and a shared CARGO_TARGET_DIR
+      // means another worktree's binary must not pass as fresh.
+      repoRoot: realRepoRoot(),
       mode,
       features: featureKey(mode),
-      // Unconditional: production always knows which tree it is, and a shared
-      // CARGO_TARGET_DIR means another worktree's binary must not pass as fresh.
-      repoRoot: realRepoRoot(),
     }),
   );
 
@@ -540,10 +605,11 @@ function writeBuildStamp(
     features: info.features,
     viteE2E: info.viteE2E,
     e2eFeature: info.e2eFeature,
-    repoRoot: root,
-    gitHead: gitHeadFor(root),
     viteMode: info.viteMode,
     binaryMtimeMs: mtimeOf(binaryPathFor(info.mode)),
+    distIndexHash: hashDistIndex(),
+    repoRoot: root,
+    gitHead: gitHeadFor(root),
     builtAtMs: now,
     builtAtIso: new Date(now).toISOString(),
   };

@@ -298,15 +298,19 @@ not rebuild.
 2. **E2E build stamp** - `buildApp` writes
    `$CARGO_TARGET_DIR/<profile>/.stalagmight-e2e-build-stamp.json` after a
    successful build, recording the profile, its cargo features, `viteE2E`, the
-   vite mode, the mtime of the binary it produced, and (since `v: 3`) the
-   `repoRoot` + `gitHead` of the source tree the build ran in. A missing stamp, a
-   stamp whose profile / features / `viteE2E` / `repoRoot` disagree with what the
+   vite mode, the mtime of the binary it produced, `distIndexHash` (the content
+   hash of `dist/index.html` - the same md5 digest `scripts/wdio.sh` writes into
+   `.e2e-build-marker`, so a bundle rebuilt behind the binary reads as stale
+   instead of failing at attach), and (since `v: 3`) the `repoRoot` + `gitHead`
+   of the source tree the build ran in. A missing stamp, a stamp whose profile /
+   features / `viteE2E` / `distIndexHash` / `repoRoot` disagree with what the
    start needs, or a binary whose mtime no longer matches the stamp
    (`./scripts/dev.sh` or a plain `pnpm tauri build` relinked it) is stale. One
    stamp per profile, beside the binary it vouches for, is what lets debug and
    release coexist without thrashing rebuilds or running the wrong binary; a
-   pre-release-mode `v1` stamp cannot name its profile and a `v2` stamp cannot
-   name its tree, so both are treated as absent (one rebuild per bump, once).
+   pre-release-mode `v1` stamp cannot name its profile and a `v2` stamp can name
+   neither its tree nor its bundle, so both are treated as absent (one rebuild
+   per bump, once).
 
 mtimes alone cannot see *how* a binary was built, so before the stamp a
 `dev.sh`-built binary looked fresh and `auto` attached to a hookless dist, only
@@ -326,8 +330,9 @@ code. `v: 3` closes that: the stamp records the realpath of the building tree,
 with a reason naming both roots and the builder's HEAD:
 
 ```
-Rebuilding: the binary was built from a different source tree
-(/path/to/other/worktree @ 1a2b3c4), current tree is /path/to/this/worktree
+Rebuilding: build stamp was produced by the checkout at /path/to/other/worktree
+(@ 1a2b3c4) but this start runs from /path/to/this/worktree - one cargo target
+dir serves every worktree, so that binary is not this tree's
 ```
 
 `app_start` also returns `builtFrom: { repoRoot, gitHead } | null` (who built the
