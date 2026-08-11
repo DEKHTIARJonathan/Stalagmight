@@ -587,6 +587,31 @@ function mayRaiseError(move: FuzzMove): boolean {
 }
 
 /**
+ * Of those, the ones that hand a file to ASYNC work - and so may report it late.
+ *
+ * The grace window exists for one shape: a move starts a parse or an import,
+ * the settle loop cannot wait for something that changes no observable state
+ * until it lands, and the error dialog therefore appears on the NEXT move,
+ * which then gets blamed for it. That is a property of moves that started
+ * async work, and `mayRaiseError` is not that set.
+ *
+ * A picker cancel is the counterexample and the reason this exists.
+ * `answerFileDialogInPage(..., null)` resolves the dialog with NO PATH, so
+ * nothing is parsed, nothing is imported, and no result can land late - yet a
+ * cancel armed a full grace move, and the next move's genuinely unexpected
+ * error dialog was swallowed as `s4LateErrorCarried` instead of failing S4.
+ * The oracle was weaker than it was written to be; this is the tightening.
+ *
+ * A cancel stays EXEMPT for its own step (that is `mayRaiseError`, unchanged):
+ * being unable to raise an error and not being blamed for one are two different
+ * claims, and only the first is being narrowed here.
+ */
+function armsErrorGrace(move: FuzzMove): boolean {
+  if (move.kind === 'cancelDialog') return false;
+  return mayRaiseError(move);
+}
+
+/**
  * Confirms that are DISABLED while a duplicate-hash probe is in flight.
  *
  * The window is short and real, and each screen's `race-*` generator aims at
@@ -1329,8 +1354,12 @@ export const importDialogFuzz: Scenario = {
         }
       }
       // Counted AFTER the check, so an exempt move's own error does not spend
-      // the grace it is granting.
-      errorGrace = exemptNow && performed ? ERROR_GRACE_MOVES : Math.max(0, errorGrace - 1);
+      // the grace it is granting. Armed on the NARROWER set - see
+      // `armsErrorGrace`: being exempt is not the same as having started
+      // something that can report late, and a picker cancel is neither.
+      const armsNow = armsErrorGrace(move) && performed;
+      if (armsNow) ctx.metric('s4GraceArmed');
+      errorGrace = armsNow ? ERROR_GRACE_MOVES : Math.max(0, errorGrace - 1);
       if (digest.screen !== 'idle' && !WEDGE_EXEMPT_SCREENS.has(digest.screen) && actionableCount(digest) === 0) {
         fail(
           `S5 WEDGE on "${digest.screen}": no actionable control anywhere in the inventory`,
