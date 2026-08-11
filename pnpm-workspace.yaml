@@ -7,8 +7,10 @@
 # `onlyBuiltDependencies` works on 10 but not on 11 - the keyed map below is the
 # only shape valid on both majors.
 #
-# esbuild is needed by Vite on every install. edgedriver and geckodriver are
-# needed only by the quarantined WebdriverIO suite under e2e/legacy/.
+# esbuild is needed by Vite on every install. edgedriver and geckodriver come
+# with `webdriverio`, the driver library the agent harness's session layer uses
+# (e2e/agent/session.ts) - the old WDIO test runner is gone (#549), the library
+# is not.
 #
 # `packages` is not here to declare a monorepo - this repo is a single package.
 # pnpm 9 reads this file only as a workspace definition and aborts with

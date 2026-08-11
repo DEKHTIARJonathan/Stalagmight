@@ -21,7 +21,8 @@
 //   node scripts/generate-replay.mjs .agent-artifacts/sessions/20260703-...  --out e2e/agent/replays/repro.spec.ts
 //
 // With no --out, writes replay.spec.ts inside the session dir (uncommitted).
-// Run a generated spec with: REPLAY_SPEC=<file> pnpm test:e2e:replay
+// No in-repo runner today (#549 retired the WDIO one; the #466 replay-runner
+// phase replaces it) - the spec is the reviewable record of the steps.
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -253,7 +254,7 @@ push('');
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, lines.join('\n'));
 process.stdout.write(`wrote ${outPath} (${actions.length} actions)\n`);
-process.stdout.write(`run: REPLAY_SPEC=${outPath} pnpm test:e2e:replay\n`);
+process.stdout.write(`wrote ${outPath} (no in-repo runner yet - see e2e/agent/replays/README.md)\n`);
 
 // Recorded params inlined into a one-line comment. JSON never contains a raw
 // newline, so the comment cannot break out of its line; the cap keeps a long

@@ -127,8 +127,8 @@ export default defineConfig({
     // e2e/agent/lib/**/*.test.ts: pure-logic unit tests for agent-harness helpers
     // (e.g. build freshness). Scoped to `lib/` - the helper directory - rather than
     // to all of e2e/agent, because every SIBLING directory there is runtime code for
-    // a different runner: `replays/` and `scenarios/` drive the app through
-    // mocha/wdio globals, and `mcp/` is the server. An exclude list only covered
+    // a different runner: `replays/` holds generated replay specs, `scenarios/`
+    // drives the live app, and `mcp/` is the server. An exclude list only covered
     // `replays/`, so a scenario named *.test.ts would have been vacuumed in here and
     // failed on missing globals. A new home for vitest suites under e2e/agent is a
     // deliberate one-line addition to this list.
@@ -137,8 +137,8 @@ export default defineConfig({
     // these run unattended - nothing in them posts a real event or moves the cursor.
     // e2e/lib/**/*.test.ts: pure-logic unit tests for the shared harness helpers
     // (e.g. the profile config-path resolution both runners depend on). Same
-    // reasoning as the e2e/agent/lib entry above - `lib/` is helper code, so
-    // nothing here needs mocha/wdio globals.
+    // reasoning as the e2e/agent/lib entry above - `lib/` is helper code that
+    // runs under plain vitest.
     include: [
       'src/**/*.{test,spec}.?(c|m)[jt]s?(x)',
       'scripts/**/*.{test,spec}.ts',
@@ -147,7 +147,6 @@ export default defineConfig({
       'e2e/lib/**/*.test.ts',
     ],
     exclude: [
-      '**/e2e/legacy/**',
       '**/e2e/agent/replays/**',
       '**/e2e-playwright/**',
       '**/node_modules/**',

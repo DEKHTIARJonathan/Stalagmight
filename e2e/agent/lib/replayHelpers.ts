@@ -1,6 +1,7 @@
 /**
- * Helpers a generated replay spec imports. Replay specs run under wdio (the
- * ambient `browser`/`$` globals), so these take the browser explicitly and wrap
+ * Helpers a generated replay spec imports. Replay specs were written for the
+ * retired WDIO runner's ambient `browser`/`$` globals (#549; the #466 replay
+ * runner replaces it), so these take the browser explicitly and wrap
  * the same page-context primitives the live harness uses. Keeping the generated
  * spec's imports pointed here (not at internal lib layout) decouples committed
  * replays from harness refactors.

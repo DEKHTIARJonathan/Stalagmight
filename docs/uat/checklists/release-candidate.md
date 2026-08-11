@@ -14,8 +14,10 @@ release build: pass `--release` (journeys) or set `STALAGMIGHT_AGENT_RELEASE=1`
 - [ ] `pnpm agent:journeys -- --release --ledger` is green at the RC commit.
 - [ ] `STALAGMIGHT_AGENT_RELEASE=1 pnpm agent:scenarios` is green at the RC
       commit.
-- [ ] The 7 unique-coverage legacy WDIO specs (`e2e/legacy/README.md` lists
-      them) have run at the RC commit: `./scripts/wdio.sh`.
+- [ ] The stress tier has run at the RC commit when the release touched
+      import/merge scale: `pnpm agent:scenario fractal-stress --iterations 4`
+      (the retired WDIO suite's residual coverage lives in the journeys above
+      plus this scenario - #549).
 
 ## macOS (Apple Silicon)
 

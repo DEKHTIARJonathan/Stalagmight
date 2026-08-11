@@ -176,7 +176,7 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Docs index](docs/README.md) | Every page under `docs/`, grouped, with a contributor reading order |
 | [SPEC.md](docs/SPEC.md) | **Full specification** - data model, UI design, workflows, file formats, validation rules |
 | [Testing Guide](docs/TESTING.md) | Which tier a test belongs in, and the UI testability requirements |
-| [Testing Recipes](docs/testing-recipes.md) | Commands per tier, Playwright/WebdriverIO/Rust/vitest patterns, mock conventions, troubleshooting |
+| [Testing Recipes](docs/testing-recipes.md) | Commands per tier, Playwright/agent-harness/Rust/vitest patterns, mock conventions, troubleshooting |
 | [Linting & Format Policy](docs/linting.md) | Rust clippy/rustfmt CI gates, the anti-AI-slop policy, the per-test-module `#[expect]` idiom, considered-but-deferred lints |
 | [Toolchain](docs/toolchain.md) | The pnpm/node pins: corepack integrity hash, `allowBuilds` build-script approvals, lockfile version policy |
 | [Architecture](docs/architecture.md) | Workspace crate layout, state flow, command pattern, key files, Rust patterns |
@@ -191,7 +191,7 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Performance](docs/performance.md) | Algorithm choices, renderer cost model, profiling guide |
 | [Debug Gates](docs/debug-gates.md) | Where dev-only logs / asserts / profile harnesses live, and how to turn them on |
 | [macOS Build](docs/macos-build.md) | macOS build scripts and known issues |
-| [Agent Harness](docs/agent-harness.md) | LLM-agent harness (MCP + WebdriverIO) to drive the real app: tools, oracles, stress scenarios, replay + repro reports. Runs on the repo-pinned Node. |
+| [Agent Harness](docs/agent-harness.md) | LLM-agent harness (MCP + webdriverio) to drive the real app: tools, oracles, stress scenarios, replay + repro reports. Runs on the repo-pinned Node. |
 | [UAT ledger](docs/uat/ledger.md) | Acceptance tier: one line per real-app UAT run, the per-RC checklist, and the machine-readable records. |
 | [App modes](docs/app-modes.md) | Survey/Plan/Export modes and the read-only contract every mutation path must check |
 | [Loop closures](docs/closures.md) | Raw Data View vs Closures Computed View, the least-squares solve, co-location with the move tools |

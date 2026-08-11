@@ -63,4 +63,4 @@ pnpm typecheck:agent    # typecheck just the agent code
 
 Generators: `scripts/generate-replay.mjs`, `scripts/generate-repro-report.mjs`.
 Session artifacts live under `.agent-artifacts/` (gitignored, 20 newest kept).
-`e2e/agent/**` is CI `paths-ignore`d; `e2e/lib/**` is not (wdio.conf.ts uses it).
+`e2e/agent/**` is CI `paths-ignore`d; `e2e/lib/**` is not.

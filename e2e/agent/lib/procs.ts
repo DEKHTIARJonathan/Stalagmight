@@ -2,7 +2,7 @@
  * Process + port helpers for the agent harness. Port probing and SCOPED
  * process reaping: only PIDs recorded in a session pidfile whose comm name
  * matches an expected one are killed. Never a broad `pkill stalagmight` (that
- * lesson is baked into scripts/wdio.sh).
+ * lesson came from the retired scripts/wdio.sh).
  *
  * comm/pgid come from /proc on Linux and from `ps` on macOS, which has no
  * /proc - without the darwin arm the comm check never matches and every reap

@@ -633,44 +633,18 @@ loader binds to comctl32 v5, which lacks `TaskDialogIndirect` (statically
 imported via rfd / tauri-plugin-dialog). The env var makes `build.rs` delay-load
 comctl32 for test binaries. The shipping app is unaffected.
 
-### WebdriverIO (real Tauri app, on-demand)
+### Agent harness (real Tauri app, on-demand)
 
 ```bash
-./scripts/wdio.sh                                                  # full suite
-./scripts/wdio.sh --spec e2e/legacy/specs/tml-import-integration.spec.ts
-./scripts/wdio.sh --rebuild        # force a rebuild first
-./scripts/wdio.sh --headed         # force headed (fail if there is no display)
-./scripts/wdio.sh --headless       # force xvfb
-./scripts/wdio.sh --skip-build     # skip freshness checks (see the stale-binary trap)
-```
-
-Flags combine, e.g. `./scripts/wdio.sh --skip-build --spec e2e/legacy/specs/project-persistence.spec.ts`.
-
-`wdio.sh` handles platform detection, driver installation checks, display
-detection (xvfb when headless), port cleanup of stale drivers, and build
-freshness. Prefer it over the raw commands.
-
-The raw equivalents, for when you need to bypass the wrapper:
-
-```bash
-pnpm test:e2e                                    # builds, then runs
-xvfb-run -a pnpm test:e2e                        # headless Linux
-SKIP_BUILD=1 xvfb-run -a pnpm test:e2e           # reuse an existing binary
-WDIO_MAX_INSTANCES=4 xvfb-run -a pnpm test:e2e   # N parallel workers
-SKIP_BUILD=1 npx wdio run wdio.conf.ts --spec e2e/legacy/specs/map-interactions.spec.ts
-```
-
-Running one spec manually requires `npx wdio run wdio.conf.ts --spec <file>`;
-`pnpm test:e2e -- --spec <file>` does not pass the flag through.
-
-### Agent harness
-
-```bash
-pnpm agent:smoke
-pnpm agent:scenarios
+pnpm agent:smoke                                    # plumbing self-test
+pnpm agent:scenarios                                # scenario smoke (crash gate)
+pnpm agent:journeys                                 # golden flows (behavioral gate)
+pnpm agent:scenario fractal-stress --iterations 4   # large-survey stress tier (#549)
 ```
 
 Runs on the repo-pinned Node (`nvm use`). See [Agent Harness](agent-harness.md).
+The retired WDIO suite's residual coverage lives in the journeys and the
+`fractal-stress` scenario (#549).
 
 ### Typecheck
 
@@ -683,13 +657,9 @@ pnpm typecheck:playwright  # e2e-playwright/ + playwright.config.ts
 The first two are `check` gates, the third is a `smoke` gate - it has to be,
 because `check` path-ignores `e2e-playwright/**`.
 
-`e2e/legacy/` is the one *test* tree nothing type-checks. `tsconfig.e2e.json`
-exists but is deliberately not gated: the quarantined WDIO suite has 606
-pre-existing errors (mostly the ambient `browser` global and untyped hook
-parameters) and runs in no automated job, so gating it would mean fixing 606
-errors in code that is on its way out. Some non-test files are ungoverned too -
-`scripts/**/*.ts`, `vite.config.ts`, `wdio.replay.conf.ts`, `src-tauri/bindings/`
-are in no tsconfig's `include`.
+Some non-test files are ungoverned - `scripts/**/*.ts`, `vite.config.ts`, and
+`src-tauri/bindings/` are in no tsconfig's `include`. (The old ungated
+`tsconfig.e2e.json` went with the WDIO suite, #549.)
 
 Note the strictness difference: `tsconfig.playwright.json` is `strict`, but
 unlike the root config it does not set `noUncheckedIndexedAccess`,
@@ -706,7 +676,6 @@ only thing standing between it and silent rot.
 ```bash
 pnpm exec vitest run --coverage   # unit + component -> docs/coverage/
 pnpm coverage:ui             # instrument the app, run Playwright
-pnpm coverage:e2e            # instrument the app, run WebdriverIO
 pnpm coverage:merge          # merge raw E2E output into docs/coverage/
 ```
 
@@ -1291,8 +1260,8 @@ await waitForMapIdle(page);
 const center = await page.evaluate(() => (window as any).__stalagmight_map__?.getCenter());
 ```
 
-Same shape under WebdriverIO, with `browser.execute(...)` and
-`$('[data-testid="center-station-button"]').click()`.
+Same shape under the agent harness, with `ctx.eval(...)` / `element_state`
+against the same test ids.
 
 `page.hover()` is reliable for Select options. Where it is not, dispatch a
 bubbling `mouseover` instead - see `triggerMouseHover` in
@@ -1479,7 +1448,7 @@ fn parses_v5_dmp() {
 ```
 
 Because Rust tests read `e2e/fixtures/`, the CI `check` job must keep running on
-changes there. Only `e2e/legacy/**` is safe to path-ignore.
+changes there - never path-ignore `e2e/**`.
 
 ### Inducing save failures must be root-safe
 
@@ -1561,59 +1530,24 @@ small rounding tolerance) by reading the width and height straight out of the
 PNG IHDR chunk; `png_oversized_dpi_errors` and `png_dpi_zero_errors` pin the
 rejection paths.
 
-## WebdriverIO (real app)
+## Agent harness (real app)
 
-Quarantined under `e2e/legacy/`, on-demand only. See
-[`e2e/legacy/README.md`](../e2e/legacy/README.md) for what still has unique
-coverage there (real TML round-trips, real cross-session persistence,
-single-write coordination, large-dataset stress) and what is redundant with
-Playwright. Prefer adding new UI coverage to `e2e-playwright/`.
-
-Requirements:
-
-- A WebDriver: `tauri-driver` on Linux and Windows (`cargo install tauri-driver`),
-  `tauri-wd` on macOS.
-- A display, or `xvfb` for headless (`wdio.sh` detects and starts it).
-- A debug build: `pnpm tauri build --debug --no-bundle` (`wdio.sh` checks
-  freshness and rebuilds).
+The one real-app tier since the WDIO suite retired (#549): journeys, stress
+scenarios, and fuzz tiers under `e2e/agent/`, on-demand and per release
+candidate. Commands are in the "Agent harness" section above; the full tool and
+oracle reference is [docs/agent-harness.md](agent-harness.md). Prefer adding new
+UI coverage to `e2e-playwright/`; add a journey when the property needs the real
+backend end-to-end.
 
 ```
 e2e/
-├── agent/       # LLM-agent harness (MCP + WDIO) - see docs/agent-harness.md
+├── agent/       # LLM-agent harness (MCP + the webdriverio library) - see docs/agent-harness.md
 ├── fixtures/    # .dmp/.tml/.tmlu/.stalx test data (Rust tests read these too)
-├── lib/         # shared plumbing: env, display detection, fractal generation
-└── legacy/      # the quarantined WebdriverIO suite (specs/, helpers/, README.md)
+└── lib/         # shared plumbing: env, display detection, fractal generation
 ```
 
-`wdio.conf.ts`, key settings:
-
-- Specs: `./e2e/legacy/specs/**/*.spec.ts`.
-- `maxInstances` = `min(4, cpu count)`, overridable with `WDIO_MAX_INSTANCES`;
-  **forced to 1 on macOS**, where all workers share one `tauri-wd` and would
-  otherwise contend on config and data files.
-- Ports: `WDIO_BASE_PORT` (default 4444) and `WDIO_BASE_NATIVE_PORT` (default
-  base + 1000), plus the worker index.
-- 30 s connection-retry timeout, 10 s default `waitforTimeout`.
-- Per-worker config/data/cache isolation under a temp directory, auto-cleaned.
-
-Open dialogs through the E2E store, same as in Playwright:
-
-```typescript
-await browser.execute(() => {
-  (window as any).__E2E_TEST__.uiStore.getState().openDialog('import');
-});
-```
-
-### Binary path
-
-The runner looks for `$CARGO_TARGET_DIR/debug/stalagmight`, defaulting to
-`~/.cargo_build/debug/stalagmight`. If your tree builds elsewhere, set
-`CARGO_TARGET_DIR`:
-
-```bash
-CARGO_TARGET_DIR=./src-tauri/target xvfb-run -a pnpm test:e2e
-CARGO_TARGET_DIR=./src-tauri/target SKIP_BUILD=1 xvfb-run -a pnpm test:e2e
-```
+The harness looks for the debug binary under `$CARGO_TARGET_DIR` (default
+`~/.cargo_build`) and refuses stale builds via `.e2e-build-marker`.
 
 ## Fixtures
 
@@ -1622,9 +1556,9 @@ Shared between the Rust tests and the E2E tiers, in `e2e/fixtures/` - see
 and the DMP format notes. Playwright also keeps a small copy of the DMP files
 under `e2e-playwright/fixtures/`.
 
-The real Tauri backend parses these for real under WebdriverIO and in the Rust
-tests. Playwright's mock does **not** read them - it returns simulated section
-data.
+The real Tauri backend parses these for real under the agent harness and in the
+Rust tests. Playwright's mock does **not** read them - it returns simulated
+section data.
 
 When adding one: prefer real device data (anonymized if needed), or synthetic
 data for a specific edge case, and record what it is for in the fixtures README.
@@ -1643,15 +1577,14 @@ data for a specific edge case, and record what it is for in the fixtures README.
 | Flake that rotates identity between runs | Load timing. Reproduce with `--repeat-each=5 --workers=1` before treating it as a real bug. |
 | "No tests found", exits in ~1 s | `pnpm <script> -- <flags>`. Use `pnpm exec playwright test <flags>`. |
 
-### WebdriverIO
+### Agent harness
 
 | Symptom | Fix |
 |---------|-----|
 | "No such file or directory" for the stalagmight binary | Set `CARGO_TARGET_DIR` to where it was built |
-| "No display available" | `xvfb-run -a`, or use `./scripts/wdio.sh` (auto-detects) |
-| Port 4444 in use | A stale driver. `pkill tauri-driver`, or use `./scripts/wdio.sh` |
+| Port 4444 in use | A stale driver: `pkill tauri-driver` |
 | Driver not found | `cargo install tauri-driver` (Linux/Windows), or install `tauri-wd` (macOS) |
-| "Application did not load" with "Could not connect to localhost" in the page source | Stale frontend assets embedded in the binary, typically from `SKIP_BUILD=1`. Rebuild with `pnpm tauri build --debug --no-bundle`, or use `./scripts/wdio.sh`, which checks freshness |
+| Stale-binary "Application did not load" | Rebuild with `pnpm tauri build --debug --no-bundle`; the harness's `.e2e-build-marker` freshness check names the mismatch |
 | A dialog is not found | It is missing `role="dialog"` - see the testability contract in the [Testing Guide](TESTING.md) |
 
 ### Rust

@@ -299,7 +299,7 @@ not rebuild.
    `$CARGO_TARGET_DIR/<profile>/.stalagmight-e2e-build-stamp.json` after a
    successful build, recording the profile, its cargo features, `viteE2E`, the
    vite mode, the mtime of the binary it produced, `distIndexHash` (the content
-   hash of `dist/index.html` - the same md5 digest `scripts/wdio.sh` writes into
+   hash of `dist/index.html` - the md5 digest the retired scripts/wdio.sh wrote into
    `.e2e-build-marker`, so a bundle rebuilt behind the binary reads as stale
    instead of failing at attach), and (since `v: 3`) the `repoRoot` + `gitHead`
    of the source tree the build ran in. A missing stamp, a stamp whose profile /
@@ -1244,8 +1244,8 @@ mutating because every later `os_*` step depends on that consent, and
   tools become numbered comments; inter-action gaps > 250ms become bounded
   pauses; `--assert-final` turns the last
   `store_state` into a hard expect (skipped if the recorded value was
-  truncated). Run via `REPLAY_SPEC=<file> pnpm test:e2e:replay` (spreads the
-  base wdio config; single instance, no retries). Curated replays live under
+  truncated). No in-repo runner today (#549 retired the WDIO one; the #466
+  replay-runner phase replaces it). Curated replays live under
   `e2e/agent/replays/`.
 - **Report**: `node scripts/generate-repro-report.mjs <sessionDir>` ->
   `report.md` (steps, environment, oracle findings, evidence paths), with

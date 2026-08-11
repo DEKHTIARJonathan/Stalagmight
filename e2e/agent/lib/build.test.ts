@@ -457,7 +457,7 @@ describe('hashDistIndex', () => {
     const first = hashDistIndex(dir);
     // A literal, cross-checked against coreutils - `printf '%s' <the string> |
     // md5sum` gives this same digest. That is the actual claim being pinned:
-    // scripts/wdio.sh computes .e2e-build-marker with the shell tool, so the two
+    // The retired scripts/wdio.sh computed .e2e-build-marker with the shell tool, so the two
     // tiers only agree about "this bundle" if both digests are plain md5 of the
     // file bytes.
     expect(first).toBe('d14f063eb4fdcd3e0a81ab448bae9fe9');

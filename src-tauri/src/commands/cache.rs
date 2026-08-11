@@ -357,7 +357,7 @@ mod tests {
 
     // Note: Integration tests for get_cache_stats and clear_tile_cache
     // require AppState which needs more complex setup. Those are covered
-    // in the Playwright and WebdriverIO tests.
+    // in the Playwright and agent-harness tiers.
 
     #[test]
     fn test_get_tile_providers_command() {

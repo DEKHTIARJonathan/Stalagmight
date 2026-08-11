@@ -172,7 +172,7 @@ P('Automated replay (regenerate + run):');
 P('');
 P('```bash');
 P(`node scripts/generate-replay.mjs <artifacts>`);
-P('REPLAY_SPEC=<artifacts>/replay.spec.ts pnpm test:e2e:replay');
+P('replay.spec.ts in the artifacts dir records the exact steps (runner: see e2e/agent/replays/README.md)');
 P('```');
 P('');
 P('## Expected vs actual');

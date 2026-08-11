@@ -184,7 +184,7 @@ export class MacSession extends SessionCore {
       );
     }
 
-    // 6. Attach. Mirror wdio.conf.ts's darwin capabilities: the wrapper is the
+    // 6. Attach. Same darwin capabilities the retired WDIO config used: the wrapper is the
     // "application" (it delays the port announcement past the window race and
     // records the app pid), the real binary rides STALAGMIGHT_BINARY.
     try {

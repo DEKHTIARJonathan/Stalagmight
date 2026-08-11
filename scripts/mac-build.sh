@@ -163,19 +163,21 @@ fi
 
 # ── Step 5a: Build debug binary for E2E (optional) ────────────────────
 if [[ "$TEST_E2E" == true ]]; then
-  # Ensure CARGO_TARGET_DIR matches what wdio.conf.ts expects
+  # Same CARGO_TARGET_DIR convention as the agent harness (e2e/lib/env.ts).
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cargo_build}"
-  info "Building debug binary with e2e feature for WebDriverIO tests"
+  info "Building debug binary with e2e feature for the agent harness"
   info "  CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
   (cd "$PROJECT_DIR" && VITE_E2E=1 pnpm tauri build --debug --no-bundle -- --features e2e)
   ok "E2E debug binary built"
 fi
 
-# ── Step 5b: Run WebDriverIO E2E tests (optional) ────────────────────
+# ── Step 5b: Run the agent-harness journeys (optional) ────────────────
+# The WDIO suite this used to run was retired in #549; the journey tier is
+# the real-app equivalent.
 if [[ "$TEST_E2E" == true ]]; then
-  info "Running WebDriverIO E2E tests"
-  (cd "$PROJECT_DIR" && ./scripts/wdio.sh --skip-build)
-  ok "WebDriverIO E2E tests passed"
+  info "Running agent-harness journeys"
+  (cd "$PROJECT_DIR" && pnpm agent:journeys)
+  ok "Agent-harness journeys passed"
 fi
 
 # ── Step 6: Production build ────────────────────────────────────────────────
