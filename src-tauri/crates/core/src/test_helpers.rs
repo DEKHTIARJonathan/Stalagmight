@@ -179,6 +179,11 @@ impl IsolatedConfig {
 /// is a dir the test knows the identity of - to seed a config file in, to squat
 /// to make a save fail, or to hand to a worker thread - and one dir for the
 /// whole test rather than one per thread it spawns.
+///
+/// # Panics
+///
+/// If the temp dir cannot be created, which is a broken test environment
+/// rather than a failure the caller could act on.
 #[cfg(any(test, feature = "test-support"))]
 #[expect(
     clippy::expect_used,

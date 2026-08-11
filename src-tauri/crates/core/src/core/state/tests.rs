@@ -6911,10 +6911,8 @@ fn test_remove_recent_projects_fails_when_lock_poisoned() {
 #[test]
 fn test_remove_recent_project_removes_present_entry() {
     // Isolated because `remove_from_recent_projects` persists the trimmed list and
-    // reports a save failure as `success: false`, WITHOUT taking the config lock.
-    // `command_tests.rs` points the process-global `XDG_CONFIG_HOME` at a chmod-555
-    // dir to force a save failure, holding only the config lock - so without this
-    // guard the two overlap and this assert trips at random under a parallel run.
+    // reports a save failure as `success: false`, so this assert is only about the
+    // removal if the save has a writable config file of its own to land in.
     crate::test_helpers::with_isolated_config(|| {
         let state = AppState::new().unwrap();
         {
@@ -23468,8 +23466,7 @@ fn logout_closes_edit_gate_on_remote_edit_session() {
     //
     // Under `with_isolated_config` because logout WRITES the config (it clears the
     // persisted account email, the rehydrate seed) and now REPORTS a failure to do
-    // so. Without the isolation lock this test raced other config-touching tests for
-    // the global config path and failed on their temp dir.
+    // so, so the write needs a config file of its own to land in.
     crate::test_helpers::with_isolated_config(|| {
         let (state, _sid, _shid, _temp) = remote_fixture_editable();
         assert!(
@@ -23490,7 +23487,7 @@ fn logout_leaves_local_project_editable() {
     //
     // Isolated for the same reason as `logout_closes_edit_gate_on_remote_edit_session`:
     // logout writes the config to clear the rehydrate seed and now reports a failure
-    // to do so, so it has to hold the config serialization lock.
+    // to do so, so it needs a config file of its own.
     crate::test_helpers::with_isolated_config(|| {
         let state = AppState::new().unwrap();
         assert!(

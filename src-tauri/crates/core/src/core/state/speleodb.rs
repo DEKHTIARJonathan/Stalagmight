@@ -5363,10 +5363,8 @@ mod tests {
         // connections, so a release that still went out is observable as a hit.
         //
         // Under `with_isolated_config` because logout WRITES the config (it clears the
-        // rehydrate seed). Without the guard this test saves into whatever config path
-        // is active - the real `~/.config/stalagmight/config.toml`, or worse the temp
-        // dir a concurrently-running config test has overridden, whose file it then
-        // clobbers mid-test.
+        // rehydrate seed), so the save needs a config file of its own rather than
+        // whatever this thread would otherwise resolve to.
         crate::test_helpers::with_isolated_config(|| {
             let (base, _listener, hits) = counting_stub();
             let (_temp, state) = editing_fixture(&base);
@@ -5913,7 +5911,7 @@ mod tests {
         // Logging out of a force-edit session drops BOTH gates (no lock to release).
         //
         // Isolated because logout writes the config (clearing the rehydrate seed) and
-        // now reports a failure to do so, so it must hold the config lock.
+        // now reports a failure to do so, so it needs a config file of its own.
         crate::test_helpers::with_isolated_config(|| {
             let (_temp, state) = remote_readonly_fixture();
             state.set_edit_enabled(true);
