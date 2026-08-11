@@ -84,6 +84,7 @@ describe('cross-language numeric bounds mirror (#357 item 18)', () => {
     const rustSections = parseRustClamp(rustSource, 'sections_panel_width', 'panels.rs');
     const rustDetail = parseRustClamp(rustSource, 'detail_panel_width', 'panels.rs');
     const rustDataTable = parseRustClamp(rustSource, 'data_table_height', 'panels.rs');
+    const rustWizardMap = parseRustClamp(rustSource, 'wizard_map_panel_width', 'panels.rs');
 
     expect(
       rustSections,
@@ -100,5 +101,10 @@ describe('cross-language numeric bounds mirror (#357 item 18)', () => {
       `data_table_height bounds drift: Rust clamp=${JSON.stringify(rustDataTable)} but TS ` +
         `PANEL_SIZE_BOUNDS['data-table']=${JSON.stringify(PANEL_SIZE_BOUNDS['data-table'])}. Change both together.`,
     ).toEqual(PANEL_SIZE_BOUNDS['data-table']);
+    expect(
+      rustWizardMap,
+      `wizard_map_panel_width bounds drift: Rust clamp=${JSON.stringify(rustWizardMap)} but TS ` +
+        `PANEL_SIZE_BOUNDS['wizard-map']=${JSON.stringify(PANEL_SIZE_BOUNDS['wizard-map'])}. Change both together.`,
+    ).toEqual(PANEL_SIZE_BOUNDS['wizard-map']);
   });
 });

@@ -24,6 +24,18 @@ pub struct PanelsConfig {
     pub detail_panel_width: u32,
     /// Data table height in pixels
     pub data_table_height: u32,
+    /// Width in pixels of the import wizards' map column (#404).
+    ///
+    /// ONE value for every wizard that shows one - the mNemo wizard's two steps
+    /// and the Ariane import dialog - so the map does not change size as the
+    /// user moves between them or between formats. It is the panel's only
+    /// persisted state: unlike the three above it has no open/hover mode, since
+    /// the map column is always shown while its step is.
+    ///
+    /// `serde(default)` rather than a required field, so a config written by an
+    /// older build loads unchanged and picks up the default here.
+    #[serde(default = "default_wizard_map_panel_width")]
+    pub wizard_map_panel_width: u32,
     /// Shots-table column order (grid column keys; empty = declaration order)
     #[serde(default)]
     pub data_table_shot_column_order: Vec<String>,
@@ -133,6 +145,13 @@ fn default_panel_mode() -> String {
     "pin".to_string()
 }
 
+/// Default import-wizard map column width. Mirrors
+/// `WIZARD_MAP_PANEL_DEFAULT_WIDTH` in
+/// src/components/SingleSystemView/layoutConstants.ts.
+fn default_wizard_map_panel_width() -> u32 {
+    480
+}
+
 impl PanelsConfig {
     /// Clamp persisted panel sizes to the same bounds the UI enforces while
     /// dragging, and repair any out-of-range reveal-mode string. The frontend
@@ -147,6 +166,7 @@ impl PanelsConfig {
         self.sections_panel_width = self.sections_panel_width.clamp(150, 400);
         self.detail_panel_width = self.detail_panel_width.clamp(200, 500);
         self.data_table_height = self.data_table_height.clamp(100, 500);
+        self.wizard_map_panel_width = self.wizard_map_panel_width.clamp(280, 900);
         normalize_panel_mode(&mut self.sections_panel_mode);
         normalize_panel_mode(&mut self.detail_panel_mode);
         normalize_panel_mode(&mut self.data_table_mode);

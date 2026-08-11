@@ -77,6 +77,36 @@ describe('uiStore.savePanelSizes', () => {
     );
   });
 
+  // #404: the import wizards' map column persists a width but has no open/hover
+  // state, so it is a SizedPanelId and not a PanelId. It reaches the same IPC
+  // through its own config field and its own (wider) bounds.
+  it('persists the wizard map column under its own field and bounds', async () => {
+    await useUIStore.getState().savePanelSizes('wizard-map', 512);
+
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'update_panel_sizes',
+      { wizardMapPanelWidth: 512 },
+      expect.objectContaining({ purpose: expect.any(String) }),
+    );
+
+    // 600 is above the detail panel's 500 ceiling but well inside this one's.
+    invokeIpcMock.mockClear();
+    await useUIStore.getState().savePanelSizes('wizard-map', 600);
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'update_panel_sizes',
+      { wizardMapPanelWidth: 600 },
+      expect.objectContaining({ purpose: expect.any(String) }),
+    );
+
+    invokeIpcMock.mockClear();
+    await useUIStore.getState().savePanelSizes('wizard-map', 10);
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'update_panel_sizes',
+      { wizardMapPanelWidth: 280 },
+      expect.objectContaining({ purpose: expect.any(String) }),
+    );
+  });
+
   it('folds a non-finite size to the panel minimum instead of persisting NaN', async () => {
     await useUIStore.getState().savePanelSizes('data-table', Number.NaN);
 

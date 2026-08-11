@@ -11,11 +11,11 @@ import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement
 import type { ZeroDatumConfigResult } from './ZeroDatumConfigDialog';
 import type { DmpSection } from '../../types/commands';
 import type { OverlapMode } from '../../types/config';
-import {
-  WizardMapPanel,
-  MAP_PANEL_DEFAULT_WIDTH,
-  MAP_PANEL_MAX_WIDTH,
-} from './WizardMapPanel';
+import { WizardMapPanel } from './WizardMapPanel';
+// The preview-square cap comes straight from layoutConstants rather than
+// through WizardMapPanel's re-export: two component tests mock that module, and
+// a mocked module cannot supply a plain number the render arithmetic needs.
+import { WIZARD_MAP_PANEL_MAX_WIDTH as MAP_PANEL_MAX_WIDTH } from '../SingleSystemView/layoutConstants';
 import { WizardScrollBody } from './WizardScrollBody';
 import SectionPreview, { type MergePreviewConfig, type DmpMergePreviewConfig, type ContextSectionGeometry, computeStationsFromDmpShots, computeStationsFromShots } from './SectionPreview';
 import { Select, type SelectOption } from '../common/Select';
@@ -838,8 +838,11 @@ export default function DmpNewImportDialog({
   // overflows the fullscreen dialog on short windows (#93 review). One per flow.
   // The map column's width, dragged by the divider between it and the settings.
   // One value for both side-by-side blocks (suggestion and manual placing), so
-  // the wizard does not change shape as it steps between them.
-  const [mapPanelWidth, setMapPanelWidth] = useState(MAP_PANEL_DEFAULT_WIDTH);
+  // the wizard does not change shape as it steps between them - and store-owned
+  // since #404, so it also survives the dialog closing and the session ending
+  // (WizardMapPanel persists it on divider release).
+  const mapPanelWidth = useUIStore((s) => s.wizardMapPanelWidth);
+  const setMapPanelWidth = useUIStore((s) => s.setWizardMapPanelWidth);
   const suggestionBodyRef = useRef<HTMLDivElement | null>(null);
   const manualBodyRef = useRef<HTMLDivElement | null>(null);
   const [suggestionPreviewRef, suggestionPreviewSize] = usePreviewSquareSize(MAP_PANEL_MAX_WIDTH);

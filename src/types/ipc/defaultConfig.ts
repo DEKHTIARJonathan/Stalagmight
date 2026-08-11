@@ -226,6 +226,7 @@ export const defaultConfig: Config = {
     "sections_panel_width": 250,
     "detail_panel_width": 300,
     "data_table_height": 200,
+    "wizard_map_panel_width": 480,
     "data_table_shot_column_order": [],
     "data_table_shot_hidden_columns": [
       "section_id",
