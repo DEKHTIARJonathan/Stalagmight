@@ -21,7 +21,7 @@ describe('buildGasReachFeatureState', () => {
       { id: 1, shotOffset: 0, shotCount: 2 },
       { id: 2, shotOffset: 2, shotCount: 1 },
     ],
-    shotIds: new Int32Array([10, 11, 20]),
+    shotIds: new Uint32Array([10, 11, 20]),
   } as unknown as Pick<SurveyData, 'sections' | 'shotIds'>;
 
   // (1,2) is finite-but-OVER-budget (gas_to_reach 1500 > budget 1000, reachable false)

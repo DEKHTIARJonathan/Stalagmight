@@ -25,7 +25,7 @@ describe('buildDistanceFeatureState', () => {
       { id: 1, shotOffset: 0, shotCount: 2 },
       { id: 2, shotOffset: 2, shotCount: 0 },
     ],
-    shotIds: new Int32Array([10, 11]),
+    shotIds: new Uint32Array([10, 11]),
   } as unknown as Pick<SurveyData, 'sections' | 'shotIds'>;
 
   const field: DistanceField = {

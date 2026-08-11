@@ -90,13 +90,13 @@ function buildSurvey(specs: SecSpec[]): SurveyData {
     });
   }
   d.shotCount = shotIds.length;
-  d.shotIds = Int32Array.from(shotIds);
-  d.shotSectionIds = Int32Array.from(shotSectionIds);
+  d.shotIds = Uint32Array.from(shotIds);
+  d.shotSectionIds = Uint32Array.from(shotSectionIds);
   d.shotFlags = Uint8Array.from(shotFlags);
   d.shotDepthIn = Float32Array.from(shotDepthIn);
   d.shotDepthOut = Float32Array.from(shotDepthOut);
   d.stationCount = stSectionIds.length;
-  d.stationSectionIds = Int32Array.from(stSectionIds);
+  d.stationSectionIds = Uint32Array.from(stSectionIds);
   d.stationIndices = Uint32Array.from(stIndices);
   d.stationCoords = Float64Array.from(stCoords);
   d.stationFlags = Uint8Array.from(stFlags);
@@ -152,7 +152,7 @@ describe('sameSurveyLayout', () => {
     expect(sameSurveyLayout(a, dropped)).toBe(false);
 
     const remapped = cloneSurvey(a);
-    remapped.stationSectionIds = Int32Array.from(remapped.stationSectionIds);
+    remapped.stationSectionIds = Uint32Array.from(remapped.stationSectionIds);
     remapped.stationSectionIds[remapped.stationCount - 1] = 99;
     expect(sameSurveyLayout(a, remapped)).toBe(false);
 
@@ -160,7 +160,7 @@ describe('sameSurveyLayout', () => {
     // full rebuild: the incremental path skips the dim/hide/highlight buffers,
     // which the immovable-feature predicates key on shotIds.
     const shotRekeyed = cloneSurvey(a);
-    shotRekeyed.shotIds = Int32Array.from(shotRekeyed.shotIds);
+    shotRekeyed.shotIds = Uint32Array.from(shotRekeyed.shotIds);
     shotRekeyed.shotIds[shotRekeyed.shotCount - 1] = 987654;
     expect(sameSurveyLayout(a, shotRekeyed)).toBe(false);
   });

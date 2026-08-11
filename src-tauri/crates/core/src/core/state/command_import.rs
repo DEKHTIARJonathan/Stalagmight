@@ -2,7 +2,7 @@ use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
     AzimuthReference, ClosureStrategy, Coordinates, Project, SectionData, SectionId, ShotData,
-    ShotKind, StationRef,
+    ShotKind, StationRef, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -357,6 +357,34 @@ impl AppState {
                 return CommandResult::failure(format!(
                     "Import shot update for section {} shot {} has a non-finite (NaN/inf) value",
                     update.section_id, update.shot_id
+                ));
+            }
+        }
+
+        // Section-id budget (#555), checked for the WHOLE batch before any
+        // mutation. Every importer (Ariane, Compass, Walls, GPX, the DMP
+        // wizard) funnels through here, and the loop below mints one section
+        // per config via `create_section` -> `Project::add_section`, whose
+        // `Section::new` computes `next_shot_id = id * FEATURE_ID_STRIDE`
+        // unchecked. `create_section` refuses past the bound too, but only per
+        // section: reaching it mid-loop would roll back a large import after
+        // the work, and the file's own declared section count is knowable up
+        // front, so a file that cannot fit is refused whole - the same
+        // batch-atomic rule the non-finite checks above apply.
+        let ids_already_spent = match self.project.lock() {
+            Ok(guard) => guard.as_ref().map(|p| p.next_section_id),
+            Err(poisoned) => poisoned.into_inner().as_ref().map(|p| p.next_section_id),
+        };
+        if let Some(spent) = ids_already_spent {
+            let spent_count = spent as usize;
+            if sections.len().saturating_add(spent_count) > MAX_SECTIONS_IN_ID_SPACE {
+                return CommandResult::failure(format!(
+                    "Import refused: this file would add {} sections and the project has \
+                     already used {spent_count} section ids, which is past the limit of \
+                     {MAX_SECTIONS_IN_ID_SPACE} sections. Shot ids encode as \
+                     section_id * {FEATURE_ID_STRIDE} + position in 32 bits, so section \
+                     ids past {MAX_SECTION_ID} cannot hold shots. Nothing was imported.",
+                    sections.len()
                 ));
             }
         }

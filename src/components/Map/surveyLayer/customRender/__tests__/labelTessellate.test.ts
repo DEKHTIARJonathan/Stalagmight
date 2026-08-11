@@ -55,15 +55,15 @@ function fixture(): SurveyData {
     { id: 1, name: 'Alpha', surveyor: null, date: null, color: '#4ecdc4', direction: 'in' as never, quality: 0, next_shot_id: 2, shotOffset: 0, shotCount: 2 },
   ];
   d.shotCount = 2;
-  d.shotIds = new Int32Array([0, 1]);
-  d.shotSectionIds = new Int32Array([1, 1]);
+  d.shotIds = new Uint32Array([0, 1]);
+  d.shotSectionIds = new Uint32Array([1, 1]);
   d.shotFlags = new Uint8Array([0, shotKindToFlags('Reference')]);
   d.shotAzimuthIn = new Float32Array([312, 45]);
   d.shotLength = new Float32Array([4, 3]);
   d.shotDepthIn = new Float32Array([1, 2]);
   d.shotDepthOut = new Float32Array([2, 4]);
   d.stationCount = 3;
-  d.stationSectionIds = new Int32Array([1, 1, 1]);
+  d.stationSectionIds = new Uint32Array([1, 1, 1]);
   d.stationIndices = new Uint32Array([0, 1, 2]);
   d.stationCoords = new Float64Array([0, 0, 0, 10, 0, -1, 20, 0, -2]);
   d.stationFlags = new Uint8Array([0, 0, 0]);

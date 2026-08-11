@@ -35,8 +35,8 @@ function buildSurveyData(spec: {
 
   const totalShots = offset;
   data.shotCount = totalShots;
-  data.shotIds = new Int32Array(totalShots);
-  data.shotSectionIds = new Int32Array(totalShots);
+  data.shotIds = new Uint32Array(totalShots);
+  data.shotSectionIds = new Uint32Array(totalShots);
   let c = 0;
   for (const s of spec.sections) {
     for (const id of s.shotIds) {
@@ -47,7 +47,7 @@ function buildSurveyData(spec: {
   }
 
   data.stationCount = spec.stations.length;
-  data.stationSectionIds = new Int32Array(spec.stations.length);
+  data.stationSectionIds = new Uint32Array(spec.stations.length);
   data.stationIndices = new Uint32Array(spec.stations.length);
   spec.stations.forEach((st, i) => {
     data.stationSectionIds[i] = st.sectionId;

@@ -22,6 +22,14 @@ import {
   GHOST_CIRCLE_VERTEX_SRC,
   GHOST_CIRCLE_FRAGMENT_SRC,
 } from './ghostShaders';
+import {
+  type ProgramBundle,
+  linkProgramBundle,
+  deleteProgramBundle,
+  bindVec2,
+  bindFloat,
+  bindColor,
+} from './glProgram';
 
 /** See {@link import('./surveyCustomLayer').SelfDisableCallback}. */
 export type GhostSelfDisableCallback = (reason: string) => void;
@@ -68,37 +76,46 @@ interface CircleGpu {
   count: number;
 }
 
-function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader | null {
-  const sh = gl.createShader(type);
-  if (!sh) return null;
-  gl.shaderSource(sh, src);
-  gl.compileShader(sh);
-  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-    console.warn('[dragGhost] shader compile failed:', gl.getShaderInfoLog(sh));
-    gl.deleteShader(sh);
-    return null;
-  }
-  return sh;
-}
+/** Uniform / attribute names of the two programs, resolved once at link time
+ *  ({@link ProgramBundle}). Each list must match the GLSL declarations in
+ *  ghostShaders.ts; `__tests__/programNames.test.ts` pins that. */
+export const GHOST_LINE_UNIFORMS = [
+  'u_matrix',
+  'u_viewport',
+  'u_half_width',
+  'u_aa',
+  'u_offset_px',
+] as const;
 
-function link(gl: WebGL2RenderingContext, vsSrc: string, fsSrc: string): WebGLProgram | null {
-  const vs = compile(gl, gl.VERTEX_SHADER, vsSrc);
-  const fs = compile(gl, gl.FRAGMENT_SHADER, fsSrc);
-  if (!vs || !fs) return null;
-  const prog = gl.createProgram();
-  if (!prog) return null;
-  gl.attachShader(prog, vs);
-  gl.attachShader(prog, fs);
-  gl.linkProgram(prog);
-  gl.deleteShader(vs);
-  gl.deleteShader(fs);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-    console.warn('[dragGhost] program link failed:', gl.getProgramInfoLog(prog));
-    gl.deleteProgram(prog);
-    return null;
-  }
-  return prog;
-}
+export const GHOST_LINE_ATTRIBS = [
+  'a_pos_a',
+  'a_pos_b',
+  'a_endpoint',
+  'a_side',
+  'a_move_a',
+  'a_move_b',
+  'a_color',
+  'a_width_mul',
+] as const;
+
+export const GHOST_CIRCLE_UNIFORMS = [
+  'u_matrix',
+  'u_viewport',
+  'u_radius',
+  'u_stroke_width',
+  'u_aa',
+  'u_offset_px',
+] as const;
+
+export const GHOST_CIRCLE_ATTRIBS = [
+  'a_center',
+  'a_corner',
+  'a_move',
+  'a_fill',
+  'a_stroke',
+  'a_size_mul',
+  'a_stroke_mul',
+] as const;
 
 function makeBuffer(gl: WebGL2RenderingContext, target: number, data: ArrayBufferView): WebGLBuffer {
   const buf = gl.createBuffer()!;
@@ -113,8 +130,8 @@ export class SurveyGhostLayer implements CustomLayerInterface {
   readonly renderingMode = '2d' as const;
 
   private gl: WebGL2RenderingContext | null = null;
-  private lineProgram: WebGLProgram | null = null;
-  private circleProgram: WebGLProgram | null = null;
+  private lineBundle: ProgramBundle<typeof GHOST_LINE_UNIFORMS, typeof GHOST_LINE_ATTRIBS> | null = null;
+  private circleBundle: ProgramBundle<typeof GHOST_CIRCLE_UNIFORMS, typeof GHOST_CIRCLE_ATTRIBS> | null = null;
   private lineGpu: LineGpu | null = null;
   private circleGpu: CircleGpu | null = null;
   private disabled = false;
@@ -158,9 +175,14 @@ export class SurveyGhostLayer implements CustomLayerInterface {
     this.gl = gl;
     this.disabled = false;
     this.disabledReason = null;
-    this.lineProgram = link(gl, GHOST_LINE_VERTEX_SRC, GHOST_LINE_FRAGMENT_SRC);
-    this.circleProgram = link(gl, GHOST_CIRCLE_VERTEX_SRC, GHOST_CIRCLE_FRAGMENT_SRC);
-    if (!this.lineProgram || !this.circleProgram) {
+    // linkProgramBundle() already logs getShaderInfoLog / getProgramInfoLog ungated.
+    this.lineBundle = linkProgramBundle(
+      gl, GHOST_LINE_VERTEX_SRC, GHOST_LINE_FRAGMENT_SRC, GHOST_LINE_UNIFORMS, GHOST_LINE_ATTRIBS, '[dragGhost]',
+    );
+    this.circleBundle = linkProgramBundle(
+      gl, GHOST_CIRCLE_VERTEX_SRC, GHOST_CIRCLE_FRAGMENT_SRC, GHOST_CIRCLE_UNIFORMS, GHOST_CIRCLE_ATTRIBS, '[dragGhost]',
+    );
+    if (!this.lineBundle || !this.circleBundle) {
       console.warn('[dragGhost] shader program link failed; disabling ghost layer');
       this.disabled = true;
       this.disabledReason = 'program-link-failed';
@@ -203,7 +225,7 @@ export class SurveyGhostLayer implements CustomLayerInterface {
   render(gl: WebGLRenderingContext | WebGL2RenderingContext, options: CustomRenderMethodInput): void {
     if (this.disabled || !(gl instanceof WebGL2RenderingContext)) return;
     const data = this.data;
-    if (!data || !this.lineProgram || !this.circleProgram || !this.lineGpu || !this.circleGpu) return;
+    if (!data || !this.lineBundle || !this.circleBundle || !this.lineGpu || !this.circleGpu) return;
     const mainMatrix = options.defaultProjectionData.mainMatrix as ArrayLike<number> | undefined;
     if (!mainMatrix) return;
     const matrix = composeAnchorMatrix(mainMatrix, data.anchorX, data.anchorY);
@@ -239,23 +261,23 @@ export class SurveyGhostLayer implements CustomLayerInterface {
     viewport: [number, number],
     data: GhostRenderData,
   ): void {
-    const prog = this.lineProgram!;
+    const { program, uniforms: u, attribs: a } = this.lineBundle!;
     const g = this.lineGpu!;
     if (g.count === 0) return;
-    gl.useProgram(prog);
-    gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'u_matrix'), false, matrix);
-    gl.uniform2f(gl.getUniformLocation(prog, 'u_viewport'), viewport[0], viewport[1]);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_half_width'), data.lineHalfWidthPx);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_aa'), data.aaPx);
-    gl.uniform2f(gl.getUniformLocation(prog, 'u_offset_px'), this.offsetX, this.offsetY);
-    this.bindVec2(gl, prog, 'a_pos_a', g.posA);
-    this.bindVec2(gl, prog, 'a_pos_b', g.posB);
-    this.bindFloat(gl, prog, 'a_endpoint', g.endpoint);
-    this.bindFloat(gl, prog, 'a_side', g.side);
-    this.bindFloat(gl, prog, 'a_move_a', g.moveA);
-    this.bindFloat(gl, prog, 'a_move_b', g.moveB);
-    this.bindColor(gl, prog, 'a_color', g.color);
-    this.bindFloat(gl, prog, 'a_width_mul', g.widthMul);
+    gl.useProgram(program);
+    gl.uniformMatrix4fv(u.u_matrix, false, matrix);
+    gl.uniform2f(u.u_viewport, viewport[0], viewport[1]);
+    gl.uniform1f(u.u_half_width, data.lineHalfWidthPx);
+    gl.uniform1f(u.u_aa, data.aaPx);
+    gl.uniform2f(u.u_offset_px, this.offsetX, this.offsetY);
+    bindVec2(gl, a.a_pos_a, g.posA);
+    bindVec2(gl, a.a_pos_b, g.posB);
+    bindFloat(gl, a.a_endpoint, g.endpoint);
+    bindFloat(gl, a.a_side, g.side);
+    bindFloat(gl, a.a_move_a, g.moveA);
+    bindFloat(gl, a.a_move_b, g.moveB);
+    bindColor(gl, a.a_color, g.color);
+    bindFloat(gl, a.a_width_mul, g.widthMul);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
   }
@@ -266,49 +288,25 @@ export class SurveyGhostLayer implements CustomLayerInterface {
     viewport: [number, number],
     data: GhostRenderData,
   ): void {
-    const prog = this.circleProgram!;
+    const { program, uniforms: u, attribs: a } = this.circleBundle!;
     const g = this.circleGpu!;
     if (g.count === 0) return;
-    gl.useProgram(prog);
-    gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'u_matrix'), false, matrix);
-    gl.uniform2f(gl.getUniformLocation(prog, 'u_viewport'), viewport[0], viewport[1]);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_radius'), data.circleRadiusPx);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_stroke_width'), data.circleStrokePx);
-    gl.uniform1f(gl.getUniformLocation(prog, 'u_aa'), data.aaPx);
-    gl.uniform2f(gl.getUniformLocation(prog, 'u_offset_px'), this.offsetX, this.offsetY);
-    this.bindVec2(gl, prog, 'a_center', g.center);
-    this.bindVec2(gl, prog, 'a_corner', g.corner);
-    this.bindFloat(gl, prog, 'a_move', g.move);
-    this.bindColor(gl, prog, 'a_fill', g.fill);
-    this.bindColor(gl, prog, 'a_stroke', g.stroke);
-    this.bindFloat(gl, prog, 'a_size_mul', g.sizeMul);
-    this.bindFloat(gl, prog, 'a_stroke_mul', g.strokeMul);
+    gl.useProgram(program);
+    gl.uniformMatrix4fv(u.u_matrix, false, matrix);
+    gl.uniform2f(u.u_viewport, viewport[0], viewport[1]);
+    gl.uniform1f(u.u_radius, data.circleRadiusPx);
+    gl.uniform1f(u.u_stroke_width, data.circleStrokePx);
+    gl.uniform1f(u.u_aa, data.aaPx);
+    gl.uniform2f(u.u_offset_px, this.offsetX, this.offsetY);
+    bindVec2(gl, a.a_center, g.center);
+    bindVec2(gl, a.a_corner, g.corner);
+    bindFloat(gl, a.a_move, g.move);
+    bindColor(gl, a.a_fill, g.fill);
+    bindColor(gl, a.a_stroke, g.stroke);
+    bindFloat(gl, a.a_size_mul, g.sizeMul);
+    bindFloat(gl, a.a_stroke_mul, g.strokeMul);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
-  }
-
-  private bindVec2(gl: WebGL2RenderingContext, prog: WebGLProgram, name: string, buf: WebGLBuffer): void {
-    const loc = gl.getAttribLocation(prog, name);
-    if (loc < 0) return;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-  }
-
-  private bindFloat(gl: WebGL2RenderingContext, prog: WebGLProgram, name: string, buf: WebGLBuffer): void {
-    const loc = gl.getAttribLocation(prog, name);
-    if (loc < 0) return;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 1, gl.FLOAT, false, 0, 0);
-  }
-
-  private bindColor(gl: WebGL2RenderingContext, prog: WebGLProgram, name: string, buf: WebGLBuffer): void {
-    const loc = gl.getAttribLocation(prog, name);
-    if (loc < 0) return;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 4, gl.UNSIGNED_BYTE, true, 0, 0);
   }
 
   private freeGpu(): void {
@@ -329,11 +327,11 @@ export class SurveyGhostLayer implements CustomLayerInterface {
     const gl = this.gl;
     this.freeGpu();
     if (gl) {
-      if (this.lineProgram) gl.deleteProgram(this.lineProgram);
-      if (this.circleProgram) gl.deleteProgram(this.circleProgram);
+      deleteProgramBundle(gl, this.lineBundle);
+      deleteProgramBundle(gl, this.circleBundle);
     }
-    this.lineProgram = null;
-    this.circleProgram = null;
+    this.lineBundle = null;
+    this.circleBundle = null;
     this.gl = null;
   }
 }

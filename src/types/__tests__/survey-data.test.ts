@@ -429,4 +429,141 @@ describe('SurveyData', () => {
       expect(getShot(data, 0).marker_index).toBe(1);
     });
   });
+
+  // #555. Rust mints shot ids as `section_id * 100_000 + sequence_order` in
+  // u32, so the id space runs up to 4_294_899_999 at the highest permitted
+  // section id (42_948) - well past i32's 2_147_483_647. The SoA used to keep
+  // those in an `Int32Array`, which wrapped every id from 2^31 up to a NEGATIVE
+  // number, while the very same id read off `section.shots[j].id` (the legacy /
+  // lazy object path), off `ProjectWarning.shotId`, and off the map's feature
+  // ids stayed unsigned. Consumers that compare the two sides - the immovable
+  // shot set (MapCanvas builds it from `section.shots[i].id`, controller.ts
+  // tests membership with `surveyData.shotIds[...]`), the severity map
+  // (severity.ts keys by `data.shotIds[i]`, looks up by `warning.shotId`) -
+  // then silently never matched for those sections.
+  describe('u32 shot ids at high section ids (#555)', () => {
+    /** Highest section id the backend can mint (42_949 sections, 0-based). */
+    const MAX_SECTION_ID = 42_948;
+    /** Mirror of Rust's shot-id stride. */
+    const SHOT_ID_STRIDE = 100_000;
+    const I32_MAX = 2_147_483_647;
+
+    /** One section at `sectionId` whose shots carry the real minted ids for
+     *  `seqs`, plus its `seqs.length + 1` stations. */
+    function highIdFixture(
+      sectionId: number,
+      seqs: number[],
+    ): { sections: Section[]; stations: Station[] } {
+      const shots: Shot[] = seqs.map((seq) => ({
+        id: sectionId * SHOT_ID_STRIDE + seq,
+        azimuth_in: 0,
+        azimuth_out: 0,
+        length: 1,
+        depth_in: 0,
+        depth_out: 0,
+        pitch_in: null,
+        pitch_out: null,
+        left: null,
+        right: null,
+        up: null,
+        down: null,
+        comment: null,
+        kind: 'Normal' as const,
+        marker_index: null,
+        temperature: null,
+      }));
+      const sections: Section[] = [
+        {
+          id: sectionId,
+          name: 'Deep',
+          surveyor: null,
+          date: null,
+          color: '#0000ff',
+          direction: 'in',
+          quality: 1.0,
+          next_shot_id: sectionId * SHOT_ID_STRIDE + seqs.length,
+          reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
+          shots,
+        },
+      ];
+      const stations: Station[] = shots.map((_, i) => ({
+        station_ref: { section_id: sectionId, station_index: i },
+        coordinates: { x: i, y: 0, z: -i },
+        is_zero_datum: i === 0,
+        gps_coordinates: null,
+        merged_with: [],
+        closures_with: [],
+      }));
+      stations.push({
+        station_ref: { section_id: sectionId, station_index: shots.length },
+        coordinates: { x: shots.length, y: 0, z: -shots.length },
+        is_zero_datum: false,
+        gps_coordinates: null,
+        merged_with: [],
+        closures_with: [],
+      });
+      return { sections, stations };
+    }
+
+    // 2_147_483_648 is exactly 2^31: the first id an Int32Array turns into
+    // -2_147_483_648. 4_294_899_999 is the largest id the section bound allows.
+    const CASES: Array<{ label: string; sectionId: number; seqs: number[] }> = [
+      { label: 'first id past i32 (section 21_474)', sectionId: 21_474, seqs: [83_648, 83_649] },
+      { label: 'highest permitted section (42_948)', sectionId: MAX_SECTION_ID, seqs: [0, 1, 99_999] },
+    ];
+
+    for (const { label, sectionId, seqs } of CASES) {
+      it(`round-trips shot ids exactly - ${label}`, () => {
+        const { sections, stations } = highIdFixture(sectionId, seqs);
+        const data = soaFromLegacy(sections, stations);
+        const section = sections[0]!;
+
+        // Guard the fixture itself: if these ids ever stop exceeding i32 the
+        // test would keep passing while proving nothing.
+        for (const shot of section.shots) expect(shot.id).toBeGreaterThan(I32_MAX);
+
+        section.shots.forEach((shot, j) => {
+          // The SoA column and the legacy object are the same id, exactly.
+          expect(data.shotIds[j]).toBe(shot.id);
+          expect(data.shotIds[j]).toBeGreaterThan(I32_MAX);
+          // The materializer agrees with the column it reads from.
+          expect(getShot(data, j).id).toBe(shot.id);
+          expect(data.shotSectionIds[j]).toBe(sectionId);
+        });
+        // No slot wrapped negative (the exact i32 failure mode).
+        expect(Array.from(data.shotIds).filter((id) => id < 0)).toEqual([]);
+        expect(Array.from(data.shotSectionIds).filter((id) => id < 0)).toEqual([]);
+      });
+
+      it(`finds high-id shots by (section_id, shot_id) - ${label}`, () => {
+        const { sections, stations } = highIdFixture(sectionId, seqs);
+        const data = soaFromLegacy(sections, stations);
+        sections[0]!.shots.forEach((shot, j) => {
+          expect(findShotGlobalIndex(data, sectionId, shot.id)).toBe(j);
+        });
+      });
+
+      it(`SoA-keyed lookups hit when probed with the unsigned id - ${label}`, () => {
+        const { sections, stations } = highIdFixture(sectionId, seqs);
+        const data = soaFromLegacy(sections, stations);
+        // Mirrors surveyLayer/severity.ts: the index is keyed by the SoA
+        // column, then probed with the id a ProjectWarning / feature carries.
+        const byShotId = new Map<number, number>();
+        for (let i = 0; i < data.shotCount; i++) byShotId.set(data.shotIds[i]!, i);
+        sections[0]!.shots.forEach((shot, j) => {
+          expect(byShotId.get(shot.id)).toBe(j);
+        });
+      });
+    }
+
+    it('station section ids survive the highest permitted section id', () => {
+      const { sections, stations } = highIdFixture(MAX_SECTION_ID, [0, 1]);
+      const data = soaFromLegacy(sections, stations);
+      for (let g = 0; g < data.stationCount; g++) {
+        expect(data.stationSectionIds[g]).toBe(MAX_SECTION_ID);
+        expect(getStation(data, g).station_ref.section_id).toBe(MAX_SECTION_ID);
+        expect(findStationGlobalIndex(data, MAX_SECTION_ID, g)).toBe(g);
+      }
+    });
+  });
 });

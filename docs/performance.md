@@ -242,6 +242,11 @@ Consequences worth exploiting:
 - Selection, hover, dimming, and drag-hide are per-vertex float flags with their
   own re-upload paths, so they do not disturb colors and colors do not disturb
   them.
+- Uniform and attribute locations are resolved once at link time into a
+  program bundle (`customRender/glProgram.ts`), rebuilt by `onAdd` on context
+  restore, so `render()` never calls `getUniformLocation` /
+  `getAttribLocation` (#339) - those are per-name string lookups in the
+  driver, and before the cache the custom layers issued ~55 of them per frame.
 - The one extra per-frame call is `gl.getError()` after the draws, and only for
   the first 5 frames (`MAX_CHECKED_FRAMES`) - a `getError` is a synchronous
   pipeline stall, so the layer stops asking once it has drawn cleanly.
@@ -341,6 +346,20 @@ zoom level and last-zoom average FPS/worst frame, and Map Stats shows WebGL
 renderer and limits and tile-cache stats. Its per-source feature counts call
 `querySourceFeatures`, which is expensive, so they are collected on `idle`
 with a 500 ms throttle and never on `render`.
+
+**Counting per-frame GL lookups.** The same context-wrap trick verifies the
+link-time location cache (#339): in the harness (or devtools), wrap
+`getUniformLocation` / `getAttribLocation` on
+`window.__stalagmight_map__.getCanvas().getContext('webgl2')` with counters,
+run the `map-storm` scenario, and divide by frames (`map.on('render')`).
+Measured on the fractal fixture (32 sections / 116 stations, 300 jumps):
+~54 lookups per frame before the cache, ~0.4 after - the residue is MapLibre's
+own lazy program setup on the shared context. The survey layers contribute
+zero: the only `get*Location` call sites left under `src/` are inside
+`linkProgramBundle`, and `surveyCustomLayerGl.test.ts` pins the geometry
+layer's render loop at zero lookups. Frame times were vsync-bound
+(~16.7 ms mean) on the measurement machine both before and after; the win is
+removing driver string lookups from the hot loop, not a measured FPS change.
 
 **Dev-only build timings.** `controller.ts` logs `[customRender] build` with
 elapsed ms, shot-segment and station counts, and buffer megabytes;
