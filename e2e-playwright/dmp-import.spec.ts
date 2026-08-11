@@ -672,6 +672,69 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
   });
 
   /**
+   * Test: #567 item 2 - the suggestion phase's section-settings disclosure
+   * starts collapsed and preserves a typed name across a collapse/re-open.
+   */
+  test('suggestion-phase section settings disclosure starts collapsed and preserves a typed name', async ({ page }) => {
+    await createProject(page, 'Disclosure Preserve');
+    await createSectionViaStore(page, {
+      name: 'Anchor Section',
+      shots: [{ azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: -1, depth_out: -2 }],
+    });
+
+    await page.evaluate(() => {
+      const setSuggestions = (window as unknown as Record<string, unknown>).__MOCK_SET_IMPORT_PLACEMENT_SUGGESTIONS__;
+      if (typeof setSuggestions !== 'function') {
+        throw new Error('Mock suggestion setter not available');
+      }
+      (setSuggestions as (suggestions: unknown[]) => void)([
+        {
+          existingStationIndex: 0,
+          importStationIndex: 0,
+          score: 0.95,
+          matchedShots: 0,
+          direction: 'forward',
+          isPartial: false,
+          confidence: 'high',
+          existingSectionName: 'Anchor Section',
+          importSectionIndex: 0,
+          importSectionName: 'Main Passage',
+          targetType: 'existing',
+          existingSectionId: 1,
+          targetImportIndex: null,
+        },
+      ]);
+    });
+
+    await openDmpSelectionDialog(page);
+    const dialog = page.getByTestId('dmp-selection-dialog');
+    await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+    await dialog.locator('[data-testid="select-none-button"]').click();
+    await page.locator('[data-testid="section-checkbox-0"]').click();
+    await proceedToDmpSectionConfig(page);
+
+    await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
+
+    const header = page.getByTestId('wizard-suggestion-section-settings-header');
+    const nameInput = page.getByTestId('section-name-input');
+
+    // Collapsed by default.
+    await expect(nameInput).not.toBeVisible();
+
+    // Expand, type a name.
+    await header.click();
+    await expect(nameInput).toBeVisible();
+    await nameInput.fill('Renamed Section');
+    await expect(nameInput).toHaveValue('Renamed Section');
+
+    // Collapse, then re-open - the typed name survives.
+    await header.click();
+    await expect(nameInput).not.toBeVisible();
+    await header.click();
+    await expect(nameInput).toHaveValue('Renamed Section');
+  });
+
+  /**
    * Test: a completed DMP import drops its import context (#477)
    *
    * `importContext` says an import flow is in progress, and it decides what

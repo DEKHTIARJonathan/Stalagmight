@@ -29,32 +29,31 @@ export function Panel({
   testId,
 }: PanelProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
+  const bodyId = testId ? `${testId}-body` : undefined;
 
   return (
     <div className={`bg-panel ${bare ? '' : 'border border-border rounded'} ${className}`} data-testid={testId}>
       {title && (
-        <div
-          className={`
-            flex items-center justify-between px-3 py-2 border-b border-border
-            ${collapsible ? 'cursor-pointer hover:bg-background-50' : ''}
-          `}
-          {...(collapsible
-            ? {
-                role: 'button' as const,
-                tabIndex: 0,
-                'data-testid': `${testId}-header`,
-                onClick: () => setIsOpen(!isOpen),
-              }
-            : {})}
-        >
-          <div className="flex items-center gap-2">
-            {collapsible && (
+        <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+          {collapsible ? (
+            <button
+              type="button"
+              className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer hover:bg-background-50"
+              onClick={() => setIsOpen((prev) => !prev)}
+              aria-expanded={isOpen}
+              aria-controls={bodyId}
+              data-testid={`${testId}-header`}
+            >
               <span className="text-text-secondary">
                 {isOpen ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
               </span>
-            )}
-            <h3 className="font-medium text-text-primary">{title}</h3>
-          </div>
+              <h3 className="font-medium text-text-primary">{title}</h3>
+            </button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <h3 className="font-medium text-text-primary">{title}</h3>
+            </div>
+          )}
           {headerActions && (
             <div {...(collapsible ? { onClick: (e: MouseEvent) => e.stopPropagation() } : {})}>
               {headerActions}
@@ -63,7 +62,7 @@ export function Panel({
         </div>
       )}
       {(!collapsible || isOpen) && (
-        <div className="p-3">{children}</div>
+        <div className="p-3" id={bodyId}>{children}</div>
       )}
     </div>
   );

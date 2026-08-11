@@ -78,7 +78,7 @@ export function SegmentPlacementModes({
       : sec ? sec.shots.filter((s) => s.shot_type === 'Standard').length + 1 : 0;
     return Array.from({ length: count }, (_, i): SelectOption => ({
       value: String(i),
-      label: `Station ${i}`,
+      label: t('dialogs.dmpNewImport.manualPlacing.stationIndexed', { index: i }),
     }));
   };
 
@@ -127,10 +127,14 @@ export function SegmentPlacementModes({
             {placementMode === 'fromExisting' && (
               <div className="mt-2 space-y-2">
                 {/* Import side: segment section + station */}
-                <div className="text-xs font-medium text-text-secondary mt-1">Import station</div>
+                <div className="text-xs font-medium text-text-secondary mt-1">
+                  {t('dialogs.dmpNewImport.manualPlacing.importStation')}
+                </div>
                 {currentSegment && currentSegment.length > 1 && (
                   <div className="flex items-center gap-2">
-                    <label className="text-xs text-text-secondary whitespace-nowrap">Section</label>
+                    <label className="text-xs text-text-secondary whitespace-nowrap">
+                      {t('dialogs.dmpNewImport.manualPlacing.section')}
+                    </label>
                     <Select
                       value={String(segmentAnchor?.sectionIndex ?? '')}
                       onChange={(v) => onCommitSegmentAnchor({ sectionIndex: Number(v), stationIndex: 0 })}
@@ -142,7 +146,9 @@ export function SegmentPlacementModes({
                   </div>
                 )}
                 <div className="flex items-center gap-2">
-                  <label className="text-xs text-text-secondary whitespace-nowrap">Station</label>
+                  <label className="text-xs text-text-secondary whitespace-nowrap">
+                    {t('dialogs.dmpNewImport.manualPlacing.station')}
+                  </label>
                   <Select
                     value={String(segmentAnchor?.stationIndex ?? 0)}
                     onChange={(v) => {
@@ -157,11 +163,15 @@ export function SegmentPlacementModes({
                 </div>
 
                 {/* Target side: existing project section + station */}
-                <div className="text-xs font-medium text-text-secondary mt-1">Target station</div>
+                <div className="text-xs font-medium text-text-secondary mt-1">
+                  {t('dialogs.dmpNewImport.manualPlacing.targetStation')}
+                </div>
                 {projectSections.length > 0 ? (
                   <>
                     <div className="flex items-center gap-2">
-                      <label className="text-xs text-text-secondary whitespace-nowrap">Section</label>
+                      <label className="text-xs text-text-secondary whitespace-nowrap">
+                        {t('dialogs.dmpNewImport.manualPlacing.section')}
+                      </label>
                       <Select
                         value={fromExistingSectionId != null ? String(fromExistingSectionId) : ''}
                         onChange={(v) => {
@@ -181,13 +191,15 @@ export function SegmentPlacementModes({
                     </div>
                     {fromExistingSectionId != null && (
                       <div className="flex items-center gap-2">
-                        <label className="text-xs text-text-secondary whitespace-nowrap">Station</label>
+                        <label className="text-xs text-text-secondary whitespace-nowrap">
+                          {t('dialogs.dmpNewImport.manualPlacing.station')}
+                        </label>
                         <Select
                           value={String(fromExistingStationIdx)}
                           onChange={(v) => onFromExistingStationChange(Number(v))}
                           options={Array.from({ length: fromExistingStationCount }, (_, i): SelectOption => ({
                             value: String(i),
-                            label: `Station ${i}`,
+                            label: t('dialogs.dmpNewImport.manualPlacing.stationIndexed', { index: i }),
                           }))}
                           className="flex-1"
                           data-testid="from-existing-station-select"
@@ -224,7 +236,9 @@ export function SegmentPlacementModes({
               <div className="mt-2 space-y-2">
                 {currentSegment && currentSegment.length > 1 && (
                   <div className="flex items-center gap-2">
-                    <label className="text-xs text-text-secondary whitespace-nowrap">Section</label>
+                    <label className="text-xs text-text-secondary whitespace-nowrap">
+                      {t('dialogs.dmpNewImport.manualPlacing.section')}
+                    </label>
                     <Select
                       value={String(segmentAnchor?.sectionIndex ?? '')}
                       onChange={(v) => onCommitSegmentAnchor({ sectionIndex: Number(v), stationIndex: 0 })}
@@ -236,7 +250,9 @@ export function SegmentPlacementModes({
                   </div>
                 )}
                 <div className="flex items-center gap-2">
-                  <label className="text-xs text-text-secondary whitespace-nowrap">Station</label>
+                  <label className="text-xs text-text-secondary whitespace-nowrap">
+                    {t('dialogs.dmpNewImport.manualPlacing.station')}
+                  </label>
                   <Select
                     value={String(segmentAnchor?.stationIndex ?? 0)}
                     onChange={(v) => {
