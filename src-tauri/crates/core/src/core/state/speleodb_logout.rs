@@ -614,6 +614,15 @@ mod tests {
             state.speleodb_persist_keychain_belief(held.clone());
 
             let saved = crate::config::Config::load().expect("read the config back off disk");
+            // FIRST, because it decides which question the assertion below is
+            // asking. This test opens no project, so its own config carries no
+            // recent projects; a document that does is somebody else's file and
+            // the finding is the isolation, not the retry (#522).
+            assert!(
+                saved.general.recent_projects.is_empty(),
+                "the config read back must be the one this test wrote - {}",
+                config_state_for_diagnosis()
+            );
             assert!(
                 saved.speleodb.keychain_has_token,
                 "the retry has to re-attempt the disk write, not short-circuit on the \
@@ -647,11 +656,15 @@ mod tests {
             std::fs::remove_dir(&squatted).expect("unblock the config file");
             state.speleodb_persist_keychain_declined(true);
 
+            let saved = crate::config::Config::load().expect("read the config back off disk");
+            // Same order and the same reason as its sibling above.
             assert!(
-                crate::config::Config::load()
-                    .expect("read the config back off disk")
-                    .speleodb
-                    .keychain_declined,
+                saved.general.recent_projects.is_empty(),
+                "the config read back must be the one this test wrote - {}",
+                config_state_for_diagnosis()
+            );
+            assert!(
+                saved.speleodb.keychain_declined,
                 "the retry has to re-attempt the disk write, not short-circuit on the \
                  value the failed attempt left behind - {}",
                 config_state_for_diagnosis()

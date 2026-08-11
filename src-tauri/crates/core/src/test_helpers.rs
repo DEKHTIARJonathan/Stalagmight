@@ -283,3 +283,139 @@ pub fn real_config_resolution() -> RealConfigResolution {
         _serialized: serialized,
     }
 }
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "unit test fixtures fail loudly on setup errors"
+)]
+mod tests {
+    use super::{current_config_dir, isolated_config, real_config_resolution, ConfigHandoff};
+    use crate::config::Config;
+    use std::path::PathBuf;
+
+    /// Save a config carrying a distinctive marker into whatever file the
+    /// CALLING THREAD resolves to, and report where it landed and whether the
+    /// write is really on disk. Both halves matter: a test that only compares
+    /// paths would pass just as well if the save had failed.
+    fn save_marked_config(marked: bool) -> (PathBuf, bool) {
+        let mut config = Config::default();
+        config.speleodb.keychain_has_token = marked;
+        config.save().expect("save the config");
+        let path = Config::config_path().expect("config path");
+        let landed = Config::load()
+            .expect("read it back")
+            .speleodb
+            .keychain_has_token
+            == marked;
+        (path, landed)
+    }
+
+    #[test]
+    fn a_thread_that_never_asked_for_isolation_cannot_reach_a_test_that_did() {
+        // #522 as a permanent test. The unguarded writer here is what the
+        // logout tests were failed by: a save on another thread, atomically
+        // renaming a config.toml of its own into place. It must be a different
+        // file, or the assertion below is one scheduler away from failing.
+        let cfg = isolated_config();
+        let (ours, ours_landed) = save_marked_config(true);
+        assert!(ours_landed, "precondition: our own save landed");
+        assert!(
+            ours.starts_with(cfg.path()),
+            "the guard's dir is where we resolve: {} vs {}",
+            ours.display(),
+            cfg.path().display()
+        );
+
+        let (theirs, theirs_landed) = std::thread::spawn(|| save_marked_config(false))
+            .join()
+            .expect("the foreign writer did not panic");
+        assert!(
+            theirs_landed,
+            "precondition: the foreign save landed somewhere, or this proves nothing"
+        );
+        assert_ne!(
+            theirs, ours,
+            "a thread that never asked for isolation still gets a config file of its own"
+        );
+        assert!(
+            Config::load()
+                .expect("read our config back")
+                .speleodb
+                .keychain_has_token,
+            "the foreign write must not be able to land in the file this test wrote"
+        );
+        // And it took its directory with it: `join` returns after the worker's
+        // thread-locals have been destroyed, so the temp dir is already gone.
+        assert!(
+            !theirs.exists(),
+            "the per-thread dir is removed when its thread exits: {}",
+            theirs.display()
+        );
+    }
+
+    #[test]
+    fn a_worker_that_adopts_the_handoff_writes_the_parent_thread_s_file() {
+        // The escape hatch from the isolation above, and the one the concurrency
+        // gate and the config lost-update race depend on: without it their
+        // workers would each race a file nobody else can see.
+        let _cfg = isolated_config();
+        let (ours, _) = save_marked_config(false);
+
+        let handoff = ConfigHandoff::capture();
+        let (theirs, theirs_landed) = std::thread::spawn(move || {
+            let _config = handoff.adopt();
+            save_marked_config(true)
+        })
+        .join()
+        .expect("the adopting writer did not panic");
+
+        assert!(theirs_landed, "precondition: the worker's save landed");
+        assert_eq!(theirs, ours, "an adopted worker resolves to the parent's file");
+        assert!(
+            Config::load()
+                .expect("read our config back")
+                .speleodb
+                .keychain_has_token,
+            "and the parent reads what the worker wrote"
+        );
+    }
+
+    #[test]
+    fn a_nested_guard_hands_the_outer_dir_back_when_it_drops() {
+        let outer = isolated_config();
+        {
+            let inner = isolated_config();
+            assert_ne!(inner.path(), outer.path(), "a fresh dir per guard");
+            assert_eq!(
+                current_config_dir().as_deref(),
+                Some(inner.path()),
+                "the innermost guard wins while it is alive"
+            );
+        }
+        assert_eq!(
+            current_config_dir().as_deref(),
+            Some(outer.path()),
+            "and dropping it restores the guard it replaced rather than clearing the mode"
+        );
+    }
+
+    #[test]
+    fn real_resolution_stops_at_the_guard() {
+        // Only the PATH is resolved here - never opened - so this says nothing
+        // about, and does nothing to, the developer's real config file.
+        let cfg = isolated_config();
+        {
+            let _real = real_config_resolution();
+            assert!(
+                current_config_dir().is_none(),
+                "under this guard the config resolves through app_dirs / the environment"
+            );
+        }
+        assert_eq!(
+            current_config_dir().as_deref(),
+            Some(cfg.path()),
+            "and the thread's isolation comes back afterwards"
+        );
+    }
+}
