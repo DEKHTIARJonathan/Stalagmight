@@ -13,3 +13,15 @@ $env:STALAGMIGHT_TEST_MANIFEST = '1'
 if (-not $env:TELEMETRY_ENDPOINT) { $env:TELEMETRY_ENDPOINT = 'http://localhost/dummy' }
 
 cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry @args
+# $ErrorActionPreference does not stop on native-command failure (that needs
+# $PSNativeCommandUseErrorActionPreference, PS 7.3+), so propagate explicitly -
+# otherwise a later success would mask a red workspace run.
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Vendored compass_data is [workspace]-excluded, so the run above never tests it
+# (CI gates it separately, #494). Skipped when a filter is given - extra args
+# target the workspace run.
+if (-not $args) {
+    cargo test --locked --manifest-path src-tauri/vendor/compass_data/Cargo.toml
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
