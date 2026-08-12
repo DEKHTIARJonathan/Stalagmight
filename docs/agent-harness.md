@@ -292,17 +292,40 @@ not rebuild.
 `app_start(build: "auto")` rebuilds when either signal says stale
 (`e2e/agent/lib/build.ts`):
 
-1. **mtimes** - any file under `src/`, `src-tauri/src/`, `src-tauri/crates/`, or one of
-   `tauri.conf.json` / `package.json` / `index.html` / `vite.config.ts` is newer
-   than the binary for the profile being started.
+1. **mtimes** - any file under `src/`, `src-tauri/src/`, `src-tauri/crates/`,
+   `src-tauri/capabilities/`, `src-tauri/vendor/` (the vendored `compass_data`
+   crate the parsers crate path-depends on - it feeds the binary despite being
+   excluded from the cargo workspace for lint-gate purposes only), or `public/`
+   (not present in this checkout today; listed so the scan picks it up the
+   moment one exists - forward-proofing, not a closed gap), or one of
+   `tauri.conf.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` /
+   `src-tauri/build.rs` / `package.json` / `pnpm-lock.yaml` / `index.html` /
+   `vite.config.ts` / `tsconfig.json` / `postcss.config.js` / `tailwind.config.js` /
+   `.env` / `.env.local` / `.env.production` / `.env.production.local` (vite's
+   full mode-aware load order for `pnpm build`, which defaults to production
+   mode) / `.cargo/config.toml` / `.cargo/config` / `src-tauri/.cargo/config.toml` /
+   `src-tauri/.cargo/config` (cargo's config hierarchy, read from the build cwd
+   upward and shaping the binary via target dir / rustflags / profile
+   overrides - commonly local-only and uncommitted, which is exactly why the
+   freshness scan rather than `git status` has to see them) is newer than the
+   threshold described below (the build's start time when a stamp has one, the
+   binary's own mtime otherwise). This list is the input surface of the WHOLE
+   binary pipeline - vite's frontend leg and cargo's backend leg - not the
+   tracked source tree in general, and it is a documented heuristic rather than a
+   derivation from either build tool's own dependency graph - issue #554
+   widened it (the cargo half, the lockfile, the config files, `public/`) on
+   the principle that a green run over the wrong bundle is worse than a red
+   one over the right question, so the list errs toward over-listing.
 2. **E2E build stamp** - `buildApp` writes
    `$CARGO_TARGET_DIR/<profile>/.stalagmight-e2e-build-stamp.json` after a
    successful build, recording the profile, its cargo features, `viteE2E`, the
    vite mode, the mtime of the binary it produced, `distIndexHash` (the content
    hash of `dist/index.html` - the md5 digest the retired scripts/wdio.sh wrote into
    `.e2e-build-marker`, so a bundle rebuilt behind the binary reads as stale
-   instead of failing at attach), and (since `v: 3`) the `repoRoot` + `gitHead`
-   of the source tree the build ran in. A missing stamp, a stamp whose profile /
+   instead of failing at attach), (since `v: 3`) the `repoRoot` + `gitHead`
+   of the source tree the build ran in, and (since issue #554) the optional
+   `buildStartedAtMs` - the moment `buildApp` invoked `pnpm tauri build`, captured
+   before the vite leg even starts. A missing stamp, a stamp whose profile /
    features / `viteE2E` / `distIndexHash` / `repoRoot` disagree with what the
    start needs, or a binary whose mtime no longer matches the stamp
    (`./scripts/dev.sh` or a plain `pnpm tauri build` relinked it) is stale. One
@@ -310,7 +333,42 @@ not rebuild.
    release coexist without thrashing rebuilds or running the wrong binary; a
    pre-release-mode `v1` stamp cannot name its profile and a `v2` stamp can name
    neither its tree nor its bundle, so both are treated as absent (one rebuild
-   per bump, once).
+   per bump, once). `buildStartedAtMs` is read leniently, like `gitHead`: a
+   stamp written before #554 simply has none, and the mtime comparison falls
+   back to the binary's own mtime, exactly as it did before.
+
+**The mid-build edit race (issue #554), closed.** `pnpm tauri build`'s
+`beforeBuildCommand` runs vite FIRST - dist/ lands within seconds - and only
+then does cargo spend minutes compiling and linking. A source edit landing in
+that cargo window is older than the binary's eventual mtime, so comparing
+against the binary's mtime (the pre-#554 behavior) missed it entirely: the
+stamp's `distIndexHash` still matched the (now-stale) `dist/` it embedded, and
+`fresh: true` came back over a bundle that predated the edit. `checkBuildFreshness`
+now compares the newest tracked source mtime against `buildStartedAtMs` instead
+of the binary's mtime whenever a stamp carries one, which closes the window -
+nothing under a TRACKED path edited after the build began can look fresh (an
+untracked input is a gap in the list above, not something this comparison can
+see). The workaround this used to require (manually passing `build: "force"`
+after editing mid-build) is no longer necessary.
+
+`buildStartedAtMs` is trusted only when `0 < buildStartedAtMs <= binaryMtimeMs
++ BUILD_START_SLACK_MS` in the same stamp (2000ms, absorbing legitimate
+filesystem mtime granularity - sub-millisecond on ext4/APFS, up to ~1s on
+HFS+, up to ~2s on FAT worst case - rather than misreading it as clock skew,
+which a plain `<=` did and CI caught) - a real build does not start long after
+it finished linking. Two independent clocks feed those two numbers (the
+harness process clock and the filesystem), and a stamp that fails the check
+falls back to `binaryMtimeMs` instead: an untrusted, future-dated
+`buildStartedAtMs` would otherwise make every later edit read fresh forever,
+and a filesystem whose mtimes trail the process clock would otherwise make
+every source read newer than a threshold that never advances - a rebuild loop
+that never converges (and, since each rebuild re-stamps with the same lagging
+clock, one that also defeats `fuzz-matrix`'s warm-up-alone skip).
+
+The Tier 2 OS helper (`e2e/agent/os/helper.ts`) keeps the older, binary-mtime-
+only comparison; its build is a handful of small crates finishing in seconds,
+so the mid-build window this section closes is negligible there. Left out of
+scope deliberately, not missed.
 
 mtimes alone cannot see *how* a binary was built, so before the stamp a
 `dev.sh`-built binary looked fresh and `auto` attached to a hookless dist, only
@@ -369,7 +427,7 @@ Lifecycle:
 
 | Tool | Purpose |
 |---|---|
-| `app_start(build?, headed?, freshProfile?)` | Build if stale, launch, attach, verify hooks. `build`: auto/skip/force. Staleness = source mtimes newer than the binary **or** the E2E build stamp not vouching for it - wrong profile/features/`viteE2E`, relinked behind our back, or built from a different worktree (see above). Returns `builtFrom` (which tree built the binary) and `rebuildReasons` when staleness forced a rebuild. Default is headless on Xvfb even when a desktop display exists (no window pops up, no focus stealing); `headed: true` shows the window on the real display. |
+| `app_start(build?, headed?, freshProfile?)` | Build if stale, launch, attach, verify hooks. `build`: auto/skip/force. Staleness = source mtimes newer than the build-start threshold (the stamped `buildStartedAtMs` when trustworthy, else the binary's own mtime) **or** the E2E build stamp not vouching for it - wrong profile/features/`viteE2E`, relinked behind our back, or built from a different worktree (see above). Returns `builtFrom` (which tree built the binary) and `rebuildReasons` when staleness forced a rebuild. Default is headless on Xvfb even when a desktop display exists (no window pops up, no focus stealing); `headed: true` shows the window on the real display. |
 | `app_stop` | Close app + driver, reap the process group. |
 | `app_restart(freshProfile?=false)` | Restart keeping the profile (persisted-state repros). |
 | `app_status` | Liveness: state, uptime, driverAlive, sessionDir, node. |
