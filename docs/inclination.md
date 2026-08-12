@@ -92,9 +92,14 @@ contradicts its depths cannot flip itself into agreement. It inherits the
 section verdict and stays flagged, which is the entire point of the
 `INCLINATION_DEPTH_MISMATCH` check.
 
-A section is only touched when the evidence is lopsided: at least 3 usable
-shots, and a flipped error less than half the as-is error. Real DMP sections
-clear that by 3-7x and already-correct sections fail it by a wide margin.
+A section is only touched when the evidence is lopsided, and it is votes that
+are counted, never summed errors: each usable shot casts one vote - to flip
+when its flipped error is less than half its as-is error, to keep when its
+as-is error is less than half its flipped error, and it abstains when neither
+holds. A section flips only when at least 3 shots vote to flip and the flip
+votes are more than twice the keep votes. That margin lets a real DMP section
+carry one blunder without being held hostage by it, while an already-correct
+section can never be flipped by an outlier.
 Anything in between is left alone rather than guessed at. Out-of-range legs
 (steeper than vertical) do not vote: validation skips the cross-check for them,
 so a single blunder should not drag a section's verdict. Sections that had

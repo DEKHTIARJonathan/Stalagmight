@@ -39,7 +39,7 @@ Still ordinary MapLibre, on small GeoJSON sources built in
 ghosts, and the **interact overlay** - a handful of features holding only the
 currently hovered / selected / snapped items, redrawn above the custom geometry
 so per-item highlight survives without feature-state. Z-order is explicit: the
-geometry layer inserts before `survey-interact-shots` (`controller.ts:328`), so
+geometry layer inserts before `survey-interact-shots` (`controller.ts:371`), so
 it sits above closures and ghosts and below every overlay, and the label layer
 is added with no `beforeId`, so labels are on top.
 
@@ -92,8 +92,10 @@ re-upload it, never touching positions or colors:
   array, merged into one emphasis level per section (hover beats selection) that
   the shader turns into a width or radius bump.
 
-Show/hide toggles for shots, stations, reference legs, and jumps are shader
-uniforms - a flag flip plus `triggerRepaint`, no rebuild at all. Tessellation
+Show/hide toggles never rebuild: shots and stations skip their draw call
+outright (`drawShots` / `drawStations`), reference legs and jumps stay in the
+buffers and are discarded in the shader (`u_hide_reference` / `u_hide_jump`) - a
+flag flip plus `triggerRepaint`, no rebuild at all. Tessellation
 itself (`tessellate.ts`) is deliberately simpler than MapLibre's: each shot is an
 independent quad, extended past its endpoints in the vertex shader so the
 fragment shader's capsule SDF can round the caps, no miter joins,
@@ -313,11 +315,12 @@ the source is created, which the live fetch requires.
 
 ## Relationship to `performance.md`
 
-The frontend section of [`performance.md`](performance.md) predates this renderer.
-Two of its patterns are **superseded** for survey geometry: `queryRenderedFeatures`
-for spatial queries (now the geometry index above) and `setFeatureState` for
-visual updates (now per-vertex flag attributes plus re-upload). The rest still
-hold: zero-duration paint transitions on the surviving stock overlay layers,
+The frontend section of [`performance.md`](performance.md) covers this same
+renderer from the cost side - where the time goes per frame and per data change,
+and how to measure it. It already records that survey spatial queries go through
+the geometry index rather than `queryRenderedFeatures`, and that no
+`setFeatureState` call remains in `src/`. The stock-layer patterns it keeps apply
+here too: zero-duration paint transitions on the surviving overlay layers,
 rAF-batching of pointer moves, and updating `SurveyLayer` directly while deferring
 the Zustand write.
 

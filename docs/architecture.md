@@ -125,8 +125,9 @@ guide -> [speleodb-dev-testing.md](speleodb-dev-testing.md)
 **Telemetry.** `src-tauri/crates/telemetry/src/telemetry/` is always compiled but real only behind the
 `telemetry` Cargo feature; with it off every method is an empty no-op. Anonymous
 session-level counters, off by default and opt-in via config, buffered to disk on a failed
-flush and retried. `registry.rs` owns the event vocabulary and the `registry_covers_all_*`
-tests that fail when a new command / tool / dialog is added without a matching event.
+flush and retried. `registry.rs` owns the event vocabulary; the `registry_covers_all_*`
+tests that fail when a new command / tool / dialog is added without a matching event live
+in `src-tauri/src/commands/telemetry_coverage_tests.rs`.
 -> [telemetry.md](telemetry.md)
 
 ## Key Files
@@ -171,7 +172,7 @@ tests that fail when a new command / tool / dialog is added without a matching e
 | `src/components/Dialogs/KeyboardShortcutsDialog.tsx` | Keyboard shortcuts overlay (`?` key) |
 | `src/components/Dialogs/settings/AppearanceSettings.tsx` | Theme mode & color theme selection UI |
 | `src/components/Dialogs/settings/ThemePreviewCard.tsx` | Mini app mockup preview cards for themes |
-| `src-tauri/crates/core/src/config/types.rs` | Config types incl. `AppearanceConfig`, `PlacementSuggestionConfig`, `ImportConfig` |
+| `src-tauri/crates/core/src/config/types.rs` | Config types incl. `AppearanceConfig`, `ImportConfig` (`PlacementSuggestionConfig` is defined in `src-tauri/crates/models/src/config/mod.rs`) |
 
 ## Color Theme System
 
@@ -212,7 +213,7 @@ Pressing `?` opens the `KeyboardShortcutsDialog`, a filterable grid showing all 
 
 ## Grid Overlay
 
-`GridOverlay.tsx` renders a coordinate grid on the map that scales with survey data. Grid spacing auto-selects from `[1, 5, 10, 25, 50, 100]` meters based on zoom level. The grid subscribes to `resolvedTheme` for theme-aware colors via the `--cc-grid-default` CSS variable.
+`GridOverlay.tsx` renders a coordinate grid on the map that scales with survey data. Grid spacing is chosen by the user from `[1, 5, 10, 25, 50, 100]` meters in the Display menu (default 10 m). The grid subscribes to `resolvedTheme` for theme-aware colors via the `--cc-grid-default` CSS variable.
 
 ## Rust Backend Patterns
 

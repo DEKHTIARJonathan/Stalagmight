@@ -110,7 +110,7 @@ UI-only events tracked via `trackAction`. Always include a source.
 | Multi-select | `select-add.station`, `select-add.shot` | `map`, `data-table` |
 | Dialogs | `dialog.import`, `dialog.settings`, ... | `unknown`, `context-menu` |
 | Panel toggles | `panel-open.sections`, `panel-close.detail`, `panel-open.data-table` | `keyboard`, `unknown` (= collapse button) |
-| Context menu | `unmerge`, `remove-closure`, `toggle-reference` | `context-menu`, `detail-panel` |
+| Context menu | `unmerge`, `remove-closure`, `set-shot-kind`, `cycle-shot-kind` | `context-menu`, `detail-panel` |
 
 ### Dialog Cancellations - `dialog-cancel.<name>`
 
@@ -169,7 +169,7 @@ dwell.global-view              - seconds on the Welcome/project-list screen
 
 | Trigger | Dwell key |
 |---------|-----------|
-| `setView('single-system')` | `tool.{activeTool}` |
+| `setView('single')` | `tool.{activeTool}` |
 | `setView('global')` | `global-view` |
 | `setActiveTool(tool)` | `tool.{tool}` (skipped when dialog/placement active) |
 | `openDialog(name)` | `dialog.{name}` |
@@ -319,6 +319,10 @@ Auto-resets after 50ms to prevent bleed to unrelated actions.
 | `recent-map` | Recent-projects map marker |
 | `hamburger` | Global-view hamburger application menu |
 | `empty-state` | Empty-state cards (first run) |
+| `mouse` | Map pan/zoom by wheel or mouse drag |
+| `touch` | Map pan/zoom by touch gesture |
+| `drag-drop` | File dropped onto the window (open or import) |
+| `os-file-association` | File handed to us by the OS: double-click / "Open with" |
 | `unknown` | No source set (default) |
 
 ### Caveat: single consumption
@@ -402,7 +406,7 @@ name (or an event name with no corresponding feature).
 | `registry_covers_all_dialogs` | App.tsx `activeDialog` values ↔ `action.dialog.*` / `dialog-cancel.*` / `dwell.dialog.*` |
 | `registry_covers_all_sources` | `SourceName` union ↔ `SOURCE_NAMES` |
 | `registry_covers_all_nav_events` | `NavigationAction` union ↔ `action.nav.*` |
-| `registry_covers_all_panel_events` | `PanelName` union ↔ `action.panel-open.*` / `action.panel-close.*` |
+| `registry_covers_all_panel_events` | `PanelName` union ↔ `action.panel-open.*` / `action.panel-close.*` / `action.panel-pin.*` / `action.panel-unpin.*` |
 | `registry_covers_all_selections` | `SelectionType` union ↔ `action.select.*` / `action.select-add.*` |
 | `registry_covers_all_context_menu_actions` | `ContextMenuAction` union ↔ `action.*` (miscellaneous) |
 | `dialog_complete_calls_match_dialogs` | All `trackDialogComplete('...')` call sites use valid dialog names |
@@ -465,8 +469,8 @@ will fail if you forget either.
 
 1. Add the panel name to the `PanelName` type union in `telemetry.ts`.
 2. Use `trackPanelToggle('my-panel', opening)` in the toggle function.
-3. Add `action.panel-open.<name>` and `action.panel-close.<name>` to both
-   registries.
+3. Add `action.panel-open.<name>`, `action.panel-close.<name>`,
+   `action.panel-pin.<name>` and `action.panel-unpin.<name>` to `EVENT_NAMES`.
 4. The `registry_covers_all_panel_events` test will fail if anything is missing.
 
 ### New selection source
@@ -587,8 +591,10 @@ DELETE FROM sessions WHERE ip_hash = '<hash>';
 ### Observability
 
 Workers Logs are enabled via `[observability]` in `wrangler.toml` (100%
-sampling). Every request logs a structured tag + context to `console.log`,
-visible in the Cloudflare dashboard and via `wrangler tail`.
+sampling), so invocations and their response status are visible in the
+Cloudflare dashboard and via `wrangler tail`. The worker emits no `console.*`
+output of its own - each path returns a status code and a short text body,
+nothing more.
 
 **Live tail** (streams logs in real time):
 
@@ -600,17 +606,16 @@ visible in the Cloudflare dashboard and via `wrangler tail`.
 filterable by status code, with invocation traces (wall time, CPU time,
 subrequests).
 
-**Log tags emitted by the worker**:
+**Response statuses returned by the worker**:
 
-| Tag | Status | Meaning |
-|-----|--------|---------|
-| `ok` | 200 | Successful ingestion (includes app version, event count, project_seq) |
-| `invalid_payload` | 400 | Body is not valid gzip/JSON, or the JSON has the wrong shape |
-| `field_too_long` | 400 | session_id, app_version, or os exceeds length limit |
-| `too_many_events` | 400 | >500 distinct events in one payload |
-| `payload_too_large` | 413 | Body exceeds 64 KB |
-| `rate_limited` | 429 | >10 flushes/min from same IP hash |
-| `db_batch_failed` | 500 | D1 batch write failed (logs error + event count) |
+| Status | Meaning |
+|--------|---------|
+| 200 | Event batch ingested |
+| 400 | Body is not valid gzip/JSON (including a gzip stream expanding past the 256 KB cap) or has the wrong shape; `session_id`/`app_version`/`os` over its length limit (64/32/32); or more than 500 distinct events |
+| 404 | Not `POST /v1/events`, or a `User-Agent` that does not start with `Stalagmight/` |
+| 413 | `Content-Length` over 64 KB |
+| 429 | The same IP hash already has 10 flushes recorded in the last minute |
+| 500 | D1 batch write failed |
 
 ### Configuration files
 

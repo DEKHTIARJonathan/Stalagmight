@@ -48,7 +48,7 @@ Click any station or shot in a section to drag the entire connected branch. Conn
 3. Connected sections filtered to exclude anchored ones
 4. `beginDragPreview(connectedSet)` creates temp layers with section inclusion filters
 5. Per-mousemove: `updateDragPreview(dx, dy)` updates *-translate on all temp layers (GPU uniform, no GeoJSON rebuild)
-6. On the release of a press that stayed put (see [The drop is click-gated](#the-drop-is-click-gated)): `commitDragPreview()` + `moveSection()` backend call for each connected section
+6. On the release of a press that stayed put (see [The drop is click-gated](#the-drop-is-click-gated)): `commitDragPreview()` + a single `moveSegment()` backend call with the grabbed section id (the backend expands it to the whole rigid connected group)
 
 ### Anchored Sections
 
@@ -65,7 +65,7 @@ During station or segment drag, the user can drop onto another station to merge 
 
 ### Segment Hover Resolution
 
-When hovering in Move Segment mode, the connected section IDs are resolved asynchronously. A debounce (150ms) prevents flicker when transitioning between features. The `segmentDragTokenRef` system discards stale async results.
+When hovering in Move Segment mode, the connected section IDs are resolved asynchronously. A debounce (150ms) prevents flicker when transitioning between features. The `segmentHoverTokenRef` system discards stale async results (the drag path has its own `segmentDragTokenRef`).
 
 ---
 
@@ -237,7 +237,7 @@ Move Station and Move Shot use `default` as their base cursor (with `pointer` on
 | `anchoredSectionIds.has()` | `handleMoveDragStart` | Silent no-op for clicks on anchored sections |
 | `immovableStationKeys.has()` | `handleMoveDragStart` | Block station/shot drag on immovable stations |
 | `segmentDragTokenRef` | Connected section fetch | Discard stale async results if drag cancelled or restarted |
-| `ctrlDragActiveRef` | Click capture handler | Block DOM click events during Ctrl+drag cooldown |
+| `customPanActiveRef` | Click capture handler | Block DOM click events during Ctrl+drag cooldown |
 | Movement threshold (1mm) | `handleMoveDragEnd` | Distinguish click from drag; skip backend call for sub-millimeter moves |
 
 ---
@@ -249,4 +249,4 @@ Move Station and Move Shot use `default` as their base cursor (with `pointer` on
 | `src/components/Map/MapCanvas.tsx` | Drag state management, Ctrl+drag panning, immovable/anchored computation, snap-to-merge detection |
 | `src/components/Map/SurveyLayer.tsx` | Hover detection, visual state (feature-state), drag preview layers, cursor management |
 | `src/hooks/useMapTools.ts` | Per-tool click/hover handlers, immovable guards, drag initiation callbacks |
-| `src/components/Map/surveyLayer/features.ts` | GeoJSON feature construction, ghost section previews |
+| `src/components/Map/surveyLayer/ghostFeatures.ts` | Ghost section preview GeoJSON (`buildGhostFeatures`) |

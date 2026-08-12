@@ -102,9 +102,9 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | LRUD | `Left`/`Right`/`Up`/`Down` | `0.0` for `None` - Ariane's format has no null, so an UNMEASURED passage dimension and one MEASURED as zero are written as the same `0.0`. See [The LRUD zero/null collision](#the-lrud-zeronull-collision). |
 | `shot.comment` | `Comment` / `CM` | Empty string if unset. Also carries the **to-station's** `project.station_comments` entry, joined with the shot comment via the ZWSP marker - see [Station-comment co-encoding](#station-comment-co-encoding). |
 | `shot.kind` | `Type` / `TY` | Both `Jump` and `Reference` export as `VIRTUAL`; `Normal` as `REAL`. Ariane has a single virtual category, so the #27 distinction is lossy on export by design (q9) and is preserved locally instead. |
-| `shot.uuid` | `UUID` / `UU` | Emitted for every REAL/VIRTUAL forward shot; omitted on the synthesized shots (START, CLOSURE, reversed and pre-zero-datum legs), which have no 1:1 Stalagmight shot behind them. See [Shot UUIDs](#shot-uuids). |
+| `shot.uuid` | `UUID` / `UU` | Emitted for every block that stands for a real project shot - the forward blocks and the reversed / pre-zero-datum legs alike; omitted on the blocks the exporter synthesizes (START, CLOSURE, and the SpeleoDB VIRTUAL padding shot), and on a sidecar shot whose value is a per-document repeat or not a v4. See [Shot UUIDs](#shot-uuids). |
 | - | `Locked` / `LCK` | `false` for normal shots, `true` for START |
-| - | `Name` / `NM` | `"START"` for START shot, empty otherwise |
+| - | `Name` / `NM` | `"START"` for START, `"CLOSURE:CLOSURE"` for CLOSURE, empty otherwise |
 | - | `Profiletype` / `PT` | Always `VERTICAL` |
 | - | `Excluded` / `EXC` | Always `false` |
 
@@ -214,7 +214,7 @@ Internal `#RRGGBB` hex colors are converted to Ariane's `0xRRGGBBff` format (8-d
 ## The LRUD zero/null collision
 
 `ExportShot.left` and its three siblings are plain `f64`, filled with
-`shot.left.unwrap_or(0.0)` (`export/tml.rs:744-747` and the two reversed-leg
+`shot.left.unwrap_or(0.0)` (`export/tml.rs:806-809` and the three reversed-leg
 constructors beside it), because Ariane's `Left`/`Right`/`Up`/`Down` elements
 have no null. So the file cannot distinguish these two facts about a passage:
 
@@ -222,7 +222,7 @@ have no null. So the file cannot distinguish these two facts about a passage:
 - **measured as zero** - somebody did, and it is zero (`Some(0.0)`).
 
 Both are written `0.0`, and [the importer](ariane-import.md) maps `0.0` back to
-`None` **per field** (`parsers/tml/mod.rs:1908-1914`). The round trip is
+`None` **per field** (`parsers/tml/mod.rs:1822-1828`). The round trip is
 therefore lossless for an unmeasured dimension (`None -> 0.0 -> None`) and lossy
 for a measured zero (`Some(0.0) -> 0.0 -> None`).
 
@@ -346,7 +346,7 @@ dropped or capped.
 |-----------|------|------|
 | Export logic | `src-tauri/crates/export/src/export/tml.rs` | XML generation, ZIP packaging, topology resolution, the two profiles |
 | Export command | `src-tauri/src/commands/export.rs` | `export_tml` IPC handler |
-| SpeleoDB sidecar | `src-tauri/crates/core/src/core/state/speleodb.rs` | `speleodb_render_tml` renders the co-push sidecar via `export_tml_for_speleodb` |
+| SpeleoDB sidecar | `src-tauri/crates/core/src/core/state/speleodb_push.rs` | `speleodb_render_tml` renders the co-push sidecar via `export_tml_for_speleodb` |
 | Store method | `src/store/projectStore.ts` | `exportTml()` frontend binding |
 | Export dialog | `src/components/Dialogs/ExportDialog.tsx` | UI with TML format option |
 

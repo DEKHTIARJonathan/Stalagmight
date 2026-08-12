@@ -92,11 +92,11 @@ min_aggregate_score = 0.45          # Minimum aggregate score to include a sugge
 max_reference_shots = 5             # Maximum reference shots to try from each leaf
 # Further cutoffs and penalties (max_suggestions, min_partial_ratio,
 # single_shot_penalty, short_shot_threshold, max_azimuth_error_*,
-# max_depth_error, max_length_error_*) are in config/types.rs.
+# max_depth_error, max_length_error_*) are in `src-tauri/crates/models/src/config/mod.rs`.
 
 [map]
 satellite_provider = "esri"         # Tile provider (selects from backend registry via get_tile_providers IPC)
-satellite_enabled = false           # Show satellite imagery
+satellite_enabled = true            # Show satellite imagery
 # GPS origin for coordinate alignment (required for satellite tiles)
 satellite_gps_origin = { latitude = 24.55, longitude = -81.78 }
 zoom_default = 15                   # Currently unread - the map always opens at 15 (hard-coded in uiStore)
@@ -212,7 +212,7 @@ sections_panel_open = true          # Pinned open at startup
 sections_panel_mode = "pin"         # "pin" (click to open, stays open) or "hover"
 detail_panel_open = true
 detail_panel_mode = "pin"
-data_table_open = false
+data_table_open = true
 data_table_mode = "pin"
 # The data table's column layout is persisted here too:
 # data_table_shot_column_order / data_table_station_column_order (empty = declaration
@@ -256,7 +256,7 @@ jump_rmv_multiplier = 1.5           # Extra RMV on jump legs; stacks multiplicat
 include_reference_legs = false      # Escape hatch: treat reference shots as swimmable again
 conservative_tank_gas = true        # "Call it an 80" derate instead of precise fill x volume x Z
 # survey_speed_m_per_min (unset = same speed both ways) and the dpv scooter
-# profile (unset = no scooter) are optional; see config/gas.rs.
+# profile (unset = no scooter) are optional; see `src-tauri/crates/models/src/config/gas.rs`.
 
 [gas.reserve_profile]
 stage_reserve_bar = 30.0            # Gas held back in each stage under Half-Minus

@@ -226,7 +226,7 @@ but the tag: no version files, no changelog, no push.
 ### CI (`.github/workflows/ci.yml`)
 
 - **Trigger**: push to master, pull requests to master
-- **Steps**: TypeScript check, Rust tests
+- **Steps**: cargo fmt --check, TypeScript checks (`pnpm tsc --noEmit` + `pnpm typecheck:agent`), test-ID / file-size / read-only lint gates, release-tooling tests, vitest, Rust tests, ts-rs bindings drift check, clippy, release-profile `cargo check --release`
 - Installs: system libs, Rust toolchain, Node 24 (from `.nvmrc`), pnpm 11 (from `packageManager`)
 
 ### Release (`.github/workflows/release.yml`)
@@ -236,7 +236,7 @@ but the tag: no version files, no changelog, no push.
 
 | Job | Runner | Does |
 |-----|--------|------|
-| `verify` | `ubuntu-latest` | TypeScript check + Rust tests - a subset of the CI `check` job, not the whole gate. It does not run `cargo fmt --check`, clippy, vitest, the file-size ratchets or leak-scan; those gate the merge, and a tag is cut from already-merged code |
+| `verify` | `ubuntu-latest` | TypeScript check + Rust tests + a release-profile `cargo check --release`, plus the third-party license bundle gate (leak-scan runs on branch/PR events only, so a tag push would otherwise skip it) - mostly a subset of the CI `check` job, not the whole gate. It does not run `cargo fmt --check`, clippy, vitest, the file-size ratchets or the private-leak/em-dash scans; those gate the merge, and a tag is cut from already-merged code |
 | `build` | `ubuntu-latest`, `macos-latest`, `windows-latest` | `pnpm tauri build`, collects that platform's bundles, checksums them, uploads them as a job artifact |
 | `release` | `ubuntu-latest` | Downloads all three artifact sets, re-verifies the checksums, asserts every platform is represented, extracts the changelog section, creates the GitHub release via the `gh` CLI |
 
@@ -412,7 +412,7 @@ blanket substitution would rewrite the whole file. The pre-flight refuses to sta
 if the lock is already out of step with `package.json`, rather than quietly bumping
 past a discrepancy worth looking at.
 
-The About dialog reads the version dynamically via `__APP_VERSION__` (injected by Vite from `package.json` at build time).
+The About dialog reads the version dynamically via `__APP_VERSION__` (injected by Vite: the matching release tag on HEAD when there is one, otherwise `package.json`'s version plus the commit hash).
 
 ## Troubleshooting
 

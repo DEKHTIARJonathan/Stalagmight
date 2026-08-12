@@ -5,9 +5,9 @@ surface carries. This is normative: new code follows it, and review holds change
 it. It synthesizes the Carbon notification pattern, Apple's HIG interruption levels,
 and Material's notification content guidance, applied to this codebase's surfaces.
 
-Some existing code predates this policy; the cleanup checklist is issue #415. Do
-not copy an existing callsite's behavior without checking it against this page
-first.
+Some existing code predates this policy; the cleanup pass was tracked in issue
+#415 (closed). Do not copy an existing callsite's behavior without checking it
+against this page first.
 
 ## Adding a notification? Answer these first
 
@@ -40,7 +40,7 @@ first.
 
 | Surface | Use for | Persistence | Examples in the codebase |
 |---|---|---|---|
-| Modal dialog | User must acknowledge/decide before continuing; data at risk | Until dismissed; app inert behind it | `ErrorDialog`, `ImportReceiptDialog` (only when the receipt has a warning, is empty, or converted units, #411), corruption recovery |
+| Modal dialog | User must acknowledge/decide before continuing; data at risk | Until dismissed; app inert behind it | `ErrorDialog`, `ImportReceiptDialog` (only when the receipt has a warning, is empty, converted units, or created a zero datum, #411), corruption recovery |
 | Banner / indicator | Ongoing conditions | Until the condition clears | integrity banner (`App.tsx`), `SpeleoBanner`, `OfflineIndicator`, read-only badges (`MapTopLeftOverlay`) |
 | Toast | Transient outcome of an action whose result is off-screen or non-obvious | Auto-dismiss (5-9 s by kind) | save confirmations, blocked-edit notice, export results, warning-free non-converted import receipt (#411) |
 | Log only | Internal, recoverable, debug | n/a | `console.warn`/`console.error` |
@@ -107,9 +107,10 @@ regions). Read the comment blocks in those two files plus
   through `presentImportReceipt` in `saveFeedback.ts` - a receipt producer that
   bypasses it is a policy defect) reports facts the user
   already asked for by importing - counts, not a choice. When it carries no
-  `warnings`, no unit conversion, and something actually landed, it surfaces
-  as a `success` toast (counts only, dedup key `TOAST_KEYS.IMPORT_RECEIPT`)
-  instead of opening `ImportReceiptDialog`. Three things keep the modal:
+  `warnings`, no unit conversion, no created zero datum, and something actually
+  landed, it surfaces as a `success` toast (counts only, dedup key
+  `TOAST_KEYS.IMPORT_RECEIPT`) instead of opening `ImportReceiptDialog`. Four
+  things keep the modal:
   - It carries even one warning: a warning means something was lost or needs
     a look, and #411 exists precisely so that never rides a dismissible toast.
   - `sections_imported` is zero (#442) - nothing landing is itself the fact
@@ -120,11 +121,14 @@ regions). Read the comment blocks in those two files plus
     number in the data. It is a transformation notice, not a decision, but it
     does not fit the toast's one-line budget, so it keeps the modal rather
     than being dropped or given a second, lesser surface.
+  - `zero_datum_created` is set (F12c) - the import created a zero datum on a
+    section, and naming that section does not fit the toast's one-line budget
+    either, so it rides the modal for the same reason as `unit_conversion`.
 
   The toast path emits no dialog telemetry, deliberately (toasts carry no
   events and the registry is untouched) - so from this change on,
-  `dwell.dialog.import-receipt` counts only warning/empty/converted imports,
-  not "imports happened". Read dashboards accordingly.
+  `dwell.dialog.import-receipt` counts only warning/empty/converted/zero-datum
+  imports, not "imports happened". Read dashboards accordingly.
 - **Warnings are not errors.** Do not dress warning-class content in `ErrorDialog`
   with `hideReportHint` as a costume; if no warning-capable surface fits, that is a
   gap to raise, not to paper over.

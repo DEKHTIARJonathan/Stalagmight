@@ -38,7 +38,7 @@ Installs all required development tools, skipping anything already present. Safe
 3. **Node.js** - major read from `.nvmrc` (currently 24), via `brew install node@<major>`, with PATH fix for keg-only installs
 4. **pnpm** - exact version read from `packageManager` in `package.json` (currently 11.18.0, integrity-pinned), via `npm install -g pnpm@<version>`, with CA cert fix for Homebrew's OpenSSL. An existing install is accepted if its major matches, since any pnpm 10+ self-switches to the pin
 5. **Rust stable** - via rustup
-6. **tauri-wd** - via `cargo install tauri-webdriver-automation` (WebDriver for macOS E2E tests)
+6. **tauri-wd** - via `cargo install --git https://github.com/FumblingBarbell/tauri-webdriver --branch fix/resolve-element-refs-in-execute-sync tauri-webdriver-automation` (WebDriver for macOS E2E tests; a fix branch until the change lands in a crates.io release)
 
 ### Homebrew PATH detection
 
@@ -114,7 +114,7 @@ The `e2e` feature is gated behind a Cargo feature flag (`[features] e2e = [...]`
 
 #### Prerequisites
 
-- `tauri-wd` must be installed: `cargo install tauri-webdriver-automation` (handled by `mac-setup.sh`)
+- `tauri-wd` must be installed from the pinned fix branch: `cargo install --git https://github.com/FumblingBarbell/tauri-webdriver --branch fix/resolve-element-refs-in-execute-sync tauri-webdriver-automation` (handled by `mac-setup.sh`)
 
 #### Artifacts
 
