@@ -305,6 +305,24 @@ impl Database {
             } else {
                 "NULL, NULL, NULL, NULL"
             };
+            // #557: refuse BEFORE materializing. `ORDER BY id` puts over-bound
+            // rows last, so the per-row check below would allocate the whole
+            // table first - a hostile file with millions of rows makes the
+            // refusal maximally expensive. `MAX(id)` is O(1) off the pk index,
+            // and read as i64 it also gives a section id past even u32 the
+            // same receipt-grade message instead of a bare type error.
+            let max_id: Option<i64> =
+                self.conn
+                    .query_row("SELECT MAX(id) FROM sections", [], |row| row.get(0))?;
+            if let Some(max_id) = max_id {
+                anyhow::ensure!(
+                    max_id <= i64::from(MAX_SECTION_ID),
+                    "This file cannot be opened: it contains section id {max_id}, \
+                     but section ids past {MAX_SECTION_ID} cannot hold shots. \
+                     The file was written by an incompatible tool or is corrupted."
+                );
+            }
+
             let mut stmt = self.conn.prepare(&format!(
                 "SELECT id, name, surveyor, date, color, direction, {quality_expr}, {parity_expr}, \
                  {gauge_expr}, {gauge_nb_expr}, {azimuth_exprs} FROM sections ORDER BY id"

@@ -222,21 +222,33 @@ rather than through those doors:
 |------|-------------------------------|
 | `models/section.rs` `Section::new` (`next_shot_id`) | unchecked multiply - panics in debug, wraps in release. Unreachable from disk since #557: the `.stalx` open refuses first, and the persisted-undo `restore_section` replay is bounded identically |
 | `core/state/project_io.rs` (uuid index, twice) | unchecked multiply - same |
-| `persistence/sqlite/read.rs` (shot id, `next_shot_id`) | saturating (#427) - no panic, ids alias. Moot since #557: the open refuses any over-bound section id before a shot encodes |
+| `persistence/sqlite/read.rs` (shot id, `next_shot_id`) | saturating (#427) - no panic, ids alias. The #557 open-refusal vets `sections` rows only, so an orphan `shots` row (a section id with no `sections` row) still reaches this encode and saturates |
 | `persistence/sqlite/read.rs` `unrecognised_shot_kinds` (`shot_id`) | saturating (#557) - it runs its own query, so a shots row can name a section id the open-refusal never vetted |
 | `models/shot.rs` `shot_display_position` | saturating (#413) - display only |
 | `src/utils/ids.ts` `encodeFeatureId` | JS doubles, exact past 2^32 - no wrap. The SoA typed arrays feeding the renderer were widened from `Int32Array` to `Uint32Array` (#555), so the JS side is exact across the full `u32` range, not just the positive half of `i32` |
 
 The load half of the split is closed (#557): opening a `.stalx` that names a
-section id past `MAX_SECTION_ID` is refused outright, with a message naming the
-offending id and the bound - a pre-#556 file, another tool's output, or a
-hostile author cannot reach the unchecked encodes through the open path. The
-counter rebuild (`next_section_id`) saturates as defense in depth, and the
-persisted-undo replay refuses an over-bound `restore_section` entry the same
-way. `resolved_warnings` rows whose section id cell does not coerce to a live
-id are dropped-and-counted on read (post-#517, logged) - correct, because
+section id past `MAX_SECTION_ID` is refused outright (an O(1) `MAX(id)`
+precheck plus a per-row backstop), with a message naming the offending id and
+the bound - a pre-#556 file, another tool's output, or a hostile author cannot
+reach the unchecked encodes through the open path. The persisted-undo replay
+is bounded at both of its section-construction points: `restore_section`
+(legacy `SectionSnapshot` and `CreatedSectionSnapshot` entries) refuses an
+over-bound id, and `restore_snapshot_into` - the chokepoint the
+`ProjectSnapshotPair` arm current builds write goes through, where serde
+rebuilds sections without `Section::new` - refuses the whole snapshot. The
+counter rebuild (`next_section_id`) saturates as defense in depth.
+`resolved_warnings` rows whose section id cell does not coerce to a live id
+are dropped-and-counted on read (post-#517, logged) - correct, because
 suppression is keyed by `(section_id, uuid)`, so such a row can never match a
 live shot.
+
+One accepted consequence: a file that genuinely carries over-bound section
+ids is refused, not salvaged - `repair.rs` recovers a project through
+`load_project`, so the salvage path refuses it too. Such a file can only come
+from a foreign writer or corruption (no shipped build could mint past the
+bound without the encode already misbehaving), so refusal-with-receipt beats
+loading data whose shot ids alias.
 
 The suffix can collide with a name the file itself declares (a file with both
 `A` and `A (trip 2)`). That is accepted, not disambiguated: nothing in the

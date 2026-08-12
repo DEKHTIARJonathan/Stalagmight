@@ -754,6 +754,26 @@ impl AppState {
         let current_file_path = slot.as_ref().and_then(|p| p.file_path.clone());
         match serde_json::from_str::<Project>(snapshot) {
             Ok(mut restored) => {
+                // #557: the snapshot blob is FILE-SUPPLIED (persisted undo is
+                // loaded from the .stalx), and serde rebuilds `Section`s
+                // field-by-field - never through `Section::new`, so neither the
+                // open-refusal in `persistence/sqlite/read.rs` nor the
+                // `restore_section` bound can see an over-bound id arriving
+                // here. Refuse the restore outright: with such a section live,
+                // the first uuid-index or save-path encode is back in the
+                // debug-panic / release-wrap regime the bound exists to end.
+                if let Some(section) = restored
+                    .sections
+                    .iter()
+                    .find(|s| s.id > crate::models::MAX_SECTION_ID)
+                {
+                    tracing::warn!(
+                        section_id = section.id,
+                        max = crate::models::MAX_SECTION_ID,
+                        "Refusing snapshot restore: section id past the shot-id encode bound"
+                    );
+                    return false;
+                }
                 if !snapshot_has_validation {
                     if let Some(validation) = current_validation {
                         restored.validation = validation;

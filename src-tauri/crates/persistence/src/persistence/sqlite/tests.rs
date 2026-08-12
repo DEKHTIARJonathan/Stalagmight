@@ -8369,6 +8369,10 @@ fn a_u32_max_section_id_is_refused_before_the_counter_rebuild() {
         err.contains(&u32::MAX.to_string()),
         "the refusal must name the offending id: {err}"
     );
+    assert!(
+        err.contains(&crate::models::MAX_SECTION_ID.to_string()),
+        "the refusal must name the bound: {err}"
+    );
 }
 
 /// The boundary id itself is legal - the refusal must not be off by one, and
@@ -8423,10 +8427,33 @@ fn unrecognised_shot_kinds_saturates_an_over_bound_section_id() {
         )
         .unwrap();
 
+    // A second, legal row pins the FORMULA (a bare `shot_id: section_id`
+    // would also yield u32::MAX for the hostile row above).
+    db.conn
+        .execute(
+            "INSERT INTO sections (id, color, created_at) VALUES (7, '#abcdef', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO shots (section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out, kind)
+             VALUES (7, 3, 0.0, 180.0, 5.0, 0.0, 1.0, 99)",
+            [],
+        )
+        .unwrap();
+
     let kinds = db.unrecognised_shot_kinds().unwrap();
-    assert_eq!(kinds.len(), 1, "the unrecognised kind must be reported");
+    assert_eq!(kinds.len(), 2, "both unrecognised kinds must be reported");
+    let legal = kinds.iter().find(|k| k.section_id == 7).unwrap();
     assert_eq!(
-        kinds[0].shot_id,
+        legal.shot_id,
+        7 * crate::models::FEATURE_ID_STRIDE + 3,
+        "a legal section id must still encode by the stride formula"
+    );
+    let hostile = kinds.iter().find(|k| k.section_id == u32::MAX).unwrap();
+    assert_eq!(
+        hostile.shot_id,
         u32::MAX,
         "an over-bound section id saturates the encode instead of panicking"
     );

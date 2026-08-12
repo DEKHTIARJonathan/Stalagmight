@@ -4392,3 +4392,29 @@ fn restoring_a_section_with_an_over_bound_id_is_refused() {
         "no section may be constructed from an over-bound id"
     );
 }
+
+/// #557 review finding (all three reviewers, independently): the
+/// `ProjectSnapshotPair` replay arm - the one CURRENT builds write - rebuilds
+/// sections through serde, never `Section::new`, so neither the open-refusal
+/// nor the `restore_section` bound sees an over-bound id arriving through a
+/// crafted undo table. `restore_snapshot_into` is the chokepoint both
+/// snapshot arms share; it must refuse and leave the live project untouched.
+#[test]
+fn a_snapshot_restore_with_an_over_bound_section_id_is_refused() {
+    let mut hostile = crate::models::Project::new("Hostile".to_string(), None);
+    hostile.add_section(crate::models::SectionData::default());
+    hostile.sections[0].id = crate::models::MAX_SECTION_ID + 1;
+    let json = serde_json::to_string(&hostile).unwrap();
+
+    let mut slot = Some(crate::models::Project::new("Live".to_string(), None));
+    assert!(
+        !AppState::restore_snapshot_into(&mut slot, &json),
+        "an over-bound snapshot must be refused"
+    );
+    let live = slot.unwrap();
+    assert_eq!(live.name, "Live", "the live project must be untouched");
+    assert!(
+        live.sections.is_empty(),
+        "no hostile section may be installed"
+    );
+}
