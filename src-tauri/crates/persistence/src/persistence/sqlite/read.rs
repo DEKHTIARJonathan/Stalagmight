@@ -7,6 +7,7 @@ use crate::models::{
     AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
     MergeTopology, NorthReference, Project, Section, SectionData, SectionId, Shot, ShotKind,
     StationKey, StationMerge, SurveyDirection, UnrecognisedShotKind, ZeroDatum, FEATURE_ID_STRIDE,
+    MAX_SECTION_ID,
 };
 
 use super::Database;
@@ -304,6 +305,24 @@ impl Database {
             } else {
                 "NULL, NULL, NULL, NULL"
             };
+            // #557: refuse BEFORE materializing. `ORDER BY id` puts over-bound
+            // rows last, so the per-row check below would allocate the whole
+            // table first - a hostile file with millions of rows makes the
+            // refusal maximally expensive. `MAX(id)` is O(1) off the pk index,
+            // and read as i64 it also gives a section id past even u32 the
+            // same receipt-grade message instead of a bare type error.
+            let max_id: Option<i64> =
+                self.conn
+                    .query_row("SELECT MAX(id) FROM sections", [], |row| row.get(0))?;
+            if let Some(max_id) = max_id {
+                anyhow::ensure!(
+                    max_id <= i64::from(MAX_SECTION_ID),
+                    "This file cannot be opened: it contains section id {max_id}, \
+                     but section ids past {MAX_SECTION_ID} cannot hold shots. \
+                     The file was written by an incompatible tool or is corrupted."
+                );
+            }
+
             let mut stmt = self.conn.prepare(&format!(
                 "SELECT id, name, surveyor, date, color, direction, {quality_expr}, {parity_expr}, \
                  {gauge_expr}, {gauge_nb_expr}, {azimuth_exprs} FROM sections ORDER BY id"
@@ -388,13 +407,28 @@ impl Database {
                     )
                 });
 
+                // #557: refuse the whole open rather than construct a section
+                // whose id cannot encode a shot id. `Section::new` computes
+                // `id * FEATURE_ID_STRIDE` (debug panic, release wrap), the
+                // shot encodes saturate every shot of such a section onto
+                // u32::MAX, and the counter rebuild below would overflow -
+                // #556 bounds what the app can MINT, this bounds what a file
+                // (pre-#556, another tool, or hostile) can smuggle in.
+                anyhow::ensure!(
+                    id <= MAX_SECTION_ID,
+                    "This file cannot be opened: it contains section id {id}, \
+                     but section ids past {MAX_SECTION_ID} cannot hold shots. \
+                     The file was written by an incompatible tool or is corrupted."
+                );
                 let mut section = Section::new(id, section_data);
                 section.reverse_parity = reverse_parity;
                 section.gauge_shot_uuid = gauge_shot_uuid;
                 section.gauge_neighbour_uuid = gauge_neighbour_uuid;
                 section.azimuth_reference = azimuth_reference;
                 section_by_id.insert(id, sections.len());
-                next_section_id = next_section_id.max(id + 1);
+                // Cannot overflow once ids are bounded above; saturating keeps
+                // the counter rebuild total even if the bound ever moves.
+                next_section_id = next_section_id.max(id.saturating_add(1));
                 sections.push(section);
             }
 
@@ -1130,8 +1164,13 @@ impl Database {
             let sequence_order: u32 = row.get(1)?;
             Ok(UnrecognisedShotKind {
                 section_id,
-                shot_id: section_id * FEATURE_ID_STRIDE + sequence_order,
-                shot_number: sequence_order + 1,
+                // Saturating like the loader's shot encode: this diagnostic
+                // runs its own query, so a shots row can name a section id no
+                // sections row (and no #557 open-refusal) ever vetted.
+                shot_id: section_id
+                    .saturating_mul(FEATURE_ID_STRIDE)
+                    .saturating_add(sequence_order),
+                shot_number: sequence_order.saturating_add(1),
                 section_name: row.get(3)?,
                 raw_value: row.get(2)?,
             })

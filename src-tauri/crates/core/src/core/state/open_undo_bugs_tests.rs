@@ -4356,3 +4356,110 @@ fn datum_stations(state: &AppState) -> Vec<StationRef> {
         .filter_map(|zd| project.resolve_key(&zd.station_ref))
         .collect()
 }
+
+/// #557: a PERSISTED undo entry reaches `restore_section` with a file-supplied
+/// section id, and `Section::restore_with_identity` -> `Section::new` computes
+/// `id * FEATURE_ID_STRIDE` unchecked. Live undo cannot mint an over-bound id
+/// (#556), so the guard exists purely for a crafted or corrupted undo table -
+/// the entry is refused, never constructed. Not `#[ignore]`d: written with its
+/// fix, per the module rule it guards the mechanism from day one.
+#[test]
+fn restoring_a_section_with_an_over_bound_id_is_refused() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Overbound Restore".to_string(),
+        location: None,
+    });
+
+    let hostile = crate::models::MAX_SECTION_ID + 1;
+    let result = state.restore_section(
+        hostile,
+        crate::models::SectionData::default(),
+        &crate::models::SectionIdentity::default(),
+    );
+    assert!(!result.success, "an over-bound restore must be refused");
+    let err = result.error.unwrap_or_default();
+    assert!(
+        err.contains(&hostile.to_string())
+            && err.contains(&crate::models::MAX_SECTION_ID.to_string()),
+        "the refusal must name the id and the bound: {err}"
+    );
+    // The refusal must leave the project untouched.
+    let project = state.get_project_state().unwrap();
+    assert!(
+        project.sections.is_empty(),
+        "no section may be constructed from an over-bound id"
+    );
+}
+
+/// #557 review finding (all three reviewers, independently): the
+/// `ProjectSnapshotPair` replay arm - the one CURRENT builds write - rebuilds
+/// sections through serde, never `Section::new`, so neither the open-refusal
+/// nor the `restore_section` bound sees an over-bound id arriving through a
+/// crafted undo table. `restore_snapshot_into` is the chokepoint both
+/// snapshot arms share; it must refuse and leave the live project untouched.
+#[test]
+fn a_snapshot_restore_with_an_over_bound_section_id_is_refused() {
+    let mut hostile = crate::models::Project::new("Hostile".to_string(), None);
+    hostile.add_section(crate::models::SectionData::default());
+    hostile.sections[0].id = crate::models::MAX_SECTION_ID + 1;
+    let json = serde_json::to_string(&hostile).unwrap();
+
+    let mut slot = Some(crate::models::Project::new("Live".to_string(), None));
+    assert!(
+        !AppState::restore_snapshot_into(&mut slot, &json),
+        "an over-bound snapshot must be refused"
+    );
+    let live = slot.unwrap();
+    assert_eq!(live.name, "Live", "the live project must be untouched");
+    assert!(
+        live.sections.is_empty(),
+        "no hostile section may be installed"
+    );
+}
+
+/// PR #575 Codex finding: `next_shot_id` is serde-carried too, so a snapshot
+/// with a LEGAL section id but a hostile counter (u32::MAX here) used to pass
+/// the id-only guard - and the next `add_shot` (`next_shot_id += 1`) panics in
+/// debug or wraps into another section's id space in release. The window check
+/// refuses it; a legitimate serialize -> restore round trip must still pass.
+#[test]
+fn a_snapshot_restore_with_a_hostile_shot_counter_is_refused() {
+    let mut hostile = crate::models::Project::new("Hostile Counter".to_string(), None);
+    hostile.add_section(crate::models::SectionData::default());
+    assert!(
+        hostile.sections[0].id <= crate::models::MAX_SECTION_ID,
+        "precondition: the id itself is legal"
+    );
+    hostile.sections[0].next_shot_id = u32::MAX;
+    let json = serde_json::to_string(&hostile).unwrap();
+
+    let mut slot = Some(crate::models::Project::new("Live".to_string(), None));
+    assert!(
+        !AppState::restore_snapshot_into(&mut slot, &json),
+        "a hostile shot counter must be refused"
+    );
+    assert!(
+        slot.unwrap().sections.is_empty(),
+        "nothing may be installed"
+    );
+
+    // The guard must not over-refuse: a real project with shots serializes and
+    // restores cleanly.
+    let mut legit = crate::models::Project::new("Legit".to_string(), None);
+    legit.add_section(crate::models::SectionData {
+        shots: vec![ShotData {
+            length: 5.0,
+            azimuth_in: 90.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let json = serde_json::to_string(&legit).unwrap();
+    let mut slot = Some(crate::models::Project::new("Live".to_string(), None));
+    assert!(
+        AppState::restore_snapshot_into(&mut slot, &json),
+        "a legitimate snapshot must still restore"
+    );
+    assert_eq!(slot.unwrap().sections.len(), 1);
+}

@@ -186,6 +186,18 @@ impl AppState {
             return CommandResult::failure("No project open".to_string());
         };
 
+        // #557: a PERSISTED undo entry carries a file-supplied id, and
+        // `Section::restore_with_identity` -> `Section::new` computes
+        // `id * FEATURE_ID_STRIDE` unchecked. Live undo cannot hold an
+        // over-bound id (#556 bounds the mint), so this only fires on a
+        // crafted or corrupted undo table - refuse the single entry.
+        if original_id > crate::models::MAX_SECTION_ID {
+            return CommandResult::failure(format!(
+                "Cannot restore section {original_id}: section ids past {} cannot hold shots",
+                crate::models::MAX_SECTION_ID
+            ));
+        }
+
         // Create section with original ID
         let section = Section::restore_with_identity(original_id, data, identity);
         // Keep section_index_cache in step.  The matching
