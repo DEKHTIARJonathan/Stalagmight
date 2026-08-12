@@ -83,14 +83,13 @@ use super::AppState;
 use crate::core::Command;
 use crate::models::{SectionId, ShotData, ShotId, ShotUpdates, StationRef};
 // CONFIG ISOLATION. Every test in this module opens with
-// `let _config = isolated_config();`, and none of them may skip it:
-// `AppState::new()` LOADS the global config, and every save reaches
-// `note_recent_project` -> `Config::save()`, which WRITES it. Unguarded that
-// is the developer's real ~/.config/stalagmight/config.toml - recent_projects
-// fills with dead /tmp paths - and the write also races the process-global
-// override the config tests set, so it can land inside a sibling test's
-// isolated config and fail it. The guard redirects the path and serializes
-// against them; it is held for the whole test because the saves are.
+// `let _config = isolated_config();`: `AppState::new()` LOADS the global config,
+// and every save reaches `note_recent_project` -> `Config::save()`, which WRITES
+// it. Config resolution is per-thread (`crate::test_helpers` documents what that
+// does and does not protect, and why it is not opt-in), so the guard is no longer
+// what keeps these tests off other files; what it buys is ONE dir for the whole
+// test, whose path the test can name and hand to a worker thread
+// (`ConfigHandoff`). It is held for the whole test because the saves are.
 use crate::test_helpers::isolated_config;
 
 // ===========================================================================
@@ -509,12 +508,21 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
     let stop = Arc::new(AtomicBool::new(false));
     let temp_path = temp.path().to_path_buf();
 
+    // Every worker save reaches `note_recent_project` -> `Config::save()`, and
+    // config resolution is per-thread: without the handoff each worker would
+    // write a config file of its own, and the concurrent writes to ONE file that
+    // this gate has always exercised would quietly stop happening - silently, so
+    // each worker also asserts once that it is on the file the others are.
+    let config = crate::test_helpers::ConfigHandoff::capture();
+    let shared_config_file = crate::config::Config::config_path().ok();
     let handles: Vec<std::thread::JoinHandle<()>> = (0..threads)
         .map(|thread| {
             let state = Arc::clone(&state);
             let progress = Arc::clone(&progress);
             let stop = Arc::clone(&stop);
             let temp_path = temp_path.clone();
+            let config = config.clone();
+            let shared_config_file = shared_config_file.clone();
             // Per-thread seeds are derived from the run seed so a whole run
             // replays from one number, and are spread far apart so two threads
             // never walk the same stream.
@@ -522,6 +530,13 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
                 .wrapping_mul(2_654_435_761)
                 .wrapping_add((thread as u32).wrapping_mul(97_531));
             std::thread::spawn(move || {
+                let _config = config.adopt();
+                assert_eq!(
+                    crate::config::Config::config_path().ok(),
+                    shared_config_file,
+                    "a worker must save into the run's ONE config file; a dir of its \
+                     own would make every config write in this gate uncontended"
+                );
                 worker(
                     &state,
                     &progress,

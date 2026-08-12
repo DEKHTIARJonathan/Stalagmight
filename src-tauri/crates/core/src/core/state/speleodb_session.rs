@@ -1978,17 +1978,20 @@ mod tests {
         // the guard exists to protect.
         //
         // `with_isolated_config` because logout writes the config (it clears the
-        // rehydrate seed); the override is process-global, so the spawned thread
-        // sees it too.
+        // rehydrate seed), and the handoff because the logout under test runs on a
+        // SPAWNED thread - config resolution is per-thread, so without it the
+        // deferred logout would write a config file this test cannot see.
         crate::test_helpers::with_isolated_config(|| {
             let state = AppState::new().expect("state");
             let before = state.speleodb_session_generation();
             let (started, has_started) = std::sync::mpsc::channel();
             let (finished, has_finished) = std::sync::mpsc::channel();
+            let config = crate::test_helpers::ConfigHandoff::capture();
 
             let lock_ops = state.speleodb_lock_ops_guard();
             std::thread::scope(|scope| {
                 scope.spawn(|| {
+                    let _config = config.adopt();
                     started.send(()).expect("announce the thread is running");
                     let _ = state.speleodb_logout();
                     finished.send(()).expect("announce the logout got through");

@@ -1460,15 +1460,17 @@ impl Config {
 
     /// Get the config file path
     pub fn config_path() -> Result<PathBuf> {
-        // Tests redirect the config path to a temp dir (see
-        // `crate::test_helpers::isolated_config`) so they never read or pollute
-        // the developer's real `~/.config/stalagmight/config.toml`.
-        // `any(test, feature = "test-support")`, matching the helper's own
-        // gate: the root crate's tests isolate their config through this hook
-        // too, and for THEIR builds this crate is a dependency - `cfg(test)`
-        // here would be off, and the override they set would be ignored.
+        // Under test this resolves PER THREAD - a temp dir of the calling
+        // thread's own unless a guard says otherwise - so no test reads or
+        // pollutes the developer's real `~/.config/stalagmight/config.toml`, and
+        // no test can land a write in another's file (#522). See
+        // `crate::test_helpers` for the modes and the spawned-thread handoff.
+        // `any(test, feature = "test-support")`, matching the helper's own gate:
+        // the root crate's tests isolate their config through this hook too, and
+        // for THEIR builds this crate is a dependency - `cfg(test)` here would
+        // be off and their isolation would be ignored.
         #[cfg(any(test, feature = "test-support"))]
-        if let Some(dir) = crate::test_helpers::config_path_override() {
+        if let Some(dir) = crate::test_helpers::current_config_dir() {
             return Ok(dir.join("config.toml"));
         }
         if let Some(dir) = crate::app_dirs::config_dir() {

@@ -107,16 +107,17 @@ deliberately NOT drawn: it is read from the config struct at save time and
 `save_project` writes that struct back out through `Config::save()`, so a drawn
 value would outlive the moves that drew it.
 
-**Config isolation is mandatory in these modules.** `AppState::new()` LOADS the
-global config and every save reaches `note_recent_project` -> `Config::save()`,
-which WRITES it, so every test in the nine fuzz/property modules opens with
-`let _config = crate::test_helpers::isolated_config();`. Without it a run
-rewrites the developer's real `~/.config/stalagmight/config.toml` (its
-`recent_projects` fills with dead `/tmp/.tmpXXXX/*.stalx` entries), and the
-write races the process-global override that guard installs - so a fuzz save can
-land inside a sibling config test's isolated config and fail it. To check a
-module still holds the line, run it with the config dir redirected and assert
-nothing was written:
+**Config isolation is on by default, and these modules ask for it anyway.**
+`AppState::new()` LOADS the global config and every save reaches
+`note_recent_project` -> `Config::save()`, which WRITES it. `Config::config_path()`
+resolves PER THREAD under test (see [Config isolation](#config-isolation) below),
+so every test in the nine fuzz/property modules is off the real
+`~/.config/stalagmight/config.toml` and off every sibling's file whether it says
+so or not; they still open with `let _config = crate::test_helpers::isolated_config();`
+because that gives the whole test ONE dir whose path it can name. To check that
+nothing in a module resolves the config through the ENVIRONMENT (which is what a
+missed `real_config_resolution` would look like), point the config dir at a temp
+dir and assert nothing was written:
 
 ```bash
 XDG_CONFIG_HOME=$(mktemp -d) \
@@ -1420,6 +1421,79 @@ mod tests {
 ```
 
 Async tests use `#[tokio::test]`.
+
+### Config isolation
+
+`AppState::new()` LOADS the global config and much of the state module writes it
+back (`note_recent_project` -> `Config::save()`), so any test that builds an
+`AppState` reads and writes one file. Under test - `cfg(any(test, feature =
+"test-support"))` - `Config::config_path()` resolves through
+`crate::test_helpers`, and the default for a thread that never asked for
+anything is **a temp dir of that thread's own**, created on first use and removed
+when the thread exits. libtest runs each `#[test]` on a thread of its own, so
+every test is isolated from the developer's real
+`~/.config/stalagmight/config.toml` and from every sibling test **with no
+opt-in**. (One remote exception: when libtest cannot spawn a thread it runs that
+test on the MAIN thread, which shares its dir with every other test that lands
+there - a test that needs a dir nothing has ever written to still takes
+`isolated_config`.)
+
+That is the fix for [#522](https://github.com/Stalagmight/Stalagmight/issues/522).
+Isolation used to be a process-global override cell taken under a process-global
+mutex, which cost two distinct hazards:
+
+- With no override live, an unguarded test resolved to the developer's real
+  `config.toml` and rewrote it (its `recent_projects` filling with dead
+  `/tmp/.tmpXXXX/*.stalx` entries).
+- While ANY test held the override, an unguarded test's save resolved **into
+  that test's isolated dir**. That is #522: an unguarded test atomically renamed
+  its own `config.toml` over an isolated test's file, between that test's save
+  and its read-back, and failed an assertion about keychain retry logic with an
+  environment problem.
+
+| helper | what it does |
+|---|---|
+| (nothing) | this thread's own temp dir - the default |
+| `isolated_config()` | a fresh temp dir for this thread until the guard drops, whose `path()` the test can name (to seed a config, or to squat it and force a save failure). Nests: dropping it restores the guard it replaced |
+| `with_isolated_config(f)` | the same, around a closure |
+| `current_config_dir()` | where this thread resolves right now. `Some(dir)` always, unless the thread is under `real_config_resolution()`, which is the only meaning of `None`: a temp dir that cannot be created panics rather than degrading to the real path |
+| `ConfigHandoff::capture()` / `.adopt()` | share the parent's config FILE (and keep its dir alive) in a thread it spawns |
+| `real_config_resolution()` | resolve for real (`app_dirs`, then `directories` over the environment) |
+
+**The one trap is a spawned thread.** It is a new thread, so by default it gets a
+dir of its own rather than the spawning test's. That is usually what you want; a
+test whose workers must write ONE config file (a concurrent-save race, or a
+worker whose write the parent reads back) has to say so:
+
+```rust
+let handoff = crate::test_helpers::ConfigHandoff::capture(); // on the test's thread
+let mine = handoff.clone();
+std::thread::spawn(move || {
+    let _config = mine.adopt();   // inside the worker; BIND it, the guard is the adoption
+    // every Config::load()/save() here is the parent's file
+});
+```
+
+Three tests need it today: the worker pool in
+`src-tauri/crates/core/src/core/state/concurrency_tests.rs` (its saves persist
+recents), the config lost-update race in `src-tauri/src/commands/command_tests.rs`,
+and `logout_waits_for_an_in_flight_lock_operation` in
+`src-tauri/crates/core/src/core/state/speleodb_session.rs` (the logout under test
+runs on the worker). The first two would pass VACUOUSLY without it - each worker
+would race a private file - so both assert from inside the worker that they are on
+the parent's path.
+
+`real_config_resolution()` is for the handful of tests that drive
+`config_path()` itself, by pointing `XDG_CONFIG_HOME` (or `HOME`, which is what
+the `directories` crate reads on macOS) at an unwritable directory to force a
+save failure. Those guards serialize against each other, because the environment
+they mutate is process-wide, and nothing else resolves the CONFIG PATH through
+the environment. They do **not** serialize against code that reads the
+environment for other purposes - `TempDir::new()` reads `TMPDIR`, and
+`directories::UserDirs` reads `HOME` for the default project location - which
+raced those three tests before this change and still does. The cure there is a
+config root injected rather than an env var mutated, which is a bigger change
+than #522.
 
 ### In-memory SQLite
 
