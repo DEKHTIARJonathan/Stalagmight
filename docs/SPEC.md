@@ -1948,7 +1948,8 @@ not simplified: no path simplification, no station merging, no zoom-based hiding
 ### 13.3 Data Table Virtualization
 
 Library: TanStack Virtual, always on - there is no row-count threshold. The shot
-grid virtualizes its rows at `ROW_HEIGHT` = 33 px with `overscan: 8`
+grid virtualizes its rows at `ROW_HEIGHT` = 33 px (defined in
+`src/components/common/SpreadsheetGrid/types.ts`) with `overscan: 8`
 (`src/components/common/SpreadsheetGrid/SpreadsheetGrid.tsx`).
 
 ### 13.4 Auto-Save Debouncing
