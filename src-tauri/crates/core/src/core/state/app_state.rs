@@ -758,19 +758,39 @@ impl AppState {
                 // loaded from the .stalx), and serde rebuilds `Section`s
                 // field-by-field - never through `Section::new`, so neither the
                 // open-refusal in `persistence/sqlite/read.rs` nor the
-                // `restore_section` bound can see an over-bound id arriving
-                // here. Refuse the restore outright: with such a section live,
-                // the first uuid-index or save-path encode is back in the
-                // debug-panic / release-wrap regime the bound exists to end.
+                // `restore_section` bound can see a hostile value arriving
+                // here. Two fields are load-bearing for the shot-id encode and
+                // both come straight from the JSON:
+                // - `id` past MAX_SECTION_ID puts the first uuid-index or
+                //   save-path encode back in the debug-panic / release-wrap
+                //   regime the bound exists to end;
+                // - `next_shot_id` outside the section's stride window makes
+                //   the next `add_shot` (`self.next_shot_id += 1`) panic in
+                //   debug or wrap into another section's id space in release
+                //   (Codex, PR #575). A legit counter always sits inside
+                //   [id * STRIDE, (id + 1) * STRIDE] - `Section::new` starts it
+                //   at the window base and the max-shots-per-section check caps
+                //   growth. Upper bound in u64: for id = MAX_SECTION_ID the
+                //   window end is u32::MAX + 1.
+                // Refuse the whole restore rather than repair it: a snapshot is
+                // a before/after pair, and a "fixed" one no longer restores the
+                // state it recorded.
+                let window_violation = |s: &crate::models::Section| {
+                    let base = u64::from(s.id) * u64::from(crate::models::FEATURE_ID_STRIDE);
+                    let end = base + u64::from(crate::models::FEATURE_ID_STRIDE);
+                    let counter = u64::from(s.next_shot_id);
+                    counter < base || counter > end
+                };
                 if let Some(section) = restored
                     .sections
                     .iter()
-                    .find(|s| s.id > crate::models::MAX_SECTION_ID)
+                    .find(|s| s.id > crate::models::MAX_SECTION_ID || window_violation(s))
                 {
                     tracing::warn!(
                         section_id = section.id,
+                        next_shot_id = section.next_shot_id,
                         max = crate::models::MAX_SECTION_ID,
-                        "Refusing snapshot restore: section id past the shot-id encode bound"
+                        "Refusing snapshot restore: section id or shot counter outside the shot-id encode bound"
                     );
                     return false;
                 }

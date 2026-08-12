@@ -4418,3 +4418,49 @@ fn a_snapshot_restore_with_an_over_bound_section_id_is_refused() {
         "no hostile section may be installed"
     );
 }
+
+/// PR #575 Codex finding: `next_shot_id` is serde-carried too, so a snapshot
+/// with a LEGAL section id but a hostile counter (u32::MAX here) used to pass
+/// the id-only guard - and the next `add_shot` (`next_shot_id += 1`) panics in
+/// debug or wraps into another section's id space in release. The window check
+/// refuses it; a legitimate serialize -> restore round trip must still pass.
+#[test]
+fn a_snapshot_restore_with_a_hostile_shot_counter_is_refused() {
+    let mut hostile = crate::models::Project::new("Hostile Counter".to_string(), None);
+    hostile.add_section(crate::models::SectionData::default());
+    assert!(
+        hostile.sections[0].id <= crate::models::MAX_SECTION_ID,
+        "precondition: the id itself is legal"
+    );
+    hostile.sections[0].next_shot_id = u32::MAX;
+    let json = serde_json::to_string(&hostile).unwrap();
+
+    let mut slot = Some(crate::models::Project::new("Live".to_string(), None));
+    assert!(
+        !AppState::restore_snapshot_into(&mut slot, &json),
+        "a hostile shot counter must be refused"
+    );
+    assert!(
+        slot.unwrap().sections.is_empty(),
+        "nothing may be installed"
+    );
+
+    // The guard must not over-refuse: a real project with shots serializes and
+    // restores cleanly.
+    let mut legit = crate::models::Project::new("Legit".to_string(), None);
+    legit.add_section(crate::models::SectionData {
+        shots: vec![ShotData {
+            length: 5.0,
+            azimuth_in: 90.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let json = serde_json::to_string(&legit).unwrap();
+    let mut slot = Some(crate::models::Project::new("Live".to_string(), None));
+    assert!(
+        AppState::restore_snapshot_into(&mut slot, &json),
+        "a legitimate snapshot must still restore"
+    );
+    assert_eq!(slot.unwrap().sections.len(), 1);
+}
