@@ -1281,6 +1281,32 @@ fn test_get_project_state_none_when_no_project() {
     assert!(project::get_project_state(state(&app)).is_none());
 }
 
+/// The depth stats the frontend gets are the ABSOLUTE station range, matching
+/// the station z on the very same payload - not the per-section delta walk that
+/// reported 0..3 for a survey that never leaves 5..8 m (#481).
+#[test]
+fn test_get_project_state_depth_stats_match_station_z() {
+    let app = app_with_state();
+    create_project(&app);
+    create_section_with_shots(
+        &app,
+        vec![
+            shot_data_with_depth(10.0, 5.0, 6.0),
+            shot_data_with_depth(10.0, 6.0, 8.0),
+        ],
+    );
+
+    let project_state = project::get_project_state(state(&app)).expect("project state");
+    let depths: Vec<f64> = project_state
+        .stations
+        .iter()
+        .map(|s| s.coordinates.z)
+        .collect();
+    assert_eq!(depths, vec![5.0, 6.0, 8.0]);
+    assert_eq!(project_state.stats.min_depth, 5.0);
+    assert_eq!(project_state.stats.max_depth, 8.0);
+}
+
 #[test]
 fn test_close_project_clears_state() {
     let app = app_with_state();

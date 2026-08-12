@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Project depth statistics reported a made-up range** - the min/max depth carried with the project statistics was a per-section walk of depth *changes* seeded at zero, so a survey that never leaves 30-35 m was described as 0-5 m, and two sections at different depths cancelled instead of combining. It is now the real range of the station depths shown everywhere else in the app ([#481](https://github.com/Stalagmight/Stalagmight/issues/481))
+
 ## [0.5.0] - 2026-08-10
 
 The first release with builds for all three platforms. The headline additions are

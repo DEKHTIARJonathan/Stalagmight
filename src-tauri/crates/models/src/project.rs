@@ -480,7 +480,11 @@ pub struct ProjectStats {
     pub section_count: usize,
     pub shot_count: usize,
     pub total_length: f64,
+    /// Shallowest absolute station z. Filled by the caller from
+    /// [`Project::depth_range`], never by [`Project::stats`] (#481).
     pub min_depth: f64,
+    /// Deepest absolute station z. Same source as
+    /// [`min_depth`](Self::min_depth).
     pub max_depth: f64,
     pub station_count: usize,
     pub loop_count: usize,

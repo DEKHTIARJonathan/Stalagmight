@@ -257,8 +257,6 @@ pub struct SectionStats {
     /// unchanged by #27 so the length users already read does not silently shift
     /// on upgrade; use [`swum_length`](Self::swum_length) for the divable figure.
     pub total_length: f64,
-    pub min_depth: f64,
-    pub max_depth: f64,
     /// Sum of the lengths a diver actually swims: excludes
     /// [`ShotKind::Reference`] (a non-swimmable survey tie) but keeps
     /// [`ShotKind::Jump`] (a swum shortcut). Issue #27 q13.
@@ -694,19 +692,15 @@ impl Section {
     }
 
     /// Calculate statistics for this section
-    /// Note: min_depth and max_depth are computed from accumulated z-coordinates
-    /// (like station positions) not from raw shot depth_in/depth_out values.
+    ///
+    /// Depth is deliberately absent: it is only meaningful as the ABSOLUTE
+    /// station range, which needs the computed stations rather than this
+    /// section's shots, so it lives on `ProjectStats` alone (#481).
     pub fn stats(&self) -> SectionStats {
         let mut total_length = 0.0;
         let mut swum_length = 0.0;
         let mut jump_count = 0;
         let mut reference_count = 0;
-
-        // Compute min/max from accumulated z-coordinates (station depths)
-        // First station starts at z=0
-        let mut current_z: f64 = 0.0;
-        let mut min_depth: f64 = 0.0;
-        let mut max_depth: f64 = 0.0;
 
         for shot in &self.shots {
             total_length += shot.length;
@@ -721,18 +715,11 @@ impl Section {
                 // the divable length (#27 q13).
                 ShotKind::Reference => reference_count += 1,
             }
-
-            // Accumulate depth change (same as station computation)
-            current_z += shot.depth_out - shot.depth_in;
-            min_depth = min_depth.min(current_z);
-            max_depth = max_depth.max(current_z);
         }
 
         SectionStats {
             shot_count: self.shots.len(),
             total_length,
-            min_depth,
-            max_depth,
             swum_length,
             jump_shot_count: jump_count,
             reference_shot_count: reference_count,
@@ -1185,15 +1172,11 @@ mod tests {
 
         assert_eq!(stats.shot_count, 0);
         assert_eq!(stats.total_length, 0.0);
-        assert_eq!(stats.min_depth, 0.0);
-        assert_eq!(stats.max_depth, 0.0);
         assert_eq!(stats.reference_shot_count, 0);
     }
 
     #[test]
     fn test_stats_single_shot() {
-        // Shot with depth_in=5.0, depth_out=8.0 → dz=3.0
-        // Station 0: z=0, Station 1: z=3.0
         let section = Section::new(
             0,
             SectionData {
@@ -1206,16 +1189,11 @@ mod tests {
 
         assert_eq!(stats.shot_count, 1);
         assert_eq!(stats.total_length, 10.0);
-        assert_eq!(stats.min_depth, 0.0); // First station at z=0
-        assert_eq!(stats.max_depth, 3.0); // Second station at z=3 (depth_out - depth_in)
         assert_eq!(stats.reference_shot_count, 0);
     }
 
     #[test]
     fn test_stats_multiple_shots() {
-        // Shot 1: dz = 12-10 = 2, z: 0→2
-        // Shot 2: dz = 15-12 = 3, z: 2→5
-        // Shot 3: dz = 8-15 = -7, z: 5→-2
         let section = Section::new(
             0,
             SectionData {
@@ -1232,8 +1210,6 @@ mod tests {
 
         assert_eq!(stats.shot_count, 3);
         assert_eq!(stats.total_length, 15.0); // 5 + 7 + 3
-        assert_eq!(stats.min_depth, -2.0); // Station 3 at z=-2
-        assert_eq!(stats.max_depth, 5.0); // Station 2 at z=5
     }
 
     #[test]
@@ -1284,27 +1260,6 @@ mod tests {
         assert_eq!(stats.swum_length, 8.0); // 5 + 3
         assert_eq!(stats.jump_shot_count, 1);
         assert_eq!(stats.reference_shot_count, 1);
-    }
-
-    #[test]
-    fn test_stats_negative_depths() {
-        // Shot 1: dz = -5 - (-10) = 5, z: 0→5
-        // Shot 2: dz = 2 - (-5) = 7, z: 5→12
-        let section = Section::new(
-            0,
-            SectionData {
-                shots: vec![
-                    test_shot_data_with_depths(5.0, -10.0, -5.0),
-                    test_shot_data_with_depths(3.0, -5.0, 2.0),
-                ],
-                ..Default::default()
-            },
-        );
-
-        let stats = section.stats();
-
-        assert_eq!(stats.min_depth, 0.0); // First station at z=0
-        assert_eq!(stats.max_depth, 12.0); // Last station at z=12
     }
 
     // === Section Data Conversion Tests ===
@@ -1427,8 +1382,6 @@ mod tests {
         let stats = SectionStats {
             shot_count: 5,
             total_length: 42.5,
-            min_depth: 3.0,
-            max_depth: 25.0,
             swum_length: 36.5,
             jump_shot_count: 2,
             reference_shot_count: 1,
@@ -1439,8 +1392,6 @@ mod tests {
 
         assert_eq!(deserialized.shot_count, 5);
         assert_eq!(deserialized.total_length, 42.5);
-        assert_eq!(deserialized.min_depth, 3.0);
-        assert_eq!(deserialized.max_depth, 25.0);
         assert_eq!(deserialized.swum_length, 36.5);
         assert_eq!(deserialized.jump_shot_count, 2);
         assert_eq!(deserialized.reference_shot_count, 1);
