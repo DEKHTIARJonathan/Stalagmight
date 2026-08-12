@@ -108,9 +108,11 @@ Three workflows gate `master`:
   steps live here rather than in `check` because `check` path-ignores
   `e2e-playwright/**` - the very changes they guard.
 - **`leak-scan.yml`** - `lint:private-leaks` + `lint:no-em-dash` over the whole
-  tracked tree. It is the one workflow with **no** `paths-ignore`, because
-  `check` and `smoke` both skip `**/*.md` and `docs/**` - exactly where a leak or
-  a Unicode dash lands.
+  tracked tree, plus `lint:third-party` (THIRD-PARTY-LICENSES.md against the
+  hashes of the two lockfiles, the generator and its cargo-about config). It is
+  the one workflow with **no** `paths-ignore`, because `check` and `smoke` both
+  skip `**/*.md` and `docs/**` - exactly where a leak, a Unicode dash or a stale
+  attribution bundle lands.
 
 `check` and `smoke` use blocklist-style `paths-ignore`, so a new or unlisted path
 defaults to *running*. Two edges are load-bearing and must not be widened:

@@ -89,7 +89,7 @@ exemptions don't go stale. When you add a test that uses a new denied lint
 (e.g. a `println!` diagnostic), add that lint to the module's `#[expect]`.
 
 > Do **not** introduce `clippy.toml` `allow-*-in-tests` - it conflicts with the
-> ~30 existing `#[expect]` attributes (it suppresses the lint, leaving them
+> ~55 existing `#[expect]` attributes (it suppresses the lint, leaving them
 > unfulfilled). Follow the existing idiom.
 
 ## Extending the policy: measure, don't vibe
