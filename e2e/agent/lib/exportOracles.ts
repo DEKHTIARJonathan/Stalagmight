@@ -1021,13 +1021,15 @@ function lrudSentinel(value: number | null): string {
  *
  * COMMENTS ARE DELIBERATELY NOT IN THE KEY, and that is a corrected premise
  * rather than a weakening. A comment does not belong to a SHOT across this round
- * trip: the exporter co-encodes station comments INTO the shot comment with
- * U+200B separators, and the importer moves them back out onto stations when
- * "comments on stations" is on (`core::comment_split::split`) - which is the
- * DEFAULT, since `projectStore.executeTmlImport` sends `commentsOnStations ?? true`.
- * So a shot comment legitimately arrives as a STATION comment on that shot's
- * to-station, and keying the shot on it reports every comment as lost while the
- * text is sitting right there. Measured on seed 1.
+ * trip: the exporter co-encodes station comments INTO the shot comment with a
+ * U+200B line marker (`models::comment_split`), and the importer moves the
+ * unmarked lines out onto stations when "comments on stations" is on - which is
+ * the DEFAULT, since `projectStore.executeTmlImport` sends
+ * `commentsOnStations ?? true`. Shot comments themselves stay on the shot since
+ * #564 (every exported shot comment is marked), but a STATION comment still
+ * legitimately moves - it lands in `project.station_comments`, which
+ * `get_project_state` does not expose - so keying the shot on comment text
+ * would report movement/invisibility as loss. Measured on seed 1.
  *
  * Text survival is therefore its own project-wide multiset
  * (`commentMultisetDelta`), which asks the question that survives the move.
@@ -1286,9 +1288,10 @@ export function checkShotMultiset(
       lines.push(`      ${JSON.stringify(delta.key.slice(0, 60))}  x${delta.before} -> x${delta.after}`);
     }
     if (commentDeltas.length > 8) lines.push(`      ... and ${commentDeltas.length - 8} more`);
-    lines.push(`      A shot comment legitimately arrives as a STATION comment (the importer's`);
-    lines.push(`      "comments on stations" split), and the exporter's U+200B co-encoding is`);
-    lines.push(`      already undone by splitting - so this is text that is simply GONE.`);
+    lines.push(`      A STATION comment legitimately moves into project.station_comments (which`);
+    lines.push(`      get_project_state does not expose); shot comments stay on the shot (#564),`);
+    lines.push(`      and the U+200B co-encoding is undone by splitting - with this scenario's`);
+    lines.push(`      commentsOnStations: false import, a differing text really is GONE.`);
   }
   lines.push(`    Section STRUCTURE is deliberately not compared (branch fragmentation, #412).`);
   lines.push(`  ${reproduce}`);

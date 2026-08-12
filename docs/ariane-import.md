@@ -359,7 +359,7 @@ Parsed but dropped:
   whitespace does not round-trip: `"\tleading tab"` comes back as `"leading tab"`. A literal CR is
   lost twice over - XML 1.0 line-end handling normalises it to LF before the reader sees it, and
   then the trim removes it - so writing `&#13;` would not help either. Interior whitespace, and the
-  U+200B station-comment separator (not whitespace in Unicode terms), are unaffected. CSV export is
+  U+200B shot-comment marker (not whitespace in Unicode terms), are unaffected. CSV export is
   lossless here by contrast; this is a property of the XML text format, not of the comment.
 - **Per-shot surveyor / date / color survive as far as the section model allows.**
   A run is cut per trip ([The trip cut](#the-trip-cut)), so several teams over
