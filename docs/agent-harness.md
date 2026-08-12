@@ -301,11 +301,17 @@ not rebuild.
    `tauri.conf.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` /
    `src-tauri/build.rs` / `package.json` / `pnpm-lock.yaml` / `index.html` /
    `vite.config.ts` / `tsconfig.json` / `postcss.config.js` / `tailwind.config.js` /
-   `.env` / `.env.local` / `.env.production` is newer than the threshold
-   described below (the build's start time when a stamp has one, the binary's
-   own mtime otherwise). This list is the input surface of the WHOLE binary
-   pipeline - vite's frontend leg and cargo's backend leg - not the tracked
-   source tree in general, and it is a documented heuristic rather than a
+   `.env` / `.env.local` / `.env.production` / `.env.production.local` (vite's
+   full mode-aware load order for `pnpm build`, which defaults to production
+   mode) / `.cargo/config.toml` / `.cargo/config` / `src-tauri/.cargo/config.toml` /
+   `src-tauri/.cargo/config` (cargo's config hierarchy, read from the build cwd
+   upward and shaping the binary via target dir / rustflags / profile
+   overrides - commonly local-only and uncommitted, which is exactly why the
+   freshness scan rather than `git status` has to see them) is newer than the
+   threshold described below (the build's start time when a stamp has one, the
+   binary's own mtime otherwise). This list is the input surface of the WHOLE
+   binary pipeline - vite's frontend leg and cargo's backend leg - not the
+   tracked source tree in general, and it is a documented heuristic rather than a
    derivation from either build tool's own dependency graph - issue #554
    widened it (the cargo half, the lockfile, the config files, `public/`) on
    the principle that a green run over the wrong bundle is worse than a red
@@ -345,16 +351,19 @@ untracked input is a gap in the list above, not something this comparison can
 see). The workaround this used to require (manually passing `build: "force"`
 after editing mid-build) is no longer necessary.
 
-`buildStartedAtMs` is trusted only when `0 < buildStartedAtMs <= binaryMtimeMs`
-in the same stamp - a real build cannot start after it finished linking. Two
-independent clocks feed those two numbers (the harness process clock and the
-filesystem), and a stamp that fails the check falls back to `binaryMtimeMs`
-instead: an untrusted, future-dated `buildStartedAtMs` would otherwise make
-every later edit read fresh forever, and a filesystem whose mtimes trail the
-process clock would otherwise make every source read newer than a threshold
-that never advances - a rebuild loop that never converges (and, since each
-rebuild re-stamps with the same lagging clock, one that also defeats
-`fuzz-matrix`'s warm-up-alone skip).
+`buildStartedAtMs` is trusted only when `0 < buildStartedAtMs <= binaryMtimeMs
++ BUILD_START_SLACK_MS` in the same stamp (2000ms, absorbing legitimate
+filesystem mtime granularity - sub-millisecond on ext4/APFS, up to ~1s on
+HFS+, up to ~2s on FAT worst case - rather than misreading it as clock skew,
+which a plain `<=` did and CI caught) - a real build does not start long after
+it finished linking. Two independent clocks feed those two numbers (the
+harness process clock and the filesystem), and a stamp that fails the check
+falls back to `binaryMtimeMs` instead: an untrusted, future-dated
+`buildStartedAtMs` would otherwise make every later edit read fresh forever,
+and a filesystem whose mtimes trail the process clock would otherwise make
+every source read newer than a threshold that never advances - a rebuild loop
+that never converges (and, since each rebuild re-stamps with the same lagging
+clock, one that also defeats `fuzz-matrix`'s warm-up-alone skip).
 
 The Tier 2 OS helper (`e2e/agent/os/helper.ts`) keeps the older, binary-mtime-
 only comparison; its build is a handful of small crates finishing in seconds,

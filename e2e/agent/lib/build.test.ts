@@ -263,17 +263,24 @@ describe('sourceStaleReason', () => {
 
   // Pre-PR review finding: buildStartedAtMs and binaryMtimeMs are two
   // independent clocks (the harness process clock vs. the filesystem) and are
-  // not guaranteed to agree. A `buildStartedAtMs` LATER than the same stamp's
-  // `binaryMtimeMs` cannot describe a real build (a build always starts before
-  // it finishes linking) - candidates are an NTP step backwards, a hand-edited
-  // stamp, or a filesystem whose mtimes trail the process clock.
-  describe('the buildStartedAtMs <= binaryMtimeMs guard', () => {
+  // not guaranteed to agree. A `buildStartedAtMs` far LATER than the same
+  // stamp's `binaryMtimeMs` cannot describe a real build (a build cannot start
+  // long after it finished linking) - candidates are an NTP step backwards, a
+  // hand-edited stamp, or a filesystem whose mtimes trail the process clock.
+  // Second review round (CI failure on PR #574): the guard must NOT be exact
+  // `<=` - filesystem mtime granularity can legitimately put `binaryMtimeMs`
+  // fractionally BELOW `buildStartedAtMs` even in a correct build (observed:
+  // 0.08ms on the CI filesystem), so a `BUILD_START_SLACK_MS` window absorbs
+  // that before anything is treated as genuine skew.
+  describe('the buildStartedAtMs vs binaryMtimeMs guard (with FS-granularity slack)', () => {
     // RED-FIRST case (a), future-dated buildStartedAtMs: verified red against
     // the unguarded comparison by hand - `threshold = stamp.buildStartedAtMs ??
     // stamp.binaryMtimeMs` alone would pick BUILD_FINISHED + 1e9 as the
     // threshold, and BUILD_FINISHED + 1000 does not exceed that, so the
     // unguarded code calls this fresh. Without the guard, EVERY later edit
-    // reads fresh forever - worse than the pre-#554 behavior it replaces.
+    // reads fresh forever - worse than the pre-#554 behavior it replaces. The
+    // skew here (1e9 ms) is many orders past BUILD_START_SLACK_MS (2000ms), so
+    // this direction is unaffected by the slack.
     it('rejects a future-dated buildStartedAtMs and falls back to binaryMtimeMs', () => {
       const futureStamp: E2EBuildStamp = {
         ...stampWithStart,
@@ -295,6 +302,7 @@ describe('sourceStaleReason', () => {
     // reads as newer than a threshold that never advances - a rebuild loop
     // that never converges. Falling back to binaryMtimeMs keeps this input
     // fresh-eligible via the SAME code path a well-formed stamp would use.
+    // Unaffected by the slack for the same reason as the case above.
     it('keeps a source older than binaryMtimeMs fresh-eligible despite an absurd future start', () => {
       const futureStamp: E2EBuildStamp = {
         ...stampWithStart,
@@ -315,6 +323,58 @@ describe('sourceStaleReason', () => {
       expect(sourceStaleReason(BUILD_FINISHED - 1000, BUILD_FINISHED, instantStamp)).toBeNull();
       expect(sourceStaleReason(BUILD_FINISHED + 1000, BUILD_FINISHED, instantStamp)).toBe(
         'a source file changed after the build started',
+      );
+    });
+
+    // The exact CI failure, as a fixture: buildStartedAtMs = 1786499818461,
+    // binaryMtimeMs = 1786499818460.9158 (0.0842ms below - a plain float floor
+    // from fs.statSync on the CI filesystem). RED against the pre-slack exact
+    // `<=` guard: `1786499818461 <= 1786499818460.9158` is false, so that guard
+    // rejected this real, non-skewed stamp and silently fell back to the
+    // pre-#554 binMtime-only comparison. Threshold must still be BUILD-START-
+    // OR-MIN (here, binaryMtimeMs itself, since it is the smaller of the two)
+    // and the reason must still say "changed after the build started" - this
+    // must NOT be classified as skew.
+    it('treats the floored-mtime CI case as within slack, not as clock skew', () => {
+      const buildStartedAtMs = 1_786_499_818_461;
+      const binaryMtimeMs = 1_786_499_818_460.9158;
+      const flooredStamp: E2EBuildStamp = { ...stampWithStart, buildStartedAtMs, binaryMtimeMs };
+
+      // A source landing between the floored mtime and the nominal start must
+      // still be caught - min(buildStartedAtMs, binaryMtimeMs) is binaryMtimeMs
+      // here, and this reason text is the "trustworthy start" one, not the
+      // skewed-fallback one.
+      expect(sourceStaleReason(binaryMtimeMs + 1, binaryMtimeMs, flooredStamp)).toBe(
+        'a source file changed after the build started',
+      );
+      // A source strictly before the floored mtime is still fresh-eligible.
+      expect(sourceStaleReason(binaryMtimeMs - 1, binaryMtimeMs, flooredStamp)).toBeNull();
+    });
+
+    it('accepts buildStartedAtMs exactly BUILD_START_SLACK_MS past binaryMtimeMs (the slack boundary)', () => {
+      const SLACK_MS = 2000;
+      const stampAtBoundary: E2EBuildStamp = {
+        ...stampWithStart,
+        buildStartedAtMs: BUILD_FINISHED + SLACK_MS,
+      };
+      // Within slack: threshold is min(buildStartedAtMs, binaryMtimeMs) =
+      // binaryMtimeMs (the smaller), so a source just past it is still caught,
+      // with the "trustworthy start" reason.
+      expect(sourceStaleReason(BUILD_FINISHED + 1, BUILD_FINISHED, stampAtBoundary)).toBe(
+        'a source file changed after the build started',
+      );
+    });
+
+    it('rejects buildStartedAtMs one ms past the slack boundary', () => {
+      const SLACK_MS = 2000;
+      const stampPastBoundary: E2EBuildStamp = {
+        ...stampWithStart,
+        buildStartedAtMs: BUILD_FINISHED + SLACK_MS + 1,
+      };
+      // Past slack: treated as skew, falls back to binaryMtimeMs with the
+      // skewed-fallback reason.
+      expect(sourceStaleReason(BUILD_FINISHED + 1000, BUILD_FINISHED, stampPastBoundary)).toBe(
+        'a source file is newer than the binary',
       );
     });
   });
@@ -706,11 +766,19 @@ describe('builtFromFor', () => {
 
 // Pre-PR review finding: `sourceStaleReason`'s guard is only as good as what
 // the real writer actually produces. This pins the writer's OWN invariant -
-// buildStartedAtMs <= binaryMtimeMs - on a stamp `writeBuildStamp` itself
-// wrote, not on a hand-built fixture, so a future change to the write order
-// (e.g. moving `Date.now()` to capture buildStartedAtMs AFTER the binary is
-// written) shows up here even though every `sourceStaleReason` test above
-// still passes in isolation.
+// buildStartedAtMs within BUILD_START_SLACK_MS of binaryMtimeMs - on a stamp
+// `writeBuildStamp` itself wrote, not on a hand-built fixture, so a future
+// change to the write order (e.g. moving `Date.now()` to capture
+// buildStartedAtMs AFTER the binary is written, or introducing a delay large
+// enough to matter) shows up here even though every `sourceStaleReason` test
+// above still passes in isolation.
+//
+// Second review round: the assertion here is the ONE that actually failed in
+// CI - `fs.statSync` returned `binaryMtimeMs` floored 0.08ms below the
+// `buildStartedAtMs` captured moments earlier, which is legitimate filesystem
+// mtime truncation, not a bug in the writer. The assertion below checks the
+// GUARDED relation (within slack), not the exact `<=` that CI proved false
+// for a correct build.
 describe('writeBuildStamp', () => {
   let dir: string;
   let binaryFile: string;
@@ -726,11 +794,12 @@ describe('writeBuildStamp', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('records a buildStartedAtMs that never exceeds the binaryMtimeMs it reads off the same binary', () => {
+  it('records a buildStartedAtMs within BUILD_START_SLACK_MS of the binaryMtimeMs it reads off the same binary', () => {
     // Mirrors buildApp's real order: capture the start time, THEN produce the
     // binary (the build), THEN stamp. RED if that order were reversed (stamp
-    // captured after the binary write, or the binary write backdated) - the
-    // assertion below would fail on real output, not a synthetic case.
+    // captured long after the binary write) - the assertion below would fail
+    // on real output, not a synthetic case.
+    const SLACK_MS = 2000; // Mirrors build.ts's BUILD_START_SLACK_MS (FAT worst case).
     const buildStartedAtMs = Date.now();
     fs.writeFileSync(binaryFile, 'not really a binary');
 
@@ -751,7 +820,10 @@ describe('writeBuildStamp', () => {
     const written = readBuildStamp(stampFile);
     expect(written).not.toBeNull();
     expect(written?.buildStartedAtMs).toBe(buildStartedAtMs);
-    expect(written?.binaryMtimeMs).toBeGreaterThanOrEqual(written?.buildStartedAtMs ?? Number.POSITIVE_INFINITY);
+    // NOT an exact `<=`: filesystem mtime granularity can legitimately floor
+    // binaryMtimeMs a fraction below buildStartedAtMs (the CI failure this
+    // guards against) even though the writer's order is correct.
+    expect(written?.buildStartedAtMs).toBeLessThanOrEqual((written?.binaryMtimeMs ?? 0) + SLACK_MS);
     // And the guard in sourceStaleReason accepts what the real writer wrote.
     expect(sourceStaleReason(buildStartedAtMs - 1, written?.binaryMtimeMs ?? 0, written)).toBeNull();
   });

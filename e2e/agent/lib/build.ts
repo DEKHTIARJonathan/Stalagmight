@@ -95,6 +95,18 @@ export function needsE2eFeature(): boolean {
 // PATH dependency (`{ path = "../../vendor/compass_data" }`), so an edit
 // there recompiles into the same binary despite the crate being excluded from
 // the cargo workspace for lint-gate purposes only.
+//
+// The `.env*` set is vite's full mode-aware load order for `pnpm build`
+// (mode=production, since `vite build` defaults to it): `.env`, `.env.local`,
+// `.env.[mode]`, `.env.[mode].local` - all four, not the first three.
+//
+// The `.cargo/config.toml` (and legacy extensionless `.cargo/config`) entries
+// are included at both the repo root and `src-tauri/`, because cargo reads
+// this hierarchy from the build cwd upward and it shapes the binary (target
+// dir, rustflags, profile overrides). These are commonly LOCAL-ONLY and
+// uncommitted, which is exactly why the freshness scan - not git status -
+// must be the thing that notices them.
+//
 // Exported (rather than kept module-private) so a test can table-drive over
 // the list itself - dropping any single entry then goes red - instead of only
 // pinning the handful an author remembered to write a case for.
@@ -121,6 +133,11 @@ export const SOURCE_FILES = [
   '.env',
   '.env.local',
   '.env.production',
+  '.env.production.local',
+  path.join('.cargo', 'config.toml'),
+  path.join('.cargo', 'config'),
+  path.join('src-tauri', '.cargo', 'config.toml'),
+  path.join('src-tauri', '.cargo', 'config'),
 ];
 
 /** Newest mtime (ms) among files under `dir`, recursively; 0 if missing. */
@@ -473,6 +490,14 @@ export function stampStaleReasons(
 }
 
 /**
+ * Slack absorbed when checking `buildStartedAtMs` against `binaryMtimeMs` in
+ * the same stamp, to cover legitimate filesystem mtime granularity rather
+ * than genuine clock skew: sub-millisecond on ext4/APFS, up to ~1s on HFS+,
+ * up to ~2s on FAT - 2000ms is the FAT worst case.
+ */
+const BUILD_START_SLACK_MS = 2000;
+
+/**
  * Pure staleness decision for the file-TIMING half of the check: is
  * `newestSource` (the newest mtime among tracked build inputs) newer than the
  * moment the binary can be trusted to reflect?
@@ -494,27 +519,43 @@ export function stampStaleReasons(
  *
  * `buildStartedAtMs` is trusted only when it is a plausible start time for
  * the binary the SAME stamp records, i.e. `0 < buildStartedAtMs <=
- * binaryMtimeMs` - a real build always starts before (or the instant) it
- * finishes linking. Two clocks feed this field (the harness process clock for
- * `buildStartedAtMs`, the filesystem for `binaryMtimeMs`), and they are not
- * guaranteed to agree: an NTP step backwards between the two reads, a
- * hand-edited stamp, or a filesystem whose mtimes run ahead of the process
- * clock (VM/Docker shared mounts, some CI volumes) can all produce a
- * `buildStartedAtMs` that is LATER than `binaryMtimeMs`. Trusting it anyway is
- * worse in both directions than the pre-#554 behavior it replaces: a
- * future-dated value makes every later edit read fresh forever (case (a)), and
- * a filesystem lagging the process clock makes every source read newer than
+ * binaryMtimeMs + BUILD_START_SLACK_MS` - a real build starts before (or
+ * around) the instant it finishes linking. Two clocks feed this field (the
+ * harness process clock for `buildStartedAtMs`, the filesystem for
+ * `binaryMtimeMs`), and they are not guaranteed to agree even for a CORRECT
+ * build: filesystem mtime granularity can legitimately put `binaryMtimeMs`
+ * BELOW `buildStartedAtMs` - sub-millisecond truncation on ext4/APFS (seen in
+ * CI: a binary stamped 0.08ms below its own `Date.now()`), up to ~1s on
+ * HFS+, up to ~2s on FAT - and an exact `<=` guard would misclassify every
+ * one of those as clock-skewed and silently lose the mid-build race
+ * protection on exactly the filesystems coarse enough to need it.
+ * `BUILD_START_SLACK_MS` absorbs that legitimate case; only skew LARGER than
+ * the coarsest granularity in wide use is treated as untrustworthy: an NTP
+ * step backwards between the two reads, a hand-edited stamp, or a filesystem
+ * whose mtimes run ahead of the process clock (VM/Docker shared mounts, some
+ * CI volumes). Trusting an actually-skewed value would be worse in both
+ * directions than the pre-#554 behavior it replaces: a future-dated value
+ * makes every later edit read fresh forever (case (a)), and a filesystem
+ * lagging the process clock makes every source read newer than
  * `binaryMtimeMs` (case (b)) - and because each rebuild re-stamps with the
  * same lagging clock, that direction never converges, silently defeating
  * `fuzz-matrix`'s warm-up-alone skip too. Falling back to `binaryMtimeMs`
  * whenever the invariant fails keeps both failure modes bounded to "no worse
  * than before this fix".
+ *
+ * Within the accepted range the threshold is `Math.min(buildStartedAtMs,
+ * binaryMtimeMs)`, not `buildStartedAtMs` outright - stale-biased on both
+ * sides. A normal build uses `buildStartedAtMs` (the smaller value, closing
+ * the mid-build race). A build whose mtime floored below its start time uses
+ * `binaryMtimeMs` instead, which can only make MORE sources read as stale,
+ * never fewer - the bias this whole check exists for.
  */
 export function sourceStaleReason(newestSource: number, binMtime: number, stamp: E2EBuildStamp | null): string | null {
   if (stamp) {
     const startedAt = stamp.buildStartedAtMs;
-    const trustworthyStart = startedAt !== undefined && startedAt > 0 && startedAt <= stamp.binaryMtimeMs;
-    const threshold = trustworthyStart ? startedAt : stamp.binaryMtimeMs;
+    const trustworthyStart =
+      startedAt !== undefined && startedAt > 0 && startedAt <= stamp.binaryMtimeMs + BUILD_START_SLACK_MS;
+    const threshold = trustworthyStart ? Math.min(startedAt, stamp.binaryMtimeMs) : stamp.binaryMtimeMs;
     if (newestSource > threshold) {
       return trustworthyStart
         ? 'a source file changed after the build started'
