@@ -4357,3 +4357,38 @@ fn datum_stations(state: &AppState) -> Vec<StationRef> {
         .filter_map(|zd| project.resolve_key(&zd.station_ref))
         .collect()
 }
+
+/// #557: a PERSISTED undo entry reaches `restore_section` with a file-supplied
+/// section id, and `Section::restore_with_identity` -> `Section::new` computes
+/// `id * FEATURE_ID_STRIDE` unchecked. Live undo cannot mint an over-bound id
+/// (#556), so the guard exists purely for a crafted or corrupted undo table -
+/// the entry is refused, never constructed. Not `#[ignore]`d: written with its
+/// fix, per the module rule it guards the mechanism from day one.
+#[test]
+fn restoring_a_section_with_an_over_bound_id_is_refused() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Overbound Restore".to_string(),
+        location: None,
+    });
+
+    let hostile = crate::models::MAX_SECTION_ID + 1;
+    let result = state.restore_section(
+        hostile,
+        crate::models::SectionData::default(),
+        &crate::models::SectionIdentity::default(),
+    );
+    assert!(!result.success, "an over-bound restore must be refused");
+    let err = result.error.unwrap_or_default();
+    assert!(
+        err.contains(&hostile.to_string())
+            && err.contains(&crate::models::MAX_SECTION_ID.to_string()),
+        "the refusal must name the id and the bound: {err}"
+    );
+    // The refusal must leave the project untouched.
+    let project = state.get_project_state().unwrap();
+    assert!(
+        project.sections.is_empty(),
+        "no section may be constructed from an over-bound id"
+    );
+}
