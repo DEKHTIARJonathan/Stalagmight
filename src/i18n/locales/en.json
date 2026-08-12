@@ -1,5 +1,8 @@
 {
   "common": {
+    "a11y": {
+      "wizardMapResize": "Resize map panel"
+    },
     "toast": {
       "dismiss": "Dismiss notification: {{message}}"
     },
@@ -1450,6 +1453,10 @@
         "skip": "Skip (place later)",
         "gpsLat": "Latitude",
         "gpsLng": "Longitude",
+        "importStation": "Import station",
+        "section": "Section",
+        "station": "Station",
+        "stationIndexed": "Station {{index}}",
         "targetSection": "Target section",
         "targetStation": "Target station",
         "noSections": "No existing sections available",
