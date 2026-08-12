@@ -9,7 +9,7 @@ Update this file every time a new version is tagged.
 
 ### Fixed
 
-- **Project depth statistics reported a made-up range** - the min/max depth carried with the project statistics was a per-section walk of depth *changes* seeded at zero, so a survey that never leaves 30-35 m was described as 0-5 m, and two sections at different depths cancelled instead of combining. It is now the real range of the station depths shown everywhere else in the app ([#481](https://github.com/Stalagmight/Stalagmight/issues/481))
+- **Project depth statistics reported a made-up range** - the min/max depth in the project-statistics IPC payload was a per-section walk of depth *changes* seeded at zero: a survey that never leaves 30-35 m came through as 0-5 m, and two sections at different depths cancelled instead of combining. No screen displayed these two numbers (the panels compute their range from station depths directly), but any consumer of the payload would have disagreed with every depth shown in the app. The payload now carries the real station depth range ([#481](https://github.com/Stalagmight/Stalagmight/issues/481))
 
 ## [0.5.0] - 2026-08-10
 

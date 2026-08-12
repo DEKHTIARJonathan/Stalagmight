@@ -47,8 +47,10 @@ impl Project {
     /// and what disagreed with every depth the UI shows (#481). Empty input is
     /// `(0.0, 0.0)`, matching the frontend's own fallback.
     ///
-    /// Associated fn, filled onto [`ProjectStats`] by the caller that holds the
-    /// stations, like [`Self::calculate_penetration_with`].
+    /// Associated fn with no `&self` - it is a function of the stations alone.
+    /// The caller that holds the stations fills the result onto
+    /// [`ProjectStats`], next to the `penetration_distance` it computes via
+    /// [`Self::calculate_penetration_with`].
     pub fn depth_range(stations: &[Station]) -> (f64, f64) {
         if stations.is_empty() {
             return (0.0, 0.0);
