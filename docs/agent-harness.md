@@ -1353,9 +1353,9 @@ Gitignored; the 20 newest sessions are kept.
 
 - `app_start` fails `UND_ERR_INVALID_ARG` -> an error from webdriverio's undici
   HTTP layer. Check `HTTP_PROXY` / `NO_PROXY` in the environment first; on
-  Node >= 26 the cause is the shared undici global-dispatcher slot, which
-  `e2e/agent/lib/undici-dispatcher-pin.ts` pins back to a plain `Agent` -
-  confirm it is still imported ahead of `webdriverio`.
+  Node >= 26 the cause is the dispatcher pin (see "Runtime: the repo-pinned
+  Node" above) - confirm `undici-dispatcher-pin.ts` is still imported ahead of
+  `webdriverio`.
 - `window.__E2E_TEST__ not present` -> the binary was built without `VITE_E2E=1`.
   `build: "auto"` should have caught that before attach (see the build stamp
   below); if you land here anyway, rerun `app_start` with `build: "force"`.

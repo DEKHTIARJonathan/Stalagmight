@@ -186,7 +186,7 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Saving](docs/saving.md) | Save pipeline, auto-save, undo persistence, atomic writes |
 | [Inclination convention](docs/inclination.md) | Pitch is +down everywhere; where each importer normalises, and the v12 migration |
 | [SpeleoDB dev testing](docs/speleodb-dev-testing.md) | Dev box env vars, the superuser test account, env-gated self-seeding live tests, verified v2 API contract |
-| [Roadmap](docs/roadmap.md) | v1.0 phases, PRDs, backend changes |
+| [Roadmap](docs/roadmap.md) | Historical record of the v1.0 phases; live work is in the issue tracker |
 | [Telemetry](docs/telemetry.md) | Event reference, source tracking, adding telemetry to new features |
 | [IPC Type Generation](docs/ipc-typegen.md) | How IPC TS types are generated and updated |
 | [Performance](docs/performance.md) | Algorithm choices, renderer cost model, profiling guide |

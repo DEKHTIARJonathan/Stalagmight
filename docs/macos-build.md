@@ -114,7 +114,7 @@ The `e2e` feature is gated behind a Cargo feature flag (`[features] e2e = [...]`
 
 #### Prerequisites
 
-- `tauri-wd` must be installed from the pinned fix branch: `cargo install --git https://github.com/FumblingBarbell/tauri-webdriver --branch fix/resolve-element-refs-in-execute-sync tauri-webdriver-automation` (handled by `mac-setup.sh`)
+- `tauri-wd` must be installed from the pinned fix branch (step 6 of `mac-setup.sh` above; the pinned command lives there)
 
 #### Artifacts
 

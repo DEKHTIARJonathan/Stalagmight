@@ -2577,7 +2577,7 @@ Section Colors (auto-assigned):
 
 Map Colors:
 Grid: #333366
-Zero Datum Star: #ffd700 (Gold)
+Zero Datum Station: #ffd700 (Gold; enlarged dot on the map, star in map exports)
 Jump Shot: 50% opacity of the section color (#27)
 Reference Shot: 28% opacity of the section color (#27)
 Selection Highlight: #4ecdc4
