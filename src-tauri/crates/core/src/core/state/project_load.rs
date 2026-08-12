@@ -717,6 +717,10 @@ impl AppState {
         // Calculate penetration distance with computed stations
         stats.penetration_distance =
             project.calculate_penetration_with(&stations, include_reference_legs);
+        // Depth is the absolute station range, not a per-section delta walk (#481).
+        let (min_depth, max_depth) = crate::models::Project::depth_range(&stations);
+        stats.min_depth = min_depth;
+        stats.max_depth = max_depth;
         // Heartbeat after computation to indicate work completed
         progress.heartbeat(LoadingPhase::ComputingStatistics);
         check_cancelled!();

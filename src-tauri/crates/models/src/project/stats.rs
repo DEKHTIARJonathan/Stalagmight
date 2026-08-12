@@ -1,28 +1,24 @@
 use std::cmp::Ordering;
 
-use crate::GpsBounds;
+use crate::{GpsBounds, Station};
 
 use super::{Project, ProjectMetadata, ProjectStats};
 
 impl Project {
     /// Calculate project statistics
+    ///
+    /// The station-derived figures - `min_depth`, `max_depth` and
+    /// `penetration_distance` - come back as 0.0: they need the computed
+    /// stations, which this shot-only walk does not have. The caller fills them
+    /// from [`Self::depth_range`] and [`Self::calculate_penetration_with`].
     pub fn stats(&self) -> ProjectStats {
         let mut shot_count = 0;
         let mut total_length = 0.0;
-        let mut min_depth = f64::MAX;
-        let mut max_depth = f64::MIN;
 
         for section in &self.sections {
             let section_stats = section.stats();
             shot_count += section_stats.shot_count;
             total_length += section_stats.total_length;
-            min_depth = min_depth.min(section_stats.min_depth);
-            max_depth = max_depth.max(section_stats.max_depth);
-        }
-
-        if self.sections.is_empty() {
-            min_depth = 0.0;
-            max_depth = 0.0;
         }
 
         // Station count = shots + 1 per section (first station)
@@ -35,12 +31,39 @@ impl Project {
             section_count: self.sections.len(),
             shot_count,
             total_length,
-            min_depth,
-            max_depth,
+            min_depth: 0.0, // Calculated separately with stations
+            max_depth: 0.0, // Calculated separately with stations
             station_count,
             loop_count,
             penetration_distance: 0.0, // Calculated separately with stations
         }
+    }
+
+    /// Absolute depth range `(min, max)` over the computed stations.
+    ///
+    /// Station z is ABSOLUTE - the average of the surrounding shots'
+    /// `depth_out`/`depth_in` (`compute_station_depth`) - never a per-section
+    /// delta walk seeded at 0, which is what the project stats used to report
+    /// and what disagreed with every depth the UI shows (#481). Empty input is
+    /// `(0.0, 0.0)`, matching the frontend's own fallback.
+    ///
+    /// Associated fn with no `&self` - it is a function of the stations alone.
+    /// The caller that holds the stations fills the result onto
+    /// [`ProjectStats`], next to the `penetration_distance` it computes via
+    /// [`Self::calculate_penetration_with`].
+    pub fn depth_range(stations: &[Station]) -> (f64, f64) {
+        if stations.is_empty() {
+            return (0.0, 0.0);
+        }
+
+        stations
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(min_depth, max_depth), station| {
+                (
+                    min_depth.min(station.coordinates.z),
+                    max_depth.max(station.coordinates.z),
+                )
+            })
     }
 
     /// Get metadata for this project

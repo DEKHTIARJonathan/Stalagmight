@@ -1265,12 +1265,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               (section.shots ?? []).map((shot: { length?: number }) => shot.length ?? 0)
             );
             const totalLength = shotLengths.reduce((sum, length) => sum + length, 0);
-            const depthValues = defaultSections.flatMap((section) =>
-              (section.shots ?? []).flatMap((shot: { depth_in?: number; depth_out?: number }) => [
-                shot.depth_in ?? 0,
-                shot.depth_out ?? 0,
-              ])
-            );
+            // Absolute station z, as the backend fills it (#481) - not the raw
+            // shot depths.
+            const depthValues = mockStations.map((station) => station.coordinates.z);
             const minDepth = depthValues.length > 0 ? Math.min(...depthValues) : 0;
             const maxDepth = depthValues.length > 0 ? Math.max(...depthValues) : 0;
             const shotCount = defaultSections.reduce((count, section) => count + (section.shots?.length ?? 0), 0);

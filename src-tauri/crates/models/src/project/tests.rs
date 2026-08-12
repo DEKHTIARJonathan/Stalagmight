@@ -8003,8 +8003,11 @@ fn stats_empty_project() {
     assert_eq!(stats.station_count, 0);
     assert_eq!(stats.loop_count, 0);
     assert!((stats.total_length - 0.0).abs() < 1e-6);
-    assert!((stats.min_depth - 0.0).abs() < 1e-6);
-    assert!((stats.max_depth - 0.0).abs() < 1e-6);
+    // Depth is a station figure, and an empty project has no stations (#481).
+    assert_eq!(
+        Project::depth_range(&project.compute_station_coordinates()),
+        (0.0, 0.0)
+    );
 }
 
 #[test]
@@ -8023,21 +8026,24 @@ fn stats_single_section() {
     assert_eq!(stats.shot_count, 2);
     assert_eq!(stats.station_count, 3); // 2 shots + 1 first station
     assert!((stats.total_length - 18.0).abs() < 1e-6);
+    // stats() leaves depth to the caller, exactly like penetration_distance (#481).
     assert!((stats.min_depth - 0.0).abs() < 1e-6);
-    assert!((stats.max_depth - 12.0).abs() < 1e-6);
+    assert!((stats.max_depth - 0.0).abs() < 1e-6);
+    // Stations: 0.0, (5+5)/2 = 5.0, 12.0.
+    let (min_depth, max_depth) = Project::depth_range(&project.compute_station_coordinates());
+    assert!((min_depth - 0.0).abs() < 1e-6);
+    assert!((max_depth - 12.0).abs() < 1e-6);
 }
 
 #[test]
 fn stats_multiple_sections() {
     let mut project = Project::new("Multi".to_string(), None);
-    // Section 1: depth change = depth_out - depth_in = -5 - (-2) = -3
-    // accumulated z: 0 -> -3, so min_depth = -3
+    // Section 1 stations: -2, -5
     project.add_section(SectionData {
         shots: vec![shot(0.0, 0.0, 10.0, -2.0, -5.0)],
         ..Default::default()
     });
-    // Section 2: dz1 = 1-0 = 1, dz2 = 3-1 = 2, accumulated z: 0 -> 1 -> 3
-    // max_depth = 3
+    // Section 2 stations: 0, (1+1)/2 = 1, 3
     project.add_section(SectionData {
         shots: vec![
             shot(90.0, 90.0, 5.0, 0.0, 1.0),
@@ -8051,8 +8057,10 @@ fn stats_multiple_sections() {
     assert_eq!(stats.shot_count, 3);
     assert_eq!(stats.station_count, 5); // 3 shots + 2 first stations
     assert!((stats.total_length - 22.0).abs() < 1e-6);
-    assert!((stats.min_depth - (-3.0)).abs() < 1e-6);
-    assert!((stats.max_depth - 3.0).abs() < 1e-6);
+    // Absolute over both sections, not per-section excursions (#481).
+    let (min_depth, max_depth) = Project::depth_range(&project.compute_station_coordinates());
+    assert!((min_depth - (-5.0)).abs() < 1e-6);
+    assert!((max_depth - 3.0).abs() < 1e-6);
 }
 
 #[test]
@@ -8086,6 +8094,28 @@ fn stats_with_loop_closures() {
 
     let stats = project.stats();
     assert_eq!(stats.loop_count, 1);
+}
+
+/// A section that never comes back up: every station is deep, and the old
+/// per-section delta walk would have reported the 0..5 excursion instead of the
+/// 30..35 the stations actually sit at (#481).
+#[test]
+fn depth_range_is_absolute_not_a_delta_walk() {
+    let mut project = Project::new("Deep".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 10.0, 30.0, 32.0),
+            shot(0.0, 0.0, 10.0, 32.0, 35.0),
+        ],
+        ..Default::default()
+    });
+
+    // Stations: 30.0, (32+32)/2 = 32.0, 35.0.
+    let (min_depth, max_depth) = Project::depth_range(&project.compute_station_coordinates());
+    assert!((min_depth - 30.0).abs() < 1e-6);
+    assert!((max_depth - 35.0).abs() < 1e-6);
+
+    assert_eq!(Project::depth_range(&[]), (0.0, 0.0));
 }
 
 // =====================================================================
