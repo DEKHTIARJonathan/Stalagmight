@@ -79,18 +79,38 @@ export function needsE2eFeature(): boolean {
 
 // Source inputs whose changes should invalidate the built binary.
 //
-// This list mirrors vite's actual input surface - not the tracked source tree
-// in general, but everything a `pnpm build` reads to produce dist/ - and it is
-// a HEURISTIC, not a derivation from vite's own config graph. Issue #554: a
-// green run over the wrong bundle is worse than a red one over the right
-// question, so the bias here is to over-list rather than under-list. Missing
-// entries (mtimeOf/newestMtimeInDir return 0 for files/dirs that do not exist,
-// e.g. .env.local on a machine that has none) cost nothing; a missing entry
-// that DOES exist and DOES feed the bundle is the failure mode this list
-// exists to close.
-const SOURCE_DIRS = ['src', 'public', path.join('src-tauri', 'src'), path.join('src-tauri', 'crates')];
-const SOURCE_FILES = [
+// This is the input surface of the WHOLE binary pipeline - vite's frontend
+// leg AND cargo's backend leg, everything `pnpm tauri build` reads to produce
+// the binary `checkBuildFreshness` is judging - not the tracked source tree
+// in general, and it is a HEURISTIC, not a derivation from vite's or cargo's
+// own dependency graphs. Issue #554: a green run over the wrong bundle is
+// worse than a red one over the right question, so the bias here is to
+// over-list rather than under-list. Missing entries (mtimeOf/newestMtimeInDir
+// return 0 for files/dirs that do not exist, e.g. .env.local on a machine
+// that has none) cost nothing; a missing entry that DOES exist and DOES feed
+// the binary is the failure mode this list exists to close.
+//
+// `src-tauri/vendor` is included because it is not merely vendored
+// documentation: `crates/parsers/Cargo.toml` depends on `compass_data` via a
+// PATH dependency (`{ path = "../../vendor/compass_data" }`), so an edit
+// there recompiles into the same binary despite the crate being excluded from
+// the cargo workspace for lint-gate purposes only.
+// Exported (rather than kept module-private) so a test can table-drive over
+// the list itself - dropping any single entry then goes red - instead of only
+// pinning the handful an author remembered to write a case for.
+export const SOURCE_DIRS = [
+  'src',
+  'public',
+  path.join('src-tauri', 'src'),
+  path.join('src-tauri', 'crates'),
+  path.join('src-tauri', 'capabilities'),
+  path.join('src-tauri', 'vendor'),
+];
+export const SOURCE_FILES = [
   path.join('src-tauri', 'tauri.conf.json'),
+  path.join('src-tauri', 'Cargo.toml'),
+  path.join('src-tauri', 'Cargo.lock'),
+  path.join('src-tauri', 'build.rs'),
   'package.json',
   'pnpm-lock.yaml',
   'index.html',
@@ -471,18 +491,73 @@ export function stampStaleReasons(
  * A stamp older than #554 (no `buildStartedAtMs`) falls back to its own
  * `binaryMtimeMs`, i.e. exactly the pre-fix comparison - lenient, not a forced
  * rebuild, same as every other optional stamp field.
+ *
+ * `buildStartedAtMs` is trusted only when it is a plausible start time for
+ * the binary the SAME stamp records, i.e. `0 < buildStartedAtMs <=
+ * binaryMtimeMs` - a real build always starts before (or the instant) it
+ * finishes linking. Two clocks feed this field (the harness process clock for
+ * `buildStartedAtMs`, the filesystem for `binaryMtimeMs`), and they are not
+ * guaranteed to agree: an NTP step backwards between the two reads, a
+ * hand-edited stamp, or a filesystem whose mtimes run ahead of the process
+ * clock (VM/Docker shared mounts, some CI volumes) can all produce a
+ * `buildStartedAtMs` that is LATER than `binaryMtimeMs`. Trusting it anyway is
+ * worse in both directions than the pre-#554 behavior it replaces: a
+ * future-dated value makes every later edit read fresh forever (case (a)), and
+ * a filesystem lagging the process clock makes every source read newer than
+ * `binaryMtimeMs` (case (b)) - and because each rebuild re-stamps with the
+ * same lagging clock, that direction never converges, silently defeating
+ * `fuzz-matrix`'s warm-up-alone skip too. Falling back to `binaryMtimeMs`
+ * whenever the invariant fails keeps both failure modes bounded to "no worse
+ * than before this fix".
  */
 export function sourceStaleReason(newestSource: number, binMtime: number, stamp: E2EBuildStamp | null): string | null {
   if (stamp) {
-    const threshold = stamp.buildStartedAtMs ?? stamp.binaryMtimeMs;
+    const startedAt = stamp.buildStartedAtMs;
+    const trustworthyStart = startedAt !== undefined && startedAt > 0 && startedAt <= stamp.binaryMtimeMs;
+    const threshold = trustworthyStart ? startedAt : stamp.binaryMtimeMs;
     if (newestSource > threshold) {
-      return stamp.buildStartedAtMs !== undefined
+      return trustworthyStart
         ? 'a source file changed after the build started'
         : 'a source file is newer than the binary';
     }
     return null;
   }
   return newestSource > binMtime ? 'a source file is newer than the binary' : null;
+}
+
+/**
+ * Every reason `checkBuildFreshness` would refuse the binary, over inputs it
+ * already computed - the stamp half (`stampStaleReasons`) plus the file-timing
+ * half (`sourceStaleReason`), composed exactly as `checkBuildFreshness` uses
+ * them. Exported (and unit-tested directly) so the WIRING between the two
+ * halves - both landing in the same reasons array - is itself covered: a
+ * mutation that drops the `sourceStaleReason` call, or that drops it silently
+ * on the fresh-stamp path, fails a test on this function without needing a
+ * real binary or a real build.
+ */
+export function freshnessReasons(input: {
+  binMtime: number;
+  stamp: E2EBuildStamp | null;
+  newestSource: number;
+  viteE2E: boolean;
+  e2eFeature: boolean;
+  distIndexHash: string;
+  repoRoot: string;
+  mode?: AgentBuildMode;
+  features?: string;
+}): string[] {
+  const reasons = stampStaleReasons(input.stamp, {
+    viteE2E: input.viteE2E,
+    e2eFeature: input.e2eFeature,
+    binaryMtimeMs: input.binMtime,
+    distIndexHash: input.distIndexHash,
+    repoRoot: input.repoRoot,
+    mode: input.mode,
+    features: input.features,
+  });
+  const sourceReason = sourceStaleReason(input.newestSource, input.binMtime, input.stamp);
+  if (sourceReason) reasons.push(sourceReason);
+  return reasons;
 }
 
 export interface Freshness {
@@ -567,10 +642,12 @@ export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
       ? { repoRoot: stamp.repoRoot, gitHead: stamp.gitHead }
       : null;
   reasons.push(
-    ...stampStaleReasons(stamp, {
+    ...freshnessReasons({
+      binMtime,
+      stamp,
+      newestSource: newestSourceMtime(repoRoot),
       viteE2E: requireE2E,
       e2eFeature: featuresFor(mode).includes('e2e'),
-      binaryMtimeMs: binMtime,
       distIndexHash: hashDistIndex(),
       // Production always knows which tree it is, and a shared CARGO_TARGET_DIR
       // means another worktree's binary must not pass as fresh.
@@ -579,10 +656,6 @@ export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
       features: featureKey(mode),
     }),
   );
-
-  const newestSource = newestSourceMtime(repoRoot);
-  const sourceReason = sourceStaleReason(newestSource, binMtime, stamp);
-  if (sourceReason) reasons.push(sourceReason);
   return { fresh: reasons.length === 0, reasons, binaryPath, builtFrom };
 }
 
@@ -718,8 +791,15 @@ export function buildApp(onLog?: (line: string) => void, mode: AgentBuildMode = 
  * Record what the build we just ran produced, so the next `build: "auto"` can
  * tell a hookless binary from an E2E one without attaching first. Best-effort:
  * a stamp we fail to write just means the next start rebuilds.
+ *
+ * `binaryFile`/`stampPath` default to the real paths and exist so this is
+ * testable against a temp binary, the same convention `builtFromFor` follows -
+ * in particular so a test can pin the real writer's own invariant, that the
+ * `buildStartedAtMs` it records never exceeds the `binaryMtimeMs` it reads off
+ * the same binary (see `sourceStaleReason`'s guard against a stamp violating
+ * that).
  */
-function writeBuildStamp(
+export function writeBuildStamp(
   info: {
     viteE2E: boolean;
     e2eFeature: boolean;
@@ -729,9 +809,10 @@ function writeBuildStamp(
     buildStartedAtMs: number;
   },
   onLog?: (line: string) => void,
+  binaryFile: string = binaryPathFor(info.mode),
+  stampPath: string = buildStampPathFor(info.mode),
 ): void {
   const now = Date.now();
-  const stampPath = buildStampPathFor(info.mode);
   const stamp: E2EBuildStamp = {
     v: 3,
     mode: info.mode,
@@ -739,7 +820,7 @@ function writeBuildStamp(
     viteE2E: info.viteE2E,
     e2eFeature: info.e2eFeature,
     viteMode: info.viteMode,
-    binaryMtimeMs: mtimeOf(binaryPathFor(info.mode)),
+    binaryMtimeMs: mtimeOf(binaryFile),
     distIndexHash: hashDistIndex(),
     repoRoot,
     gitHead: gitHeadFor(repoRoot),
