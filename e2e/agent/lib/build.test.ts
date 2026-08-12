@@ -23,7 +23,9 @@ import {
   hashDistIndex,
   isPluginAclChurn,
   needsE2eFeature,
+  newestSourceMtime,
   readBuildStamp,
+  sourceStaleReason,
   stampStaleReasons,
   type E2EBuildStamp,
 } from './build';
@@ -166,6 +168,121 @@ describe('stampStaleReasons', () => {
     );
     expect(reasons).toHaveLength(1);
     expect(reasons[0]).toContain('dist/index.html is missing');
+  });
+});
+
+// Issue #554: `pnpm tauri build`'s beforeBuildCommand runs vite first (dist/
+// lands in seconds) and only THEN does cargo compile/link for minutes, so a
+// source edit landing in the cargo window is older than the binary's final
+// mtime. Comparing against `buildStartedAtMs` instead of `binMtime` is the
+// fix; these pin the three-way branch (raced, fallback, no-stamp) directly on
+// the pure decision function `checkBuildFreshness` delegates to.
+describe('sourceStaleReason', () => {
+  const BUILD_STARTED = 1_700_000_000_000;
+  const BUILD_FINISHED = 1_700_000_060_000; // +60s: the cargo compile/link leg.
+  const stampWithStart: E2EBuildStamp = {
+    ...E2E_STAMP,
+    binaryMtimeMs: BUILD_FINISHED,
+    buildStartedAtMs: BUILD_STARTED,
+  };
+
+  // RED-FIRST: injection is `newestSource` landing strictly between the two
+  // timestamps - the mid-build edit. Against the OLD comparison
+  // (`newestSource > binMtime`, i.e. `> BUILD_FINISHED`) this same input is
+  // NOT stale (30s < 60s), which is exactly the #554 bug: verified by asserting
+  // that inverted comparison here stays green while the new one goes red.
+  it('flags a source edit that landed after the build started but before it finished', () => {
+    const midBuildEdit = BUILD_STARTED + 30_000;
+    expect(sourceStaleReason(midBuildEdit, BUILD_FINISHED, stampWithStart)).toBe(
+      'a source file changed after the build started',
+    );
+    // The bug this closes, made explicit: the pre-fix comparison against
+    // binMtime alone would have called this same input fresh.
+    expect(midBuildEdit > BUILD_FINISHED).toBe(false);
+  });
+
+  it('does not flag a source edit that predates the build start', () => {
+    expect(sourceStaleReason(BUILD_STARTED - 1000, BUILD_FINISHED, stampWithStart)).toBeNull();
+  });
+
+  it('flags a source edit after the binary finished too (still newer than everything)', () => {
+    expect(sourceStaleReason(BUILD_FINISHED + 1000, BUILD_FINISHED, stampWithStart)).toBe(
+      'a source file changed after the build started',
+    );
+  });
+
+  // Fallback: injection is a v3 stamp predating #554 (no `buildStartedAtMs`).
+  // Turns red if the fallback used `binMtime` (the live binary's CURRENT mtime,
+  // which callers pass separately) instead of the stamp's OWN `binaryMtimeMs` -
+  // the two are equal on the fresh path but a test that conflated them would
+  // not catch a caller passing the wrong one.
+  it('falls back to the stamp binaryMtimeMs when buildStartedAtMs is absent (old v3 stamp)', () => {
+    const oldStamp: E2EBuildStamp = { ...E2E_STAMP, binaryMtimeMs: BUILD_FINISHED };
+    expect('buildStartedAtMs' in oldStamp).toBe(false);
+    // A source older than the binary: must NOT be stale under the fallback.
+    expect(sourceStaleReason(BUILD_FINISHED - 1000, BUILD_FINISHED, oldStamp)).toBeNull();
+    // A source newer than the binary: must still be caught.
+    expect(sourceStaleReason(BUILD_FINISHED + 1000, BUILD_FINISHED, oldStamp)).toBe(
+      'a source file is newer than the binary',
+    );
+  });
+
+  // Stampless path: injection is `stamp: null` with `newestSource > binMtime`.
+  // Turns red if the null branch were dropped in favor of always reading
+  // `stamp!.binaryMtimeMs`, which would throw rather than fall back.
+  it('uses binMtime directly when there is no stamp at all', () => {
+    expect(sourceStaleReason(BUILD_FINISHED + 1000, BUILD_FINISHED, null)).toBe(
+      'a source file is newer than the binary',
+    );
+    expect(sourceStaleReason(BUILD_FINISHED - 1000, BUILD_FINISHED, null)).toBeNull();
+  });
+});
+
+describe('newestSourceMtime', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-sources-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('returns 0 for an empty checkout (no tracked inputs present)', () => {
+    expect(newestSourceMtime(dir)).toBe(0);
+  });
+
+  // Injection: a file under `public/` - the directory widened onto SOURCE_DIRS
+  // by #554 (vite serves it verbatim into dist/). Turns red if `public` were
+  // dropped from SOURCE_DIRS, since only src/ and src-tauri/ would then be
+  // scanned and this mtime would never surface.
+  it('picks up an edit under public/, widened onto the scan by #554', () => {
+    const publicDir = path.join(dir, 'public');
+    fs.mkdirSync(publicDir, { recursive: true });
+    fs.writeFileSync(path.join(publicDir, 'favicon.ico'), 'x');
+    expect(newestSourceMtime(dir)).toBeGreaterThan(0);
+  });
+
+  // Injection: pnpm-lock.yaml touched - dependency drift, widened onto
+  // SOURCE_FILES. Turns red if the lockfile were dropped from the list.
+  it('picks up an edit to pnpm-lock.yaml, widened onto the scan by #554', () => {
+    fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), 'lockfile: 9');
+    expect(newestSourceMtime(dir)).toBeGreaterThan(0);
+  });
+
+  // Injection: tsconfig.json touched (a vite input via the build pipeline).
+  // Turns red if it were dropped from SOURCE_FILES.
+  it('picks up an edit to tsconfig.json, widened onto the scan by #554', () => {
+    fs.writeFileSync(path.join(dir, 'tsconfig.json'), '{}');
+    expect(newestSourceMtime(dir)).toBeGreaterThan(0);
+  });
+
+  // A file that is NOT a tracked input (nothing vite or cargo reads) must not
+  // move the mtime - proves the scan is bounded to the list, not "everything".
+  it('ignores a file outside every tracked dir/file', () => {
+    fs.writeFileSync(path.join(dir, 'NOTES.txt'), 'scratch');
+    expect(newestSourceMtime(dir)).toBe(0);
   });
 });
 
@@ -375,6 +492,31 @@ describe('readBuildStamp', () => {
     const stamp = readBuildStamp(write(JSON.stringify(E2E_STAMP)));
     expect(stamp).not.toBeNull();
     expect(stampStaleReasons(stamp, wantMatching)).toEqual([]);
+  });
+
+  // Issue #554: buildStartedAtMs is a NEW optional field, read leniently like
+  // gitHead - a v3 stamp missing it (every stamp written before this fix) must
+  // still validate rather than forcing a rebuild on every machine.
+  it('round-trips a stamp carrying buildStartedAtMs', () => {
+    const withStart = { ...E2E_STAMP, buildStartedAtMs: 1_700_000_000_123 };
+    expect(readBuildStamp(write(JSON.stringify(withStart)))).toEqual(withStart);
+  });
+
+  it('stays valid when buildStartedAtMs is absent (a stamp written before #554)', () => {
+    const stamp = readBuildStamp(write(JSON.stringify(E2E_STAMP)));
+    expect(stamp).not.toBeNull();
+    expect('buildStartedAtMs' in (stamp as object)).toBe(false);
+  });
+
+  // Lenient handling for a malformed value, same shape as gitHead's fallback:
+  // the field is DROPPED (undefined), not rejected - a bad buildStartedAtMs
+  // must not fail the whole stamp, it should just fall back to the coarser
+  // binaryMtimeMs comparison in sourceStaleReason.
+  it('drops a non-number buildStartedAtMs rather than rejecting the stamp', () => {
+    const bogus = { ...E2E_STAMP, buildStartedAtMs: 'not-a-number' };
+    const stamp = readBuildStamp(write(JSON.stringify(bogus)));
+    expect(stamp).not.toBeNull();
+    expect('buildStartedAtMs' in (stamp as object)).toBe(false);
   });
 });
 

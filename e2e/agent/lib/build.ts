@@ -78,12 +78,29 @@ export function needsE2eFeature(): boolean {
 }
 
 // Source inputs whose changes should invalidate the built binary.
-const SOURCE_DIRS = ['src', path.join('src-tauri', 'src'), path.join('src-tauri', 'crates')];
+//
+// This list mirrors vite's actual input surface - not the tracked source tree
+// in general, but everything a `pnpm build` reads to produce dist/ - and it is
+// a HEURISTIC, not a derivation from vite's own config graph. Issue #554: a
+// green run over the wrong bundle is worse than a red one over the right
+// question, so the bias here is to over-list rather than under-list. Missing
+// entries (mtimeOf/newestMtimeInDir return 0 for files/dirs that do not exist,
+// e.g. .env.local on a machine that has none) cost nothing; a missing entry
+// that DOES exist and DOES feed the bundle is the failure mode this list
+// exists to close.
+const SOURCE_DIRS = ['src', 'public', path.join('src-tauri', 'src'), path.join('src-tauri', 'crates')];
 const SOURCE_FILES = [
   path.join('src-tauri', 'tauri.conf.json'),
   'package.json',
+  'pnpm-lock.yaml',
   'index.html',
   'vite.config.ts',
+  'tsconfig.json',
+  'postcss.config.js',
+  'tailwind.config.js',
+  '.env',
+  '.env.local',
+  '.env.production',
 ];
 
 /** Newest mtime (ms) among files under `dir`, recursively; 0 if missing. */
@@ -116,6 +133,23 @@ function mtimeOf(file: string): number {
   } catch {
     return 0;
   }
+}
+
+/**
+ * Newest mtime (ms) among every file `checkBuildFreshness` treats as a build
+ * input, under `root` (defaults to this checkout). Exported so the input list
+ * (SOURCE_DIRS/SOURCE_FILES) is testable against a temp tree without touching
+ * this checkout's real files - `root` is the seam.
+ */
+export function newestSourceMtime(root: string = repoRoot): number {
+  let newest = 0;
+  for (const dir of SOURCE_DIRS) {
+    newest = Math.max(newest, newestMtimeInDir(path.join(root, dir)));
+  }
+  for (const file of SOURCE_FILES) {
+    newest = Math.max(newest, mtimeOf(path.join(root, file)));
+  }
+  return newest;
 }
 
 /**
@@ -207,6 +241,22 @@ export interface E2EBuildStamp {
   gitHead: string;
   builtAtMs: number;
   builtAtIso: string;
+  /**
+   * `Date.now()` captured right BEFORE `buildApp` spawned `pnpm tauri build`,
+   * i.e. before vite even started. Optional, and read leniently like
+   * `gitHead` - a stamp without it (any stamp written before this field
+   * existed) must still validate, just with the older, coarser comparison.
+   *
+   * Load-bearing when present: `pnpm tauri build`'s `beforeBuildCommand` runs
+   * vite FIRST, emitting dist/ in seconds, and only then does cargo spend
+   * minutes compiling and linking. A source edit landing in that window is
+   * OLDER than the binary's final mtime - `newestSource > binMtime` therefore
+   * misses it, distIndexHash still matches the dist/ that predates the edit,
+   * and the whole stamp still checks out (issue #554). Comparing against the
+   * moment the build STARTED, instead of the moment it finished, closes that
+   * window: nothing edited after the build began can look fresh.
+   */
+  buildStartedAtMs?: number;
 }
 
 /**
@@ -298,10 +348,12 @@ export function readBuildStamp(file: string = buildStampPath): E2EBuildStamp | n
   // machine, once - rather than read leniently: a field a file does not carry is
   // a check that silently does not run, which is the shape of #488 itself.
   //
-  // `gitHead` is the one exception, and deliberately so: it decides nothing, and
-  // a stamp written by a sibling branch that does not record it must still be
-  // READABLE here, or the two halves of a shared target dir would rebuild over
-  // each other on every start.
+  // `gitHead` and `buildStartedAtMs` are the exceptions, and deliberately so:
+  // neither decides validity, and a stamp written by a sibling branch (or by
+  // this branch before #554) that does not record them must still be READABLE
+  // here, or the two halves of a shared target dir would rebuild over each
+  // other on every start. `buildStartedAtMs` absent just means the caller falls
+  // back to the coarser binMtime comparison, same as before this field existed.
   if (candidate.v !== 3) return null;
   if (candidate.mode !== 'debug' && candidate.mode !== 'release') return null;
   if (typeof candidate.features !== 'string') return null;
@@ -323,6 +375,10 @@ export function readBuildStamp(file: string = buildStampPath): E2EBuildStamp | n
     gitHead: typeof candidate.gitHead === 'string' ? candidate.gitHead : 'unknown',
     builtAtMs: typeof candidate.builtAtMs === 'number' ? candidate.builtAtMs : 0,
     builtAtIso: typeof candidate.builtAtIso === 'string' ? candidate.builtAtIso : '',
+    // Lenient, same as gitHead: a non-number is dropped rather than failing the
+    // whole stamp, so a hand-edited or foreign-written field cannot poison an
+    // otherwise-valid stamp into rejecting every start.
+    ...(typeof candidate.buildStartedAtMs === 'number' ? { buildStartedAtMs: candidate.buildStartedAtMs } : {}),
   };
 }
 
@@ -394,6 +450,39 @@ export function stampStaleReasons(
     );
   }
   return reasons;
+}
+
+/**
+ * Pure staleness decision for the file-TIMING half of the check: is
+ * `newestSource` (the newest mtime among tracked build inputs) newer than the
+ * moment the binary can be trusted to reflect?
+ *
+ * Issue #554: `pnpm tauri build`'s beforeBuildCommand runs vite FIRST, so
+ * dist/ lands within seconds while cargo then spends minutes compiling and
+ * linking. A source edit landing in that cargo window is OLDER than the
+ * binary's eventual mtime, so comparing against `binMtime` (the pre-#554
+ * behavior) misses it - the bundle on disk predates the edit but the mtime
+ * check still says fresh. Comparing against the moment the build STARTED
+ * closes that window, but only when a stamp is in hand to say when that was;
+ * a stampless binary is already stale via `stampStaleReasons` above, so its
+ * branch here keeps the original `binMtime` comparison to avoid restating
+ * "no stamp" as a second, confusing source-timing complaint.
+ *
+ * A stamp older than #554 (no `buildStartedAtMs`) falls back to its own
+ * `binaryMtimeMs`, i.e. exactly the pre-fix comparison - lenient, not a forced
+ * rebuild, same as every other optional stamp field.
+ */
+export function sourceStaleReason(newestSource: number, binMtime: number, stamp: E2EBuildStamp | null): string | null {
+  if (stamp) {
+    const threshold = stamp.buildStartedAtMs ?? stamp.binaryMtimeMs;
+    if (newestSource > threshold) {
+      return stamp.buildStartedAtMs !== undefined
+        ? 'a source file changed after the build started'
+        : 'a source file is newer than the binary';
+    }
+    return null;
+  }
+  return newestSource > binMtime ? 'a source file is newer than the binary' : null;
 }
 
 export interface Freshness {
@@ -491,16 +580,9 @@ export function checkBuildFreshness(opts: FreshnessOptions = {}): Freshness {
     }),
   );
 
-  let newestSource = 0;
-  for (const dir of SOURCE_DIRS) {
-    newestSource = Math.max(newestSource, newestMtimeInDir(path.join(repoRoot, dir)));
-  }
-  for (const file of SOURCE_FILES) {
-    newestSource = Math.max(newestSource, mtimeOf(path.join(repoRoot, file)));
-  }
-  if (newestSource > binMtime) {
-    reasons.push('a source file is newer than the binary');
-  }
+  const newestSource = newestSourceMtime(repoRoot);
+  const sourceReason = sourceStaleReason(newestSource, binMtime, stamp);
+  if (sourceReason) reasons.push(sourceReason);
   return { fresh: reasons.length === 0, reasons, binaryPath, builtFrom };
 }
 
@@ -583,6 +665,12 @@ export function buildApp(onLog?: (line: string) => void, mode: AgentBuildMode = 
   onLog?.(
     `Building Tauri ${mode} app (VITE_E2E=1, --no-bundle${withE2eFeature ? ', --features e2e' : ''})...`,
   );
+  // Captured BEFORE the spawn, not after: `pnpm tauri build`'s
+  // beforeBuildCommand runs vite first (dist/ lands in seconds) and only then
+  // does cargo spend minutes compiling and linking, so a source edit made
+  // during the cargo leg is older than the binary's eventual mtime. Stamping
+  // the start, not the finish, is what makes `checkBuildFreshness` catch it.
+  const buildStartedAtMs = Date.now();
   // Build output goes to stderr (fd 2), NEVER inherited stdout: under the MCP
   // server, stdout is the JSON-RPC stream and any build chatter (pnpm/vite log
   // to stdout) would corrupt the protocol framing.
@@ -613,7 +701,14 @@ export function buildApp(onLog?: (line: string) => void, mode: AgentBuildMode = 
     }
   }
   writeBuildStamp(
-    { viteE2E: true, e2eFeature: withE2eFeature, viteMode: 'production', mode, features: features.join(',') },
+    {
+      viteE2E: true,
+      e2eFeature: withE2eFeature,
+      viteMode: 'production',
+      mode,
+      features: features.join(','),
+      buildStartedAtMs,
+    },
     onLog,
   );
   onLog?.(`Build complete (${mode}).`);
@@ -631,6 +726,7 @@ function writeBuildStamp(
     viteMode: string;
     mode: AgentBuildMode;
     features: string;
+    buildStartedAtMs: number;
   },
   onLog?: (line: string) => void,
 ): void {
@@ -649,6 +745,7 @@ function writeBuildStamp(
     gitHead: gitHeadFor(repoRoot),
     builtAtMs: now,
     builtAtIso: new Date(now).toISOString(),
+    buildStartedAtMs: info.buildStartedAtMs,
   };
   try {
     fs.mkdirSync(path.dirname(stampPath), { recursive: true });
