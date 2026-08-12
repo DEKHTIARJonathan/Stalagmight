@@ -99,7 +99,7 @@ The `docs/` tree is extensive. Good entry points:
 | [project-structure.md](docs/project-structure.md) | Directory tree and tech stack |
 | [TESTING.md](docs/TESTING.md) | Test tiers, and which one your test belongs in |
 | [testing-recipes.md](docs/testing-recipes.md) | Commands and patterns (Rust, Playwright, vitest, agent harness) |
-| [roadmap.md](docs/roadmap.md) | Phases and planned work |
+| [roadmap.md](docs/roadmap.md) | Historical record of the v1.0 phases and how they were scoped |
 
 Everything else - subsystems, import formats, testing, platform notes - is
 indexed with a suggested reading order in [docs/README.md](docs/README.md).
