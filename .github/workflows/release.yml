@@ -51,6 +51,15 @@ jobs:
         run: |
           node scripts/check-updater-pubkey.test.mjs
           node scripts/check-updater-pubkey.mjs
+      # scripts/gen-updater-manifest.mjs has no live-repo invariant to check
+      # (it runs against release artifacts that only exist later in this same
+      # workflow), so unlike the pubkey gate above there is only a fixture
+      # test to run here - but it has to run here regardless: a tag push must
+      # not reach the paid build matrix carrying a broken generator, only to
+      # fail once the `release` job finally invokes it after every platform
+      # has already built.
+      - name: Updater manifest generator - fixture test
+        run: node scripts/gen-updater-manifest.test.mjs
       - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
@@ -292,14 +301,16 @@ jobs:
           $SUM * > "$RUNNER_TEMP/sums"
           mv "$RUNNER_TEMP/sums" "SHA256SUMS-${{ matrix.name }}"
           cat "SHA256SUMS-${{ matrix.name }}"
-      # Job-internal record of which macOS signing path ran, logged now for
-      # the run's own record. Not consumed by anything yet - the
-      # updater-manifest generation step (a later PR in the #579 arc) will
-      # read it to decide whether the macOS build enters the manifest at
-      # all. Written after the checksum step on purpose: it must not appear
-      # in SHA256SUMS-macos (nothing downloads it, so it has no checksum to
-      # verify), and the release job deletes it before `gh release create
-      # release-artifacts/*` so it never becomes a published asset.
+      # Job-internal record of which macOS signing path ran. Consumed by the
+      # release job's "Publish updater manifest" step: only "developer-id"
+      # lets the macOS build into the updater manifest at all - "adhoc" is
+      # excluded outright, never treated as a lesser-but-acceptable variant,
+      # because the updater channel is trusted and an ad-hoc build carries no
+      # verifiable identity. Written after the checksum step on purpose: it
+      # must not appear in SHA256SUMS-macos (nothing downloads it, so it has
+      # no checksum to verify), and the release job deletes it before
+      # `gh release create release-artifacts/*` so it never becomes a
+      # published asset.
       - name: Record macOS signing marker
         if: matrix.os == 'macos-latest'
         shell: bash
@@ -384,12 +395,15 @@ jobs:
         env:
           UPDATER_ON: ${{ steps.updater.outputs.on }}
       # Job-internal: records which macOS signing path the build job used
-      # (see "Record macOS signing marker" above). Logged for the release
-      # run's own record, and captured into this step's own output BEFORE the
-      # file is removed - the "Publish updater manifest" step below is the
-      # consumer that #579 always intended here, deciding --include-darwin
-      # from developer-id-vs-adhoc without re-reading a file that is about to
-      # be deleted. Deleted regardless, so it never rides along with
+      # (see "Record macOS signing marker" above). Captured into this step's
+      # own output BEFORE the file is removed - the "Publish updater
+      # manifest" step below is the consumer, deciding --include-darwin by
+      # whether the value is EXACTLY "developer-id" (never merely
+      # non-empty: "adhoc" must exclude the macOS build, not include it).
+      # A missing marker is only a warning here, unconditionally - the
+      # publish step is what turns that into a hard failure, and only when
+      # updater artifacts are actually enabled for this tag; see there.
+      # Deleted regardless, so it never rides along with
       # `gh release create release-artifacts/*` below - it is not an
       # installable artifact and nobody downloads it.
       - name: Consume macOS signing marker
@@ -458,12 +472,23 @@ jobs:
             exit 0
           fi
           VERSION="${TAG#v}"
-          # The marker step above leaves this empty when MACOS-SIGNED never
-          # rode along with the artifacts (a workflow_dispatch rehearsal never
-          # reaches this job, but a future partial-matrix failure could) -
-          # treat that the same as "no macOS build to publish".
+          # Only a Developer ID build enters the manifest. "adhoc" is not a
+          # lesser flavor of the same trust level - it is what every macOS
+          # build gets when no signing identity is configured, and shipping
+          # it through the trusted updater channel would let the updater
+          # replace a notarized install with an ad-hoc one on every existing
+          # user's machine. An empty MODE (see below) is refused outright,
+          # never silently treated as "no macOS build".
+          if [ -z "$MACOS_MODE" ]; then
+            echo "::error::UPDATER_ON is true but the MACOS-SIGNED marker never reached this job - the build job either did not run the macOS leg or something is structurally wrong. Refusing to guess; a silent default here would publish a manifest with no macOS entry (or the wrong one) on an otherwise-green run."
+            exit 1
+          fi
           INCLUDE_DARWIN=false
-          [ -n "$MACOS_MODE" ] && INCLUDE_DARWIN=true
+          if [ "$MACOS_MODE" = "developer-id" ]; then
+            INCLUDE_DARWIN=true
+          else
+            echo "::warning::macOS build was ad-hoc signed (not Developer ID) - excluding it from the updater manifest. Ad-hoc artifacts must never reach the trusted update channel."
+          fi
           OUT="release-artifacts/latest-${TRACK}.json"
           node scripts/gen-updater-manifest.mjs \
             --version "$VERSION" \
