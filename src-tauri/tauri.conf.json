@@ -31,6 +31,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "resources": { "../THIRD-PARTY-LICENSES.md": "THIRD-PARTY-LICENSES.md" },
     "icon": [
       "icons/32x32.png",
@@ -68,5 +69,12 @@
       }
     ]
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "pubkey": "UPDATER-PUBKEY-PENDING-SEE-ISSUE-579",
+      "endpoints": [
+        "https://github.com/Stalagmight/Stalagmight/releases/download/updater/latest-stable.json"
+      ]
+    }
+  }
 }
