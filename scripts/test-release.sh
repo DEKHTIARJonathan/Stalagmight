@@ -737,6 +737,52 @@ printf '%s\n' '# Changelog' '' '## [Unreleased]' '' > "$WORK/empty.md"
 assert "empty changelog still produces a body" \
   bash -c 'CHANGELOG='"$WORK"'/empty.md bash '"$NOTES"' v1.2.3 | grep -q "Release v1.2.3"'
 
+echo "== case 20: a weekly-shaped tag is refused, not hand-tagged =="
+D=$(fresh_clone case20)
+CUR=$(version_of "$D")
+if out=$("$D/scripts/release-tag.sh" "v${CUR}-weekly.20260817" 2>&1); then
+  fail "tagged a weekly-shaped tag by hand"
+else
+  pass "refused a weekly-shaped tag"
+  assert "message names weekly tags as machine-created" \
+    bash -c 'printf "%s" "$1" | grep -q "machine-created"' _ "$out"
+  refute "no tag created" has_tag "$D" "v${CUR}-weekly.20260817"
+fi
+
+echo "== case 21: a stable tag warns when a higher weekly tag already exists =="
+D=$(fresh_clone case21)
+CUR=$(version_of "$D")
+git -C "$D" tag "v${CUR}-weekly.20260817"
+if out=$("$D/scripts/release-tag.sh" "v$CUR" --dry-run 2>&1); then
+  assert "warns about the higher weekly tag" \
+    bash -c 'printf "%s" "$1" | grep -q "weekly tag v'"$CUR"'-weekly.20260817 already carries"' _ "$out"
+  assert "explains weekly-track users will not be offered it" \
+    bash -c 'printf "%s" "$1" | grep -q "will not be offered"' _ "$out"
+else
+  fail "a stable tag with a higher weekly tag was refused outright"
+fi
+
+echo "== case 21b: a stable tag stays silent when no weekly tag supersedes it =="
+D=$(fresh_clone case21b)
+CUR=$(version_of "$D")
+if out=$("$D/scripts/release-tag.sh" "v$CUR" --dry-run 2>&1); then
+  refute "no supersession warning with no weekly tags at all" \
+    bash -c 'printf "%s" "$1" | grep -q "already carries"' _ "$out"
+else
+  fail "a stable tag with no weekly tags was refused outright"
+fi
+
+echo "== case 21c: a lower weekly tag does not trigger the supersession warning =="
+D=$(fresh_clone case21c)
+CUR=$(version_of "$D")
+git -C "$D" tag "v0.0.1-weekly.20260101"
+if out=$("$D/scripts/release-tag.sh" "v$CUR" --dry-run 2>&1); then
+  refute "no supersession warning from a lower weekly tag" \
+    bash -c 'printf "%s" "$1" | grep -q "already carries"' _ "$out"
+else
+  fail "a stable tag with only a lower weekly tag was refused outright"
+fi
+
 echo
 echo "release tooling: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
