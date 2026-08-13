@@ -447,10 +447,120 @@ fails fast and names the missing secret(s) - a partial set would otherwise
 produce a signed-but-unnotarized bundle that fails much later, obscurely,
 inside `xcrun stapler validate`. A job-internal `MACOS-SIGNED` marker
 (`developer-id` or `adhoc`) records which path a given `build` run took; the
-`release` job reads and deletes it before publishing, so it never appears as
-a downloadable release asset. Nothing consumes the marker's value yet - that
-lands with the updater-manifest generation step in a later PR of the #579
-arc, which will use it to decide whether the macOS build enters the manifest.
+`release` job reads it, captures the value into a step output, and deletes
+the file before publishing, so it never appears as a downloadable release
+asset. The consumer of that output is the "Publish updater manifest" step -
+see [Updater manifests](#updater-manifests) - which treats either signing
+mode as "a macOS build exists" and an absent marker as "no macOS build to
+publish".
+
+## Updater manifests
+
+Two update tracks exist, **stable** and **weekly**, each user-selectable at
+runtime. Each track's manifest is a static JSON file, `latest-stable.json` or
+`latest-weekly.json`, published as an asset on **`updater`**: a rolling
+GitHub prerelease with no release notes of its own, created **once, by
+hand**, per issue #579 (`gh release create updater --prerelease --title
+"Updater manifests" --notes "Rolling manifests for the auto-updater. Not a
+release - see docs/releasing.md."`). Nothing in this repo's automation ever
+creates that release; every workflow that touches it only uploads to it with
+`--clobber`, and fails loudly rather than creating it if it is missing. This
+is deliberate: an accidentally-auto-created `updater` release with the wrong
+visibility or the wrong tag is a worse failure mode than a loud error someone
+has to act on once.
+
+### How a manifest gets published
+
+The `release` job's "Publish updater manifest" step (`.github/workflows/release.yml`)
+runs after `gh release create`, once the tag's own release and its artifacts
+exist. It:
+
+1. Skips, with an `::notice::`, when updater artifacts are CI-side disabled
+   (no `plugins.updater.pubkey` yet - see [Update artifacts and
+   signing](#update-artifacts-and-signing)).
+2. Derives the track from the tag: contains `-weekly.` -> `weekly`; matches
+   `^vX.Y.Z$` exactly -> `stable`; anything else (an `-rc*` candidate, or any
+   other suffix) touches **neither** manifest - the step logs `no manifest
+   for tag` and exits cleanly. **A release candidate is never offered to
+   updater clients on either track.**
+3. Reads the `MACOS-SIGNED` marker's captured value (see [Update artifacts
+   and signing](#update-artifacts-and-signing)) to decide `--include-darwin`
+   - present (either signing mode) means a macOS build exists and enters the
+     manifest; absent means it does not.
+4. Runs `scripts/gen-updater-manifest.mjs` against the job's own
+   `release-artifacts/` directory, reusing the same rendered `release-body.md`
+   that `gh release create` already published as this release's notes.
+5. Uploads the result to the `updater` release as `latest-<track>.json`, with
+   `--clobber` - each publish on a track fully replaces the previous manifest
+   for that track.
+
+### `scripts/gen-updater-manifest.mjs`
+
+Pure Node, no dependencies. Given `--dir`, it finds each platform's update
+artifact and its detached `.sig` (the Tauri v2 updater's own artifact set,
+**not** every installer `build` produces):
+
+| Platform key | Artifact | Signature |
+|--------------|----------|-----------|
+| `linux-x86_64` | `*.AppImage` | `*.AppImage.sig` |
+| `windows-x86_64` | `*-setup.exe` (the NSIS installer - **not** the `.msi`, which Tauri's updater cannot drive) | `*-setup.exe.sig` |
+| `darwin-aarch64` | `*.app.tar.gz` | `*.app.tar.gz.sig` (only when `--include-darwin true`) |
+
+It inlines each `.sig` file's content verbatim as that platform's
+`signature`, builds the asset URL as
+`https://github.com/Stalagmight/Stalagmight/releases/download/<tag>/<file>`
+(filename URL-encoded), and hard-fails - naming what is wrong - on a missing
+artifact or signature, an ambiguous match (more than one file fits a
+platform's pattern), a malformed `--version`, or an empty signature file. The
+manifest is deterministic and pretty-printed with a fixed key order
+(`version`, `notes`, `pub_date`, then `platforms` in the table's order), so a
+diff between two manifests - during review, or while debugging a bad
+publish - is actually readable. Run its fixture tests with
+`node scripts/gen-updater-manifest.test.mjs` (also `pnpm
+gen:updater-manifest:test`, gated in the leak-scan workflow alongside the
+pubkey tripwire).
+
+### Rollback / repoint runbook
+
+`.github/workflows/repoint-updater-manifest.yml` (`workflow_dispatch` only,
+`contents: write`, guarded to this repository) exists for the day a manifest
+needs to point somewhere other than what the automatic publish wrote - most
+often "stable regressed, repoint `latest-stable.json` back at the previous
+release." Given a `track` and a past `tag`, it downloads that release's
+update artifacts + sigs, determines `--include-darwin` from whether that
+release actually shipped a macOS pair, regenerates the manifest with that
+release's own notes (`gh release view <tag> --json body`), and
+clobber-uploads it - the same file the automatic publish step would have
+written for that tag, republished now.
+
+**Repoint first, delete after - never the other way around.** Updater
+clients read the manifest, not the release; deleting a bad release before
+repointing the manifest away from it leaves clients pointed at a dead
+download URL, which is a worse failure than the regression the rollback was
+meant to fix. Once the manifest points at a release you are willing to stand
+behind, the bad release can be deleted (or left as a pre-release, unlinked)
+at your discretion.
+
+```bash
+gh workflow run repoint-updater-manifest.yml \
+  -f track=stable -f tag=v0.5.0
+```
+
+### The weekly-track supersession warning
+
+The weekly manifest, once a later PR in the #579 arc starts cutting weekly
+tags on a schedule, only ever moves forward: each publish clobbers the
+previous `latest-weekly.json`. If a stable `vX.Y.Z` is tagged after a weekly
+tag whose own base version is already `>= X.Y.Z`, weekly-track users on that
+build (or a later one) will never be offered the new stable - there is no
+mechanism for a stable release to "supersede" a newer-looking weekly build
+once one already exists. `scripts/release-tag.sh` warns about exactly this
+(without blocking - it may be an intentional patch cut behind a weekly build
+that shipped nothing users need) whenever a `v*-weekly.*` tag already carries
+a base version at or past the stable tag being cut. Weekly tags themselves
+are refused outright by `release-tag.sh` - they are machine-created on their
+own cadence, never hand-typed, and a hand-typed one could collide with or
+masquerade as a real one.
 
 ## Testing the release tooling
 
