@@ -5542,6 +5542,21 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // would mask a real regression in that path.
             return [];
 
+          // In-app updater (#579). The default is "nothing on offer", so the
+          // launch check every spec triggers resolves quietly instead of
+          // parking an update banner over whatever that spec is asserting on.
+          // A spec that wants the banner overrides this case.
+          case 'check_for_app_update':
+            return { status: { kind: 'up_to_date' }, current_version: '0.5.0' };
+
+          case 'download_app_update':
+          case 'install_app_update_and_restart':
+            // Unreachable from the default state above (both refuse without a
+            // checked update), and a real install would end the browser session.
+            // Present so the contract holds and an accidental call is visible as
+            // a failed assertion rather than an unhandled null.
+            throw new Error(`${cmd} is not driven by the default mock state`);
+
           // Silent no-ops: commands that should succeed without side-effects
           case 'push_frontend_log':
             return null;
