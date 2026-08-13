@@ -214,7 +214,7 @@ Internal `#RRGGBB` hex colors are converted to Ariane's `0xRRGGBBff` format (8-d
 ## The LRUD zero/null collision
 
 `ExportShot.left` and its three siblings are plain `f64`, filled with
-`shot.left.unwrap_or(0.0)` (`export/tml.rs:806-809` and the three reversed-leg
+`shot.left.unwrap_or(0.0)` (`export/tml.rs:893-896` and the three reversed-leg
 constructors beside it), because Ariane's `Left`/`Right`/`Up`/`Down` elements
 have no null. So the file cannot distinguish these two facts about a passage:
 
@@ -222,7 +222,7 @@ have no null. So the file cannot distinguish these two facts about a passage:
 - **measured as zero** - somebody did, and it is zero (`Some(0.0)`).
 
 Both are written `0.0`, and [the importer](ariane-import.md) maps `0.0` back to
-`None` **per field** (`parsers/tml/mod.rs:1822-1828`). The round trip is
+`None` **per field** (`parsers/tml/mod.rs:1902-1908`). The round trip is
 therefore lossless for an unmeasured dimension (`None -> 0.0 -> None`) and lossy
 for a measured zero (`Some(0.0) -> 0.0 -> None`).
 

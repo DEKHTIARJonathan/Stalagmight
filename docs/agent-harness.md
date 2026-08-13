@@ -195,8 +195,9 @@ hazards over long runs.
   - `pnpm agent:mcp:smoke` - MCP-layer smoke (spawns the server, round-trips
     every tool through the protocol, self-tests the crash oracle).
   - `pnpm agent:scenarios` - runs all 10 gated stress scenarios once at small n.
-    The other two (`import-dialog-fuzz`, `export-roundtrip-fuzz`) are excluded
-    from the gate and reported as SKIP; there is no expected-red list.
+    The other three (`import-dialog-fuzz`, `export-roundtrip-fuzz`,
+    `fractal-stress`) are excluded from the gate and reported as SKIP; there is
+    no expected-red list.
   - `pnpm agent:scenario <name> [--seed N] [--iterations M] [--release]` - runs
     ONE scenario at a chosen seed/n, then a full sweep. The one to reach for when
     a seeded scenario needs re-running: a fuzzer repro, or a soak at a bigger n
