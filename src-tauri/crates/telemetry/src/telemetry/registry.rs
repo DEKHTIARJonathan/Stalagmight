@@ -45,6 +45,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.can_undo",
     "command.cancel_loading",
     "command.check_duplicate_import",
+    "command.check_for_app_update",
     "command.check_merge_connectivity",
     "command.check_section_hashes",
     "command.clear_tile_cache",
@@ -64,6 +65,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.delete_section",
     "command.delete_shot",
     "command.delete_shot_and_split",
+    "command.download_app_update",
     "command.execute_batch",
     "command.execute_gpx_import",
     "command.execute_tml_import",
@@ -94,6 +96,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.history_discarded",
     "command.import_dmp",
     "command.import_sections",
+    "command.install_app_update_and_restart",
     "command.list_backups",
     "command.list_dive_plans",
     "command.list_recent_projects",
@@ -1108,7 +1111,11 @@ mod tests {
         //   + 1 the discarded-history banner (#473) asks the backend whether the
         //       project it just opened could read its edit history at all:
         //       command.history_discarded = 737.
-        assert_eq!(EVENT_NAMES.len(), 737);
+        //   + 3 the in-app updater (#579), one per step of the deliberately
+        //       three-command cycle: command.check_for_app_update,
+        //       command.download_app_update,
+        //       command.install_app_update_and_restart = 740.
+        assert_eq!(EVENT_NAMES.len(), 740);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
