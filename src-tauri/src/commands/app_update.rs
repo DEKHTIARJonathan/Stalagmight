@@ -103,7 +103,7 @@ const MAX_UPDATE_BYTES: u64 = 512 * 1024 * 1024;
 /// reqwest's default of NO timeout, so an endpoint that accepts the connection
 /// and then stalls leaves the check pending for the life of the process - and
 /// the frontend's launch check would never resolve.
-const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
+const CHECK_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Whole-request timeout for the bundle download.
 ///
@@ -113,7 +113,7 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 /// the manifest fetch alone. Ten minutes is deliberately generous - it is a
 /// backstop against a stalled connection, not a bandwidth policy, and a user
 /// on a slow link must still be able to finish.
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_mins(10);
 
 /// The answer to one update check.
 #[derive(Debug, Clone, Serialize, TS)]
@@ -215,10 +215,10 @@ impl AppUpdateState {
 ///
 /// It gates plugin registration in `lib.rs`, and it has to: the plugin's own
 /// `Config` has a REQUIRED `pubkey` and no `Default`, so with `plugins.updater`
-/// absent Tauri fails to deserialize it and `Builder::build()` returns an error
-/// - the app never starts. The block is deliberately absent today (the minisign
-/// keypair is still being provisioned), so registering unconditionally would
-/// brick every build, local and released, until the key lands.
+/// absent Tauri fails to deserialize it and `Builder::build()` returns an
+/// error, so the app never starts. The block is deliberately absent today (the
+/// minisign keypair is still being provisioned), so registering unconditionally
+/// would brick every build, local and released, until the key lands.
 pub fn updater_configured() -> bool {
     static CONFIGURED: OnceLock<bool> = OnceLock::new();
     *CONFIGURED.get_or_init(|| pubkey_present(include_str!("../../tauri.conf.json")))
