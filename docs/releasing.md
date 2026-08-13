@@ -371,27 +371,48 @@ before it can be handed to anyone.
 
 ## Update artifacts and signing
 
-`bundle.createUpdaterArtifacts` is on in `tauri.conf.json` (issue #579), so
-every `build` leg now emits, alongside the installers already listed above,
-a signed update bundle per platform plus a detached `.sig`:
+`bundle.createUpdaterArtifacts` is **not** set in `tauri.conf.json` - it is
+enabled CI-side only, in the release workflow's `build` job, and only once a
+real `plugins.updater.pubkey` is committed there (issue #579 provisioning).
+This is deliberate, not incidental: `tauri-cli` base64-decodes that pubkey
+with a hard failure at bundle time whenever `createUpdaterArtifacts` is on,
+so turning it on in the checked-in config before the real key exists breaks
+every build, on every platform, including a contributor's local
+`pnpm tauri build`. Keeping enablement CI-side means local dev builds never
+need a signing key at all, today or after the key lands.
+
+Each `build` leg derives whether updater artifacts are enabled for that run
+(`UPDATER_ON`) from `plugins.updater.pubkey` in the checked-out
+`tauri.conf.json` - non-empty means on. While the pubkey is pending, every
+build runs exactly as it did before #579 and a `::warning::` says so in the
+log. Once enabled, each leg emits, alongside the installers already listed
+above, a signed update bundle per platform plus a detached `.sig` (Tauri
+signs every package type it bundles, not only the updater's own artifact):
 
 | Platform | Update artifact | Signature |
 |----------|------------------|-----------|
-| Linux | `.AppImage` | `.AppImage.sig` |
+| Linux | `.AppImage` | `.AppImage.sig`, plus `.deb.sig` and `.rpm.sig` on the installers |
 | Windows | NSIS `-setup.exe` (the update path) and `.msi` | `-setup.exe.sig` and `.msi.sig` |
 | macOS | `.app.tar.gz` | `.app.tar.gz.sig` |
 
 Windows ships two installers, but only the NSIS one is the updater's install
-path - Tauri's updater does not drive an MSI upgrade. The `.msi.sig` exists
-because Tauri signs whatever it bundles, not because anything consumes it yet.
+path - Tauri's updater does not drive an MSI upgrade. The `.msi.sig` (and the
+Linux `.deb.sig`/`.rpm.sig`) exist because Tauri signs whatever it bundles,
+not because anything consumes them yet. When `UPDATER_ON` is true, the
+`build` job's collect step asserts at least one `.sig` landed and the
+`release` job's completeness check requires the full platform-specific set
+above; both are skipped while the pubkey is pending, since no `.sig` exists
+to require.
 
-**The updater plugin is configured but not wired up.** `tauri.conf.json`
-carries a placeholder `pubkey` (`UPDATER-PUBKEY-PENDING-SEE-ISSUE-579`) and
-the GitHub-hosted `latest-stable.json` endpoint the client will eventually
-poll; the plugin itself is not yet registered in `lib.rs`, so nothing reads
-either value at runtime. Wiring the plugin in, generating and publishing
-`latest-stable.json`, and replacing the placeholder pubkey are later steps
-in the #579 arc.
+**The updater plugin is not wired up yet.** Once the real pubkey and its
+GitHub-hosted `latest-stable.json` endpoint are committed to
+`plugins.updater`, the plugin itself still needs registering in `lib.rs`
+before anything reads either value at runtime - that, generating and
+publishing `latest-stable.json`, and replacing the pubkey are later steps in
+the #579 arc. `scripts/check-updater-pubkey.mjs` (`pnpm lint:updater-pubkey`,
+gated in CI) is a tripwire for that commit: it passes trivially while
+`plugins.updater` is absent, and the day it lands, a placeholder, malformed
+base64, or a non-https/non-`github.com` endpoint fails the gate immediately.
 
 ### Keypair custody
 
@@ -409,7 +430,7 @@ download carrying the new public key.
 
 | Secret | Required for | Effect when unset |
 |--------|---------------|---------------------|
-| `TAURI_SIGNING_PRIVATE_KEY` | Every `build` leg | The `build` job fails fast with a named error - `createUpdaterArtifacts` means an unsigned build cannot produce a verifiable update bundle, so this is not allowed to degrade quietly |
+| `TAURI_SIGNING_PRIVATE_KEY` | Every `build` leg, once `plugins.updater.pubkey` is committed | The `build` job fails fast with a named error. Tauri itself already refuses to sign without this key - this guard exists only to fail earlier with a clearer, named message instead of chasing Tauri's own error. While the pubkey is pending this secret is not required at all |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Only if the key above has a password | Passed through empty otherwise |
 | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Real Developer ID signing + notarization of the macOS leg | Absent (or `APPLE_SIGNING_IDENTITY` empty) leaves the macOS leg exactly as it was before #579: ad-hoc signed via the checked-in `signingIdentity: "-"`, not notarized |
 
@@ -420,10 +441,16 @@ ad-hoc-signing behavior byte-identical: the `build` job only appends a
 `signingIdentity` override to the Tauri build config when
 `APPLE_SIGNING_IDENTITY` is non-empty, and `scripts/verify-macos-signature.sh`
 only runs the additional `spctl -a -vv` / `xcrun stapler validate` checks
-under that same condition. A job-internal `MACOS-SIGNED` marker
+under that same condition. If `APPLE_SIGNING_IDENTITY` is set but any of
+`APPLE_ID`, `APPLE_PASSWORD` or `APPLE_TEAM_ID` is missing, the `build` job
+fails fast and names the missing secret(s) - a partial set would otherwise
+produce a signed-but-unnotarized bundle that fails much later, obscurely,
+inside `xcrun stapler validate`. A job-internal `MACOS-SIGNED` marker
 (`developer-id` or `adhoc`) records which path a given `build` run took; the
 `release` job reads and deletes it before publishing, so it never appears as
-a downloadable release asset.
+a downloadable release asset. Nothing consumes the marker's value yet - that
+lands with the updater-manifest generation step in a later PR of the #579
+arc, which will use it to decide whether the macOS build enters the manifest.
 
 ## Testing the release tooling
 
