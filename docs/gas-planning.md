@@ -368,7 +368,7 @@ scooter park marker), `components/Map/GasLegend.tsx`, `utils/gasReach.ts` (the
 overlay ramp), and `utils/segmentColors.ts` + `utils/dpv.ts` (segment identity
 colors; the rig editor's Rust-mirroring helpers).
 
-Engine semantics are pinned by 111 tests in `gas/tests.rs`. Before changing it,
+Engine semantics are pinned by 112 tests in `gas/tests.rs`. Before changing it,
 read `gas_reach_field_no_waypoints_is_identical_to_the_plain_field`,
 `gas_reach_field_out_of_budget_endpoint_turns_early_on_its_own_branch`,
 `gas_reach_field_override_to_default_station_is_a_no_op` and

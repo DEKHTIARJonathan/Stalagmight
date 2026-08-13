@@ -9,8 +9,8 @@ The DMP import wizard (`DmpNewImportDialog`) is the primary UI for importing cav
 | `init` | Import the zero-datum section (if provided), then call `suggest_all_import_placements` for all remaining sections |
 | `suggesting` | Present suggestions one at a time; user confirms, edits, or skips each |
 | `manual_placing` | Nothing was suggested for the remaining sections, so they are offered one SEGMENT at a time (`computeUnreachableSegments`) with four choices: reuse a skipped suggestion, attach to an existing section, place on the map by hand, or discard. Entered with `autoStartManualPlacementPending` set, which hides the dialog (`DialogWrapper`'s `hidden`) until the map placement it auto-starts has begun |
-| `placing` | Run `applyAllOverlapTreatments`, build batch `ImportSectionConfig[]` + `ExistingShotUpdate[]`, and call `import_sections` |
-| `done` | All sections placed, or hand off unreachable sections to legacy dialog |
+| `placing` | Late import: build batch `ImportSectionConfig[]` for anything manual placement added and call `import_sections` again (overlap treatment already ran on the way out of `suggesting`) |
+| `done` | All sections placed and `onComplete` fires; if any remain unconnected the wizard re-enters `manual_placing` instead |
 
 The phase union is declared inline at `DmpNewImportDialog.tsx`'s `phase` state and
 mirrored, for the onboarding tour, as `DmpImportWizardPhase` in `src/store/uiStore.ts`.
@@ -135,7 +135,7 @@ Two residues, both deliberate:
 
 ## Virtual Connections
 
-During the `suggesting` phase, confirmed placements are recorded as **virtual connections** - lightweight client-side records that describe how two sections should be joined. No backend call happens until the `placing` phase.
+During the `suggesting` phase, confirmed placements are recorded as **virtual connections** - lightweight client-side records that describe how two sections should be joined. No backend write happens for them until the early import that runs on the transition out of `suggesting`.
 
 ```typescript
 type VirtualConnection = {
@@ -179,7 +179,7 @@ The overlap mode is persisted to the project config.
 
 ### Centralized Overlap Treatment
 
-All overlap mutation is handled by a single function - `applyAllOverlapTreatments` - which runs once during the `placing` phase, before `buildBatchImport`. The `handleConfirm` callback does **not** mutate overlap shots; it only records:
+All overlap mutation is handled by a single function - `applyAllOverlapTreatments` - which runs once on the transition out of the `suggesting` phase (the early import), before `buildBatchImport`. The `handleConfirm` callback does **not** mutate overlap shots; it only records:
 
 1. The virtual connection (placement info)
 2. A `ConfirmedOverlapInfo` entry (which merge station the user chose)
@@ -310,7 +310,7 @@ A `coveredExistingSectionIds` set tracks which existing section IDs have already
 
 ## Batch Import
 
-When all suggestions are exhausted (or skipped), the placing phase proceeds:
+When all suggestions are exhausted (or skipped), the early import runs on the transition out of `suggesting`:
 
 1. `applyAllOverlapTreatments` processes all overlap suggestions → mutates `sectionEditsRef` + returns `ExistingShotUpdateLocal[]`
 2. `buildBatchImport()` constructs the final `ImportSectionConfig[]`:
@@ -329,21 +329,21 @@ Sections unreachable after all passes remain in the wizard's manual segment-plac
 | Type | Location | Purpose |
 |------|----------|---------|
 | `VirtualConnection` | `src/utils/segmentContext.ts` | Client-side connection record |
-| `ConfirmedOverlapInfo` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Merge station choice per confirmed suggestion |
-| `ExistingShotUpdateLocal` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Frontend representation of existing shot modifications |
+| `ConfirmedOverlapInfo` | `src/utils/batchImportHelpers.ts` | Merge station choice per confirmed suggestion |
+| `ExistingShotUpdateLocal` | `src/utils/overlapTreatment.ts` | Frontend representation of existing shot modifications |
 | `ExistingShotUpdate` | `src-tauri/crates/models/src/section.rs` | Backend type for atomic existing shot modifications |
 | `ExistingAnchor` | `src/utils/segmentContext.ts` | Position where a DMP section meets an existing section |
 | `ExistingSectionGeoEntry` | `src/utils/segmentContext.ts` | Cached segment geometry with frame offset |
 | `CrossSectionSuggestion` | `src-tauri/crates/models/src/placement_suggest.rs` | Backend suggestion with score/confidence |
 | `SegmentGeometry` | `src-tauri/crates/models/src/section.rs` | Backend segment shot-line data |
 | `ContextSectionGeometry` | `src/components/Dialogs/SectionPreview.tsx` | Shot pairs for preview rendering |
-| `SectionEditState` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Per-section editable metadata + shots |
+| `SectionEditState` | `src/utils/batchImportHelpers.ts` | Per-section editable metadata + shots |
 
 ## Key Functions
 
 | Function | Location | Purpose |
 |----------|----------|---------|
-| `applyAllOverlapTreatments` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Single-pass overlap mutation for all suggestions |
+| `applyAllOverlapTreatments` | `src/utils/overlapTreatment.ts` | Single-pass overlap mutation for all suggestions |
 | `buildBatchImport` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Construct ordered `ImportSectionConfig[]` for backend |
 | `buildAdjacency` | `src/utils/segmentContext.ts` | Adjacency map from `importing`-type connections |
 | `computeDmpBfsContext` | `src/utils/segmentContext.ts` | BFS collecting DMP neighbor geometry + existing anchors |
@@ -366,9 +366,9 @@ Sections unreachable after all passes remain in the wizard's manual segment-plac
 
 ## Backend Safety Guards
 
-The `execute_import_sections` function in `src-tauri/crates/core/src/core/state/commands.rs` applies two guards before modifying existing section shots:
+The `execute_import_sections` function in `src-tauri/crates/core/src/core/state/command_import.rs` applies two guards before modifying existing section shots:
 
-1. **Doubly-anchored filter**: For each affected section, if the modified shot range is straddled by positional constraints (zero datums, station merges, aligned closures) on both sides, updates for that section are silently skipped.
+1. **Doubly-anchored filter**: For each affected section, if the modified shot range is straddled by positional constraints (zero datums, station merges, aligned closures) on both sides, updates for that section are skipped and the skipped shot count is named on the import receipt.
 
 2. **Zero datum offset compensation**: For sections with a zero datum above the modified shots, the section offset (and all sections in the same rigid group) is adjusted after updates to keep the datum station at its original absolute position.
 

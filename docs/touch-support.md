@@ -42,8 +42,8 @@ There is no single rule. Three patterns coexist:
   touch, with `e.pointerType` consulted only where the behavior must differ.
 - **Mouse-only, deliberately.** The custom Ctrl+drag / middle-drag map pan uses
   raw `mousedown`/`mousemove`/`mouseup` capture listeners on the map container
-  (`MapCanvas.tsx:2751-2833`) and its pointer-capture guard explicitly requires
-  `e.pointerType === 'mouse'` (`MapCanvas.tsx:2849`). There is no modifier key on
+  (`MapCanvas.tsx:2880-3105`) and its pointer-capture guard explicitly requires
+  `e.pointerType === 'mouse'` (`MapCanvas.tsx:3044`). There is no modifier key on
   touch, so this is intentional - and since #409 no loss either, because plain
   one-finger drag pans.
 - **Mouse-only, by omission.** Most of the app was never converted. The
@@ -182,8 +182,10 @@ interactions commit through MapCanvas's POINTER handlers - placement on
 events, so the swallowed `touchend` cannot stop them; ungated, one hold would
 both mutate the survey and open a menu over the result. Note pointer events
 precede touch events, so a placement confirmed by that very touch has already
-cleared the store before the press is armed; the placement half of the gate
-covers holds that begin while placement is still armed. `GlobalSurveyLayer` has
+cleared the store before the press is armed; `MapCanvas` therefore stamps the
+confirm via `notePlacementConfirmed` and the gate honours a short
+`PLACEMENT_CONFIRM_GRACE_MS` window, while the store read covers holds that
+begin while placement is still armed. `GlobalSurveyLayer` has
 neither mode and passes no gate; `useTouchContextMenu` always passes one, but it
 reads an optional `enabled` flag that defaults to true and the grid never sets.
 
@@ -234,28 +236,29 @@ free. `GlobalSurveyLayer` likewise resolves via its own `pickSystemAt` index.
 
 **Placement mode** is the one map interaction explicitly written for touch:
 `handlePlacementClick` recomputes the cursor position from the event because
-`pointerdown` precedes any `pointermove` on touch (`MapCanvas.tsx:3690`), and
+`pointerdown` precedes any `pointermove` on touch (`MapCanvas.tsx:3949`), and
 `PlacementOverlay` shows a Cancel button when `navigator.maxTouchPoints > 0`
 because right-click-to-cancel is unavailable.
 
 ## Toolbar
 
 `ToolButton` and `ToolGroupButton` record `e.pointerType` into
-`lastPointerTypeRef` on `onPointerDown` (`Toolbar.tsx:650`, `:880`) and branch on
+`lastPointerTypeRef` on `onPointerDown` (`Toolbar.tsx:700`, `:930`) and branch on
 it:
 
 - A tap on a tool group toggles its flyout open instead of cycling through the
-  group's tools (`Toolbar.tsx:733`), so touch users can see and pick a subtool.
-- `handleMouseEnter` returns early after a touch (`Toolbar.tsx:602`, `:762`), so
+  group's tools (`Toolbar.tsx:783`), so touch users can see and pick a subtool.
+- `handleMouseEnter` returns early after a touch (`Toolbar.tsx:652`, `:812`), so
   the hover-open flyout and the informational flyout do not appear.
 
 ## Form input
 
 Numeric fields carry `inputMode="decimal"` so tablets raise a numeric soft
-keyboard. Applied across `ShotTableEditor`, `EditShotDialog`,
-`SectionMetadataForm` and the other shot/geometry entry dialogs; grep
+keyboard. Applied across `EditShotDialog`, `InsertStationDialog`,
+`DrawShotDialog`, `SectionMetadataForm` and the other shot/geometry entry
+dialogs (the `SpreadsheetGrid`-based shot editor sets no `inputMode`); grep
 `inputMode="decimal"` for the full set. `HelpTooltip` toggles on `onClick`
-(`HelpTooltip.tsx:116`) rather than hover-only, so its text is reachable by tap.
+(`HelpTooltip.tsx:211`) rather than hover-only, so its text is reachable by tap.
 
 ## Gaps and known-broken cases
 

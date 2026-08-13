@@ -13,6 +13,7 @@ pub struct UndoEntry {
     pub command: Command,                    // The original command
     pub undo_data: UndoData,               // Data needed to reverse it
     pub timestamp: Option<DateTime<Utc>>,  // Set at push time
+    pub command_bytes: Option<usize>,      // [#303] serialized command length, measured at push
 }
 ```
 
@@ -20,13 +21,13 @@ Entries are **moved** between stacks, never recreated. The same `UndoData` serve
 
 ### UndoStack
 
-Two `Vec<UndoEntry>` stacks (undo + redo) behind a `Mutex`, with a configurable `history_limit` (default 100, FIFO-trimmed on push). A separate `command_lock: Mutex<()>` on `AppState` serializes all execute/undo/redo calls to prevent interleaving.
+Two `VecDeque<UndoEntry>` stacks (undo + redo) behind a `Mutex`, with a configurable `history_limit` (default 100, FIFO-trimmed on push). A separate `command_lock: Mutex<()>` on `AppState` serializes all execute/undo/redo calls to prevent interleaving.
 
 ## Two-Phase Undo Data Capture
 
 Commands go through a two-phase capture during execution:
 
-1. **`generate_undo_data()` - before execution**: Captures "before" state. For creates this returns `UndoData::None` since the ID doesn't exist yet. For updates it snapshots previous field values. For deletes it snapshots the entity.
+1. **`generate_undo_data()` - before execution**: Captures "before" state. For `CreateSection` this returns `UndoData::None` since the ID doesn't exist yet; `CreateShot` returns a `CreatedShotSnapshot` STUB instead, because its `previous_offsets` can only be read before the insert. For updates it snapshots previous field values. For deletes it snapshots the entity.
 
 2. **`finalize_undo_data()` - after execution**: Fills in data that only exists post-execution. For `CreateSection`/`CreateShot`, this captures the assigned ID and full snapshot. For `CreateLoopClosure`, this grabs the closure object from the project.
 
@@ -38,13 +39,13 @@ Commands go through a two-phase capture during execution:
 | `PreviousValues` | UpdateShot, SetShotKind, UpdateSectionMetadata | Parse JSON, apply old values, then put the recorded `section_offsets` back (see below) | Execute the original command |
 | `CreatedSectionSnapshot` | CreateSection | Delete the section | Restore from snapshot (preserves the original ID **and** the recorded identity - see below) |
 | `CreatedShotSnapshot` | CreateShot | Remove the created shot - the exact inverse of the insert, guard-free - then put the recorded `section_offsets` back (see below) | Restore from snapshot (preserves original ID) |
-| `ShotSnapshot` | DeleteShot | Restore shot at exact position | Re-execute the delete |
-| `MergeInfo` | MergeStations | Restore previous offsets + unmerge | Execute the original command |
-| `UnmergeInfo` | UnmergeStations | Re-merge + restore removed closures | Re-execute the unmerge |
+| `ShotSnapshot` | legacy persisted DeleteShot entries (a live DeleteShot records `ProjectSnapshotPair`) | Restore shot at exact position | Re-execute the delete |
+| `MergeInfo` | legacy persisted MergeStations entries (a live MergeStations records `ProjectSnapshotPair`) | Restore previous offsets + unmerge | Execute the original command |
+| `UnmergeInfo` | legacy persisted UnmergeStations entries (a live UnmergeStations records `ProjectSnapshotPair`) | Re-merge + restore removed closures | Re-execute the unmerge |
 | `ClosureInfo` | Create/RemoveLoopClosure | Remove the closure, or put it back at its recorded index | Push closure back (preserves ID) |
 | `ZeroDatumInfo` | SetZeroDatum (and legacy persisted RemoveZeroDatum entries) | Restore GPS + offsets directly, at the datum's recorded index | Execute the original command |
 | `SegmentMoveInfo` | MoveSegment | Restore section offsets directly | Reapply offset to affected sections |
-| `ProjectSnapshotPair` | Batch, DeleteSection, RemoveZeroDatum (see below) | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
+| `ProjectSnapshotPair` | Batch, DeleteSection, DeleteShot, ReverseSection, MergeStations, UnmergeStations, UnmergeStationPair, MoveStation, MoveComment, RemoveZeroDatum, CreateLoopClosure (distributing strategies only), and the label-only RepairIntegrity / UpdateProjectSettings / SetSurfaceElevation (see below) | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
 | `None` | Non-undoable commands | N/A | N/A |
 
 ### Undo data addresses a shot by uuid, never by its in-session id (#413)
@@ -778,13 +779,16 @@ likewise only ever bumped while holding `project`; see the module doc in
 - Shows up to 5 items with icon, truncated description (40 chars), and relative timestamp
 - **Click item**: jumps to that stack position (`undo_to`/`redo_to`) and closes.
   A jump lands exactly where the same number of single steps lands: `undo_to` and
-  `redo_to` loop the `*_inner` variants and then run the SAME success epilogue
-  `undo()`/`redo()` run - `mark_remote_dirty()` and `reconcile_geometry()` -
-  once, after the loop. Per step would be wasted work (the intermediate states of
-  a jump are not states the user ever sees); skipping it altogether was #413's
-  finding 7, where a jump kept the drift `reconcile_geometry`'s `realign_merges`
-  heals and left sections metres from where Ctrl+Z the same number of times
-  leaves them
+  `redo_to` loop the `*_inner` variants and run the SAME success epilogue
+  `undo()`/`redo()` run - `reconcile_geometry()` after EVERY step, plus
+  `mark_remote_dirty()` once after the loop. The reconcile is per step, not once
+  at the end, because an intermediate state is not one the user ever sees but it
+  IS one the steps above it read (the arms that re-derive rather than restore -
+  `PreviousValues` via `update_shot`, `CreatedShotSnapshot` via
+  `remove_created_shot` - read the live offsets at the moment they run); skipping
+  it altogether was #413's finding 7, where a jump kept the drift
+  `reconcile_geometry`'s `realign_merges` heals and left sections metres from
+  where Ctrl+Z the same number of times leaves them
 - **Click button while open**: performs single undo/redo, refreshes the list, stays open
 - **Keyboard**: Arrow keys navigate, Enter selects, Escape closes
 - Actions are queued and processed sequentially (`actionQueueRef`)
@@ -807,7 +811,7 @@ Section names in preview data are resolved at **display time**, not execution ti
 
 `derive_preview_data()` matches `(Command, UndoData)` pairs to extract meaningful field changes. Every command type produces preview data - the fallback arm returns the command description as an "Action" field so hover is never empty.
 
-For `UpdateShot`, all changed fields are shown (up to 5): Length, Azimuth In/Out, Depth In/Out, Pitch In/Out, LRUD, Comment, Reference, Temperature. The previous values come from `PreviousValues.values_json`.
+For `UpdateShot`, all changed fields are shown (up to 5): Length, Azimuth In/Out, Depth In/Out, Pitch In/Out, LRUD, Comment, Kind, Temperature. The previous values come from `PreviousValues.values_json`.
 
 For batch commands, `derive_command_details()` extracts a compact detail string from each sub-command (without access to undo data, since the batch uses a single `ProjectSnapshotPair`).
 
@@ -823,7 +827,8 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 | `src-tauri/crates/core/src/core/state/speleodb_cache.rs` | `InheritedUndo` and the drop-on-adopt chokepoint |
 | `src/components/Dialogs/SpeleoUnwindDialog.tsx` | The Unwind confirmation |
 | `src/components/Dialogs/settings/SpeleoUndoModeControl.tsx` | The per-project Full/Disabled control |
-| `src-tauri/crates/core/src/core/state/commands.rs` | `execute()`, `generate_undo_data()`, `finalize_undo_data()` |
+| `src-tauri/crates/core/src/core/state/commands.rs` | `execute()`, `execute_batch()` |
+| `src-tauri/crates/core/src/core/state/undo_capture.rs` | `generate_undo_data()`, `finalize_undo_data()`, `is_undoable()` |
 | `src-tauri/crates/core/src/core/command.rs` | `Command` enum and `description()` method |
 | `src-tauri/src/commands/history.rs` | Tauri commands for stacks |
 | `src-tauri/crates/core/src/core/undo/history_view.rs` | `UndoHistoryItem` DTO, `derive_preview_data()`, `entry_to_history_item()` |

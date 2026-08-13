@@ -9,9 +9,11 @@ to satisfy, see the [Testing Guide](TESTING.md).
 ## The undo fuzz gate (Rust tier)
 
 `src-tauri/crates/core/src/core/state/fuzz_undo_tests.rs` runs the undo/redo fuzzing model
-directly against `AppState`, as ordinary tests. It is the only tier that gates
-CI: the agent harness never runs there, and `open_undo_bugs_tests.rs` is
-`#[ignore]`d by design.
+directly against `AppState`, as ordinary tests. It gates CI, alongside the
+metamorphic, file-format, crash-timing, adversarial and concurrency gates below;
+the agent harness never runs there. `open_undo_bugs_tests.rs` is no longer
+`#[ignore]`d - every bug it pinned is fixed, so its tests now run as regression
+guards on every CI run.
 
 ```bash
 # The gate. Runs with the default suite; ~10 s for all four tests.
@@ -42,7 +44,9 @@ where the project is.
 **Reproducing a specific known bug.** The module carries a BUG IDENTIFICATION
 MATRIX in its header: for every finding on
 [issue 413](https://github.com/Stalagmight/Stalagmight/issues/413), the mode,
-seed and move count under which this tier reaches it AND classifies it by id.
+seed and move count under which this tier used to reach and classify it, and the
+fix that closed it - every finding is FIXED now, `CLASSIFIERS` is empty, and
+each row's sweep reaches nothing at all.
 Four environment flags switch the modes on, and the gate uses none of them
 because each one CONSTRUCTS a known defect:
 
@@ -63,9 +67,9 @@ STALAGMIGHT_RUST_FUZZ_DIVERGENCE=1 STALAGMIGHT_RUST_FUZZ_SEEDS=1 \
   -p stalagmight-core --lib fuzz_seed_survey -- --ignored --nocapture
 ```
 
-Every seed prints one summary line per mode ending in `classified hits: ...`,
-and that list is the answer: a finding is *identified* when its id appears
-there, not merely when the seed fails.
+Every seed prints one summary line per mode; with `CLASSIFIERS` empty a clean
+run reaches nothing, so any `classified hits: ...` entry is a NEW open bug or
+float dust past tolerance rather than a known finding.
 
 **Long horizon.** Thousands of moves per seed, past the app's own
 `undo_history_limit`, so three things nothing shorter reaches get exercised: the
@@ -179,18 +183,19 @@ buckets and the classified totals. Two things follow:
   after every other seed has finished, so one bad seed no longer costs a soak
   the rest of its evidence.
 
-**The red tests.** Twenty-five of them, all `#[ignore]`d, all failing today on
-the bug named in each `#[ignore]` reason. Twenty-three are reductions in
-`open_undo_bugs_tests.rs`; two are pinned to a fuzzer SEED in the fuzz module
-instead, because every reduction for those two was measured not to reproduce
-(finding 14, and bug 7 - which had no test anywhere before). Delete an
-`#[ignore]` when its bug is fixed and the test becomes the regression guard.
+**The red tests.** None are left: every bug they pinned is fixed, so none is
+`#[ignore]`d any more. The 49 reductions in `open_undo_bugs_tests.rs` and the
+two seed-pinned tests in the fuzz module
+(`finding_14_no_insert_leaves_a_merge_out_of_alignment`,
+`bug_7_a_jump_is_n_single_steps`) all run as regression guards on every CI run.
+A new red test still goes in `#[ignore]`d, and the `#[ignore]` is deleted when
+its bug is fixed.
 
 ```bash
 # libtest takes several filters and ORs them; a shell-regex filter matches
 # nothing, since cargo's own filter is a plain substring.
 cargo test --manifest-path src-tauri/Cargo.toml \
-  -p stalagmight-core --lib -- --ignored open_undo_bugs finding_14 bug_7
+  -p stalagmight-core --lib -- open_undo_bugs finding_14 bug_7
 ```
 
 ## The metamorphic gate (Rust tier)
@@ -245,9 +250,11 @@ asserted, so a regression in it shows up in the summary diff without being a
 false failure today.
 
 It found finding 22 on its first run. The classified-hit ids it prints follow
-the same delete-when-fixed contract the roundtrip classifiers do, and one of
-them is deliberately named `observation-...` rather than `finding-...` because
-it is intermittent on identical inputs and has not been root-caused.
+the same delete-when-fixed contract the roundtrip classifiers do, and `EXPLAINS`
+is empty now: its last entry,
+`observation-split-routes-disagree-on-station-comment-keys`, was triaged out as
+this engine's own sort-before-mask rather than a defect in either route (see
+`resort_set_like`), so nothing is explained away any more.
 
 ## The file-format gate (Rust tier)
 
@@ -266,18 +273,22 @@ STALAGMIGHT_RUST_FORMAT_SEEDS=60 STALAGMIGHT_RUST_FORMAT_CLOSURES=1 \
   -p stalagmight-core --lib format_property_sweep -- --ignored --nocapture
 ```
 
-Three properties: save -> load -> save is a fixpoint (finding 23, classified);
-the loader is a function of the file (four loads per seed, green); and the
+Three properties: save -> load -> save is a fixpoint (finding 23, fixed - the
+classifier is deleted and the check records zero classified hits); the loader is
+a function of the file (four loads per seed, green); and the
 documented legacy fallbacks work, tested by writing a current file and
 degrading it with SQL - dropping the gauge columns `read.rs`'s
 `has_gauge_columns` probe expects to be missing, winding `PRAGMA user_version`
 back, desynchronising the two version markers, and dropping the undo tables.
 No fixture is involved: every degraded file is built from a fresh one.
 
-The fixpoint property does NOT assert that the drift settles. It does not:
-over eight gate runs "settles after one cycle" held four times and failed four
-on the same inputs. What it asserts is that no save/load cycle changes anything
-except bounded float dust in the derived and history tables.
+The fixpoint property still does not assert that the drift settles - and there
+is no drift left to settle: the re-roll that made "settles after one cycle" hold
+four times and fail four over eight gate runs was root-caused to a `HashMap` in
+`UndoData::previous_offsets`, which now serializes in key order, so no
+generation-1-to-2 pair differs at all. What it asserts is that no save/load
+cycle changes ANYTHING in the file's logical content: finding 23 is fixed,
+`is_finding_23` is deleted, and the "except bounded float dust" clause is gone.
 
 ## The crash-timing gate (Rust tier)
 
@@ -311,7 +322,7 @@ The oracle: no panic, the destination is EXACTLY the old file or EXACTLY the
 new one (never a blend, and the engine names which it must be, because every
 pre-rename state leaves the destination byte-intact), it opens, and it can be
 saved again leaving no staging file behind. That last step is what walks the
-next save into the orphaned-journal hazard `project_io.rs:482` creates: the
+next save into the orphaned-journal hazard `project_io.rs:846` creates: the
 leftover-temp cleanup removes the temp but not its `-journal`, so the next save
 builds a fresh temp database at that name straight on top of a hot journal.
 That one is measured benign - the save succeeds and SQLite discards the stale
@@ -443,9 +454,10 @@ STALAGMIGHT_RUST_FUZZ_SEEDS=40 STALAGMIGHT_RUST_FUZZ_ITERATIONS=100 \
 ```
 
 `COMBINED_SEEDS` is chosen the same way, from the same tool under `COMBINED=1`,
-with one extra criterion: the pair has to cover `COMBINED_CLASSIFIED` between
-them, which is the id SET that gate pins (the counts are printed, not asserted -
-a sharper classifier must not turn a gate red).
+with one extra criterion: between them the pair has to exercise the regime's
+three structural properties (it trimmed, it crossed more than once, it jumped).
+The old `COMBINED_CLASSIFIED` id-set pin is inverted - the gate now asserts the
+regime reaches nothing.
 
 **Debugging a failure.** `STALAGMIGHT_RUST_FUZZ_TRACE=1` streams every move as it
 happens, including the line the classifier writes when a hit is explained - which
@@ -526,9 +538,11 @@ Two things the mechanism guarantees, and one it does not:
 - It does not shrink the PLAN or the values inside a move. A mode is on or off,
   and the shot data a move carries is replayed verbatim.
 
-Three tests gate the machinery on every CI run: recording does not change what a
-run does, a FULL trace replays to exactly the run it was recorded from, and the
-ddmin schedule reaches the known minimum of a synthetic predicate.
+Seven tests gate the machinery on every CI run: recording does not change what a
+run does, a FULL trace replays to exactly the run it was recorded from, the
+ddmin schedule reaches the known minimum of a synthetic predicate, the shrinker
+minimizes an injected failure, and three signature-matching tests pin what "the
+same failure" means.
 
 ## Commands
 
@@ -579,9 +593,9 @@ hooks the specs drive - a plain production build strips them.
 
 Locally it reuses an already-running server. If you run more than one clone of
 this repo, that reuse will silently point the suite at the *other* clone's
-server, so you test the wrong code with no error. Do not kill theirs: start your
-own on a free port (`pnpm exec vite --port 1421`) and run against a config whose
-`baseURL` and `webServer.url` point at it.
+server, so you test the wrong code with no error. Do not kill theirs: run the
+suite on a free port with `PW_PORT=1421 pnpm test:ui` - `PW_PORT` repoints the
+webServer, the `baseURL` and the reuse probe together.
 
 ### Rust
 
@@ -688,9 +702,10 @@ pnpm coverage:merge          # merge raw E2E output into docs/coverage/
 
 The suite is defined by `vite.config.ts` `test.include`, which is wider than
 `src/`: it also picks up `scripts/**/*.{test,spec}.ts` (golden tests for the
-repo's own Node tooling) and `e2e/agent/lib/**/*.test.ts` (agent-harness helper
-logic). A new vitest home outside those three globs is a deliberate one-line
-addition there.
+repo's own Node tooling), `e2e/agent/lib/**/*.test.ts` and
+`e2e/agent/os/**/*.test.ts` (agent-harness helper and OS-input logic), and
+`e2e/lib/**/*.test.ts` (shared harness helpers). A new vitest home outside those
+five globs is a deliberate one-line addition there.
 
 Tiering is by **file extension**, via `environmentMatchGlobs`:
 
@@ -791,7 +806,7 @@ Use these instead of `waitForTimeout`. All from `helpers/app.ts`:
 
 `helpers/app.ts` also has seeding helpers (`createSectionViaStore`,
 `seedProjectWithSections`), menu navigation (`openAppMenu`,
-`openSettingsFromMenu`, `openOrImportFromMenu`), the DMP wizard drivers
+`openSettingsFromMenu`, `openDebugFromMenu`), the DMP wizard drivers
 (`openDmpSelectionDialog`, `proceedToDmpImportWizard`, `placeAllSections`), and
 canvas readback (`getDrawnGeometry`, `getStationScreenPositions`,
 `readCanvasPixel`, `countCanvasInk`). Read the file before writing a new

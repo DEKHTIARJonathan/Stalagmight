@@ -41,10 +41,13 @@ solver uses a sparse representation and iterative Conjugate Gradient:
 3. **Jacobi preconditioner:** M = diag(A), trivially inverted. Good enough for
    graph Laplacians where the diagonal dominance ensures fast convergence.
 
-4. **CG iteration:** converges in O(diameter) iterations for graph Laplacians,
-   which is typically much less than n.
+4. **Exact degree-≤2 reduction, then CG:** `solve_reduced_laplacian` peels
+   degree-1 spurs and series-reduces degree-2 chains exactly in O(n), runs
+   Jacobi-PCG on the surviving 2-core (≈ one node per eligible closure), then
+   back-substitutes.
 
-**Complexity:** O(nnz × iterations) ≈ O(n × diameter), vs O(n³) for dense LU.
+**Complexity:** O(n) peeling plus PCG over the tiny 2-core, vs O(n²) for the
+former full-system PCG on a single long loop and O(n³) for dense LU.
 
 **Tolerance:** 1e-12 relative residual norm, max 10,000 iterations.
 
@@ -141,11 +144,14 @@ hotspots.
 
 ## Per-Command Geometry Reconcile
 
-Every command whose `command_integrity` profile sets `affects_geometry` runs a
-`reconcile_geometry()` pass in the `execute()` epilogue (`check_merge_alignment`
-+ `realign_merges` + `resolve_offsets`). That pass is O(total shots + total
-merges) and allocates two whole-project maps (`section_local_coords` and the
-resolved station offsets) - it is **not** cached between calls.
+Every command whose `Command::affects_geometry()` returns true runs a
+`reconcile_geometry()` pass in the `execute()` epilogue
+(`remeasure_closure_alignment` + `realign_merges` +
+`remeasure_closure_alignment`, with `realign_merges` reaching
+`check_merge_alignment` and the offsets re-solve internally). That pass is
+O(total shots + total merges) and allocates two whole-project maps
+(`section_local_coords` and the resolved station offsets) - it is **not** cached
+between calls.
 
 `UpdateShot` is in this group (a length/azimuth/depth edit moves stations, and
 the bespoke `realign_after_shot_edit` no-ops on a merge group with no zero

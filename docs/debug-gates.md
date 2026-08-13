@@ -3,10 +3,13 @@
 Stalagmight ships with a fair amount of instrumentation - phase timings on the
 load path, per-section progress markers during TML / Compass / DMP import,
 console traces in the React store, and `debug_assert`-style cross-checks in the
-project model. All of it is **off by default in production**: the dev-only
-machinery either compiles to nothing in release, or is filtered out by the
-default log level. This page is the map of where each gate lives and how to
-turn the noise back on when you actually want to see it.
+project model. Most of it is **off by default in production**: the
+`#[cfg(debug_assertions)]` (Rust) and `import.meta.env.DEV` (Vite) machinery
+compiles to nothing in release. The backend `debug!` stream is the exception -
+the default subscriber filter is `info,stalagmight=debug`, so it still reaches
+the log in release builds unless you override `RUST_LOG`. This page is the map
+of where each gate lives and how to turn the noise back on when you actually
+want to see it.
 
 Read this before adding new diagnostic code. The cost of a stray `tracing::info!`
 or `console.log` on a per-shot / per-merge hot path is *real* - the import work
@@ -21,9 +24,9 @@ measurable fraction of the wall clock.
 |-------|--------------------------|---------|
 | `error!` | always | Conditions a user should care about (corruption, save failed, FK violation). |
 | `warn!`  | always | Recoverable anomalies (poisoned mutex, FK rebuild fallback). |
-| `info!`  | always (release default filter is `info`) | **Once-per-lifecycle** events: app startup, project create / open / save / close success, schema migrations, full integrity check. |
-| `debug!` | off in release; on when `RUST_LOG=stalagmight=debug` | Per-operation chatter, sub-phase timings, load-loop progress, per-section import timing. |
-| `trace!` | off everywhere by default | Per-shot / per-row spam. (Reserved - no current callers.) |
+| `info!`  | always (default filter is `info,stalagmight=debug`) | **Once-per-lifecycle** events: app startup, project create / open / save / close success, schema migrations, full integrity check. |
+| `debug!` | on by default (the default filter enables `stalagmight=debug`); silence with `RUST_LOG=info` | Per-operation chatter, sub-phase timings, load-loop progress, per-section import timing. |
+| `trace!` | off everywhere by default | Per-shot / per-row spam. (A handful of callers: tilemap cache hits, closure correction/metrics.) |
 
 The default release filter is set in `src-tauri/crates/telemetry/src/logging/mod.rs`. Override at
 runtime via `RUST_LOG=…` exactly as in any tracing application. Log targets
@@ -45,28 +48,31 @@ stalagmight_parsers::parsers::tml=debug pnpm tauri dev
 ### Categories of `debug!` worth knowing about
 
 **Load-phase timings** (`debug!` in
-`src-tauri/crates/persistence/src/persistence/sqlite.rs::open_existing` and
-`src-tauri/crates/models/src/project.rs::compute_station_coordinates_with_progress`):
+`src-tauri/crates/persistence/src/persistence/sqlite/open.rs::open_existing` and
+`src-tauri/crates/models/src/project/coordinates.rs::compute_station_coordinates_with_progress`):
 break down `Database::open_existing` and `compute_station_coordinates` into
 sub-phases (validate_integrity, has_project_data, ensure_schema_version,
 validate_foreign_keys, build_colocated_groups, depths loop, xyz walk, …).
 Enable when investigating slow project opens.
 
 **TML import loop progress** (`debug!` in
-`src-tauri/crates/core/src/core/state/commands.rs::execute_import_sections`): per-100-section
+`src-tauri/crates/core/src/core/state/command_import.rs::execute_import_sections`): per-100-section
 batch timing - `batch_ms`, `create_ms`, `placement_ms`. Enable when debugging
 super-linear growth during a batch import.
 
-**Per-operation success acks** (`debug!` throughout `commands.rs`): "Section
-created", "Stations merged", "Shot updated", etc. Quiet by default - they fire
-N times during a 14k-section import and don't help in release.
+**Per-operation success acks** (`debug!` throughout the `command_*.rs` modules
+under `src-tauri/crates/core/src/core/state/`): "Section created", "Stations
+merged", "Shot updated", etc. On by default like every other `debug!` (see the
+level table) - they fire N times during a 14k-section import and don't help in
+release, so silence them with `RUST_LOG=info`.
 
-**SQLite open / save chatter** (`debug!` in
-`src-tauri/crates/persistence/src/persistence/sqlite.rs`): per-open / per-save / per-row-count
+**SQLite open / save chatter** (`debug!` across
+`src-tauri/crates/persistence/src/persistence/sqlite/` - `open.rs`, `write.rs`,
+`read.rs`): per-open / per-save / per-row-count
 diagnostics. Enable when debugging persistence bugs.
 
 **Recent-projects metadata timings** (`debug!` in
-`sqlite.rs::load_metadata`): fires once per recent project on every
+`sqlite/read.rs::load_metadata`): fires once per recent project on every
 refresh. Enable when chasing slow startup.
 
 ### `debug_assert_*` and `#[cfg(debug_assertions)]`
@@ -107,11 +113,10 @@ clean - they're meant to be run on demand by hand.
 
 ### `src/utils/debugLog.ts`
 
-Thin wrappers around `console.log` / `console.warn` / `console.info`. The
-exported functions are bound to the real `console.*` method **only when
-`import.meta.env.DEV` is `true`** (Vite sets it in dev / test). In a
-production build the helpers compile to `() => {}` and Vite's tree-shaker
-drops the call sites entirely.
+A thin wrapper around `console.log`. The exported `debugLog` is bound to the
+real `console.log` **only when `import.meta.env.DEV` is `true`** (Vite sets it
+in dev / test). In a production build it compiles to `() => {}` and Vite's
+tree-shaker drops the call sites entirely.
 
 ```typescript
 import { debugLog } from '../utils/debugLog';
@@ -119,7 +124,7 @@ import { debugLog } from '../utils/debugLog';
 debugLog('[projectStore] refreshProjectState: done');
 ```
 
-Use these for any per-operation diagnostic print. Keep raw `console.error` (and
+Use it for any per-operation diagnostic print. Keep raw `console.error` (and
 `console.warn` for genuine runtime anomalies a user could act on) untouched -
 those are signal, not noise.
 

@@ -49,8 +49,10 @@ out of bundles built without the flag, so there is no production cost.
 
 ### `src/utils/debugLockup.ts`
 
-- Wraps Tauri IPC calls (via `trackInvoke`, threaded through `invokeIpc` and
-  the direct `push_frontend_log` caller in `consoleCapture.ts`). Logs every
+- Wraps Tauri IPC calls (via `trackInvoke`, threaded through `invokeIpc` in
+  `src/utils/ipc.ts`; `consoleCapture.ts`'s own `push_frontend_log` invoke is
+  deliberately left unwrapped - `console.error` is monkey-patched there to
+  call it, so tracking that invoke would recurse on IPC errors). Logs every
   call with id, duration, and a running in-flight count. Logs a `HANG`
   warning for any call still pending after 3 s.
 - Captures `window.onerror` and `unhandledrejection` with full stack traces.
@@ -111,7 +113,8 @@ leaking.
   `@tauri-apps/api/core` is the Promise-shaped one. Patching at the internals
   level breaks app startup. Use the `trackInvoke(command, promise)`
   pass-through helper from `debugLockup.ts` instead and wire it in at known
-  call sites (`src/utils/ipc.ts`, `src/utils/consoleCapture.ts`).
+  call sites (`src/utils/ipc.ts`) - not `src/utils/consoleCapture.ts`, whose
+  `push_frontend_log` invoke must stay unwrapped for the reason above.
 - `installConsoleCapture` (in `main.tsx`) pipes every `console.*` call to an
   IPC `push_frontend_log` invoke. If you add new debug logs from within
   debugLockup itself, cache `console.log.bind(console)` *before*

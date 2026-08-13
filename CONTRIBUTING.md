@@ -107,6 +107,7 @@ pnpm lint:e2e-parallel                                             # Playwright 
 pnpm lint:pw-timing:test                                           # Playwright timing-reporter fixtures (a CI gate)
 pnpm lint:rust-file-size                                           # Rust file-size ratchet (a CI gate)
 pnpm lint:ts-file-size                                             # TS file-size ratchet (a CI gate)
+pnpm lint:test-ids:test && pnpm lint:test-ids                      # interactive UI test-ID contract (a CI gate)
 pnpm lint:readonly-gates:test && pnpm lint:readonly-gates          # read-only gating tripwire (a CI gate)
 pnpm lint:private-leaks                                            # no internal/personal refs in the public tree (a CI gate)
 pnpm lint:no-em-dash:test && pnpm lint:no-em-dash                  # ASCII hyphens only, no Unicode dashes (a CI gate)

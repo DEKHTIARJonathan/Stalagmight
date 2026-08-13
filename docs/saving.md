@@ -36,16 +36,16 @@ source survey, not repaired.
 2. Load display settings from current database or in-memory cache
 3. Write project data to temp file (file.stalx.tmp)
 4. Copy display settings to temp database
-5. Close temp database, atomically rename to final path
-6. Reopen database at final path
-7. Persist undo/redo stacks synchronously to the database
+5. Persist undo/redo stacks synchronously into the temp database
+6. Close temp database, atomically rename to final path
+7. Reopen database at final path
 8. Update project.file_path
 9. Swap in the new database handle
 10. Update recent projects list in config
 11. Return CommandResult with saved_path
 ```
 
-Steps 1-6 are the critical path for data safety. Step 7 persists undo/redo stacks synchronously to avoid race conditions with concurrent readers.
+Steps 1-6 are the critical path for data safety. Step 5 writes the undo/redo stacks while the file is still staged, so a partial rewrite is never renamed into place.
 
 ### `section_offsets` rows are never all-zero
 
@@ -71,7 +71,7 @@ fixpoint, and a legacy file is one from its first save onward.
 For a SpeleoDB-managed project given an explicit destination (Save a Copy, see
 below), the pipeline diverges after step 5: the copy is written and renamed into
 place, recorded in Recent Projects, and the function returns with
-`CommandResult.unlinked_copy_path` set - steps 6, 8 and 9 are skipped on
+`CommandResult.unlinked_copy_path` set - steps 7, 8 and 9 are skipped on
 purpose, because the session stays on the managed file.
 
 ### Frontend (`saveProject` in `projectStore.ts`)
@@ -86,7 +86,7 @@ purpose, because the session stays on the managed file.
 5. Set isDirty: false
 ```
 
-The frontend does **not** call `refreshProjectState()` after save. Save doesn't change any computed data (stations, stats, warnings), so recomputing everything would be wasted work. The only state that changes is `file_path` (on first save or save-as), which the backend returns via `CommandResult.saved_path`. When the save produced a detached copy instead (see Save a Copy below), the path comes back in `unlinked_copy_path` and `saved_path` is absent.
+The frontend calls `refreshProjectState()` after a save ONLY when the project entered the save with integrity issues (the backend's save-time heals mutate the live project). A clean save skips it: it changes no computed data (stations, stats, warnings), so recomputing everything would be wasted work. The only state that changes is `file_path` (on first save or save-as), which the backend returns via `CommandResult.saved_path`. When the save produced a detached copy instead (see Save a Copy below), the path comes back in `unlinked_copy_path` and `saved_path` is absent.
 
 ## Atomic Save (Temp File + Rename)
 
@@ -191,7 +191,7 @@ Undo and redo stacks are persisted to the SQLite database synchronously on each 
 
 1. While the undo stack lock is held, entries are collected and serialized
 2. Entries are written to the database synchronously (no background thread)
-3. Errors are logged via `tracing::warn` but don't affect the save result
+3. A failed write is logged via `tracing::warn`, both stacks are cleared, and the save result carries an `UNDO_HISTORY_DROPPED` warning; if clearing also fails, the save is aborted with `save_failure` and the temp file is removed
 
 ### Details
 
@@ -214,7 +214,7 @@ The `save_project` backend command returns the save path as a string in `Command
 
 | File | Purpose |
 |------|---------|
-| `src-tauri/crates/core/src/core/state/project_io.rs` | Backend `save_project`, `open_project`, atomic save logic |
+| `src-tauri/crates/core/src/core/state/project_io.rs` | Backend `save_project`, atomic save logic (`open_project` lives in `project_load.rs`) |
 | `src-tauri/crates/core/src/core/command.rs` | `CommandResult` with `saved_path` field |
 | `src/store/projectStore.ts` | Frontend `saveProject()` action |
 | `src/hooks/useAutoSave.ts` | Debounced auto-save hook |

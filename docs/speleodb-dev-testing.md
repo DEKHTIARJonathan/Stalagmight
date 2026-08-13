@@ -87,7 +87,7 @@ The live round-trip owns all of its own state - there is **no** pre-seeded
 - A `ProjectCleanup` guard (`Drop`) **soft-deletes** that project on the way out -
   even if an assertion panics partway through - so runs don't leak projects.
 - Seeding a known-good `.stalx` goes through the real single-writer dance:
-  `acquire_lock → upload_auto_single → release_lock`. (Upload requires holding the
+  `acquire_lock → upload_auto → release_lock`. (Upload requires holding the
   project mutex; the server enforces `UserOwnsProjectMutex`.)
 - The pull half then exercises `download_dump → classify → extract →
   Database::open_existing`, proving the dump opens self-contained.

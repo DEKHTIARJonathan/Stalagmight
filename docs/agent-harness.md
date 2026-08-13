@@ -21,14 +21,22 @@ This used to say the harness required Node 22 and would fail on 23+ with
 from its bundled undici and handed it to Node's built-in `fetch`, so the two
 undici majors had to agree. That mechanism is not what the code does. `webdriver`
 9.23.0 imports `fetch` from undici alongside `Agent` (`build/node.js:1614`) and
-calls that fetch (`:1986`), so on today's code they cannot disagree: the one place
-a dispatcher it did not create could reach its own `fetch` is `getGlobalDispatcher()`
-(`:2000-2005`, assigned at `:2031`), and `getDispatcher` declines any foreign
-dispatcher by testing `constructor.name` against `Agent`/`MockAgent` (`:2002-2003`).
-That guard is a string comparison, so treat this as true-of-this-version rather than
-structurally impossible. The
-global-`fetch` variant is `request/web.ts`, the browser path, which this harness
-does not use.
+calls that fetch (`:1986`), so the two undici majors no longer have to agree
+about `fetch` itself. The DISPATCHER is a different story: `getDispatcher` reads
+`getGlobalDispatcher()` (`:2001`) and RETURNS whatever sits in that shared slot
+unless it is a plain `Agent`/`MockAgent` (`:2002-2003`), so a foreign dispatcher
+does reach webdriver's own fetch. On Node >= 26 the builtin undici rewrites the
+shared slot (`Symbol.for('undici.globalDispatcher.1')`) with a
+`Dispatcher1Wrapper` on the first global fetch, webdriver's undici-6 request is
+then routed through undici-8 internals, and every WebDriver command dies with
+`UND_ERR_INVALID_ARG` before reaching tauri-driver.
+`e2e/agent/lib/undici-dispatcher-pin.ts` - the first import in `session.ts`,
+`sessionMac.ts` and `createSession.ts` - patches that copy's
+`getGlobalDispatcher` to return a stable plain `Agent` whenever the slot holds
+anything else, so webdriver falls through to building its own per-session
+`Agent`. Inert on Node 22/24, and best-effort: a resolution failure leaves
+webdriver untouched. The global-`fetch` variant is `request/web.ts`, the browser
+path, which this harness does not use.
 
 Checked rather than assumed: driving `remote()` through a full session lifecycle
 (`POST /session` -> `GET .../window` -> `DELETE`) against a stub WebDriver server
@@ -64,8 +72,9 @@ is not free in practice. The runner image carries webkit's `-dev` packages for
 and `tauri-driver` (xvfb is usually already there) - about 40s combined.
 
 If `app_start` ever does fail with `UND_ERR_INVALID_ARG`, suspect `HTTP_PROXY` /
-`NO_PROXY` in the environment before the Node version, and record what actually
-fixed it here. `agent:http-probe` drops those variables for its own loopback stub
+`NO_PROXY` in the environment first - the Node >= 26 shared-dispatcher cause is
+already pinned out by `undici-dispatcher-pin.ts` above - and record any new cause
+here. `agent:http-probe` drops those variables for its own loopback stub
 (webdriver snapshots them at module init and would otherwise route a 127.0.0.1
 request through the proxy, then blame the driver), so a proxy-caused failure shows
 up in `app_start` rather than in the probe.
@@ -81,8 +90,9 @@ installs the `tauri-wd` binary onto PATH) against the in-app
 (`pnpm tauri build --debug --no-bundle -- --features e2e`; the E2E build stamp
 records the feature so a plugin-less binary reads as stale). The feature build
 regenerates `src-tauri/gen/schemas/*.json` with the plugin's ACL entries;
-`buildApp` restores them when they were clean before the build, and warns
-instead of clobbering when they were already modified - never commit them in
+`buildApp` restores them when they were clean before the build, or when their
+only changes are provably the plugin's ACL entries, and warns instead of
+clobbering when the diff carries anything else - never commit them in
 the feature shape. `e2e/mac-app-wrapper.mjs` sits between tauri-wd and the
 binary exactly as in the legacy WDIO suite.
 
@@ -184,8 +194,10 @@ hazards over long runs.
   - `pnpm agent:smoke` - session-core smoke (build -> launch -> drive -> stop).
   - `pnpm agent:mcp:smoke` - MCP-layer smoke (spawns the server, round-trips
     every tool through the protocol, self-tests the crash oracle).
-  - `pnpm agent:scenarios` - runs all 10 stress scenarios once at small n. Two of them
-    are expected-red (see Stress scenarios); the gate reports those as XFAIL.
+  - `pnpm agent:scenarios` - runs all 10 gated stress scenarios once at small n.
+    The other three (`import-dialog-fuzz`, `export-roundtrip-fuzz`,
+    `fractal-stress`) are excluded from the gate and reported as SKIP; there is
+    no expected-red list.
   - `pnpm agent:scenario <name> [--seed N] [--iterations M] [--release]` - runs
     ONE scenario at a chosen seed/n, then a full sweep. The one to reach for when
     a seeded scenario needs re-running: a fuzzer repro, or a soak at a bigger n
@@ -239,11 +251,12 @@ children). That default is a deliberate trade, not inertia.
 **What release costs you.** `debug_assertions` is off, so these stop running:
 
 - Every `debug_assert!` in a live path - `core/state/command_comment.rs:71`,
-  four in `core/loading.rs`, `models/project/reverse.rs:358`,
-  `models/project/classify.rs:244`. Each is an
+  four in `core/loading.rs`, `models/project/reverse.rs:379`,
+  `models/project/classify.rs:244`, `core/state/undo_restore.rs:264`,
+  `core/state/speleodb_pull.rs:1685`, `persistence/sqlite.rs:519`. Each is an
   invariant check the app performs on itself during exactly the mutations a
   fuzzer drives.
-- `Project::debug_assert_merge_alignment` (`models/project/offsets.rs:72`), whose
+- `Project::debug_assert_merge_alignment` (`models/project/offsets.rs:546`), whose
   whole body is `#[cfg(debug_assertions)]`. In debug it emits a `tracing::error!`
   when a merge ends up more than 5 cm out of alignment inside a single command;
   that line rides the ring buffer into the harness's error-log oracle. In release
@@ -609,8 +622,8 @@ STALAGMIGHT_FUZZ_STREAM=v3 pnpm agent:fuzz-matrix --seeds 1..4 --workers 1 --ite
 covering an arbitrary number of new sections, placements, station comments and
 in-place edits to shots that were already there. That is the widest single
 command in the app, and it is a `ProjectSnapshotPair` - the entry family findings
-8 and 11 both lived in. v3 adds thirteen generators for it
-(`e2e/agent/scenarios/undoRedoFuzzImportActions.ts`), about 22% of a balanced
+8 and 11 both lived in. v3 adds fifteen generators for it
+(`e2e/agent/scenarios/undoRedoFuzzImportActions.ts`), about 24% of a balanced
 run's draws:
 
 - **`importSectionsSynthetic`** - fully synthetic `ImportSectionConfig` batches:
@@ -634,6 +647,11 @@ run's draws:
   `import-dialog-fuzz` uses, never a fixture.
 - **The cheap probes** - `calculateFileHash`, `checkDuplicateImport`,
   `checkSectionHashes`, `suggestImportPlacement`, `saveAfterImport`.
+- **The motif pair** - `createMotifSection` plants a section whose shots are a
+  motif derived from a small integer key, and `probeSuggestMotif` asks
+  `suggest_import_placement` for that same motif jittered well inside the
+  suggester's cutoffs. Both are pure, so the shrinker can re-derive either half;
+  until they landed, the probe had only ever exercised the empty return.
 
 **v1 and v2 draw identically.** The group is filtered out before the weighted
 name array is built, and appended at its END when it is not, so every index
@@ -712,15 +730,15 @@ covered by `import-dialog-fuzz`, which drives the dialogs that call it.
 
 There is no Rust-tier analogue of the import group, and adding one is a design
 problem rather than a transcription. `Refs::learn`
-(`src-tauri/src/core/state/fuzz_undo_tests.rs`) pairs what a recorded move
-created against what the replayed move created POSITIONALLY, with `zip` and no
-length check - sound only because every existing `Op` creates a fixed number of
-entities (at most one section, one shot, one closure; `BatchOp` has no creating
-variant at all). An import creates an arbitrary number in one move, and
-`execute_import_sections` drops sections whose placement does not resolve, so a
-replay that places one fewer would pair a PREFIX, silently, and the shrinker
-would minimize toward the mis-pairing instead of toward the bug. Whoever adds it
-has to give `learn` a checked, arity-aware pairing first.
+(`src-tauri/crates/core/src/core/state/fuzz_undo_tests.rs`) pairs what a
+recorded move created against what the replayed move created POSITIONALLY, with
+`zip` and no length check - sound only because every existing `Op` creates a
+fixed number of entities (at most one section, one shot, one closure; `BatchOp`
+has no creating variant at all). An import creates an arbitrary number in one
+move, and `execute_import_sections` drops sections whose placement does not
+resolve, so a replay that places one fewer would pair a PREFIX, silently, and
+the shrinker would minimize toward the mis-pairing instead of toward the bug.
+Whoever adds it has to give `learn` a checked, arity-aware pairing first.
 
 The findings are tracked at
 <https://github.com/Stalagmight/Stalagmight/issues/413>, one comment per finding
@@ -943,7 +961,10 @@ Its knobs, all read at call time so a replayed trace's restored environment
 reaches them: `STALAGMIGHT_FUZZ_IMPORT_FORMAT` (all five families),
 `STALAGMIGHT_FUZZ_IMPORT_FLOWS_PER_EPISODE` (3), `_MAX_FLOW_STEPS` (140),
 `_MALFORMED_P` (0.2), `_INTERJECT_P` (0.08), `_AUX_INTERJECT_P` (0.04),
-`_SETTLE_MS` (12000), plus `STALAGMIGHT_FUZZ_CORPUS_DIR` (unset).
+`_SETTLE_MS` (12000), `STALAGMIGHT_FUZZ_IMPORT_NO_PROJECT_P` (0.3),
+`_GPS_PASSABLE_P` (0.6), `_SUGGESTIVE_P` (0.5), `_FORCE_STATIONS` (on), plus
+`STALAGMIGHT_FUZZ_CORPUS_DIR` (unset) and `STALAGMIGHT_FUZZ_CORPUS_DRAW_P`
+(0.25).
 
 Two interjection streams, not one: `_INTERJECT_P` drives the original
 Escape/route/undo/redo/save set, and `_AUX_INTERJECT_P` drives the wave-3
@@ -1174,10 +1195,12 @@ normalized out of those, because removing a mutation moves every depth and index
 while the defect stays the same; the sentence shape, the field at the end of the
 path and the classifier ids are NOT normalized, so a candidate that fails
 DIFFERENTLY is rejected exactly like one that passes. That is standard ddmin
-practice and it is what stops a shrink wandering onto one of the other ten open
-bugs; the count of rejected-as-divergent candidates is reported.
+practice and it is what stops a shrink wandering onto a different failure than
+the one the trace recorded; the count of rejected-as-divergent candidates is
+reported.
 
-Measured, on the two current reds:
+Measured, on the two traces that were red when the shrinker was built (both bugs
+are now fixed):
 
 | trace | before | after | replays | divergent, rejected | per replay | wall clock |
 |---|---|---|---|---|---|---|
@@ -1234,8 +1257,9 @@ consumed, which is what resolves it there.)
   lines since an internal cursor. A `dropped`/`ring-overflow` warning means the
   500-entry ring rotated past the cursor.
 - **Full sweep** (`check_problems`): cheap sweep plus `check_project_integrity`
-  (`save_blocked` = fatal, non-empty messages = error), leftover `*.stalx.tmp`
-  beside `projectStore.projectPath`, `get_memory_stats` vs a session baseline
+  (`save_blocked` = fatal, non-empty messages = error), leftover write-staging
+  files (`*.stalx.tmp`, `*.download.tmp`, `*.vacuum.tmp`) beside
+  `projectStore.projectPath`, `get_memory_stats` vs a session baseline
   (total RSS > baseline*1.5 + 300MB = warning, with per-process breakdown), and
   a read-only responsiveness probe (a hung IPC = possible command-lock deadlock,
   fatal).
@@ -1317,6 +1341,7 @@ mutating because every later `os_*` step depends on that consent, and
   screenshots/         # <seq>-<name>.png
   state/               # state snapshots
   findings/<n>/        # finding.json + screenshot.png + crash markers
+  traces/              # fuzz traces, if a run recorded one
   pids                 # recorded PIDs (for scoped orphan reaping)
   tauri-driver.log     # continuous driver stderr/stdout
   replay.spec.ts       # if a replay was generated here
@@ -1328,8 +1353,10 @@ Gitignored; the 20 newest sessions are kept.
 ## Troubleshooting
 
 - `app_start` fails `UND_ERR_INVALID_ARG` -> an error from webdriverio's undici
-  HTTP layer. Session creation works on Node 22 and 24, so check `HTTP_PROXY` /
-  `NO_PROXY` in the environment before blaming the Node version.
+  HTTP layer. Check `HTTP_PROXY` / `NO_PROXY` in the environment first; on
+  Node >= 26 the cause is the dispatcher pin (see "Runtime: the repo-pinned
+  Node" above) - confirm `undici-dispatcher-pin.ts` is still imported ahead of
+  `webdriverio`.
 - `window.__E2E_TEST__ not present` -> the binary was built without `VITE_E2E=1`.
   `build: "auto"` should have caught that before attach (see the build stamp
   below); if you land here anyway, rerun `app_start` with `build: "force"`.

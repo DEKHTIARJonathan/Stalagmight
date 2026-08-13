@@ -165,7 +165,7 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 ### 2.10 Updates & Telemetry
 - No auto-update mechanism
 - Opt-in telemetry only
-- No external network calls except tile servers
+- No external network calls except tile servers, SpeleoDB sync, and opt-in telemetry
 
 ### 2.11 Recovery
 - Auto-save only (no crash recovery dialog)
@@ -212,8 +212,12 @@ Project (Cave System)
 │   ├── surveyor: Option<String>
 │   ├── date: Option<Date>
 │   ├── color: Color
+│   ├── direction: SurveyDirection
+│   ├── quality: f64
+│   ├── azimuth_reference: Option<AzimuthReference>
 │   └── Shots[]
 │       ├── id: u32 (internal, immutable)
+│       ├── uuid: Option<String> (persistent identity, schema v6+)
 │       ├── azimuth_in: f64 (degrees, 0-360)
 │       ├── azimuth_out: f64 (degrees, 0-360)
 │       ├── length: f64 (meters)
@@ -230,20 +234,24 @@ Project (Cave System)
 │       ├── marker_index: Option<u32>
 │       └── temperature: Option<f64> (celsius)
 ├── Stations[] (computed from shots)
-│   ├── id: StationRef (section_id:shot_index)
-│   ├── coordinates: Option<Coordinates> (computed or GPS)
+│   ├── station_ref: StationRef (section_id:station_index)
+│   ├── coordinates: Coordinates (computed or GPS)
 │   ├── is_zero_datum: bool
+│   ├── gps_coordinates: Option<GpsCoordinates>
 │   ├── merged_with: Vec<StationRef>
-│   └── closures_with: Option<Vec<ClosureRef>> (direct + transitive closure relationships)
+│   ├── closures_with: Option<Vec<ClosureRef>> (direct + transitive closure relationships)
+│   └── comment: Option<String>
 │
 │   ClosureRef:
-│     ├── closure_id: u32 (references LoopClosure.id)
+│     ├── closure_id: u64 (references LoopClosure.id)
 │     ├── station_ref: StationRef (the other station in the closure)
 │     ├── via_station: Option<StationRef> (intermediate station for transitive closures)
 │     └── is_transitive: bool (false = direct closure, true = transitive)
-└── Settings
-    ├── display_preferences: DisplaySettings
-    └── export_preferences: ExportSettings
+└── Settings (per-project, stored in the .stalx: project_settings + display_settings tables)
+    ├── validation: ValidationConfig
+    ├── surface_elevation: Option<f64>
+    ├── default_azimuth_reference: Option<AzimuthReference>
+    └── display toggles (show_stations, show_shots, grid_spacing, geometry_mode, ...)
 ```
 
 ### 4.2 Station Identification
@@ -523,9 +531,8 @@ Shows all cave systems the user has loaded, with survey geometry rendering for G
 - Hard bounds (50% padding): cannot pan beyond this limit
 
 **Search Filter:**
-- Text input filters systems by name
-- Non-matching systems dimmed to 25% opacity
-- Uses MapLibre `index-of` + `downcase` expression
+- Text input in the Recent list filters the list by name, location or file path
+- The map is not filtered by search (it always shows every project)
 
 **FPS Monitoring:**
 - Auto-throttle when FPS drops below threshold (default 30)
@@ -580,7 +587,7 @@ The Detail Panel provides interactive hyperlinks that enable quick navigation be
 Detail Panel display IDs (distinct from internal data model IDs) use the format `sectionId:position` where station position is 0-indexed:
 - Station position = `station_index`
 - Shot position = `shot array index + 1`
-- Section links show `sectionId: sectionName` (or `sectionId: Unnamed` if no name)
+- Section links show `Section <sectionId> - <sectionName>` (or `Section <sectionId> - Unnamed section` if no name); at the default `full` syntactic-highlighting level the link renders as a pill instead: entity symbol, section name, then the section id
 
 **Shot Detail - Connected Section:**
 ```
@@ -625,9 +632,9 @@ Detail Panel display IDs (distinct from internal data model IDs) use the format 
 - Collapsible with default expanded state
 - Hidden when station has no `closures_with` entries
 - Closures grouped by `closure_id`; direct closures listed first, then transitive
-- Direct closures: "Closure to B, C" with station links (DetailLink)
-- Transitive closures: "Transitive closure to X (via A)" with muted text (`text-text-tertiary`)
-- Metrics below each group: "Path: 15.2m | Error: 0.30m (1.97%)"
+- Direct closures: "Direct: B, C" with station links (DetailLink)
+- Transitive closures: "Transitive: X (via A)"; a transitive-only group is dimmed with `opacity-50`
+- Metrics below each group: "Path 15.2m | Error 0.30m | 1.97%"
 - Metrics from `project.loop_closures` by matching `closure_id`
 - Station links navigate to target station (same behavior as merged station links)
 
@@ -673,7 +680,7 @@ Each detail view (Shot, Station, Section) includes a center button in the panel 
 **Behavior:**
 - Click pans and zooms map to fit the element
 - Stations/Shots: Uses `easeTo()` with configured `point_zoom` level
-- Sections: Applies 10% margin on all sides plus panel offsets. If the section already fits within the viewport and occupies ≥30% in at least one axis, uses `easeTo()` to center/pan only (skip-zoom-in). Otherwise uses `fitBounds()` to zoom out or in as needed
+- Sections: Applies 10% margins on all sides (no panel offsets - the map container already excludes the side panels) and always uses `fitBounds()`. A single-station or zero-area section instead uses `easeTo()` at the configured `point_zoom`
 - Full keyboard accessibility (Tab + Enter)
 - Dynamic aria-label: "Center map on [type] [id]"
 
@@ -703,9 +710,9 @@ Examples: "Selected station 2:5", "Selected shot 2:3", "Selected section 2: Main
 
 Data Table shot selection:
 ```
-"Shot [id] selected"
+"Selected shot [id]."
 ```
-Example: "Shot 2:3 selected"
+Example: "Selected shot 2:3."
 
 ### 6.4 Undo/Redo History Dropdown
 
@@ -716,7 +723,7 @@ The Undo and Redo toolbar buttons feature dropdown menus showing recent actions 
 - **Hover**: Dropdown opens after 300ms delay when hovering over Undo/Redo buttons
 - **Chevron Indicator**: A small `▾` chevron appears next to the button text when history is available
 - **Click**: Single click on button performs standard undo/redo (one step)
-- **Empty State**: No dropdown shown when stack is empty
+- **Empty State**: The button stays disabled and hover opens nothing, with one exception - on a SpeleoDB-linked project whose write lock is held and where a revision-chain step resolves, hover (or ArrowDown) opens the panel to show the pinned Unwind/Rewind entry. Placement mode suppresses the panel entirely
 
 #### Dropdown Layout
 
@@ -746,18 +753,7 @@ The Undo and Redo toolbar buttons feature dropdown menus showing recent actions 
 #### Item Display
 
 Each item shows:
-- **Icon**: Text icon based on command type (matches toolbar style)
-  - `+` Create section/shot
-  - `✏` Update shot/section metadata
-  - `✕` Delete section/shot
-  - `⊕` Merge stations
-  - `⊖` Unmerge stations
-  - `◉` Set zero datum
-  - `○` Remove zero datum
-  - `↔` Move station
-  - `┄` Set shot reference
-  - `▤` Batch operation
-  - `•` Default/other
+- **Icon**: Inline SVG icon component chosen by command type (`getCommandIcon`, same icon set as the toolbar): plus (create section/shot), pencil (update shot/section metadata), trash (delete section/shot), link (merge) / link-off (unmerge), target (set zero datum) / circle (remove zero datum), move (move station/section) and move-horizontal (move segment), dashed line (set shot kind), layers (batch), dot (default)
 - **Description**: Truncated at ~40 characters with ellipsis
 - **Timestamp**: Smart hybrid format
   - Less than 1 day: relative (e.g., "2 minutes ago")
@@ -797,7 +793,7 @@ The dropdown stays open when performing actions (button click, item click, keybo
   - Mouse leaving the button/dropdown area (100ms buffer)
   - Pressing Escape key
   - Clicking outside the dropdown
-  - Stack becoming empty after an action (auto-close)
+  - Stack becoming empty after an action (auto-close), unless a SpeleoDB write lock is held
 
 #### Action Behavior
 
@@ -807,7 +803,7 @@ When an action is performed while the dropdown is open:
 - Keyboard navigation and scroll position reset to the top (first item)
 - Detail preview popup is dismissed immediately on any action
 - Rapid clicks are queued and executed sequentially with a refresh after each
-- If the stack becomes empty after an action, remaining queued actions are discarded and the dropdown closes
+- If the stack becomes empty after an action, remaining queued actions are discarded and the dropdown closes - unless a SpeleoDB write lock is held, in which case it stays open so the Unwind/Rewind chain entry stays reachable
 - On error, the dropdown stays open, the stack is refreshed to reflect backend state, and an error dialog is shown with title, message, and stack trace (if available from a caught exception)
 - Ctrl+Z/Y/Shift+Z keyboard shortcuts are intercepted by the dropdown (capture phase) to prevent the global handler from causing a double-undo/redo
 - Keyboard shortcuts are NOT intercepted when focus is in a text input, textarea, select, or contentEditable element (native text editing undo/redo is preserved)
@@ -824,7 +820,7 @@ defaults from `src-tauri/crates/core/src/config/defaults.rs` and are all rebinda
 | **Pan** *(hidden by default; `map.controls.show_navigation_tools`)* | P | Pan | Pan | Pan | Pan map |
 | **Zoom** *(hidden by default; `map.controls.show_navigation_tools`)* | Z | Zoom in | Zoom in | Zoom in | Zoom area |
 | **Merge** | M | Select for merge | - | - | - |
-| **Measure** | R | Start measurement | - | Start measurement | - |
+| **Measure** | R | Start measurement | Measure from/to a point along the shot | Start measurement | - |
 | **Move Station** | T | Pick up an unanchored station | - | Drop what is being carried | Pan map |
 | **Move Shot** | G | - | Pick up one shot: both endpoints plus any co-located stations | Drop what is being carried | Pan map |
 | **Move Segment** | V | Pick up the whole connected branch (sections joined by merges and aligned closures) | Same, grabbed on a shot | Drop what is being carried, else deselect | Pan map |
@@ -857,10 +853,10 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 - Stations (dots)
 - Section names (labels)
 - Shot data (azimuth, length, depth)
-- Reference shots (dotted lines)
-- Zero datum (golden star)
-- Grid overlay (theme-aware, auto-spacing from 1-100m based on zoom)
-- Scale bar
+- Reference shots (faded, semi-transparent lines)
+- Zero datum (enlarged golden station dot)
+- Grid overlay (theme-aware; spacing chosen by the user from 1, 5, 10, 25, 50, 100 m - default 10 m)
+- Scale bar (always shown; not a toggle)
 - Satellite imagery
 - Depth color gradient (configurable palette)
 - LRUD passage walls (future)
@@ -882,12 +878,12 @@ The three move tools are documented in detail in [move-tools.md](move-tools.md).
 | Element | Appearance |
 |---------|------------|
 | Regular shot | Solid colored line (section color) |
-| Reference shot | Dotted line, semi-transparent |
+| Reference shot | Solid line at reduced opacity (~0.28) |
 | Station | Filled circle |
 | Selected station | Highlighted ring |
-| Zero datum | Golden star icon |
+| Zero datum | Golden station circle at 2x radius |
 | Validation warning | Red highlight, ⚠ icon |
-| Marked as resolved | Light red highlight |
+| Marked as resolved | No map highlight; dimmed and struck through in the Detail Panel |
 | Loop closure line | Dashed line with error percentage |
 
 ### 6.8 Dialogs
@@ -979,7 +975,7 @@ After selecting sections, the workflow continues into zero-datum setup (if neede
 │                                                                  │
 │  Statistics: 42 shots │ 187.3m total │ Depth: 3.2m - 17.8m      │
 │                                                                  │
-│  [ Cancel ]   [ ↶ Undo ] [ Redo ↷ ]              [ Place Section ]│
+│  [ Cancel ]                                     [ Place segment ]│
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -992,10 +988,9 @@ After selecting sections, the workflow continues into zero-datum setup (if neede
   - Subtle separator line below stats
 - Parameters panel: name, surveyor (inherited), date, color, direction
 - Interactive preview with pan/zoom and click-to-select-station
-- 3 exclusive placement modes:
-  - **Origin**: Place at (0,0) - first section default
-  - **From Existing**: Merge with existing section's station
-  - **Manual**: Click on map to position
+- Placement modes (exclusive radio group): **Suggested connection** (when one was
+  skipped), **From existing station**, **Manual placement** (click on map), **Do
+  not place** (skip the segment)
   - GPS placement is not a mode here: if the import needs a zero datum, it is
     set beforehand via the separate section-selection and configuration
     dialogs (§7.10)
@@ -1004,8 +999,7 @@ After selecting sections, the workflow continues into zero-datum setup (if neede
   - Warning column (⚠) for azimuth/pitch discrepancies
   - Right-click context menu: insert before/after, delete
   - Keyboard navigation (Tab, Enter, Escape)
-- Local undo/redo within dialog
-- Section created on "Place Section" click
+- Section created on "Place segment" click
 - Warnings inform but don't block; errors block import
 
 **Section Stats Formatting:**
@@ -1224,13 +1218,13 @@ Shown when creating a loop closure between two **connected** stations.
 │                                                                  │
 │  Export Type: [Map Image ▼]                                     │
 │    • Map Image (PNG, SVG, PDF)                                  │
-│    • Survey Data (CSV, JSON)                                    │
+│    • Survey Data (CSV, JSON, TML)                               │
 │                                                                  │
 │  Format: [PNG ▼]                                                │
 │                                                                  │
 │  Options:                                                        │
-│    [✓] Include satellite imagery                                │
-│    [ ] Include grid                                             │
+│    [ ] Include station comments                                 │
+│    [ ] Include shot comments                                    │
 │    [✓] Include station labels                                   │
 │    [✓] Include section names                                    │
 │    [ ] Include shot data (azimuth, length, depth)               │
@@ -1248,8 +1242,8 @@ Shown when creating a loop closure between two **connected** stations.
 ### 7.1 First Launch
 
 1. Application opens to Global View (empty)
-2. Empty state message: "No cave systems yet"
-3. Prominent buttons: [Import DMP] [New Project] [Open Existing]
+2. Empty state title: "Open or drop any survey file"
+3. Two controls: a drop zone [Open or drop a file] and [Start a new project instead]
 4. No tutorial - interface should be self-guiding
 
 ### 7.2 Creating New Project
@@ -1293,11 +1287,9 @@ Runs only if the project has no zero datum yet:
     - Review/edit shot data in table
     - Azimuth shown as average; editing sets both in/out
     - Warning icons for azimuth/pitch discrepancies
-12. User selects placement mode (exclusive):
-    - **Origin**: Place at (0,0) - default for first section
-    - **From Existing**: Merge with existing section's station
-    - **Manual**: Click on map to position
-13. User clicks [Place Section]
+12. User selects a placement method (exclusive): Suggested connection (when one
+    is offered), From existing station, Manual placement, or Do not place
+13. User clicks [Place segment]
 14. Section created in backend immediately
 15. User navigates to next section or clicks [Done]
 16. Each placed section is auto-saved
@@ -1309,7 +1301,7 @@ Runs only if the project has no zero datum yet:
 
 **Error Handling:**
 - Warnings (e.g., azimuth mismatch) are shown but don't block
-- Errors (e.g., invalid data) block the Place Section button
+- Errors (e.g., invalid data) block the Place segment button
 
 ### 7.4 Manual Data Entry
 
@@ -1382,29 +1374,35 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 
 **Deleting a Shot:**
 1. Select shot, press Delete (or right-click → Delete)
-2. Confirmation: "Delete shot? This will split the section."
-3. Confirm → Shot deleted, section splits into two with suffixes (A, B)
-4. Further splits: C, D, E...
+2. From the map context menu, the data table or the detail panel, the confirm is
+   position-aware: an edge shot gets "Are you sure you want to delete this
+   shot?" and is deleted without splitting; a mid-section shot opens the Delete
+   Shot dialog offering [Split Section] or [Shift Geometry]; the last remaining
+   shot removes the whole section
+3. On Split Section, the section splits into two, named "<section>-A" and
+   "<section>-B" by default (both editable)
 
-**Deleting a Station:**
-1. Select station, press Delete
-2. Confirmation: "Delete station? Connected shots will also be deleted."
-3. Confirm → Station and connected shots deleted, sections split as needed
+**Deleting a Station:** Not supported. Selecting a station and pressing Delete
+opens the Delete Station dialog, whose Delete button is disabled; it tells the
+user to delete the connected shots instead.
 
 **Deleting a Section:**
 1. Right-click section in Sections Panel → Delete
-2. Confirmation with statistics: "Delete 'Main Line'? (24 shots, 187.3m)"
+2. Confirmation: "Are you sure you want to delete this section and all its
+   shots?", plus a list of relationships (merges, closures, offsets, zero
+   datums) that will also be removed
 3. Confirm → Section removed
 
 ### 7.8 Merging Cave Systems
 
 1. User is in Global View
-2. Multi-select two systems (Shift+click or Ctrl+click)
-3. Right-click → "Merge Systems"
+2. Multi-select two systems (Ctrl/Cmd+click)
+3. Right-click → "Merge N projects"
 4. Dialog:
    - Shows both system names and statistics
    - Enter new merged system name
-   - Warning: Original files will be archived
+   - Optional checkbox: "Archive original project files (rename to
+     .stalx.archived)" - off by default
 5. Confirm → Systems merged into single file
 6. Auto-switch to Single System View
 7. User connects the systems using Merge Tool
@@ -1418,12 +1416,13 @@ Unanchored sections can be repositioned via the **Section Adjust Dialog** (right
 The zero datum establishes the coordinate system origin and enables GPS-accurate positioning:
 
 **Setting Zero Datum via Map:**
-1. Right-click on a station → "Set as Zero Datum"
-2. GPS Coordinates dialog appears:
-   - Enter latitude (degrees, -90 to 90)
-   - Enter longitude (degrees, -180 to 180)
-3. Click "Set Zero Datum"
-4. Station marked with golden star icon
+1. Right-click on a station → "Set Zero Datum"
+2. The Edit Station dialog opens with "Set as Zero Datum" ticked and the GPS
+   field focused: enter the coordinates in one field (DD, DMS, DDM, UTM, Plus
+   Code or map URL; MGRS and What3words are recognized and validated but not
+   converted - see 2.7)
+3. Click Save
+4. Station marked with the enlarged golden zero-datum station dot
 5. Map auto-zooms to fit survey in new position
 6. All section offsets are recalculated
 
@@ -1450,17 +1449,19 @@ built anywhere in this flow; it is tracked as an enhancement in #524.
 5. Connected sections' positions are preserved through offset tracking
 
 **Updating an Existing Zero Datum:**
-1. Right-click on zero datum station → "Edit GPS Coordinates"
+1. Right-click on the zero datum station → "Set Zero Datum" (reopens the Edit
+   Station dialog)
 2. Modify coordinates and confirm
 3. All section offsets are recalculated
 4. Undo restores previous GPS coordinates
 
 **Removing a Zero Datum:**
-1. Right-click on zero datum station → "Remove Zero Datum"
-2. Confirm removal
-3. Station loses golden star icon
-4. If this was the only datum, coordinate system reverts to (0,0) origin
-5. Undo restores the GPS coordinates
+1. Right-click the zero datum station → "Set Zero Datum", untick "Set as Zero
+   Datum", and click Save
+2. Station loses the enlarged golden zero-datum styling (back to a normal
+   station dot)
+3. If this was the only datum, coordinate system reverts to (0,0) origin
+4. Undo restores the GPS coordinates
 
 ---
 
@@ -1496,6 +1497,8 @@ pub struct UndoEntry {
     pub undo_data: UndoData,
     /// Timestamp when the command was executed (None for legacy entries)
     pub timestamp: Option<DateTime<Utc>>,
+    /// Serialized byte length of `command`, measured at push (None for restored/legacy entries)
+    pub command_bytes: Option<usize>,
 }
 ```
 
@@ -1637,7 +1640,7 @@ The sidebar displays 12 settings categories, with a visual separator before the 
 
 | Category | Contents |
 |----------|----------|
-| General | Auto-save toggle/interval, recent projects limit, undo history/persist limits, shortcut feedback preference |
+| General | Language/number/date formats, auto-save toggle/interval, recent projects limit, undo history/persist limits, shortcut feedback preference, splash screen and onboarding, telemetry opt-in (telemetry-enabled builds) |
 | Appearance | Theme mode (dark/light/auto), day and night color theme selection with preview cards, 10 color themes |
 | Units | Length/depth/angle units, decimal precision |
 | Gas planning | Swim speed, jump RMV multiplier, whether reference legs count toward gas |
@@ -1792,10 +1795,10 @@ All `:focus-visible` outlines use `var(--cc-focus-ring)` and `var(--cc-focus-rin
 |-----|--------|
 | Arrow Up/Down | Move between rows |
 | Arrow Left/Right | Move between cells |
-| Home/End | First/last row |
-| Ctrl+Home/End | First/last cell |
-| Enter | Select row / enter edit mode |
-| Space | Toggle row selection |
+| Home/End | First/last cell in the row |
+| Ctrl+Home/End | First/last cell of the grid |
+| Enter | Move down one cell (Shift+Enter up); cycles the active cell within a multi-cell selection |
+| Space | Activate a button cell; otherwise start editing |
 | F2 | Enter edit mode |
 
 #### Tool Shortcuts
@@ -1807,11 +1810,6 @@ All shortcuts are configurable and can be cleared:
 P and Z act only when `map.controls.show_navigation_tools` is on; the Pan and
 Zoom tools are hidden by default, and while they are hidden those two keys do
 nothing at all.
-
-#### Skip Links
-- "Skip to main content"
-- "Skip to data table"
-- Visible on focus only
 
 ### 11.3 Screen Reader Support
 
@@ -1830,7 +1828,7 @@ nothing at all.
 - Validation results
 - Dialog open/close
 - Error messages (assertive)
-- Undo/redo dropdown refresh (announces remaining action count, e.g., "3 actions remaining", "1 action remaining", or "No actions remaining" when stack empties)
+- Undo/redo dropdown refresh (announces remaining action count, e.g., "3 actions remaining.", or "No more actions remaining." when the stack empties)
 
 ### 11.4 Visual Accessibility
 
@@ -1848,7 +1846,6 @@ nothing at all.
 
 - Map not keyboard navigable (too complex)
 - Users use data table for keyboard access to survey data
-- Skip link to bypass map
 
 ---
 
@@ -1909,7 +1906,7 @@ export function formatDate(date: Date, locale: string): string {
 
 - Storage: Always ISO 8601
 - Display: Localized based on user preference
-- Units: Hardcoded to metric (meters) in v1
+- Units: display unit comes from the Units settings category (meters or feet), not from the locale; stored values are always metric
 
 ### 12.4 Missing Key Handling
 
@@ -1935,29 +1932,25 @@ export function formatDate(date: Date, locale: string): string {
 #### Level of Detail (LOD)
 | Zoom Level | Detail |
 |------------|--------|
-| < 10 | Simplified paths, no labels |
+| < 10 | No labels (section names appear at z10, station/shot/comment labels at z14) |
 | 10-14 | Normal paths, section labels only |
 | 14-17 | Full detail, all labels |
 | > 17 | Maximum detail |
 
-#### Geometry Simplification
-- Douglas-Peucker algorithm when zoomed out
-- Merge nearby stations
-- Hide small features
-- Based on pixel density
+#### Zoom-Dependent Thinning
+
+Only labels are thinned by zoom: each label carries a baked reveal zoom that folds
+the collision declutter together with a nested decimation band
+(`labelReveal.ts` / `labelDecimation.ts`), and the shader draws a label only at or
+above that zoom - see [map-renderer.md](map-renderer.md). Shot geometry itself is
+not simplified: no path simplification, no station merging, no zoom-based hiding.
 
 ### 13.3 Data Table Virtualization
 
-Library: TanStack Virtual (for tables > 50 rows)
-
-```typescript
-const virtualizer = useVirtualizer({
-  count: rows.length,
-  getScrollElement: () => parentRef.current,
-  estimateSize: () => 32,
-  overscan: 5,
-});
-```
+Library: TanStack Virtual, always on - there is no row-count threshold. The shot
+grid virtualizes its rows at `ROW_HEIGHT` = 33 px (defined in
+`src/components/common/SpreadsheetGrid/types.ts`) with `overscan: 8`
+(`src/components/common/SpreadsheetGrid/SpreadsheetGrid.tsx`).
 
 ### 13.4 Auto-Save Debouncing
 
@@ -1975,19 +1968,24 @@ stored copy is served only as a last resort, when the provider cannot be reached
 at all (`stale-if-error`, RFC 5861):
 
 ```
-~/.cache/stalagmight/tile_cache.db
+~/.cache/com.stalagmight.desktop/tile_cache.db
 
 -- Schema
 CREATE TABLE tiles (
-    provider TEXT,
-    z INTEGER,
-    y INTEGER,
-    x INTEGER,
-    data BLOB,
-    content_type TEXT,
-    fetched_at INTEGER,
-    accessed_at INTEGER,
-    PRIMARY KEY (provider, z, y, x)
+    id INTEGER PRIMARY KEY,
+    provider TEXT NOT NULL,
+    z INTEGER NOT NULL,
+    y INTEGER NOT NULL,
+    x INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    content_type TEXT NOT NULL DEFAULT 'image/jpeg',
+    size_bytes INTEGER NOT NULL,
+    fetched_at INTEGER NOT NULL,
+    accessed_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    etag TEXT,
+    no_cache INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(provider, z, y, x)
 );
 ```
 
@@ -2016,11 +2014,7 @@ CREATE TABLE tiles (
 ### 14.1 Error Boundaries (Per-Panel)
 
 ```tsx
-<ErrorBoundary
-  fallback={<ErrorFallback />}
-  onError={logError}
-  onReset={clearErrorState}
->
+<ErrorBoundary panelName="Map">
   <Panel />
 </ErrorBoundary>
 ```
@@ -2035,8 +2029,7 @@ Wrap each major panel:
 
 | Option | Description |
 |--------|-------------|
-| Try Again | Clear error state, re-render |
-| Reload Panel | Reload panel data from backend |
+| Try Again | Clear the boundary's error state and re-render the panel |
 
 ### 14.3 Network Error Handling
 
@@ -2077,8 +2070,12 @@ fn backup_before_repair(path: &Path) -> Result<PathBuf> {
 
 ### 14.5 Validation Error Recovery
 
-- Individual error clear: X button on each error
-- "Clear All Errors" button
+- Per-warning: a "Resolve" button opens the resolution flow, which offers per-code
+  fixes plus "Ignore (keep value, don't warn again)" for advisory warnings (errors
+  are never ignorable); a resolved entry offers "Undo" to mark it unresolved
+- "Resolve all" walks the unresolved warnings one at a time and ends in a
+  resolved/skipped/remaining summary; resolved entries are hidden until the
+  "Show resolved" toggle reveals them
 - Auto-clear when field corrected
 - Cleared errors stay cleared (don't re-validate automatically)
 
@@ -2154,10 +2151,14 @@ All dialogs must have:
 Structured JSON for machine parsing:
 
 ```json
-{"ts":"2024-01-12T14:32:15.123Z","level":"INFO","target":"stalagmight::commands","msg":"Command executed","command":"CreateSection","section_name":"Main Line","shots":24}
-{"ts":"2024-01-12T14:32:15.125Z","level":"DEBUG","target":"stalagmight::commands","msg":"Undo data generated","type":"InverseCommand","inverse":"DeleteSection"}
-{"ts":"2024-01-12T14:32:15.130Z","level":"INFO","target":"stalagmight::persistence","msg":"Project saved","path":"/home/user/caves/sistema.stalx","size_kb":245}
+{"timestamp":"2024-01-12T14:32:15.123456Z","level":"INFO","fields":{"message":"Command executed","command":"CreateSection","section_name":"Main Line","shots":24},"target":"stalagmight::commands"}
+{"timestamp":"2024-01-12T14:32:15.125789Z","level":"DEBUG","fields":{"message":"Undo data generated","type":"InverseCommand","inverse":"DeleteSection"},"target":"stalagmight::commands"}
+{"timestamp":"2024-01-12T14:32:15.130421Z","level":"INFO","fields":{"message":"Project saved","path":"/home/user/caves/sistema.stalx","size_kb":245},"target":"stalagmight::persistence"}
 ```
+
+The keys and their order are tracing-subscriber's JSON formatter defaults:
+`timestamp`, `level`, a nested `fields` object holding `message` plus the event's
+own fields, then `target`; events inside a span also carry `span` / `spans`.
 
 ### 16.4 Instrumentation Requirements
 
@@ -2213,7 +2214,7 @@ opened. Alongside the survey tables (project, sections, shots, station merges,
 zero datums, loop closures, section and station offsets) it holds per-project and
 display settings, the persisted undo and redo stacks, resolved warnings, import
 hashes, station comments, the SpeleoDB link row, and the Unwind chain position in
-`speleo_undo_chain`. Three markers are worth knowing before touching migration
+`speleo_undo_chain`. Five markers are worth knowing before touching migration
 code:
 
 - `UNDO_FORMAT_SAFE_VERSION` - files written before it get their persisted
@@ -2234,11 +2235,12 @@ code:
   SpeleoDB) and two local-only tables: `speleo_undo_chain` (how far back through
   the server's revisions this machine has unwound) and `speleo_undo_watermark`
   (which loaded entries a chain step inherited, so the next push does not ship
-  them again); see [undo-redo.md](undo-redo.md). Note that `speleo_undo_watermark`
-  is NOT created by the migration in `schema.rs` like its sibling - it is created
-  lazily by `CREATE TABLE IF NOT EXISTS` on first write in
-  `persistence/sqlite/settings.rs`, with a `sqlite_master` probe on the read side,
-  so tracing the migration alone will not find it.
+  them again); see [undo-redo.md](undo-redo.md). Both `speleo_undo_chain` and
+  `speleo_undo_watermark` are created by `migrate_schema` in `schema.rs`
+  (CREATE TABLE IF NOT EXISTS), so a legacy file gains them on open;
+  `save_speleo_undo_watermark` in `persistence/sqlite/settings.rs` also creates
+  the watermark table defensively, and the read side probes `sqlite_master`
+  first.
 - v17 gives `SectionUpdates`' `name` / `surveyor` / `date` the `double_option` +
   `skip_serializing_if` pair `ShotUpdates` has had since v7, so an undo can once
   again restore a section field that was null before the edit (issue #413
@@ -2267,14 +2269,16 @@ pub struct DmpFile {
 }
 
 pub struct DmpSection {
-    pub name: [u8; 3],  // 3-char identifier
-    pub direction: Direction,  // IN or OUT
-    pub date: NaiveDate,
+    pub version: u8,              // DMP version for this section
+    pub name: String,             // 3-character identifier
+    pub direction: DmpDirection,  // In or Out
+    pub date: NaiveDateTime,
     pub shots: Vec<DmpShot>,
+    pub content_hash: String,     // SHA256 over name + direction + standard shot measurements
 }
 
 pub struct DmpShot {
-    pub shot_type: ShotType,  // CSA, CSB, STANDARD, END_OF_SURVEY
+    pub shot_type: DmpShotType,  // CsA, CsB, Standard, EndOfSurvey
     pub heading_in: f64,
     pub heading_out: f64,
     pub length: f64,
@@ -2291,6 +2295,7 @@ pub struct DmpShot {
     pub minute: u8,
     pub second: u8,
     pub marker_index: u8,
+    pub comment: Option<String>,  // not parsed from DMP; defaults to None
 }
 ```
 
@@ -2340,26 +2345,22 @@ keeping references as the boundary - tracked separately, not attempted here.
 
 | Element | Target Pixels | Notes |
 |---------|---------------|-------|
-| Station radius | 3px | Regular stations |
-| Station radius (Zero Datum) | 6px | Double size for visibility |
-| Station stroke-width | 1px | Black outline |
-| Shot stroke-width | 2px | Section or depth color |
-| Grid stroke-width | 0.5px | Thin grid lines |
-| Shot-label font-size | 8px | Depth labels when enabled |
-| Shot-label dx/dy | 2px, -2px | Offset from midpoint |
-| ZD label dx/dy | 8px, 4px | Offset from zero datum |
-| Section-name dx/dy | 5px, -5px | Offset from midpoint |
-| Label font-size | 10px | Station labels |
-| Section-name font-size | 12px | Bold section names |
-| Legend bar width | 16px | Depth gradient bar |
-| Legend height | 100px | Depth gradient bar |
-| Legend font-size | 10px | Min/max depth labels |
+| Shot stroke-width (thin) | 1px | `THIN_PX` - default segment stroke |
+| Shot stroke-width (thick) | 2.5px | `THICK_PX` - segments whose branching factor reaches `branching_threshold` |
+| Junction trim | 5px | `JUNCTION_TRIM_PX` (2 x thick) - gap where a tied segment meets its parent |
+| Zero-datum star radius | 7px / 3px | `STAR_OUTER_PX` / `STAR_INNER_PX`; the star is the only station marker |
+| Label font-size | 11px | `PEN_LABEL_PX` - shared by every label group (penetration, station, section, shot data, comments) |
+| Label halo stroke-width | 3px | `PEN_LABEL_HALO_PX` - white outline so text stays legible over a line |
+| Label offset | 9px | `PEN_LABEL_OFFSET_PX` - anchor point to label centre |
+
+Non-zero-datum stations get no marker, and the exporter draws no grid and no
+depth legend.
 
 **Survey Data (CSV):**
 ```csv
 section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment
-0,Main Line,0,3.2,45.0,225.0,5.1,5.8,1.2,0.8,2.1,1.5,false,
-0,Main Line,1,4.1,52.3,232.0,5.8,6.2,1.0,1.1,1.8,1.2,false,
+0,Main Line,0,3.2,45.0,46.2,5.1,5.8,1.2,0.8,2.1,1.5,Permanent,
+0,Main Line,1,4.1,52.3,53.0,5.8,6.2,1.0,1.1,1.8,1.2,Permanent,
 ```
 
 **Survey Data (JSON):**
@@ -2380,7 +2381,7 @@ section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out
           "id": 0,
           "length": 3.2,
           "azimuth_in": 45.0,
-          "azimuth_out": 225.0,
+          "azimuth_out": 46.2,
           "depth_in": 5.1,
           "depth_out": 5.8,
           "lrud": [1.2, 0.8, 2.1, 1.5],
@@ -2434,8 +2435,8 @@ See [project-structure.md](project-structure.md) for the directory tree.
 ## 19. Beyond the Current Scope
 
 There are no versioned roadmap buckets. Queued and in-flight work lives in the
-GitHub issue tracker - currently slate-photo OCR import (#274), the release
-pipeline (#323 to #325), and continuing SpeleoDB work. [roadmap.md](roadmap.md) is the
+GitHub issue tracker - currently slate-photo OCR import (#274), the remaining
+release-pipeline work (#325), and continuing SpeleoDB work. [roadmap.md](roadmap.md) is the
 historical record of the v1.0 phases, all of which shipped (one caveat: GPS
 entry validates but does not convert MGRS and What3words - see 2.7).
 
@@ -2462,9 +2463,13 @@ not live co-editing), and floating/dockable panels.
 | Move Comment Tool | Shift+C |
 | Undo | Ctrl+Z |
 | Redo | Ctrl+Y / Ctrl+Shift+Z |
+| New | Ctrl+N |
+| Open | Ctrl+O |
 | Save | Ctrl+S |
+| Save As | Ctrl+Shift+S |
 | Import | Ctrl+I (configurable) |
 | Export | Ctrl+E (configurable) |
+| Quit | Ctrl+Q |
 | Delete Selected | Delete / Backspace |
 | Select All | Ctrl+A |
 | Deselect | Escape |
@@ -2525,14 +2530,17 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 | Shot length < 0.3m (default; configurable) | Warning | "Shot {section_id}:{position} length {length}m below minimum threshold {threshold}m" |
 | Shot length > 50m | Warning | "Shot {section_id}:{position} length {length}m above maximum threshold {threshold}m" |
 | Depth change > 10m per shot | Warning | "Shot {section_id}:{position} depth change {change}m exceeds threshold {threshold}m" |
-| Azimuth deviation > 30° | Warning | "Shot {section_id}:{position} azimuth in/out deviation {dev}° exceeds threshold {threshold}°" |
+| Azimuth in/out difference > 20 degrees (default `azimuth_diff_threshold`; configurable) | Warning | "Shot {section_id}:{position} azimuth in/out difference {dev}° exceeds threshold {threshold}°" |
 | Zero length shot | Error | "Shot {section_id}:{position} has zero length" |
 | Negative length | Error | "Shot {section_id}:{position} has negative length: {length}m" |
 | Negative LRUD | Error | "Shot {section_id}:{position} has negative {direction} distance: {value}m" |
 | Invalid azimuth | Error | "Shot {section_id}:{position} has invalid azimuth_{in/out}: {value}° (must be 0-360)" |
 | Shot length < depth change | Error | "Shot {section_id}:{position} length {length}m is shorter than its depth change {dz}m (impossible: slope length must be at least the vertical change)" |
 | Recorded inclination disagrees with length/depth (> inclination_depth_diff_threshold, default 15°) | Warning | "Shot {section_id}:{position} recorded inclination {pitch}° disagrees with the {computed}° implied by its length and depth change (exceeds {threshold}° threshold)" |
-| Duplicate station merge | Error | "Station is already merged with target" |
+| Non-finite field value | Error | "Shot {section_id}:{position} has non-finite value(s) in: {fields}" |
+| Inclination outside -90 to 90 degrees | Error | "Shot {section_id}:{position} has an out-of-range pitch_{in/out}: {value}° (must be between -90° and 90°)" |
+| Merge group anchored by two or more zero datums | Error | "This merge group is anchored by {n} zero datums ({anchors}). Two or more GPS anchors over-constrain one rigid group; keep one and remove the others." |
+| Duplicate station merge | Error | "These stations are already merged" |
 
 ---
 
@@ -2570,9 +2578,9 @@ Section Colors (auto-assigned):
 
 Map Colors:
 Grid: #333366
-Zero Datum Star: #ffd700 (Gold)
+Zero Datum Station: #ffd700 (Gold; enlarged dot on the map, star in map exports)
 Jump Shot: 50% opacity of the section color (#27)
 Reference Shot: 28% opacity of the section color (#27)
 Selection Highlight: #4ecdc4
-Loop Closure Line: #ffcb77 (dashed)
+Loop Closure Line: dashed, colored by error severity (#22c55e <1%, #eab308 1-3%, #f97316 3-5%, #ef4444 >5%)
 ```
