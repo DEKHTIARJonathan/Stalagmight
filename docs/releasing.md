@@ -369,6 +369,62 @@ accurate. If it says "damaged", signing is not sufficient and the release needs
 notarization ([#226](https://github.com/Stalagmight/Stalagmight/issues/226))
 before it can be handed to anyone.
 
+## Update artifacts and signing
+
+`bundle.createUpdaterArtifacts` is on in `tauri.conf.json` (issue #579), so
+every `build` leg now emits, alongside the installers already listed above,
+a signed update bundle per platform plus a detached `.sig`:
+
+| Platform | Update artifact | Signature |
+|----------|------------------|-----------|
+| Linux | `.AppImage` | `.AppImage.sig` |
+| Windows | NSIS `-setup.exe` (the update path) and `.msi` | `-setup.exe.sig` and `.msi.sig` |
+| macOS | `.app.tar.gz` | `.app.tar.gz.sig` |
+
+Windows ships two installers, but only the NSIS one is the updater's install
+path - Tauri's updater does not drive an MSI upgrade. The `.msi.sig` exists
+because Tauri signs whatever it bundles, not because anything consumes it yet.
+
+**The updater plugin is configured but not wired up.** `tauri.conf.json`
+carries a placeholder `pubkey` (`UPDATER-PUBKEY-PENDING-SEE-ISSUE-579`) and
+the GitHub-hosted `latest-stable.json` endpoint the client will eventually
+poll; the plugin itself is not yet registered in `lib.rs`, so nothing reads
+either value at runtime. Wiring the plugin in, generating and publishing
+`latest-stable.json`, and replacing the placeholder pubkey are later steps
+in the #579 arc.
+
+### Keypair custody
+
+The signing keypair is a minisign key Nico generates and holds outside this
+repository. **The private key is never committed, never logged, and lives
+only in the `TAURI_SIGNING_PRIVATE_KEY` GitHub secret** (plus its optional
+password in `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). Losing it is not
+recoverable in place: every already-installed app trusts the matching public
+key baked into its own binary, so a lost or rotated private key strands
+every existing install - they can no longer verify (and therefore will not
+apply) any future signed update, and must be reinstalled from a fresh
+download carrying the new public key.
+
+### Secrets
+
+| Secret | Required for | Effect when unset |
+|--------|---------------|---------------------|
+| `TAURI_SIGNING_PRIVATE_KEY` | Every `build` leg | The `build` job fails fast with a named error - `createUpdaterArtifacts` means an unsigned build cannot produce a verifiable update bundle, so this is not allowed to degrade quietly |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Only if the key above has a password | Passed through empty otherwise |
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Real Developer ID signing + notarization of the macOS leg | Absent (or `APPLE_SIGNING_IDENTITY` empty) leaves the macOS leg exactly as it was before #579: ad-hoc signed via the checked-in `signingIdentity: "-"`, not notarized |
+
+The six `APPLE_*` secrets do not exist yet - they land once Nico provisions
+a paid Apple Developer account ([#226](https://github.com/Stalagmight/Stalagmight/issues/226)).
+Until then the macOS leg's graceful-degradation conditional keeps today's
+ad-hoc-signing behavior byte-identical: the `build` job only appends a
+`signingIdentity` override to the Tauri build config when
+`APPLE_SIGNING_IDENTITY` is non-empty, and `scripts/verify-macos-signature.sh`
+only runs the additional `spctl -a -vv` / `xcrun stapler validate` checks
+under that same condition. A job-internal `MACOS-SIGNED` marker
+(`developer-id` or `adhoc`) records which path a given `build` run took; the
+`release` job reads and deletes it before publishing, so it never appears as
+a downloadable release asset.
+
 ## Testing the release tooling
 
 ```bash
