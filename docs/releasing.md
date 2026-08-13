@@ -485,8 +485,16 @@ exist. It:
    updater clients on either track.**
 3. Reads the `MACOS-SIGNED` marker's captured value (see [Update artifacts
    and signing](#update-artifacts-and-signing)) to decide `--include-darwin`
-   - present (either signing mode) means a macOS build exists and enters the
-     manifest; absent means it does not.
+   - **only `developer-id` enters the manifest.** `adhoc` is excluded with a
+     `::warning::`, never treated as a lesser-but-acceptable variant: an
+     ad-hoc build carries no verifiable identity, and the updater channel is
+     trusted, so shipping an ad-hoc `.app.tar.gz` through it would let the
+     updater silently replace a notarized install with an ad-hoc one on
+     every existing user's machine. When `UPDATER_ON` is true and the marker
+     never arrived at all (empty, not `developer-id` or `adhoc`), the step
+     fails loudly rather than guessing - a silent default there would
+     publish a manifest with no macOS entry, or the wrong one, on an
+     otherwise-green run.
 4. Runs `scripts/gen-updater-manifest.mjs` against the job's own
    `release-artifacts/` directory, reusing the same rendered `release-body.md`
    that `gh release create` already published as this release's notes.
@@ -509,16 +517,30 @@ artifact and its detached `.sig` (the Tauri v2 updater's own artifact set,
 It inlines each `.sig` file's content verbatim as that platform's
 `signature`, builds the asset URL as
 `https://github.com/Stalagmight/Stalagmight/releases/download/<tag>/<file>`
-(filename URL-encoded), and hard-fails - naming what is wrong - on a missing
-artifact or signature, an ambiguous match (more than one file fits a
-platform's pattern), a malformed `--version`, or an empty signature file. The
-manifest is deterministic and pretty-printed with a fixed key order
+(filename URL-encoded; the `Stalagmight/Stalagmight` base is hardcoded, since
+this is a single-repo tool that only ever runs from this repo's own CI), and
+hard-fails - naming what is wrong - on:
+
+- a missing artifact or signature
+- an ambiguous match (more than one file fits a platform's pattern)
+- a malformed `--version` or a malformed `--tag` (both checked against the
+  same `vX.Y.Z[-suffix]`/`X.Y.Z[-suffix]` shape `release-tag.sh` accepts -
+  `--tag` flows into a URL path segment, and the script is also exposed as a
+  bare `pnpm` command a caller could invoke by hand)
+- an empty signature file, **or one that is not shaped like a real minisign
+  signature** (an `untrusted comment:` header line followed by a base64
+  body line - Tauri's signer's own format). A merely-non-empty check let a
+  truncated or corrupted `.sig` through, which ships a manifest that fails
+  closed on every client trying to verify it.
+
+The manifest is deterministic and pretty-printed with a fixed key order
 (`version`, `notes`, `pub_date`, then `platforms` in the table's order), so a
 diff between two manifests - during review, or while debugging a bad
 publish - is actually readable. Run its fixture tests with
 `node scripts/gen-updater-manifest.test.mjs` (also `pnpm
-gen:updater-manifest:test`, gated in the leak-scan workflow alongside the
-pubkey tripwire).
+gen:updater-manifest:test`, gated in both the leak-scan workflow, alongside
+the pubkey tripwire, and the release workflow's `verify` job - a tag push
+must not reach the paid build matrix with a broken generator either).
 
 ### Rollback / repoint runbook
 
@@ -526,12 +548,21 @@ pubkey tripwire).
 `contents: write`, guarded to this repository) exists for the day a manifest
 needs to point somewhere other than what the automatic publish wrote - most
 often "stable regressed, repoint `latest-stable.json` back at the previous
-release." Given a `track` and a past `tag`, it downloads that release's
-update artifacts + sigs, determines `--include-darwin` from whether that
-release actually shipped a macOS pair, regenerates the manifest with that
-release's own notes (`gh release view <tag> --json body`), and
-clobber-uploads it - the same file the automatic publish step would have
-written for that tag, republished now.
+release." Given a `track`, a past `tag`, and an explicit `include-darwin`
+input, it downloads that release's update artifacts + sigs, regenerates the
+manifest with that release's own notes (`gh release view <tag> --json
+body`), and clobber-uploads it - the same file the automatic publish step
+would have written for that tag, republished now.
+
+**`include-darwin` is a required choice input with no default, never
+inferred from whether a `.app.tar.gz` pair merely exists on the release.**
+An ad-hoc macOS build can be present there too (see the developer-id-only
+predicate above); "the asset exists" and "it is safe to publish through the
+trusted updater channel" are different questions, and only the operator -
+checking the original `build` run's log for the signing mode it recorded -
+can answer the second one. Get this wrong and the dispatch itself becomes
+the very failure the [developer-id-only predicate](#how-a-manifest-gets-published)
+exists to prevent.
 
 **Repoint first, delete after - never the other way around.** Updater
 clients read the manifest, not the release; deleting a bad release before
@@ -541,26 +572,67 @@ meant to fix. Once the manifest points at a release you are willing to stand
 behind, the bad release can be deleted (or left as a pre-release, unlinked)
 at your discretion.
 
+**Repointing does not recall clients already on the bad build.** Tauri's
+updater only ever offers a strictly newer version than the one currently
+installed; it never downgrades or re-prompts an install that already
+applied the bad update. Repointing the manifest only stops **not-yet-updated**
+clients from receiving it - anyone who updated before the repoint stays on
+the bad build until the next good release reaches them normally.
+
+**This dispatch is also the only retry path for a release job that failed
+partway through.** `gh release create` and `gh release upload updater
+--clobber` are two separate steps; a failure between them (or a failure
+inside the manifest-generation step itself) leaves the tag's own GitHub
+release published with no updated manifest, or with the previous track's
+manifest left in place - `latest-<track>.json` never rotated to the new
+tag. There is no re-run of just the failed step: re-running the `release`
+job would try to `gh release create` a tag that already exists and fail
+immediately. Repoint the track at the tag that already has its artifacts
+published instead.
+
 ```bash
 gh workflow run repoint-updater-manifest.yml \
-  -f track=stable -f tag=v0.5.0
+  -f track=stable -f tag=v0.5.0 -f include-darwin=true
 ```
+
+### The weekly version invariant
+
+A weekly build's version carries a `-weekly.YYYYMMDD` suffix, which is a
+semver **pre-release** identifier - `0.5.1-weekly.20260817` sorts *below*
+plain `0.5.1`, not above it, so "just append `-weekly.<today>` to the last
+stable's base" would be wrong: the first weekly cut after `0.5.1` ships would
+compare as older than `0.5.1` itself and never reach anyone on that stable.
+The scheme that later PR in the #579 arc implements instead bakes each
+weekly onto the **next unconsumed base** - the base no stable release has
+shipped yet. That keeps every weekly version strictly above the last stable
+and strictly below the next one: after `0.5.1` ships, weeklies are cut as
+`0.5.2-weekly.YYYYMMDD` until `0.5.2` itself ships, at which point they
+converge - `0.5.2` is not "older" than `0.5.2-weekly.20260901`, it is the
+release that pre-release series was building toward, and stable correctly
+supersedes it.
 
 ### The weekly-track supersession warning
 
-The weekly manifest, once a later PR in the #579 arc starts cutting weekly
-tags on a schedule, only ever moves forward: each publish clobbers the
-previous `latest-weekly.json`. If a stable `vX.Y.Z` is tagged after a weekly
-tag whose own base version is already `>= X.Y.Z`, weekly-track users on that
-build (or a later one) will never be offered the new stable - there is no
-mechanism for a stable release to "supersede" a newer-looking weekly build
-once one already exists. `scripts/release-tag.sh` warns about exactly this
+The weekly manifest, once that later PR starts cutting weekly tags on a
+schedule, only ever moves forward: each publish clobbers the previous
+`latest-weekly.json`. Given the invariant above, a problem only arises when
+a weekly tag's base is **strictly greater** than the stable base being cut -
+that means a weekly series already targets a version beyond the stable
+about to ship, so weekly-track users on that build (or a later one in the
+same series) will never be offered it; there is no mechanism for a stable
+release to "supersede" a weekly build already aimed past it. At an *equal*
+base the two converge as described above, and the stable correctly
+supersedes the weekly series - not a condition to warn about.
+`scripts/release-tag.sh` warns about exactly the strictly-greater case
 (without blocking - it may be an intentional patch cut behind a weekly build
-that shipped nothing users need) whenever a `v*-weekly.*` tag already carries
-a base version at or past the stable tag being cut. Weekly tags themselves
-are refused outright by `release-tag.sh` - they are machine-created on their
-own cadence, never hand-typed, and a hand-typed one could collide with or
-masquerade as a real one.
+that shipped nothing users need), comparing versions numerically
+component-by-component (so `0.5.10` correctly reads as greater than `0.5.9`,
+not less, the way a lexical comparison would get wrong) and taking the
+**highest** weekly base found across every `v*-weekly.*` tag, not merely the
+first match. Weekly tags themselves are refused outright by
+`release-tag.sh` - they are reserved for the automated weekly pipeline
+(#579, lands separately), never hand-typed, and a hand-typed one could
+collide with or masquerade as a real one.
 
 ## Testing the release tooling
 
