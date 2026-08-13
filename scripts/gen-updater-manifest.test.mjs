@@ -32,21 +32,28 @@ function write(dir, name, content = 'synthetic content') {
   fs.writeFileSync(path.join(dir, name), content);
 }
 
+// Shaped like a real minisign signature file (an "untrusted comment:" header
+// line, then a base64 body line) - the structure gen-updater-manifest.mjs's
+// readSig now validates, not just "non-empty".
+function minisignSig(label) {
+  return `untrusted comment: signature from minisign secret key\n${Buffer.from(`fake-${label}-signature-body`).toString('base64')}\ntrusted comment: fake trusted comment\n${Buffer.from(`fake-${label}-global-signature`).toString('base64')}\n`;
+}
+
 // Writes a full set of three-platform artifacts + sigs, with a name pattern
 // that resembles the real bundler output (underscore-separated, per the
 // `collect release artifacts` globs in release.yml).
 function writeHappyPathArtifacts(dir, { linux = true, windows = true, darwin = true } = {}) {
   if (linux) {
     write(dir, 'Stalagmight_0.5.1_amd64.AppImage');
-    write(dir, 'Stalagmight_0.5.1_amd64.AppImage.sig', 'linux-signature-body');
+    write(dir, 'Stalagmight_0.5.1_amd64.AppImage.sig', minisignSig('linux'));
   }
   if (windows) {
     write(dir, 'Stalagmight_0.5.1_x64-setup.exe');
-    write(dir, 'Stalagmight_0.5.1_x64-setup.exe.sig', 'windows-signature-body');
+    write(dir, 'Stalagmight_0.5.1_x64-setup.exe.sig', minisignSig('windows'));
   }
   if (darwin) {
     write(dir, 'Stalagmight.app.tar.gz');
-    write(dir, 'Stalagmight.app.tar.gz.sig', 'darwin-signature-body');
+    write(dir, 'Stalagmight.app.tar.gz.sig', minisignSig('darwin'));
   }
 }
 
@@ -60,9 +67,9 @@ test('happy path: all three platforms', () => {
   assert.equal(manifest.notes, 'Release notes.');
   assert.ok(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(manifest.pub_date));
   assert.deepEqual(Object.keys(manifest.platforms), ['linux-x86_64', 'windows-x86_64', 'darwin-aarch64']);
-  assert.equal(manifest.platforms['linux-x86_64'].signature, 'linux-signature-body');
-  assert.equal(manifest.platforms['windows-x86_64'].signature, 'windows-signature-body');
-  assert.equal(manifest.platforms['darwin-aarch64'].signature, 'darwin-signature-body');
+  assert.equal(manifest.platforms['linux-x86_64'].signature, minisignSig('linux').trim());
+  assert.equal(manifest.platforms['windows-x86_64'].signature, minisignSig('windows').trim());
+  assert.equal(manifest.platforms['darwin-aarch64'].signature, minisignSig('darwin').trim());
   assert.equal(
     manifest.platforms['linux-x86_64'].url,
     'https://github.com/Stalagmight/Stalagmight/releases/download/v0.5.1/Stalagmight_0.5.1_amd64.AppImage',
@@ -97,6 +104,26 @@ test('empty sig fails', () => {
   assert.throws(() => buildManifest({ ...BASE, dir, includeDarwin: true }), /signature is empty/);
 });
 
+test('garbage-but-non-empty sig fails (not minisign-shaped)', () => {
+  const dir = makeDir();
+  writeHappyPathArtifacts(dir);
+  write(dir, 'Stalagmight_0.5.1_amd64.AppImage.sig', 'not a real signature, just some text\n');
+  assert.throws(
+    () => buildManifest({ ...BASE, dir, includeDarwin: true }),
+    /does not look like a minisign signature/,
+  );
+});
+
+test('a sig missing the base64 body line fails', () => {
+  const dir = makeDir();
+  writeHappyPathArtifacts(dir);
+  write(dir, 'Stalagmight_0.5.1_amd64.AppImage.sig', 'untrusted comment: signature from minisign secret key\n');
+  assert.throws(
+    () => buildManifest({ ...BASE, dir, includeDarwin: true }),
+    /does not look like a minisign signature/,
+  );
+});
+
 test('missing artifact fails, naming the platform', () => {
   const dir = makeDir();
   writeHappyPathArtifacts(dir, { windows: false });
@@ -114,7 +141,7 @@ test('ambiguous match fails, naming the candidates', () => {
   const dir = makeDir();
   writeHappyPathArtifacts(dir, { darwin: false });
   write(dir, 'Stalagmight_0.5.1_arm64.AppImage');
-  write(dir, 'Stalagmight_0.5.1_arm64.AppImage.sig', 'linux-signature-body-2');
+  write(dir, 'Stalagmight_0.5.1_arm64.AppImage.sig', minisignSig('linux-2'));
   let err;
   try {
     buildManifest({ ...BASE, dir, includeDarwin: false });
@@ -136,6 +163,24 @@ test('malformed --version fails', () => {
   );
 });
 
+test('malformed --tag fails', () => {
+  const dir = makeDir();
+  writeHappyPathArtifacts(dir, { darwin: false });
+  assert.throws(
+    () => buildManifest({ ...BASE, tag: 'not-a-tag', dir, includeDarwin: false }),
+    /not a valid release tag/,
+  );
+});
+
+test('a --tag missing the leading v fails', () => {
+  const dir = makeDir();
+  writeHappyPathArtifacts(dir, { darwin: false });
+  assert.throws(
+    () => buildManifest({ ...BASE, tag: '0.5.1', dir, includeDarwin: false }),
+    /not a valid release tag/,
+  );
+});
+
 test('weekly version string passes through unchanged', () => {
   const dir = makeDir();
   writeHappyPathArtifacts(dir, { darwin: false });
@@ -146,9 +191,9 @@ test('weekly version string passes through unchanged', () => {
 test('asset filenames are URL-encoded', () => {
   const dir = makeDir();
   write(dir, 'Stalagmight 0.5.1-setup.exe');
-  write(dir, 'Stalagmight 0.5.1-setup.exe.sig', 'windows-signature-body');
+  write(dir, 'Stalagmight 0.5.1-setup.exe.sig', minisignSig('windows'));
   write(dir, 'Stalagmight_0.5.1_amd64.AppImage');
-  write(dir, 'Stalagmight_0.5.1_amd64.AppImage.sig', 'linux-signature-body');
+  write(dir, 'Stalagmight_0.5.1_amd64.AppImage.sig', minisignSig('linux'));
   const manifest = buildManifest({ ...BASE, dir, includeDarwin: false });
   assert.equal(
     manifest.platforms['windows-x86_64'].url,

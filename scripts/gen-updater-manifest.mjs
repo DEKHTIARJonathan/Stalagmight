@@ -13,9 +13,14 @@
 //     --notes-file notes.md --out latest-stable.json [--include-darwin true]
 //
 // `--version` is what the updater compares against the running app's own
-// version - it is the manifest version, not necessarily the tag (a weekly
-// build carries a `-weekly.YYYYMMDD` suffix so it never collides with, or
-// looks older than, a stable release of the same base number).
+// version - it is the manifest version, not necessarily the tag. A weekly
+// build's version carries a `-weekly.YYYYMMDD` suffix on the NEXT unconsumed
+// base (the base no stable release has shipped yet), never on the last
+// stable's own base - a `-weekly.` suffix is a semver PRE-release, so
+// `0.5.1-weekly.20260817` sorts BELOW plain `0.5.1`, not above it. Baking it
+// onto the next base keeps every weekly version strictly above the last
+// stable and strictly below the next one, which is the actual invariant the
+// updater's "only ever offer something newer" comparison depends on.
 //
 // `--tag` names the GitHub release the artifacts were uploaded to; asset URLs
 // are built from it as
@@ -40,10 +45,27 @@ import { fileURLToPath } from 'url';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+// Single-repo tool by design, not a config gap: this script only ever runs
+// from this repository's own CI (the release job and the repoint dispatch
+// workflow, both guarded separately - the latter on `github.repository`), so
+// a hardcoded base is simpler than a flag nothing would ever set differently.
 const GITHUB_RELEASE_BASE = 'https://github.com/Stalagmight/Stalagmight/releases/download';
 
 // X.Y.Z, optionally followed by a dot/alnum suffix (`-rc1`, `-weekly.20260817`).
 const VERSION_RE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/;
+
+// vX.Y.Z, optionally suffixed - the same shape release-tag.sh accepts.
+// Flows unvalidated into a URL path segment otherwise, and this script is
+// also exposed as a bare pnpm command that a caller could invoke by hand.
+const TAG_RE = /^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/;
+
+// A minisign signature file (which is what Tauri's signer produces) is at
+// minimum an "untrusted comment:" header line followed by a base64 body
+// line. Checking only "non-empty" let a truncated or corrupted .sig through,
+// which ships a manifest that fails closed on every client that tries to
+// verify it - worth catching here instead.
+const MINISIGN_COMMENT_RE = /^untrusted comment:/;
+const BASE64_LINE_RE = /^[A-Za-z0-9+/]+=*$/;
 
 // Order here is the order platforms appear in the emitted manifest.
 const PLATFORMS = [
@@ -100,6 +122,17 @@ function readSig(dir, artifactFile, label) {
   if (sig.length === 0) {
     throw new Error(`${label} update signature is empty: ${sigPath}`);
   }
+  const lines = sig.split('\n');
+  if (!MINISIGN_COMMENT_RE.test(lines[0] ?? '')) {
+    throw new Error(
+      `${label} update signature does not look like a minisign signature (missing "untrusted comment:" header): ${sigPath}`,
+    );
+  }
+  if (!BASE64_LINE_RE.test((lines[1] ?? '').trim())) {
+    throw new Error(
+      `${label} update signature does not look like a minisign signature (second line is not base64): ${sigPath}`,
+    );
+  }
   return sig;
 }
 
@@ -110,6 +143,9 @@ function readSig(dir, artifactFile, label) {
 export function buildManifest({ version, tag, dir, notes, includeDarwin }) {
   if (!VERSION_RE.test(version)) {
     throw new Error(`--version "${version}" is not a valid version (expected X.Y.Z or X.Y.Z-suffix)`);
+  }
+  if (!TAG_RE.test(tag)) {
+    throw new Error(`--tag "${tag}" is not a valid release tag (expected vX.Y.Z or vX.Y.Z-suffix)`);
   }
 
   const platforms = {};
