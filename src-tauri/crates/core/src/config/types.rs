@@ -695,9 +695,13 @@ pub struct GeneralConfig {
     /// Release track the update check follows: stable (default) or weekly
     #[serde(default)]
     pub update_track: UpdateTrack,
-    /// Whether the app asks GitHub for a newer release. On by default; the
-    /// Settings toggle is the opt-out, and it is the only thing that stops the
-    /// check being made.
+    /// Whether the AUTOMATIC launch-time update check runs. On by default.
+    ///
+    /// Read by the frontend's launch hook only - `check_for_app_update` does
+    /// not consult it, deliberately: the About dialog's "Check for updates"
+    /// button is an explicit request by the user, and a backend that refused
+    /// would break that button along with the background check this setting is
+    /// actually about.
     #[serde(default = "default_update_check_enabled")]
     pub update_check_enabled: bool,
 }

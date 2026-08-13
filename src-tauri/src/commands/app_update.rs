@@ -6,20 +6,39 @@
 //! release tracks. So the endpoint is computed here from the user's configured
 //! track and handed to a per-call [`tauri_plugin_updater::UpdaterBuilder`].
 //!
-//! The cycle is deliberately THREE commands, not one:
+//! The cycle is deliberately FOUR commands, not one:
 //!
 //! - [`check_for_app_update`] asks the manifest and parks the answer,
 //! - [`download_app_update`] fetches and signature-verifies the bytes,
+//! - [`arm_app_update_restart`] takes the safety catch off,
 //! - [`install_app_update_and_restart`] writes them and relaunches.
 //!
-//! `Update::download_and_install` would collapse the last two, and must not be
-//! used: on Windows the install step hands control to the NSIS installer and
+//! `Update::download_and_install` would collapse the middle two, and must not
+//! be used: on Windows the install step hands control to the NSIS installer and
 //! exits this process, so anything the frontend still had to ask the user -
 //! unsaved work, a held SpeleoDB write lock - would never be asked. Splitting
 //! the download from the install is what keeps the point of no return behind
 //! the existing quit guards.
+//!
+//! ## What is trusted, and where
+//!
+//! The manifest is fetched over https but is NOT itself signed - only the
+//! bundle is, and the plugin verifies that signature against the baked-in
+//! minisign public key at the END of `Update::download`, before this module is
+//! handed any bytes. So everything the manifest says is UNTRUSTED input until
+//! then: the download URL, its size, and how long it takes to arrive. Three
+//! guards follow from that, none of which the plugin provides:
+//!
+//! - [`MAX_UPDATE_BYTES`] with a real mid-stream abort (the plugin buffers the
+//!   whole body in RAM and enforces no length at all),
+//! - an explicit request timeout on both the check and the download,
+//! - a generation stamp pairing bytes with the check that offered them.
 
-use std::sync::Mutex;
+use std::future::Future as _;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::task::Poll;
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State, Url};
@@ -29,12 +48,18 @@ use ts_rs::TS;
 use crate::config::UpdateTrack;
 use crate::core::AppState;
 
-/// Endpoint override, honoured in every build.
+/// Endpoint override for the update manifest.
 ///
-/// Not a debug gate: it is how a maintainer points a real installed app at a
-/// local manifest to reproduce a user's failing update, and the manual test
-/// recipe in docs/releasing.md depends on it. Read at CALL time, so exporting
-/// it and re-checking is enough - no restart.
+/// Honoured unconditionally in a DEBUG build - that is the manual test recipe
+/// in docs/releasing.md, where a local `python3 -m http.server` stands in for
+/// GitHub. In a release build it is restricted to https `github.com` URLs
+/// ([`is_trusted_manifest_url`]): the manifest decides which binary an
+/// installed app downloads, so an attacker who can set one environment
+/// variable must not be able to redirect it. (The plugin's own
+/// `validate_endpoints` already refuses non-https in release; this narrows the
+/// host as well.)
+///
+/// Read at CALL time, so exporting it and re-checking is enough - no restart.
 pub const UPDATE_URL_ENV: &str = "STALAGMIGHT_UPDATE_URL";
 
 /// Per-track manifests, both rolling assets of the `updater` release.
@@ -42,6 +67,9 @@ const STABLE_ENDPOINT: &str =
     "https://github.com/Stalagmight/Stalagmight/releases/download/updater/latest-stable.json";
 const WEEKLY_ENDPOINT: &str =
     "https://github.com/Stalagmight/Stalagmight/releases/download/updater/latest-weekly.json";
+
+/// The only host a release build will fetch a manifest from.
+const TRUSTED_MANIFEST_HOST: &str = "github.com";
 
 /// Release-notes landing page for an offered version. Tags are `v<version>`.
 const RELEASE_TAG_URL_PREFIX: &str = "https://github.com/Stalagmight/Stalagmight/releases/tag/v";
@@ -57,6 +85,35 @@ pub const DOWNLOAD_PROGRESS_EVENT: &str = "app-update:download-progress";
 /// is still ~40 updates for a 10 MB bundle, which is finer than a progress bar
 /// can show.
 const PROGRESS_EMIT_BYTES: u64 = 256 * 1024;
+
+/// Hard ceiling on an update bundle, enforced mid-stream.
+///
+/// The plugin accumulates the entire response into a `Vec<u8>` and checks no
+/// length whatsoever, so without this a manifest pointing at an endless body
+/// grows the process until the OS kills it - and the manifest is exactly the
+/// part of the chain nothing has signed yet. 512 MiB is roughly an order of
+/// magnitude above the largest bundle this app ships (a Windows NSIS setup is
+/// tens of MB), so it cannot be reached by a legitimate release; raise it here
+/// rather than discovering it as a failed update if that stops being true.
+const MAX_UPDATE_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Whole-request timeout for the manifest fetch.
+///
+/// A JSON document of a few hundred bytes. Without this the check inherits
+/// reqwest's default of NO timeout, so an endpoint that accepts the connection
+/// and then stalls leaves the check pending for the life of the process - and
+/// the frontend's launch check would never resolve.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Whole-request timeout for the bundle download.
+///
+/// Set on the `Update` itself, NOT inherited from the builder:
+/// `Updater::check` constructs the `Update` with `timeout: None` hard-coded
+/// (tauri-plugin-updater 2.9.0, `updater.rs`), so the builder's timeout covers
+/// the manifest fetch alone. Ten minutes is deliberately generous - it is a
+/// backstop against a stalled connection, not a bandwidth policy, and a user
+/// on a slow link must still be able to finish.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// The answer to one update check.
 #[derive(Debug, Clone, Serialize, TS)]
@@ -81,9 +138,6 @@ pub enum AppUpdateStatus {
     UpToDate,
     Available {
         version: String,
-        /// Verbatim from the manifest's `pub_date`, not reformatted - the
-        /// frontend renders it in the user's locale or not at all.
-        pub_date: Option<String>,
         notes_url: String,
     },
 }
@@ -97,8 +151,8 @@ pub enum AppUpdateStatus {
 pub struct AppUpdateProgress {
     /// `number` in TS, not ts-rs's default `bigint` for `u64`: serde_json puts a
     /// plain JSON number on the wire, so a `bigint` declaration would typecheck
-    /// against arithmetic that throws at runtime. A release bundle is hundreds
-    /// of megabytes at the very most, nowhere near 2^53.
+    /// against arithmetic that throws at runtime. Bounded by
+    /// [`MAX_UPDATE_BYTES`], nowhere near 2^53.
     #[ts(type = "number")]
     pub downloaded: u64,
     #[ts(type = "number | null")]
@@ -112,8 +166,24 @@ pub struct AppUpdateProgress {
 /// parked here between commands, and the verified bytes with it.
 #[derive(Default)]
 struct Pending {
+    /// Bumped by every check. Everything downstream carries the generation it
+    /// was produced under, so a download that finishes after a LATER check
+    /// cannot have its bytes paired with that later check's `Update` - both
+    /// would be validly signed, and the user would silently install a version
+    /// nobody offered them. See [`store_downloaded_bytes`].
+    generation: u64,
     update: Option<Update>,
-    bytes: Option<Vec<u8>>,
+    /// The verified bundle and the generation it was downloaded for.
+    bytes: Option<(u64, Vec<u8>)>,
+    /// One-shot consent for [`install_app_update_and_restart`].
+    ///
+    /// The frontend's exit guards - unsaved changes, unpushed SpeleoDB work -
+    /// are frontend code, and any script running in the webview can `invoke`
+    /// the install command directly and walk straight past them. This flag is
+    /// the backend half of that contract: the install refuses unless the quit
+    /// path armed it, and it is cleared by the install, by a new check, and by
+    /// [`unarm_app_update_restart`] on every abandoned restart.
+    restart_armed: bool,
 }
 
 /// Tauri-managed state for the update cycle.
@@ -134,46 +204,224 @@ impl AppUpdateState {
     }
 }
 
-/// The parked update, or the message the frontend shows when there is none.
+/// Does this build have an updater public key configured?
 ///
-/// Cloned out rather than borrowed: the caller awaits a download afterwards,
-/// and holding the lock across that await is exactly what `await_holding_lock`
-/// forbids.
-fn checked_update(update_state: &AppUpdateState) -> Result<Update, String> {
-    update_state
-        .with(|pending| pending.update.clone())?
-        .ok_or_else(|| "No update to download; check for updates first".to_owned())
+/// Read from the checked-in `src-tauri/tauri.conf.json` - the SAME fact, from
+/// the SAME file, that `.github/workflows/release.yml` reads with
+/// `jq -r '.plugins.updater.pubkey // empty'` to decide whether to enable
+/// updater artifacts. CI's `--config` merge adds only
+/// `bundle.createUpdaterArtifacts`, never the pubkey, so `include_str!` and the
+/// merged config cannot disagree about this key.
+///
+/// It gates plugin registration in `lib.rs`, and it has to: the plugin's own
+/// `Config` has a REQUIRED `pubkey` and no `Default`, so with `plugins.updater`
+/// absent Tauri fails to deserialize it and `Builder::build()` returns an error
+/// - the app never starts. The block is deliberately absent today (the minisign
+/// keypair is still being provisioned), so registering unconditionally would
+/// brick every build, local and released, until the key lands.
+pub fn updater_configured() -> bool {
+    static CONFIGURED: OnceLock<bool> = OnceLock::new();
+    *CONFIGURED.get_or_init(|| pubkey_present(include_str!("../../tauri.conf.json")))
 }
 
-/// The parked update and its downloaded bytes, TAKING the bytes so a second
-/// install cannot run off a copy the first one already consumed.
-fn installable_update(update_state: &AppUpdateState) -> Result<(Update, Vec<u8>), String> {
-    let (update, bytes) =
-        update_state.with(|pending| (pending.update.clone(), pending.bytes.take()))?;
-    let update =
-        update.ok_or_else(|| "No update to install; check for updates first".to_owned())?;
-    let bytes = bytes
-        .ok_or_else(|| "The update has not been downloaded yet; download it first".to_owned())?;
-    Ok((update, bytes))
+/// [`updater_configured`]'s decision, over an explicit document so a test can
+/// drive both answers without a second `tauri.conf.json`.
+fn pubkey_present(conf_json: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(conf_json)
+        .ok()
+        .and_then(|conf| {
+            conf.get("plugins")?
+                .get("updater")?
+                .get("pubkey")?
+                .as_str()
+                .map(|key| !key.trim().is_empty())
+        })
+        .unwrap_or(false)
+}
+
+/// The error every command answers with while the updater has no public key.
+fn updater_not_configured() -> String {
+    "This build has no update signing key, so it cannot check for updates".to_owned()
+}
+
+/// Is this a manifest URL a release build may fetch?
+///
+/// https, and `github.com` exactly - not a suffix match, which would accept
+/// `github.com.evil.test`. Release assets live on `objects.githubusercontent.com`,
+/// but that host is only ever reached by following a redirect the manifest
+/// names, never configured here.
+fn is_trusted_manifest_url(url: &str) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    parsed.scheme() == "https" && parsed.host_str() == Some(TRUSTED_MANIFEST_HOST)
+}
+
+/// Decide what [`UPDATE_URL_ENV`] means, given the raw value and whether the
+/// host allowlist is being enforced.
+///
+/// Split out and parameterised because `cfg!(debug_assertions)` is ALWAYS true
+/// under `cargo test`: the release branch - the one that matters for security -
+/// would otherwise have no test that can reach it.
+fn resolve_override(raw: Option<&str>, enforce_allowlist: bool) -> Option<String> {
+    // An exported-then-emptied variable (`export STALAGMIGHT_UPDATE_URL=`) is
+    // present but blank; honouring it would send the check at an unparseable URL.
+    let value = raw.map(str::trim).filter(|v| !v.is_empty())?;
+    if enforce_allowlist && !is_trusted_manifest_url(value) {
+        tracing::warn!(
+            purpose = "override the update manifest endpoint",
+            "Ignoring {UPDATE_URL_ENV}: a release build only accepts an https \
+             {TRUSTED_MANIFEST_HOST} URL"
+        );
+        return None;
+    }
+    Some(value.to_owned())
 }
 
 /// The manifest URL for `track`, or the [`UPDATE_URL_ENV`] override.
 ///
-/// Pure: the environment is the only input besides the track, and it is read
-/// here rather than cached so a support session can point a running app
-/// somewhere else between two checks. A variable set to whitespace is treated
-/// as unset, since that is what an emptied shell export looks like.
+/// Pure apart from the environment, which is read here rather than cached so a
+/// support session can point a running app somewhere else between two checks.
 pub fn endpoint_for_track(track: UpdateTrack) -> String {
-    if let Ok(override_url) = std::env::var(UPDATE_URL_ENV) {
-        if !override_url.trim().is_empty() {
-            return override_url;
-        }
+    let raw = std::env::var(UPDATE_URL_ENV).ok();
+    if let Some(overridden) = resolve_override(raw.as_deref(), !cfg!(debug_assertions)) {
+        return overridden;
     }
     match track {
         UpdateTrack::Stable => STABLE_ENDPOINT,
         UpdateTrack::Weekly => WEEKLY_ENDPOINT,
     }
     .to_owned()
+}
+
+/// Why a download must stop before the body ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DownloadAbort {
+    /// More bytes than any bundle we ship could plausibly be.
+    OverCap,
+    /// More bytes than the server itself said it would send.
+    OverDeclaredLength,
+}
+
+impl DownloadAbort {
+    fn message(self) -> String {
+        match self {
+            Self::OverCap => format!(
+                "The update download exceeded the {} MiB limit and was stopped",
+                MAX_UPDATE_BYTES / 1024 / 1024
+            ),
+            Self::OverDeclaredLength => {
+                "The update download sent more data than it declared and was stopped".to_owned()
+            }
+        }
+    }
+}
+
+/// Should the in-flight download be abandoned?
+///
+/// Pure, so the three ways a body can be hostile are testable without a server.
+/// The declared-length arm is checked BEFORE any bytes arrive as well as
+/// against the running total, so a manifest advertising a 4 GiB bundle fails on
+/// the first chunk instead of after half a gigabyte of RAM.
+fn download_abort_reason(downloaded: u64, content_length: Option<u64>) -> Option<DownloadAbort> {
+    if downloaded > MAX_UPDATE_BYTES {
+        return Some(DownloadAbort::OverCap);
+    }
+    match content_length {
+        Some(declared) if declared > MAX_UPDATE_BYTES => Some(DownloadAbort::OverCap),
+        Some(declared) if downloaded > declared => Some(DownloadAbort::OverDeclaredLength),
+        _ => None,
+    }
+}
+
+/// The parked update and the generation it belongs to.
+///
+/// Cloned out rather than borrowed: the caller awaits a download afterwards,
+/// and holding the lock across that await is exactly what `await_holding_lock`
+/// forbids.
+fn checked_update(update_state: &AppUpdateState) -> Result<(u64, Update), String> {
+    update_state
+        .with(|pending| pending.update.clone().map(|u| (pending.generation, u)))?
+        .ok_or_else(|| "No update to download; check for updates first".to_owned())
+}
+
+/// Park downloaded bytes, but only if no check has happened since the download
+/// started.
+///
+/// The refusal is the point: a second check while a download is in flight has
+/// already replaced `pending.update`, so storing here would pair one version's
+/// bytes with another version's `Update`, and the install would apply a build
+/// nobody was offered.
+fn store_downloaded_bytes(
+    update_state: &AppUpdateState,
+    generation: u64,
+    bytes: Vec<u8>,
+) -> Result<(), String> {
+    update_state.with(|pending| {
+        if pending.generation != generation {
+            return Err(
+                "A newer update check replaced this one while it was downloading; check again"
+                    .to_owned(),
+            );
+        }
+        pending.bytes = Some((generation, bytes));
+        Ok(())
+    })?
+}
+
+/// Arm the one-shot install consent. [`arm_app_update_restart`]'s whole body,
+/// as a plain function so the state machine is reachable from a unit test.
+fn arm_restart(update_state: &AppUpdateState) -> Result<(), String> {
+    update_state.with(|pending| {
+        match pending.bytes {
+            Some((generation, _)) if generation == pending.generation => {}
+            _ => {
+                return Err(
+                    "There is no downloaded update to restart into; download it first".to_owned(),
+                )
+            }
+        }
+        pending.restart_armed = true;
+        Ok(())
+    })?
+}
+
+/// Spend the install consent and take the bytes it authorised.
+///
+/// Taking both - rather than peeking - is what makes the arm a one-shot: a
+/// second install cannot run off consent the first one already spent, and a
+/// failed install has to be re-armed through the guarded path like any other
+/// restart. The arm is checked FIRST, so an unarmed `invoke` from the webview
+/// learns nothing about whether an update is even pending.
+fn take_install_authorisation(update_state: &AppUpdateState) -> Result<Vec<u8>, String> {
+    update_state.with(|pending| {
+        if !std::mem::take(&mut pending.restart_armed) {
+            return Err(
+                "The update restart was not armed; use Restart to update in the app".to_owned(),
+            );
+        }
+        let Some((generation, bytes)) = pending.bytes.take() else {
+            return Err("The update has not been downloaded yet; download it first".to_owned());
+        };
+        if generation != pending.generation {
+            return Err(
+                "The downloaded update no longer matches the latest check; check again".to_owned(),
+            );
+        }
+        Ok(bytes)
+    })?
+}
+
+/// The authorised bytes plus the [`Update`] that will apply them.
+fn installable_update(update_state: &AppUpdateState) -> Result<(Update, Vec<u8>), String> {
+    let bytes = take_install_authorisation(update_state)?;
+    // Unreachable in practice - bytes only ever land through
+    // `store_downloaded_bytes`, which runs after a check parked an `Update` of
+    // the same generation - but "cannot happen" is not a reason to unwrap.
+    let update = update_state
+        .with(|pending| pending.update.clone())?
+        .ok_or_else(|| "No update to install; check for updates first".to_owned())?;
+    Ok((update, bytes))
 }
 
 /// Ask this track's manifest whether a newer build exists.
@@ -195,6 +443,12 @@ pub async fn check_for_app_update(
     state: State<'_, AppState>,
     update_state: State<'_, AppUpdateState>,
 ) -> Result<AppUpdateCheck, String> {
+    // The plugin is not registered without a pubkey (see `updater_configured`),
+    // and `updater_builder()` PANICS on its unmanaged state - so this guard is
+    // load-bearing, not defensive.
+    if !updater_configured() {
+        return Err(updater_not_configured());
+    }
     let current_version = app.package_info().version.to_string();
     let track = state.get_config().general.update_track;
     let endpoint = endpoint_for_track(track);
@@ -203,6 +457,7 @@ pub async fn check_for_app_update(
 
     let updater = app
         .updater_builder()
+        .timeout(CHECK_TIMEOUT)
         .endpoints(vec![url])
         .map_err(|e| format!("Update endpoint was rejected: {e}"))?
         .build()
@@ -220,12 +475,15 @@ pub async fn check_for_app_update(
         Err(e) => return Err(format!("Update check failed: {e}")),
     };
 
-    let Some(update) = found else {
-        // Drop anything a previous check parked: an update the server has since
-        // withdrawn must not stay installable from this session.
+    // Every check invalidates the previous one, found or not: an update the
+    // server has since withdrawn must not stay installable, and consent given
+    // for the old offer must not carry over to a new one.
+    let Some(mut update) = found else {
         update_state.with(|pending| {
+            pending.generation = pending.generation.wrapping_add(1);
             pending.update = None;
             pending.bytes = None;
+            pending.restart_armed = false;
         })?;
         return Ok(AppUpdateCheck {
             status: AppUpdateStatus::UpToDate,
@@ -233,27 +491,21 @@ pub async fn check_for_app_update(
         });
     };
 
+    // See `DOWNLOAD_TIMEOUT`: the builder's timeout never reaches the body.
+    update.timeout = Some(DOWNLOAD_TIMEOUT);
     let version = update.version.clone();
-    // Straight off the manifest rather than through the plugin's parsed
-    // `OffsetDateTime`, which would have to be re-formatted to get back to the
-    // string the manifest already carries.
-    let pub_date = update
-        .raw_json
-        .get("pub_date")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned);
 
     update_state.with(|pending| {
+        pending.generation = pending.generation.wrapping_add(1);
         pending.update = Some(update);
-        // Bytes belong to the version they were downloaded for.
         pending.bytes = None;
+        pending.restart_armed = false;
     })?;
 
     Ok(AppUpdateCheck {
         status: AppUpdateStatus::Available {
             notes_url: format!("{RELEASE_TAG_URL_PREFIX}{version}"),
             version,
-            pub_date,
         },
         current_version,
     })
@@ -263,22 +515,36 @@ pub async fn check_for_app_update(
 ///
 /// Download ONLY - see the module docs for why this never installs. The bytes
 /// are held in memory until [`install_app_update_and_restart`] asks for them;
-/// the plugin has already checked them against the bundled minisign public key
+/// the plugin has already checked them against the baked-in minisign public key
 /// by the time this returns.
 #[tauri::command]
 pub async fn download_app_update(
     app: AppHandle,
     update_state: State<'_, AppUpdateState>,
 ) -> Result<(), String> {
-    let update = checked_update(&update_state)?;
+    let (generation, update) = checked_update(&update_state)?;
 
+    // Shared with the progress closure, which runs inside the download future
+    // and therefore cannot return anything to us.
+    let abort = Arc::new(AtomicBool::new(false));
+    let mut reason: Option<DownloadAbort> = None;
     let mut downloaded: u64 = 0;
     let mut emitted_at: u64 = 0;
     let mut total: Option<u64> = None;
-    let bytes = update
-        .download(
+
+    // The whole borrow of the counters above lives in this block: the closure
+    // holds them for as long as the future does, so the final progress emit and
+    // the result handling have to happen after it is dropped.
+    let outcome = {
+        let abort = Arc::clone(&abort);
+        let mut download = Box::pin(update.download(
             |chunk, content_length| {
                 downloaded += chunk as u64;
+                if let Some(why) = download_abort_reason(downloaded, content_length) {
+                    reason = Some(why);
+                    abort.store(true, Ordering::Relaxed);
+                    return;
+                }
                 // Emit on the byte step OR when the announced total changes -
                 // the latter is what makes the first chunk emit, so the UI
                 // learns the size instead of waiting a quarter megabyte for it.
@@ -289,16 +555,35 @@ pub async fn download_app_update(
                 }
             },
             || {},
-        )
+        ));
+
+        // The plugin's `download` has no way to be cancelled from the progress
+        // callback, so cancel it from the outside: stop polling the future and
+        // drop it, which frees the partially-accumulated buffer. The flag is
+        // written by the closure DURING a poll, so it is always current by the
+        // time the poll returns `Pending`.
+        std::future::poll_fn(|cx| match download.as_mut().poll(cx) {
+            Poll::Ready(result) => Poll::Ready(Some(result)),
+            Poll::Pending if abort.load(Ordering::Relaxed) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        })
         .await
-        .map_err(|e| format!("Update download failed: {e}"))?;
+    };
 
-    // The throttle can swallow the tail, and a bar stuck at 97% reads as a
-    // hang; the finished size is also the one the frontend can assert on.
-    emit_progress(&app, downloaded, total);
-
-    update_state.with(|pending| pending.bytes = Some(bytes))?;
-    Ok(())
+    match outcome {
+        Some(Ok(bytes)) => {
+            // The throttle can swallow the tail, and a bar stuck at 97% reads
+            // as a hang; the finished size is also the one the frontend can
+            // assert on.
+            emit_progress(&app, downloaded, total);
+            store_downloaded_bytes(&update_state, generation, bytes)?;
+            Ok(())
+        }
+        Some(Err(e)) => Err(format!("Update download failed: {e}")),
+        // The abort path. `reason` is always set alongside the flag; the
+        // fallback keeps the failure honest rather than unwrapping.
+        None => Err(reason.unwrap_or(DownloadAbort::OverCap).message()),
+    }
 }
 
 fn emit_progress(app: &AppHandle, downloaded: u64, total: Option<u64>) {
@@ -315,16 +600,43 @@ fn emit_progress(app: &AppHandle, downloaded: u64, total: Option<u64>) {
     }
 }
 
+/// Take the safety catch off the install, for exactly one attempt.
+///
+/// Called by `requestUpdateRestart` immediately before it asks for a window
+/// close, so the install command can only fire on a restart the quit path
+/// actually started. Refuses unless a download for the current check is sitting
+/// ready - arming with nothing to install would be consent for whatever the
+/// NEXT download turns out to be.
+#[tauri::command]
+pub fn arm_app_update_restart(update_state: State<AppUpdateState>) -> Result<(), String> {
+    arm_restart(update_state.inner())
+}
+
+/// Put the safety catch back.
+///
+/// Idempotent, and called on every path that abandons a restart - the user
+/// cancels a guard dialog, the window close is refused, the install rejects -
+/// so a restart the user walked away from cannot be completed by a later,
+/// unrelated window close.
+#[tauri::command]
+pub fn unarm_app_update_restart(update_state: State<AppUpdateState>) -> Result<(), String> {
+    update_state.with(|pending| pending.restart_armed = false)
+}
+
 /// Install the downloaded update and relaunch into it.
 ///
-/// The point of no return, and the frontend must have run every exit guard
-/// before calling it. On Windows `install` hands over to the installer and
-/// exits this process, so nothing after it is guaranteed to run - which is also
-/// why `app.restart()` (never-returning by signature) sits directly behind it
-/// rather than any cleanup.
+/// The point of no return. It requires [`arm_app_update_restart`] to have run,
+/// which is the backend's own guarantee that this arrived through the quit path
+/// and not from a bare `invoke` in the webview; the frontend's exit guards
+/// cannot provide that guarantee themselves.
 ///
-/// On failure the bytes are put back, so "Restart to update" can be retried
-/// without downloading again.
+/// On Windows `install` hands over to the installer and exits this process, so
+/// nothing after it is guaranteed to run - which is also why `app.restart()`
+/// (never-returning by signature) sits directly behind it rather than any
+/// cleanup.
+///
+/// On failure the bytes are put back, so the restart can be retried - through
+/// the guarded path, which re-arms - without downloading again.
 #[tauri::command]
 pub fn install_app_update_and_restart(
     app: AppHandle,
@@ -333,7 +645,10 @@ pub fn install_app_update_and_restart(
     let (update, bytes) = installable_update(&update_state)?;
 
     if let Err(e) = update.install(&bytes) {
-        update_state.with(|pending| pending.bytes = Some(bytes))?;
+        update_state.with(|pending| {
+            let generation = pending.generation;
+            pending.bytes = Some((generation, bytes));
+        })?;
         return Err(format!("Update install failed: {e}"));
     }
     app.restart();
@@ -373,11 +688,20 @@ mod tests {
         }
     }
 
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// `Update` has no `Debug`, so `expect_err` is unavailable on these.
+    fn refusal<T>(result: Result<T, String>) -> String {
+        result.err().expect("the step must refuse")
+    }
+
     #[test]
     fn each_track_has_its_own_manifest() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = env_lock();
         let _env = EnvVarGuard::set(None);
 
         let stable = endpoint_for_track(UpdateTrack::Stable);
@@ -388,21 +712,20 @@ mod tests {
             stable, weekly,
             "the two tracks must not resolve to one manifest"
         );
-        // https only: the plugin refuses an insecure endpoint in release builds,
-        // and it would be a signed-payload delivery over a channel anyone can
-        // rewrite.
-        assert!(stable.starts_with("https://"), "{stable}");
-        assert!(weekly.starts_with("https://"), "{weekly}");
+        // Both defaults must satisfy the release allowlist, or a release build
+        // would refuse its own endpoints if they were ever routed through it.
+        assert!(is_trusted_manifest_url(&stable), "{stable}");
+        assert!(is_trusted_manifest_url(&weekly), "{weekly}");
     }
 
     #[test]
     fn the_env_override_wins_over_both_tracks() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = env_lock();
         let _env = EnvVarGuard::set(Some("http://127.0.0.1:8000/latest.json"));
 
         for track in [UpdateTrack::Stable, UpdateTrack::Weekly] {
+            // Debug build (which every test binary is), so the local recipe URL
+            // is honoured verbatim.
             assert_eq!(
                 endpoint_for_track(track),
                 "http://127.0.0.1:8000/latest.json"
@@ -410,14 +733,9 @@ mod tests {
         }
     }
 
-    /// An exported-then-emptied variable (`export STALAGMIGHT_UPDATE_URL=`) is
-    /// present but blank. Honouring it would send the check at an unparseable
-    /// URL instead of the real manifest.
     #[test]
     fn a_blank_override_is_treated_as_unset() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = env_lock();
         let _env = EnvVarGuard::set(Some("   "));
 
         assert_eq!(endpoint_for_track(UpdateTrack::Stable), STABLE_ENDPOINT);
@@ -429,32 +747,55 @@ mod tests {
     /// silently do nothing.
     #[test]
     fn the_override_is_re_read_on_every_call() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = env_lock();
 
         let _env = EnvVarGuard::set(None);
         assert_eq!(endpoint_for_track(UpdateTrack::Stable), STABLE_ENDPOINT);
-        std::env::set_var(UPDATE_URL_ENV, "https://example.invalid/latest.json");
+        std::env::set_var(UPDATE_URL_ENV, "https://github.com/x/latest.json");
         assert_eq!(
             endpoint_for_track(UpdateTrack::Stable),
-            "https://example.invalid/latest.json"
+            "https://github.com/x/latest.json"
         );
         std::env::remove_var(UPDATE_URL_ENV);
         assert_eq!(endpoint_for_track(UpdateTrack::Stable), STABLE_ENDPOINT);
     }
 
-    /// Both default endpoints must survive `Url::parse`, which is the first
-    /// thing `check_for_app_update` does with them.
+    /// The security half of the override: in a RELEASE build anything that is
+    /// not an https github.com URL is ignored, so one environment variable
+    /// cannot redirect an installed app at an attacker's manifest.
+    /// `cfg!(debug_assertions)` is always true under `cargo test`, which is why
+    /// `resolve_override` takes the flag rather than reading it.
     #[test]
-    fn the_default_endpoints_parse() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _env = EnvVarGuard::set(None);
+    fn a_release_build_only_accepts_a_github_https_override() {
+        let allowed = "https://github.com/Stalagmight/Stalagmight/releases/download/updater/x.json";
+        assert_eq!(
+            resolve_override(Some(allowed), true).as_deref(),
+            Some(allowed)
+        );
 
-        for track in [UpdateTrack::Stable, UpdateTrack::Weekly] {
-            Url::parse(&endpoint_for_track(track)).expect("endpoint should be a valid URL");
+        for rejected in [
+            // The dev recipe - fine in debug, never in release.
+            "http://127.0.0.1:8000/latest.json",
+            // Plain http on the right host is still rewritable in transit.
+            "http://github.com/x.json",
+            // Suffix-matching the host would accept this.
+            "https://github.com.evil.test/x.json",
+            "https://evil.test/github.com/x.json",
+            // A userinfo field that reads as github.com to a human.
+            "https://github.com@evil.test/x.json",
+            "not a url at all",
+        ] {
+            assert_eq!(
+                resolve_override(Some(rejected), true),
+                None,
+                "release builds must reject {rejected}"
+            );
+            // ...and a debug build still honours it, so the recipe works.
+            assert_eq!(
+                resolve_override(Some(rejected), false).as_deref(),
+                Some(rejected),
+                "debug builds must honour {rejected}"
+            );
         }
     }
 
@@ -468,42 +809,234 @@ mod tests {
         );
     }
 
-    /// `Update` has no `Debug`, so `expect_err` is unavailable on these.
-    fn refusal<T>(result: Result<T, String>) -> String {
-        result.err().expect("the step must refuse")
+    // ── Download bounds ──────────────────────────────────────────────────────
+
+    #[test]
+    fn an_ordinary_download_is_never_aborted() {
+        assert_eq!(download_abort_reason(0, None), None);
+        assert_eq!(download_abort_reason(40 * 1024 * 1024, None), None);
+        assert_eq!(
+            download_abort_reason(40 * 1024 * 1024, Some(40 * 1024 * 1024)),
+            None
+        );
+        // Exactly at the cap is still allowed; only past it is not.
+        assert_eq!(download_abort_reason(MAX_UPDATE_BYTES, None), None);
     }
 
-    /// Nothing checked yet: both later steps must refuse, and say which step
-    /// the user is missing rather than surfacing a lock or unwrap failure.
+    /// A body with no `Content-Length` that just keeps coming - the shape the
+    /// plugin has no defence against at all, since it buffers everything.
     #[test]
-    fn download_and_install_refuse_an_unchecked_state() {
+    fn an_endless_body_is_aborted_at_the_cap() {
+        assert_eq!(
+            download_abort_reason(MAX_UPDATE_BYTES + 1, None),
+            Some(DownloadAbort::OverCap)
+        );
+    }
+
+    /// A manifest that ADMITS to an enormous bundle is refused on the first
+    /// chunk, rather than after half a gigabyte of it has been accumulated.
+    #[test]
+    fn an_oversized_declared_length_is_refused_immediately() {
+        assert_eq!(
+            download_abort_reason(1, Some(MAX_UPDATE_BYTES + 1)),
+            Some(DownloadAbort::OverCap)
+        );
+    }
+
+    /// A server that declares a small body and then sends more is lying about
+    /// one of the two; either way the extra bytes are not accumulated.
+    #[test]
+    fn overrunning_a_declared_length_is_aborted() {
+        assert_eq!(
+            download_abort_reason(1_001, Some(1_000)),
+            Some(DownloadAbort::OverDeclaredLength)
+        );
+        assert_eq!(download_abort_reason(1_000, Some(1_000)), None);
+    }
+
+    #[test]
+    fn each_abort_reason_names_itself() {
+        assert!(DownloadAbort::OverCap.message().contains("512 MiB"));
+        assert!(DownloadAbort::OverDeclaredLength
+            .message()
+            .contains("more data than it declared"));
+    }
+
+    // ── Updater configuration ────────────────────────────────────────────────
+
+    #[test]
+    fn a_pubkey_is_only_present_when_it_is_a_non_empty_string() {
+        assert!(pubkey_present(
+            r#"{"plugins":{"updater":{"pubkey":"abc"}}}"#
+        ));
+        assert!(!pubkey_present(r#"{"plugins":{"updater":{"pubkey":""}}}"#));
+        assert!(!pubkey_present(
+            r#"{"plugins":{"updater":{"pubkey":"  "}}}"#
+        ));
+        assert!(!pubkey_present(r#"{"plugins":{"updater":{}}}"#));
+        assert!(!pubkey_present(r#"{"plugins":{}}"#));
+        assert!(!pubkey_present("{}"));
+        assert!(!pubkey_present("not json"));
+    }
+
+    /// `updater_configured` and CI's `jq -r '.plugins.updater.pubkey // empty'`
+    /// must always agree - CI decides whether to build updater artifacts from
+    /// it, this decides whether the app registers the plugin at all, and a
+    /// disagreement means either signed artifacts nothing can install or an app
+    /// that refuses to start.
+    #[test]
+    fn the_plugin_gate_matches_the_committed_conf() {
+        let conf = include_str!("../../tauri.conf.json");
+        assert_eq!(
+            updater_configured(),
+            pubkey_present(conf),
+            "the cached gate disagrees with tauri.conf.json"
+        );
+    }
+
+    // ── State machine ────────────────────────────────────────────────────────
+
+    /// Nothing checked yet: every later step must refuse, and name the step the
+    /// user is missing rather than surfacing a lock or unwrap failure.
+    #[test]
+    fn every_step_refuses_an_unchecked_state() {
         let state = AppUpdateState::default();
 
         let download = refusal(checked_update(&state));
         assert!(download.contains("check for updates"), "{download}");
 
-        let install = refusal(installable_update(&state));
-        assert!(install.contains("check for updates"), "{install}");
+        let arm = refusal(arm_restart(&state));
+        assert!(arm.contains("download it first"), "{arm}");
+
+        // Install refuses on the ARM first - the safety catch is checked before
+        // anything else, so a bare `invoke` gets no information about state.
+        let install = refusal(take_install_authorisation(&state));
+        assert!(install.contains("not armed"), "{install}");
     }
 
-    /// The download step ran but the bytes are gone (or never landed). The
-    /// install must name THAT, not repeat "check for updates" - the two are
-    /// different things for the user to do.
+    /// The install cannot run on consent that was never given, even with a
+    /// perfectly good download sitting ready. This is the guard that a webview
+    /// script calling `invoke('install_app_update_and_restart')` hits.
     #[test]
-    fn install_refuses_when_the_download_has_not_happened() {
+    fn install_refuses_without_an_arm() {
         let state = AppUpdateState::default();
-        // Only the bytes are observable without a live `Update`, so drive the
-        // discrimination the other way: with bytes present and no update, the
-        // message is still the check one; the byte message needs an update.
+        seed_download(&state, 1);
+
+        let err = refusal(take_install_authorisation(&state));
+        assert!(err.contains("not armed"), "{err}");
+        // ...and the refusal did not consume the download.
+        assert!(state
+            .with(|pending| pending.bytes.is_some())
+            .expect("lockable"));
+    }
+
+    /// The arm is one-shot: consumed by the install attempt it authorised, so a
+    /// second attempt has to be re-armed through the guarded path.
+    #[test]
+    fn the_arm_is_spent_by_one_install_attempt() {
+        let state = AppUpdateState::default();
+        seed_download(&state, 1);
+        arm_restart(&state).expect("arming a ready download should work");
+
+        assert!(state
+            .with(|pending| pending.restart_armed)
+            .expect("lockable"));
+        // Standing in for the real install, which cannot run in a unit test.
+        assert_eq!(
+            take_install_authorisation(&state),
+            Ok(vec![0u8; 16]),
+            "an armed, current download must be handed over exactly once"
+        );
+        assert!(!state
+            .with(|pending| pending.restart_armed)
+            .expect("lockable"));
+
+        let second = refusal(take_install_authorisation(&state));
+        assert!(second.contains("not armed"), "{second}");
+    }
+
+    /// Unarming is what every abandoned restart does - a cancelled guard
+    /// dialog, a refused close - and it must actually disarm.
+    #[test]
+    fn unarming_revokes_the_consent() {
+        let state = AppUpdateState::default();
+        seed_download(&state, 1);
+        arm_restart(&state).expect("arming a ready download should work");
         state
-            .with(|pending| pending.bytes = Some(vec![0u8; 4]))
-            .expect("state should be lockable");
-        let err = refusal(installable_update(&state));
-        assert!(err.contains("check for updates"), "{err}");
-        // ...and the taken bytes are NOT left behind for a later install to
-        // pick up against a different version.
+            .with(|pending| pending.restart_armed = false)
+            .expect("lockable");
+
+        let err = refusal(take_install_authorisation(&state));
+        assert!(err.contains("not armed"), "{err}");
+    }
+
+    /// The pairing race, from the download's side: a check that lands while the
+    /// download is in flight bumps the generation, and the finishing download
+    /// must NOT write its bytes against the new check's update. Both bundles
+    /// carry a valid signature, so nothing downstream would notice.
+    #[test]
+    fn a_check_during_a_download_refuses_the_late_bytes() {
+        let state = AppUpdateState::default();
+        let generation = state
+            .with(|pending| {
+                pending.generation = 7;
+                pending.generation
+            })
+            .expect("lockable");
+
+        // A second check lands mid-download.
+        state
+            .with(|pending| {
+                pending.generation += 1;
+                pending.bytes = None;
+            })
+            .expect("lockable");
+
+        let err = refusal(store_downloaded_bytes(&state, generation, vec![0u8; 8]));
+        assert!(err.contains("newer update check"), "{err}");
         assert!(state
             .with(|pending| pending.bytes.is_none())
-            .expect("state should be lockable"));
+            .expect("lockable"));
+    }
+
+    /// ...and from the install's side, for any way a stale pair could still be
+    /// sitting in the state.
+    #[test]
+    fn install_refuses_a_mismatched_pair() {
+        let state = AppUpdateState::default();
+        seed_download(&state, 3);
+        arm_restart(&state).expect("arming a ready download should work");
+        // The check that invalidates it lands after the arm.
+        state
+            .with(|pending| pending.generation = 4)
+            .expect("lockable");
+
+        let err = refusal(take_install_authorisation(&state));
+        assert!(err.contains("no longer matches"), "{err}");
+    }
+
+    #[test]
+    fn a_download_for_the_current_check_is_stored() {
+        let state = AppUpdateState::default();
+        let generation = state.with(|pending| pending.generation).expect("lockable");
+        store_downloaded_bytes(&state, generation, vec![1u8; 4]).expect("should store");
+        assert_eq!(
+            state
+                .with(|pending| pending.bytes.clone())
+                .expect("lockable"),
+            Some((generation, vec![1u8; 4]))
+        );
+    }
+
+    /// Put the state where a real check + download would leave it, without an
+    /// `Update` (which needs a live plugin). Anything that needs the `Update`
+    /// itself is covered by the command-level paths, not here.
+    fn seed_download(state: &AppUpdateState, generation: u64) {
+        state
+            .with(|pending| {
+                pending.generation = generation;
+                pending.bytes = Some((generation, vec![0u8; 16]));
+            })
+            .expect("lockable");
     }
 }
