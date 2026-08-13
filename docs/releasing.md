@@ -395,8 +395,8 @@ in the #579 arc.
 
 ### Keypair custody
 
-The signing keypair is a minisign key Nico generates and holds outside this
-repository. **The private key is never committed, never logged, and lives
+The signing keypair is a minisign key generated and held by the maintainer
+outside this repository. **The private key is never committed, never logged, and lives
 only in the `TAURI_SIGNING_PRIVATE_KEY` GitHub secret** (plus its optional
 password in `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). Losing it is not
 recoverable in place: every already-installed app trusts the matching public
@@ -413,8 +413,8 @@ download carrying the new public key.
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Only if the key above has a password | Passed through empty otherwise |
 | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Real Developer ID signing + notarization of the macOS leg | Absent (or `APPLE_SIGNING_IDENTITY` empty) leaves the macOS leg exactly as it was before #579: ad-hoc signed via the checked-in `signingIdentity: "-"`, not notarized |
 
-The six `APPLE_*` secrets do not exist yet - they land once Nico provisions
-a paid Apple Developer account ([#226](https://github.com/Stalagmight/Stalagmight/issues/226)).
+The six `APPLE_*` secrets do not exist yet - they land once a paid Apple
+Developer account is provisioned ([#226](https://github.com/Stalagmight/Stalagmight/issues/226)).
 Until then the macOS leg's graceful-degradation conditional keeps today's
 ad-hoc-signing behavior byte-identical: the `build` job only appends a
 `signingIdentity` override to the Tauri build config when

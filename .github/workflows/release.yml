@@ -137,8 +137,8 @@ jobs:
           TELEMETRY_ENDPOINT: ${{ secrets.TELEMETRY_ENDPOINT }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Apple credentials are optional (empty on a fork, or until Nico
-          # provisions them - see docs/releasing.md). When APPLE_SIGNING_IDENTITY
+          # Apple credentials are optional (empty on a fork, or until they are
+          # provisioned - see docs/releasing.md). When APPLE_SIGNING_IDENTITY
           # is empty the --config override above is skipped, and Tauri falls
           # back to the checked-in ad-hoc `signingIdentity: "-"` - byte-identical
           # to pre-#579 behavior.
