@@ -385,20 +385,26 @@ jobs:
           UPDATER_ON: ${{ steps.updater.outputs.on }}
       # Job-internal: records which macOS signing path the build job used
       # (see "Record macOS signing marker" above). Logged for the release
-      # run's own record - not consumed by anything yet, that lands with the
-      # updater-manifest generation step in a later PR of the #579 arc.
-      # Deleted here regardless, so it never rides along with
+      # run's own record, and captured into this step's own output BEFORE the
+      # file is removed - the "Publish updater manifest" step below is the
+      # consumer that #579 always intended here, deciding --include-darwin
+      # from developer-id-vs-adhoc without re-reading a file that is about to
+      # be deleted. Deleted regardless, so it never rides along with
       # `gh release create release-artifacts/*` below - it is not an
       # installable artifact and nobody downloads it.
       - name: Consume macOS signing marker
+        id: macos-signing
         shell: bash
         working-directory: release-artifacts
         run: |
           if [ -f MACOS-SIGNED ]; then
-            echo "macOS signing mode: $(cat MACOS-SIGNED)"
+            MODE="$(cat MACOS-SIGNED)"
+            echo "macOS signing mode: $MODE"
+            echo "mode=$MODE" >> "$GITHUB_OUTPUT"
             rm MACOS-SIGNED
           else
             echo "::warning::MACOS-SIGNED marker missing from release artifacts"
+            echo "mode=" >> "$GITHUB_OUTPUT"
           fi
       # Same script you can run locally to preview the body before tagging, so
       # what gets published is never a surprise.
@@ -423,3 +429,55 @@ jobs:
             --notes-file "$RUNNER_TEMP/release-body.md" \
             "${PRERELEASE[@]}" \
             release-artifacts/*
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      # Updater manifests (#579): the rolling `updater` GitHub release carries
+      # latest-stable.json / latest-weekly.json, each overwritten on every
+      # publish of that track. An -rc* tag is a candidate, never a track, so it
+      # updates neither file - see docs/releasing.md (Updater manifests) for the
+      # full flow, including how to repoint or roll one back.
+      - name: Publish updater manifest
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATER_ON: ${{ steps.updater.outputs.on }}
+          MACOS_MODE: ${{ steps.macos-signing.outputs.mode }}
+        run: |
+          if [ "$UPDATER_ON" != "true" ]; then
+            echo "::notice::updater artifacts are disabled (no plugins.updater.pubkey committed yet - issue #579) - skipping updater manifest publish."
+            exit 0
+          fi
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "$TAG" == *-weekly.* ]]; then
+            TRACK=weekly
+          elif [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            TRACK=stable
+          else
+            echo "no manifest for tag $TAG"
+            exit 0
+          fi
+          VERSION="${TAG#v}"
+          # The marker step above leaves this empty when MACOS-SIGNED never
+          # rode along with the artifacts (a workflow_dispatch rehearsal never
+          # reaches this job, but a future partial-matrix failure could) -
+          # treat that the same as "no macOS build to publish".
+          INCLUDE_DARWIN=false
+          [ -n "$MACOS_MODE" ] && INCLUDE_DARWIN=true
+          OUT="release-artifacts/latest-${TRACK}.json"
+          node scripts/gen-updater-manifest.mjs \
+            --version "$VERSION" \
+            --tag "$TAG" \
+            --dir release-artifacts \
+            --notes-file "$RUNNER_TEMP/release-body.md" \
+            --out "$OUT" \
+            --include-darwin "$INCLUDE_DARWIN"
+          # The rolling release is created once, by hand, per issue #579 - this
+          # workflow only ever uploads to it, never creates it, so a missing
+          # release fails loudly instead of silently doing nothing useful.
+          if ! gh release view updater >/dev/null 2>&1; then
+            echo "::error::the rolling 'updater' GitHub release does not exist. See docs/releasing.md (Updater manifests) to create it once, then re-run this job."
+            exit 1
+          fi
+          gh release upload updater "$OUT" --clobber
+          echo "Published $OUT to the 'updater' release (${TRACK} track)."
