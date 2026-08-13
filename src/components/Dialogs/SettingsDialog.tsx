@@ -38,6 +38,8 @@ import { isValidationConfigValid } from '../../utils/validation';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import { AboutMapImagery } from './AboutMapImagery';
+import { invokeIpc } from '../../utils/ipc';
+import type { AppUpdateCheck } from '../../types/ipc/AppUpdateCheck';
 
 /**
  * Deep comparison of two config objects to detect changed field paths.
@@ -411,6 +413,27 @@ export default function SettingsDialog() {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   // About dialog state
   const [showAbout, setShowAbout] = useState(false);
+  // Manual "Check for updates" state (#579) - inline result text, no toast.
+  const [checkUpdatesState, setCheckUpdatesState] = useState<
+    'idle' | 'checking' | 'up_to_date' | 'available' | 'failed'
+  >('idle');
+  const [checkUpdatesVersion, setCheckUpdatesVersion] = useState<string | null>(null);
+  const handleCheckUpdates = useCallback(async () => {
+    setCheckUpdatesState('checking');
+    try {
+      const result = await invokeIpc<AppUpdateCheck>('check_for_app_update', undefined, {
+        purpose: 'manual check for app update',
+      });
+      if (result.status.kind === 'available') {
+        setCheckUpdatesVersion(result.status.version);
+        setCheckUpdatesState('available');
+      } else {
+        setCheckUpdatesState('up_to_date');
+      }
+    } catch {
+      setCheckUpdatesState('failed');
+    }
+  }, []);
 
   // Initialize local config from store
   useEffect(() => {
@@ -731,7 +754,10 @@ export default function SettingsDialog() {
             <div className="flex justify-between gap-2 px-4 py-3 border-t border-border bg-panel">
               <Button
                 variant="secondary"
-                onClick={() => setShowAbout(true)}
+                onClick={() => {
+                  setCheckUpdatesState('idle');
+                  setShowAbout(true);
+                }}
                 data-testid="settings-about-button"
               >
                 {t('dialogs.about.title')}
@@ -837,6 +863,39 @@ export default function SettingsDialog() {
               a bug report still has to identify which build it came from. */}
           <p className="text-xs text-text-secondary" data-testid="about-commit">
             {t('dialogs.about.build', { commit: __APP_COMMIT__ })}
+          </p>
+          {/* Only shown for a non-stable build - a stable release says nothing
+              extra, matching the version line users already read. */}
+          {__APP_CHANNEL__ !== 'stable' && (
+            <p className="text-xs text-text-secondary" data-testid="about-channel">
+              {t('dialogs.about.channel', { channel: __APP_CHANNEL__ })}
+            </p>
+          )}
+          <p className="text-xs text-text-secondary" data-testid="about-update-track">
+            {t('dialogs.about.track', {
+              track: t(`settings.general.updateTrack.options.${localConfig?.general.update_track ?? 'stable'}`),
+            })}
+          </p>
+          <p>
+            <Button
+              variant="secondary"
+              onClick={handleCheckUpdates}
+              disabled={checkUpdatesState === 'checking'}
+              data-testid="about-check-updates"
+            >
+              {t('dialogs.about.checkUpdates')}
+            </Button>
+            {checkUpdatesState !== 'idle' && checkUpdatesState !== 'checking' && (
+              <span
+                className={`ml-2 text-sm ${checkUpdatesState === 'failed' ? 'text-warning' : 'text-text-secondary'}`}
+                data-testid="about-check-updates-result"
+              >
+                {checkUpdatesState === 'up_to_date' && t('dialogs.about.upToDate')}
+                {checkUpdatesState === 'available' && checkUpdatesVersion &&
+                  t('dialogs.about.updateAvailable', { version: checkUpdatesVersion })}
+                {checkUpdatesState === 'failed' && t('dialogs.about.checkFailed')}
+              </span>
+            )}
           </p>
           <p className="text-sm text-text-secondary">{t('dialogs.about.description')}</p>
           <p>
