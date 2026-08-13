@@ -31,6 +31,19 @@ on:
         description: 'Tag to repoint the manifest at (e.g. v0.5.0, v0.5.1-weekly.20260817)'
         required: true
         type: string
+      include-darwin:
+        # Deliberately required with no default, and not inferred from asset
+        # presence: a release can carry an *.app.tar.gz built ad-hoc (see
+        # release.yml's Developer-ID-only gate for why that must never enter
+        # a manifest), so "the pair exists" is not the same question as "was
+        # this actually a Developer ID build" - only the operator checking
+        # the original run's log knows the answer.
+        description: 'Include the macOS entry? true ONLY for a release built with Developer ID signing - check the original build run''s log first.'
+        required: true
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 permissions:
   contents: write
@@ -77,8 +90,8 @@ jobs:
           # manifest under the wrong track entirely.
           case "$TRACK" in
             weekly)
-              if [[ "$TAG" != *-weekly.* ]]; then
-                echo "::error::track is 'weekly' but tag '$TAG' has no -weekly. suffix."
+              if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-weekly\.[0-9]{8}$ ]]; then
+                echo "::error::track is 'weekly' but tag '$TAG' is not a vX.Y.Z-weekly.YYYYMMDD tag."
                 exit 1
               fi
               ;;
@@ -94,27 +107,24 @@ jobs:
               ;;
           esac
       - name: Fetch the target release's assets and notes
-        id: fetch
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
+          INCLUDE_DARWIN: ${{ inputs.include-darwin }}
         run: |
-          if ! gh release view "$TAG" --json assets,body > "$RUNNER_TEMP/release.json" 2>/dev/null; then
+          if ! gh release view "$TAG" --json body > "$RUNNER_TEMP/release.json" 2>/dev/null; then
             echo "::error::release '$TAG' does not exist."
             exit 1
           fi
           jq -r '.body' "$RUNNER_TEMP/release.json" > "$RUNNER_TEMP/notes.md"
-          has_asset() { jq -e --arg re "$1" '.assets[] | select(.name | test($re))' "$RUNNER_TEMP/release.json" >/dev/null; }
-          INCLUDE_DARWIN=false
-          if has_asset '\.app\.tar\.gz$' && has_asset '\.app\.tar\.gz\.sig$'; then
-            INCLUDE_DARWIN=true
-          fi
-          echo "include-darwin=$INCLUDE_DARWIN" >> "$GITHUB_OUTPUT"
           mkdir -p release-artifacts
           # Only the files the manifest actually reads - not the .deb/.rpm/
           # .msi/.dmg installers, which this workflow has no use for and
-          # would otherwise pull down for nothing.
+          # would otherwise pull down for nothing. Which pair to fetch is the
+          # operator's explicit include-darwin input, never inferred from
+          # which assets merely exist on the release (an ad-hoc .app.tar.gz
+          # can exist there too - see the input's description).
           PATTERNS=(-p '*.AppImage' -p '*.AppImage.sig' -p '*-setup.exe' -p '*-setup.exe.sig')
           if [ "$INCLUDE_DARWIN" = true ]; then
             PATTERNS+=(-p '*.app.tar.gz' -p '*.app.tar.gz.sig')
@@ -127,7 +137,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
           TRACK: ${{ inputs.track }}
-          INCLUDE_DARWIN: ${{ steps.fetch.outputs.include-darwin }}
+          INCLUDE_DARWIN: ${{ inputs.include-darwin }}
         run: |
           VERSION="${TAG#v}"
           OUT="release-artifacts/latest-${TRACK}.json"
