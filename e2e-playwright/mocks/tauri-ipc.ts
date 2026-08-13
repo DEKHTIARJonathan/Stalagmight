@@ -5549,6 +5549,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'check_for_app_update':
             return { status: { kind: 'up_to_date' }, current_version: '0.5.0' };
 
+          case 'arm_app_update_restart':
+          case 'unarm_app_update_restart':
+            // The backend's one-shot install consent. Succeeds here so a spec
+            // that seeds an available update can drive Restart through the real
+            // exit guards; the refusal cases are covered in Rust.
+            return null;
+
           case 'download_app_update':
           case 'install_app_update_and_restart':
             // Unreachable from the default state above (both refuse without a

@@ -38,8 +38,7 @@ import { isValidationConfigValid } from '../../utils/validation';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import { AboutMapImagery } from './AboutMapImagery';
-import { invokeIpc } from '../../utils/ipc';
-import type { AppUpdateCheck } from '../../types/ipc/AppUpdateCheck';
+import { runAppUpdateCheck } from '../../hooks/useAppUpdate';
 
 /**
  * Deep comparison of two config objects to detect changed field paths.
@@ -414,25 +413,34 @@ export default function SettingsDialog() {
   // About dialog state
   const [showAbout, setShowAbout] = useState(false);
   // Manual "Check for updates" state (#579) - inline result text, no toast.
+  //
+  // The check itself goes through `runAppUpdateCheck`, the SAME path the launch
+  // hook uses, so it drives the update store as well. Keeping a private result
+  // here made the two disagree in both directions: this text promised "see the
+  // update banner" for a banner the store never learned to show, and the
+  // backend check (which discards any parked download) ran underneath a banner
+  // still offering "Restart to update" - a restart that could then only fail.
+  // What stays local is only the presentation: which sentence to show, and the
+  // version pair to show in it.
   const [checkUpdatesState, setCheckUpdatesState] = useState<
     'idle' | 'checking' | 'up_to_date' | 'available' | 'failed'
   >('idle');
-  const [checkUpdatesVersion, setCheckUpdatesVersion] = useState<string | null>(null);
+  const [checkUpdatesVersions, setCheckUpdatesVersions] = useState<{
+    current: string;
+    available: string | null;
+  } | null>(null);
   const handleCheckUpdates = useCallback(async () => {
     setCheckUpdatesState('checking');
-    try {
-      const result = await invokeIpc<AppUpdateCheck>('check_for_app_update', undefined, {
-        purpose: 'manual check for app update',
-      });
-      if (result.status.kind === 'available') {
-        setCheckUpdatesVersion(result.status.version);
-        setCheckUpdatesState('available');
-      } else {
-        setCheckUpdatesState('up_to_date');
-      }
-    } catch {
+    const outcome = await runAppUpdateCheck();
+    if (outcome.kind === 'failed') {
       setCheckUpdatesState('failed');
+      return;
     }
+    setCheckUpdatesVersions({
+      current: outcome.currentVersion,
+      available: outcome.kind === 'available' ? outcome.version : null,
+    });
+    setCheckUpdatesState(outcome.kind);
   }, []);
 
   // Initialize local config from store
@@ -890,9 +898,15 @@ export default function SettingsDialog() {
                 className={`ml-2 text-sm ${checkUpdatesState === 'failed' ? 'text-warning' : 'text-text-secondary'}`}
                 data-testid="about-check-updates-result"
               >
-                {checkUpdatesState === 'up_to_date' && t('dialogs.about.upToDate')}
-                {checkUpdatesState === 'available' && checkUpdatesVersion &&
-                  t('dialogs.about.updateAvailable', { version: checkUpdatesVersion })}
+                {checkUpdatesState === 'up_to_date' &&
+                  checkUpdatesVersions &&
+                  t('dialogs.about.upToDate', { current: checkUpdatesVersions.current })}
+                {checkUpdatesState === 'available' &&
+                  checkUpdatesVersions?.available &&
+                  t('dialogs.about.updateAvailable', {
+                    current: checkUpdatesVersions.current,
+                    version: checkUpdatesVersions.available,
+                  })}
                 {checkUpdatesState === 'failed' && t('dialogs.about.checkFailed')}
               </span>
             )}

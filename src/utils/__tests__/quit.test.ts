@@ -13,10 +13,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const closeMock = vi.hoisted(() => vi.fn(async () => {}));
+const invokeIpcMock = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({ close: closeMock, destroy: vi.fn(async () => {}) }),
 }));
-vi.mock('../ipc', () => ({ invokeIpc: vi.fn(), getErrorMessage: (_e: unknown, f?: string) => f }));
+vi.mock('../ipc', () => ({
+  invokeIpc: invokeIpcMock,
+  getErrorMessage: (_e: unknown, f?: string) => f,
+}));
 
 import {
   quitApp,
@@ -26,7 +30,7 @@ import {
   resetQuitConfirmationForTests,
   requestUpdateRestart,
   consumeUpdateRestartArmed,
-  unarmUpdateRestart,
+  abandonUpdateRestart,
   resetUpdateRestartForTests,
 } from '../quit';
 import { useProjectStore } from '../../store/projectStore';
@@ -55,6 +59,8 @@ beforeEach(() => {
   closeMock.mockReset();
   closeMock.mockResolvedValue(undefined);
   openDialog.mockReset();
+  invokeIpcMock.mockReset();
+  invokeIpcMock.mockResolvedValue(null);
   resetQuitConfirmationForTests();
   resetUpdateRestartForTests();
   useProjectStore.setState({ project: { name: 'p' } as never, isDirty: false });
@@ -299,33 +305,81 @@ describe('the one-shot quit confirmation', () => {
  * `useBeforeUnload.guard.test.tsx` for that half).
  */
 describe('the update-restart arm (#579)', () => {
-  it('requests a close, unconfirmed - guardQuit must still run for it', () => {
-    requestUpdateRestart();
+  it('requests a close, unconfirmed - guardQuit must still run for it', async () => {
+    await requestUpdateRestart();
     expect(closeMock).toHaveBeenCalledTimes(1);
     expect(consumeQuitConfirmation()).toBe(false);
   });
 
-  it('is armed by requestUpdateRestart and consumed exactly once', () => {
+  it('is armed by requestUpdateRestart and consumed exactly once', async () => {
     expect(consumeUpdateRestartArmed()).toBe(false);
-    requestUpdateRestart();
+    await requestUpdateRestart();
     expect(consumeUpdateRestartArmed()).toBe(true);
     expect(consumeUpdateRestartArmed()).toBe(false);
   });
 
-  it('expires instead of arming a much later close request', () => {
+  /**
+   * The BACKEND arm is what actually gates the install command, so it has to be
+   * taken before the window is asked to close - the frontend flag alone is a
+   * convention any webview script could ignore.
+   */
+  it('arms the backend before asking for the close', async () => {
+    await requestUpdateRestart();
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'arm_app_update_restart',
+      undefined,
+      expect.anything(),
+    );
+    expect(invokeIpcMock.mock.invocationCallOrder[0]).toBeLessThan(
+      closeMock.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('does not arm, or close, when the backend refuses', async () => {
+    invokeIpcMock.mockRejectedValueOnce(new Error('nothing downloaded'));
+    await expect(requestUpdateRestart()).rejects.toThrow('nothing downloaded');
+    expect(closeMock).not.toHaveBeenCalled();
+    expect(consumeUpdateRestartArmed()).toBe(false);
+  });
+
+  /**
+   * [review] It used to be a 10-second TTL, and this test used to assert the
+   * expiry as if it were the desired behaviour. It is not: the arm spans the
+   * unsaved-changes dialog, which is HUMAN time - reading it, saving, then
+   * confirming is routinely more than ten seconds. Past the deadline the
+   * restart silently became a plain quit and the downloaded update was lost
+   * with nothing said. Only an explicit abandon may clear it.
+   */
+  it('survives arbitrarily long guard dialogs - no wall clock', async () => {
     vi.useFakeTimers();
     try {
-      requestUpdateRestart();
-      vi.advanceTimersByTime(60_000);
-      expect(consumeUpdateRestartArmed()).toBe(false);
+      await requestUpdateRestart();
+      vi.advanceTimersByTime(60 * 60_000);
+      expect(consumeUpdateRestartArmed()).toBe(true);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('unarmUpdateRestart un-arms without needing to consume', () => {
-    requestUpdateRestart();
-    unarmUpdateRestart();
+  it('abandonUpdateRestart clears both halves', async () => {
+    await requestUpdateRestart();
+    invokeIpcMock.mockClear();
+    abandonUpdateRestart();
     expect(consumeUpdateRestartArmed()).toBe(false);
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'unarm_app_update_restart',
+      undefined,
+      expect.anything(),
+    );
+  });
+
+  /**
+   * Every ordinary quit runs through the same exit dialogs, whose Cancel calls
+   * this unconditionally - so it must be free when no restart is in flight,
+   * rather than sending an unarm for every cancelled quit in the app.
+   */
+  it('abandoning when nothing is armed touches no IPC', () => {
+    abandonUpdateRestart();
+    expect(invokeIpcMock).not.toHaveBeenCalled();
   });
 });

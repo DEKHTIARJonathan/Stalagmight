@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures/coverage';
-import { setupMockedPage, createProject, createSectionViaStore } from './helpers/app';
+import { setupMockedPage, createProject, createSectionViaStore, openSettingsFromMenu } from './helpers/app';
 import { setIpcOverrides } from './helpers/ipcOverrides';
 
 /**
@@ -14,9 +14,10 @@ import { setIpcOverrides } from './helpers/ipcOverrides';
 
 interface UpdateStoreApi {
   getState: () => {
-    setAvailable: (info: { version: string; notesUrl: string }) => void;
-    startDownloading: () => void;
-    setReady: () => void;
+    beginCheck: () => number;
+    setAvailable: (seq: number, info: { version: string; notesUrl: string }) => void;
+    startDownloading: (version: string) => void;
+    setReady: (version: string) => void;
   };
 }
 
@@ -30,7 +31,11 @@ async function seedAvailable(page: import('@playwright/test').Page, version = '9
   await getUpdateStore(page);
   await page.evaluate((v) => {
     const store = (window as unknown as { __E2E_TEST__: { updateStore: UpdateStoreApi } }).__E2E_TEST__.updateStore;
-    store.getState().setAvailable({ version: v, notesUrl: 'https://example.com/notes' });
+    // Through `beginCheck` rather than around it: every reply carries the
+    // sequence of the check it answers, and one seeded outside that contract
+    // would be dropped as stale.
+    const seq = store.getState().beginCheck();
+    store.getState().setAvailable(seq, { version: v, notesUrl: 'https://example.com/notes' });
   }, version);
 }
 
@@ -75,7 +80,7 @@ test.describe('In-app update banner', () => {
     await seedAvailable(page, '9.9.9');
     await page.evaluate(() => {
       const store = (window as unknown as { __E2E_TEST__: { updateStore: UpdateStoreApi } }).__E2E_TEST__.updateStore;
-      store.getState().startDownloading();
+      store.getState().startDownloading('9.9.9');
     });
     await expect(page.getByTestId('update-banner-progress')).toBeVisible();
 
@@ -112,8 +117,8 @@ test.describe('In-app update banner', () => {
     await seedAvailable(page, '9.9.9');
     await page.evaluate(() => {
       const store = (window as unknown as { __E2E_TEST__: { updateStore: UpdateStoreApi } }).__E2E_TEST__.updateStore;
-      store.getState().startDownloading();
-      store.getState().setReady();
+      store.getState().startDownloading('9.9.9');
+      store.getState().setReady('9.9.9');
     });
     await expect(page.getByTestId('update-banner-restart')).toBeVisible();
 
@@ -125,6 +130,43 @@ test.describe('In-app update banner', () => {
     await page.getByTestId('unsaved-changes-cancel').click();
     await expect(page.getByTestId('unsaved-changes-dialog')).toHaveCount(0);
     await expect(page.getByTestId('update-banner-restart')).toBeVisible();
+  });
+
+  /**
+   * [review] About's "Check for updates" used to keep its own local result, so
+   * its "see the update banner" line pointed at a banner the store had never
+   * been told about. It now runs the SAME check path the launch hook does, and
+   * the banner is the observable proof of that.
+   */
+  test('the About check raises the banner, not just its own line', async ({ page }) => {
+    await setIpcOverrides(page, {
+      check_for_app_update: {
+        status: {
+          kind: 'available',
+          version: '9.9.9',
+          notes_url: 'https://example.com/notes',
+        },
+        current_version: '0.5.0',
+      },
+    });
+    await expect(page.getByTestId('update-banner')).toHaveCount(0);
+
+    await openSettingsFromMenu(page);
+    await page.getByTestId('settings-about-button').click();
+    await expect(page.getByTestId('about-dialog')).toBeVisible();
+    await page.getByTestId('about-check-updates').click();
+
+    // The inline answer names both versions...
+    const result = page.getByTestId('about-check-updates-result');
+    await expect(result).toContainText('9.9.9');
+    await expect(result).toContainText('0.5.0');
+
+    // ...and the banner it points at really appears.
+    await page.getByTestId('about-close').click();
+    await page.getByTestId('settings-cancel-button').click();
+    const banner = page.getByTestId('update-banner');
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText('9.9.9');
   });
 
   test('Dismiss hides the banner for the session, for that version only', async ({ page }) => {

@@ -4,6 +4,7 @@
  * button) so the exit guards + close contract live in exactly one place.
  */
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { invokeIpc } from './ipc';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
@@ -89,49 +90,87 @@ export function performQuit(): void {
 }
 
 /**
- * Set by {@link requestUpdateRestart} for exactly one `tauri://close-requested`
- * round trip: unlike {@link quitConfirmedUntil} it does NOT pre-confirm the
- * close (an update restart still has to run every exit guard, same as a plain
- * quit), so it is consumed only in `useBeforeUnload`'s FINAL branch - after
- * every guard has passed - where it swaps the window destroy for
- * `install_app_update_and_restart`. A guard that opens a dialog leaves this
- * armed; if the user then confirms (performQuit), the re-issued close reaches
- * the final branch while this is still armed and installs instead of
- * destroying. If the user cancels, nothing consumes it and it simply expires -
- * see {@link QUIT_CONFIRMATION_TTL_MS} for why an unconsumed flag must not
- * outlive its own attempt.
+ * Set by {@link requestUpdateRestart}: unlike {@link quitConfirmedUntil} it does
+ * NOT pre-confirm the close (an update restart still has to run every exit
+ * guard, same as a plain quit), so it is consumed only in `useBeforeUnload`'s
+ * FINAL branch - after every guard has passed - where it swaps the window
+ * destroy for `install_app_update_and_restart`.
+ *
+ * A plain boolean, NOT a deadline, and that is the whole point. It was a
+ * 10-second TTL borrowed from {@link QUIT_CONFIRMATION_TTL_MS}, which is sized
+ * for a single IPC round trip - but this flag spans HUMAN time: the guard it
+ * runs opens the unsaved-changes dialog, and a user who reads it, saves their
+ * work and then confirms takes far longer than ten seconds. Past the deadline
+ * the restart silently degraded into an ordinary quit: the app closed, the
+ * downloaded update was never applied, and nothing said so.
+ *
+ * What replaces the deadline is explicit ownership - every path that abandons
+ * the attempt calls {@link abandonUpdateRestart}: the tier-1 native confirm
+ * declined, either exit dialog cancelled, the install itself rejecting. A
+ * guard that merely OPENS a dialog leaves this armed on purpose, because the
+ * dialog's own action re-issues the close via `performQuit` and that re-issued
+ * close is the same attempt continuing.
  */
-let updateRestartArmedUntil = 0;
+let updateRestartArmed = false;
 
 /**
- * Arm the one-shot update-restart flag, then request a window close through
- * the same entry point a plain quit uses (`quitApp`, not `performQuit`): an
- * update restart is not pre-confirmed, so it still runs the import/dive-plan
- * prompt and `guardQuit` exactly like every other exit.
+ * Arm the update restart on BOTH sides, then request a window close through the
+ * same entry point a plain quit uses (`quitApp`, not `performQuit`): an update
+ * restart is not pre-confirmed, so it still runs the import/dive-plan prompt
+ * and `guardQuit` exactly like every other exit.
+ *
+ * The backend arm is what makes the exit guards a real guarantee rather than a
+ * convention: `install_app_update_and_restart` refuses unless it has been
+ * armed, so a script in the webview cannot `invoke` its way past the dialogs by
+ * calling the install command directly. It is armed FIRST and awaited, so a
+ * refusal (nothing downloaded, a newer check superseded it) aborts the restart
+ * before the window is asked to close.
+ *
+ * Rejects if the backend refuses; the caller surfaces that.
  */
-export function requestUpdateRestart(): void {
-  updateRestartArmedUntil = Date.now() + QUIT_CONFIRMATION_TTL_MS;
+export async function requestUpdateRestart(): Promise<void> {
+  await invokeIpc('arm_app_update_restart', undefined, {
+    purpose: 'arm the in-app update restart',
+  });
+  updateRestartArmed = true;
   quitApp();
 }
 
 /**
- * Read AND clear the one-shot update-restart flag. Consumed only once every
- * exit guard has passed - see {@link updateRestartArmedUntil}.
+ * Read AND clear the frontend half of the arm. Consumed only once every exit
+ * guard has passed - see {@link updateRestartArmed}.
+ *
+ * The backend half is spent by the install command itself, so a consumed arm
+ * needs no matching unarm call.
  */
 export function consumeUpdateRestartArmed(): boolean {
-  const armed = Date.now() < updateRestartArmedUntil;
-  updateRestartArmedUntil = 0;
+  const armed = updateRestartArmed;
+  updateRestartArmed = false;
   return armed;
 }
 
-/** Un-arm without consuming - used when the install call itself rejects. */
-export function unarmUpdateRestart(): void {
-  updateRestartArmedUntil = 0;
+/**
+ * Give up on a restart attempt, on both sides.
+ *
+ * Safe (and free) to call on any exit that was never a restart - it returns
+ * immediately when nothing is armed, so the two exit dialogs can call it from
+ * their ordinary Cancel handlers without knowing why they were opened.
+ */
+export function abandonUpdateRestart(): void {
+  if (!updateRestartArmed) return;
+  updateRestartArmed = false;
+  void invokeIpc('unarm_app_update_restart', undefined, {
+    purpose: 'abandon the in-app update restart',
+  }).catch((err) => {
+    // The backend arm is one-shot and only reachable through this same flow, so
+    // a failed unarm is not dangerous - but it must not be silent.
+    console.error('[quit] unarm_app_update_restart failed:', err);
+  });
 }
 
 /** Test-only reset so a leaked arm can't bleed across cases. */
 export function resetUpdateRestartForTests(): void {
-  updateRestartArmedUntil = 0;
+  updateRestartArmed = false;
 }
 
 /**

@@ -1722,8 +1722,8 @@
       "channel": "Channel: {{channel}}",
       "track": "Update track: {{track}}",
       "checkUpdates": "Check for updates",
-      "upToDate": "You're up to date",
-      "updateAvailable": "Stalagmight {{version}} is available - see the update banner",
+      "upToDate": "You're up to date on Stalagmight {{current}}",
+      "updateAvailable": "You're on Stalagmight {{current}} - {{version}} is available, see the update banner",
       "checkFailed": "Could not check for updates",
       "mapImagery": {
         "title": "Map imagery"
@@ -2551,7 +2551,8 @@
     "downloading": "Downloading update…",
     "restart": "Restart to update",
     "toasts": {
-      "downloadFailed": "Could not download the update. Try again from the update banner."
+      "downloadFailed": "Could not download the update. Try again from the update banner.",
+      "installFailed": "Could not install the update. Download it again from the update banner."
     }
   },
   "integrityRepair": {

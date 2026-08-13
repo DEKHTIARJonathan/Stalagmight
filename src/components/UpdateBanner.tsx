@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { useUpdateStore } from '../store/updateStore';
 import { invokeIpc } from '../utils/ipc';
 import { useUIStore } from '../store/uiStore';
@@ -35,10 +36,15 @@ export function UpdateBanner() {
     return null;
   }
 
+  // Captured at click time and threaded through both store transitions, so a
+  // check that lands mid-download cannot leave this download's completion
+  // marking a DIFFERENT version ready (updateStore: `downloadVersion`).
+  const downloadingVersion = info.version;
+
   const handleDownload = () => {
-    startDownloading();
+    startDownloading(downloadingVersion);
     void invokeIpc('download_app_update', undefined, { purpose: 'download app update' })
-      .then(() => setReady())
+      .then(() => setReady(downloadingVersion))
       .catch((e: unknown) => {
         console.error('[UpdateBanner] download_app_update failed:', e);
         setDownloadFailed();
@@ -52,8 +58,31 @@ export function UpdateBanner() {
       });
   };
 
+  // `openUrl`, not `window.open`: the Tauri webview has no browser chrome to
+  // open a tab in, and the CSP would not admit the navigation anyway - the same
+  // reason SavePermissionDialog and useSpeleoWebLink go through the opener
+  // plugin. This hands the URL to the OS default browser.
   const handleOpenNotes = () => {
-    window.open(info.notesUrl, '_blank');
+    void openUrl(info.notesUrl).catch((e: unknown) => {
+      console.error('[UpdateBanner] could not open the release notes:', e);
+    });
+  };
+
+  // The restart arms the backend first and can be refused (nothing downloaded,
+  // a newer check superseded it). A refusal must not leave the user staring at
+  // a button that silently did nothing.
+  const handleRestart = () => {
+    void requestUpdateRestart().catch((e: unknown) => {
+      console.error('[UpdateBanner] could not start the update restart:', e);
+      setDownloadFailed();
+      useUIStore
+        .getState()
+        .showToast(
+          t('updateBanner.toasts.installFailed'),
+          TOAST_KEYS.APP_UPDATE_INSTALL_FAILED,
+          'error',
+        );
+    });
   };
 
   const total = progress?.total ?? null;
@@ -125,7 +154,7 @@ export function UpdateBanner() {
 
       {status === 'ready' && (
         <button
-          onClick={() => requestUpdateRestart()}
+          onClick={handleRestart}
           className="px-3 py-1 rounded bg-accent text-white text-xs"
           data-testid="update-banner-restart"
         >
