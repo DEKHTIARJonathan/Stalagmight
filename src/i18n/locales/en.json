@@ -2852,13 +2852,9 @@
       "endpoint": "Endpoint",
       "onward": "Onward",
       "noRigHint": "Add a DPV rig in the Equipment tab to plan scooter legs.",
-      "speedAria": "Speed for the {{from}} to {{to}} leg",
       "scooterAria": "Riding a DPV for the {{from}} to {{to}} leg",
       "parkHere": "Parked here",
-      "parkHereHint": "The DPV is parked at this point - derived from the scootered legs above, not set directly.",
-      "resetSpeed": "Reset",
-      "resetSpeedHint": "Return to the plan's swim speed",
-      "resetSpeedAria": "Reset the {{from}} to {{to}} leg speed to the plan speed"
+      "parkHereHint": "The DPV is parked at this point - derived from the scootered legs above, not set directly."
     },
     "dpv": {
       "title": "DPV",
