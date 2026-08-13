@@ -142,6 +142,19 @@ jobs:
       - name: Build
         shell: bash
         run: |
+          # GitHub renders unset secrets as EMPTY strings, and tauri-bundler
+          # keys on env-var PRESENCE (var_os) for APPLE_CERTIFICATE - an
+          # empty-but-present value sends it down the keychain-import path
+          # with an empty certificate, which fails `security import` on every
+          # macOS build (seen live: run 31671174336). So the six APPLE_* vars
+          # arrive under *_SECRET staging names and the bundler-recognized
+          # names are exported only when non-empty.
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            s="${v}_SECRET"
+            if [ -n "${!s:-}" ]; then
+              export "$v"="${!s}"
+            fi
+          done
           # When the pubkey is present TAURI_SIGNING_PRIVATE_KEY is required.
           # Tauri itself already refuses to sign without it (its own error),
           # so this exists only to fail earlier with a named secret rather
@@ -185,16 +198,18 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Apple credentials are optional (empty on a fork, or until they are
-          # provisioned - see docs/releasing.md). When APPLE_SIGNING_IDENTITY
-          # is empty the --config override above is skipped, and Tauri falls
-          # back to the checked-in ad-hoc `signingIdentity: "-"` - byte-identical
-          # to pre-#579 behavior.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # provisioned - see docs/releasing.md). Staged under *_SECRET names:
+          # the run block exports the real names only when non-empty, because
+          # tauri-bundler treats a present-but-empty APPLE_CERTIFICATE as a
+          # request to import it. With none set, Tauri falls back to the
+          # checked-in ad-hoc `signingIdentity: "-"` - byte-identical to
+          # pre-#579 behavior.
+          APPLE_CERTIFICATE_SECRET: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD_SECRET: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD_SECRET: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
       # v0.5.0-rc1 shipped a .app that macOS refused to open as "damaged". The
       # cause was an absent signature rather than a corrupt download: with no
       # signing identity Tauri skips codesign entirely, leaving only the Rust
