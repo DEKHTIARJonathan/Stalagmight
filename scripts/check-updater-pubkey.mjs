@@ -27,6 +27,25 @@ function isValidBase64(s) {
   return Buffer.from(s, 'base64').length > 0;
 }
 
+// A Tauri updater pubkey is the base64 of a minisign .pub file: an
+// "untrusted comment:" line followed by a base64 key line whose decoded
+// form is 42 bytes - a 2-byte "Ed" algorithm tag, an 8-byte key id, and
+// the 32-byte Ed25519 public key. Base64 decodability alone would accept
+// any blob (e.g. "AAAAAAAA") that no .sig file could ever verify against,
+// and this key ships baked into released clients - so enforce the real
+// shape, not just the encoding.
+export function isMinisignPubkey(s) {
+  if (!isValidBase64(s)) return false;
+  const text = Buffer.from(s, 'base64').toString('utf8');
+  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length !== 2) return false;
+  if (!lines[0].startsWith('untrusted comment:')) return false;
+  const keyLine = lines[1].trim();
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(keyLine)) return false;
+  const key = Buffer.from(keyLine, 'base64');
+  return key.length === 42 && key.subarray(0, 2).toString('latin1') === 'Ed';
+}
+
 // Returns a list of problem strings; empty means either the updater plugin
 // is not configured yet, or its config is sane.
 export function checkUpdaterConfig(root) {
@@ -42,8 +61,11 @@ export function checkUpdaterConfig(root) {
   if (!updater) return [];
 
   const problems = [];
-  if (!isValidBase64(updater.pubkey)) {
-    problems.push(`${CONF}: plugins.updater.pubkey is not a valid non-empty base64 string`);
+  if (!isMinisignPubkey(updater.pubkey)) {
+    problems.push(
+      `${CONF}: plugins.updater.pubkey is not a valid minisign public key ` +
+        `(expected the base64 of a .pub file: an "untrusted comment:" line plus a 42-byte Ed25519 key)`
+    );
   }
 
   const endpoints = Array.isArray(updater.endpoints) ? updater.endpoints : [];
@@ -63,6 +85,19 @@ export function checkUpdaterConfig(root) {
     }
     if (url.hostname !== 'github.com') {
       problems.push(`${CONF}: endpoint "${ep}" is not a github.com URL`);
+    }
+    // The release pipeline publishes manifests to exactly these two asset
+    // paths on the rolling `updater` release (see docs/releasing.md); an
+    // endpoint pointing anywhere else passes DNS/TLS checks yet updates
+    // nobody, so pin the full path here.
+    if (url.protocol === 'https:' && url.hostname === 'github.com') {
+      const expected = /^\/Stalagmight\/Stalagmight\/releases\/download\/updater\/latest-(stable|weekly)\.json$/;
+      if (!expected.test(url.pathname)) {
+        problems.push(
+          `${CONF}: endpoint "${ep}" does not point at the published manifest path ` +
+            `(/Stalagmight/Stalagmight/releases/download/updater/latest-<stable|weekly>.json)`
+        );
+      }
     }
   }
   return problems;

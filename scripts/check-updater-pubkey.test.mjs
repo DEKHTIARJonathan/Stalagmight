@@ -33,7 +33,11 @@ function makeTree(conf) {
   return root;
 }
 
-const VALID_PUBKEY = Buffer.from('a valid minisign-style key body').toString('base64');
+// A real (throwaway, test-only) `tauri signer generate` output: base64 of an
+// "untrusted comment:" line plus the 42-byte Ed25519 key line. The private
+// half was discarded; this key signs nothing and ships nowhere.
+const VALID_PUBKEY =
+  'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ2NjgyMzI1OTkzRjIyNkUKUldSdUlqK1pKU05vMXNrTkRjUW9nTFdFYXR2blRNTWI0SGFGUWNXdkNja29rYzRkWEVPaUs0czUK';
 const VALID_ENDPOINT = 'https://github.com/Stalagmight/Stalagmight/releases/download/updater/latest-stable.json';
 
 test('no plugins.updater block passes (pending state)', () => {
@@ -60,6 +64,25 @@ test('empty pubkey fails', () => {
   assert.match(checkUpdaterConfig(root)[0], /pubkey is not a valid/);
 });
 
+test('base64-but-not-minisign pubkey fails (structure, not just encoding)', () => {
+  const root = makeTree({ plugins: { updater: { pubkey: 'AAAAAAAA', endpoints: [VALID_ENDPOINT] } } });
+  assert.match(checkUpdaterConfig(root)[0], /not a valid minisign public key/);
+});
+
+test('base64 of arbitrary text fails (no key line)', () => {
+  const notAKey = Buffer.from('a valid minisign-style key body').toString('base64');
+  const root = makeTree({ plugins: { updater: { pubkey: notAKey, endpoints: [VALID_ENDPOINT] } } });
+  assert.match(checkUpdaterConfig(root)[0], /not a valid minisign public key/);
+});
+
+test('minisign structure with a truncated key line fails', () => {
+  const truncated = Buffer.from(
+    'untrusted comment: minisign public key: DEADBEEF\nRWRuIj+Z\n'
+  ).toString('base64');
+  const root = makeTree({ plugins: { updater: { pubkey: truncated, endpoints: [VALID_ENDPOINT] } } });
+  assert.match(checkUpdaterConfig(root)[0], /not a valid minisign public key/);
+});
+
 test('non-https endpoint fails and names it', () => {
   const root = makeTree({
     plugins: { updater: { pubkey: VALID_PUBKEY, endpoints: ['http://github.com/x/y'] } },
@@ -81,6 +104,34 @@ test('non-github endpoint fails and names it', () => {
 test('empty endpoints list fails', () => {
   const root = makeTree({ plugins: { updater: { pubkey: VALID_PUBKEY, endpoints: [] } } });
   assert.match(checkUpdaterConfig(root)[0], /endpoints is empty/);
+});
+
+test('github.com endpoint off the published manifest path fails', () => {
+  const root = makeTree({
+    plugins: {
+      updater: {
+        pubkey: VALID_PUBKEY,
+        endpoints: ['https://github.com/Stalagmight/Stalagmight/releases/download/updater/latest.json'],
+      },
+    },
+  });
+  const problems = checkUpdaterConfig(root);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /does not point at the published manifest path/);
+});
+
+test('weekly manifest endpoint passes', () => {
+  const root = makeTree({
+    plugins: {
+      updater: {
+        pubkey: VALID_PUBKEY,
+        endpoints: [
+          'https://github.com/Stalagmight/Stalagmight/releases/download/updater/latest-weekly.json',
+        ],
+      },
+    },
+  });
+  assert.deepEqual(checkUpdaterConfig(root), []);
 });
 
 test('missing/invalid tauri.conf.json fails loudly', () => {

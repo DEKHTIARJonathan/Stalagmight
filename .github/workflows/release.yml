@@ -42,6 +42,15 @@ jobs:
         run: |
           node scripts/check-third-party-licenses.test.mjs
           node scripts/check-third-party-licenses.mjs
+      # Same rationale as the license gate above: the leak-scan workflow that
+      # normally runs this gate covers branch/PR events only, and the pubkey
+      # is the update trust root baked into every released client - a direct
+      # tag push from a commit that skipped leak-scan must not reach the paid
+      # build matrix with a placeholder or malformed key.
+      - name: Updater pubkey gate
+        run: |
+          node scripts/check-updater-pubkey.test.mjs
+          node scripts/check-updater-pubkey.mjs
       - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
