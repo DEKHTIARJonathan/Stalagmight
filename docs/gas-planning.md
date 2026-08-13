@@ -360,7 +360,11 @@ Frontend seams, all under `src/`: `store/gasPlanStore.ts` (plan inputs,
 runtime-only), `components/SingleSystemView/GasPlanPanel.tsx` (setup sidebar +
 readout), its `DivePlanBar.tsx` (save/load/delete); the bottom Plan dock's
 `PlanTablesPanel.tsx` with `CylindersTable.tsx` + `DpvRigEditor.tsx` (the
-Equipment tab), `SegmentsTable.tsx` and `ProfileChart.tsx`;
+Equipment tab), `SegmentsTable.tsx` and `ProfileChart.tsx` - both tables render
+on the shared `SpreadsheetGrid` (#403), with column defs in
+`segmentsGridColumns.tsx` / `cylindersGridColumns.tsx` and the pure edit
+reducers (unit conversion, clamps, the scooter coupling) in
+`segmentsGridEdits.ts` / `cylindersGridEdits.ts`;
 `components/Map/MapCanvas.tsx` (fetch, turn dots, draggable drops, final-turn
 marker), `components/Map/useGasPlanPointMarkers.ts` (datum stars, way points,
 marked points), `components/Map/useGasPlanDropMarkers.ts` (stage drops + the

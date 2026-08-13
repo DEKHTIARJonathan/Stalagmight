@@ -2839,7 +2839,6 @@
     "segments": {
       "colFrom": "From",
       "colTo": "To",
-      "colSpeed": "Speed",
       "colSpeedUnit": "Speed ({{unit}})",
       "colScooter": "DPV",
       "segmentNoun_one": "segment",
