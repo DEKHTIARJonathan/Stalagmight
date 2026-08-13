@@ -1547,9 +1547,18 @@ pub fn run() {
 
     let builder = builder
         .manage(commands::launch::PendingLaunchFiles::default())
+        // In-app updater state (#579): the checked `Update` and its downloaded
+        // bytes, parked between the three `app_update` commands. Managed here
+        // rather than in `.setup()` because it needs nothing from the app.
+        .manage(commands::app_update::AppUpdateState::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // The updater plugin supplies the minisign public key and the Windows
+        // install mode from `plugins.updater` in tauri.conf.json; the ENDPOINT
+        // it configures there is only a fallback, because `commands::app_update`
+        // overrides it per call with the user's release track.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .register_asynchronous_uri_scheme_protocol(
             "stalagmight-tiles",
             |ctx, request, responder| {
@@ -1954,6 +1963,11 @@ pub fn run() {
             commands::survey_geometry::get_survey_geometry_for_file,
             // OS file association / launch-with-file (#424)
             commands::launch::take_pending_launch_files,
+            // In-app updater (#579): check / download / install are separate
+            // steps so the install cannot run before the exit guards do.
+            commands::app_update::check_for_app_update,
+            commands::app_update::download_app_update,
+            commands::app_update::install_app_update_and_restart,
             // Recovery (SPEC 14.4)
             commands::recovery::attempt_repair,
             commands::recovery::list_backups,
