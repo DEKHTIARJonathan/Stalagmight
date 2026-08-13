@@ -110,17 +110,44 @@ jobs:
       # all: without the secret the build simply omits telemetry (which is also
       # opt-in at runtime). Secrets are not readable from `if:` expressions on
       # steps, hence the shell check on the env var.
+      # bundle.createUpdaterArtifacts is on (issue #579), so every build now
+      # produces updater artifacts (.sig files) that Tauri can only emit when
+      # a signing key is configured. An unset key does not fail the build -
+      # it silently ships updater artifacts nobody's client can verify - so
+      # this guard turns that into a loud, named failure a fork will actually
+      # see, matching the TELEMETRY_ENDPOINT probe below.
       - name: Build
         shell: bash
         run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret not set. bundle.createUpdaterArtifacts is enabled, so the build cannot produce verifiable updater artifacts without it - set TAURI_SIGNING_PRIVATE_KEY (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD if the key has one)."
+            exit 1
+          fi
+          TAURI_ARGS=()
+          if [ "${{ matrix.os }}" = "macos-latest" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            TAURI_ARGS+=(--config '{"bundle":{"macOS":{"signingIdentity":"'"$APPLE_SIGNING_IDENTITY"'"}}}')
+          fi
           if [ -n "$TELEMETRY_ENDPOINT" ]; then
-            pnpm tauri build -- --features telemetry
+            pnpm tauri build "${TAURI_ARGS[@]}" -- --features telemetry
           else
             echo "TELEMETRY_ENDPOINT secret not set - building without telemetry."
-            pnpm tauri build
+            pnpm tauri build "${TAURI_ARGS[@]}"
           fi
         env:
           TELEMETRY_ENDPOINT: ${{ secrets.TELEMETRY_ENDPOINT }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Apple credentials are optional (empty on a fork, or until Nico
+          # provisions them - see docs/releasing.md). When APPLE_SIGNING_IDENTITY
+          # is empty the --config override above is skipped, and Tauri falls
+          # back to the checked-in ad-hoc `signingIdentity: "-"` - byte-identical
+          # to pre-#579 behavior.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       # v0.5.0-rc1 shipped a .app that macOS refused to open as "damaged". The
       # cause was an absent signature rather than a corrupt download: with no
       # signing identity Tauri skips codesign entirely, leaving only the Rust
@@ -140,6 +167,8 @@ jobs:
         if: matrix.os == 'macos-latest'
         shell: bash
         run: ./scripts/verify-macos-signature.sh "$BUNDLE_DIR/dmg"
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
       - name: Collect release artifacts
         shell: bash
         run: |
@@ -152,9 +181,14 @@ jobs:
             deb/*.deb \
             rpm/*.rpm \
             appimage/*.AppImage \
+            appimage/*.AppImage.sig \
             dmg/*.dmg \
             msi/*.msi \
-            nsis/*-setup.exe
+            msi/*.msi.sig \
+            nsis/*-setup.exe \
+            nsis/*-setup.exe.sig \
+            macos/*.app.tar.gz \
+            macos/*.app.tar.gz.sig
           do
             cp "$BUNDLE_DIR"/$pattern release-artifacts/ 2>/dev/null || true
           done
@@ -182,6 +216,23 @@ jobs:
           $SUM * > "$RUNNER_TEMP/sums"
           mv "$RUNNER_TEMP/sums" "SHA256SUMS-${{ matrix.name }}"
           cat "SHA256SUMS-${{ matrix.name }}"
+      # Job-internal record of which macOS signing path ran, read by the
+      # release job to decide whether the notarization-staple check applies.
+      # Written after the checksum step on purpose: it must not appear in
+      # SHA256SUMS-macos (nothing downloads it, so it has no checksum to
+      # verify), and the release job deletes it before `gh release create
+      # release-artifacts/*` so it never becomes a published asset.
+      - name: Record macOS signing marker
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "developer-id" > release-artifacts/MACOS-SIGNED
+          else
+            echo "adhoc" > release-artifacts/MACOS-SIGNED
+          fi
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ matrix.name }}
@@ -226,6 +277,21 @@ jobs:
           [ ${#macos[@]}   -gt 0 ] || { echo "::error::no macOS artifact";   exit 1; }
           [ ${#windows[@]} -gt 0 ] || { echo "::error::no Windows artifact"; exit 1; }
           echo "SHA256SUMS:"; cat SHA256SUMS
+      # Job-internal: records which macOS signing path the build job used
+      # (see "Record macOS signing marker" above). Logged for the release
+      # run's own record, then deleted so it does not ride along with
+      # `gh release create release-artifacts/*` below - it is not an
+      # installable artifact and nobody downloads it.
+      - name: Consume macOS signing marker
+        shell: bash
+        working-directory: release-artifacts
+        run: |
+          if [ -f MACOS-SIGNED ]; then
+            echo "macOS signing mode: $(cat MACOS-SIGNED)"
+            rm MACOS-SIGNED
+          else
+            echo "::warning::MACOS-SIGNED marker missing from release artifacts"
+          fi
       # Same script you can run locally to preview the body before tagging, so
       # what gets published is never a surprise.
       - name: Build release notes
