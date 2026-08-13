@@ -24,6 +24,10 @@ import {
   performQuit,
   consumeQuitConfirmation,
   resetQuitConfirmationForTests,
+  requestUpdateRestart,
+  consumeUpdateRestartArmed,
+  unarmUpdateRestart,
+  resetUpdateRestartForTests,
 } from '../quit';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
@@ -52,6 +56,7 @@ beforeEach(() => {
   closeMock.mockResolvedValue(undefined);
   openDialog.mockReset();
   resetQuitConfirmationForTests();
+  resetUpdateRestartForTests();
   useProjectStore.setState({ project: { name: 'p' } as never, isDirty: false });
   useSpeleoStore.setState({ link: null });
   useUIStore.setState({ openDialog: openDialog as never, activeDialog: null, dialogData: {} });
@@ -283,5 +288,44 @@ describe('the one-shot quit confirmation', () => {
     await Promise.resolve();
     expect(consumeQuitConfirmation()).toBe(false);
     err.mockRestore();
+  });
+});
+
+/**
+ * [#579] `requestUpdateRestart` - unlike `performQuit`, it does NOT pre-confirm
+ * the close: an update restart still runs the same exit guards a plain quit
+ * does, so `updateRestartArmedUntil` is a SEPARATE one-shot flag consumed only
+ * in `useBeforeUnload`'s final branch (see the guard-integration tests in
+ * `useBeforeUnload.guard.test.tsx` for that half).
+ */
+describe('the update-restart arm (#579)', () => {
+  it('requests a close, unconfirmed - guardQuit must still run for it', () => {
+    requestUpdateRestart();
+    expect(closeMock).toHaveBeenCalledTimes(1);
+    expect(consumeQuitConfirmation()).toBe(false);
+  });
+
+  it('is armed by requestUpdateRestart and consumed exactly once', () => {
+    expect(consumeUpdateRestartArmed()).toBe(false);
+    requestUpdateRestart();
+    expect(consumeUpdateRestartArmed()).toBe(true);
+    expect(consumeUpdateRestartArmed()).toBe(false);
+  });
+
+  it('expires instead of arming a much later close request', () => {
+    vi.useFakeTimers();
+    try {
+      requestUpdateRestart();
+      vi.advanceTimersByTime(60_000);
+      expect(consumeUpdateRestartArmed()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('unarmUpdateRestart un-arms without needing to consume', () => {
+    requestUpdateRestart();
+    unarmUpdateRestart();
+    expect(consumeUpdateRestartArmed()).toBe(false);
   });
 });

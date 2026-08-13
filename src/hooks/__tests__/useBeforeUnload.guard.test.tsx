@@ -31,8 +31,21 @@ vi.mock('@tauri-apps/api/window', () => ({
 const confirmMock = vi.hoisted(() => vi.fn(async () => true));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
 
+const invokeIpcMock = vi.hoisted(() => vi.fn());
+vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+
+const showToastMock = vi.hoisted(() => vi.fn());
+vi.mock('../../store/uiStore', () => ({
+  useUIStore: { getState: () => ({ showToast: showToastMock }) },
+}));
+
 import { useBeforeUnload } from '../useBeforeUnload';
-import { performQuit, resetQuitConfirmationForTests } from '../../utils/quit';
+import {
+  performQuit,
+  resetQuitConfirmationForTests,
+  requestUpdateRestart,
+  resetUpdateRestartForTests,
+} from '../../utils/quit';
 
 function Harness({
   shouldBlock,
@@ -60,6 +73,10 @@ beforeEach(() => {
   confirmMock.mockClear();
   confirmMock.mockResolvedValue(true);
   resetQuitConfirmationForTests();
+  resetUpdateRestartForTests();
+  invokeIpcMock.mockReset();
+  invokeIpcMock.mockResolvedValue(undefined);
+  showToastMock.mockClear();
 });
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -315,5 +332,70 @@ describe('useBeforeUnload - the tier-1 cleanup waits for the tier-2 guard', () =
 
     expect(destroyMock).toHaveBeenCalledTimes(1);
     err.mockRestore();
+  });
+});
+
+/**
+ * [#579] An update restart armed by `requestUpdateRestart` runs the SAME guard
+ * chain as a plain close, but the final branch installs instead of destroying.
+ */
+describe('useBeforeUnload - the armed update restart (#579)', () => {
+  it('installs instead of destroying once every guard has passed', async () => {
+    const guard = vi.fn(() => false);
+    render(<Harness shouldBlock={false} guard={guard} />);
+    await flush();
+
+    requestUpdateRestart();
+    await pressWindowX();
+
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'install_app_update_and_restart',
+      undefined,
+      expect.any(Object),
+    );
+    expect(destroyMock).not.toHaveBeenCalled();
+  });
+
+  it('a guard that opens a dialog leaves the flag armed - not consumed - and installs nothing', async () => {
+    const guard = vi.fn(() => true);
+    render(<Harness shouldBlock={false} guard={guard} />);
+    await flush();
+
+    requestUpdateRestart();
+    await pressWindowX();
+
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+    expect(destroyMock).not.toHaveBeenCalled();
+
+    // The dialog's own action re-issues the close, pre-confirmed - the still-armed
+    // flag is what makes it install rather than destroy.
+    performQuit();
+    await pressWindowX();
+
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'install_app_update_and_restart',
+      undefined,
+      expect.any(Object),
+    );
+    expect(destroyMock).not.toHaveBeenCalled();
+  });
+
+  it('un-arms and toasts on a rejected install, and does NOT close the window', async () => {
+    invokeIpcMock.mockRejectedValueOnce(new Error('disk full'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const guard = vi.fn(() => false);
+    render(<Harness shouldBlock={false} guard={guard} />);
+    await flush();
+
+    requestUpdateRestart();
+    await pressWindowX();
+
+    expect(destroyMock).not.toHaveBeenCalled();
+    expect(showToastMock).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+
+    // Un-armed: a later, ordinary close request destroys the window normally.
+    await pressWindowX();
+    expect(destroyMock).toHaveBeenCalledTimes(1);
   });
 });

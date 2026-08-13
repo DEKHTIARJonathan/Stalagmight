@@ -116,6 +116,9 @@ export const TOAST_KEYS = {
   // Open / import routing
   IMPORT_IN_PROGRESS: 'import-in-progress',
 
+  // In-app updater (#579)
+  APP_UPDATE_DOWNLOAD_FAILED: 'app-update-download-failed',
+
   // Debug
   DEBUG_REFRESH: 'debug-refresh',
   DEBUG_COPY: 'debug-copy',

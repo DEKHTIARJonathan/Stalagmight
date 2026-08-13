@@ -89,6 +89,52 @@ export function performQuit(): void {
 }
 
 /**
+ * Set by {@link requestUpdateRestart} for exactly one `tauri://close-requested`
+ * round trip: unlike {@link quitConfirmedUntil} it does NOT pre-confirm the
+ * close (an update restart still has to run every exit guard, same as a plain
+ * quit), so it is consumed only in `useBeforeUnload`'s FINAL branch - after
+ * every guard has passed - where it swaps the window destroy for
+ * `install_app_update_and_restart`. A guard that opens a dialog leaves this
+ * armed; if the user then confirms (performQuit), the re-issued close reaches
+ * the final branch while this is still armed and installs instead of
+ * destroying. If the user cancels, nothing consumes it and it simply expires -
+ * see {@link QUIT_CONFIRMATION_TTL_MS} for why an unconsumed flag must not
+ * outlive its own attempt.
+ */
+let updateRestartArmedUntil = 0;
+
+/**
+ * Arm the one-shot update-restart flag, then request a window close through
+ * the same entry point a plain quit uses (`quitApp`, not `performQuit`): an
+ * update restart is not pre-confirmed, so it still runs the import/dive-plan
+ * prompt and `guardQuit` exactly like every other exit.
+ */
+export function requestUpdateRestart(): void {
+  updateRestartArmedUntil = Date.now() + QUIT_CONFIRMATION_TTL_MS;
+  quitApp();
+}
+
+/**
+ * Read AND clear the one-shot update-restart flag. Consumed only once every
+ * exit guard has passed - see {@link updateRestartArmedUntil}.
+ */
+export function consumeUpdateRestartArmed(): boolean {
+  const armed = Date.now() < updateRestartArmedUntil;
+  updateRestartArmedUntil = 0;
+  return armed;
+}
+
+/** Un-arm without consuming - used when the install call itself rejects. */
+export function unarmUpdateRestart(): void {
+  updateRestartArmedUntil = 0;
+}
+
+/** Test-only reset so a leaked arm can't bleed across cases. */
+export function resetUpdateRestartForTests(): void {
+  updateRestartArmedUntil = 0;
+}
+
+/**
  * Work that exists ONLY on this computer: edits SpeleoDB has never seen.
  *
  * Shared by EVERY exit ({@link guardQuit} plus the three hand-back exits behind
