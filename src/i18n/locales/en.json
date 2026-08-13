@@ -2787,6 +2787,9 @@
       "usableAria": "Usable gas for {{tank}}",
       "roleAria": "Role for {{tank}}",
       "colRole": "Role",
+      "tankNoun_one": "tank",
+      "tankNoun_other": "tanks",
+      "negativePressure": "Pressure cannot be negative.",
       "editHint": "Edit your cylinders in the Equipment tab below."
     },
     "roles": {
@@ -2839,7 +2842,11 @@
       "colFrom": "From",
       "colTo": "To",
       "colSpeed": "Speed",
+      "colSpeedUnit": "Speed ({{unit}})",
       "colScooter": "DPV",
+      "segmentNoun_one": "segment",
+      "segmentNoun_other": "segments",
+      "inheritedHint": "Following the plan speed. Type a number to give this leg its own pace, or clear the cell to go back.",
       "origin": "Origin",
       "waypointN": "WP {{n}}",
       "endpoint": "Endpoint",
