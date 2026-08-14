@@ -2769,10 +2769,10 @@
       "label": "Tanks",
       "bar": "bar",
       "psi": "psi",
-      "fillAria": "Fill pressure for {{tank}}",
       "removeAria": "Remove {{tank}}",
-      "addPlaceholder": "Add tank…",
-      "conservative": "Conservative gas (cap overfills to rated)",
+      "addPlaceholder": "Add cylinder…",
+      "conservative": "Conservative gas",
+      "conservativeHint": "Caps an overfilled cylinder to its rated pressure when computing usable gas.",
       "notCounted": "This role isn't counted toward the open-circuit penetration budget.",
       "disabledHint": "This tank is switched off and excluded from the gas plan.",
       "enabledAria": "Carry {{tank}} on this dive",
@@ -2784,10 +2784,12 @@
       "colUsableBar": "Usable (bar)",
       "colUsablePsi": "Usable (psi)",
       "usableHint": "Penetration gas: how much you'll breathe off this tank on the way in before turning. Computed by the strategy; editable under Free.",
-      "usableAria": "Usable gas for {{tank}}",
       "roleAria": "Role for {{tank}}",
       "colRole": "Role",
-      "editHint": "Edit your cylinders in the Equipment tab below."
+      "tankNoun_one": "tank",
+      "tankNoun_other": "tanks",
+      "negativePressure": "Pressure cannot be negative.",
+      "editHint": "Edit your cylinders in the Cylinders tab below."
     },
     "roles": {
       "back_gas": "Back gas",
@@ -2838,20 +2840,20 @@
     "segments": {
       "colFrom": "From",
       "colTo": "To",
-      "colSpeed": "Speed",
+      "colSpeedUnit": "Speed ({{unit}})",
       "colScooter": "DPV",
+      "segmentNoun_one": "segment",
+      "segmentNoun_other": "segments",
+      "inheritedHint": "Following the plan speed. Type a number to give this leg its own pace, or clear the cell to go back.",
+      "explicitHint": "This leg flies its own pace. Clear the cell to follow the plan speed again.",
       "origin": "Origin",
       "waypointN": "WP {{n}}",
       "endpoint": "Endpoint",
       "onward": "Onward",
-      "noRigHint": "Add a DPV rig in the Equipment tab to plan scooter legs.",
-      "speedAria": "Speed for the {{from}} to {{to}} leg",
+      "noRigHint": "Add a DPV rig in the DPV tab to plan scooter legs.",
       "scooterAria": "Riding a DPV for the {{from}} to {{to}} leg",
       "parkHere": "Parked here",
-      "parkHereHint": "The DPV is parked at this point - derived from the scootered legs above, not set directly.",
-      "resetSpeed": "Reset",
-      "resetSpeedHint": "Return to the plan's swim speed",
-      "resetSpeedAria": "Reset the {{from}} to {{to}} leg speed to the plan speed"
+      "parkHereHint": "The DPV is parked at this point - derived from the scootered legs above, not set directly."
     },
     "dpv": {
       "title": "DPV",
@@ -2920,7 +2922,8 @@
   },
   "planTables": {
     "tabs": {
-      "equipment": "Equipment",
+      "cylinders": "Cylinders",
+      "dpv": "DPV",
       "segments": "Segments",
       "profile": "Profile"
     },
