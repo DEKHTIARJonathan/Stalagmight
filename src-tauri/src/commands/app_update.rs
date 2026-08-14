@@ -34,9 +34,10 @@
 //! - an explicit request timeout on both the check and the download,
 //! - a generation stamp pairing bytes with the check that offered them.
 
-use std::future::Future as _;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::task::Poll;
 use std::time::Duration;
 
@@ -386,42 +387,70 @@ fn arm_restart(update_state: &AppUpdateState) -> Result<(), String> {
     })?
 }
 
-/// Spend the install consent and take the bytes it authorised.
+/// Spend the install consent and take everything the install needs, in ONE
+/// critical section.
 ///
-/// Taking both - rather than peeking - is what makes the arm a one-shot: a
-/// second install cannot run off consent the first one already spent, and a
-/// failed install has to be re-armed through the guarded path like any other
-/// restart. The arm is checked FIRST, so an unarmed `invoke` from the webview
-/// learns nothing about whether an update is even pending.
-fn take_install_authorisation(update_state: &AppUpdateState) -> Result<Vec<u8>, String> {
-    update_state.with(|pending| {
-        if !std::mem::take(&mut pending.restart_armed) {
-            return Err(
-                "The update restart was not armed; use Restart to update in the app".to_owned(),
-            );
-        }
-        let Some((generation, bytes)) = pending.bytes.take() else {
-            return Err("The update has not been downloaded yet; download it first".to_owned());
-        };
-        if generation != pending.generation {
-            return Err(
-                "The downloaded update no longer matches the latest check; check again".to_owned(),
-            );
-        }
-        Ok(bytes)
-    })?
-}
-
-/// The authorised bytes plus the [`Update`] that will apply them.
-fn installable_update(update_state: &AppUpdateState) -> Result<(Update, Vec<u8>), String> {
-    let bytes = take_install_authorisation(update_state)?;
+/// Taking rather than peeking is what makes the arm a one-shot: a second
+/// install cannot run off consent the first one already spent, and a failed
+/// install has to be re-armed through the guarded path like any other restart.
+/// The arm is checked FIRST, so an unarmed `invoke` from the webview learns
+/// nothing about whether an update is even pending.
+///
+/// One acquisition, not two, because the pair is the whole point. Taking the
+/// bytes under one lock and cloning the `Update` under a second left a window
+/// in which a check could complete: the bytes came from the old offer and the
+/// `Update` (with its signature and download URL) from the new one, which is
+/// exactly the mispairing the generation exists to prevent.
+///
+/// Takes `&mut Pending` rather than the state, so the state machine is
+/// reachable from a unit test without a live plugin behind `Update`.
+fn take_installable(pending: &mut Pending) -> Result<(u64, Update, Vec<u8>), String> {
+    if !std::mem::take(&mut pending.restart_armed) {
+        return Err(
+            "The update restart was not armed; use Restart to update in the app".to_owned(),
+        );
+    }
+    let Some((generation, bytes)) = pending.bytes.take() else {
+        return Err("The update has not been downloaded yet; download it first".to_owned());
+    };
+    if generation != pending.generation {
+        return Err(
+            "The downloaded update no longer matches the latest check; check again".to_owned(),
+        );
+    }
     // Unreachable in practice - bytes only ever land through
     // `store_downloaded_bytes`, which runs after a check parked an `Update` of
     // the same generation - but "cannot happen" is not a reason to unwrap.
-    let update = update_state
-        .with(|pending| pending.update.clone())?
-        .ok_or_else(|| "No update to install; check for updates first".to_owned())?;
-    Ok((update, bytes))
+    let Some(update) = pending.update.clone() else {
+        return Err("No update to install; check for updates first".to_owned());
+    };
+    Ok((generation, update, bytes))
+}
+
+/// The authorised bytes, the [`Update`] that will apply them, and the
+/// generation both belong to.
+fn installable_update(update_state: &AppUpdateState) -> Result<(u64, Update, Vec<u8>), String> {
+    update_state.with(take_installable)?
+}
+
+/// Put bytes back after a failed install - but only if they are still the
+/// current offer.
+///
+/// A check that completed while the install was running has already replaced
+/// the parked `Update`, so restoring unconditionally would re-create the
+/// mispairing: old bytes filed under the new generation, ready for the next
+/// arm to hand them to a different version's installer. They are dropped
+/// instead, and the banner's re-check offers the new download.
+fn restore_bytes_if_current(
+    update_state: &AppUpdateState,
+    generation: u64,
+    bytes: Vec<u8>,
+) -> Result<(), String> {
+    update_state.with(|pending| {
+        if pending.generation == generation {
+            pending.bytes = Some((generation, bytes));
+        }
+    })
 }
 
 /// Ask this track's manifest whether a newer build exists.
@@ -472,6 +501,13 @@ pub async fn check_for_app_update(
             tauri_plugin_updater::Error::ReleaseNotFound
             | tauri_plugin_updater::Error::TargetNotFound(_),
         ) => None,
+        // Returns BEFORE any of the state mutations below, and that ordering is
+        // load-bearing: a check that never reached the server knows nothing
+        // about the offer already on the table, so it must not bump the
+        // generation. Bumping here would invalidate a COMPLETED download - the
+        // user's finished "Restart to update" would start refusing on the
+        // strength of one failed background poll. The frontend store mirrors
+        // this by leaving an actionable banner alone on a failed re-check.
         Err(e) => return Err(format!("Update check failed: {e}")),
     };
 
@@ -526,7 +562,7 @@ pub async fn download_app_update(
 
     // Shared with the progress closure, which runs inside the download future
     // and therefore cannot return anything to us.
-    let abort = Arc::new(AtomicBool::new(false));
+    let abort = AtomicBool::new(false);
     let mut reason: Option<DownloadAbort> = None;
     let mut downloaded: u64 = 0;
     let mut emitted_at: u64 = 0;
@@ -536,7 +572,7 @@ pub async fn download_app_update(
     // holds them for as long as the future does, so the final progress emit and
     // the result handling have to happen after it is dropped.
     let outcome = {
-        let abort = Arc::clone(&abort);
+        let abort = &abort;
         let mut download = Box::pin(update.download(
             |chunk, content_length| {
                 downloaded += chunk as u64;
@@ -557,17 +593,7 @@ pub async fn download_app_update(
             || {},
         ));
 
-        // The plugin's `download` has no way to be cancelled from the progress
-        // callback, so cancel it from the outside: stop polling the future and
-        // drop it, which frees the partially-accumulated buffer. The flag is
-        // written by the closure DURING a poll, so it is always current by the
-        // time the poll returns `Pending`.
-        std::future::poll_fn(|cx| match download.as_mut().poll(cx) {
-            Poll::Ready(result) => Poll::Ready(Some(result)),
-            Poll::Pending if abort.load(Ordering::Relaxed) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
-        })
-        .await
+        abortable(download.as_mut(), abort).await
     };
 
     match outcome {
@@ -584,6 +610,32 @@ pub async fn download_app_update(
         // fallback keeps the failure honest rather than unwrapping.
         None => Err(reason.unwrap_or(DownloadAbort::OverCap).message()),
     }
+}
+
+/// Drive `fut` to completion, abandoning it the moment `abort` is set.
+///
+/// The plugin's `download` has no way to be cancelled from the progress
+/// callback, so it is cancelled from the outside: stop polling and drop the
+/// future, which frees the partially-accumulated buffer. The callback runs
+/// INSIDE `poll`, so the flag is current the instant that poll returns.
+///
+/// The order of the two checks is load-bearing. The flag is tested BEFORE the
+/// poll's own result, because the poll that receives the final chunk is also
+/// the poll that can return `Ready` - a body whose last chunk crosses the cap
+/// sets the flag and completes in the same call. Honouring `Ready` first
+/// accepted exactly the fully-buffered payload the cap exists to refuse.
+async fn abortable<F: Future>(mut fut: Pin<&mut F>, abort: &AtomicBool) -> Option<F::Output> {
+    std::future::poll_fn(|cx| {
+        let polled = fut.as_mut().poll(cx);
+        if abort.load(Ordering::Relaxed) {
+            return Poll::Ready(None);
+        }
+        match polled {
+            Poll::Ready(value) => Poll::Ready(Some(value)),
+            Poll::Pending => Poll::Pending,
+        }
+    })
+    .await
 }
 
 fn emit_progress(app: &AppHandle, downloaded: u64, total: Option<u64>) {
@@ -607,6 +659,30 @@ fn emit_progress(app: &AppHandle, downloaded: u64, total: Option<u64>) {
 /// actually started. Refuses unless a download for the current check is sitting
 /// ready - arming with nothing to install would be consent for whatever the
 /// NEXT download turns out to be.
+///
+/// ## Threat model, and what this deliberately does NOT claim
+///
+/// A reasonable objection is that exposing the arm as its own IPC command lets
+/// anything that can call the install also call the arm, so the guarantee looks
+/// circular. It is worth stating plainly what the nonce is and is not for.
+///
+/// It does NOT defend against a fully compromised webview. It cannot: the
+/// unsaved-changes and unpushed-SpeleoDB conditions live in the frontend
+/// stores, so "have the exit guards passed?" is not a question Rust can answer
+/// without moving that whole model across the boundary. And an attacker who can
+/// run arbitrary JS here already has commands with a far worse blast radius
+/// than a signed, in-place upgrade - `save_project`, `delete_project`, the
+/// SpeleoDB push.
+///
+/// What it does defend against is narrower and real: a SINGLE stray
+/// `invoke('install_app_update_and_restart')` - an XSS payload firing one call,
+/// a frontend bug, a devtools invocation replayed out of context - can no
+/// longer restart the app out from under unsaved work. Reaching the installer
+/// now takes a deliberate two-step against state the backend maintains, which
+/// is the difference between an accident and an intent.
+///
+/// Refusing to arm without a current download is the other half: the consent is
+/// bound to one specific, already-verified bundle, not to "whatever is next".
 #[tauri::command]
 pub fn arm_app_update_restart(update_state: State<AppUpdateState>) -> Result<(), String> {
     arm_restart(update_state.inner())
@@ -642,13 +718,12 @@ pub fn install_app_update_and_restart(
     app: AppHandle,
     update_state: State<'_, AppUpdateState>,
 ) -> Result<(), String> {
-    let (update, bytes) = installable_update(&update_state)?;
+    let (generation, update, bytes) = installable_update(&update_state)?;
 
     if let Err(e) = update.install(&bytes) {
-        update_state.with(|pending| {
-            let generation = pending.generation;
-            pending.bytes = Some((generation, bytes));
-        })?;
+        // Filed under the generation they were DOWNLOADED for, not whatever is
+        // current now - see `restore_bytes_if_current`.
+        restore_bytes_if_current(&update_state, generation, bytes)?;
         return Err(format!("Update install failed: {e}"));
     }
     app.restart();
@@ -910,7 +985,7 @@ mod tests {
 
         // Install refuses on the ARM first - the safety catch is checked before
         // anything else, so a bare `invoke` gets no information about state.
-        let install = refusal(take_install_authorisation(&state));
+        let install = refusal(installable_update(&state));
         assert!(install.contains("not armed"), "{install}");
     }
 
@@ -922,7 +997,7 @@ mod tests {
         let state = AppUpdateState::default();
         seed_download(&state, 1);
 
-        let err = refusal(take_install_authorisation(&state));
+        let err = refusal(installable_update(&state));
         assert!(err.contains("not armed"), "{err}");
         // ...and the refusal did not consume the download.
         assert!(state
@@ -941,17 +1016,20 @@ mod tests {
         assert!(state
             .with(|pending| pending.restart_armed)
             .expect("lockable"));
-        // Standing in for the real install, which cannot run in a unit test.
-        assert_eq!(
-            take_install_authorisation(&state),
-            Ok(vec![0u8; 16]),
-            "an armed, current download must be handed over exactly once"
-        );
+
+        // An `Update` cannot be constructed outside a live plugin, so the
+        // attempt gets all the way to the LAST check and stops there - which is
+        // itself the proof that the arm and the bytes were accepted and taken.
+        let attempt = refusal(installable_update(&state));
+        assert!(attempt.contains("No update to install"), "{attempt}");
         assert!(!state
             .with(|pending| pending.restart_armed)
             .expect("lockable"));
+        assert!(state
+            .with(|pending| pending.bytes.is_none())
+            .expect("lockable"));
 
-        let second = refusal(take_install_authorisation(&state));
+        let second = refusal(installable_update(&state));
         assert!(second.contains("not armed"), "{second}");
     }
 
@@ -966,7 +1044,7 @@ mod tests {
             .with(|pending| pending.restart_armed = false)
             .expect("lockable");
 
-        let err = refusal(take_install_authorisation(&state));
+        let err = refusal(installable_update(&state));
         assert!(err.contains("not armed"), "{err}");
     }
 
@@ -1011,8 +1089,112 @@ mod tests {
             .with(|pending| pending.generation = 4)
             .expect("lockable");
 
-        let err = refusal(take_install_authorisation(&state));
+        let err = refusal(installable_update(&state));
         assert!(err.contains("no longer matches"), "{err}");
+    }
+
+    /// A failed install hands the bytes back so "Restart to update" can be
+    /// retried without re-downloading - but only while they are still the offer
+    /// on the table.
+    #[test]
+    fn a_failed_install_restores_bytes_while_the_offer_stands() {
+        let state = AppUpdateState::default();
+        state
+            .with(|pending| pending.generation = 5)
+            .expect("lockable");
+
+        restore_bytes_if_current(&state, 5, vec![7u8; 3]).expect("lockable");
+
+        assert_eq!(
+            state
+                .with(|pending| pending.bytes.clone())
+                .expect("lockable"),
+            Some((5, vec![7u8; 3]))
+        );
+    }
+
+    /// ...and drops them when a check completed while the install was running.
+    /// Restoring unconditionally would file the OLD bytes under the NEW
+    /// generation, re-creating exactly the mispairing the generation exists to
+    /// prevent - the next arm would hand a different version's installer a
+    /// bundle it was never offered.
+    #[test]
+    fn a_failed_install_drops_bytes_a_newer_check_superseded() {
+        let state = AppUpdateState::default();
+        state
+            .with(|pending| pending.generation = 5)
+            .expect("lockable");
+
+        // The install was running under generation 5; a check landed and made
+        // it 6 before the failure came back.
+        state
+            .with(|pending| pending.generation = 6)
+            .expect("lockable");
+        restore_bytes_if_current(&state, 5, vec![7u8; 3]).expect("lockable");
+
+        assert!(
+            state
+                .with(|pending| pending.bytes.is_none())
+                .expect("lockable"),
+            "bytes from a superseded offer must not be filed under the new one"
+        );
+    }
+
+    // ── Download cancellation ────────────────────────────────────────────────
+
+    /// Poll `fut` once through [`abortable`] with a no-op waker, which is all
+    /// the ordering question needs: does one poll that both sets the flag and
+    /// returns `Ready` count as an abort, or as a success?
+    fn poll_abortable_once<F: Future>(fut: F, abort: &AtomicBool) -> Poll<Option<F::Output>> {
+        let mut fut = std::pin::pin!(fut);
+        let mut wrapper = std::pin::pin!(abortable(fut.as_mut(), abort));
+        let waker = std::task::Waker::noop();
+        wrapper
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(waker))
+    }
+
+    /// [review] The cap was checked AFTER the poll's own result, so a body
+    /// whose FINAL chunk crosses the limit was accepted: the callback sets the
+    /// flag and the very same poll returns `Ready` with the fully-buffered
+    /// payload - the exact thing the cap exists to refuse, already in memory.
+    #[test]
+    fn a_ready_result_from_the_poll_that_tripped_the_cap_is_still_aborted() {
+        let abort = AtomicBool::new(false);
+        let tripped = &abort;
+        let ready_but_over_cap = std::future::poll_fn(move |_| {
+            // Stands in for the last chunk arriving: the callback trips the cap
+            // and the download completes, both inside this one poll.
+            tripped.store(true, Ordering::Relaxed);
+            Poll::Ready("the whole oversized body")
+        });
+
+        assert_eq!(
+            poll_abortable_once(ready_but_over_cap, &abort),
+            Poll::Ready(None),
+            "a result produced by the poll that tripped the cap must not be accepted"
+        );
+    }
+
+    /// ...while an untripped download still delivers its result.
+    #[test]
+    fn an_untripped_download_is_handed_back_normally() {
+        let abort = AtomicBool::new(false);
+        assert_eq!(
+            poll_abortable_once(std::future::ready("body"), &abort),
+            Poll::Ready(Some("body"))
+        );
+    }
+
+    /// A download still in flight when the cap trips ends immediately, without
+    /// waiting for a body that would never stop arriving.
+    #[test]
+    fn a_pending_download_is_abandoned_as_soon_as_the_cap_trips() {
+        let abort = AtomicBool::new(true);
+        assert_eq!(
+            poll_abortable_once(std::future::pending::<&str>(), &abort),
+            Poll::Ready(None)
+        );
     }
 
     #[test]
