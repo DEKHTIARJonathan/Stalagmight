@@ -367,12 +367,13 @@ async function lastGasReachDpv(page: Page): Promise<unknown> {
   });
 }
 
-/** Enable a DPV rig from the Plan-mode bottom panel's "Equipment" tab (#317, moved out of
- *  Settings). Requires Plan mode already entered with the bottom panel visible - unlike the old
- *  Settings dialog, there is no route to the rig editor before `plan-tables-panel` exists. */
+/** Enable a DPV rig from the Plan-mode bottom panel's "DPV" tab (#317, moved out of Settings;
+ *  its own tab since the Equipment split). Requires Plan mode already entered with the bottom
+ *  panel visible - unlike the old Settings dialog, there is no route to the rig editor before
+ *  `plan-tables-panel` exists. */
 async function enableDpvRig(page: Page): Promise<void> {
   await expect(page.locator('[data-testid="plan-tables-panel"]')).toBeVisible({ timeout: 3000 });
-  await page.locator('[data-testid="plan-tab-equipment"]').click();
+  await page.locator('[data-testid="plan-tab-dpv"]').click();
   await page.locator('[data-testid="toggle-dpv-enabled"]').click();
   await expect(page.locator('[data-testid="dpv-rig-fields"]')).toBeVisible();
 }
@@ -664,7 +665,7 @@ test.describe('Gas planning', () => {
     expect(timePath).not.toContain('NaN');
 
     // Switching tabs away and back keeps the chart (the tab state is local + transient).
-    await page.locator('[data-testid="plan-tab-equipment"]').click();
+    await page.locator('[data-testid="plan-tab-cylinders"]').click();
     await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible();
     await page.locator('[data-testid="plan-tab-profile"]').click();
     await expect(page.locator('[data-testid="plan-profile-svg"]')).toBeVisible();
@@ -1895,7 +1896,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="segments-no-rig-hint"]')).toBeVisible();
   });
 
-  test('configuring a DPV rig in the Equipment tab enables the segment scooter checkbox and its readout row (#317)', async ({
+  test('configuring a DPV rig in the DPV tab enables the segment scooter checkbox and its readout row (#317)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -1940,7 +1941,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-readout-scooter-range"]')).toBeVisible({
       timeout: 3000,
     });
-    await page.locator('[data-testid="plan-tab-equipment"]').click();
+    await page.locator('[data-testid="plan-tab-dpv"]').click();
     await expect(page.locator('[data-testid="toggle-dpv-enabled"]')).toHaveAttribute(
       'aria-checked',
       'true',
@@ -2024,7 +2025,7 @@ test.describe('Gas planning', () => {
       .poll(async () => (await lastGasReachSegments(page))[0]?.on_scooter, { timeout: 3000 })
       .toBe(true);
 
-    await page.locator('[data-testid="plan-tab-equipment"]').click();
+    await page.locator('[data-testid="plan-tab-dpv"]').click();
     await page.locator('[data-testid="toggle-dpv-enabled"]').click();
     await expect(page.locator('[data-testid="dpv-rig-fields"]')).toHaveCount(0);
 
