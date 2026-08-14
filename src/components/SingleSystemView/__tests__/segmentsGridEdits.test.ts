@@ -184,6 +184,61 @@ describe('applySegmentEdits - scooter coupling', () => {
 });
 
 describe('applySegmentEdits - batches', () => {
+  it('a batch-authored speed survives the same batch untick (full-row paste onto a scootered span)', () => {
+    // Codex P2 on #590: pasting a swum row with its own pace onto a scootered
+    // row emits speed before scooter; the untick reset must keep the pasted
+    // pace, not return the span to inheriting.
+    const rows = [seg({ on_scooter: true, speed_m_per_min: 40 })];
+    const next = applySegmentEdits(
+      rows,
+      [
+        { row: 0, colKey: SEG_COL.speed, value: 15 },
+        { row: 0, colKey: SEG_COL.scooter, value: false },
+      ],
+      metric(RIG)
+    );
+    expect(next[0]).toEqual({ on_scooter: false, speed_m_per_min: 15 });
+  });
+
+  it('a no-op speed edit still counts as batch-authored for the untick', () => {
+    // The pasted speed equals the current one, so the speed edit itself changes
+    // nothing - but it is still the paste supplying that pace, and the untick
+    // beside it must not wipe it.
+    const rows = [seg({ on_scooter: true, speed_m_per_min: 15 })];
+    const next = applySegmentEdits(
+      rows,
+      [
+        { row: 0, colKey: SEG_COL.speed, value: 15 },
+        { row: 0, colKey: SEG_COL.scooter, value: false },
+      ],
+      metric(RIG)
+    );
+    expect(next[0]).toEqual({ on_scooter: false, speed_m_per_min: 15 });
+  });
+
+  it('an untick with no speed beside it in the batch still resets to inherited', () => {
+    const rows = [seg({ on_scooter: true, speed_m_per_min: 40 })];
+    const next = applySegmentEdits(
+      rows,
+      [{ row: 0, colKey: SEG_COL.scooter, value: false }],
+      metric(RIG)
+    );
+    expect(next[0]).toEqual({ on_scooter: false, speed_m_per_min: null });
+  });
+
+  it('an untick before the speed edit lands on the pasted pace regardless of order', () => {
+    const rows = [seg({ on_scooter: true, speed_m_per_min: 40 })];
+    const next = applySegmentEdits(
+      rows,
+      [
+        { row: 0, colKey: SEG_COL.scooter, value: false },
+        { row: 0, colKey: SEG_COL.speed, value: 15 },
+      ],
+      metric(RIG)
+    );
+    expect(next[0]).toEqual({ on_scooter: false, speed_m_per_min: 15 });
+  });
+
   it('applies edits in order, so a speed written first survives the tick beside it', () => {
     const rows = [seg(), seg()];
     const next = applySegmentEdits(

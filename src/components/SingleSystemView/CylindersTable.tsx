@@ -14,6 +14,8 @@ import { GAS_CYLINDER_GRID_PREFIX } from '../../utils/testId';
 import { buildCylinderColumns } from './cylindersGridColumns';
 import { applyCylinderEdits, CYL_COL, CYL_ROLES, isUsableEditable } from './cylindersGridEdits';
 import { planGridHeight, usePlanGridFillHeight } from './planGridHeight';
+import { usePasteReportToast } from './usePasteReportToast';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 /** Rows behind the FALLBACK height (before the pane is measured, and under jsdom).
  *  The grid fills its tab now, so this only caps the pre-measurement guess. */
@@ -141,6 +143,7 @@ export function CylindersTable() {
   );
 
   const labels = useGridLabels('gasPanel.tanks.tankNoun');
+  const onPasteReport = usePasteReportToast(TOAST_KEYS.PLAN_CYLINDERS_PASTE);
   const onEdit = useCallback(
     (row: number, colKey: string, value: unknown) => applyEdits([{ row, colKey, value }]),
     [applyEdits]
@@ -193,6 +196,7 @@ export function CylindersTable() {
         height={height}
         onEdit={onEdit}
         onBatchEdit={applyEdits}
+        onPasteReport={onPasteReport}
         onDeleteRows={removeRows}
         // Replaces the row `title`/`data-enabled` the <tr> carried: a row that doesn't count
         // toward the penetration budget reads as dimmed, and the reason is the Tank cell's

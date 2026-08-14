@@ -95,8 +95,14 @@ function sameSegment(a: PlanSegment, b: PlanSegment): boolean {
 }
 
 /** Apply one edit to one segment. Returns the segment unchanged (identity) when
- *  the edit is a skip or a no-op. */
-function applyOne(seg: PlanSegment, edit: CellEdit, ctx: SegmentEditContext): PlanSegment {
+ *  the edit is a skip or a no-op. `batchAuthoredSpeed` is true when THIS batch
+ *  already carried a speed edit for this row - see the untick branch. */
+function applyOne(
+  seg: PlanSegment,
+  edit: CellEdit,
+  ctx: SegmentEditContext,
+  batchAuthoredSpeed: boolean
+): PlanSegment {
   if (edit.colKey === SEG_COL.speed) {
     // `number-nullable`: a cleared cell returns the span to inheriting the plan
     // speed, which is what `speed_m_per_min: null` has meant since `defaultSegment`.
@@ -115,10 +121,15 @@ function applyOne(seg: PlanSegment, edit: CellEdit, ctx: SegmentEditContext): Pl
     // the same batch just wrote, and re-ticking an already-ticked span must not
     // re-auto-fill over a speed the diver typed afterwards.
     if (next === seg.on_scooter) return seg;
-    // Unticking ALWAYS returns the span to inheriting: leaving the auto-filled
-    // scooter pace behind would price a swum span at a scooter's speed, silently
-    // overstating range and understating gas.
-    if (!next) return { on_scooter: false, speed_m_per_min: null };
+    // Unticking returns the span to inheriting: leaving the auto-filled scooter
+    // pace behind would price a swum span at a scooter's speed, silently
+    // overstating range and understating gas. ONE exception (Codex P2 on #590):
+    // when this same batch already wrote the row's speed - a full-row paste of a
+    // swum span onto a scootered one emits speed before scooter - that speed is
+    // the pasted value, not a scooter leftover, and the reset must not wipe it.
+    if (!next) {
+      return { on_scooter: false, speed_m_per_min: batchAuthoredSpeed ? seg.speed_m_per_min : null };
+    }
     // Ticking a span that has no speed of its own adopts the rig's primary speed:
     // the range model spends the rig's battery by METRES, so riding at swim pace
     // would understate the real drain. A span with an explicit speed keeps it.
@@ -148,11 +159,21 @@ export function applySegmentEdits(
   ctx: SegmentEditContext
 ): PlanSegment[] {
   let next: PlanSegment[] | null = null;
+  // Rows whose speed THIS batch wrote (a no-op speed edit still counts: pasting
+  // an identical speed is still the paste authoring it). The scooter untick
+  // branch consults this so it never wipes a speed the same batch supplied.
+  const speedAuthored = new Set<number>();
   for (const edit of edits) {
     const current = next ?? segments;
     const seg = current[edit.row];
     if (seg === undefined) continue;
-    const updated = applyOne(seg, edit, ctx);
+    if (
+      edit.colKey === SEG_COL.speed &&
+      (edit.value === null || (typeof edit.value === 'number' && Number.isFinite(edit.value)))
+    ) {
+      speedAuthored.add(edit.row);
+    }
+    const updated = applyOne(seg, edit, ctx, speedAuthored.has(edit.row));
     if (sameSegment(updated, seg)) continue;
     if (next === null) next = segments.slice();
     next[edit.row] = updated;
