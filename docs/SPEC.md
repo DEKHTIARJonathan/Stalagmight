@@ -163,19 +163,23 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 - Reset to defaults per category
 
 ### 2.10 Updates & Telemetry
-- In-app auto-update: on launch (once per process, after a short delay) and on demand
-  from the About dialog, the app checks a minisign-signed manifest published on GitHub
-  Releases and offers to download + install a newer build. Two user-selectable tracks -
-  `stable` (tagged releases, the default) and `weekly` (the Monday prerelease builds) -
-  each resolve to their own manifest; the launch check can be turned off in
-  Settings > General, and the manual "Check for updates" button in About always works
-  regardless of that setting. The download is signature-verified before anything is
-  written to disk, and installing routes through the same unsaved-changes / SpeleoDB
+- In-app auto-update: on launch (once per process, after a short delay), on demand from
+  the About dialog, and whenever the release track is switched in Settings, the app
+  checks a manifest published on GitHub Releases (fetched over https; the manifest
+  itself is NOT signed) and offers to download a newer build. The downloaded BUNDLE is
+  minisign-verified against a public key baked into the running binary before it is
+  written to disk or installed - never the manifest. Two user-selectable tracks -
+  `stable` (the default for an ordinary build) and `weekly` (the Monday prerelease
+  builds, the default for a build compiled with `STALAGMIGHT_CHANNEL=weekly`) - each
+  resolve to their own manifest. The launch check can be turned off in Settings >
+  General; the manual "Check for updates" button in About and switching tracks both
+  ignore that setting. Installing routes through the same unsaved-changes / SpeleoDB
   write-lock quit guards as any other app close - it is never a silent restart.
 - Opt-in telemetry only
-- No external network calls except tile servers, SpeleoDB sync, the update
-  manifest/artifact fetch (GitHub Releases; disableable via the update-check setting),
-  and opt-in telemetry
+- No external network calls except tile servers, the MapLibre stylesheet (unpkg.com)
+  and glyph fonts (fonts.openmaptiles.org), SpeleoDB sync, the update manifest/artifact
+  fetch (GitHub Releases; the launch check is disableable via the update-check setting,
+  but a manual check or a track switch always reaches it), and opt-in telemetry
 
 ### 2.11 Recovery
 - Auto-save only (no crash recovery dialog)
@@ -1650,7 +1654,7 @@ The sidebar displays 12 settings categories, with a visual separator before the 
 
 | Category | Contents |
 |----------|----------|
-| General | Language/number/date formats, auto-save toggle/interval, recent projects limit, undo history/persist limits, shortcut feedback preference, splash screen and onboarding, telemetry opt-in (telemetry-enabled builds) |
+| General | Language/number/date formats, auto-save toggle/interval, recent projects limit, undo history/persist limits, shortcut feedback preference, splash screen and onboarding, telemetry opt-in (telemetry-enabled builds), automatic update-check toggle and release track (stable/weekly) |
 | Appearance | Theme mode (dark/light/auto), day and night color theme selection with preview cards, 10 color themes |
 | Units | Length/depth/angle units, decimal precision |
 | Gas planning | Swim speed, jump RMV multiplier, whether reference legs count toward gas |

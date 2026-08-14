@@ -410,11 +410,18 @@ to require.
 `plugins.updater.pubkey` in the checked-in `tauri.conf.json` - the plugin's
 own `Config` has a required `pubkey` with no `Default`, so registering it
 unconditionally before the key exists would fail `Builder::build()` and stop
-every build, released or local, from starting at all. Every `check_for_app_update`
-/ `download_app_update` / `install_app_update_and_restart` IPC command answers
-with a named "no update signing key" error under the same gate, so the
-Settings > General Updates section and About's manual check are present in
-every build but inert until the key lands. `scripts/check-updater-pubkey.mjs`
+every build, released or local, from starting at all. Only `check_for_app_update`
+consults that gate directly and answers with a named "no update signing key"
+error while it is absent; `download_app_update`, `arm_app_update_restart` and
+`install_app_update_and_restart` each refuse on their own missing precondition
+instead ("No update to download; check for updates first", "restart was not
+armed", etc. - see the state machine in `app_update.rs`), which is unreachable
+in practice because nothing calls them before a successful check. The net
+effect is the same: the Settings > General Updates section and About's manual
+check are present in every build but inert until the key lands.
+`arm_app_update_restart` / `unarm_app_update_restart` are the two commands
+either side of that state machine that take and release the one-shot install
+consent; they never touch the pubkey gate. `scripts/check-updater-pubkey.mjs`
 (`pnpm lint:updater-pubkey`, gated in CI) is a tripwire for that commit: it
 passes trivially while `plugins.updater` is absent, and the day the real key
 lands, a placeholder, malformed base64, or a non-https/non-`github.com`
@@ -477,8 +484,10 @@ pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}' --debug
 
 # 3. Sign the resulting bundle with the throwaway private key (tauri build
 #    already did this automatically if TAURI_SIGNING_PRIVATE_KEY was
-#    exported before step 2; otherwise sign it explicitly):
-pnpm tauri signer sign -k /tmp/stalagmight-updater-test.key <path to the bundle>
+#    exported before step 2; otherwise sign it explicitly). -f/--private-key-path
+#    loads the key FROM A FILE; -k/--private-key wants the key material as a
+#    string, so passing the same path there fails.
+pnpm tauri signer sign -f /tmp/stalagmight-updater-test.key <path to the bundle>
 
 # 4. Hand-write a manifest next to the signed bundle, e.g. latest.json:
 #    { "version": "v9.9.9", "notes": "local test", "pub_date": "<RFC3339>",
@@ -499,6 +508,16 @@ variable in a release build is restricted to an https `github.com` URL and
 would silently ignore this override (`is_trusted_manifest_url`). Use the
 Settings > General Updates section or About's "Check for updates" button in
 the running app to trigger the check once the server is up.
+
+This recipe reliably exercises check + download + the signature verification
+and restart-arm/quit-guard flow. The final install step is NOT proven by it:
+`./scripts/dev.sh` runs `tauri dev`, an unbundled binary, not the packaged
+`.app`/`.exe`/`.AppImage` a real update installs over - so "Restart to
+update" on a dev build is exercising the same IPC calls but not the actual
+file-replacement path. Proving the install leg itself needs a packaged build
+(step 2's `pnpm tauri build`, launched from its bundle output rather than via
+`dev.sh`) and, on macOS, is further limited by ad-hoc signing rather than a
+real Developer ID (see the Secrets table above) until #226 lands.
 
 ## Testing the release tooling
 
