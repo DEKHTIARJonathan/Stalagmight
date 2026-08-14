@@ -9,23 +9,28 @@ import { getNumberFormatLocale } from '../../i18n/format';
 import { isBudgetRole } from '../../utils/gasRoles';
 import { TANK_PRESETS, cylinderFromPreset } from '../../utils/tankPresets';
 import type { Cylinder, CylRole } from '../../types/ipc.generated';
+import { Tooltip } from '../common/Tooltip';
 import { GAS_CYLINDER_GRID_PREFIX } from '../../utils/testId';
 import { buildCylinderColumns } from './cylindersGridColumns';
 import { applyCylinderEdits, CYL_COL, CYL_ROLES, isUsableEditable } from './cylindersGridEdits';
-import { planGridHeight } from './planGridHeight';
+import { planGridHeight, usePlanGridFillHeight } from './planGridHeight';
 
-/** How many rows the grid shows before it starts scrolling internally. Lower than
- *  the Segments grid's: this one shares the Equipment tab with the DPV editor. */
+/** Rows behind the FALLBACK height (before the pane is measured, and under jsdom).
+ *  The grid fills its tab now, so this only caps the pre-measurement guess. */
 const MAX_VISIBLE_ROWS = 10;
 
 /**
- * The diver's cylinder set - the top block of the Plan-mode bottom panel's "Equipment" tab
- * (#38; the DPV rig editor sits below it, #317).
+ * The diver's cylinder set - the Plan-mode bottom panel's "Cylinders" tab (#38), which
+ * the grid fills edge to edge; the DPV rig editor is its own tab next door (#317).
  * Add tanks from presets, edit fill pressure + role, remove. Budget-role rows (back
  * gas / stage) are emphasised; the rest are dimmed (they don't count toward the swim-in
  * budget - PRD §5.3). Edits flow to gasPlanStore, which nulls the cached reach field so
  * the map overlay refetches. Tank water *capacity* stays in litres regardless of units
  * (it's a tank spec, not a gas volume); only the fill pressure flips bar↔psi.
+ *
+ * The two controls that are not per-row - "Add cylinder" and the conservative-gas
+ * switch - live in {@link CylinderTableActions}, which the panel renders at the far end
+ * of the tab strip so this tab is nothing but grid.
  *
  * Hosted on the shared `SpreadsheetGrid` (#403): the columns live in
  * `cylindersGridColumns.tsx`, and every value write - typed, pasted, filled, cleared, or
@@ -35,13 +40,11 @@ const MAX_VISIBLE_ROWS = 10;
  */
 export function CylindersTable() {
   const { t } = useTranslation();
-  const { cylinders, gasConfig, reachField, setCylinders, setGasConfig } = useGasPlanStore(
+  const { cylinders, gasConfig, reachField } = useGasPlanStore(
     useShallow((s) => ({
       cylinders: s.cylinders,
       gasConfig: s.gasConfig,
       reachField: s.reachField,
-      setCylinders: s.setCylinders,
-      setGasConfig: s.setGasConfig,
     }))
   );
   const units = gasConfig.units;
@@ -143,61 +146,92 @@ export function CylindersTable() {
     [applyEdits]
   );
 
+  // The grid owns the whole tab body, so its height is the MEASURED pane rather than the
+  // row count; the content-sized number is only the pre-measurement/jsdom fallback.
+  const { ref: gridBoxRef, height } = usePlanGridFillHeight(
+    planGridHeight(cylinders.length, MAX_VISIBLE_ROWS)
+  );
+
+  return (
+    <div className="h-full flex flex-col p-3 text-sm text-text-primary" data-testid="cylinders-table">
+      <div ref={gridBoxRef} className="flex-1 min-h-0">
+        <SpreadsheetGrid<Cylinder>
+          columns={columns}
+          rows={cylinders}
+          // Cylinders have no id of their own, and the engine's per-row outputs
+          // (`cylinder_usable_bars`) are aligned to this same position.
+          rowKey={(_cyl, index) => index}
+          testIdPrefix={GAS_CYLINDER_GRID_PREFIX}
+          // The fill and usable cells keep their pre-grid test ids. The usable one names which
+          // MODE the row is in, so a computed row can never be mistaken for an editable one.
+          cellTestId={(cyl, index, colKey) =>
+            colKey === CYL_COL.fill
+              ? `gas-cylinder-fill-${index}`
+              : colKey === CYL_COL.usable
+                ? isUsableEditable(cyl, isFree)
+                  ? `gas-cylinder-usable-${index}`
+                  : `gas-cylinder-usable-readonly-${index}`
+                : undefined
+          }
+          locale={locale}
+          height={height}
+          onEdit={onEdit}
+          onBatchEdit={applyEdits}
+          onDeleteRows={removeRows}
+          // Replaces the row `title`/`data-enabled` the <tr> carried: a row that doesn't count
+          // toward the penetration budget reads as dimmed, and the reason is the Tank cell's
+          // tooltip.
+          rowClassName={(cyl) =>
+            !cyl.enabled || !isBudgetRole(cyl.role) ? 'opacity-50' : undefined
+          }
+          labels={labels}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The cylinder controls that belong to the TAB rather than to a row: the preset picker
+ * that appends a tank, and the conservative-gas switch. `PlanTablesPanel` renders them at
+ * the right-hand end of the tab strip while the Cylinders tab is up, so the grid itself
+ * gets the whole pane - but the handlers stay here, next to the table they act on.
+ *
+ * The conservative switch's explanation ("cap overfills to rated") is a hover tooltip, not
+ * a longer label: the strip is a single row shared with four tab buttons.
+ */
+export function CylinderTableActions() {
+  const { t } = useTranslation();
+  const { cylinders, gasConfig, setCylinders, setGasConfig } = useGasPlanStore(
+    useShallow((s) => ({
+      cylinders: s.cylinders,
+      gasConfig: s.gasConfig,
+      setCylinders: s.setCylinders,
+      setGasConfig: s.setGasConfig,
+    }))
+  );
+
   const addPreset = (presetId: string) => {
     const preset = TANK_PRESETS.find((p) => p.id === presetId);
     if (preset) setCylinders([...cylinders, cylinderFromPreset(preset)]);
   };
 
   return (
-    // No h-full here: this block stacks above the DPV editor inside the Equipment tab's own
-    // scroll container, and claiming full height pushed the DPV below the fold (#317 feedback).
-    // Same reason the grid is sized to its content rather than to the pane.
-    <div className="p-3 text-sm text-text-primary" data-testid="cylinders-table">
-      <SpreadsheetGrid<Cylinder>
-        columns={columns}
-        rows={cylinders}
-        // Cylinders have no id of their own, and the engine's per-row outputs
-        // (`cylinder_usable_bars`) are aligned to this same position.
-        rowKey={(_cyl, index) => index}
-        testIdPrefix={GAS_CYLINDER_GRID_PREFIX}
-        // The fill and usable cells keep their pre-grid test ids. The usable one names which
-        // MODE the row is in, so a computed row can never be mistaken for an editable one.
-        cellTestId={(cyl, index, colKey) =>
-          colKey === CYL_COL.fill
-            ? `gas-cylinder-fill-${index}`
-            : colKey === CYL_COL.usable
-              ? isUsableEditable(cyl, isFree)
-                ? `gas-cylinder-usable-${index}`
-                : `gas-cylinder-usable-readonly-${index}`
-              : undefined
-        }
-        locale={locale}
-        height={planGridHeight(cylinders.length, MAX_VISIBLE_ROWS)}
-        onEdit={onEdit}
-        onBatchEdit={applyEdits}
-        onDeleteRows={removeRows}
-        // Replaces the row `title`/`data-enabled` the <tr> carried: a row that doesn't count
-        // toward the penetration budget reads as dimmed, and the reason is the Tank cell's
-        // tooltip.
-        rowClassName={(cyl) =>
-          !cyl.enabled || !isBudgetRole(cyl.role) ? 'opacity-50' : undefined
-        }
-        labels={labels}
+    <div className="flex items-center gap-4">
+      <Select
+        value=""
+        onChange={(v) => addPreset(v)}
+        options={TANK_PRESETS.map((p) => ({
+          value: p.id,
+          label: `${p.label} (${p.water_volume_l}L)`,
+        }))}
+        placeholder={t('gasPanel.tanks.addPlaceholder')}
+        size="sm"
+        aria-label={t('gasPanel.tanks.addPlaceholder')}
+        data-testid="gas-add-tank"
       />
-      <div className="flex items-center gap-4 mt-3">
-        <Select
-          value=""
-          onChange={(v) => addPreset(v)}
-          options={TANK_PRESETS.map((p) => ({
-            value: p.id,
-            label: `${p.label} (${p.water_volume_l}L)`,
-          }))}
-          placeholder={t('gasPanel.tanks.addPlaceholder')}
-          size="sm"
-          aria-label={t('gasPanel.tanks.addPlaceholder')}
-          data-testid="gas-add-tank"
-        />
-        <label className="flex items-center gap-2 text-xs">
+      <Tooltip content={t('gasPanel.tanks.conservativeHint')} tooltipTestId="gas-conservative-tooltip">
+        <label className="flex items-center gap-2 text-xs whitespace-nowrap">
           <input
             type="checkbox"
             checked={gasConfig.conservative_tank_gas}
@@ -206,7 +240,7 @@ export function CylindersTable() {
           />
           <span>{t('gasPanel.tanks.conservative')}</span>
         </label>
-      </div>
+      </Tooltip>
     </div>
   );
 }

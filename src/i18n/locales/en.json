@@ -2770,8 +2770,9 @@
       "bar": "bar",
       "psi": "psi",
       "removeAria": "Remove {{tank}}",
-      "addPlaceholder": "Add tank…",
-      "conservative": "Conservative gas (cap overfills to rated)",
+      "addPlaceholder": "Add cylinder…",
+      "conservative": "Conservative gas",
+      "conservativeHint": "Caps an overfilled cylinder to its rated pressure when computing usable gas.",
       "notCounted": "This role isn't counted toward the open-circuit penetration budget.",
       "disabledHint": "This tank is switched off and excluded from the gas plan.",
       "enabledAria": "Carry {{tank}} on this dive",
@@ -2788,7 +2789,7 @@
       "tankNoun_one": "tank",
       "tankNoun_other": "tanks",
       "negativePressure": "Pressure cannot be negative.",
-      "editHint": "Edit your cylinders in the Equipment tab below."
+      "editHint": "Edit your cylinders in the Cylinders tab below."
     },
     "roles": {
       "back_gas": "Back gas",
@@ -2848,7 +2849,7 @@
       "waypointN": "WP {{n}}",
       "endpoint": "Endpoint",
       "onward": "Onward",
-      "noRigHint": "Add a DPV rig in the Equipment tab to plan scooter legs.",
+      "noRigHint": "Add a DPV rig in the DPV tab to plan scooter legs.",
       "scooterAria": "Riding a DPV for the {{from}} to {{to}} leg",
       "parkHere": "Parked here",
       "parkHereHint": "The DPV is parked at this point - derived from the scootered legs above, not set directly."
@@ -2920,7 +2921,8 @@
   },
   "planTables": {
     "tabs": {
-      "equipment": "Equipment",
+      "cylinders": "Cylinders",
+      "dpv": "DPV",
       "segments": "Segments",
       "profile": "Profile"
     },

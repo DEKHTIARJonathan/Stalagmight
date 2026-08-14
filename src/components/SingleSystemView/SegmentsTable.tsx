@@ -9,11 +9,12 @@ import { formatStationId } from '../../utils/formatters';
 import { speedToDisplay } from '../../utils/formatGas';
 import { buildSegmentColumns } from './segmentsGridColumns';
 import { applySegmentEdits, SEG_COL } from './segmentsGridEdits';
-import { planGridHeight } from './planGridHeight';
+import { planGridHeight, usePlanGridFillHeight } from './planGridHeight';
 import type { PlanSegment } from '../../types/ipc.generated';
 import type { StationRef } from '../../types/project';
 
-/** How many rows the grid shows before it starts scrolling internally. */
+/** Rows behind the FALLBACK height (before the pane is measured, and under jsdom).
+ *  The grid fills its tab now, so this only caps the pre-measurement guess. */
 const MAX_VISIBLE_ROWS = 12;
 
 function sameStation(a: StationRef | null, b: StationRef | null): boolean {
@@ -56,7 +57,7 @@ export function SegmentsTable() {
     }))
   );
   const units = gasConfig.units;
-  // Riding a DPV needs a rig configured in the Equipment tab; with none, the checkbox is
+  // Riding a DPV needs a rig configured in the DPV tab; with none, the checkbox is
   // disabled (not hidden) so the reason stays visible in place, mirroring the backend:
   // `resolve_segments` drops `on_scooter` entirely without a rig, so a checked-but-inert
   // box would be a lie.
@@ -125,31 +126,40 @@ export function SegmentsTable() {
     [applyEdits]
   );
 
+  // The grid owns the whole tab body (minus the no-rig hint below it), so its height is the
+  // MEASURED pane rather than the row count; the content-sized number is only the
+  // pre-measurement/jsdom fallback.
+  const { ref: gridBoxRef, height } = usePlanGridFillHeight(
+    planGridHeight(segments.length, MAX_VISIBLE_ROWS)
+  );
+
   return (
-    // No `h-full overflow-auto`: the grid owns its own scroller and is sized to its content
-    // (a second scroller around it would double up the scrollbars).
-    <div className="p-3 text-sm text-text-primary" data-testid="segments-table">
-      <SpreadsheetGrid<PlanSegment>
-        columns={columns}
-        rows={segments}
-        // Segments have no id of their own - position IS the identity (segment k spans
-        // boundary k -> k + 1), and the store keeps the list exactly `waypoints.length + 1`
-        // long.
-        rowKey={(_seg, index) => index}
-        testIdPrefix="segment"
-        // The speed cell keeps its pre-grid test id, which is what the e2e specs and the
-        // inherited-speed marker next to it are addressed by.
-        cellTestId={(_seg, index, colKey) =>
-          colKey === SEG_COL.speed ? `segment-speed-${index}` : undefined
-        }
-        locale={getNumberFormatLocale()}
-        height={planGridHeight(segments.length, MAX_VISIBLE_ROWS)}
-        onEdit={onEdit}
-        onBatchEdit={applyEdits}
-        labels={labels}
-      />
+    // No outer `overflow-auto`: the grid owns its own scroller, and a second one around it
+    // would double up the scrollbars.
+    <div className="h-full flex flex-col p-3 text-sm text-text-primary" data-testid="segments-table">
+      <div ref={gridBoxRef} className="flex-1 min-h-0">
+        <SpreadsheetGrid<PlanSegment>
+          columns={columns}
+          rows={segments}
+          // Segments have no id of their own - position IS the identity (segment k spans
+          // boundary k -> k + 1), and the store keeps the list exactly `waypoints.length + 1`
+          // long.
+          rowKey={(_seg, index) => index}
+          testIdPrefix="segment"
+          // The speed cell keeps its pre-grid test id, which is what the e2e specs and the
+          // inherited-speed marker next to it are addressed by.
+          cellTestId={(_seg, index, colKey) =>
+            colKey === SEG_COL.speed ? `segment-speed-${index}` : undefined
+          }
+          locale={getNumberFormatLocale()}
+          height={height}
+          onEdit={onEdit}
+          onBatchEdit={applyEdits}
+          labels={labels}
+        />
+      </div>
       {!hasRig && (
-        <p className="text-xs opacity-60 mt-2" data-testid="segments-no-rig-hint">
+        <p className="text-xs opacity-60 mt-2 shrink-0" data-testid="segments-no-rig-hint">
           {t('gasPanel.segments.noRigHint')}
         </p>
       )}

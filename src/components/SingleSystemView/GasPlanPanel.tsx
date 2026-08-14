@@ -317,7 +317,7 @@ export function GasPlanPanel() {
   };
   const confirmPushy = () => {
     if (!pendingPushy) return;
-    // Re-check: the rig may have lost stages while the ack panel was open (the Equipment tab is
+    // Re-check: the rig may have lost stages while the ack panel was open (the Cylinders tab is
     // visible alongside it). Only apply if the rig still satisfies the strategy - otherwise we'd
     // show a staged strategy selected on a stage-short rig while the backend falls back to
     // All-thirds (broken UI/backend parity). Insufficient → dismiss without applying.

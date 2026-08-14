@@ -1,5 +1,5 @@
 /**
- * Component test (#403) - the Equipment tab's tank list, now hosted on SpreadsheetGrid.
+ * Component test (#403) - the Cylinders tab's tank list, now hosted on SpreadsheetGrid.
  *
  * The pure rules (usable clamp, role parsing, boolean tokens, no-op identity) are pinned in
  * `__tests__/cylindersGridEdits.test.ts`; what is covered here is the wiring only the real
