@@ -7,7 +7,7 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-08-10
+## [0.5.0] - 2026-08-13
 
 The first release with builds for all three platforms. The headline additions are
 **Plan mode**, a gas- and range-aware dive planner built on the survey graph, and
@@ -61,6 +61,7 @@ between divers.
 - **Dual-distance ruler** - the measure tool reports both the **direct** 3D straight line and the **along-cave-line** distance following the surveyed passage. Endpoints snap to a station or an exact point on a shot. Endpoints in disconnected parts of the cave report no along-line distance rather than a wrong one ([#26](https://github.com/Stalagmight/Stalagmight/issues/26))
 - **Distance gradient overlay** - **Display -> Color -> Distance** colors the survey gold to purple by along-cave distance from the entrance, greys out anything unreachable, and shows a legend. Click a station or shot to re-root the gradient anywhere ([#34](https://github.com/Stalagmight/Stalagmight/issues/34))
 - **Declination is recorded per section, and applied only where it is needed.** The bearings you measured are always stored exactly as you recorded them; each section separately declares whether they were sighted against true or magnetic north and what the correction between the two is, and that correction is applied only when the map or an export needs true north. Compass and Walls imports keep the original readings and record the correction on the section rather than baking it into the numbers, and an Ariane import looks the historical declination up for you when the file carries a date, saying on the receipt when it could not. Exporting a survey whose sections disagree, to a format that has only one north, rewrites every bearing to true north when each section's correction is on record; when one is not, the readings go out exactly as measured and the export says so rather than guessing ([#438](https://github.com/Stalagmight/Stalagmight/issues/438))
+- **A zero datum can sit below the surface** - the zero-datum dialog gains a "Depth below surface" field, so a datum measured under water no longer has to pretend it sits at the water line ([#524](https://github.com/Stalagmight/Stalagmight/issues/524))
 
 #### Import, export and platforms
 
@@ -73,7 +74,6 @@ between divers.
 - **Double-clicking a survey file opens it.** A `.stalx`, `.tml` or `.tmlu` opened from Finder or Explorer launches Stalagmight, or focuses the copy already running, and opens the file - asking first if that would replace a project with unsaved work ([#424](https://github.com/Stalagmight/Stalagmight/issues/424))
 - **The first import into an empty project now offers to place the parts of the survey that float free**, and says so when it has nothing to suggest. A first import previously got no placement suggestions at all, even from a file that plainly contained both anchored and disconnected pieces ([#446](https://github.com/Stalagmight/Stalagmight/issues/446))
 - **The Ariane import dialog is a wizard now** - importing a `.tml`/`.tmlu` shows a map preview of the file's sections, per-section include toggles, and a placement step - the origin, the file's own coordinates, or coordinates you type - instead of silently placing the survey at the origin. The map pane's width can be dragged, is shared with the mNemo wizard, and is remembered ([#425](https://github.com/Stalagmight/Stalagmight/issues/425), [#404](https://github.com/Stalagmight/Stalagmight/issues/404))
-- **A zero datum can sit below the surface** - the zero-datum dialog gains a "Depth below surface" field, so a datum measured under water no longer has to pretend it sits at the water line ([#524](https://github.com/Stalagmight/Stalagmight/issues/524))
 
 #### Interface
 
@@ -260,10 +260,9 @@ between divers.
 
 - **The notice before an Ariane export no longer claims that sections will be discarded.** Every section is written; the notice now says only that the file will not be georeferenced, and points at **Set Zero Datum** on a station if that is not what you want ([#411](https://github.com/Stalagmight/Stalagmight/issues/411))
 - **Ariane opened an exported `.tml` to a blank map.** A section whose parent station was itself another section's merge station could be written with no parent at all, because parent links were resolved in section-storage order while the link tree is not ordered. Ariane reads a parentless non-entrance shot as a second entrance, abandons the loop solve, and draws nothing - the data table still filled, so the survey looked present but invisible. Only surveys that had both such a section *and* a loop closure were affected. Sections that genuinely stand alone are now written as their own entrance, the way Ariane stores them, and an export that would still leave a shot unrooted now fails instead of writing a file that cannot be drawn.
-- **A survey with more than one entrance placed the extra ones at latitude 0, longitude 0.** Only the first entrance received the project's GPS anchor, so any other one landed roughly 9000 km away in the Atlantic and zooming to fit showed half a hemisphere. Every entrance now carries the anchor, which is how Ariane writes them.
+- **A survey with more than one entrance placed the extra ones at latitude 0, longitude 0.** Only the first entrance received the project's GPS anchor, so any other one landed roughly 9000 km away in the Atlantic and zooming to fit showed half a hemisphere. Every entrance now carries an anchor - its own section's datum where it has one, the project's otherwise - which is how Ariane writes them. Anchors stay put across repeated export/import cycles, and an export refused for unrooted sections lists a bounded, cleaned sample of them instead of an unbounded dump ([#378](https://github.com/Stalagmight/Stalagmight/issues/378))
 - **A survey that goes out to Ariane and comes back now keeps each shot's own identity** instead of every shot being issued a new one each round trip. It matters if you work on the same survey in both applications: a shot you split in Stalagmight keeps its identity in the half that used to lose it ([#423](https://github.com/Stalagmight/Stalagmight/issues/423))
 - **A shot comment no longer turns into a station comment on re-import.** A shot comment with no station comment beside it was written without the invisible marker that names its side, so a default re-import filed it on the station. Every shot comment now carries its marker ([#564](https://github.com/Stalagmight/Stalagmight/issues/564))
-- **Each entrance is anchored with its own coordinates.** A survey with several entrances wrote the project's single GPS anchor on all of them, so every entrance but one was slightly out of place; each entrance now carries its own section's datum. Anchors also stay put across repeated export/import cycles, and an export refused for unrooted sections lists a bounded, cleaned sample of them instead of an unbounded dump ([#378](https://github.com/Stalagmight/Stalagmight/issues/378))
 
 
 #### Ariane import
