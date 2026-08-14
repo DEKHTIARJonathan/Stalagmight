@@ -37,8 +37,11 @@ export function planGridHeight(rowCount: number, maxRows: number): number {
  * component tests keep the deterministic content-sized height they had while
  * the cylinders grid shared its tab with the DPV editor.
  *
- * Attach `ref` to the element whose CONTENT box is the grid's room - i.e. the
- * `flex-1 min-h-0` box wrapping the grid, not a padded ancestor.
+ * Attach `ref` to the element whose CONTENT box is the grid's room: the box that
+ * directly wraps the grid and has no padding of its own (the tab body itself for
+ * the Cylinders grid, the `flex-1 min-h-0` box above the no-rig hint for the
+ * Segments one) - never a padded ancestor, whose content box is smaller than the
+ * room the grid actually gets.
  */
 export function usePlanGridFillHeight(fallbackHeight: number): {
   ref: MutableRefObject<HTMLDivElement | null>;

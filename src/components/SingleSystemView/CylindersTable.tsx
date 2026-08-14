@@ -153,48 +153,55 @@ export function CylindersTable() {
   );
 
   return (
-    <div className="h-full flex flex-col p-3 text-sm text-text-primary" data-testid="cylinders-table">
-      <div ref={gridBoxRef} className="flex-1 min-h-0">
-        <SpreadsheetGrid<Cylinder>
-          columns={columns}
-          rows={cylinders}
-          // Cylinders have no id of their own, and the engine's per-row outputs
-          // (`cylinder_usable_bars`) are aligned to this same position.
-          rowKey={(_cyl, index) => index}
-          testIdPrefix={GAS_CYLINDER_GRID_PREFIX}
-          // The fill and usable cells keep their pre-grid test ids. The usable one names which
-          // MODE the row is in, so a computed row can never be mistaken for an editable one.
-          cellTestId={(cyl, index, colKey) =>
-            colKey === CYL_COL.fill
-              ? `gas-cylinder-fill-${index}`
-              : colKey === CYL_COL.usable
-                ? isUsableEditable(cyl, isFree)
-                  ? `gas-cylinder-usable-${index}`
-                  : `gas-cylinder-usable-readonly-${index}`
-                : undefined
-          }
-          // The role cell's Select covers the whole cell (see `cylindersGridColumns`),
-          // which it can only do from `position: absolute` - so the cell has to be its
-          // containing block. Safe on stacking order: the cell keeps `z-index: auto`,
-          // while the sticky header (z-30), the row gutter (z-20), every selection
-          // overlay (z>=3) and the cell editor (z-20) carry an explicit z-index above it.
-          cellClassName={(_cyl, _index, colKey) =>
-            colKey === CYL_COL.role ? 'relative' : undefined
-          }
-          locale={locale}
-          height={height}
-          onEdit={onEdit}
-          onBatchEdit={applyEdits}
-          onDeleteRows={removeRows}
-          // Replaces the row `title`/`data-enabled` the <tr> carried: a row that doesn't count
-          // toward the penetration budget reads as dimmed, and the reason is the Tank cell's
-          // tooltip.
-          rowClassName={(cyl) =>
-            !cyl.enabled || !isBudgetRole(cyl.role) ? 'opacity-50' : undefined
-          }
-          labels={labels}
-        />
-      </div>
+    // Flush with the tab body on every edge, the way the Survey data table hosts its
+    // grid (`DataTable`'s `flex-1 overflow-hidden` box): a padding frame here just
+    // shrank the table inside the panel the diver sized on purpose. `overflow-hidden`
+    // for the same reason DataTable's box has it - the grid scrolls internally, and a
+    // second scroller around it would double the scrollbars.
+    <div
+      ref={gridBoxRef}
+      className="h-full overflow-hidden text-sm text-text-primary"
+      data-testid="cylinders-table"
+    >
+      <SpreadsheetGrid<Cylinder>
+        columns={columns}
+        rows={cylinders}
+        // Cylinders have no id of their own, and the engine's per-row outputs
+        // (`cylinder_usable_bars`) are aligned to this same position.
+        rowKey={(_cyl, index) => index}
+        testIdPrefix={GAS_CYLINDER_GRID_PREFIX}
+        // The fill and usable cells keep their pre-grid test ids. The usable one names which
+        // MODE the row is in, so a computed row can never be mistaken for an editable one.
+        cellTestId={(cyl, index, colKey) =>
+          colKey === CYL_COL.fill
+            ? `gas-cylinder-fill-${index}`
+            : colKey === CYL_COL.usable
+              ? isUsableEditable(cyl, isFree)
+                ? `gas-cylinder-usable-${index}`
+                : `gas-cylinder-usable-readonly-${index}`
+              : undefined
+        }
+        // The role cell's Select covers the whole cell (see `cylindersGridColumns`),
+        // which it can only do from `position: absolute` - so the cell has to be its
+        // containing block. Safe on stacking order: the cell keeps `z-index: auto`,
+        // while the sticky header (z-30), the row gutter (z-20), every selection
+        // overlay (z>=3) and the cell editor (z-20) carry an explicit z-index above it.
+        cellClassName={(_cyl, _index, colKey) =>
+          colKey === CYL_COL.role ? 'relative' : undefined
+        }
+        locale={locale}
+        height={height}
+        onEdit={onEdit}
+        onBatchEdit={applyEdits}
+        onDeleteRows={removeRows}
+        // Replaces the row `title`/`data-enabled` the <tr> carried: a row that doesn't count
+        // toward the penetration budget reads as dimmed, and the reason is the Tank cell's
+        // tooltip.
+        rowClassName={(cyl) =>
+          !cyl.enabled || !isBudgetRole(cyl.role) ? 'opacity-50' : undefined
+        }
+        labels={labels}
+      />
     </div>
   );
 }

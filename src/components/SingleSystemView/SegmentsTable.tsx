@@ -134,10 +134,13 @@ export function SegmentsTable() {
   );
 
   return (
-    // No outer `overflow-auto`: the grid owns its own scroller, and a second one around it
-    // would double up the scrollbars.
-    <div className="h-full flex flex-col p-3 text-sm text-text-primary" data-testid="segments-table">
-      <div ref={gridBoxRef} className="flex-1 min-h-0">
+    // Flush with the tab body, the way the Survey data table hosts its grid: the only
+    // thing between the grid and the panel edge is the no-rig hint, which is a compact
+    // strip along the bottom rather than a padding frame around everything.
+    <div className="h-full flex flex-col text-sm text-text-primary" data-testid="segments-table">
+      {/* `overflow-hidden` for DataTable's reason: the grid scrolls internally, and a
+          second scroller around it would double the scrollbars. */}
+      <div ref={gridBoxRef} className="flex-1 min-h-0 overflow-hidden">
         <SpreadsheetGrid<PlanSegment>
           columns={columns}
           rows={segments}
@@ -159,7 +162,10 @@ export function SegmentsTable() {
         />
       </div>
       {!hasRig && (
-        <p className="text-xs opacity-60 mt-2 shrink-0" data-testid="segments-no-rig-hint">
+        <p
+          className="shrink-0 border-t border-border px-3 py-1 text-xs opacity-60"
+          data-testid="segments-no-rig-hint"
+        >
           {t('gasPanel.segments.noRigHint')}
         </p>
       )}
