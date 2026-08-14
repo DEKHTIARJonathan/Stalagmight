@@ -205,16 +205,27 @@ export function buildCylinderColumns(ctx: CylinderColumnContext): GridColumn<Cyl
         trigger?.click();
       },
       parse: (raw, cyl) => parseCylRole(raw, cyl.role, roleLabels),
+      // The cell IS the control: `variant="cell"` strips the Select's box, and the
+      // wrapper covers the WHOLE cell so every pixel of it opens the list - including
+      // the grid's own `px-2` padding, which the Select re-applies inside the trigger
+      // so the role label lands at the same x-offset as the Tank label beside it and
+      // the chevron sits at the cell's right edge.
+      //
+      // `absolute inset-0` is the only way to reach that padding: the grid wraps a
+      // cell's content in an `overflow-hidden` div inset by the padding, which clips a
+      // negative-margin bleed (measured: 8px dead strip on each edge). Going
+      // out-of-flow escapes that clip and is bounded by the cell's own overflow
+      // instead. It needs the cell to be the containing block, so `CylindersTable`
+      // gives the role cell `position: relative` via `cellClassName` - the two go
+      // together.
       render: (cyl, index): ReactNode => (
-        <span
-          className="flex h-full w-full items-center"
-          ref={(el) => registerRoleTrigger(index, el)}
-        >
+        <span className="absolute inset-0 flex" ref={(el) => registerRoleTrigger(index, el)}>
           <Select
             value={cyl.role}
             onChange={(v) => onSetRole(index, v as CylRole)}
             options={roleOptions}
-            size="sm"
+            variant="cell"
+            className="min-w-0 flex-1"
             aria-label={t('gasPanel.tanks.roleAria', { tank: tankName(cyl) })}
             data-testid={`gas-cylinder-role-${index}`}
           />

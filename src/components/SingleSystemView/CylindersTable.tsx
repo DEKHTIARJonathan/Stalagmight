@@ -173,6 +173,14 @@ export function CylindersTable() {
                   : `gas-cylinder-usable-readonly-${index}`
                 : undefined
           }
+          // The role cell's Select covers the whole cell (see `cylindersGridColumns`),
+          // which it can only do from `position: absolute` - so the cell has to be its
+          // containing block. Safe on stacking order: the cell keeps `z-index: auto`,
+          // while the sticky header (z-30), the row gutter (z-20), every selection
+          // overlay (z>=3) and the cell editor (z-20) carry an explicit z-index above it.
+          cellClassName={(_cyl, _index, colKey) =>
+            colKey === CYL_COL.role ? 'relative' : undefined
+          }
           locale={locale}
           height={height}
           onEdit={onEdit}
