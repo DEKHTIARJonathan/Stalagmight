@@ -163,9 +163,19 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 - Reset to defaults per category
 
 ### 2.10 Updates & Telemetry
-- No auto-update mechanism
+- In-app auto-update: on launch (once per process, after a short delay) and on demand
+  from the About dialog, the app checks a minisign-signed manifest published on GitHub
+  Releases and offers to download + install a newer build. Two user-selectable tracks -
+  `stable` (tagged releases, the default) and `weekly` (the Monday prerelease builds) -
+  each resolve to their own manifest; the launch check can be turned off in
+  Settings > General, and the manual "Check for updates" button in About always works
+  regardless of that setting. The download is signature-verified before anything is
+  written to disk, and installing routes through the same unsaved-changes / SpeleoDB
+  write-lock quit guards as any other app close - it is never a silent restart.
 - Opt-in telemetry only
-- No external network calls except tile servers, SpeleoDB sync, and opt-in telemetry
+- No external network calls except tile servers, SpeleoDB sync, the update
+  manifest/artifact fetch (GitHub Releases; disableable via the update-check setting),
+  and opt-in telemetry
 
 ### 2.11 Recovery
 - Auto-save only (no crash recovery dialog)

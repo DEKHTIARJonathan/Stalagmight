@@ -404,15 +404,21 @@ not because anything consumes them yet. When `UPDATER_ON` is true, the
 above; both are skipped while the pubkey is pending, since no `.sig` exists
 to require.
 
-**The updater plugin is not wired up yet.** Once the real pubkey and its
-GitHub-hosted `latest-stable.json` endpoint are committed to
-`plugins.updater`, the plugin itself still needs registering in `lib.rs`
-before anything reads either value at runtime - that, generating and
-publishing `latest-stable.json`, and replacing the pubkey are later steps in
-the #579 arc. `scripts/check-updater-pubkey.mjs` (`pnpm lint:updater-pubkey`,
-gated in CI) is a tripwire for that commit: it passes trivially while
-`plugins.updater` is absent, and the day it lands, a placeholder, malformed
-base64, or a non-https/non-`github.com` endpoint fails the gate immediately.
+**The updater plugin is wired up, but still waiting on the real key.**
+`lib.rs` registers `tauri_plugin_updater` only when
+`commands::app_update::updater_configured()` finds a non-empty
+`plugins.updater.pubkey` in the checked-in `tauri.conf.json` - the plugin's
+own `Config` has a required `pubkey` with no `Default`, so registering it
+unconditionally before the key exists would fail `Builder::build()` and stop
+every build, released or local, from starting at all. Every `check_for_app_update`
+/ `download_app_update` / `install_app_update_and_restart` IPC command answers
+with a named "no update signing key" error under the same gate, so the
+Settings > General Updates section and About's manual check are present in
+every build but inert until the key lands. `scripts/check-updater-pubkey.mjs`
+(`pnpm lint:updater-pubkey`, gated in CI) is a tripwire for that commit: it
+passes trivially while `plugins.updater` is absent, and the day the real key
+lands, a placeholder, malformed base64, or a non-https/non-`github.com`
+endpoint fails the gate immediately.
 
 ### Keypair custody
 
@@ -451,6 +457,48 @@ inside `xcrun stapler validate`. A job-internal `MACOS-SIGNED` marker
 a downloadable release asset. Nothing consumes the marker's value yet - that
 lands with the updater-manifest generation step in a later PR of the #579
 arc, which will use it to decide whether the macOS build enters the manifest.
+
+### Local end-to-end updater test
+
+Exercises the whole check -> download -> verify -> install cycle against a
+throwaway key and a manifest served from `localhost`, without touching the
+real signing key or GitHub Releases. Everything below is local and
+disposable; none of it is committed.
+
+```bash
+# 1. A throwaway minisign keypair (never the real one).
+pnpm tauri signer generate -w /tmp/stalagmight-updater-test.key
+# Prints the public key; note it for step 2.
+
+# 2. Temporarily set plugins.updater.pubkey in src-tauri/tauri.conf.json to
+#    that public key - do not commit this. Then build with updater artifacts
+#    turned on, the same --config merge the release workflow uses:
+pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}' --debug
+
+# 3. Sign the resulting bundle with the throwaway private key (tauri build
+#    already did this automatically if TAURI_SIGNING_PRIVATE_KEY was
+#    exported before step 2; otherwise sign it explicitly):
+pnpm tauri signer sign -k /tmp/stalagmight-updater-test.key <path to the bundle>
+
+# 4. Hand-write a manifest next to the signed bundle, e.g. latest.json:
+#    { "version": "v9.9.9", "notes": "local test", "pub_date": "<RFC3339>",
+#      "platforms": { "<current-target-triple>": { "signature": "<.sig contents>",
+#      "url": "http://127.0.0.1:8000/<bundle filename>" } } }
+
+# 5. Serve the directory holding the manifest and the signed bundle:
+python3 -m http.server 8000
+
+# 6. Point a DEBUG build at it and run the app:
+STALAGMIGHT_UPDATE_URL=http://127.0.0.1:8000/latest.json ./scripts/dev.sh
+```
+
+`STALAGMIGHT_UPDATE_URL` (`UPDATE_URL_ENV` in `app_update.rs`) is honored
+verbatim only in a debug build - `cfg!(debug_assertions)` - which is exactly
+what makes this recipe work with a plain `http://127.0.0.1` URL; the same
+variable in a release build is restricted to an https `github.com` URL and
+would silently ignore this override (`is_trusted_manifest_url`). Use the
+Settings > General Updates section or About's "Check for updates" button in
+the running app to trigger the check once the server is up.
 
 ## Testing the release tooling
 
