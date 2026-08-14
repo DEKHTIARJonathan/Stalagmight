@@ -174,7 +174,11 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
   resolve to their own manifest. The launch check can be turned off in Settings >
   General; the manual "Check for updates" button in About and switching tracks both
   ignore that setting. Installing routes through the same unsaved-changes / SpeleoDB
-  write-lock quit guards as any other app close - it is never a silent restart.
+  write-lock quit guards as any other app close - it is never a silent restart. The
+  mechanism is present but INERT until the update signing key is committed
+  (`plugins.updater.pubkey` is absent today; see [releasing.md](releasing.md#update-artifacts-and-signing))
+  - every check refuses with a named error before it builds an endpoint at all, and
+  the network behavior above applies once that config lands.
 - Opt-in telemetry only
 - No external network calls except tile servers, the MapLibre stylesheet (unpkg.com)
   and glyph fonts (fonts.openmaptiles.org), SpeleoDB sync, the update manifest/artifact

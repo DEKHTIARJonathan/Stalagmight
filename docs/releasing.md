@@ -477,21 +477,29 @@ disposable; none of it is committed.
 pnpm tauri signer generate -w /tmp/stalagmight-updater-test.key
 # Prints the public key; note it for step 2.
 
-# 2. Temporarily set plugins.updater.pubkey in src-tauri/tauri.conf.json to
-#    that public key - do not commit this. Then build with updater artifacts
-#    turned on, the same --config merge the release workflow uses:
+# 2. Export the throwaway private key BEFORE building, not after: with
+#    createUpdaterArtifacts on, tauri-bundler signs each updater artifact as
+#    part of the `tauri build` invocation itself, so the key has to be in the
+#    environment DURING that step - signing afterward with `tauri signer
+#    sign` cannot retroactively produce the artifacts tauri-bundler skipped.
+export TAURI_SIGNING_PRIVATE_KEY=/tmp/stalagmight-updater-test.key
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=
+
+# 3. Temporarily set plugins.updater.pubkey in src-tauri/tauri.conf.json to
+#    the public key from step 1 - do not commit this. Then build with updater
+#    artifacts turned on, the same --config merge the release workflow uses:
 pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}' --debug
+# tauri-bundler signs the bundle automatically here, using the key exported
+# in step 2, and writes the matching *.sig next to it.
 
-# 3. Sign the resulting bundle with the throwaway private key (tauri build
-#    already did this automatically if TAURI_SIGNING_PRIVATE_KEY was
-#    exported before step 2; otherwise sign it explicitly). -f/--private-key-path
-#    loads the key FROM A FILE; -k/--private-key wants the key material as a
-#    string, so passing the same path there fails.
-pnpm tauri signer sign -f /tmp/stalagmight-updater-test.key <path to the bundle>
-
-# 4. Hand-write a manifest next to the signed bundle, e.g. latest.json:
+# 4. Hand-write a manifest next to the signed bundle, e.g. latest.json. The
+#    platforms key is Tauri's own OS-ARCH form (linux-x86_64, windows-x86_64,
+#    darwin-x86_64, darwin-aarch64 - see `updater::target()` in the plugin,
+#    `{os}-{arch}`), NOT a Rust target triple: a triple key does not match
+#    what the running app looks up, so `check_for_app_update` finds no entry
+#    for this platform and the recipe silently tests nothing.
 #    { "version": "v9.9.9", "notes": "local test", "pub_date": "<RFC3339>",
-#      "platforms": { "<current-target-triple>": { "signature": "<.sig contents>",
+#      "platforms": { "<os>-<arch>, e.g. linux-x86_64": { "signature": "<.sig contents>",
 #      "url": "http://127.0.0.1:8000/<bundle filename>" } } }
 
 # 5. Serve the directory holding the manifest and the signed bundle:
