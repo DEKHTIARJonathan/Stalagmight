@@ -471,6 +471,20 @@ has to act on once.
 
 ### How a manifest gets published
 
+Before anything is made public, a **"Preflight rolling updater release" step**
+runs early in the `release` job (right after "Determine updater enablement",
+well before `gh release create`): when `UPDATER_ON` is true and the tag
+matches either strict track shape (below), it confirms `gh release view
+updater` succeeds and fails loudly - naming this doc - if it does not. This
+has to happen *before* the tag's own release goes public: the "Publish
+updater manifest" step's own identical check (kept as a backup for the race
+where the release disappears in between) runs far too late to prevent the bad
+outcome. By the time it fires, `gh release create` has already made the
+versioned release public, so a missing/renamed `updater` release strands a
+now-public release with no manifest update, and a re-run cannot recover by
+re-running the whole job - `gh release create` refuses a tag that already
+exists.
+
 The `release` job's "Publish updater manifest" step (`.github/workflows/release.yml`)
 runs after `gh release create`, once the tag's own release and its artifacts
 exist. It:
@@ -478,12 +492,32 @@ exist. It:
 1. Skips, with an `::notice::`, when updater artifacts are CI-side disabled
    (no `plugins.updater.pubkey` yet - see [Update artifacts and
    signing](#update-artifacts-and-signing)).
-2. Derives the track from the tag: contains `-weekly.` -> `weekly`; matches
-   `^vX.Y.Z$` exactly -> `stable`; anything else (an `-rc*` candidate, or any
-   other suffix) touches **neither** manifest - the step logs `no manifest
-   for tag` and exits cleanly. **A release candidate is never offered to
-   updater clients on either track.**
-3. Reads the `MACOS-SIGNED` marker's captured value (see [Update artifacts
+2. Derives the track from the tag using the same **strict, anchored** shapes
+   the preflight step and the repoint workflow use - not a substring match:
+   `^v[0-9]+\.[0-9]+\.[0-9]+-weekly\.[0-9]{8}$` -> `weekly`;
+   `^v[0-9]+\.[0-9]+\.[0-9]+$` -> `stable`; anything else (an `-rc*`
+   candidate, or a malformed weekly-looking tag like `v0.5.1-weekly.oops`)
+   touches **neither** manifest - the step logs `no manifest for tag` and
+   exits cleanly. A `*-weekly.*` substring match once let a malformed tag
+   still clobber `latest-weekly.json`; the anchored regex is what closes
+   that. **A release candidate is never offered to updater clients on
+   either track.**
+3. Reconciles the manifest version against what was actually **built**,
+   before trusting the tag at all. Version-baking currently comes from
+   whatever the tree already said at build time (proper tag-driven
+   version-baking lands via `workflow_call` in a later PR), so a directly
+   pushed weekly tag can build a stale tree version while the tag claims a
+   newer one - a `0.5.0`-baked build published under a `0.5.1-weekly.<date>`
+   manifest would have updater clients see `0.5.1-weekly.<date>` as newer
+   than their installed `0.5.0`, download it, and relaunch the exact same
+   `0.5.0` build forever. The step parses the version baked into the
+   artifacts from their filenames (`Stalagmight_X.Y.Z_...` - the same
+   pattern the completeness check globs), asserts every artifact agrees, and
+   requires: for **weekly**, the tag's numeric base equals the artifact
+   version; for **stable**, the tag version equals the artifact version
+   exactly. Any mismatch is a named `::error::` and the step exits 1 rather
+   than publish a manifest that would loop clients on a stale build.
+4. Reads the `MACOS-SIGNED` marker's captured value (see [Update artifacts
    and signing](#update-artifacts-and-signing)) to decide `--include-darwin`
    - **only `developer-id` enters the manifest.** `adhoc` is excluded with a
      `::warning::`, never treated as a lesser-but-acceptable variant: an
@@ -495,10 +529,10 @@ exist. It:
      fails loudly rather than guessing - a silent default there would
      publish a manifest with no macOS entry, or the wrong one, on an
      otherwise-green run.
-4. Runs `scripts/gen-updater-manifest.mjs` against the job's own
+5. Runs `scripts/gen-updater-manifest.mjs` against the job's own
    `release-artifacts/` directory, reusing the same rendered `release-body.md`
    that `gh release create` already published as this release's notes.
-5. Uploads the result to the `updater` release as `latest-<track>.json`, with
+6. Uploads the result to the `updater` release as `latest-<track>.json`, with
    `--clobber` - each publish on a track fully replaces the previous manifest
    for that track.
 
