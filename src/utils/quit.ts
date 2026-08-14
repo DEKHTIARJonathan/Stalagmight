@@ -133,7 +133,20 @@ export async function requestUpdateRestart(): Promise<void> {
     purpose: 'arm the in-app update restart',
   });
   updateRestartArmed = true;
-  quitApp();
+  // Awaited here rather than delegating to `quitApp`, which is fire-and-forget:
+  // if the close is REFUSED (a revoked `core:window:allow-close` capability, an
+  // IPC failure) the guard chain never runs, so nothing downstream will ever
+  // consume the arm we just took - and the next ordinary close the user makes
+  // would find it still set and install an update they never asked to install.
+  // Both halves are released here, and the rejection is re-thrown so the caller
+  // can say the restart did not start.
+  try {
+    await getCurrentWindow().close();
+  } catch (err) {
+    abandonUpdateRestart();
+    console.error('[quit] window.close() failed:', err);
+    throw err;
+  }
 }
 
 /**

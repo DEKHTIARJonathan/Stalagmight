@@ -82,8 +82,18 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
   ...INITIAL_STATE,
 
   beginCheck: () => {
-    const seq = get().checkSeq + 1;
-    set({ status: 'checking', checkSeq: seq });
+    const { checkSeq, status } = get();
+    const seq = checkSeq + 1;
+    // `checking` replaces the status ONLY when there is nothing on screen to
+    // lose. A re-check while an update is already offered (or downloaded, or
+    // downloading) must not blank the banner on the way in: the reply will
+    // overwrite the status anyway if it lands, and if it never lands - the
+    // usual case, a background poll with no network - the user would have
+    // watched an actionable banner, and possibly a finished download, vanish
+    // for no reason they could see. It also means `checking` is a reliable
+    // signal that nothing was actionable, which is what `setCheckFailed` reads.
+    const actionable = status !== 'idle' && status !== 'error';
+    set(actionable ? { checkSeq: seq } : { status: 'checking', checkSeq: seq });
     return seq;
   },
   setUpToDate: (seq) => {
@@ -92,6 +102,15 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
   },
   setCheckFailed: (seq) => {
     if (get().checkSeq !== seq) return;
+    // A check that never reached the server knows nothing about the update we
+    // already found: the backend still holds the parked `Update` and, if it got
+    // that far, the verified bytes - it does not bump its generation on a failed
+    // check either. Dropping to idle here hid an actionable banner - including a
+    // finished "Restart to update" - on the strength of one network blip, with
+    // no way to get it back short of another successful check. `checking` is
+    // only ever the status when there was nothing actionable (see `beginCheck`),
+    // so this is exactly the "nothing to lose" case.
+    if (get().status !== 'checking') return;
     set({ status: 'idle', progress: null });
   },
   setAvailable: (seq, info) => {

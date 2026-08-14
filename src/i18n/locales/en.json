@@ -1721,6 +1721,7 @@
       "close": "Close",
       "channel": "Channel: {{channel}}",
       "track": "Update track: {{track}}",
+      "trackPending": "(unsaved change pending)",
       "checkUpdates": "Check for updates",
       "upToDate": "You're up to date on Stalagmight {{current}}",
       "updateAvailable": "You're on Stalagmight {{current}} - {{version}} is available, see the update banner",

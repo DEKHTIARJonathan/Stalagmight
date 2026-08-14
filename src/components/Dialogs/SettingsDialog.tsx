@@ -39,6 +39,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import { AboutMapImagery } from './AboutMapImagery';
 import { runAppUpdateCheck } from '../../hooks/useAppUpdate';
+import { buildDefaultUpdateTrack } from '../../utils/updateTrack';
 
 /**
  * Deep comparison of two config objects to detect changed field paths.
@@ -95,7 +96,11 @@ export function getCategoryDefaults(
 ): Partial<Config> {
   switch (category) {
     case 'general':
-      return { general: { ...defaultConfig.general } };
+      // `update_track` overridden, not taken from the snapshot: its default is
+      // a property of the BUILD. See `buildDefaultUpdateTrack`.
+      return {
+        general: { ...defaultConfig.general, update_track: buildDefaultUpdateTrack() },
+      };
     case 'units':
       return { units: { ...defaultConfig.units } };
     case 'gas':
@@ -430,8 +435,16 @@ export default function SettingsDialog() {
     available: string | null;
   } | null>(null);
   const handleCheckUpdates = useCallback(async () => {
+    const previous = checkUpdatesState;
     setCheckUpdatesState('checking');
     const outcome = await runAppUpdateCheck();
+    // A newer check (a track switch, a second press) already owns the store, so
+    // this reply was never applied to it. Rendering it anyway would put a line
+    // on screen that contradicts the banner - keep whatever was there before.
+    if (outcome.kind === 'stale') {
+      setCheckUpdatesState(previous === 'checking' ? 'idle' : previous);
+      return;
+    }
     if (outcome.kind === 'failed') {
       setCheckUpdatesState('failed');
       return;
@@ -441,7 +454,7 @@ export default function SettingsDialog() {
       available: outcome.kind === 'available' ? outcome.version : null,
     });
     setCheckUpdatesState(outcome.kind);
-  }, []);
+  }, [checkUpdatesState]);
 
   // Initialize local config from store
   useEffect(() => {
@@ -879,10 +892,21 @@ export default function SettingsDialog() {
               {t('dialogs.about.channel', { channel: __APP_CHANNEL__ })}
             </p>
           )}
+          {/* The PERSISTED track, not the staged `localConfig` one. The check
+              button below runs a backend command that reads the config from
+              disk, so showing the staged value made the line disagree with the
+              behaviour it sits next to: stage Weekly, do not Save, press Check,
+              and the label said Weekly while the query went to Stable. A staged
+              change is called out instead of silently displayed. */}
           <p className="text-xs text-text-secondary" data-testid="about-update-track">
             {t('dialogs.about.track', {
-              track: t(`settings.general.updateTrack.options.${localConfig?.general.update_track ?? 'stable'}`),
+              track: t(`settings.general.updateTrack.options.${config?.general.update_track ?? 'stable'}`),
             })}
+            {localConfig && config && localConfig.general.update_track !== config.general.update_track && (
+              <span className="ml-1 text-warning" data-testid="about-update-track-pending">
+                {t('dialogs.about.trackPending')}
+              </span>
+            )}
           </p>
           <p>
             <Button

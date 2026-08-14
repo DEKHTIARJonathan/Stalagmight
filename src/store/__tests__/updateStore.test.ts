@@ -41,12 +41,14 @@ describe('updateStore transitions', () => {
     expect(s.progress).toBeNull();
   });
 
-  it('setCheckFailed goes idle without touching info', () => {
-    seedAvailable();
+  // A failed check from an IDLE store is the plain case; the cases where
+  // something actionable is already on screen are pinned in the
+  // "a failed re-check" block below (they used to go idle, which was the bug).
+  it('setCheckFailed goes idle when nothing was on offer', () => {
     useUpdateStore.getState().setCheckFailed(check());
     const s = useUpdateStore.getState();
     expect(s.status).toBe('idle');
-    expect(s.info).toEqual(INFO);
+    expect(s.info).toBeNull();
   });
 
   it('setAvailable -> available with info', () => {
@@ -115,6 +117,46 @@ describe('a check reply that has been overtaken is dropped', () => {
     useUpdateStore.getState().setAvailable(fresh, INFO);
     useUpdateStore.getState().setUpToDate(stale);
 
+    const s = useUpdateStore.getState();
+    expect(s.status).toBe('available');
+    expect(s.info).toEqual(INFO);
+  });
+
+  /**
+   * [review] A failed RE-check dropped an actionable banner to idle even though
+   * the backend's parked Update - and any completed download - was untouched: a
+   * check that never reached the server does not bump the generation either. A
+   * finished "Restart to update" vanished on one network blip, unrecoverable
+   * short of another successful check.
+   */
+  it('a failed re-check leaves an available banner alone', () => {
+    seedAvailable();
+    useUpdateStore.getState().setCheckFailed(check());
+
+    const s = useUpdateStore.getState();
+    expect(s.status).toBe('available');
+    expect(s.info).toEqual(INFO);
+  });
+
+  it('a failed re-check leaves a FINISHED download alone', () => {
+    seedAvailable();
+    useUpdateStore.getState().startDownloading(INFO.version);
+    useUpdateStore.getState().setReady(INFO.version);
+
+    useUpdateStore.getState().setCheckFailed(check());
+
+    expect(useUpdateStore.getState().status).toBe('ready');
+  });
+
+  it('a failed check with nothing to lose still goes idle', () => {
+    useUpdateStore.getState().setCheckFailed(check());
+    expect(useUpdateStore.getState().status).toBe('idle');
+  });
+
+  /** ...and the "checking" state itself must not blank the banner on the way in. */
+  it('beginCheck does not blank an actionable banner', () => {
+    seedAvailable();
+    check();
     const s = useUpdateStore.getState();
     expect(s.status).toBe('available');
     expect(s.info).toEqual(INFO);

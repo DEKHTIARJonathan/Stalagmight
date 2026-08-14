@@ -17,7 +17,7 @@ vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
 const listenMock = vi.hoisted(() => vi.fn(async () => vi.fn()));
 vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }));
 
-import { useAppUpdate, resetAppUpdateLaunchCheckForTests } from '../useAppUpdate';
+import { useAppUpdate, resetAppUpdateLaunchCheckForTests, runAppUpdateCheck } from '../useAppUpdate';
 import { useProjectStore } from '../../store/projectStore';
 import { useUpdateStore } from '../../store/updateStore';
 import { defaultConfig } from '../../types/config';
@@ -151,6 +151,50 @@ describe('the check result reaches the store', () => {
     const s = useUpdateStore.getState();
     expect(s.status).toBe('available');
     expect(s.info).toEqual({ version: '1.2.3', notesUrl: 'https://notes' });
+  });
+
+  /**
+   * [review] A check overtaken by a newer one must tell its CALLER so, not hand
+   * back a result the store already refused. About renders what it is given, so
+   * returning the stale answer put a line on screen contradicting the banner
+   * the newer check produced.
+   */
+  it('reports a check the store no longer owns as stale', async () => {
+    let release: ((v: unknown) => void) | undefined;
+    invokeIpcMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    const inFlight = runAppUpdateCheck();
+    // A newer check takes ownership while the first is still waiting.
+    useUpdateStore.getState().beginCheck();
+    release?.({
+      status: { kind: 'available', version: '1.2.3', notes_url: 'https://n' },
+      current_version: '0.5.0',
+    });
+
+    await expect(inFlight).resolves.toEqual({ kind: 'stale' });
+    // ...and it wrote nothing.
+    expect(useUpdateStore.getState().info).toBeNull();
+  });
+
+  it('reports a stale FAILURE as stale rather than failed', async () => {
+    let reject: ((e: unknown) => void) | undefined;
+    invokeIpcMock.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, rej) => {
+          reject = rej;
+        }),
+    );
+
+    const inFlight = runAppUpdateCheck();
+    useUpdateStore.getState().beginCheck();
+    reject?.(new Error('offline'));
+
+    await expect(inFlight).resolves.toEqual({ kind: 'stale' });
   });
 
   /** A failed background check is log-only: never a toast, never a banner. */

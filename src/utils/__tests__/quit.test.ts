@@ -343,6 +343,28 @@ describe('the update-restart arm (#579)', () => {
   });
 
   /**
+   * [review] The arm was already taken when the close was requested, so a
+   * REFUSED close (a revoked `core:window:allow-close` capability, an IPC
+   * failure) left it set with no guard chain coming to consume it - and the
+   * next ordinary quit the user made installed the update instead of quitting,
+   * without them ever pressing Restart.
+   */
+  it('releases both arms when the window refuses to close', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    closeMock.mockRejectedValueOnce(new Error('close denied'));
+
+    await expect(requestUpdateRestart()).rejects.toThrow('close denied');
+
+    expect(consumeUpdateRestartArmed()).toBe(false);
+    expect(invokeIpcMock).toHaveBeenCalledWith(
+      'unarm_app_update_restart',
+      undefined,
+      expect.anything(),
+    );
+    err.mockRestore();
+  });
+
+  /**
    * [review] It used to be a 10-second TTL, and this test used to assert the
    * expiry as if it were the desired behaviour. It is not: the arm spans the
    * unsaved-changes dialog, which is HUMAN time - reading it, saving, then

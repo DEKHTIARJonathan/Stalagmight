@@ -35,6 +35,14 @@ export function resetAppUpdateLaunchCheckForTests(): void {
 export type AppUpdateCheckOutcome =
   | { kind: 'up_to_date'; currentVersion: string }
   | { kind: 'available'; currentVersion: string; version: string }
+  /**
+   * A newer check took ownership of the store while this one was in flight, so
+   * this reply was never applied. Distinct from `failed`: nothing went wrong,
+   * this answer is simply not the current one - and a caller that RENDERS the
+   * answer (About) must not show it, or its text would contradict the banner
+   * the newer check produced.
+   */
+  | { kind: 'stale' }
   | { kind: 'failed' };
 
 /**
@@ -58,6 +66,10 @@ export async function runAppUpdateCheck(): Promise<AppUpdateCheckOutcome> {
     const result = await invokeIpc<AppUpdateCheck>('check_for_app_update', undefined, {
       purpose: 'check for app update',
     });
+    // The setters drop a stale write on their own; this is the CALLER's half of
+    // the same fact. Returning the answer anyway let About render a result the
+    // store had already rejected, so its line and the banner disagreed.
+    if (useUpdateStore.getState().checkSeq !== seq) return { kind: 'stale' };
     if (result.status.kind === 'available') {
       const { version, notes_url: notesUrl } = result.status;
       useUpdateStore.getState().setAvailable(seq, { version, notesUrl });
@@ -67,6 +79,7 @@ export async function runAppUpdateCheck(): Promise<AppUpdateCheckOutcome> {
     return { kind: 'up_to_date', currentVersion: result.current_version };
   } catch (e) {
     debugLog('[useAppUpdate] check failed:', e);
+    if (useUpdateStore.getState().checkSeq !== seq) return { kind: 'stale' };
     useUpdateStore.getState().setCheckFailed(seq);
     return { kind: 'failed' };
   }
