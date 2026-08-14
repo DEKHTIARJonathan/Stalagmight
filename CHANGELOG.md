@@ -7,21 +7,7 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
-### Added
-
-- **A long press opens the data-table grid's context menu** ([#338](https://github.com/Stalagmight/Stalagmight/issues/338))
-
-### Fixed
-
-- **Project depth statistics reported a made-up range** - the min/max depth in the project-statistics IPC payload was a per-section walk of depth *changes* seeded at zero: a survey that never leaves 30-35 m came through as 0-5 m, and two sections at different depths cancelled instead of combining. No screen displayed these two numbers (the panels compute their range from station depths directly), but any consumer of the payload would have disagreed with every depth shown in the app. The payload now carries the real station depth range ([#481](https://github.com/Stalagmight/Stalagmight/issues/481))
-- **A two-finger pinch on Global View zooms without twisting the plan** ([#338](https://github.com/Stalagmight/Stalagmight/issues/338))
-- **An unreadable edit history is bounded, discarded and reported in a banner**, instead of failing silently ([#473](https://github.com/Stalagmight/Stalagmight/issues/473))
-- **<kbd>Ctrl+=</kbd>, <kbd>Ctrl+-</kbd> and <kbd>Ctrl+0</kbd> are enforced as reserved shortcuts**, not just displayed as such, and the sections-row tooltip says a double-click zooms ([#319](https://github.com/Stalagmight/Stalagmight/issues/319))
-- **A `.tml`'s per-shot trip metadata now cuts sections instead of collapsing them** ([#427](https://github.com/Stalagmight/Stalagmight/issues/427))
-- **Compass import preview counts are exact**, and the DMP unemitted-reachable warning no longer repeats ([#437](https://github.com/Stalagmight/Stalagmight/issues/437), [#535](https://github.com/Stalagmight/Stalagmight/issues/535))
-- **The orientation tour resumes at its remembered step** instead of restarting ([#368](https://github.com/Stalagmight/Stalagmight/issues/368))
-
-## [0.5.0] - 2026-08-10
+## [0.5.0] - 2026-08-13
 
 The first release with builds for all three platforms. The headline additions are
 **Plan mode**, a gas- and range-aware dive planner built on the survey graph, and
@@ -75,6 +61,7 @@ between divers.
 - **Dual-distance ruler** - the measure tool reports both the **direct** 3D straight line and the **along-cave-line** distance following the surveyed passage. Endpoints snap to a station or an exact point on a shot. Endpoints in disconnected parts of the cave report no along-line distance rather than a wrong one ([#26](https://github.com/Stalagmight/Stalagmight/issues/26))
 - **Distance gradient overlay** - **Display -> Color -> Distance** colors the survey gold to purple by along-cave distance from the entrance, greys out anything unreachable, and shows a legend. Click a station or shot to re-root the gradient anywhere ([#34](https://github.com/Stalagmight/Stalagmight/issues/34))
 - **Declination is recorded per section, and applied only where it is needed.** The bearings you measured are always stored exactly as you recorded them; each section separately declares whether they were sighted against true or magnetic north and what the correction between the two is, and that correction is applied only when the map or an export needs true north. Compass and Walls imports keep the original readings and record the correction on the section rather than baking it into the numbers, and an Ariane import looks the historical declination up for you when the file carries a date, saying on the receipt when it could not. Exporting a survey whose sections disagree, to a format that has only one north, rewrites every bearing to true north when each section's correction is on record; when one is not, the readings go out exactly as measured and the export says so rather than guessing ([#438](https://github.com/Stalagmight/Stalagmight/issues/438))
+- **A zero datum can sit below the surface** - the zero-datum dialog gains a "Depth below surface" field, so a datum measured under water no longer has to pretend it sits at the water line ([#524](https://github.com/Stalagmight/Stalagmight/issues/524))
 
 #### Import, export and platforms
 
@@ -86,6 +73,7 @@ between divers.
 - **Every import now ends with a receipt.** After a Compass, Walls, GPX, Ariane or mNemo import, a summary says what was brought in - sections, shots and loop closures created - together with any warning the converter raised, which previously went to the log and was never shown. Trying to import into an open project offers to close it and carry on in one step instead of telling you to close it yourself first, and the welcome screen now says plainly that opening or dropping a file never modifies the original on disk ([#391](https://github.com/Stalagmight/Stalagmight/issues/391))
 - **Double-clicking a survey file opens it.** A `.stalx`, `.tml` or `.tmlu` opened from Finder or Explorer launches Stalagmight, or focuses the copy already running, and opens the file - asking first if that would replace a project with unsaved work ([#424](https://github.com/Stalagmight/Stalagmight/issues/424))
 - **The first import into an empty project now offers to place the parts of the survey that float free**, and says so when it has nothing to suggest. A first import previously got no placement suggestions at all, even from a file that plainly contained both anchored and disconnected pieces ([#446](https://github.com/Stalagmight/Stalagmight/issues/446))
+- **The Ariane import dialog is a wizard now** - importing a `.tml`/`.tmlu` shows a map preview of the file's sections, per-section include toggles, and a placement step - the origin, the file's own coordinates, or coordinates you type - instead of silently placing the survey at the origin. The map pane's width can be dragged, is shared with the mNemo wizard, and is remembered ([#425](https://github.com/Stalagmight/Stalagmight/issues/425), [#404](https://github.com/Stalagmight/Stalagmight/issues/404))
 
 #### Interface
 
@@ -96,6 +84,7 @@ between divers.
 - **The Move tools now say how they work.** A hint at the top of the map reads "Click a station to pick it up" (or shot, per tool) while a move tool is selected, switching to "Click to drop it here. Esc to cancel." once something is picked up - the tools are click-to-pick-up, not press-and-drag, and nothing said so before
 - **A Debug submenu in the project hamburger menu with four independent overlay toggles: Dev Stats, Memory Stats, Map Stats, and Zoom Stats.** All off by default. Dev Stats shows frame rate and the render-pipeline profile plus the MapLibre debug-layer toggles; Map Stats shows map/tile load state, WebGL info, tile-fetch and cache stats; Zoom Stats shows the current zoom level, the last zoom gesture's performance, and wheel-chain diagnostics (previously a separate overlay left on screen at all times in dev builds); Memory Stats reveals the existing backend/frontend memory probe panel. Previously these all lived behind a single "Dev Stats" toggle
 - **Entrance elevation is visible and editable in Project Settings.** Until now it could only arrive from an imported file, with no way to see it or correct it if the file recorded the wrong value ([#465](https://github.com/Stalagmight/Stalagmight/issues/465))
+- **A long press opens the data-table grid's context menu** ([#338](https://github.com/Stalagmight/Stalagmight/issues/338))
 
 ### Changed
 
@@ -130,6 +119,8 @@ between divers.
 - **The two geometry views are renamed to Raw Data View and Closures Computed View**, from Measured and Closure-adjusted, and both carry an open or closed padlock so it is clear at a glance which one you can edit in ([#408](https://github.com/Stalagmight/Stalagmight/issues/408))
 - **Every remaining dropdown uses the app's own control** rather than the operating system's, so they all look alike and open in the right place inside a scrolling dialog
 - **Opening a project from the recents list goes through the same checks as opening a file from anywhere else**, and accepts project files only, so a stale or hand-edited entry pointing at something else can no longer be opened by mistake. A message that could print your full file path, home folder and username included, for certain unsupported files no longer does ([#450](https://github.com/Stalagmight/Stalagmight/issues/450))
+- **The import wizards use their space better** - the map preview fills its pane instead of holding a centred square, the divider between the panes can be moved from the keyboard, the suggestion step's section settings fold away until needed, and the placement buttons stay visible on a short window ([#567](https://github.com/Stalagmight/Stalagmight/issues/567))
+- **Map drawing does less work per frame** - the WebGL layers look up their shader handles once when a program links instead of on every frame ([#339](https://github.com/Stalagmight/Stalagmight/issues/339))
 
 ### Removed
 
@@ -162,6 +153,9 @@ between divers.
 - **Removing the station a survey's coordinates were anchored to silently moved everything** - map, data table and any export - by however far that anchor had shifted things. Every station keeps its real position now; only which station counts as home changes. The same fix covers adding the very first anchor to a survey made of several disconnected pieces, which could jump one piece relative to the others ([#469](https://github.com/Stalagmight/Stalagmight/issues/469))
 - **Warnings you had already dismissed could come back on the next save** of a project made by an older version, because the file's own record of which one-time upgrades it had been through could be wrong. A save no longer takes the file's word for it ([#485](https://github.com/Stalagmight/Stalagmight/issues/485))
 - **A save could rebuild the file with your list of ignored warnings erased, and say nothing about it.** Any difficulty reading that list counted as "there is no list" - including a lock briefly held by something else, an unexpected value in a single cell, or an older file shape - so the warnings you had dismissed came back and the dismissals were gone from the file for good. A problem in one row can no longer erase anything: an unreadable cell is coerced or trimmed, and a row that names no shot is dropped and counted. A problem with the table itself now refuses the save outright, before anything is written, and says so instead of sending you to a repair screen that cannot help. The list you see in the app and the list a save carries are read the same way now, so they can no longer disagree ([#517](https://github.com/Stalagmight/Stalagmight/issues/517))
+- **Project depth statistics reported a made-up range** - the min/max depth in the project-statistics IPC payload was a per-section walk of depth *changes* seeded at zero: a survey that never leaves 30-35 m came through as 0-5 m, and two sections at different depths cancelled instead of combining. No screen displayed these two numbers (the panels compute their range from station depths directly), but any consumer of the payload would have disagreed with every depth shown in the app. The payload now carries the real station depth range ([#481](https://github.com/Stalagmight/Stalagmight/issues/481))
+- **An unreadable edit history is bounded, discarded and reported in a banner**, instead of failing silently ([#473](https://github.com/Stalagmight/Stalagmight/issues/473))
+- **A survey can no longer outgrow its shot identity space** - a shot's identity is derived from its section's number, which caps how many sections a project can hold (42,949). Nothing enforced the cap: a large enough import, merge, split or plain section creation silently wrapped identities so shots in different sections collided. Every path that creates sections now refuses past the cap before changing anything, naming the limit, and opening a `.stalx` that already carries section numbers past it - written by another tool, or corrupted - is refused with a message naming the offending id, instead of corrupting shot identity ([#555](https://github.com/Stalagmight/Stalagmight/issues/555), [#557](https://github.com/Stalagmight/Stalagmight/issues/557))
 
 #### SpeleoDB
 
@@ -233,6 +227,10 @@ between divers.
 - **Panning and zooming are noticeably smoother**, zooming especially: a large amount of per-frame work that the map did not need is gone ([#430](https://github.com/Stalagmight/Stalagmight/issues/430))
 - **A long load or save could appear to freeze partway.** Progress updates were being discarded as out of date when they were nothing of the kind, leaving the indicator stuck where it stopped ([#486](https://github.com/Stalagmight/Stalagmight/issues/486))
 - **Plan mode's Start from entrance could show an entirely unreachable survey with no explanation** when the project had no usable zero datum. It now says so, and points at setting one or picking a different start station ([#480](https://github.com/Stalagmight/Stalagmight/issues/480))
+- **A two-finger pinch on Global View zooms without twisting the plan** ([#338](https://github.com/Stalagmight/Stalagmight/issues/338))
+- **<kbd>Ctrl+=</kbd>, <kbd>Ctrl+-</kbd> and <kbd>Ctrl+0</kbd> are enforced as reserved shortcuts**, not just displayed as such, and the sections-row tooltip says a double-click zooms ([#319](https://github.com/Stalagmight/Stalagmight/issues/319))
+- **The orientation tour resumes at its remembered step** instead of restarting ([#368](https://github.com/Stalagmight/Stalagmight/issues/368))
+- **Cancelling the export file picker no longer counts as completing the export dialog** - the dialog stays open with your options intact, ready to try again ([#560](https://github.com/Stalagmight/Stalagmight/issues/560))
 
 #### Import
 
@@ -249,6 +247,7 @@ between divers.
 - **An import with nothing to warn about now finishes with a brief message instead of a dialog to dismiss.** A dialog still appears when the import converted units, raised a warning, or landed nothing ([#411](https://github.com/Stalagmight/Stalagmight/issues/411))
 - **The mNemo import wizard could finish without ever showing its receipt** - after placing stations by hand, or on the quick path through the last screen. The counts were right, they just never reached you. Both paths show the summary now ([#487](https://github.com/Stalagmight/Stalagmight/issues/487))
 - **Import polish**: the summary after a new-project import no longer says "1 sections"; the invitation to report a bug appears only when the failure could actually be one, not when the file is simply wrong; the import dialogs keep their buttons reachable when the body scrolls in a short window; and a project created by an import takes its name from the cave name in the file, when the file records one, rather than always from the filename ([#447](https://github.com/Stalagmight/Stalagmight/issues/447))
+- **Compass import preview counts are exact**, and the mNemo unemitted-reachable warning no longer repeats ([#437](https://github.com/Stalagmight/Stalagmight/issues/437), [#535](https://github.com/Stalagmight/Stalagmight/issues/535))
 
 
 #### Windows
@@ -261,8 +260,9 @@ between divers.
 
 - **The notice before an Ariane export no longer claims that sections will be discarded.** Every section is written; the notice now says only that the file will not be georeferenced, and points at **Set Zero Datum** on a station if that is not what you want ([#411](https://github.com/Stalagmight/Stalagmight/issues/411))
 - **Ariane opened an exported `.tml` to a blank map.** A section whose parent station was itself another section's merge station could be written with no parent at all, because parent links were resolved in section-storage order while the link tree is not ordered. Ariane reads a parentless non-entrance shot as a second entrance, abandons the loop solve, and draws nothing - the data table still filled, so the survey looked present but invisible. Only surveys that had both such a section *and* a loop closure were affected. Sections that genuinely stand alone are now written as their own entrance, the way Ariane stores them, and an export that would still leave a shot unrooted now fails instead of writing a file that cannot be drawn.
-- **A survey with more than one entrance placed the extra ones at latitude 0, longitude 0.** Only the first entrance received the project's GPS anchor, so any other one landed roughly 9000 km away in the Atlantic and zooming to fit showed half a hemisphere. Every entrance now carries the anchor, which is how Ariane writes them.
+- **A survey with more than one entrance placed the extra ones at latitude 0, longitude 0.** Only the first entrance received the project's GPS anchor, so any other one landed roughly 9000 km away in the Atlantic and zooming to fit showed half a hemisphere. Every entrance now carries an anchor - its own section's datum where it has one, the project's otherwise - which is how Ariane writes them. Anchors stay put across repeated export/import cycles, and an export refused for unrooted sections lists a bounded, cleaned sample of them instead of an unbounded dump ([#378](https://github.com/Stalagmight/Stalagmight/issues/378))
 - **A survey that goes out to Ariane and comes back now keeps each shot's own identity** instead of every shot being issued a new one each round trip. It matters if you work on the same survey in both applications: a shot you split in Stalagmight keeps its identity in the half that used to lose it ([#423](https://github.com/Stalagmight/Stalagmight/issues/423))
+- **A shot comment no longer turns into a station comment on re-import.** A shot comment with no station comment beside it was written without the invisible marker that names its side, so a default re-import filed it on the station. Every shot comment now carries its marker ([#564](https://github.com/Stalagmight/Stalagmight/issues/564))
 
 
 #### Ariane import
@@ -272,6 +272,7 @@ between divers.
 - **Real `.tml`/`.tmlu` files could fail to import, or import with their text mangled**, over things Ariane itself writes: older text encodings, unexpected capitalisation in a few fields, and an unusually large file inside the archive. These import correctly now, with a warning wherever a character could not be read back exactly ([#411](https://github.com/Stalagmight/Stalagmight/issues/411))
 - **A depth-only survey exported to Ariane and read back complained that its pitch and depth disagreed, about data that says no such thing.** A level shot with no recorded pitch goes into the file as a wire value of exactly zero, and the reader took that back as a measured zero. It is read as "no pitch recorded" in exactly the cases where the warning would have been invented, and left alone where a recorded zero can be real ([#482](https://github.com/Stalagmight/Stalagmight/issues/482))
 - **Some branching `.tml` surveys were broken into more disconnected pieces than they needed to be.** The reader now follows the longest branch through a junction instead of stopping there, and rejoins side chains to the main line where that is unambiguous, so the imported shape is closer to how the cave was surveyed. Some fragmentation remains ([#412](https://github.com/Stalagmight/Stalagmight/issues/412))
+- **A `.tml`'s per-shot trip metadata now cuts sections instead of collapsing them** ([#427](https://github.com/Stalagmight/Stalagmight/issues/427))
 
 
 ## [0.2.0] - 2026-06-02
