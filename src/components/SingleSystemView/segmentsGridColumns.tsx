@@ -122,7 +122,13 @@ export function buildSegmentColumns(ctx: SegmentColumnContext): GridColumn<PlanS
       // a value the engine would have quietly accepted at the boundary.
       render: (seg, index): ReactNode => {
         if (seg.speed_m_per_min != null) {
-          return formatFixed(speedToDisplay(seg.speed_m_per_min, units), undefined, 1);
+          // The Reset button is gone; clearing the cell is the only way back to
+          // the plan speed, so the row that NEEDS that gesture must say so.
+          return (
+            <span title={t('gasPanel.segments.explicitHint')}>
+              {formatFixed(speedToDisplay(seg.speed_m_per_min, units), undefined, 1)}
+            </span>
+          );
         }
         // An inherited span shows the plan speed it is actually flown at, dimmed
         // and italic so it never reads as a number someone typed here.

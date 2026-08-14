@@ -37,8 +37,11 @@ export const SEG_COL = {
  * price a different one in the engine (and in the exported dive profile). Clamped here so the value
  * the row displays after commit is always the value the engine will actually use.
  *
- * `SegmentsTable.tsx` still declares its own copies while it is on the legacy
- * markup; those die with the component rewrite that follows this commit.
+ * One more TS copy lives in `gasPlanStore.ts` (private, above `mergeSegments`) with a
+ * deliberately different policy: it TREATS an out-of-range speed as inherited when
+ * ranking which span wins a way-point merge - mirroring the engine's fallback - while
+ * this module CLAMPS a user edit into range. Keep all three copies (here, the store,
+ * `scooter.rs`) in sync when the engine range moves.
  */
 export const MIN_SEGMENT_SPEED_M_PER_MIN = 0.1;
 /** Mirrors `MAX_SEGMENT_SPEED_M_PER_MIN` in the same file. */

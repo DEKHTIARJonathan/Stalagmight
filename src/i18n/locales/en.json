@@ -2845,6 +2845,7 @@
       "segmentNoun_one": "segment",
       "segmentNoun_other": "segments",
       "inheritedHint": "Following the plan speed. Type a number to give this leg its own pace, or clear the cell to go back.",
+      "explicitHint": "This leg flies its own pace. Clear the cell to follow the plan speed again.",
       "origin": "Origin",
       "waypointN": "WP {{n}}",
       "endpoint": "Endpoint",

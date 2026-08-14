@@ -27,8 +27,8 @@ function formatRouteRuntime(min: number): string {
 /**
  * Gas & route-planning setup sidebar (#38). The right Dock slot while in Plan mode:
  * origin, diver RMV, gas strategy + per-stage reserve, units, and the plan readout. The cylinder
- * rig editor lives in the bottom panel's "Equipment" tab (see PlanTablesPanel) - this sidebar
- * reads the cylinders only to compute the turn / drop pressures. Every input nulls the cached
+ * table and DPV rig editor live in the bottom panel's "Cylinders" and "DPV" tabs (see
+ * PlanTablesPanel) - this sidebar reads the cylinders only to compute the turn / drop pressures. Every input nulls the cached
  * field via gasPlanStore, so MapCanvas refetches + repaints the reachable overlay. Volumes follow
  * the master units toggle; RMV flips L·min⁻¹ ↔ cuft·min⁻¹.
  */

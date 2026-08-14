@@ -4,8 +4,9 @@
  * Same contract as `segmentsGridEdits`: the grid emits `{ row, colKey, value }`
  * with values already coerced by each column's parser, and this folds a batch of
  * them into the next `Cylinder[]` for `gasPlanStore.setCylinders`. It is the
- * SINGLE write path for the table (checkbox, role Select, remove button, grid
- * paste/fill/clear all funnel through it).
+ * single CELL-EDIT write path for the table (checkbox, role Select, grid
+ * paste/fill/clear all funnel through it). Row REMOVAL is the one exception:
+ * `removeRows` in `CylindersTable.tsx` filters the array directly.
  *
  * ⚠ Unit space: pressures arrive in DISPLAY units (bar or psi), because the grid
  * seeds its editor from `getValue` and fill/internal-paste transfer that raw
