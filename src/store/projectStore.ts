@@ -231,6 +231,14 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * composes it.
    */
   newerSchemaVersion: number | null;
+  /**
+   * [#576 B35(b) review] The open file's SpeleoDB link row could not be read. It
+   * opened as a local project, but the backend refuses every save over this file
+   * (the rebuilt file would lose the row), so App.tsx shows a banner from the first
+   * frame instead of leaving the first failed save to explain it. Set from the load
+   * result; cleared on close, create, and a Save As that moves the session away.
+   */
+  speleoLinkUnreadable: boolean;
   stations: Station[];
   /**
    * Struct-of-Arrays representation of the loaded project's bulk
@@ -624,6 +632,7 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
     projectTreeGeneration: nextProjectTreeGeneration(),
     databaseOpen: false,
     newerSchemaVersion: null,
+    speleoLinkUnreadable: false,
     stations: [],
     surveyData: null,
     stationsAdjusted: null,
@@ -895,6 +904,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   projectTreeGeneration: 0,
   databaseOpen: false,
   newerSchemaVersion: null,
+  speleoLinkUnreadable: false,
   stations: [],
   surveyData: null,
   stationsAdjusted: null,
@@ -1096,6 +1106,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // [#576 B6-D1] The backend's own read-only verdict for THIS load, in the
           // same set() as the project: a newer file is read-only from the first frame.
           newerSchemaVersion: result.newerSchemaVersion,
+          speleoLinkUnreadable: result.speleoLinkUnreadable,
           isDirty: false,
           // Reset integrity state on project switch so a dismissal from the
           // previous project can never carry over and suppress this one's banner.
@@ -1348,6 +1359,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         databaseOpen: !deferred,
         // This build created it, so it is this build's to edit (#576 B6-D1).
         newerSchemaVersion: null,
+        speleoLinkUnreadable: false,
         stations: [],
         stationsAdjusted: null,
         surveyDataAdjusted: null,
@@ -1438,7 +1450,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // useLayoutEffect keys on it - a no-op save would trigger a full survey
         // rebuild + republish, briefly blanking all geometry (#mem).
         if (project && project.file_path !== result.saved_path) {
-          set({ project: { ...project, file_path: result.saved_path } });
+          // The session moved to that file, written without the unreadable link
+          // (#576 B35(b)), so saving over the open file works again.
+          set({ project: { ...project, file_path: result.saved_path }, speleoLinkUnreadable: false });
         }
       }
       // Lightweight: just refresh undo/redo availability

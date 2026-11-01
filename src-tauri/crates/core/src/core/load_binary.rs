@@ -105,6 +105,10 @@ pub struct LoadProjectFullBinaryResult {
     /// top-level key of the map-encoded envelope: a reader that predates it finds
     /// it absent rather than misaligned, so no format bump.
     pub newer_schema_version: Option<i32>,
+    /// [#576 B35(b) review] Mirrors `LoadProjectFullResult::speleo_link_unreadable`:
+    /// the file's SpeleoDB link row could not be read, so saving over the file is
+    /// refused. A top-level key like `newer_schema_version`, so no format bump.
+    pub speleo_link_unreadable: bool,
     pub project_header: ProjectHeaderBinary,
 
     pub shot_count: u32,
@@ -211,6 +215,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         display_settings,
         is_remote,
         newer_schema_version,
+        speleo_link_unreadable,
     } = result;
 
     // Compute the frozen shots while the whole project is still in scope (its
@@ -406,6 +411,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         loading_id,
         is_remote,
         newer_schema_version,
+        speleo_link_unreadable,
         project_header,
         shot_count: shot_count as u32,
         shots_floats: ByteBuf::from(shots_floats),
@@ -576,6 +582,7 @@ mod tests {
             display_settings: DisplaySettings::default(),
             is_remote: false,
             newer_schema_version: None,
+            speleo_link_unreadable: false,
         };
 
         let bytes = encode(result).unwrap();
@@ -649,6 +656,7 @@ mod tests {
             display_settings: DisplaySettings::default(),
             is_remote: false,
             newer_schema_version: None,
+            speleo_link_unreadable: false,
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
@@ -717,6 +725,7 @@ mod tests {
             display_settings: DisplaySettings::default(),
             is_remote: false,
             newer_schema_version: None,
+            speleo_link_unreadable: false,
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
@@ -756,6 +765,7 @@ mod tests {
             display_settings: DisplaySettings::default(),
             is_remote: false,
             newer_schema_version: None,
+            speleo_link_unreadable: false,
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();

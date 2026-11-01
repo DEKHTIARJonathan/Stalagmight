@@ -240,6 +240,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         'execute_walls_import', 'execute_gpx_import', 'resolve_warning', 'unresolve_warning',
       ]);
       const WORKSPACE_GUARDED_REJECTS = new Set(['repair_project_integrity', 'resolve_warning', 'unresolve_warning']);
+      // `BinaryEnvelope::speleo_link_unreadable` (#576 B35(b) review): the NEXT binary
+      // load reports that the file's SpeleoDB link row could not be read. Flip per-spec
+      // with __MOCK_SET_PROJECT_SPELEO_LINK_UNREADABLE__. `openProjectSpeleoLinkUnreadable`
+      // is what the open project got: like the backend, every save over that file is
+      // refused, and a Save As elsewhere moves the session to a file without the row.
+      let mockSpeleoLinkUnreadable = false;
+      let openProjectSpeleoLinkUnreadable = false;
       // Window teardown calls, so an exit-guard spec can assert the POSITIVE
       // outcome of an unguarded close instead of only "no dialog appeared".
       let windowDestroyCount = 0;
@@ -542,6 +549,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         version: number | null,
       ) => {
         mockNewerSchema = version;
+      };
+      // Make the next binary load report an unreadable SpeleoDB link row (or not) -
+      // the #576 B35(b) open-time banner, exercised from the load path itself.
+      (window as unknown as Record<string, unknown>).__MOCK_SET_PROJECT_SPELEO_LINK_UNREADABLE__ = (
+        unreadable: boolean,
+      ) => {
+        mockSpeleoLinkUnreadable = unreadable;
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_WINDOW_TEARDOWN_COUNTS__ = () => ({
         destroy: windowDestroyCount,
@@ -1064,6 +1078,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // A project this build created is this build's to save (#576 B6-D1).
             openProjectNewerSchema = null;
             mockWorkspaceMode = 'survey'; // #576 C5: a project opens in Survey
+            openProjectSpeleoLinkUnreadable = false;
             const projectLocation = (args?.projectLocation as string | null | undefined) ?? null;
             const savePathArg = (args?.savePath as string | undefined) ?? undefined;
             const saveDirectoryArg = (args?.saveDirectory as string | undefined) ?? undefined;
@@ -1541,6 +1556,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               is_remote: projectIsRemote,
               // #576 B6-D1: the backend's newer-version verdict for this load.
               newer_schema_version: mockNewerSchema,
+              // #576 B35(b) review: the backend could not read this file's link row.
+              speleo_link_unreadable: mockSpeleoLinkUnreadable,
               project_header: {
                 name: jsonResult.project.name ?? 'Test Project',
                 location: jsonResult.project.location ?? null,
@@ -1623,6 +1640,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // The backend commits the same verdict as the open project's state.
             openProjectNewerSchema = mockNewerSchema;
             mockWorkspaceMode = 'survey'; // #576 C5: a project opens in Survey
+            openProjectSpeleoLinkUnreadable = mockSpeleoLinkUnreadable;
             const bytes = MessagePack.encode(envelope);
             // Return as plain number[] so the frontend's
             // `Array.isArray` fallback converts to Uint8Array without
@@ -1643,6 +1661,25 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 warnings: [],
                 section_ids: [],
               };
+            }
+            // #576 B35(b): a link row the open could not read refuses every save that
+            // would rewrite this file (the backend's message); a Save As to another
+            // file goes ahead and the session moves there, unlinked.
+            if (openProjectSpeleoLinkUnreadable) {
+              const target = (args?.path as string | undefined) ?? projectPath;
+              if (target === projectPath) {
+                return {
+                  success: false,
+                  error:
+                    "Can't save: this project's SpeleoDB link could not be read (no such column: " +
+                    'project_name). Saving would rewrite the file without it, so nothing was ' +
+                    'written - the file on disk is unchanged. Use Save As to save your changes ' +
+                    'to another file.',
+                  warnings: [],
+                  section_ids: [],
+                };
+              }
+              openProjectSpeleoLinkUnreadable = false;
             }
             // Mirror the backend's Save-a-Copy contract: an EXPLICIT destination
             // on a SpeleoDB-managed project writes a detached unlinked copy - the
@@ -1669,6 +1706,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             projectPath = null;
             openProjectNewerSchema = null;
             mockWorkspaceMode = 'survey'; // #576 C5
+            openProjectSpeleoLinkUnreadable = false;
             return { success: true, section_ids: [] };
           }
 

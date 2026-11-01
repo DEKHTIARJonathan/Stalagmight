@@ -838,7 +838,23 @@ impl AppState {
         //
         // [#469] Read BEFORE the entries rather than after, because the depth it resolves
         // is also the bound the LOAD runs under; see `history_load_row_cap`.
-        let mut speleo_link = db.load_speleo_link().ok().flatten();
+        //
+        // [#576 B35(b) review] A link that cannot be READ still opens as "no link" - the
+        // project is usable as a local one - but it is not silent: every save that would
+        // rewrite this file is refused (the rebuilt file would lose the row), so the
+        // load result says so and the frontend tells the user when the project opens.
+        let (mut speleo_link, speleo_link_unreadable) = match db.load_speleo_link() {
+            Ok(link) => (link, false),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve SpeleoDB hand-off link on save",
+                    "The speleo_link table could not be read; opening as a local project \
+                     whose in-place saves are refused"
+                );
+                (None, true)
+            }
+        };
         if let Some(link) = &mut speleo_link {
             self.materialize_undo_mode(&db, link);
         }
@@ -1071,6 +1087,8 @@ impl AppState {
             is_remote,
             // [#576 B6-D1] Likewise the newer-version read-only state.
             newer_schema_version: newer_schema,
+            // [#576 B35(b) review] Read off the same link read the edit gate used.
+            speleo_link_unreadable,
         })
     }
 }

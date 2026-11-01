@@ -63,6 +63,10 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
    *  refused); the store gates the UI on this so the two settle together, like
    *  `isRemote`. Binary envelope only, like `frozen_shots`. */
   newerSchemaVersion: number | null;
+  /** [#576 B35(b) review] The file's SpeleoDB link row could not be read. The
+   *  project opened as a local one, but every save over this file is refused (the
+   *  rebuilt file would lose the row), so the UI says so on open. */
+  speleoLinkUnreadable: boolean;
 }
 
 /**
@@ -104,6 +108,9 @@ export interface BinaryEnvelope {
   /** [#576 B6-D1] Schema version of a file a newer build saved, else null. A
    *  top-level map key: absent from an envelope that predates it. */
   newer_schema_version?: number | null;
+  /** [#576 B35(b) review] The link row could not be read; absent from an
+   *  envelope that predates it. */
+  speleo_link_unreadable?: boolean;
   project_header: ProjectHeaderBinary;
   shot_count: number;
   shots_floats: Uint8Array;
@@ -457,6 +464,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     isRemote: env.is_remote,
     // [#576 B6-D1] Same synchronous settling for the newer-version read-only gate.
     newerSchemaVersion: env.newer_schema_version ?? null,
+    speleoLinkUnreadable: env.speleo_link_unreadable === true,
     surveyData,
   };
 }

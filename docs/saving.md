@@ -186,6 +186,13 @@ Opening a linked `.stalx` from any non-canonical path is refused by
 raises `SpeleoManagedFileDialog`, offering to open the managed copy from
 SpeleoDB or to remove the file's link and open it as a local project.
 
+A `speleo_link` row that cannot be READ is not "no link" (#576 B35(b)). The
+file opens as a local project, but every save that would rewrite it is refused -
+the rebuilt file would lose the row - while a Save As to another file goes
+ahead, unlinked, and moves the session there. The load reports it
+(`speleo_link_unreadable` on the binary envelope), and a banner says so when the
+project opens, so the first refused save is not the first the user hears of it.
+
 ## Auto-Save
 
 Auto-save is handled entirely in the frontend via the `useAutoSave` hook (`src/hooks/useAutoSave.ts`). There is no per-command auto-save in the backend.

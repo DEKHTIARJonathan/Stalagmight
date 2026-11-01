@@ -888,6 +888,15 @@ pub struct LoadProjectFullResult {
     #[serde(skip)]
     #[ts(skip)]
     pub newer_schema_version: Option<i32>,
+    /// [#576 B35(b) review] The file carries a `speleo_link` table whose row could
+    /// not be read. The project opened as a local one (`is_remote` false), but
+    /// every save that would rewrite this file is refused, because the rebuilt file
+    /// would lose the row; the frontend says so as soon as the project opens rather
+    /// than at the first failed save. Binary envelope only, like
+    /// `newer_schema_version`, so the generated binding is unchanged.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub speleo_link_unreadable: bool,
 }
 
 // ============================================================================
@@ -1283,6 +1292,7 @@ mod tests {
             display_settings: DisplaySettings::default(),
             is_remote: false,
             newer_schema_version: None,
+            speleo_link_unreadable: false,
         };
         assert_wire(
             &serde_json::to_value(&load).expect("serialize load result"),

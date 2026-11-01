@@ -23756,6 +23756,7 @@ fn profile_stalx_load() {
         loading_id: 0,
         is_remote: false,
         newer_schema_version: None,
+        speleo_link_unreadable: false,
     };
     let bin = crate::core::load_binary::encode(result).expect("encode");
     let t8 = Instant::now();

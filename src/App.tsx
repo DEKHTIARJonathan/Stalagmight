@@ -58,6 +58,7 @@ function App() {
   const checkHistoryDiscarded = useProjectStore((s) => s.checkHistoryDiscarded);
   const dismissHistoryDiscarded = useProjectStore((s) => s.dismissHistoryDiscarded);
   const newerFileReadOnly = useProjectStore(selectNewerFileReadOnly);
+  const speleoLinkUnreadable = useProjectStore((s) => s.speleoLinkUnreadable);
   const autosaveFailure = useProjectStore((s) => s.autosaveFailure);
   const autosaveFailureKind = useProjectStore((s) => s.autosaveFailureKind);
   const clearAutosaveFailure = useProjectStore((s) => s.clearAutosaveFailure);
@@ -639,6 +640,28 @@ function App() {
           <span className="text-warning font-medium flex-1 min-w-0">
             {t('banners.newerFile.lead')}{' '}
             <span className="text-text-secondary font-normal">{t('banners.newerFile.detail')}</span>
+          </span>
+        </div>
+      )}
+
+      {/* [#576 B35(b) review] Unreadable-link banner. The file's SpeleoDB link row
+          could not be read, so the project opened as a local one - but the backend
+          refuses every save over this file, because the rebuilt file would lose the
+          row. Without this, the first autosave failed with a message about a link the
+          user was never shown. An ongoing condition (banner, docs/notifications.md)
+          that lasts until a Save As moves the session to another file, so no
+          Dismiss, like the newer-file banner above; the remedy is in the message. */}
+      {speleoLinkUnreadable && project && !loading.isLoading && (
+        <div
+          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
+          role="status"
+          data-testid="speleo-link-unreadable-banner"
+        >
+          <span className="text-warning font-medium flex-1 min-w-0">
+            {t('banners.speleoLinkUnreadable.lead')}{' '}
+            <span className="text-text-secondary font-normal">
+              {t('banners.speleoLinkUnreadable.detail')}
+            </span>
           </span>
         </div>
       )}
