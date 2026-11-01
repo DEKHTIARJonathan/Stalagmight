@@ -122,7 +122,8 @@ Three workflows gate `master`:
   `lint:prepush-checklist` (the CLAUDE.md checklist lists every CI gate). The
   two whole-tree guards share one file reader (`scripts/lib/tracked-files.mjs`):
   a tracked symlink is scanned as its link text, the content git publishes for
-  it, and is never followed. It is
+  it, and is never followed, and every tracked file PATH is scanned as well as
+  its content (an image named after a person is published too). It is
   the one workflow with **no** `paths-ignore`, because `check` and `smoke` both
   skip `**/*.md` and `docs/**` - exactly where a leak, a Unicode dash or a stale
   attribution bundle lands.

@@ -8,7 +8,9 @@
 // re-added the day after #229 removed the directory).
 //
 // It scans every git-TRACKED text file (`git ls-files` - exactly the set that
-// gets published) for a small set of high-signal markers:
+// gets published), and every tracked PATH string - binaries and vendored files
+// included, since a file named after a person is published too (#576 E18(e)) -
+// for a small set of high-signal markers:
 //   - maintainer names / handles. These also catch a name-bearing personal path
 //     (`/home/daniel`, `/Users/ndh`). Suppressed only in ROOT attribution files
 //     (README, CONTRIBUTING, AUTHORS, LICENSE, CHANGELOG, SECURITY, …), where
@@ -169,8 +171,7 @@ export function isAttributionFile(rel) {
 // Scan one file's text. Returns [{ruleId, lineNo, why, match}]. Note: the matched
 // substring (`match`) is the MARKER itself (e.g. "SCW_", "daniel") - never the
 // whole line - so printing it to a public CI log can't publish an adjacent secret.
-export function findLeaks(text, rel) {
-  const attribution = isAttributionFile(rel);
+export function findLeaks(text, rel, { attribution = isAttributionFile(rel) } = {}) {
   const out = [];
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -186,6 +187,15 @@ export function findLeaks(text, rel) {
     }
   }
   return out;
+}
+
+// Every rule over one tracked PATH string (#576 E18(e)): a file NAMED after a
+// maintainer or a private planning doc is published as surely as one that
+// mentions it. The root-attribution exemption does not apply to paths, and
+// paths are checked before the content exclusions (binaries, vendored,
+// generated): an image named after a person passes no content scan at all.
+export function findPathLeaks(rel) {
+  return findLeaks(rel, rel, { attribution: false }).map((v) => ({ ...v, lineNo: 0 }));
 }
 
 function isAllowed(rel, ruleId) {
@@ -211,6 +221,7 @@ export function scan(files, readFile) {
   let scanned = 0;
   const entries = [...files].map(asEntry).sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
   for (const { rel, symlink } of entries) {
+    for (const v of findPathLeaks(rel)) violations.push({ rel, path: true, ...v });
     if (isExcluded(rel, { symlink })) continue;
     let result;
     try {
@@ -255,7 +266,8 @@ export function report(result, log = console.log, err = console.error) {
   for (const v of violations) {
     // Print the MARKER and location only - never the surrounding line (a public CI
     // log on a public repo must not echo a secret that sits beside the marker).
-    err(`  [${v.ruleId}] ${v.rel}${v.link ? ' (symlink target)' : ''}:${v.lineNo}  (matched "${v.match}")`);
+    const where = v.path ? ' (path)' : `${v.link ? ' (symlink target)' : ''}:${v.lineNo}`;
+    err(`  [${v.ruleId}] ${v.rel}${where}  (matched "${v.match}")`);
     err(`      ${v.why}\n`);
   }
   // Fail closed on a skip: a file the scanner can't read (or that exceeds the size

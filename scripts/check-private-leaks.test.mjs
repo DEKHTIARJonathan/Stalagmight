@@ -15,7 +15,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
-  findLeaks, isExcluded, isAttributionFile, RULES, gateFails, looksBinary, scan, report,
+  findLeaks, findPathLeaks, isExcluded, isAttributionFile, RULES, gateFails, looksBinary, scan, report,
 } from './check-private-leaks.mjs';
 import { parseLsFilesStage, makeReader, hasBinaryExt, MAX_SCAN_BYTES } from './lib/tracked-files.mjs';
 
@@ -270,6 +270,31 @@ test('scan never reads an excluded path (exclusion precedes the read)', () => {
     return buf('clean');
   });
   assert.deepEqual(read, ['ok.ts']);
+});
+
+// --- paths are scanned too (#576 E18(e)) -------------------------------------------
+
+test('a marker only in the PATH fails, though the content is clean', () => {
+  const r = scan(['docs/personaldocs-plan.md'], () => buf('clean ascii text'));
+  assert.deepEqual(r.violations.map((v) => [v.ruleId, v.path]), [['private-doc-or-tool', true]]);
+  const lines = [];
+  assert.equal(report(r, () => {}, (m) => lines.push(m)), 1);
+  assert.ok(lines.some((l) => l.includes('docs/personaldocs-plan.md (path)')), lines.join('\n'));
+});
+
+test('a marker in the name of an EXCLUDED file (binary, vendored) still fails', () => {
+  const read = [];
+  const r = scan(['docs/daniel-headshot.png', 'src-tauri/vendor/x/anzu.rs'], (rel) => { read.push(rel); return buf(''); });
+  assert.deepEqual(read, [], 'excluded content is still never read');
+  assert.deepEqual(r.violations.map((v) => v.ruleId).sort(), ['maintainer-name', 'private-cloud-infra']);
+});
+
+test('the root-attribution exemption covers content, never the path', () => {
+  assert.equal(findPathLeaks('README.md').length, 0);
+  // A root attribution file may credit a name in its CONTENT...
+  assert.equal(scan(['CHANGELOG.md'], () => buf('thanks Daniel')).violations.length, 0);
+  // ...but a path is checked without that exemption.
+  assert.equal(findPathLeaks('docs/daniel/README.md').length, 1);
 });
 
 // --- scripts/lib/tracked-files.mjs: the shared reader both guards use -------------

@@ -53,7 +53,9 @@
 //
 // Whole PATHS are also excluded further below (vendored, generated, lockfiles,
 // binaries), so the guard is not unconditional. Prefer an ALLOW row with a
-// written reason over widening those prefixes.
+// written reason over widening those prefixes. Those exclusions cover CONTENT
+// only: every tracked path string is scanned too, excluded ones included, and
+// a path hit is never budgeted by ALLOW (#576 E18(e)).
 //
 // Usage:  node scripts/check-no-em-dash.mjs   (or: pnpm lint:no-em-dash)
 
@@ -125,7 +127,7 @@ export function isExcluded(rel, { symlink = false } = {}) {
   return !symlink && hasBinaryExt(rel);
 }
 
-// Scan one file's text. Returns [{lineNo, col, char, name}], one row per banned
+// Scan one file's text (or one path string). Returns [{lineNo, col, char, name}], one row per banned
 // code point. Reports the offending CHARACTER and its position only - never the
 // surrounding line - so the CI log stays terse on a bulk regression.
 export function findDashes(text) {
@@ -208,8 +210,13 @@ export function scan(files, readFile) {
   const skipped = []; // {rel, reason} - each FAILS the gate (fail-closed)
   const symlinks = []; // scanned as their link text, never followed
   let scanned = 0;
+  const pathViolations = [];
   const entries = [...files].map(asEntry).sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
   for (const { rel, symlink } of entries) {
+    // The PATH is published too (#576 E18(e)): scan every tracked path string,
+    // BEFORE the content exclusions - a dash in the name of a vendored file, a
+    // lockfile or an image is just as visible in the tree as one in a doc.
+    for (const v of findDashes(rel)) pathViolations.push({ rel, path: true, ...v });
     if (isExcluded(rel, { symlink })) continue;
     let result;
     try {
@@ -232,7 +239,8 @@ export function scan(files, readFile) {
     scanned++;
     for (const v of findDashes(t.text)) violations.push({ rel, link: t.link, ...v });
   }
-  return { violations: applyAllow(violations), skipped, scanned, symlinks };
+  // ALLOW budgets content only; a path hit is never allowlisted.
+  return { violations: [...pathViolations, ...applyAllow(violations)], skipped, scanned, symlinks };
 }
 
 export function report(result, log = console.log, err = console.error) {
@@ -245,7 +253,8 @@ export function report(result, log = console.log, err = console.error) {
 
   err('\n✗ no-em-dash scan failed:\n');
   for (const v of violations.slice(0, SHOWN)) {
-    err(`  ${safePath(v.rel)}${v.link ? ' (symlink target)' : ''}:${v.lineNo}:${v.col}  ${v.name}`);
+    const where = v.path ? ` (path):${v.col}` : `${v.link ? ' (symlink target)' : ''}:${v.lineNo}:${v.col}`;
+    err(`  ${safePath(v.rel)}${where}  ${v.name}`);
   }
   if (violations.length > SHOWN) {
     err(`  ... and ${violations.length - SHOWN} more (${violations.length} total)`);

@@ -284,6 +284,27 @@ test('a symlink with a binary extension is still scanned (its content is text)',
   assert.ok(isExcluded('docs/logo.png'), 'a regular .png is still excluded');
 });
 
+test('a banned dash only in a file PATH fails, though the content is clean (#576 E18(e))', () => {
+  const r = scan([`docs/plan${ch(0x2014)}draft.md`], () => buf('clean ascii text'));
+  assert.equal(r.violations.length, 1);
+  assert.equal(r.violations[0].path, true);
+  const lines = [];
+  assert.equal(report(r, () => {}, (m) => lines.push(m)), 1);
+  assert.ok(lines.some((l) => l.includes('(path):10  U+2014 em dash')), lines.join('\n'));
+});
+
+test('a dash in the name of an EXCLUDED file still fails; its content is still not read', () => {
+  const read = [];
+  const r = scan([`docs/logo${ch(0x2013)}dark.png`, `src-tauri/vendor/a${ch(0x2010)}b.rs`], (rel) => { read.push(rel); return buf(''); });
+  assert.deepEqual(read, []);
+  assert.equal(r.violations.length, 2);
+});
+
+test('the CLAUDE.md ALLOW budget covers its content, never a path', () => {
+  const r = scan([`CLAUDE${ch(0x2014)}.md`], () => buf('clean'));
+  assert.equal(r.violations.length, 1, 'ALLOW rows are per file CONTENT; a path hit is never budgeted');
+});
+
 test('a reader result that is neither bytes nor a symlink fails closed', () => {
   const r = scan(['odd.md'], () => null);
   assert.equal(r.skipped.length, 1);
