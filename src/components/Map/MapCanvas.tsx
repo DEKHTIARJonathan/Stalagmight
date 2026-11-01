@@ -1584,6 +1584,7 @@ function MapCanvas() {
       lastCursorClientRef.current = null;
       if (snapTarget) setSnappedStation(null);
       endMoveCarry(moveCarryTokenRef.current);
+      moveCarryTokenRef.current = null;
       return;
     }
 
