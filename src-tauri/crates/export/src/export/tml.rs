@@ -27,6 +27,7 @@ use quick_xml::Writer;
 use crate::models::comment_split;
 use crate::models::{normalize_azimuth, Project, SectionId, Shot, StationRef};
 
+use super::atomic::{write_atomic, write_atomic_bytes};
 use super::tml_azimuth::AzimuthExport;
 use super::tml_topology::{
     build_parent_map, choose_default_root_section_id, section_datum, station_depth,
@@ -285,8 +286,8 @@ fn write_output(path: &Path, xml: &[u8]) -> Result<()> {
         .unwrap_or_default();
     match ext.as_str() {
         "tml" => write_zip(path, xml),
-        "tmlu" => std::fs::write(path, xml).context("Failed to write TMLU file"),
-        _ => std::fs::write(path, xml).context("Failed to write TML export file"),
+        "tmlu" => write_atomic_bytes(path, xml).context("Failed to write TMLU file"),
+        _ => write_atomic_bytes(path, xml).context("Failed to write TML export file"),
     }
 }
 
@@ -516,19 +517,19 @@ fn format_f64(v: f64) -> String {
 // ============================================================================
 
 fn write_zip(path: &Path, xml: &[u8]) -> Result<()> {
-    let file = std::fs::File::create(path).context("Failed to create TML file")?;
-    let mut zip = zip::ZipWriter::new(file);
+    write_atomic(path, |file| {
+        let mut zip = zip::ZipWriter::new(file);
 
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
 
-    zip.start_file("Data.xml", options)
-        .context("Failed to start Data.xml in ZIP")?;
-    zip.write_all(xml)
-        .context("Failed to write Data.xml to ZIP")?;
-    zip.finish().context("Failed to finalize TML ZIP")?;
-
-    Ok(())
+        zip.start_file("Data.xml", options)
+            .context("Failed to start Data.xml in ZIP")?;
+        zip.write_all(xml)
+            .context("Failed to write Data.xml to ZIP")?;
+        zip.finish().context("Failed to finalize TML ZIP")?;
+        Ok(())
+    })
 }
 
 /// Refuse to write a chain Ariane would draw as an empty map.

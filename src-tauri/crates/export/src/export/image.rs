@@ -45,6 +45,7 @@ use std::path::Path;
 use ts_rs::TS;
 use usvg::{Options, Tree};
 
+use super::atomic::write_atomic_bytes;
 use crate::models::{Project, StationRef};
 
 /// Output image format.
@@ -397,7 +398,7 @@ fn export_svg(
     stations: Vec<crate::models::Station>,
 ) -> Result<()> {
     let svg = generate_svg_string_with_stations(project, options, stations)?;
-    std::fs::write(path, svg).context("Failed to write SVG file")?;
+    write_atomic_bytes(path, svg.as_bytes()).context("Failed to write SVG file")?;
     tracing::info!(path = ?path, "Exported SVG");
     Ok(())
 }
@@ -440,7 +441,8 @@ fn export_png(
     let transform = tiny_skia::Transform::from_scale(scale, scale);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
-    pixmap.save_png(path).context("Failed to save PNG file")?;
+    let png = pixmap.encode_png().context("Failed to encode PNG")?;
+    write_atomic_bytes(path, &png).context("Failed to save PNG file")?;
 
     tracing::info!(path = ?path, dpi = options.dpi, width = width, height = height, "Exported PNG");
     Ok(())
@@ -466,7 +468,7 @@ fn export_pdf(
     )
     .map_err(|e| anyhow::anyhow!("Failed to convert SVG to PDF: {e:?}"))?;
 
-    std::fs::write(path, pdf).context("Failed to write PDF file")?;
+    write_atomic_bytes(path, &pdf).context("Failed to write PDF file")?;
 
     tracing::info!(path = ?path, "Exported PDF");
     Ok(())

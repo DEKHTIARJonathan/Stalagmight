@@ -10,13 +10,14 @@ use crate::export::{ExportImageOptions, ProfileFormat};
 use crate::models::{Cylinder, Diver, PlanSegment, Project, StationRef};
 
 /// True when `target` resolves to the same file on disk as the open project's
-/// `.stalx` at `existing`. Image export writes raw bytes (`std::fs::write` /
-/// `pixmap.save_png`), so exporting over the live project database would corrupt
-/// it. `existing` always exists (it is the open DB); `target` may not exist yet
-/// (a fresh export destination), so when it can't be canonicalized directly,
-/// compare its canonicalized parent directory + file name against the
-/// canonicalized project path. Errs toward catching the exact open-DB path
-/// rather than rejecting unrelated destinations.
+/// `.stalx` at `existing`. Every export replaces its destination with a staged
+/// file renamed over it (`export::write_atomic`), so exporting over the live
+/// project database would replace it under the open connection - the project's
+/// data gone from disk. `existing` always exists (it is the open DB); `target`
+/// may not exist yet (a fresh export destination), so when it can't be
+/// canonicalized directly, compare its canonicalized parent directory + file
+/// name against the canonicalized project path. Errs toward catching the exact
+/// open-DB path rather than rejecting unrelated destinations.
 fn is_open_project_file(target: &Path, existing: &Path) -> bool {
     let Ok(existing_canon) = std::fs::canonicalize(existing) else {
         return false;
@@ -462,9 +463,11 @@ pub async fn export_dive_profile(
         if is_project_owned_file(&path, &project) {
             return Err(refuse(&path));
         }
-        std::fs::write(&path, rendered).map_err(|e| {
-            tracing::error!(path = ?path, reason = %e, "Dive profile export failed");
-            e.to_string()
+        // Staged and renamed over `path` (#576 B9), so a write that fails part-way keeps the
+        // previous profile instead of leaving a truncated one under its name.
+        crate::export::write_atomic_bytes(&path, rendered.as_bytes()).map_err(|e| {
+            tracing::error!(path = ?path, reason = %format!("{e:#}"), "Dive profile export failed");
+            format!("{e:#}")
         })?;
         tracing::info!(
             path = ?path,
