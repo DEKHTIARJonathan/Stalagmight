@@ -89,6 +89,28 @@ describe('useNetworkStatus listener registration', () => {
     expect(unlisten).toHaveBeenCalledTimes(2);
   });
 
+  // The real unlisten is async (it awaits an IPC round trip), so a failed release
+  // is a rejected promise nobody awaits - it must be handled like a failed listen().
+  it('a rejected unlisten() is handled, on unmount and for a late registration', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const unlisten = () => Promise.reject(new Error('unlisten failed'));
+    listenState.impl = async () => unlisten;
+
+    const { unmount } = renderHook(() => useNetworkStatus());
+    await settle();
+    unmount();
+    await settle();
+
+    const pending: Array<(fn: () => Promise<never>) => void> = [];
+    listenState.impl = () => new Promise((resolve) => { pending.push(resolve); });
+    renderHook(() => useNetworkStatus()).unmount();
+    pending.forEach((resolve) => resolve(unlisten));
+    await settle();
+
+    expect(unhandled, 'unhandled rejections seen').toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(4);
+  });
+
   it('releases a listener whose registration resolves only after unmount', async () => {
     const unlisten = vi.fn();
     const pending: Array<(fn: () => void) => void> = [];

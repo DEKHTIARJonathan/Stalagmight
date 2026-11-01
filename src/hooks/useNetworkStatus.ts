@@ -46,12 +46,19 @@ export function useNetworkStatus() {
     // of escaping as an unhandled rejection, and release a listener that resolves
     // after cleanup as soon as it arrives.
     let disposed = false;
-    const unlisteners: UnlistenFn[] = [];
+    const unlisteners: Array<() => void> = [];
+    // The real unlisten is async (it awaits an IPC round trip) and nothing awaits
+    // it, so a failed release is reported here like a failed registration.
+    const release = (event: string, unlisten: UnlistenFn) => {
+      void new Promise<void>((resolve) => resolve(unlisten())).catch((e: unknown) => {
+        console.warn(`[useNetworkStatus] ${event} listener release failed:`, e);
+      });
+    };
     const register = async (event: string, handler: () => void) => {
       try {
         const unlisten = await listen(event, handler);
-        if (disposed) unlisten();
-        else unlisteners.push(unlisten);
+        if (disposed) release(event, unlisten);
+        else unlisteners.push(() => release(event, unlisten));
       } catch (e) {
         // Tauri event API not available - the browser online/offline events below still apply
         console.warn(`[useNetworkStatus] ${event} listener not available:`, e);
