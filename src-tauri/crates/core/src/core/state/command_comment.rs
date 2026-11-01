@@ -135,6 +135,34 @@ impl AppState {
         CommandResult::success()
     }
 
+    /// Whether this is a `MoveComment` whose source and target are the SAME holder, and that
+    /// holder exists and carries a comment - i.e. provably a no-op (A16, #576).
+    ///
+    /// Moving a comment onto the holder it is already on changes nothing, and neither does
+    /// swapping it with itself. Run through `execute_move_comment`, the move wrote the text onto
+    /// the target and then cleared the source - the same holder - deleting the comment, and the
+    /// swap pushed an undo entry (dropping the redo branch) and stamped the remote dirty bit.
+    /// The map's swap dialog does not compare the two holders, so the backend is the guard.
+    ///
+    /// A missing holder or one without a comment is NOT a no-op: it falls through so the
+    /// command fails exactly as before.
+    pub(super) fn is_provable_move_comment_noop(&self, cmd: &Command) -> bool {
+        let Command::MoveComment { source, target, .. } = cmd else {
+            return false;
+        };
+        if source != target {
+            return false;
+        }
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_ref() else {
+            return false;
+        };
+        matches!(Self::get_holder_comment(project, source), Ok(Some(_)))
+    }
+
     /// Read the comment from a CommentHolder (station or shot)
     fn get_holder_comment(
         project: &Project,

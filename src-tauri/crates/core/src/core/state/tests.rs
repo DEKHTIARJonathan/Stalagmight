@@ -21159,6 +21159,168 @@ fn test_move_comment_swap_exchanges_comments() {
     );
 }
 
+/// What a same-holder `MoveComment` could disturb, read at one instant.
+#[derive(Debug, PartialEq)]
+struct MoveCommentObservables {
+    station_comment: Option<String>,
+    shot_comment: Option<String>,
+    modified_at: chrono::DateTime<chrono::Utc>,
+    undo_len: usize,
+    redo_len: usize,
+    dirty: bool,
+}
+
+fn move_comment_observables(
+    state: &AppState,
+    station: StationRef,
+    sid: SectionId,
+    shid: ShotId,
+) -> MoveCommentObservables {
+    let project = state.get_project_state().unwrap();
+    let (undo_len, redo_len) = {
+        let stack = state.undo_stack.lock().unwrap();
+        (stack.len(), stack.redo_len())
+    };
+    MoveCommentObservables {
+        station_comment: project.station_comment_for_ref(station).cloned(),
+        shot_comment: project
+            .get_section(sid)
+            .unwrap()
+            .get_shot(shid)
+            .unwrap()
+            .comment
+            .clone(),
+        modified_at: project.modified_at,
+        undo_len,
+        redo_len,
+        dirty: dirty_bit(state),
+    }
+}
+
+/// A16 (#576): moving a comment onto its OWN holder must be a true no-op.
+///
+/// The map's Move Comment tool opens the swap dialog whenever the clicked target
+/// already has a comment, without comparing it to the picked-up source, so
+/// clicking the same station (or shot) twice and choosing Overwrite sends
+/// `MoveComment { source: X, target: X, swap: false }`. That wrote X's text onto
+/// X, then cleared the "source" - X - and the comment was gone. Swap on the same
+/// holder changed nothing, yet still pushed an undo entry (dropping the redo
+/// branch) and stamped `has_unpushed_edits` on a remote copy.
+///
+/// Each case runs on a stamped-remote, editable fixture carrying a station
+/// comment and a shot comment, with a redo branch to lose and a clean dirty bit,
+/// so the no-op is pinned on every observable, not just the comment text.
+#[test]
+fn move_comment_onto_its_own_holder_is_a_true_noop() {
+    use crate::core::command::CommentHolder;
+
+    let mut failures = Vec::new();
+    for holder_kind in ["station", "shot"] {
+        for swap in [false, true] {
+            let (state, sid, shid, _temp) = remote_fixture_editable();
+            let station = StationRef::new(sid, 1);
+            {
+                let mut guard = state.project.lock().unwrap();
+                let project = guard.as_mut().unwrap();
+                let key = project.key_for_ref(station).unwrap();
+                project.station_comments.insert(key, "sump".to_string());
+                project
+                    .get_section_mut(sid)
+                    .unwrap()
+                    .get_shot_mut(shid)
+                    .unwrap()
+                    .comment = Some("low airspace".to_string());
+            }
+            // Give the redo stack something to lose: a real edit, then undo it.
+            assert!(
+                state
+                    .execute(Command::SetStationComment {
+                        station_ref: StationRef::new(sid, 0),
+                        comment: Some("scratch".to_string()),
+                    })
+                    .success
+            );
+            assert!(state.undo().success);
+            // ...and start from a clean remote copy, so a stamp is visible.
+            state
+                .database
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .save_speleo_link(Some(&fixture_speleo_link()))
+                .unwrap();
+
+            let before = move_comment_observables(&state, station, sid, shid);
+            assert_eq!(before.redo_len, 1, "fixture: a redo branch to protect");
+            assert!(!before.dirty, "fixture: the remote copy starts clean");
+
+            let holder = if holder_kind == "station" {
+                CommentHolder::Station {
+                    station_ref: station,
+                }
+            } else {
+                CommentHolder::Shot {
+                    section_id: sid,
+                    shot_id: shid,
+                }
+            };
+            let result = state.execute(Command::MoveComment {
+                source: holder.clone(),
+                target: holder,
+                swap,
+            });
+            let after = move_comment_observables(&state, station, sid, shid);
+
+            println!(
+                "[A16] {holder_kind} holder onto itself, swap={swap}: success={}\n  \
+                 station comment {:?} -> {:?}\n  shot comment    {:?} -> {:?}\n  \
+                 undo_len {} -> {}, redo_len {} -> {}, remote dirty {} -> {}, \
+                 modified_at unchanged: {}",
+                result.success,
+                before.station_comment,
+                after.station_comment,
+                before.shot_comment,
+                after.shot_comment,
+                before.undo_len,
+                after.undo_len,
+                before.redo_len,
+                after.redo_len,
+                before.dirty,
+                after.dirty,
+                before.modified_at == after.modified_at,
+            );
+            if !result.success || after != before {
+                failures.push(format!(
+                    "{holder_kind} swap={swap}: success={} error={:?}\n  before {before:?}\n  after  {after:?}",
+                    result.success, result.error
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "a same-holder MoveComment must succeed and change nothing:\n{}",
+        failures.join("\n")
+    );
+
+    // A holder WITHOUT a comment is not a no-op: it still fails exactly as before.
+    let (state, sid, _shid, _temp) = remote_fixture_editable();
+    let bare = CommentHolder::Station {
+        station_ref: StationRef::new(sid, 0),
+    };
+    let result = state.execute(Command::MoveComment {
+        source: bare.clone(),
+        target: bare,
+        swap: false,
+    });
+    assert!(!result.success, "nothing to move must still fail");
+    assert_eq!(
+        result.error.as_deref(),
+        Some("Source has no comment to move")
+    );
+}
+
 // === Import hash tracking tests ===
 
 #[test]

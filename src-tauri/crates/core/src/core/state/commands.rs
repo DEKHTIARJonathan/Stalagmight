@@ -632,6 +632,16 @@ impl AppState {
             );
             return CommandResult::success();
         }
+        // A comment moved or swapped onto its own holder changes nothing either (A16, #576),
+        // and returns here for the same reasons: the move used to delete the comment, and both
+        // forms pushed an undo entry, dropped the redo branch and stamped the dirty bit.
+        if self.is_provable_move_comment_noop(&cmd) {
+            tracing::debug!(
+                command = %cmd.description(),
+                "Move comment onto its own holder changes nothing; skipping undo, redo-clear and dirty flip"
+            );
+            return CommandResult::success();
+        }
         // Any mutation invalidates the derived closure-adjusted view.
         self.invalidate_adjusted_cache();
         tracing::info!(

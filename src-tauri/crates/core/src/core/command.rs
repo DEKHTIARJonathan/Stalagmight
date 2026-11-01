@@ -10,7 +10,7 @@ use crate::models::{
 };
 
 /// Identifies either a station or a shot as a comment holder
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommentHolder {
     Station {
