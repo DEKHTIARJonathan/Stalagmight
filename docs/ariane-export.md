@@ -354,6 +354,15 @@ dropped or capped.
 
 ## Limitations
 
+- Characters XML 1.0 cannot carry at all - C0 control characters other than tab,
+  line feed and carriage return, and U+FFFE / U+FFFF - are written as U+FFFD
+  (the replacement character) in every text element, in both profiles. They
+  reach a project through imported files and pasted text, and a single one
+  written raw made Ariane and SpeleoDB reject the whole document. The user
+  export returns the `xml-chars-replaced` note, so the export toast says the
+  file's text differs from the project's; the sidecar logs it. Line breaks,
+  the U+200B shot-comment marker and C1 characters are legal XML and pass
+  through unchanged.
 - Shape/cross-section geometry (`Shape`/`SH` elements) is not exported (not stored in the internal model)
 - GPS coordinates are not written per-shot: latitude and longitude are `0.0`
   everywhere except the START shots, which repeat the primary datum's anchor

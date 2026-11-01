@@ -73,6 +73,23 @@ describe('exportTml surfaces the backend azimuth notes', () => {
   });
 
   /**
+   * #576 B11: text the file could not carry was replaced with U+FFFD. The
+   * export succeeded, so this is a translated warning, never the raw code.
+   */
+  it('translates the replaced-characters note', async () => {
+    invokeIpcMock.mockResolvedValue(['xml-chars-replaced']);
+
+    await useProjectStore.getState().exportTml('/tmp/cave.tml');
+
+    expect(showToastMock).toHaveBeenCalledTimes(1);
+    const [message, key, kind] = showToastMock.mock.calls[0] as [string, string, string];
+    expect(message).not.toBe('xml-chars-replaced');
+    expect(message).toContain('�');
+    expect(key).toBe(`${TOAST_KEYS.EXPORT_NOTE}:xml-chars-replaced`);
+    expect(kind).toBe('warning');
+  });
+
+  /**
    * A backend that grows a third note must not crash the export: an unknown
    * code falls back to itself rather than rendering the i18n key path.
    */

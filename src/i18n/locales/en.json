@@ -1686,7 +1686,8 @@
       "notes": {
         "azimuth-rotated-to-true": "Bearings rotated to true north for Ariane",
         "azimuth-mixed-unresolved": "Some sections have no declination - Ariane will re-correct all",
-        "gps-anchors-not-written": "Some GPS anchors are not at an entrance and were not written to the file"
+        "gps-anchors-not-written": "Some GPS anchors are not at an entrance and were not written to the file",
+        "xml-chars-replaced": "Some names or comments held characters Ariane cannot read - they were replaced with � in the file"
       }
     },
     "tmlUnanchoredWarning": {

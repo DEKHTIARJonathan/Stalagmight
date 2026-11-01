@@ -518,12 +518,7 @@ const MAX_FOREIGN_UUID_LEN: usize = 128;
 ///   SQLite TEXT read-back - which would make the saved and the reloaded
 ///   identity differ with nothing to show for it.
 fn is_unexportable_in_xml(c: char) -> bool {
-    let in_xml_char_set = matches!(c,
-        '\u{9}' | '\u{A}' | '\u{D}'
-        | '\u{20}'..='\u{D7FF}'
-        | '\u{E000}'..='\u{FFFD}'
-        | '\u{10000}'..='\u{10FFFF}');
-    !in_xml_char_set || c.is_control()
+    !schema::is_xml_char(c) || c.is_control()
 }
 
 /// The file's `<UUID>`/`<UU>` as an identity we are willing to store, or `None`

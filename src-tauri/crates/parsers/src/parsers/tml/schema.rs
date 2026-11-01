@@ -166,6 +166,43 @@ pub fn is_depth_in_sentinel(depth_in: f64) -> bool {
     depth_in == DEPTH_IN_SAME_AS_PREVIOUS
 }
 
+/// Whether `c` is in XML 1.0's `Char` production -
+/// `#x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]`.
+///
+/// Anything outside it cannot appear in a well-formed document at all, escaped
+/// or not: quick-xml's `BytesText::new` escapes only `<>&"'` and writes the rest
+/// as raw bytes, and one such byte makes Ariane and SpeleoDB reject the WHOLE
+/// file. Surrogates are the production's other exclusion and cannot occur in a
+/// Rust `char`. C1 controls (U+0080-U+009F) ARE in the production.
+pub fn is_xml_char(c: char) -> bool {
+    matches!(c,
+        '\u{9}' | '\u{A}' | '\u{D}'
+        | '\u{20}'..='\u{D7FF}'
+        | '\u{E000}'..='\u{FFFD}'
+        | '\u{10000}'..='\u{10FFFF}')
+}
+
+/// `text` with every character XML 1.0 cannot carry replaced by U+FFFD, and how
+/// many were replaced (#576 B11).
+///
+/// Replaced, not dropped: the file always opens, and the change is visible in
+/// Ariane rather than silently closing up the text around it. Line breaks
+/// (`\n`, `\r`, tab) and the U+200B shot-comment marker are legal XML and pass
+/// through untouched - a broader "strip control characters" filter would merge
+/// multi-line comments and destroy the station-comment co-encoding. Borrowed
+/// when nothing needed replacing, which is every ordinary string.
+pub fn xml_text(text: &str) -> (std::borrow::Cow<'_, str>, usize) {
+    let replaced = text.chars().filter(|&c| !is_xml_char(c)).count();
+    if replaced == 0 {
+        return (std::borrow::Cow::Borrowed(text), 0);
+    }
+    let safe = text
+        .chars()
+        .map(|c| if is_xml_char(c) { c } else { '\u{FFFD}' })
+        .collect();
+    (std::borrow::Cow::Owned(safe), replaced)
+}
+
 /// Colour Ariane gets for a section whose own colour is not `#RRGGBB`.
 pub const FALLBACK_ARIANE_COLOR: &str = "0x4ecdc4ff";
 /// The model colour a file row without a usable `<Color>` imports as.
@@ -298,6 +335,40 @@ mod tests {
         assert_eq!(color_from_ariane(Some("0X8F6112FF")), "#8F6112");
         for junk in [None, Some(""), Some("  "), Some("8f6112ff"), Some("0x8f61")] {
             assert_eq!(color_from_ariane(junk), FALLBACK_MODEL_COLOR);
+        }
+    }
+
+    /// Exactly the characters outside XML 1.0's `Char` production become
+    /// U+FFFD; line breaks, tab, the U+200B comment marker, C1 controls and
+    /// astral characters survive as themselves.
+    #[test]
+    fn xml_text_replaces_exactly_what_xml_cannot_carry() {
+        let (safe, replaced) = xml_text("a\u{1}b\u{B}c\u{FFFE}d\u{FFFF}e\u{0}");
+        assert_eq!(safe, "a\u{FFFD}b\u{FFFD}c\u{FFFD}d\u{FFFD}e\u{FFFD}");
+        assert_eq!(replaced, 5);
+
+        let legal = "line one\nline two\r\n\ttabbed \u{200B}marked \u{85}c1 \u{1F600} \u{FFFD}";
+        let (kept, none) = xml_text(legal);
+        assert_eq!(none, 0);
+        assert!(matches!(kept, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(kept, legal);
+
+        for c in [
+            '\u{0}', '\u{8}', '\u{B}', '\u{C}', '\u{1F}', '\u{FFFE}', '\u{FFFF}',
+        ] {
+            assert!(!is_xml_char(c), "{c:?} is not XML");
+        }
+        for c in [
+            '\t',
+            '\n',
+            '\r',
+            ' ',
+            '\u{D7FF}',
+            '\u{E000}',
+            '\u{FFFD}',
+            '\u{10000}',
+        ] {
+            assert!(is_xml_char(c), "{c:?} is XML");
         }
     }
 

@@ -109,8 +109,9 @@ struct ExportShot {
 /// exists so those concessions cannot leak into the file a user asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TmlProfile {
-    /// The user-facing "Export to Ariane" output. Byte-for-byte what we have
-    /// always written; nothing below may change it.
+    /// The user-facing "Export to Ariane" output. Its bytes change only
+    /// deliberately: `tml_golden_tests` pins the whole document, so a change
+    /// lands together with its golden.
     User,
     /// The throwaway `ariane.tml` pushed alongside a SpeleoDB commit, which the
     /// server converts to GeoJSON for the map preview.
@@ -122,8 +123,9 @@ enum TmlProfile {
 // ============================================================================
 
 /// Export a project to Ariane TML (`.tml` = ZIP) or TMLU (`.tmlu` = plain XML).
-/// Returns the notes the user has to be told about THIS document - today only
-/// the azimuth compromises (#438), which are empty for an ordinary project.
+/// Returns the notes the user has to be told about THIS document - the azimuth
+/// compromises (#438), GPS anchors no START could carry, and text characters
+/// XML could not carry (#576 B11) - all empty for an ordinary project.
 /// Notes, not warnings: nothing failed, but something about the file is not
 /// what the reader would assume, and the export command is the only moment the
 /// user is looking.
@@ -208,44 +210,37 @@ fn build_xml(
     ensure_rooted_chain(&shots, profile)?;
 
     let mut buf = Vec::new();
-    let mut writer = Writer::new_with_indent(Cursor::new(&mut buf), b' ', 4);
+    let mut out = TmlWriter {
+        xml: Writer::new_with_indent(Cursor::new(&mut buf), b' ', 4),
+        sp,
+        replaced_chars: 0,
+    };
 
     // <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    writer.write_event(Event::Decl(BytesDecl::new(
+    out.xml.write_event(Event::Decl(BytesDecl::new(
         "1.0",
         Some("UTF-8"),
         Some("yes"),
     )))?;
 
-    // <CaveFile>
-    writer.write_event(Event::Start(BytesStart::new(
-        el::cave_file::NAME.spelled(sp),
-    )))?;
+    out.start(el::cave_file::NAME)?;
 
     // Metadata elements
-    write_field(&mut writer, sp, el::cave_name::NAME, &project.name)?;
-    write_field(
-        &mut writer,
-        sp,
+    out.field(el::cave_name::NAME, &project.name)?;
+    out.field(
         el::first_start_absolute_elevation::NAME,
         &format_f64(project.surface_elevation.unwrap_or(0.0)),
     )?;
 
-    // <Data>
-    writer.write_event(Event::Start(BytesStart::new(el::data::NAME.spelled(sp))))?;
-
+    out.start(el::data::NAME)?;
     for shot in &shots {
-        write_shot(&mut writer, sp, shot)?;
+        write_shot(&mut out, shot)?;
     }
-
-    // </Data>
-    writer.write_event(Event::End(BytesEnd::new(el::data::NAME.spelled(sp))))?;
+    out.end(el::data::NAME)?;
 
     // Remaining metadata after Data (matching Ariane's ordering)
-    write_field(&mut writer, sp, el::unit::NAME, "m")?;
-    write_field(
-        &mut writer,
-        sp,
+    out.field(el::unit::NAME, "m")?;
+    out.field(
         el::use_magnetic_azimuth::NAME,
         if azimuth_export.is_magnetic() {
             "true"
@@ -254,88 +249,98 @@ fn build_xml(
         },
     )?;
 
-    // </CaveFile>
-    writer.write_event(Event::End(BytesEnd::new(el::cave_file::NAME.spelled(sp))))?;
+    out.end(el::cave_file::NAME)?;
 
-    drop(writer);
+    // A character XML cannot carry was replaced rather than written (#576
+    // B11): the file opens, but its text is not exactly the project's, so the
+    // user hears about it like any other fact the file carries and the project
+    // does not.
+    if out.replaced_chars > 0 {
+        tracing::warn!(
+            replaced = out.replaced_chars,
+            note = XML_CHARS_REPLACED_NOTE,
+            "Ariane export: replaced characters XML 1.0 cannot carry with U+FFFD"
+        );
+        notes.push(XML_CHARS_REPLACED_NOTE.to_string());
+    }
+
+    drop(out);
     Ok((buf, notes))
 }
 
-fn write_text_element<W: std::io::Write>(
-    writer: &mut Writer<W>,
-    tag: &str,
-    text: &str,
-) -> Result<()> {
-    writer.write_event(Event::Start(BytesStart::new(tag)))?;
-    writer.write_event(Event::Text(BytesText::new(text)))?;
-    writer.write_event(Event::End(BytesEnd::new(tag)))?;
-    Ok(())
+/// The export note for text that lost characters XML cannot carry (#576 B11).
+const XML_CHARS_REPLACED_NOTE: &str = "xml-chars-replaced";
+
+/// The document being written: the XML writer, the spelling its element names
+/// take, and how many characters had to be replaced on the way in.
+///
+/// Every element's text goes through [`TmlWriter::text_element`], so there is
+/// exactly one place where project text meets the file - which is where the
+/// XML 1.0 gate lives (#576 B11).
+struct TmlWriter<W: std::io::Write> {
+    xml: Writer<W>,
+    sp: Spelling,
+    replaced_chars: usize,
 }
 
-/// [`write_text_element`] for a schema element, in the document's spelling.
-fn write_field<W: std::io::Write>(
-    writer: &mut Writer<W>,
-    sp: Spelling,
-    element: ElementName,
-    text: &str,
-) -> Result<()> {
-    write_text_element(writer, element.spelled(sp), text)
+impl<W: std::io::Write> TmlWriter<W> {
+    fn start(&mut self, element: ElementName) -> Result<()> {
+        let tag = element.spelled(self.sp);
+        self.xml.write_event(Event::Start(BytesStart::new(tag)))?;
+        Ok(())
+    }
+
+    fn end(&mut self, element: ElementName) -> Result<()> {
+        let tag = element.spelled(self.sp);
+        self.xml.write_event(Event::End(BytesEnd::new(tag)))?;
+        Ok(())
+    }
+
+    /// `<tag>text</tag>`, with every character XML 1.0 cannot carry replaced
+    /// by U+FFFD (`BytesText::new` escapes only `<>&"'`; anything else would be
+    /// written raw and make the document unreadable) and counted.
+    fn text_element(&mut self, tag: &str, text: &str) -> Result<()> {
+        let (safe, replaced) = schema::xml_text(text);
+        self.replaced_chars += replaced;
+        self.xml.write_event(Event::Start(BytesStart::new(tag)))?;
+        self.xml.write_event(Event::Text(BytesText::new(&safe)))?;
+        self.xml.write_event(Event::End(BytesEnd::new(tag)))?;
+        Ok(())
+    }
+
+    /// [`Self::text_element`] for a schema element, in the document's spelling.
+    fn field(&mut self, element: ElementName, text: &str) -> Result<()> {
+        self.text_element(element.spelled(self.sp), text)
+    }
 }
 
-fn write_shot<W: std::io::Write>(
-    writer: &mut Writer<W>,
-    sp: Spelling,
-    shot: &ExportShot,
-) -> Result<()> {
-    let row = el::survey_data::NAME.spelled(sp);
-    writer.write_event(Event::Start(BytesStart::new(row)))?;
+fn write_shot<W: std::io::Write>(out: &mut TmlWriter<W>, shot: &ExportShot) -> Result<()> {
+    out.start(el::survey_data::NAME)?;
 
     // Write fields in alphabetical order (matching Ariane's output)
-    write_field(writer, sp, el::azimuth::NAME, &format_f64(shot.azimuth))?;
-    write_field(
-        writer,
-        sp,
-        el::closure_to_id::NAME,
-        &shot.closure_to_id.to_string(),
-    )?;
-    write_field(writer, sp, el::color::NAME, &shot.color)?;
-
-    let comment_str = shot.comment.as_deref().unwrap_or("");
-    write_field(writer, sp, el::comment::NAME, comment_str)?;
-
+    out.field(el::azimuth::NAME, &format_f64(shot.azimuth))?;
+    out.field(el::closure_to_id::NAME, &shot.closure_to_id.to_string())?;
+    out.field(el::color::NAME, &shot.color)?;
+    out.field(el::comment::NAME, shot.comment.as_deref().unwrap_or(""))?;
     let date_str = shot.date.as_deref().unwrap_or(DEFAULT_EXPORT_DATE);
-    write_field(writer, sp, el::date::NAME, date_str)?;
-
-    write_field(writer, sp, el::depth::NAME, &format_f64(shot.depth))?;
-    write_field(
-        writer,
-        sp,
-        el::depth_in::NAME,
-        &format_f64(emitted_depth_in(shot)),
+    out.field(el::date::NAME, date_str)?;
+    out.field(el::depth::NAME, &format_f64(shot.depth))?;
+    out.field(el::depth_in::NAME, &format_f64(emitted_depth_in(shot)))?;
+    out.field(el::down::NAME, &format_f64(shot.down))?;
+    out.field(el::excluded::NAME, "false")?;
+    let explorer = shot.explorer.as_deref();
+    out.field(
+        el::explorer::NAME,
+        explorer.unwrap_or(schema::EXPLORER_PLACEHOLDER),
     )?;
-    write_field(writer, sp, el::down::NAME, &format_f64(shot.down))?;
-    write_field(writer, sp, el::excluded::NAME, "false")?;
-
-    let explorer_str = shot
-        .explorer
-        .as_deref()
-        .unwrap_or(schema::EXPLORER_PLACEHOLDER);
-    write_field(writer, sp, el::explorer::NAME, explorer_str)?;
-
-    write_field(writer, sp, el::from_id::NAME, &shot.from_id.to_string())?;
-    write_field(writer, sp, el::id::NAME, &shot.id.to_string())?;
-    write_field(
-        writer,
-        sp,
-        el::inclination::NAME,
-        &format_f64(shot.inclination),
-    )?;
-    write_field(writer, sp, el::latitude::NAME, &format_f64(shot.latitude))?;
-    write_field(writer, sp, el::left::NAME, &format_f64(shot.left))?;
-    write_field(writer, sp, el::length::NAME, &format_f64(shot.length))?;
-    let locked = if shot.locked { "true" } else { "false" };
-    write_field(writer, sp, el::locked::NAME, locked)?;
-    write_field(writer, sp, el::longitude::NAME, &format_f64(shot.longitude))?;
+    out.field(el::from_id::NAME, &shot.from_id.to_string())?;
+    out.field(el::id::NAME, &shot.id.to_string())?;
+    out.field(el::inclination::NAME, &format_f64(shot.inclination))?;
+    out.field(el::latitude::NAME, &format_f64(shot.latitude))?;
+    out.field(el::left::NAME, &format_f64(shot.left))?;
+    out.field(el::length::NAME, &format_f64(shot.length))?;
+    out.field(el::locked::NAME, if shot.locked { "true" } else { "false" })?;
+    out.field(el::longitude::NAME, &format_f64(shot.longitude))?;
 
     // Ariane conventions: START has START name, CLOSURE uses CLOSURE:CLOSURE.
     let name_str = match shot.shot_type {
@@ -343,18 +348,13 @@ fn write_shot<W: std::io::Write>(
         schema::TYPE_CLOSURE => schema::NAME_CLOSURE,
         _ => "",
     };
-    write_field(writer, sp, el::name::NAME, name_str)?;
+    out.field(el::name::NAME, name_str)?;
 
-    write_field(
-        writer,
-        sp,
-        el::profiletype::NAME,
-        schema::PROFILE_TYPE_VERTICAL,
-    )?;
-    write_field(writer, sp, el::right::NAME, &format_f64(shot.right))?;
-    write_field(writer, sp, el::section::NAME, &shot.section)?;
-    write_field(writer, sp, el::shot_type::NAME, shot.shot_type)?;
-    write_field(writer, sp, el::up::NAME, &format_f64(shot.up))?;
+    out.field(el::profiletype::NAME, schema::PROFILE_TYPE_VERTICAL)?;
+    out.field(el::right::NAME, &format_f64(shot.right))?;
+    out.field(el::section::NAME, &shot.section)?;
+    out.field(el::shot_type::NAME, shot.shot_type)?;
+    out.field(el::up::NAME, &format_f64(shot.up))?;
 
     // Stable per-shot UUID. Emitted for every block that stands for a REAL
     // PROJECT SHOT - the forward blocks and the reversed "(pre-zero-datum)" /
@@ -377,11 +377,10 @@ fn write_shot<W: std::io::Write>(
     // cannot see a forward/reverse pair as a duplicate - pinned by
     // `a_reversed_leg_is_a_shots_only_appearance_so_nothing_is_reminted`.
     if let Some(uuid) = &shot.uuid {
-        write_field(writer, sp, el::uuid::NAME, uuid)?;
+        out.field(el::uuid::NAME, uuid)?;
     }
 
-    writer.write_event(Event::End(BytesEnd::new(row)))?;
-    Ok(())
+    out.end(el::survey_data::NAME)
 }
 
 /// Stand-in for a section with no survey date. `<Date>` is not optional to every
@@ -2482,6 +2481,76 @@ mod tests {
                 "uuid {uuid} lost from the export after an insert"
             );
         }
+    }
+
+    /// #576 B11: a character XML 1.0 cannot carry - it arrives in names and
+    /// comments from imported files and pasted text - used to be written as a
+    /// raw byte, and one such byte makes Ariane and SpeleoDB reject the WHOLE
+    /// document. It is replaced with U+FFFD and the export says so; line
+    /// breaks and the U+200B shot-comment marker are legal and survive.
+    #[test]
+    fn text_xml_cannot_carry_is_replaced_and_noted() {
+        let mut project = Project::new("Cave\u{1}A".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main\u{B}".to_string()),
+            surveyor: Some("Diver\u{FFFE}A".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![ShotData {
+                length: 3.0,
+                comment: Some("line one\nline two\u{0}".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let key = project.key_for_ref(StationRef::new(0, 1)).unwrap();
+        project
+            .station_comments
+            .insert(key, "station\u{1F}note".to_string());
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("illegal.tmlu");
+        let notes = export_tml(&project, &path).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+
+        let illegal: Vec<char> = content
+            .chars()
+            .filter(|&c| !schema::is_xml_char(c))
+            .collect();
+        assert!(
+            illegal.is_empty(),
+            "the document must be well-formed XML; still carries {illegal:?}"
+        );
+        assert_eq!(
+            content.matches('\u{FFFD}').count(),
+            // name, section (on the START and the shot), surveyor (both rows),
+            // the shot comment and the station comment
+            1 + 2 + 2 + 1 + 1,
+            "{content}"
+        );
+        assert!(
+            notes.contains(&"xml-chars-replaced".to_string()),
+            "the user must be told the text changed: {notes:?}"
+        );
+        assert!(content.contains("<caveName>Cave\u{FFFD}A</caveName>"));
+        assert!(
+            content.contains("\u{200B}line one\n\u{200B}line two\u{FFFD}\nstation\u{FFFD}note"),
+            "line breaks and the shot-comment markers survive: {content}"
+        );
+
+        // Our own reader takes the file back with the replacement in place.
+        let reparsed = crate::parsers::tml::parse_tml(&path).unwrap();
+        assert_eq!(reparsed.cave_name, "Cave\u{FFFD}A");
+        assert_eq!(reparsed.sections[0].name, "Main\u{FFFD}");
+
+        // The sidecar gets the same treatment (its notes go to the log).
+        let sidecar = dir.path().join("sidecar.tmlu");
+        export_tml_for_speleodb(&project, &sidecar).unwrap();
+        let sidecar_content = std::fs::read_to_string(&sidecar).unwrap();
+        assert!(sidecar_content.chars().all(schema::is_xml_char));
+
+        // And an ordinary project says nothing.
+        let ordinary = dir.path().join("ordinary.tmlu");
+        assert!(export_tml(&simple_project(), &ordinary).unwrap().is_empty());
     }
 
     #[test]
