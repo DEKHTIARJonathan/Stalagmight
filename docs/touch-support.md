@@ -78,7 +78,7 @@ scroll container serves every cell (see `useTouchContextMenu` below).
 |---|---|---|
 | Delay | `delay` option, default 500 ms (`useLongPress.ts:121`) | `LONG_PRESS_MS` = 500 ms |
 | Move cancel | `moveThreshold` option, default 10 px | `MOVE_CANCEL_PX` = 10 px, compared squared |
-| Multi-touch | not checked | armed only at `e.touches.length === 1`, and a second finger cancels a press already pending |
+| Multi-touch | a second finger restarts the hold from that finger (`useLongPress.ts:152`), so the press can still fire - the opposite of `attachLongPressTouch` | armed only at `e.touches.length === 1`, and a second finger cancels a press already pending |
 | Events | pointer events, spread onto an element | raw `touch*` listeners on the element |
 
 The canvas constants used to be inline literals in a state machine each map
@@ -115,7 +115,7 @@ and the user's genuine tap on the menu is well inside 700 ms. A real gesture
 always begins with a `pointerdown` and a compat sequence synthesized from a lift
 never does, so that signal cannot fire ahead of the events the window exists to
 eat. The suppressor is also torn down when the consumer unmounts
-(`useLongPress.ts:200`), since the menu a press opens can take the row
+(`useLongPress.ts:204`), since the menu a press opens can take the row
 underneath it away.
 
 Two details there are load-bearing. The suppressor is armed at the LIFT, not
