@@ -2622,6 +2622,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const sourceLabel = (args?.sourceLabel as string | null | undefined) ?? null;
             const sourceFileName = (args?.sourceFileName as string | null | undefined) ?? null;
             const sectionsFoundArg = (args?.sectionsFound as number | null | undefined) ?? null;
+            // The file's parse warnings lead the receipt (#576 B13), as in
+            // `import_sections`' `lead_receipt_with_source_warnings`.
+            const sourceWarnings = Array.isArray(args?.sourceWarnings)
+              ? (args?.sourceWarnings as string[]).filter((w) => w.length > 0)
+              : [];
             return {
               success: true,
               warnings: [],
@@ -2638,7 +2643,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 closures_requested: 0,
                 closures_created: 0,
                 unit_conversion: null,
-                warnings: [],
+                warnings: sourceWarnings,
                 info: [],
               },
             };
@@ -3468,6 +3473,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ],
                 },
               ],
+              // What the parser could not read (#576 B13); a clean file has none.
+              warnings: [],
             };
           }
 

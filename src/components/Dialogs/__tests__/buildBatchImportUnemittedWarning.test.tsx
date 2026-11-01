@@ -114,6 +114,7 @@ function build(alreadyImported: Map<number, number> | undefined) {
   const dmpFile: DmpFile = {
     version: 1,
     sections: [dmpSection('Segment', 3), dmpSection('AlreadyDone', 4)],
+    warnings: [],
   };
   const selectionConfig: DmpSelectionConfig = {
     selectedIndices: new Set([0, 1]),
@@ -176,7 +177,7 @@ describe('buildBatchImport unemitted-reachable warning', () => {
   it('does not warn when the only reachable-but-unemitted section produced nothing (every shot deleted)', () => {
     // Section 0 is anchored (reachable) but every shot was deleted in the
     // wizard's shot table, so it emits nothing - `emptySections`, not a gap.
-    const dmpFile: DmpFile = { version: 1, sections: [dmpSection('Segment', 3)] };
+    const dmpFile: DmpFile = { version: 1, sections: [dmpSection('Segment', 3)], warnings: [] };
     const selectionConfig: DmpSelectionConfig = {
       selectedIndices: new Set([0]),
       defaultSurveyor: 'S',
@@ -219,7 +220,7 @@ describe('buildBatchImport unemitted-reachable warning', () => {
     // resolver can build neither a `from_existing` nor a `from_importing`
     // placement for it - a real, unexplained gap that is not `alreadyImported`,
     // not `deferredImportSet`, and not `emptySections`.
-    const dmpFile: DmpFile = { version: 1, sections: [dmpSection('Segment', 3)] };
+    const dmpFile: DmpFile = { version: 1, sections: [dmpSection('Segment', 3)], warnings: [] };
     const selectionConfig: DmpSelectionConfig = {
       selectedIndices: new Set([0]),
       defaultSurveyor: 'S',

@@ -2282,6 +2282,7 @@ Rewrite `pytool_mnemo_lib` parser in Rust. Key structures:
 pub struct DmpFile {
     pub version: u8,  // 2-5
     pub sections: Vec<DmpSection>,
+    pub warnings: Vec<String>,  // what could not be read; empty for a clean file
 }
 
 pub struct DmpSection {

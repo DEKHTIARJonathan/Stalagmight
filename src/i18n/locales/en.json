@@ -1593,6 +1593,7 @@
       "depth": "Depth: {{range}}",
       "duplicateHashWarning": "File may have been imported before (same hash detected)",
       "duplicateSectionsWarning": "{{duplicates}} of {{total}} sections already imported (auto-deselected)",
+      "parseWarningsTitle": "Not all of this file could be read:",
       "defaultValues": "Default Values (apply to all sections)",
       "surveyorLabel": "Surveyor",
       "surveyorPlaceholder": "Enter surveyor name...",

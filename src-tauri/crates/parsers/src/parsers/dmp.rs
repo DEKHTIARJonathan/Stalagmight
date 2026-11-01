@@ -123,6 +123,11 @@ impl IntBuffer {
     fn has_remaining(&self, n: usize) -> bool {
         self.cursor + n <= self.data.len()
     }
+
+    /// Bytes not read yet
+    fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.cursor)
+    }
 }
 
 // ============================================================================
@@ -136,6 +141,14 @@ pub struct DmpFile {
     pub version: u8,
     /// Sections in the file
     pub sections: Vec<DmpSection>,
+    /// What could not be read, one sentence each (#576 B13): a section that
+    /// failed to parse, a section that stops at a damaged record, a last section
+    /// with no end-of-section marker. Empty for a clean file. The import wizard
+    /// shows them before import and hands them to `import_sections`, where they
+    /// lead the receipt like the other importers' converter warnings. At most
+    /// [`MAX_DMP_WARNINGS`], then one "and N more" line.
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 /// A section from a DMP file
@@ -320,18 +333,28 @@ fn compute_section_hash(name: &str, direction: DmpDirection, shots: &[DmpShot]) 
 // Parsing Functions
 // ============================================================================
 
+/// DMP data cut at its end-of-section markers.
+struct SplitSections<'a> {
+    /// Every slice that ends in an end-of-section marker, in file order.
+    sections: Vec<Vec<u8>>,
+    /// Whatever follows the last marker: the trailer a device writes after its
+    /// last section (an ASCII `MN2Over`, or a lone zero byte, in the dumps seen
+    /// so far), or a last section whose marker never arrived.
+    tail: &'a [u8],
+}
+
 /// Split DMP data into sections by end-of-section markers
-fn split_into_sections(data: &[u8], version: u8) -> Vec<Vec<u8>> {
+fn split_into_sections(data: &[u8], version: u8) -> SplitSections<'_> {
     let patterns = end_of_section_patterns(version);
-    if patterns.is_empty() {
-        return vec![];
-    }
+    let pattern_len = patterns.first().map_or(0, Vec::len);
 
-    let pattern_len = patterns[0].len();
-
-    // If data is shorter than pattern, no sections can be found
-    if data.len() < pattern_len {
-        return vec![];
+    // No patterns (unsupported version), or data shorter than a pattern: no
+    // section can end in this data.
+    if pattern_len == 0 || data.len() < pattern_len {
+        return SplitSections {
+            sections: vec![],
+            tail: data,
+        };
     }
 
     let mut sections = Vec::new();
@@ -348,7 +371,28 @@ fn split_into_sections(data: &[u8], version: u8) -> Vec<Vec<u8>> {
         }
     }
 
-    sections
+    SplitSections {
+        sections,
+        tail: &data[start_idx..],
+    }
+}
+
+/// Whether `tail` (the bytes after the last end-of-section marker) begins a
+/// section - a version byte, then the section magic for v3+ - rather than being
+/// a device trailer. A dump cut short inside its last section looks like this;
+/// a clean one never does.
+fn starts_a_section(tail: &[u8], version: u8) -> bool {
+    let Some((&first, rest)) = tail.split_first() else {
+        return false;
+    };
+    if first != version {
+        return false;
+    }
+    if version <= 2 {
+        return true;
+    }
+    let seen = rest.len().min(SECTION_MAGIC.len());
+    rest[..seen] == SECTION_MAGIC[..seen]
 }
 
 /// Parse a shot from buffer based on version
@@ -444,8 +488,32 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
     })
 }
 
+/// Why reading a section's shots stopped before its bytes ran out.
+enum SectionStop {
+    /// A record failed to parse; the parse error.
+    DamagedRecord(String),
+    /// Fewer bytes than one whole record were left over at the end.
+    PartialRecord,
+}
+
+/// A parsed section, and whether reading it stopped before its bytes ran out
+/// (then the section holds only the shots read before that point).
+struct ParsedSection {
+    section: DmpSection,
+    stopped_early: Option<SectionStop>,
+}
+
+/// Standard shots in `section` - the legs an import creates.
+fn standard_shot_count(section: &DmpSection) -> usize {
+    section
+        .shots
+        .iter()
+        .filter(|shot| shot.shot_type == DmpShotType::Standard)
+        .count()
+}
+
 /// Parse a section from raw section data
-fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
+fn parse_section(data: Vec<u8>) -> Result<ParsedSection> {
     let mut buffer = IntBuffer::new(data);
 
     // Version byte
@@ -502,8 +570,14 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
     // Parse shots. Each one is read from its own `shot_len`-byte record, as
     // the reference reader does, so the cursor always lands on the next record
     // boundary whatever `parse_shot` reads out of the current one.
+    //
+    // A record that does not parse ends the section there rather than being
+    // skipped: a DMP section is a chain of legs, so dropping one would hang every
+    // later shot off the wrong station. Where it stopped is returned, so
+    // `parse_dmp` can say so (#576 B13).
     let shot_len = shot_size(version);
     let mut shots = Vec::new();
+    let mut damaged_record = None;
 
     while buffer.has_remaining(shot_len) {
         let mut record = IntBuffer::new(buffer.read_n(shot_len)?);
@@ -515,10 +589,16 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
                     purpose = "parse section shots for import",
                     "Stopping shot parsing after terminal or invalid data"
                 );
+                damaged_record = Some(e.to_string());
                 break;
             }
         }
     }
+    let stopped_early = match damaged_record {
+        Some(reason) => Some(SectionStop::DamagedRecord(reason)),
+        None if buffer.remaining() > 0 => Some(SectionStop::PartialRecord),
+        None => None,
+    };
 
     if shots.is_empty() {
         bail!("Section has no shots");
@@ -539,19 +619,41 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
         shot.pitch_out = negate_pitch(shot.pitch_out);
     }
 
-    Ok(DmpSection {
-        version,
-        name,
-        direction,
-        date,
-        shots,
-        content_hash,
+    Ok(ParsedSection {
+        section: DmpSection {
+            version,
+            name,
+            direction,
+            date,
+            shots,
+            content_hash,
+        },
+        stopped_early,
     })
 }
 
 /// Maximum DMP file size (50 MB). DMP files are text-based semicolon-separated
 /// integers and should never be this large for legitimate survey data.
 const MAX_DMP_FILE_SIZE: u64 = 50 * 1024 * 1024;
+
+/// Most warnings a [`DmpFile`] carries before folding the rest into one line -
+/// the import receipt's own cap, so a file that breaks every section cannot
+/// flood the preview either.
+const MAX_DMP_WARNINGS: usize = 50;
+
+/// A section name as it may appear in a warning: the three bytes are file
+/// content, so control characters and bidi overrides are dropped.
+fn display_name(section: &DmpSection) -> String {
+    crate::models::sanitize_display_text(&section.name, 16)
+}
+
+fn shots_phrase(count: usize) -> String {
+    if count == 1 {
+        "1 shot".to_string()
+    } else {
+        format!("{count} shots")
+    }
+}
 
 /// Parse a DMP file
 ///
@@ -616,16 +718,32 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
     );
 
     // Split into sections
-    let section_data = split_into_sections(&data, version);
-    if section_data.is_empty() {
+    let split = split_into_sections(&data, version);
+    // A last section whose end marker never arrived (a download cut short) is
+    // read like any other, up to its last whole record, and said so (#576 B13).
+    let unterminated = starts_a_section(split.tail, version).then(|| split.tail.to_vec());
+    if split.sections.is_empty() && unterminated.is_none() {
         bail!("No sections found in DMP file");
     }
 
-    // Parse each section
+    // Parse each section. Nothing that fails to read is dropped silently: every
+    // loss becomes a warning the wizard shows before import and the receipt
+    // carries after it (#576 B13). Sections are named by their 1-based position
+    // in the file as well as their name, which may be part of what is damaged.
     let mut sections = Vec::new();
-    for (i, section_bytes) in section_data.into_iter().enumerate() {
+    let mut warnings = Vec::new();
+    let candidates = split
+        .sections
+        .into_iter()
+        .map(|bytes| (bytes, true))
+        .chain(unterminated.map(|bytes| (bytes, false)));
+    for (i, (section_bytes, terminated)) in candidates.enumerate() {
+        let position = i + 1;
         match parse_section(section_bytes) {
-            Ok(section) => {
+            Ok(ParsedSection {
+                section,
+                stopped_early,
+            }) => {
                 tracing::debug!(
                     section_index = i,
                     section_name = %section.name,
@@ -633,6 +751,24 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
                     purpose = "build import preview",
                     "Parsed section for import preview"
                 );
+                let name = display_name(&section);
+                let read = shots_phrase(standard_shot_count(&section));
+                if !terminated {
+                    warnings.push(format!(
+                        "Section \"{name}\" (#{position} in the file) has no end-of-section \
+                         marker, so the download may have been cut short: {read} were read, \
+                         the rest of the file was not."
+                    ));
+                } else if let Some(stop) = stopped_early {
+                    let why = match stop {
+                        SectionStop::DamagedRecord(e) => format!("a damaged record ({e})"),
+                        SectionStop::PartialRecord => "an incomplete record".to_string(),
+                    };
+                    warnings.push(format!(
+                        "Section \"{name}\" (#{position} in the file) stops at {why} after \
+                         {read}; the rest of that section was not read."
+                    ));
+                }
                 sections.push(section);
             }
             Err(e) => {
@@ -642,12 +778,33 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
                     reason = %e,
                     "Failed to parse section for import preview"
                 );
+                warnings.push(if terminated {
+                    format!(
+                        "Section #{position} in the file could not be read and was left out: {e}."
+                    )
+                } else {
+                    format!(
+                        "The file ends with a section (#{position} in the file) that has no \
+                         end-of-section marker and could not be read: {e}. The download may \
+                         have been cut short."
+                    )
+                });
             }
         }
     }
-
     if sections.is_empty() {
-        bail!("No valid sections found in DMP file");
+        bail!(
+            "No valid sections found in DMP file. {}",
+            warnings.join(" ")
+        );
+    }
+    if warnings.len() > MAX_DMP_WARNINGS {
+        let more = warnings.len() - MAX_DMP_WARNINGS;
+        warnings.truncate(MAX_DMP_WARNINGS);
+        warnings.push(format!(
+            "... and {more} more warning{}",
+            if more == 1 { "" } else { "s" }
+        ));
     }
 
     tracing::info!(
@@ -657,7 +814,11 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
         "DMP file parsed for import preview"
     );
 
-    Ok(DmpFile { version, sections })
+    Ok(DmpFile {
+        version,
+        sections,
+        warnings,
+    })
 }
 
 // ============================================================================
@@ -836,7 +997,7 @@ mod tests {
         data.extend(vec![0u8; 20]); // padding/header
         data.extend(vec![3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // end marker
 
-        let sections = split_into_sections(&data, 2);
+        let sections = split_into_sections(&data, 2).sections;
         assert_eq!(sections.len(), 1);
     }
 
@@ -1362,7 +1523,9 @@ mod tests {
         data.push(3); // EndOfSurvey
         data.extend([0; 20]);
 
-        let section = parse_section(data).expect("synthetic v3 section must parse");
+        let section = parse_section(data)
+            .expect("synthetic v3 section must parse")
+            .section;
         let times: Vec<(u8, u8, u8)> = section
             .shots
             .iter()
@@ -1416,7 +1579,9 @@ mod tests {
         data.push(3); // EndOfSurvey
         data.extend([0; 28]);
 
-        let section = parse_section(data).expect("synthetic v4 section must parse");
+        let section = parse_section(data)
+            .expect("synthetic v4 section must parse")
+            .section;
         let times: Vec<(u8, u8, u8)> = section
             .shots
             .iter()
@@ -1780,13 +1945,13 @@ mod tests {
 
     #[test]
     fn test_split_into_sections_empty_data() {
-        let sections = split_into_sections(&[], 2);
+        let sections = split_into_sections(&[], 2).sections;
         assert!(sections.is_empty());
     }
 
     #[test]
     fn test_split_into_sections_data_shorter_than_pattern() {
-        let sections = split_into_sections(&[2, 0, 0], 2);
+        let sections = split_into_sections(&[2, 0, 0], 2).sections;
         assert!(
             sections.is_empty(),
             "data shorter than pattern = no sections"
@@ -1795,7 +1960,7 @@ mod tests {
 
     #[test]
     fn test_split_into_sections_unsupported_version() {
-        let sections = split_into_sections(&[1, 0, 0, 0, 0], 99);
+        let sections = split_into_sections(&[1, 0, 0, 0, 0], 99).sections;
         assert!(sections.is_empty(), "unsupported version = no patterns");
     }
 
@@ -3038,6 +3203,256 @@ mod tests {
             buffer.read_int16_be().unwrap(),
             -17,
             "should reconstruct -17"
+        );
+    }
+
+    // ========================================================================
+    // #576 B13: what the parser could not read is reported, not dropped
+    // ========================================================================
+
+    /// A v5 section header: version, section magic, 2025-01-15 09:00, name,
+    /// direction In.
+    fn v5_header(name: &[u8; 3]) -> Vec<u8> {
+        let mut bytes = vec![5, 68, 89, 101, 25, 1, 15, 9, 0];
+        bytes.extend_from_slice(name);
+        bytes.push(0);
+        bytes
+    }
+
+    /// One 35-byte v5 record as the device lays it out: start magic, type,
+    /// seven core i16s, LRUD, temperature, h/m/s, marker, end magic.
+    fn v5_record(shot_type: u8, heading_tenths: i16, length_cm: i16) -> Vec<u8> {
+        let mut bytes = SHOT_START_MAGIC.to_vec();
+        bytes.push(shot_type);
+        for value in [
+            heading_tenths,
+            heading_tenths,
+            length_cm,
+            500,
+            520,
+            -30,
+            -30,
+        ] {
+            bytes.extend_from_slice(&value.to_be_bytes());
+        }
+        for value in [100i16, 120, 80, 60, 245] {
+            bytes.extend_from_slice(&value.to_be_bytes());
+        }
+        bytes.extend_from_slice(&[10, 30, 0, 1]);
+        bytes.extend_from_slice(&SHOT_END_MAGIC);
+        assert_eq!(bytes.len(), shot_size(5));
+        bytes
+    }
+
+    fn v5_shot(heading_tenths: i16) -> Vec<u8> {
+        v5_record(2, heading_tenths, 500)
+    }
+
+    /// The normal v5 end-of-section record.
+    fn v5_end_marker() -> Vec<u8> {
+        let mut bytes = vec![57, 67, 77, 3];
+        bytes.extend(vec![0u8; 28]);
+        bytes.extend_from_slice(&[95, 25, 35]);
+        bytes
+    }
+
+    /// Write `bytes` as a `.dmp` (semicolon-separated integers) and parse it.
+    fn parse_bytes(bytes: &[u8]) -> Result<DmpFile> {
+        let content = bytes
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(";");
+        let (_file, path) = create_dmp_file(&content);
+        let result = parse_dmp(&path);
+        std::fs::remove_file(&path).ok();
+        result
+    }
+
+    fn standard_counts(dmp: &DmpFile) -> Vec<(String, usize)> {
+        dmp.sections
+            .iter()
+            .map(|s| {
+                let standard = s
+                    .shots
+                    .iter()
+                    .filter(|shot| shot.shot_type == DmpShotType::Standard)
+                    .count();
+                (s.name.clone(), standard)
+            })
+            .collect()
+    }
+
+    /// Section AAA is whole; section BBB has three shots and then the dump
+    /// stops inside its fourth record - no end-of-section marker after it.
+    fn cut_short_dump() -> Vec<u8> {
+        let mut bytes = v5_header(b"AAA");
+        bytes.extend(v5_shot(900));
+        bytes.extend(v5_shot(910));
+        bytes.extend(v5_end_marker());
+        bytes.extend(v5_header(b"BBB"));
+        bytes.extend(v5_shot(1800));
+        bytes.extend(v5_shot(1810));
+        bytes.extend(v5_shot(1820));
+        bytes.extend(v5_shot(1830).iter().take(20));
+        bytes
+    }
+
+    /// Section AAA: two shots, then a record whose shot type (9) does not
+    /// exist, then one more shot, then the end marker.
+    fn damaged_record_dump() -> Vec<u8> {
+        let mut bytes = v5_header(b"AAA");
+        bytes.extend(v5_shot(900));
+        bytes.extend(v5_shot(910));
+        bytes.extend(v5_record(9, 920, 500));
+        bytes.extend(v5_shot(930));
+        bytes.extend(v5_end_marker());
+        bytes
+    }
+
+    /// Three sections; the second's header says month 13.
+    fn unreadable_section_dump() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for (name, month) in [(b"AAA", 1u8), (b"BBB", 13), (b"CCC", 1)] {
+            let mut header = v5_header(name);
+            header[5] = month;
+            bytes.extend(header);
+            bytes.extend(v5_shot(900));
+            bytes.extend(v5_end_marker());
+        }
+        bytes
+    }
+
+    /// A dump cut short inside its last section: the section is read up to its
+    /// last whole record and imported, and the file says so. A v5 record
+    /// carries start and end magic, so a record torn mid-way (or whole-length
+    /// but with a broken end magic) is never read as a shot.
+    #[test]
+    fn a_last_section_without_an_end_marker_is_read_up_to_its_last_whole_record() {
+        let dmp = parse_bytes(&cut_short_dump()).unwrap();
+        assert_eq!(
+            standard_counts(&dmp),
+            vec![("AAA".to_string(), 2), ("BBB".to_string(), 3)],
+            "the unterminated BBB is read up to its last whole record"
+        );
+        assert_eq!(dmp.warnings.len(), 1, "warnings: {:?}", dmp.warnings);
+        let warning = &dmp.warnings[0];
+        assert!(
+            warning.contains("\"BBB\"")
+                && warning.contains("no end-of-section marker")
+                && warning.contains("3 shots"),
+            "the warning names the section, the missing marker and what was read: {warning}"
+        );
+
+        // Same dump, but the fourth record is whole and its end magic is broken.
+        let mut bytes = cut_short_dump();
+        let torn_len = 20;
+        bytes.truncate(bytes.len() - torn_len);
+        let mut broken = v5_shot(1830);
+        let last = broken.len() - 1;
+        broken[last] = 0;
+        bytes.extend(broken);
+        let dmp = parse_bytes(&bytes).unwrap();
+        assert_eq!(
+            standard_counts(&dmp),
+            vec![("AAA".to_string(), 2), ("BBB".to_string(), 3)],
+            "a whole record with a broken end magic is not a shot"
+        );
+        assert_eq!(dmp.warnings.len(), 1, "warnings: {:?}", dmp.warnings);
+    }
+
+    /// A dump whose only section is unterminated still parses, with the warning.
+    #[test]
+    fn a_dump_that_is_one_unterminated_section_still_parses() {
+        let mut bytes = v5_header(b"BBB");
+        bytes.extend(v5_shot(1800));
+        bytes.extend(v5_shot(1810));
+        let dmp = parse_bytes(&bytes).unwrap();
+        assert_eq!(standard_counts(&dmp), vec![("BBB".to_string(), 2)]);
+        assert_eq!(dmp.warnings.len(), 1, "warnings: {:?}", dmp.warnings);
+    }
+
+    /// Reading stops at a damaged record - skipping it would hang every later
+    /// shot off the wrong station - and the stop is reported.
+    #[test]
+    fn a_section_that_stops_at_a_damaged_record_is_reported() {
+        let dmp = parse_bytes(&damaged_record_dump()).unwrap();
+        assert_eq!(standard_counts(&dmp), vec![("AAA".to_string(), 2)]);
+        assert_eq!(dmp.warnings.len(), 1, "warnings: {:?}", dmp.warnings);
+        let warning = &dmp.warnings[0];
+        assert!(
+            warning.contains("\"AAA\"")
+                && warning.contains("damaged record")
+                && warning.contains("2 shots"),
+            "the warning names the section and where it stopped: {warning}"
+        );
+    }
+
+    /// A section that cannot be read at all is left out and named by position
+    /// (its name may be part of what is unreadable).
+    #[test]
+    fn a_section_that_cannot_be_read_is_reported_by_position() {
+        let dmp = parse_bytes(&unreadable_section_dump()).unwrap();
+        assert_eq!(
+            standard_counts(&dmp),
+            vec![("AAA".to_string(), 1), ("CCC".to_string(), 1)]
+        );
+        assert_eq!(dmp.warnings.len(), 1, "warnings: {:?}", dmp.warnings);
+        let warning = &dmp.warnings[0];
+        assert!(
+            warning.contains("#2") && warning.contains("month"),
+            "the warning names the position and the reason: {warning}"
+        );
+    }
+
+    /// When nothing can be read the parse still fails, and says why.
+    #[test]
+    fn a_dump_with_no_readable_section_fails_with_the_reasons() {
+        let mut bytes = v5_header(b"AAA");
+        bytes[5] = 13;
+        bytes.extend(v5_shot(900));
+        bytes.extend(v5_end_marker());
+        let err = parse_bytes(&bytes).unwrap_err().to_string();
+        assert!(
+            err.contains("No valid sections found") && err.contains("month"),
+            "{err}"
+        );
+    }
+
+    /// The bytes a device writes after its last section - an ASCII `MN2Over`,
+    /// or a single zero byte - are not a section and raise nothing.
+    #[test]
+    fn a_clean_dump_has_no_warnings_whatever_trails_its_last_section() {
+        let mut clean = v5_header(b"AAA");
+        clean.extend(v5_shot(900));
+        clean.extend(v5_end_marker());
+        for trailer in [&b""[..], &b"MN2Over"[..], &[0u8][..]] {
+            let mut bytes = clean.clone();
+            bytes.extend_from_slice(trailer);
+            let dmp = parse_bytes(&bytes).unwrap();
+            assert_eq!(standard_counts(&dmp), vec![("AAA".to_string(), 1)]);
+            assert!(
+                dmp.warnings.is_empty(),
+                "trailer {trailer:?} raised {:?}",
+                dmp.warnings
+            );
+        }
+    }
+
+    /// A file that breaks every section cannot flood the preview: the list is
+    /// capped like the import receipt's.
+    #[test]
+    fn the_warning_list_is_capped() {
+        let mut bytes = Vec::new();
+        for _ in 0..(MAX_DMP_WARNINGS + 10) {
+            bytes.extend(damaged_record_dump());
+        }
+        let dmp = parse_bytes(&bytes).unwrap();
+        assert_eq!(dmp.warnings.len(), MAX_DMP_WARNINGS + 1);
+        assert!(
+            dmp.warnings[MAX_DMP_WARNINGS].contains("10 more"),
+            "{:?}",
+            dmp.warnings.last()
         );
     }
 }

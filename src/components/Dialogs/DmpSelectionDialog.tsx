@@ -355,6 +355,26 @@ export default function DmpSelectionDialog({
           </div>
         </div>
 
+        {/* What the parser could not read (#576 B13): a section cut short, one that
+            stops at a damaged record, one that failed to read. Shown here, before
+            any section is picked, because this is where the user can still leave a
+            partial section out; the same lines lead the import receipt. */}
+        {(dmpFile.warnings?.length ?? 0) > 0 && (
+          <div
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
+            data-testid="dmp-parse-warnings"
+          >
+            <div className="font-medium">{'\u26A0'} {t('dialogs.dmpSelection.parseWarningsTitle')}</div>
+            <ul className="mt-1 list-disc pl-5 space-y-0.5">
+              {dmpFile.warnings?.map((warning, index) => (
+                <li key={index} data-testid={`dmp-parse-warning-${index}`}>
+                  {warning}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {/* Duplicate hash warning banner */}
         {isDuplicate && hashSettled && (
           <div

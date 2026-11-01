@@ -361,7 +361,33 @@ Sections unreachable after all passes remain in the wizard's manual segment-plac
 |---------|-------|--------|-------|
 | `suggest_all_import_placements` | `ImportSectionForSuggestion[]` | `CrossSectionSuggestion[]` | Compares against existing + other imports |
 | `get_segment_geometry` | `sectionId` | `SegmentGeometry` | All connected sections' shot-lines, centered on queried section |
-| `import_sections` | `sections, fileHash, existingShotUpdates` | `CommandResult` | Batch import with atomic existing shot updates and undo support |
+| `import_sections` | `sections, fileHash, existingShotUpdates`, provenance, `sourceWarnings` | `CommandResult` | Batch import with atomic existing shot updates and undo support; `sourceWarnings` lead the receipt |
+
+## Parse Warnings
+
+`parse_dmp` does not drop what it cannot read silently; each loss becomes one
+sentence in `DmpFile.warnings` (#576 B13):
+
+* **A last section with no end-of-section marker** (a download cut short) is
+  read like any other, up to its last whole record, and imported - with a
+  warning that names it and says how many shots were read. A v5 record carries
+  start and end magic, so a record torn mid-way, or whole-length with a broken
+  end magic, is never read as a shot. The bytes a device writes after its last
+  section (an ASCII `MN2Over`, or a lone zero byte) do not begin with a section
+  header and raise nothing.
+* **A section that stops at a damaged record** keeps the shots before it. The
+  record is not skipped: a section is a chain of legs, so skipping one would
+  hang every later shot off the wrong station.
+* **A section that cannot be read at all** is left out and named by its position
+  in the file (its name may be part of what is damaged).
+
+`DmpSelectionDialog` lists them on step 1, where the user can still leave a
+partial section out. The wizard hands them to `import_sections` as
+`sourceWarnings` with the run's FIRST import only (nothing banked in
+`importedReceipts` yet - the list survives the map-placement reopen): a run's
+receipts are concatenated at completion, so sending them every time would
+repeat them once per batch. The backend puts them first on the receipt, the
+slot `decorate_receipt` gives every other importer's converter warnings.
 
 ## Backend Safety Guards
 

@@ -129,11 +129,12 @@ const renderWizard = (
     autoStartManualPlacement?: boolean;
     selected?: number[];
     zeroDatumConfig?: ZeroDatumConfigResult;
+    file?: DmpFile;
   },
 ) =>
   render(
     <DmpNewImportDialog
-      dmpFile={dmpFile}
+      dmpFile={props.file ?? dmpFile}
       selectionConfig={selectionConfig(props.selected ?? [0])}
       project={null}
       stations={[]}
@@ -274,5 +275,66 @@ describe('DMP wizard receipt carry across manual placement', () => {
       sections_imported: SEGMENT_RECEIPT.sections_imported,
       shot_count: SEGMENT_RECEIPT.shot_count,
     });
+  });
+});
+
+/**
+ * #576 B13: what the parser could not read (`DmpFile.warnings`) leads the
+ * receipt. The wizard hands it to `import_sections` (`sourceWarnings`) with the
+ * run's FIRST import only - a run's receipts are concatenated at completion, so
+ * sending it on every call would repeat it once per batch.
+ */
+describe('DMP wizard: the file parse warnings ride the first import', () => {
+  const PARSE_WARNING =
+    'Section "B" (#2 in the file) has no end-of-section marker, so the download may have been cut short: 2 shots were read, the rest of the file was not.';
+  const fileWithWarnings = { ...dmpFile, warnings: [PARSE_WARNING] } as DmpFile;
+  const importArgs = () =>
+    invokeIpcMock.mock.calls
+      .filter((c) => c[0] === 'import_sections')
+      .map((c) => c[1] as Record<string, unknown>);
+
+  beforeEach(() => {
+    invokeIpcMock.mockReset();
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'import_sections') {
+        return { success: true, section_ids: [7], import_receipt: SEGMENT_RECEIPT, warnings: [] };
+      }
+      return null;
+    });
+    useUIStore.setState({ activeDialog: null, dialogData: {}, placementMode: null });
+  });
+
+  it('sends them with the first import of the run', async () => {
+    const onComplete = vi.fn();
+    renderWizard(undefined, {
+      onComplete,
+      selected: [0],
+      zeroDatumConfig: zeroDatumOnly(),
+      file: fileWithWarnings,
+    });
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(importArgs().map((a) => a.sourceWarnings)).toEqual([[PARSE_WARNING]]);
+  });
+
+  it('does not send them again once the run has banked a receipt', async () => {
+    renderWizard(
+      savedState({
+        segmentQueue: [[1]],
+        segmentAnchor: { sectionIndex: 1, stationIndex: 0 },
+        importedReceipts: [EARLY_RECEIPT],
+      }),
+      { onComplete: vi.fn(), autoStartManualPlacement: true, selected: [0, 1], file: fileWithWarnings },
+    );
+    await waitFor(() => expect(useUIStore.getState().placementMode).not.toBeNull());
+    await act(async () => {
+      useUIStore.getState().placementMode!.onComplete!({
+        position: { x: 1, y: 2, z: 0 },
+        snappedToStation: null,
+      });
+    });
+
+    await waitFor(() => expect(importArgs()).toHaveLength(1));
+    expect(importArgs()[0]!.sourceWarnings ?? null).toBeNull();
   });
 });

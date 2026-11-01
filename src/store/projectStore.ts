@@ -51,6 +51,8 @@ export interface ImportReceiptProvenance {
   sourceLabel?: string;
   sourceFileName?: string;
   sectionsFound?: number;
+  /** The file's own parse warnings (`DmpFile.warnings`, #576 B13); they lead the receipt. */
+  sourceWarnings?: string[];
 }
 import type { CreateProjectFullResult } from '../types/loading';
 import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
@@ -2348,6 +2350,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           sourceLabel: provenance?.sourceLabel ?? null,
           sourceFileName: provenance?.sourceFileName ?? null,
           sectionsFound: provenance?.sectionsFound ?? null,
+          sourceWarnings: provenance?.sourceWarnings ?? null,
         },
         { purpose: 'apply imported sections', fields: { section_count: sections.length } }
       );

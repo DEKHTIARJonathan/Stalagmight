@@ -1712,6 +1712,7 @@ fn test_import_sections_persists_deferred_new_project() {
             None,
             None,
             None,
+            None,
         );
         assert_success(&result);
 
@@ -1774,6 +1775,10 @@ fn test_import_sections_provenance_params_decorate_receipt() {
             Some("mNemo DMP".to_string()),
             Some("dive.dmp".to_string()),
             Some(1),
+            // #576 B13: the file's parse warnings ride the same call and lead.
+            Some(vec![
+                "Section \"BBB\" (#2 in the file) has no end-of-section marker".to_string(),
+            ]),
         );
         assert_success(&result);
         let receipt = result
@@ -1783,6 +1788,10 @@ fn test_import_sections_provenance_params_decorate_receipt() {
         assert_eq!(receipt.source_format, "mNemo DMP");
         assert_eq!(receipt.file_name, "dive.dmp");
         assert_eq!(receipt.sections_found, 1);
+        assert_eq!(
+            receipt.warnings.first().map(String::as_str),
+            Some("Section \"BBB\" (#2 in the file) has no end-of-section marker")
+        );
     });
 }
 
@@ -1833,6 +1842,7 @@ fn test_import_sections_sanitizes_hostile_zero_datum_section_name() {
             Some("mNemo DMP".to_string()),
             Some("dive.dmp".to_string()),
             Some(1),
+            None,
         );
         assert_success(&result);
 
@@ -1883,6 +1893,7 @@ fn test_import_sections_without_provenance_params_leaves_receipt_defaults() {
         let result = import::import_sections(
             state(&app),
             sections,
+            None,
             None,
             None,
             None,
@@ -1976,6 +1987,7 @@ fn test_import_sections_with_nothing_to_import_still_reports_a_receipt() {
             None,
             None,
             None,
+            None,
         );
 
         assert_success(&result);
@@ -2046,6 +2058,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
         let result = import::import_sections(
             state(&app),
             sections,
+            None,
             None,
             None,
             None,
@@ -2179,6 +2192,7 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             None,
             None,
             None,
+            None,
         );
 
         let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
@@ -2245,6 +2259,7 @@ fn test_import_sections_deferred_save_generic_open_failure_is_not_a_denial() {
         let result = import::import_sections(
             state(&app),
             sections,
+            None,
             None,
             None,
             None,

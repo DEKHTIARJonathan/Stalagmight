@@ -110,6 +110,7 @@ function build(directPlacements: DirectPlacement[] | undefined) {
   const dmpFile: DmpFile = {
     version: 1,
     sections: [dmpSection('Segment', 3), dmpSection('TargetB', TARGET_SHOTS)],
+    warnings: [],
   };
   const selectionConfig: DmpSelectionConfig = {
     selectedIndices: new Set([0, 1]),

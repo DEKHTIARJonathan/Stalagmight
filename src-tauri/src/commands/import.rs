@@ -233,6 +233,14 @@ fn merge_deferred_save_outcome(
 /// existing callers (and the Playwright IPC mock) are unaffected, and the
 /// base receipt `execute_import_sections` already attached is left at its
 /// defaults when none are provided.
+///
+/// `source_warnings` are the parse warnings the caller was handed with the
+/// file (`DmpFile::warnings`, #576 B13): what of the file could not be read.
+/// They LEAD the receipt, the slot `decorate_receipt` gives every other
+/// importer's converter warnings, for the same reason (a whole-file statement
+/// outranks the per-shot ones `cap_warnings` would otherwise keep first).
+/// The wizard sends them with the first import of a run only, because a run's
+/// receipts are concatenated (`aggregateImportReceipts`).
 #[tauri::command]
 pub fn import_sections(
     state: State<'_, AppState>,
@@ -244,6 +252,7 @@ pub fn import_sections(
     source_label: Option<String>,
     source_file_name: Option<String>,
     sections_found: Option<u32>,
+    source_warnings: Option<Vec<String>>,
 ) -> CommandResult {
     let updates = existing_shot_updates.unwrap_or_default();
     tracing::info!(
@@ -268,8 +277,30 @@ pub fn import_sections(
             receipt.sections_found = sections_found.unwrap_or(0);
         }
     }
+    lead_receipt_with_source_warnings(&mut result, source_warnings.unwrap_or_default());
 
     finalize_deferred_import(state.inner(), result)
+}
+
+/// Put the file's own parse warnings first on the receipt (see
+/// [`import_sections`]). They name sections, which are file content, so they
+/// are sanitized like every other file-derived receipt string, then capped.
+/// No receipt (a refused import) has nothing to lead.
+fn lead_receipt_with_source_warnings(result: &mut CommandResult, source_warnings: Vec<String>) {
+    let Some(receipt) = result.import_receipt.as_mut() else {
+        return;
+    };
+    let leading: Vec<String> = source_warnings
+        .iter()
+        .map(|w| crate::models::sanitize_display_text(w, usize::MAX))
+        .filter(|w| !w.is_empty())
+        .collect();
+    if leading.is_empty() {
+        return;
+    }
+    let execute_warnings = std::mem::replace(&mut receipt.warnings, leading);
+    receipt.warnings.extend(execute_warnings);
+    receipt.cap_warnings();
 }
 
 /// Parse a TML/TMLU file and return preview data for the import dialog.
@@ -1124,5 +1155,39 @@ mod receipt_tests {
             Some("Some surveys measured in feet; converted to meters")
         );
         assert_eq!(walls_unit_conversion_note(false), None);
+    }
+
+    /// #576 B13: the DMP file's parse warnings (a section cut short, a damaged
+    /// record) lead the receipt ahead of the per-shot execute warnings, survive
+    /// a flood of them, and are sanitized - they quote section names, which are
+    /// file content.
+    #[test]
+    fn dmp_source_warnings_lead_the_receipt() {
+        let mut result = base_result();
+        if let Some(receipt) = result.import_receipt.as_mut() {
+            receipt.warnings = (0..60).map(|i| format!("shot {i} looks odd")).collect();
+        }
+        lead_receipt_with_source_warnings(
+            &mut result,
+            vec![
+                "Section \"A\u{202e}BC\" (#2 in the file) has no end-of-section marker".to_string(),
+                String::new(),
+            ],
+        );
+        let receipt = result.import_receipt.expect("receipt");
+        assert_eq!(
+            receipt.warnings.first().map(String::as_str),
+            Some("Section \"ABC\" (#2 in the file) has no end-of-section marker"),
+            "leads, sanitized; an empty entry is dropped"
+        );
+        assert_eq!(
+            receipt.warnings.get(1).map(String::as_str),
+            Some("shot 0 looks odd")
+        );
+        assert!(receipt.warnings.len() <= 51, "capped like any receipt");
+
+        let mut refused = CommandResult::failure("refused".to_string());
+        lead_receipt_with_source_warnings(&mut refused, vec!["dropped".to_string()]);
+        assert!(refused.import_receipt.is_none());
     }
 }

@@ -30,7 +30,7 @@ import {
   finalizePlacementForReverse,
 } from '../../utils/importSectionConfig';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
-import { useProjectStore, projectSwitched } from '../../store/projectStore';
+import { useProjectStore, projectSwitched, type ImportReceiptProvenance } from '../../store/projectStore';
 import { refuseMutationDuringCarry } from '../../store/moveCarry';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { convertToEditableShots, editableShotToShotData, editableShotsToDmpSection } from '../../utils/shotConversion';
@@ -1097,11 +1097,19 @@ export default function DmpNewImportDialog({
   // there aggregates to `undefined`, which App.tsx reads as "nothing to show".
   const importedReceiptsRef = useRef<ImportReceipt[]>([...(saved?.importedReceipts ?? [])]);
   const dmpFilePath = (useUIStore.getState().dialogData as Record<string, unknown>).filePath as string | undefined;
-  const dmpProvenance = {
+  // Called per import, not built once: the file's parse warnings (#576 B13 - a
+  // section cut short, a damaged record) lead the receipt, and a run's receipts
+  // are concatenated at completion, so they ride the run's FIRST import only.
+  // Nothing banked yet means this is it; the banked list survives the
+  // map-placement reopen, so a reopened instance does not send them again.
+  const dmpProvenance = (): ImportReceiptProvenance => ({
     sourceLabel: 'mNemo DMP',
     sourceFileName: extractFilename(dmpFilePath ?? ''),
     sectionsFound: dmpFile.sections.length,
-  };
+    ...(importedReceiptsRef.current.length === 0 && (dmpFile.warnings?.length ?? 0) > 0
+      ? { sourceWarnings: dmpFile.warnings }
+      : {}),
+  });
 
   // Refs to avoid stale closures
   const connectionsRef = useRef(connections);
@@ -1991,7 +1999,7 @@ export default function DmpNewImportDialog({
             sectionHashes: selectionConfig.sectionHashes ?? null,
             existingShotUpdates: earlyExistingShotUpdates.length > 0 ? earlyExistingShotUpdates : null,
             virtualShotMode: 'AllReferences',
-            ...dmpProvenance,
+            ...dmpProvenance(),
           }, { purpose: 'import reachable sections (early import)' });
 
           if (!result.success) {
@@ -2089,7 +2097,7 @@ export default function DmpNewImportDialog({
         let result: CommandResult;
         try {
           result = await importSections(
-            [config], selectionConfig.fileHash, selectionConfig.sectionHashes, 'AllReferences', dmpProvenance,
+            [config], selectionConfig.fileHash, selectionConfig.sectionHashes, 'AllReferences', dmpProvenance(),
           );
         } catch (e) {
           setError(importErrorMessage(e));
@@ -2240,7 +2248,7 @@ export default function DmpNewImportDialog({
             sectionHashes: selectionConfig.sectionHashes ?? null,
             existingShotUpdates: lateExistingShotUpdates.length > 0 ? lateExistingShotUpdates : null,
             virtualShotMode: 'AllReferences',
-            ...dmpProvenance,
+            ...dmpProvenance(),
           }, { purpose: 'import remaining sections (late import)' });
 
           if (!result.success) {
@@ -3081,7 +3089,7 @@ export default function DmpNewImportDialog({
         sectionHashes: selectionConfig.sectionHashes ?? null,
         existingShotUpdates: segmentExistingShotUpdates.length > 0 ? segmentExistingShotUpdates : null,
         virtualShotMode: 'AllReferences',
-        ...dmpProvenance,
+        ...dmpProvenance(),
       }, { purpose: 'import placed segment sections' });
 
       if (!result.success) {

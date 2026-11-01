@@ -82,7 +82,12 @@ describe('projectStore.importSections argument forwarding', () => {
         'file-hash',
         ['section-hash'],
         'AllReferences',
-        { sourceLabel: 'mNemo DMP', sourceFileName: 'dive.dmp', sectionsFound: 4 },
+        {
+          sourceLabel: 'mNemo DMP',
+          sourceFileName: 'dive.dmp',
+          sectionsFound: 4,
+          sourceWarnings: ['Section "BBB" (#2 in the file) has no end-of-section marker'],
+        },
         UPDATES,
       );
 
@@ -95,6 +100,8 @@ describe('projectStore.importSections argument forwarding', () => {
       sourceLabel: 'mNemo DMP',
       sourceFileName: 'dive.dmp',
       sectionsFound: 4,
+      // #576 B13: the DMP file's parse warnings, led onto the receipt.
+      sourceWarnings: ['Section "BBB" (#2 in the file) has no end-of-section marker'],
     });
   });
 

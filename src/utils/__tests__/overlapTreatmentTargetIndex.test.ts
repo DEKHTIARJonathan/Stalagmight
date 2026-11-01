@@ -88,7 +88,7 @@ const suggestion: CrossSectionSuggestion = {
   targetImportIndex: 1,
 };
 
-const dmpFile: DmpFile = { version: 1, sections: [] };
+const dmpFile: DmpFile = { version: 1, sections: [], warnings: [] };
 const noConfirmed = new Map<number, ConfirmedOverlapInfo>();
 
 /** The target section's original shots: ids 0..2 mirror the DMP ordering, with
