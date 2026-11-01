@@ -28,6 +28,8 @@ export const TOAST_KEYS = {
   GEOMETRY_COMPUTE_FAILED: 'geometry-compute-failed',
   ANCHORED_IDS_ERROR: 'anchored-ids-error',
   MOVE_COMMENT_EMPTY: 'move-comment-empty',
+  /** A carried move ghost was cancelled by another edit, a survey change or read-only (GHOST-2, src/store/moveCarry.ts). */
+  MOVE_CANCELLED: 'move-cancelled',
 
   // Global view
   SPELEODB_OPEN_REMOTE_ERROR: 'speleodb-open-remote-error',

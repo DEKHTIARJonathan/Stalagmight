@@ -31,6 +31,7 @@ import {
 } from '../../utils/importSectionConfig';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore, projectSwitched } from '../../store/projectStore';
+import { refuseMutationDuringCarry } from '../../store/moveCarry';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { editableShotToShotData, editableShotsToDmpSection } from '../../utils/shotConversion';
@@ -1987,7 +1988,7 @@ export default function DmpNewImportDialog({
             existingShotUpdatesRef.current,
             emittedSet,
           );
-          const result = await invokeIpc<CommandResult>('import_sections', {
+          const result = refuseMutationDuringCarry() ?? await invokeIpc<CommandResult>('import_sections', {
             sections: configs,
             fileHash: selectionConfig.fileHash ?? null,
             sectionHashes: selectionConfig.sectionHashes ?? null,
@@ -2248,7 +2249,7 @@ export default function DmpNewImportDialog({
             existingShotUpdatesRef.current,
             pendingSet,
           );
-          const result = await invokeIpc<CommandResult>('import_sections', {
+          const result = refuseMutationDuringCarry() ?? await invokeIpc<CommandResult>('import_sections', {
             sections: segmentConfigs,
             fileHash: selectionConfig.fileHash ?? null,
             sectionHashes: selectionConfig.sectionHashes ?? null,
@@ -2341,7 +2342,7 @@ export default function DmpNewImportDialog({
             existingShotUpdatesRef.current,
             emittedSet,
           );
-          const result = await invokeIpc<CommandResult>('import_sections', {
+          const result = refuseMutationDuringCarry() ?? await invokeIpc<CommandResult>('import_sections', {
             sections: configs,
             fileHash: selectionConfig.fileHash ?? null,
             sectionHashes: selectionConfig.sectionHashes ?? null,
@@ -3182,7 +3183,7 @@ export default function DmpNewImportDialog({
         existingShotUpdatesRef.current,
         pendingSetForUpdates,
       );
-      const result = await invokeIpc<CommandResult>('import_sections', {
+      const result = refuseMutationDuringCarry() ?? await invokeIpc<CommandResult>('import_sections', {
         sections: segmentConfigs,
         fileHash: selectionConfig.fileHash ?? null,
         sectionHashes: selectionConfig.sectionHashes ?? null,

@@ -18,6 +18,7 @@ import { autosaveFailureMessage, surfaceSaveFailure } from '../utils/saveFeedbac
 import { useGlobalViewStore } from './globalViewStore';
 import { useSpeleoStore } from './speleoStore';
 import { useExportStore } from './exportStore';
+import { refuseMutationDuringCarry, refuseStaleCarryCommit, takeMoveCarryCommit, type MoveCarryCommit } from './moveCarry';
 import type {
   Project,
   ProjectState,
@@ -659,14 +660,23 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // identity inside the callback would capture B and run A's section ids against B's
     // sections - which, since section ids are small per-project integers, would mostly RESOLVE.
     const requestProjectKey = get().project?.created_at ?? null;
-    return runSerialized(() => executeCommandInner(command, args, meta, requestProjectKey));
+    // GHOST-2 (#576), also at ISSUE time: a move carry's own commit claims its marker here;
+    // any other survey mutation issued while a carry is in flight cancels the carry and is
+    // refused before it can queue (src/store/moveCarry.ts). Renaming a project by path is a
+    // survey mutation only for the OPEN project (`set_project_name_for_path`'s own gate).
+    const carryCommit = takeMoveCarryCommit();
+    const mutatesOpenSurvey = command !== 'set_project_name_for_path' || args?.path === get().project?.file_path;
+    const refused = carryCommit || !mutatesOpenSurvey ? null : refuseMutationDuringCarry();
+    if (refused) return refused;
+    return runSerialized(() => executeCommandInner(command, args, meta, requestProjectKey, carryCommit));
   };
 
   const executeCommandInner = async (
     command: string,
     args: Record<string, unknown> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown> },
-    requestProjectKey: string | null
+    requestProjectKey: string | null,
+    carryCommit: MoveCarryCommit | null
   ): Promise<CommandResult> => {
     // Refuse before the IPC leaves: a command issued against a project that is no longer open
     // must not mutate whatever replaced it.
@@ -681,6 +691,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // project - whose section ids, being small per-project integers, would mostly RESOLVE in
       // whatever is now open.
       if (lostProject(requestProjectKey)) return emptyCommandResult(false, PROJECT_CHANGED);
+      // GHOST-2 R3: a carry's commit that queued behind another mutation, or outlived the
+      // survey it was computed against, is refused here - the last moment before IPC.
+      const staleCarryCommit = refuseStaleCarryCommit(carryCommit, get().projectTreeGeneration);
+      if (staleCarryCommit) return staleCarryCommit;
       const result = await invokeIpc<CommandResult>(command, args, meta);
       if (result.success) {
         // Re-resolve those pins BEFORE the refetch: the reach-field effect keys on modified_at,
@@ -771,8 +785,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     toastId: string,
     checkPartialFailure: boolean,
   ): Promise<CommandResult> => {
-    // Captured at ISSUE time - see `executeCommand`.
+    // Captured at ISSUE time - see `executeCommand`, which also explains the GHOST-2 check.
     const requestProjectKey = get().project?.created_at ?? null;
+    const refused = refuseMutationDuringCarry();
+    if (refused) return refused;
     return runSerialized(() =>
       executeUndoRedoInner(command, args, meta, toastId, checkPartialFailure, requestProjectKey)
     );
@@ -1612,6 +1628,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   resolveWarning: async (sectionId: number, shotId: number, warningCode: string, comment?: string): Promise<boolean> => {
+    // GHOST-2: a survey mutation (resolved warnings are pushed content), see `executeCommand`.
+    if (refuseMutationDuringCarry()) return false;
     try {
       await invokeIpc(
         'resolve_warning',
@@ -1630,6 +1648,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   unresolveWarning: async (sectionId: number, shotId: number, warningCode: string) => {
+    if (refuseMutationDuringCarry()) return; // GHOST-2, see `resolveWarning`
     try {
       await invokeIpc(
         'unresolve_warning',
@@ -1726,6 +1745,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   repairProjectIntegrity: async () => {
+    // GHOST-2: Repair mutates the survey. A refusal is thrown (the result type has no
+    // failure shape, and a zero result would read as a clean repair); the caller
+    // recognises it with `isMoveCarryRefusal` and shows nothing more.
+    const refused = refuseMutationDuringCarry();
+    if (refused) throw refused;
     try {
       const result = await invokeIpc<IntegrityRepairResult>('repair_project_integrity', undefined, {
         purpose: 'repair project structural integrity',

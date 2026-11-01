@@ -2412,6 +2412,10 @@
         "shot": "Click a shot to pick it up."
       },
       "dropInstructions": "Click to drop it here. Esc to cancel.",
+      "cancelled": "Move cancelled.",
+      "cancelledOtherChange": "Move cancelled. Your other change was not applied; try it again.",
+      "cancelledSurveyChanged": "Move cancelled because the survey changed.",
+      "cancelledReadOnly": "Move cancelled because the map is now read-only.",
       "station": "Station",
       "segment": "Segment",
       "shot": "Shot"
