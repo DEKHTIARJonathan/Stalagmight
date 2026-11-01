@@ -764,7 +764,8 @@ One lock sits OUTSIDE even that: `speleodb_lock_ops`
 operation** against every other and is deliberately held across network calls.
 Start Editing takes it before its first read (generation, link, token, holder)
 and holds it through the commit; so do the reclaim-checked releases, the status
-poll's inherited-lock gate reopen, and logout - each of which can invalidate a
+poll's inherited-lock gate reopen and its lost-lock close, Refresh's fast-forward
+(from before it reads the gate through the restore), and logout - each of which can invalidate a
 fact another one of them is mid-way through acting on. Nothing holding `project` / `database` / `undo_stack` may
 block on it - its users decide under `project`, drop that guard, and only then
 take it. The SpeleoDB session generation (`speleodb_session_generation`) is

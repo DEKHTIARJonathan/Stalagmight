@@ -595,6 +595,16 @@ impl AppState {
                 // lock-holding session is restored; a force-editor lands read-only
                 // (nothing to strand - FF requires a clean copy) and re-enters
                 // deliberately via Start editing or Force edit.
+                //
+                // [#576 B35(a)] The Start editing shape, for the race Start editing
+                // documents (`speleodb_commit_editing`): the lock-ops span opens
+                // BEFORE the gate is read and stays open through the reload and the
+                // restore. Logout and login take the same guard, so a Log out clicked
+                // during the download now runs strictly before this arm (the capture
+                // below sees the gate it shut) or strictly after it (and shuts the
+                // gate this arm restored). Without it, logout closed the gate mid-
+                // download and the restore reopened it for a signed-out session.
+                let _lock_ops = self.speleodb_lock_ops_guard();
                 let was_editing = self.edit_enabled() && !self.force_editing();
                 // Captured BEFORE the reload, which shuts the gate and lets a poll
                 // landing in that window clear the record: this is the last point the
@@ -617,17 +627,45 @@ impl AppState {
                         LocalEditsPolicy::Protect,
                     )
                     .map_err(local_dto)?;
-                if was_editing {
-                    self.set_edit_enabled(true);
-                    // Restore the record only where there was one to restore: the
-                    // reload shut the gate, and a status poll landing in that window
-                    // drops the record (as start-editing's FF arm re-records for the
-                    // same reason). A session that held no record keeps none - the
-                    // gate is restored either way, so an inherited lock stays as
-                    // editable as it was, just without an authorship claim it never
-                    // earned.
-                    if had_lock_record {
-                        self.speleodb_note_lock_acquired(Some(&link.project_id));
+                // [#576 B35(a)] Reopen only for the session that ran the download:
+                // the guard keeps logout and login out, but a 401 auto-drop on a
+                // concurrent call (`speleodb_forget`) takes no guard and can end the
+                // session during the reload. Then through the commit Start editing
+                // uses, which also refuses when the open project is no longer this
+                // one (a switch during the download).
+                let same_session =
+                    self.speleodb_active_account()
+                        .is_ok_and(|(now_endpoint, now_token, _)| {
+                            now_endpoint == endpoint && now_token == token
+                        });
+                if was_editing && !same_session {
+                    tracing::info!(
+                        project_id = %link.project_id,
+                        purpose = "never reopen editing for a session that ended mid-refresh",
+                        "speleodb update: the session changed during the fast-forward; \
+                         leaving the project read-only"
+                    );
+                } else if was_editing {
+                    match self.speleodb_commit_editing(None, &link.project_id, false) {
+                        // Restore the record only where there was one to restore: the
+                        // reload shut the gate, and a status poll landing in that
+                        // window drops the record (as start-editing's FF arm
+                        // re-records for the same reason). A session that held no
+                        // record keeps none - the gate is restored either way, so an
+                        // inherited lock stays as editable as it was, just without an
+                        // authorship claim it never earned.
+                        Ok(()) => {
+                            if had_lock_record {
+                                self.speleodb_note_lock_acquired(Some(&link.project_id));
+                            }
+                        }
+                        Err(e) => tracing::info!(
+                            error = %e,
+                            project_id = %link.project_id,
+                            purpose = "never reopen editing on a project that changed mid-refresh",
+                            "speleodb update: the open project changed during the \
+                             fast-forward; leaving it read-only"
+                        ),
                     }
                 }
                 Ok(UpdateResult::FastForwarded { local_path })

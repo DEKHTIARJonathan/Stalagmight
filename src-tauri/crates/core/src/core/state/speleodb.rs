@@ -4988,6 +4988,56 @@ mod tests {
     }
 
     #[test]
+    fn update_fast_forward_cannot_reopen_editing_after_a_logout() {
+        // [#576 B35(a)] Refresh's fast-forward snapshots the gate, runs a multi-second
+        // download + reload, then restores editing. It used to take no lock-ops guard
+        // and restore with a bare `set_edit_enabled(true)`, so a Log out landing during
+        // the download closed the gate and the fast-forward reopened it - "editing" a
+        // remote project for a signed-out session that may hold no server lock. Start
+        // editing documents this exact race and its fix (`speleodb_commit_editing`):
+        // hold `speleodb_lock_ops` from before the gate is read through the commit
+        // (logout takes it too), re-read the account the download ran as, and reopen
+        // only through the identity-checked commit.
+        //
+        // Structural, like the two tripwires above: the fast-forward needs the app
+        // cache dir only the env-gated live tests initialise.
+        let update = push_prod_source()
+            .split_once("fn speleodb_update")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    fn ").next())
+            .expect("speleodb_update body precedes the next method");
+        let ff = update
+            .split_once("ReconcileVerdict::FastForward => {")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("ReconcileVerdict::Diverged").next())
+            .expect("the fast-forward arm precedes the divergence arm");
+
+        let guard = ff
+            .find("self.speleodb_lock_ops_guard()")
+            .expect("the fast-forward arm must hold the lock-ops guard, as Start editing does");
+        let capture = ff
+            .find("let was_editing")
+            .expect("the arm captures the gate before the reload");
+        let reload = ff
+            .find(".speleodb_fast_forward(")
+            .expect("the reload is what this arm is named for");
+        let account = ff
+            .find(".speleodb_active_account()")
+            .expect("the account is re-read after the reload, before editing reopens");
+        let commit = ff
+            .find(".speleodb_commit_editing(None,")
+            .expect("editing reopens through the identity-checked commit");
+        assert!(
+            guard < capture && capture < reload && reload < account && account < commit,
+            "order must be: guard, gate capture, reload, account re-read, commit"
+        );
+        assert!(
+            !ff.contains("self.set_edit_enabled(true)"),
+            "a bare gate reopen skips the identity and session checks"
+        );
+    }
+
+    #[test]
     fn the_poll_clears_the_record_through_the_gate_rechecking_helper() {
         // The poll's catch-all clear must not act on the `edit_enabled` snapshot taken
         // at the top of `speleodb_link_status`: a fast-forward finishing underneath an
