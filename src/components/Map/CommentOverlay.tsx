@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { CheckIcon, CloseIcon } from '../common/icons';
+import type { CommandResult } from '../../types/commands';
 
 const OVERLAY_WIDTH = 220;
 const OVERLAY_MARGIN = 8;
@@ -40,12 +41,17 @@ export default function CommentOverlay() {
       clearCommentTarget();
       return;
     }
+    let saved: CommandResult | undefined;
     if (commentTarget.type === 'station' && commentTarget.stationRef) {
-      await updateStationComment(commentTarget.stationRef, trimmed || null);
+      saved = await updateStationComment(commentTarget.stationRef, trimmed || null);
     } else if (commentTarget.type === 'shot' && commentTarget.sectionId !== undefined && commentTarget.shotId !== undefined) {
       // Use "" not null for clearing: JSON null for Option<Option<String>> deserializes as outer None (= no update)
-      await updateShot(commentTarget.sectionId, commentTarget.shotId, { comment: trimmed || "" });
+      saved = await updateShot(commentTarget.sectionId, commentTarget.shotId, { comment: trimmed || "" });
     }
+    // A refused save keeps the overlay open with the typed text (DRAFT-1, #576):
+    // the store's failure notice is the feedback, and Enter or the check button
+    // retries. Escape still discards.
+    if (saved && !saved.success) return;
     clearCommentTarget();
   }, [commentTarget, value, clearCommentTarget, updateStationComment, updateShot]);
 

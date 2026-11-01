@@ -7,6 +7,7 @@ import {
   waitForNoDialogs,
   type SectionSeed,
 } from './helpers/app';
+import { clearIpcOverrideKeys, setIpcOverrides } from './helpers/ipcOverrides';
 
 /**
  * E2E tests for the data table's draft "new shot" rows.
@@ -283,5 +284,26 @@ test.describe('Draft shot rows', () => {
     await expect(page.getByTestId('grid-row-4')).toHaveCount(0);
     await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
     expect((await getShots(page)).map((s) => s.length)).toEqual([10, 20, 30]);
+  });
+
+  test('a refused create_shot keeps the typed draft row, and editing it retries (DRAFT-1)', async ({ page }) => {
+    await setIpcOverrides(page, {
+      create_shot: { success: false, warnings: [], error: 'Simulated refusal', section_ids: [] },
+    });
+    await fillDraftRow(page, 3, '5');
+
+    // The failure notice is the feedback; what was typed stays in the row.
+    await expect(page.getByText('Simulated refusal').first()).toBeVisible();
+    await expect(page.getByTestId('grid-row-3')).toHaveClass(/sg-row-draft/);
+    await expect(page.getByTestId('grid-cell-3-length')).toHaveText('5.0');
+    await expect(page.getByTestId('grid-cell-3-depth_out')).toHaveText('2.0');
+    expect((await getShots(page)).map((s) => s.length)).toEqual([10, 20, 30]);
+
+    // Editing the row sends it again; this time the backend accepts it.
+    await clearIpcOverrideKeys(page, ['create_shot']);
+    await fillCell(page, 3, 'length', '6');
+    await expect.poll(async () => (await getShots(page)).map((s) => s.length)).toEqual([10, 20, 30, 6]);
+    await expect(page.getByTestId('grid-row-4')).toHaveClass(/sg-row-draft/);
+    await expect(page.getByTestId('grid-cell-4-length')).toHaveText('');
   });
 });
