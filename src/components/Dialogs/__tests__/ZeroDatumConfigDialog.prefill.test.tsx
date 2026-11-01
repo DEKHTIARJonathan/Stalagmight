@@ -30,7 +30,7 @@ vi.mock('@tanstack/react-virtual', () => ({
     scrollToIndex: () => {},
   }),
 }));
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 
 // Partial mock: `src/i18n/index.ts` (pulled in by the number formatters) needs
 // the real `initReactI18next`.
@@ -76,7 +76,10 @@ function lastIsDirty(): boolean {
   return Boolean(last?.isDirty);
 }
 
-import ZeroDatumConfigDialog, { type ZeroDatumConfigResult } from '../ZeroDatumConfigDialog';
+import ZeroDatumConfigDialog, {
+  type ZeroDatumConfigDraft,
+  type ZeroDatumConfigResult,
+} from '../ZeroDatumConfigDialog';
 import { convertToEditableShots } from '../../../hooks/useImportState';
 import type { DmpFile, DmpSection, DmpShot } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
@@ -142,7 +145,10 @@ const carried = (): ZeroDatumConfigResult => ({
 
 const onConfirm = vi.fn<(result: ZeroDatumConfigResult) => void>();
 
-function renderDialog(initialConfig?: ZeroDatumConfigResult, onBack: () => void = vi.fn()) {
+function renderDialog(
+  initialConfig?: ZeroDatumConfigDraft,
+  onBack: (draft: ZeroDatumConfigDraft) => void = vi.fn(),
+) {
   render(
     <ZeroDatumConfigDialog
       dmpFile={dmpFile()}
@@ -383,6 +389,73 @@ describe('ZeroDatumConfigDialog prefill after Back (#394 F10)', () => {
       fireEvent.click(discard);
 
       expect(onBack).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * #576 review (R4 F9, T2): the GPS box of a reopened dialog. Carried text is
+   * parsed on arrival like typed text (note, badge). A value the user already
+   * CONFIRMED (the wizard's carry of a confirmed result, rebuilt as decimal
+   * degrees) does not get the advisory "may be swapped" hint - a Svalbard
+   * point stored as 78.9, 15.5 is not a swap - but the hint is back as soon as
+   * the text is edited. Text carried by Back that was never confirmed keeps it.
+   */
+  describe('the GPS box of a reopened dialog', () => {
+    const svalbard = (): ZeroDatumConfigResult => ({
+      ...carried(),
+      gps: { latitude: 78.9, longitude: 15.5, depth_reference: 0 },
+    });
+
+    it('parses carried raw text on arrival: note and format badge', () => {
+      renderDialog({
+        ...carried(),
+        gps: { latitude: -11.168093, longitude: 15.113069, depth_reference: 0 },
+        gpsInputText: '33S 512345 8765432',
+      });
+
+      expect(screen.getByTestId('zero-datum-gps-input')).toHaveValue('33S 512345 8765432');
+      expect(screen.getByTestId('zero-datum-gps-format')).toHaveTextContent('UTM');
+      expect(screen.getByTestId('zero-datum-gps-note')).toHaveTextContent('southern hemisphere');
+      expect(screen.queryByTestId('zero-datum-gps-transposed-warning')).not.toBeInTheDocument();
+    });
+
+    it('shows no swap hint for a confirmed far-north value until the text is edited', () => {
+      renderDialog(svalbard());
+
+      expect(screen.getByTestId('zero-datum-gps-input')).toHaveValue('78.9, 15.5');
+      expect(screen.getByTestId('zero-datum-gps-parsed')).toHaveTextContent('Lat: 78.900000');
+      expect(screen.queryByTestId('zero-datum-gps-transposed-warning')).not.toBeInTheDocument();
+
+      // A depth edit re-parses the same text: still the confirmed value.
+      fireEvent.change(screen.getByTestId('zero-datum-depth-reference-input'), { target: { value: '5' } });
+      expect(screen.queryByTestId('zero-datum-gps-transposed-warning')).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '78.9, 15.4' } });
+      expect(screen.getByTestId('zero-datum-gps-transposed-warning')).toBeInTheDocument();
+    });
+
+    it('keeps the confirmed value hint-free through Back and a forward pass', () => {
+      const onBack = vi.fn<(draft: ZeroDatumConfigDraft) => void>();
+      renderDialog(svalbard(), onBack);
+      fireEvent.click(screen.getByTestId('zero-datum-config-back'));
+      expect(onBack).toHaveBeenCalledTimes(1);
+      const draft = onBack.mock.calls[0]![0];
+      expect(draft.gpsInputText).toBe('78.9, 15.5');
+
+      cleanup();
+      renderDialog(draft);
+      expect(screen.getByTestId('zero-datum-gps-parsed')).toHaveTextContent('Lat: 78.900000');
+      expect(screen.queryByTestId('zero-datum-gps-transposed-warning')).not.toBeInTheDocument();
+    });
+
+    it('keeps the hint for carried text that was never confirmed', () => {
+      renderDialog({
+        ...carried(),
+        gps: { latitude: -87.3, longitude: 20.5, depth_reference: 0 },
+        gpsInputText: '-87.3, 20.5',
+      });
+
+      expect(screen.getByTestId('zero-datum-gps-transposed-warning')).toBeInTheDocument();
     });
   });
 });

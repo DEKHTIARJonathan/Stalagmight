@@ -62,6 +62,10 @@ export interface ZeroDatumConfigDraft extends Omit<ZeroDatumConfigResult, 'gps'>
    *  `ZeroDatumConfigDraft` - `initialGpsInputRef` below reconstructs it from
    *  `gps` in that case. */
   gpsInputText?: string;
+  /** `gpsInputText` is a value the user already CONFIRMED, carried through
+   *  Back unchanged - so the advisory "may be swapped" hint stays off for it
+   *  on the next visit, as it was on this one. */
+  gpsInputConfirmed?: boolean;
   /** The raw depth/elevation box text (#524), carried for the same reason as
    *  `gpsInputText`: a depth typed while the GPS box has not parsed exists
    *  NOWHERE else, since `gps.depth_reference` only comes into being on a
@@ -367,6 +371,17 @@ export default function ZeroDatumConfigDialog({
           (initialConfig.gps ? `${initialConfig.gps.latitude}, ${initialConfig.gps.longitude}` : ''))
       : ''
   );
+  // The GPS text of a value the user already CONFIRMED: the wizard's carry of
+  // a confirmed result (rebuilt as decimal degrees above), or that text carried
+  // on unchanged through Back. The "may be swapped" hint is for text being
+  // entered, so it stays off while the box holds this text: a confirmed
+  // Svalbard point (78.9, 15.5) is not a swap. Null for anything else.
+  const confirmedGpsInputRef = useRef(
+    initialConfig?.gps &&
+      (initialConfig.gpsInputText === undefined || initialConfig.gpsInputConfirmed === true)
+      ? initialGpsInputRef.current
+      : null
+  );
   const [gpsInput, setGpsInput] = useState(initialGpsInputRef.current);
   const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(initialConfig?.gps ?? null);
   const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(initialConfig?.gps ? 'DD' : null);
@@ -378,7 +393,8 @@ export default function ZeroDatumConfigDialog({
   // longitude were swapped. Coexists with `gpsError` - never replaces it, and
   // never blocks Confirm. `gpsSwapHint` also covers text that FAILED to parse
   // (a swapped "120, 45" only ever produces a range error) and stays quiet when
-  // the text itself says which value is the latitude (letters, UTM, a link).
+  // the text itself says which value is the latitude (letters, UTM, a link) or
+  // is a value the user already confirmed (`confirmedGpsInputRef`).
   const [gpsTransposedWarning, setGpsTransposedWarning] = useState(false);
 
   // Depth/elevation of the zero-datum point relative to the surface (#524).
@@ -525,6 +541,7 @@ export default function ZeroDatumConfigDialog({
       stationIndex,
       gps: gpsCoords,
       gpsInputText: gpsInput,
+      ...(gpsInput === confirmedGpsInputRef.current ? { gpsInputConfirmed: true } : {}),
       depthReferenceText: depthReferenceInput,
       metadata: {
         name,
@@ -599,7 +616,7 @@ export default function ZeroDatumConfigDialog({
       setGpsError(result.message);
       setGpsNote(null);
     }
-    setGpsTransposedWarning(gpsSwapHint(value, result));
+    setGpsTransposedWarning(value !== confirmedGpsInputRef.current && gpsSwapHint(value, result));
   }, []);
 
   // Depth-reference input handler: just stages the text. The effect below

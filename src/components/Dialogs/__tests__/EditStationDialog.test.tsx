@@ -1,0 +1,131 @@
+/**
+ * Edit Station: the GPS field with a value that is already stored (#576, R4
+ * review F8/F9).
+ *
+ * The stored datum is shown as decimal degrees. It goes through the same parse
+ * path as typed text, so the format badge, the note and the swap hint always
+ * describe the text in the box - including after the station is refreshed
+ * while the dialog is open, which used to leave the note of the text typed
+ * before it. A stored value was confirmed when it was saved, so the advisory
+ * "may be swapped" hint is not shown for it, only once the text is edited.
+ *
+ * `.tsx` so vitest runs it under jsdom.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-i18next')>()),
+  useTranslation: () => ({ t: (k: string) => k }),
+}));
+
+type Gps = { latitude: number; longitude: number; depth_reference: number } | null;
+
+const closeDialog = vi.fn();
+const dialogData: Record<string, unknown> = {};
+const storeState: Record<string, unknown> = {};
+
+function station(gps: Gps) {
+  return {
+    station_ref: { section_id: 1, station_index: 0 },
+    coordinates: { x: 0, y: 0, z: -3 },
+    is_zero_datum: gps !== null,
+    gps_coordinates: gps,
+    comment: null,
+    merged_with: [],
+  };
+}
+
+vi.mock('../../../store/uiStore', () => ({
+  useUIStore: () => ({ closeDialog, dialogData }),
+}));
+
+// Called both as `useProjectStore()` (the dialog) and with a selector
+// (`useDecimalPrecision` reads `config`).
+vi.mock('../../../store/projectStore', () => ({
+  useProjectStore: (sel?: (s: unknown) => unknown) => (sel ? sel(storeState) : storeState),
+}));
+
+vi.mock('../../../utils/telemetry', () => ({ trackDialogComplete: vi.fn() }));
+
+vi.mock('../DialogWrapper', () => ({
+  DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+import EditStationDialog from '../EditStationDialog';
+
+/** Put one station (section 1, index 0) in the store. A new object each time,
+ *  as a store refresh produces. */
+function setStation(gps: Gps) {
+  Object.assign(storeState, {
+    stations: [station(gps)],
+    project: { sections: [{ id: 1, name: 'CaveA Section' }] },
+    config: null,
+    setZeroDatum: vi.fn().mockResolvedValue({ success: true }),
+    removeZeroDatum: vi.fn().mockResolvedValue({ success: true }),
+    updateStationComment: vi.fn().mockResolvedValue({ success: true }),
+  });
+}
+
+const q = (id: string) => screen.queryByTestId(id);
+
+describe('EditStationDialog GPS field with a stored value (#576 R4 F8, F9)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    for (const key of Object.keys(dialogData)) delete dialogData[key];
+    dialogData.stationRef = { section_id: 1, station_index: 0 };
+  });
+
+  it('opens a stored value parsed like typed text: badge and preview, no note', () => {
+    setStation({ latitude: 20.5, longitude: -87.3, depth_reference: -3 });
+    render(<EditStationDialog />);
+
+    expect(screen.getByTestId('station-gps-input')).toHaveValue('20.5, -87.3');
+    expect(screen.getByTestId('station-gps-format')).toHaveTextContent('DD');
+    expect(screen.getByTestId('station-gps-parsed')).toHaveTextContent('Lat: 20.500000, Lon: -87.300000');
+    expect(q('station-gps-note')).not.toBeInTheDocument();
+    expect(q('station-gps-error')).not.toBeInTheDocument();
+  });
+
+  it('shows no swap hint for a stored far-north value until the text is edited', () => {
+    // Svalbard (78.9N, 15.5E) stored as decimal degrees: confirmed when saved.
+    setStation({ latitude: 78.9, longitude: 15.5, depth_reference: 0 });
+    render(<EditStationDialog />);
+
+    expect(screen.getByTestId('station-gps-parsed')).toHaveTextContent('Lat: 78.900000');
+    expect(q('station-gps-transposed-warning')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('station-gps-input'), { target: { value: '78.9, 15.4' } });
+    expect(screen.getByTestId('station-gps-transposed-warning')).toBeInTheDocument();
+  });
+
+  it('a station refresh while open re-reads the stored value and drops the old note', () => {
+    setStation(null);
+    dialogData.forceEnableZeroDatum = true;
+    const { rerender } = render(<EditStationDialog />);
+
+    fireEvent.change(screen.getByTestId('station-gps-input'), { target: { value: '33S 512345 8765432' } });
+    expect(screen.getByTestId('station-gps-note')).toHaveTextContent('southern hemisphere');
+    expect(screen.getByTestId('station-gps-format')).toHaveTextContent('UTM');
+
+    // The datum was stored (set_zero_datum succeeded) and the stations
+    // refreshed, but the dialog stayed open (e.g. the comment update failed).
+    setStation({ latitude: -11.168093, longitude: 15.113069, depth_reference: -3 });
+    rerender(<EditStationDialog />);
+
+    expect(screen.getByTestId('station-gps-input')).toHaveValue('-11.168093, 15.113069');
+    expect(screen.getByTestId('station-gps-format')).toHaveTextContent('DD');
+    expect(screen.getByTestId('station-gps-parsed')).toHaveTextContent('Lat: -11.168093, Lon: 15.113069');
+    expect(q('station-gps-note')).not.toBeInTheDocument();
+  });
+
+  it('keeps a stored value whose plain text form does not read back (1e-7)', () => {
+    // `${1e-7}` is "1e-7", which is not coordinate text; the stored value is
+    // still valid and must stay usable (no error, Save not blocked).
+    setStation({ latitude: 1e-7, longitude: -87.3, depth_reference: 0 });
+    render(<EditStationDialog />);
+
+    expect(screen.getByTestId('station-gps-parsed')).toHaveTextContent('Lat: 0.000000, Lon: -87.300000');
+    expect(q('station-gps-error')).not.toBeInTheDocument();
+  });
+});

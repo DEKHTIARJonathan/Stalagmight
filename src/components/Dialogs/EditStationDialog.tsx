@@ -8,7 +8,14 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
-import { parseGps, detectFormat, gpsSwapHint, type GpsFormat } from '../../utils/gps';
+import {
+  parseGps,
+  detectFormat,
+  gpsSwapHint,
+  type GpsFormat,
+  type GpsParseError,
+  type GpsParseResult,
+} from '../../utils/gps';
 import type { GpsCoordinates } from '../../types/project';
 import type { StationRef } from '../../types/project';
 
@@ -50,19 +57,54 @@ export default function EditStationDialog() {
   const [error, setError] = useState<string | null>(null);
   const gpsInputRef = useRef<HTMLInputElement>(null);
 
-  // Initialize form state from station data
+  // The stored GPS value as the box shows it (decimal degrees), '' without one.
+  // It was confirmed when it was saved, so the advisory "may be swapped" hint
+  // is only for edited text: a Svalbard datum (78.9, 15.5) is not a swap.
+  const originalGpsInput = station?.gps_coordinates
+    ? `${station.gps_coordinates.latitude}, ${station.gps_coordinates.longitude}`
+    : '';
+
+  // Show what parsing `value` gave. The badge names the format actually read
+  // (or, for text that did not parse, the one it was read as / looks like).
+  const showGpsResult = useCallback(
+    (value: string, result: GpsParseResult | GpsParseError) => {
+      setGpsFormat(result.format ?? detectFormat(value) ?? null);
+      if ('coordinates' in result) {
+        setGpsCoords(result.coordinates);
+        setGpsError(null);
+        setGpsNote(result.note ?? null);
+      } else {
+        setGpsCoords(null);
+        setGpsError(result.message);
+        setGpsNote(null);
+      }
+      setGpsSwapWarning(value !== originalGpsInput && gpsSwapHint(value, result));
+    },
+    [originalGpsInput]
+  );
+
+  // Initialize form state from station data. The stored GPS value goes through
+  // the same parse path as typed text, so the badge, note and hint describe the
+  // text shown - also when the station is refreshed while the dialog is open,
+  // which must not leave the note of text typed before.
   useEffect(() => {
     if (station) {
       setIsZeroDatumState(forceEnableZeroDatum ? true : station.is_zero_datum);
       setComment(station.comment ?? '');
       if (station.gps_coordinates) {
-        const initialInput = `${station.gps_coordinates.latitude}, ${station.gps_coordinates.longitude}`;
-        setGpsInput(initialInput);
-        setGpsCoords(station.gps_coordinates);
-        setGpsFormat('DD');
+        const result = parseGps(originalGpsInput);
+        setGpsInput(originalGpsInput);
+        // A stored value is valid; if its plain text does not read back (a
+        // JS exponent such as "1e-7"), keep the stored value as before.
+        showGpsResult(
+          originalGpsInput,
+          'coordinates' in result
+            ? result
+            : { coordinates: station.gps_coordinates, format: 'DD', original: originalGpsInput }
+        );
       }
     }
-  }, [forceEnableZeroDatum, station]);
+  }, [forceEnableZeroDatum, station, originalGpsInput, showGpsResult]);
 
   // Focus GPS input when dialog is opened from "Set Zero Datum" action.
   useEffect(() => {
@@ -87,21 +129,8 @@ export default function EditStationDialog() {
       setGpsSwapWarning(false);
       return;
     }
-    const result = parseGps(value);
-    // The badge names the format actually read (or, for text that did not
-    // parse, the one it was read as / looks like).
-    setGpsFormat(result.format ?? detectFormat(value) ?? null);
-    if ('coordinates' in result) {
-      setGpsCoords(result.coordinates);
-      setGpsError(null);
-      setGpsNote(result.note ?? null);
-    } else {
-      setGpsCoords(null);
-      setGpsError(result.message);
-      setGpsNote(null);
-    }
-    setGpsSwapWarning(gpsSwapHint(value, result));
-  }, []);
+    showGpsResult(value, parseGps(value));
+  }, [showGpsResult]);
 
   const handleSave = async () => {
     if (!stationRef || !station) return;
@@ -184,9 +213,6 @@ export default function EditStationDialog() {
   };
 
   // Track if form has been modified
-  const originalGpsInput = station?.gps_coordinates
-    ? `${station.gps_coordinates.latitude}, ${station.gps_coordinates.longitude}`
-    : '';
   const isDirty = station ? (
     isZeroDatum !== station.is_zero_datum ||
     gpsInput !== originalGpsInput ||
