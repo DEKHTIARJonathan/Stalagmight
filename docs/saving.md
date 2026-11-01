@@ -27,13 +27,22 @@ a pre-release file that a bump cannot read is expected to be re-imported from it
 source survey, not repaired.
 
 The floor is schema 2 (`OLDEST_SUPPORTED_SCHEMA_VERSION`), the schema the first
-public release (v0.0.3) shipped and stamped. A file whose `PRAGMA user_version` -
-or, when it carries no stamp, whose project row - is below 2 is refused before
-anything is written to it, with the `PRE_RELEASE_FILE` load error and a message
-that says to create a new project and import the survey again (#576 B1-D1). There
+public release (v0.0.3) shipped and stamped. A file whose project row claims a
+schema below 2, with no `PRAGMA user_version` of 2 or more to contradict it (no
+schema-1 build ever wrote the stamp), is refused before anything is written to it,
+with the `PRE_RELEASE_FILE` load error and a message that says to create a new
+project and import the survey again (#576 B1-D1). A file with no project row at all
+is not refused: that is an empty file about to become a new project (Android's
+document picker leaves a 0-byte placeholder at the chosen path). There
 used to be a frozen "rebuild with foreign keys" step for these files; it had fallen
 behind the schema and silently dropped columns and values, so it was removed
 rather than kept in step with every future column.
+
+`migrate_schema_from_the_oldest_supported_file_matches_a_fresh_file` (persistence
+tests) guards the chain from that floor: it builds the v0.0.3 schema-2 tables,
+opens them, and asserts every table's columns equal a freshly created file's, then
+saves and reloads the migrated project. A column added to `init_schema` without the
+matching `migrate_schema` step fails it.
 
 ### Files saved by a newer version: open read-only
 
