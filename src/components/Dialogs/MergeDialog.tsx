@@ -39,7 +39,7 @@ export default function MergeDialog() {
   const preCommands = dialogData.preCommands as BatchCommand[] | undefined;
   // The move carry those moves belong to, when a move tool opened this (GHOST-2):
   // confirming here IS that carry's commit. Absent when nothing is being carried.
-  const moveCarryToken = dialogData.moveCarryToken as number | null | undefined;
+  const moveCarryToken = dialogData.moveCarryToken as number | undefined;
 
   const handleClose = () => {
     onCancel?.();

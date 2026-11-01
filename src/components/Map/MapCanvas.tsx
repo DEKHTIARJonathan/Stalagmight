@@ -1528,8 +1528,16 @@ function MapCanvas() {
         const result = await checkMergeConnectivity(originStation, targetStation);
         // The carry was cancelled while the check was out (GHOST-2): no dialog for it.
         if (moveCallbacks && !isMoveCarryLive(moveCallbacks.moveCarryToken)) return;
+        // The token goes along only as a number (the check above already returned
+        // for a null one), so the dialogs read it as `number | undefined`.
+        const carryToken = moveCallbacks?.moveCarryToken;
         const extra = moveCallbacks
-          ? { onBeforeConfirm: moveCallbacks.onBeforeConfirm, onCancel: moveCallbacks.onCancel, preCommands: moveCallbacks.preCommands, moveCarryToken: moveCallbacks.moveCarryToken }
+          ? {
+              onBeforeConfirm: moveCallbacks.onBeforeConfirm,
+              onCancel: moveCallbacks.onCancel,
+              preCommands: moveCallbacks.preCommands,
+              ...(typeof carryToken === 'number' ? { moveCarryToken: carryToken } : {}),
+            }
           : {};
         if (result.can_merge) {
           openDialog('merge', { stationA: originStation, stationB: targetStation, ...extra });
