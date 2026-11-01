@@ -155,10 +155,13 @@ export function useGlobalViewShortcuts({
       // Block all other shortcuts if context menu is visible
       if (contextMenuVisibleRef.current) return;
 
-      const { activeDialog } = useUIStore.getState();
+      const { activeDialog, screenOccupants } = useUIStore.getState();
       if (activeDialog && e.key !== 'Escape') {
         return;
       }
+      // #576 D39(c): a prompt registered as a screen occupant (the held-lock prompt
+      // over this view, the telemetry opt-in) owns every key, Escape included.
+      if (screenOccupants > 0) return;
 
       // Don't handle if focus is in an input element
       const activeElement = document.activeElement;

@@ -353,7 +353,12 @@ export function useKeyboardShortcuts() {
       // to Stations). Mirrors the existing defaultPrevented guard in the Escape
       // branch, generalized to every reserved key.
       if (event.defaultPrevented) return;
-      const { activeDialog } = useUIStore.getState();
+      const { activeDialog, screenOccupants } = useUIStore.getState();
+      // #576 D39(c): a prompt outside the `activeDialog` slot (held-lock, telemetry
+      // opt-in, storage choice, dump picker - `useScreenOccupant`) owns the keyboard
+      // like a dialog, Escape included: its own frame answers Escape, and the branch
+      // below would otherwise clear the selection or close a dialog beneath it.
+      if (screenOccupants > 0) return;
       if (activeDialog && event.key !== 'Escape') {
         // Allow ? to toggle the keyboard shortcuts overlay closed
         if (!(event.key === '?' && activeDialog === 'keyboard-shortcuts')) {
