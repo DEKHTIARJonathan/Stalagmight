@@ -3768,6 +3768,54 @@ fn test_migrate_schema_adds_closure_columns() {
     assert!(has_is_aligned, "migration should add is_aligned column");
 }
 
+/// B23 (#576): `save_project` writes rows; it never changes the schema.
+///
+/// The save transaction used to carry its own copy of the three `loop_closures`
+/// column migrations above (`closure_id`, `strategy`, `is_aligned`) and ran them
+/// on every save. Every open path already runs the real chain (`init_schema` for
+/// a fresh temp file, `ensure_schema_version` for an existing one), so the copy
+/// could only fire on a connection whose table lacked the columns under a
+/// current stamp - and the SpeleoDB in-place writers save on the LIVE file, so
+/// there it rewrote the user's schema in the middle of a save.
+///
+/// The forged shape is exactly that: the pre-`closure_id` table on a database
+/// stamped current. A project with no closures saves fine without the columns,
+/// so the assertion isolates the DDL side effect from the INSERT.
+#[test]
+fn save_project_never_alters_the_loop_closures_schema() {
+    let mut db = Database::in_memory().unwrap();
+    db.conn
+        .execute_batch(
+            "DROP TABLE loop_closures;
+             CREATE TABLE loop_closures (id INTEGER PRIMARY KEY, station_a_section INTEGER, \
+             station_a_index INTEGER, station_b_section INTEGER, station_b_index INTEGER, \
+             path_length REAL, misclosure_distance REAL, error_percentage REAL, \
+             horizontal_misclosure REAL, vertical_misclosure REAL);",
+        )
+        .unwrap();
+    let loop_closures_ddl = |db: &Database| -> String {
+        db.conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'loop_closures'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    let before = loop_closures_ddl(&db);
+
+    db.save_project(&Project::new("CaveA".to_string(), None))
+        .unwrap();
+
+    let after = loop_closures_ddl(&db);
+    println!("loop_closures DDL before save: {before}");
+    println!("loop_closures DDL after save:  {after}");
+    assert_eq!(
+        after, before,
+        "save_project ran DDL against the open database's loop_closures table"
+    );
+}
+
 #[test]
 fn test_migrate_schema_idempotent() {
     let temp_dir = TempDir::new().unwrap();

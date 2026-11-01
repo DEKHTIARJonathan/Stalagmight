@@ -231,55 +231,12 @@ impl Database {
             )?;
         }
 
-        // Save loop closures (with closure_id column)
-        // Ensure closure_id column exists
-        let has_closure_id: bool = tx
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='closure_id'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|c| c > 0)
-            .unwrap_or(false);
-        if !has_closure_id {
-            tx.execute(
-                "ALTER TABLE loop_closures ADD COLUMN closure_id INTEGER NOT NULL DEFAULT 0",
-                [],
-            )?;
-        }
-
-        // Ensure strategy column exists
-        let has_strategy: bool = tx
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='strategy'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|c| c > 0)
-            .unwrap_or(false);
-        if !has_strategy {
-            tx.execute(
-                "ALTER TABLE loop_closures ADD COLUMN strategy TEXT NOT NULL DEFAULT 'Batch'",
-                [],
-            )?;
-        }
-
-        // Ensure is_aligned column exists
-        let has_is_aligned: bool = tx
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='is_aligned'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|c| c > 0)
-            .unwrap_or(false);
-        if !has_is_aligned {
-            tx.execute(
-                "ALTER TABLE loop_closures ADD COLUMN is_aligned INTEGER NOT NULL DEFAULT 0",
-                [],
-            )?;
-        }
-
+        // Save loop closures. The `closure_id`, `strategy` and `is_aligned`
+        // columns are the schema's business, not the save's: `init_schema`
+        // creates them on a fresh file and `ensure_schema_version` migrates an
+        // existing one on open (B23, #576). A save must never run DDL - the
+        // SpeleoDB writers save on the LIVE file, and a copy of those ALTERs
+        // here used to rewrite its schema mid-save.
         for lc in &project.loop_closures {
             let closure_id_i64 = i64::try_from(lc.id)
                 .map_err(|_| anyhow::anyhow!("Closure ID {} exceeds i64 range", lc.id))?;
