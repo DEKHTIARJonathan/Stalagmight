@@ -1831,8 +1831,8 @@ function MapCanvas() {
       container: mapContainer.current,
       style: {
         version: 8,
-        // Use OpenMapTiles fonts for text labels
-        glyphs: 'https://fonts.openmaptiles.org/{fontstack}/{range}.pbf',
+        // No `glyphs`: there is no symbol layer - survey labels are the custom
+        // WebGL layer with its own bundled-font atlas (glyphAtlas.ts).
         sources: {},
         layers: [
           {
