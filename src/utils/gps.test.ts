@@ -1247,3 +1247,38 @@ describe('label text next to a signed pair (R5-2)', () => {
     expectRejected(`Pos W -20°30'15" -87°18'27" S`); // longitude first, by its letters
   });
 });
+
+describe('a hemisphere taken from a direction word is said (R5-1)', () => {
+  it('notes a word after an unsigned longitude', () => {
+    const result = parsedOk(`-20°30'15" 87°18'27" West entrance`);
+    expect(result.coordinates.longitude).toBeCloseTo(-DMS_LON, 9);
+    expect(result.note).toMatch(/hemisphere from "West"/);
+  });
+
+  it('notes a word before an unsigned latitude', () => {
+    const result = parsedOk(`Cave South 20°30'15" -87°18'27"`);
+    expect(result.coordinates.latitude).toBeCloseTo(-DMS_LAT, 9);
+    expect(result.note).toMatch(/hemisphere from "South"/);
+  });
+
+  it('notes a single letter read together with a label word before an unsigned latitude', () => {
+    const result = parsedOk(`Cave S 20°30'15" -87°18'27"`);
+    expect(result.coordinates.latitude).toBeCloseTo(-DMS_LAT, 9);
+    expect(result.note).toMatch(/hemisphere from "S"/);
+  });
+
+  it('notes a word in a lettered paste too', () => {
+    const dms = parsedOk(`Entrance: 20°30'15"N 87°18'27" West entrance`);
+    expect(dms.coordinates.longitude).toBeCloseTo(-DMS_LON, 9);
+    expect(dms.note).toMatch(/hemisphere from "West"/);
+    const ddm = parsedOk(`20°30.5'N 87°18.5' West`);
+    expect(ddm.coordinates.longitude).toBeCloseTo(-DDM_LON, 9);
+    expect(ddm.note).toMatch(/hemisphere from "West"/);
+  });
+
+  it('a letter next to the number, or a word that agrees with a minus sign, needs no note', () => {
+    expect(parsedOk(`Entrance: -20°30'15" 87°18'27"W`).note).toBeUndefined();
+    expect(parsedOk(`Entrance: 20°30'15"N 87°18'27"W`).note).toBeUndefined();
+    expect(parsedOk(`-20°30'15" -87°18'27" West entrance`).note).toBeUndefined();
+  });
+});

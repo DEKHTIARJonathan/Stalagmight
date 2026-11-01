@@ -269,8 +269,10 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
   let lonDir: string | undefined;
   // Patterns 1 and 2 carry direction letters; pattern 3 is signed degrees only.
   let lettered = true;
-  // Notes beyond `signLetterNotes`, e.g. a letter next to the pair read as text.
+  // Notes beyond `signLetterNotes`, e.g. a letter next to the pair read as text,
+  // and the hemispheres taken from a word (`hemisphereFromTextNote`).
   const extraNotes: string[] = [];
+  const hemisphereFrom: { latitude?: string | undefined; longitude?: string | undefined } = {};
 
   // Patterns 1 and 2 end in the longitude letter: E or W, or the direction
   // word it starts (East, West; Este/Est), never the first letter of another
@@ -315,6 +317,7 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
     lonMinStr = match[6];
     lonSecStr = match[7];
     lonDir = match[8]?.[0]?.toUpperCase();
+    hemisphereFrom.longitude = wordDecides(match[8], lonDegStr);
   } else {
     match = trimmed.match(dmsSpaceRegex);
     if (match) {
@@ -327,6 +330,7 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
       lonMinStr = match[6];
       lonSecStr = match[7];
       lonDir = match[8]?.[0]?.toUpperCase();
+      hemisphereFrom.longitude = wordDecides(match[8], lonDegStr);
     } else {
       match = trimmed.match(dmsSignedRegex);
       if (match) {
@@ -382,6 +386,8 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
               extraNotes.push(i18n.t('validation.gps.letterReadAsText', { text: side.asText }));
             }
           }
+          hemisphereFrom.latitude = latSide?.decides;
+          hemisphereFrom.longitude = lonSide?.decides;
         }
       }
     }
@@ -452,7 +458,12 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
     };
   }
 
-  const note = joinNotes(signLetterNotes([latDegStr, latDir, lat], [lonDegStr, lonDir, lon]), ...extraNotes);
+  const note = joinNotes(
+    signLetterNotes([latDegStr, latDir, lat], [lonDegStr, lonDir, lon]),
+    hemisphereFromTextNote(hemisphereFrom.latitude, lat),
+    hemisphereFromTextNote(hemisphereFrom.longitude, lon),
+    ...extraNotes
+  );
   return {
     coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
     format: 'DMS',
@@ -480,12 +491,32 @@ function adjacentHemisphere(
   labelWord: boolean,
   degrees: string,
   axis: 'NS' | 'EW'
-): { letter?: string; asText?: string; refuse?: true; wrongAxis?: true } {
+): { letter?: string; asText?: string; refuse?: true; wrongAxis?: true; decides?: string } {
   const letter = found.charAt(0).toUpperCase();
   const inLabel = spaced && labelWord;
   if (!axis.includes(letter)) return inLabel ? { asText: found, wrongAxis: true } : { refuse: true, wrongAxis: true };
   if (inLabel && degrees.startsWith('-') && (letter === 'N' || letter === 'E')) return { asText: found };
-  return { letter };
+  // Used as the hemisphere. Where it alone gives the value (an unsigned
+  // degree) and it is a word or reads with a label word, say so.
+  const decides = inLabel ? (/^[+-]/.test(degrees) ? undefined : found) : wordDecides(found, degrees);
+  return decides === undefined ? { letter } : { letter, decides };
+}
+
+/**
+ * A direction word (East, West, Este, Est; North, South) that gives an
+ * unsigned degree its hemisphere - a word, unlike a letter next to the number,
+ * can also be part of a name ("West entrance"), so the reading is said
+ * (`hemisphereFromTextNote`). Undefined for a single letter or a signed degree,
+ * whose hemisphere the sign gives or a contradiction note covers.
+ */
+function wordDecides(found: string | undefined, degrees: string | undefined): string | undefined {
+  return found !== undefined && found.length > 1 && degrees !== undefined && !/^[+-]/.test(degrees) ? found : undefined;
+}
+
+/** "Took the hemisphere from "West" - read as -87.307500.", or undefined. */
+function hemisphereFromTextNote(text: string | undefined, value: number): string | undefined {
+  if (text === undefined) return undefined;
+  return i18n.t('validation.gps.hemisphereFromText', { text, value: formatFixed(value, undefined, 6) });
 }
 
 /** The notes that apply, joined; undefined when there are none. */
@@ -575,6 +606,7 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
     match = trimmed.match(ddmRegex2);
   }
   let lonDir = match?.[6]?.charAt(0).toUpperCase();
+  const lonHemisphereFrom = wordDecides(match?.[6], match?.[4]);
   if (!match) {
     match = trimmed.match(ddmNoLonLetterRegex) ?? trimmed.match(ddmNoLonLetterRegex2);
     lonDir = lonDirFromSigns(match?.[1], match?.[3]?.toUpperCase(), match?.[4]);
@@ -626,7 +658,10 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
     };
   }
 
-  const note = signLetterNotes([match[1], latDir, lat], [match[4], lonDir, lon]);
+  const note = joinNotes(
+    signLetterNotes([match[1], latDir, lat], [match[4], lonDir, lon]),
+    hemisphereFromTextNote(lonHemisphereFrom, lon)
+  );
   return {
     coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
     format: 'DDM',
