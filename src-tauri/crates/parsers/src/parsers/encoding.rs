@@ -15,7 +15,6 @@
 //! bytes that match no directive at all - an import that comes back empty with
 //! nothing to explain it.
 
-use std::io::Read;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -54,38 +53,6 @@ pub(crate) fn strip_bom_owned(mut bytes: Vec<u8>) -> Result<Vec<u8>> {
     let mark_len = bytes.len() - strip_bom(&bytes)?.len();
     bytes.drain(..mark_len);
     Ok(bytes)
-}
-
-/// Refuse a file that carries any byte-order mark at all.
-///
-/// For the one reader that takes a path and cannot be handed stripped bytes:
-/// the vendored `compass_data` crate opens a `.MAK` itself, so there is no
-/// boundary of ours to strip at.  Its lexer rejects the mark as an unexpected
-/// character and names a glyph that renders as nothing, which tells the user
-/// less than nothing; this says what is actually wrong first.
-pub(crate) fn reject_bom(path: &Path) -> Result<()> {
-    let bytes = read_mark(path).with_context(|| format!("reading {}", path.display()))?;
-    strip_bom(&bytes)?;
-    if bytes.starts_with(&UTF8_BOM) {
-        bail!(
-            "This file starts with a UTF-8 byte-order mark (what a Windows editor calls \
-             \"UTF-8 with BOM\"), which this format cannot carry. Re-save it as UTF-8 without \
-             the mark and import it again."
-        );
-    }
-    Ok(())
-}
-
-/// The leading bytes a byte-order mark could occupy - never more, because the
-/// caller only asks whether the file STARTS with one and a `.MAK`'s project
-/// tree can run to gigabytes.  A shorter file yields a shorter slice, which no
-/// mark can match, rather than an error.
-fn read_mark(path: &Path) -> std::io::Result<Vec<u8>> {
-    let mut mark = Vec::with_capacity(UTF8_BOM.len());
-    std::fs::File::open(path)?
-        .take(UTF8_BOM.len() as u64)
-        .read_to_end(&mut mark)?;
-    Ok(mark)
 }
 
 /// The Windows-1252 code points for `0x80..=0x9F`, the only range where it
@@ -193,56 +160,6 @@ mod tests {
         // A short file cannot be mistaken for a marked one.
         assert_eq!(strip_bom(b"\xef\xbb").unwrap(), b"\xef\xbb");
         assert_eq!(strip_bom(b"").unwrap(), b"");
-    }
-
-    #[test]
-    fn reject_bom_reads_only_the_mark_and_judges_short_files() {
-        let dir = tempfile::tempdir().unwrap();
-        // A file too short to hold a mark is not marked, and reading a
-        // fraction of one must not be an error in itself.
-        for (name, contents) in [
-            ("empty.mak", b"".as_slice()),
-            ("one.mak", b"#".as_slice()),
-            ("two.mak", b"\xef\xbb".as_slice()),
-            ("plain.mak", b"#cave.dat;".as_slice()),
-        ] {
-            let path = dir.path().join(name);
-            std::fs::write(&path, contents).unwrap();
-            assert!(reject_bom(&path).is_ok(), "{name} carries no mark");
-        }
-
-        // Only the first three bytes are consulted, so a mark's worth of bytes
-        // further in is content.
-        let midfile = dir.path().join("midfile.mak");
-        std::fs::write(&midfile, b"#c\xef\xbb\xbfave.dat;").unwrap();
-        assert!(reject_bom(&midfile).is_ok());
-
-        let marked = dir.path().join("marked.mak");
-        std::fs::write(&marked, b"\xef\xbb\xbf#cave.dat;").unwrap();
-        let err = reject_bom(&marked)
-            .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default();
-        assert!(
-            err.contains("byte-order mark"),
-            "a marked file must be named as such, got {err:?}"
-        );
-
-        let utf16 = dir.path().join("utf16.mak");
-        std::fs::write(&utf16, b"\xff\xfe#\0c\0").unwrap();
-        let err = reject_bom(&utf16)
-            .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default();
-        assert!(
-            err.contains("UTF-16") && err.contains("little-endian"),
-            "got {err:?}"
-        );
-
-        assert!(
-            reject_bom(&dir.path().join("absent.mak")).is_err(),
-            "a missing file is still a read failure"
-        );
     }
 
     /// Every byte decodes to exactly one char: `0x80..=0x9F` through the

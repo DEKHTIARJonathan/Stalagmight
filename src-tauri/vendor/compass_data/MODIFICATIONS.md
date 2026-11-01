@@ -22,8 +22,20 @@ Changes from upstream v0.0.7:
   from the default From.
 - **`project::Station`**: `name` / `location` fields made public so consumers can
   resolve georeference anchors from the `.MAK` link stations.
-- **`DatFile::load`**: read `.DAT` files as Windows-1252/latin1 instead of UTF-8,
-  so real files (e.g. a `0xB0` degree sign in a comment) don't fail to load.
+- **`DatFile::load`**: read `.DAT` files as latin1 (one byte per `char`)
+  instead of UTF-8, so real files (e.g. a `0xB0` degree sign in a comment)
+  don't fail to load. Stalagmight itself no longer goes through this reader;
+  see the reader hook below.
+- **Reader hook**: added `Project::from_text` (parse a `.MAK` from text),
+  `DatFile::load_from_text` (parse a linked `.DAT` from text) and
+  `Project::load_survey_files_with(read)`, which hands each linked file's path
+  - as the project lists it - to the caller's `read` closure and skips a file
+  the closure declines instead of failing the whole project. `Project::read`
+  and `DatFile::load` delegate to the text entry points. Stalagmight reads the
+  `.MAK` and every linked `.DAT` itself through this hook so its own policy
+  applies: Windows-1252 decoding with a replacement warning, byte-order-mark
+  stripping, which linked paths may be read, a size ceiling, regular files
+  only, and skip-and-report for a missing file.
 - **`survey::parser`**: the trailing survey form-feed terminator is now optional,
   so a hand-edited `.DAT` missing the final `0x0C` still parses.
 - **`survey::parser` / `parser_utils`**: an impossible `SURVEY DATE:` is a parse

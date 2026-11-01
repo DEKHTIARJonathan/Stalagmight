@@ -19,9 +19,9 @@
 //! - a `.MAK` fixed station becomes a GPS zero datum (UTM → WGS84 via `proj4rs`).
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -35,7 +35,7 @@ use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource};
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
-use crate::parsers::encoding::{cp1252_replacement_warning, read_cp1252, reject_bom, Cp1252Text};
+use crate::parsers::encoding::{cp1252_replacement_warning, read_cp1252, Cp1252Text};
 use crate::parsers::geo::{non_empty, FEET_TO_METERS};
 
 /// Distances/LRUD at or above this are Compass "missing data" sentinels.
@@ -220,25 +220,37 @@ pub fn parse_compass(path: &Path) -> Result<ParsedCompass> {
 }
 
 fn parse_mak(path: &Path) -> Result<ParsedCompass> {
-    // The `.MAK` and every `.DAT` it links are read inside the vendored crate,
-    // from their paths - so unlike `parse_dat` there is no boundary here at
-    // which a byte-order mark could be stripped. Name the mark instead of
-    // letting the vendored lexer report an invisible character (#429). A `.DAT`
-    // reached through a `.MAK` keeps the residue: a mark there lands in that
-    // file's cave name, which is only reachable by fixing the vendored reader.
-    reject_bom(path)?;
-    let project =
-        Project::read(path).map_err(|e| anyhow!("Failed to read Compass project: {e}"))?;
+    // Stalagmight reads the `.MAK` and every `.DAT` it links itself and hands
+    // the vendored parser text (#576 B35i-3, B8): the same Windows-1252 decode,
+    // byte-order-mark strip and replacement warning as a bare `.DAT`, plus the
+    // Walls importer's rules for which linked paths may be read.
+    let Cp1252Text { text, replaced } = read_cp1252(path)?;
+    // A project reads many files, so each warning about one names it.
+    let mut warnings: Vec<String> = cp1252_replacement_warning(Some(path), "Compass", replaced)
+        .into_iter()
+        .collect();
+    let project = Project::from_text(path, &text)
+        .map_err(|e| anyhow!("Failed to read Compass project: {e}"))?;
+    let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let linked = project.survey_files.len();
+    let mut skipped: Vec<String> = Vec::new();
     let loaded = project
-        .load_survey_files()
+        .load_survey_files_with(|file| read_linked_dat(&folder, file, &mut warnings, &mut skipped))
         .map_err(|e| anyhow!("Failed to load Compass survey files: {e}"))?;
+    // A skipped file costs only its own surveys; with nothing read at all
+    // there is nothing to import.
+    if linked > 0 && loaded.survey_files.is_empty() {
+        bail!(
+            "None of the survey files this project lists could be read. {}",
+            skipped.join(" ")
+        );
+    }
 
     let mut datum = None;
     let mut utm_zone = None;
     let mut declination_mode = DeclinationMode::default();
     let mut fixed_stations = Vec::new();
     let mut surveys: Vec<SurveyWithState> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
 
     for (i, dat) in loaded.survey_files.iter().enumerate() {
         // Each linked `.DAT` is parsed on its own, so each can stop part-way
@@ -364,6 +376,94 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
         surveys,
         warnings,
     })
+}
+
+/// Where a `.DAT` linked by a `.MAK` lives, by the Walls importer's rules
+/// (`walls::wpj::resolve_path`, #576 B8): backslashes are separators, a
+/// relative link resolves inside the `.MAK`'s `folder` with `..` clamped
+/// there, and an absolute local path is honoured - flagged `true` when it
+/// lies outside the folder, so the caller can say so. A network (UNC) or
+/// device-namespace path is refused before anything touches it: on Windows
+/// even asking whether `\\server\share\x` exists hands the user's
+/// credentials to that server. So is a drive letter that is not part of an
+/// absolute path here, which would otherwise resolve against the process's
+/// working directory.
+fn resolve_linked_path(folder: &Path, link: &Path) -> Result<(PathBuf, bool), &'static str> {
+    let normalized = link.to_string_lossy().replace('\\', "/");
+    // `\\server\share`, `\\?\C:\...` and `\\.\COM1` all start with two
+    // separators.
+    if normalized.starts_with("//") {
+        return Err("network (UNC) and device paths are never read");
+    }
+    let candidate = Path::new(&normalized);
+    if candidate.is_absolute() {
+        return Ok((candidate.to_path_buf(), !candidate.starts_with(folder)));
+    }
+    if normalized.contains(':') {
+        return Err("its drive letter cannot be resolved on this system");
+    }
+    let mut resolved = folder.to_path_buf();
+    for part in normalized.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if resolved != folder && resolved.starts_with(folder) {
+                    resolved.pop();
+                }
+            }
+            other => resolved.push(other),
+        }
+    }
+    Ok((resolved, false))
+}
+
+/// Read one `.DAT` a `.MAK` links, for `Project::load_survey_files_with`:
+/// its text, or `None` - with the reason in `skipped` and `warnings` - when it
+/// is refused, missing or unreadable. The rest of the project still imports
+/// (#576 B8, decision B8-D2: the Walls importer's rule).
+fn read_linked_dat(
+    folder: &Path,
+    link: &Path,
+    warnings: &mut Vec<String>,
+    skipped: &mut Vec<String>,
+) -> Option<String> {
+    let shown = link.display();
+    let reason = match resolve_linked_path(folder, link) {
+        Err(reason) => format!("'{shown}' was skipped: {reason}. Its surveys were not imported."),
+        Ok((resolved, outside)) => {
+            if outside {
+                warnings.push(format!(
+                    "'{shown}' is outside the .MAK's folder (an absolute path); it was read \
+                     from there."
+                ));
+            }
+            if resolved.exists() {
+                match read_cp1252(&resolved) {
+                    Ok(Cp1252Text { text, replaced }) => {
+                        warnings.extend(cp1252_replacement_warning(
+                            Some(link),
+                            "Compass",
+                            replaced,
+                        ));
+                        return Some(text);
+                    }
+                    Err(e) => format!(
+                        "'{shown}' could not be read ({e:#}); it was skipped and its surveys \
+                         were not imported."
+                    ),
+                }
+            } else {
+                format!(
+                    "'{shown}' was not found (looked for {}); it was skipped and its surveys \
+                     were not imported.",
+                    resolved.display()
+                )
+            }
+        }
+    };
+    warnings.push(reason.clone());
+    skipped.push(reason);
+    None
 }
 
 /// What a `.DAT` legitimately leaves behind once every survey has been read:
@@ -3155,50 +3255,6 @@ mod tests {
         assert_eq!(parsed.surveys.len(), expected.surveys.len());
     }
 
-    /// A `.MAK` is read from its path inside the vendored crate, so the mark
-    /// cannot be stripped for it. What we can do is say so: the vendored lexer
-    /// otherwise reports an unexpected character that renders as nothing.
-    #[test]
-    fn a_utf8_bom_on_a_mak_is_refused_by_name() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("s.dat"), synthetic_dat("Synthetic Cave")).unwrap();
-
-        // A `#file` entry needs a base location and a datum ahead of it.
-        let mak = "@100.0,200.0,300.0,13,0.5;\r\n&North American 1983;\r\n#s.dat;\r\n";
-        let plain = dir.path().join("plain.mak");
-        std::fs::write(&plain, mak).unwrap();
-        let marked = dir.path().join("bom.mak");
-        let mut bytes = vec![0xEF, 0xBB, 0xBF];
-        bytes.extend_from_slice(mak.as_bytes());
-        std::fs::write(&marked, bytes).unwrap();
-
-        assert_eq!(
-            parse_compass(&plain).unwrap().cave_name,
-            "Synthetic Cave",
-            "premise: the same project without a mark imports"
-        );
-
-        // Premise for the pre-flight: left to the vendored reader, the mark is
-        // an unexpected character whose name is an empty-looking glyph.
-        let vendor = Project::read(&marked)
-            .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default();
-        assert!(
-            vendor.contains("Unexpected character"),
-            "the vendored lexer is expected to choke on the mark, got {vendor:?}"
-        );
-
-        let err = parse_compass(&marked)
-            .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default();
-        assert!(
-            err.contains("byte-order mark"),
-            "the error must name the mark, got {err:?}"
-        );
-    }
-
     /// Compass is a Windows program and writes its `.DAT` text in
     /// Windows-1252, where `0x92` is the right single quote a word processor
     /// types for an apostrophe. Read as ISO-8859-1 it is U+0092, an invisible
@@ -3891,5 +3947,293 @@ mod tests {
             [(0, 3, 0, 0)],
             "the revisited A1 (station 3) ties to its first occurrence (station 0)"
         );
+    }
+
+    /// The `@` base location and `&` datum every `#file` entry needs ahead of
+    /// it, then one `#` line per linked file.
+    fn synthetic_mak(links: &[&str]) -> String {
+        let files: String = links.iter().flat_map(|link| ["#", link, ";\r\n"]).collect();
+        format!("@100.0,200.0,300.0,13,0.5;\r\n&North American 1983;\r\n{files}")
+    }
+
+    /// Write `mak` as `project.mak` in `dir` and import it.
+    fn parse_mak_text(dir: &Path, mak: &[u8]) -> Result<ParsedCompass> {
+        let path = dir.join("project.mak");
+        std::fs::write(&path, mak)?;
+        parse_compass(&path)
+    }
+
+    fn survey_names(parsed: &ParsedCompass) -> Vec<&str> {
+        parsed
+            .surveys
+            .iter()
+            .map(|s| s.survey.name.as_str())
+            .collect()
+    }
+
+    /// #576 B35i-3 / B35(i): a `.DAT` opened through its `.MAK` was decoded
+    /// byte == code point inside the vendored reader, so the same comment
+    /// imported differently from the same file opened directly: 0x92 became
+    /// the invisible C1 control U+0092 instead of U+2019, and an undefined
+    /// byte was lost without a word. Stalagmight now reads every linked file
+    /// itself, like a bare `.DAT`, and names the file in the warning.
+    #[test]
+    fn a_linked_dat_decodes_as_windows_1252_and_names_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = synthetic_survey_record("Synthetic Cave", "A", "7 10 1979");
+        let mut bytes = record.trim_end().as_bytes().to_vec();
+        bytes.extend_from_slice(b" C\x81ve don\x92t\r\n");
+        std::fs::write(dir.path().join("cave.dat"), &bytes).unwrap();
+
+        let parsed = parse_mak_text(dir.path(), synthetic_mak(&["cave.dat"]).as_bytes()).unwrap();
+        let comment = parsed.surveys[0].survey.shots[0]
+            .comment
+            .clone()
+            .unwrap_or_default();
+        let code_points: Vec<String> = comment
+            .chars()
+            .map(|c| format!("U+{:04X}", u32::from(c)))
+            .collect();
+        println!(
+            "linked .DAT comment: {comment:?} = {}",
+            code_points.join(" ")
+        );
+        println!("warnings: {:?}", parsed.warnings);
+        assert_eq!(
+            comment,
+            "C\u{fffd}ve don\u{2019}t",
+            "{}",
+            code_points.join(" ")
+        );
+        assert!(
+            parsed.warnings.iter().any(|w| w
+                == "'cave.dat' was read as windows-1252, the encoding Compass writes; 1 \
+                    character was replaced"),
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    /// #576 B35i-3: a byte-order mark on a linked `.DAT` landed in its cave
+    /// name (and so in the imported project's name).
+    #[test]
+    fn a_linked_dat_with_a_utf8_bom_keeps_its_cave_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(synthetic_dat("Synthetic Cave").as_bytes());
+        std::fs::write(dir.path().join("cave.dat"), &bytes).unwrap();
+        let parsed = parse_mak_text(dir.path(), synthetic_mak(&["cave.dat"]).as_bytes()).unwrap();
+        println!("cave name: {:?}", parsed.cave_name);
+        assert_eq!(parsed.cave_name, "Synthetic Cave");
+    }
+
+    /// #576 NF-AN4-2: the `.MAK` itself was read as strict UTF-8, so one
+    /// Windows-1252 byte anywhere in it - an accented word in a comment, a file
+    /// name - refused the whole project.
+    #[test]
+    fn a_mak_with_a_windows_1252_byte_opens() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("cave.dat"), synthetic_dat("Synthetic Cave")).unwrap();
+        let mut mak = b"/ Caf\xe9 survey notes\r\n".to_vec();
+        mak.extend_from_slice(synthetic_mak(&["cave.dat"]).as_bytes());
+        let result = parse_mak_text(dir.path(), &mak);
+        println!(
+            "MAK with 0xE9 in a comment: {:?}",
+            result
+                .as_ref()
+                .map(|p| survey_names(p).join(","))
+                .map_err(ToString::to_string)
+        );
+        assert_eq!(survey_names(&result.unwrap()), ["A"]);
+    }
+
+    /// #576 B35i-3: a "UTF-8 with BOM" `.MAK` used to be refused by name; now
+    /// that Stalagmight reads the file itself, the mark is simply dropped, as
+    /// it is for every other text format.
+    #[test]
+    fn a_utf8_bom_on_a_mak_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("s.dat"), synthetic_dat("Synthetic Cave")).unwrap();
+        let mut marked = vec![0xEF, 0xBB, 0xBF];
+        marked.extend_from_slice(synthetic_mak(&["s.dat"]).as_bytes());
+        let parsed = parse_mak_text(dir.path(), &marked).unwrap();
+        assert_eq!(parsed.cave_name, "Synthetic Cave");
+    }
+
+    /// #576 B8 (decision B8-D2): one missing `.DAT` used to fail the whole
+    /// project. It is skipped and named; the rest imports.
+    #[test]
+    fn a_missing_linked_dat_is_skipped_and_named() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("here.dat"), synthetic_dat("Synthetic Cave")).unwrap();
+        let result = parse_mak_text(
+            dir.path(),
+            synthetic_mak(&["here.dat", "absent.dat"]).as_bytes(),
+        );
+        println!(
+            "MAK linking here.dat + absent.dat: {:?}",
+            result
+                .as_ref()
+                .map(|p| (survey_names(p).join(","), p.warnings.clone()))
+                .map_err(ToString::to_string)
+        );
+        let parsed = result.unwrap();
+        assert_eq!(survey_names(&parsed), ["A"], "here.dat still imports");
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.starts_with("'absent.dat' was not found") && w.contains("skipped")),
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    /// #576 B8: with no readable file at all there is nothing to import, so
+    /// the project is refused - naming every file and why.
+    #[test]
+    fn a_mak_whose_every_link_fails_is_refused_with_the_reasons() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = parse_mak_text(dir.path(), synthetic_mak(&["a.dat", "b.dat"]).as_bytes())
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        println!("every link missing: {err}");
+        assert!(
+            err.contains("'a.dat' was not found") && err.contains("'b.dat' was not found"),
+            "{err}"
+        );
+    }
+
+    /// #576 B8 (decision B8-D1, the Walls rules): a relative link resolves
+    /// inside the `.MAK`'s folder, with `..` clamped there. A link climbing out
+    /// of the folder used to read whatever it named.
+    #[test]
+    fn a_dotdot_link_cannot_leave_the_mak_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        // Outside the project folder: must not be reachable through `..`.
+        std::fs::write(
+            dir.path().join("outside.dat"),
+            synthetic_survey_record("Synthetic Cave", "OUT", "7 10 1979"),
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("inner.dat"),
+            synthetic_survey_record("Synthetic Cave", "IN", "7 10 1979"),
+        )
+        .unwrap();
+        let result = parse_mak_text(
+            &project,
+            synthetic_mak(&["../outside.dat", "inner.dat"]).as_bytes(),
+        );
+        println!(
+            "links ../outside.dat + inner.dat: {:?}",
+            result
+                .as_ref()
+                .map(|p| (survey_names(p).join(","), p.warnings.clone()))
+                .map_err(ToString::to_string)
+        );
+        let parsed = result.unwrap();
+        assert_eq!(
+            survey_names(&parsed),
+            ["IN"],
+            "the .. link resolves inside the folder, where there is no such file"
+        );
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.starts_with("'../outside.dat' was not found")),
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    /// #576 B8: Compass is a Windows program and writes a backslash between
+    /// folders; on macOS and Linux that was read as part of the file name.
+    #[test]
+    fn a_backslash_link_resolves_on_every_platform() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        std::fs::write(
+            dir.path().join("sub").join("inner.dat"),
+            synthetic_survey_record("Synthetic Cave", "IN", "7 10 1979"),
+        )
+        .unwrap();
+        let link = "sub\\inner.dat";
+        let result = parse_mak_text(dir.path(), synthetic_mak(&[link]).as_bytes());
+        println!(
+            "link {link}: {:?}",
+            result
+                .as_ref()
+                .map(|p| survey_names(p).join(","))
+                .map_err(ToString::to_string)
+        );
+        assert_eq!(survey_names(&result.unwrap()), ["IN"]);
+    }
+
+    /// #576 B8: an absolute local path is honoured, as the Walls importer
+    /// honours an absolute `.PATH`, but said out loud.
+    #[test]
+    fn an_absolute_link_outside_the_folder_is_read_with_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let target = elsewhere.join("far.dat");
+        std::fs::write(&target, synthetic_dat("Synthetic Cave")).unwrap();
+        let link = target.display().to_string();
+        let parsed = parse_mak_text(&project, synthetic_mak(&[&link]).as_bytes()).unwrap();
+        println!("absolute link warnings: {:?}", parsed.warnings);
+        assert_eq!(survey_names(&parsed), ["A"]);
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains(&link) && w.contains("outside the .MAK's folder")),
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    /// #576 B8: a network (UNC) or device-namespace path is refused without
+    /// being touched: on Windows even checking whether `\\server\share\x`
+    /// exists hands the user's credentials to that server.
+    #[test]
+    fn network_and_device_links_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("here.dat"), synthetic_dat("Synthetic Cave")).unwrap();
+        let refused = [
+            "\\\\server\\share\\cave.dat",
+            "//server/share/cave.dat",
+            "\\\\?\\C:\\caves\\cave.dat",
+            "\\\\.\\COM1",
+        ];
+        let mut links = vec!["here.dat"];
+        links.extend(refused);
+        let result = parse_mak_text(dir.path(), synthetic_mak(&links).as_bytes());
+        println!(
+            "network/device links: {:?}",
+            result
+                .as_ref()
+                .map(|p| (survey_names(p).join(","), p.warnings.clone()))
+                .map_err(ToString::to_string)
+        );
+        let parsed = result.unwrap();
+        assert_eq!(survey_names(&parsed), ["A"]);
+        for link in refused {
+            assert!(
+                parsed
+                    .warnings
+                    .iter()
+                    .any(|w| w.starts_with(&format!("'{link}' was skipped"))
+                        && w.contains("network")),
+                "{link}: {:?}",
+                parsed.warnings
+            );
+        }
     }
 }
