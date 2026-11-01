@@ -425,9 +425,10 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
   let lat = Math.abs(latDeg) + latMin / 60;
   let lon = Math.abs(lonDeg) + lonMin / 60;
 
-  // Apply direction
-  if (latDir === 'S' || latDeg < 0) lat = -Math.abs(lat);
-  if (lonDir === 'W' || lonDeg < 0) lon = -Math.abs(lon);
+  // Apply direction. The '-' test is on the text, as in parseDMS, so a `-0`
+  // degree keeps its sign (parseInt gives -0, and -0 < 0 is false).
+  if (latDir === 'S' || match[1].startsWith('-')) lat = -Math.abs(lat);
+  if (lonDir === 'W' || match[4].startsWith('-')) lon = -Math.abs(lon);
 
   const validation = validateCoordinates(lat, lon);
   if (!validation.valid) {

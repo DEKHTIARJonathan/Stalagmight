@@ -723,3 +723,21 @@ describe('depthReference threading (#524)', () => {
     if (isSuccess(result)) expect(result.coordinates.depth_reference).toBe(15.75);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Coordinate entry review (#576 D39e, D37). Expected UTM values come from PROJ
+// (`cs2cs +proj=utm +zone=Z [+south] +datum=WGS84 +to +proj=longlat`), not from
+// this module; degree values are plain deg + min/60 + sec/3600 arithmetic.
+// ---------------------------------------------------------------------------
+
+const DDM_LON = 87 + 18.5 / 60; // 87°18.5'
+
+describe('parseDDM keeps the sign of a -0 degree (D39e)', () => {
+  it('a -0 latitude degree stays negative, like any other minus degree', () => {
+    expectCoordsClose(parseDDM("-0°30.5'N 87°18.5'W"), -30.5 / 60, -DDM_LON);
+  });
+
+  it('a -0 longitude degree stays negative', () => {
+    expectCoordsClose(parseDDM("10°00.000'N -0°30.000'E"), 10, -0.5);
+  });
+});
