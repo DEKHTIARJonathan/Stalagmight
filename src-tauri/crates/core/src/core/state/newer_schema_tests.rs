@@ -404,3 +404,60 @@ fn renaming_a_closed_newer_file_is_refused() {
     assert!(before.0 == after.0, "a refused rename wrote nothing");
     assert_eq!(undo_rows(&path), 1);
 }
+
+/// A merge reads its sources and writes a NEW file at this build's schema, so
+/// a newer source would come out of it downgraded - the same loss a Save As of
+/// that project is refused for. The merge is refused before anything is
+/// written: no output file, no archived source, the newer file untouched.
+#[test]
+fn merging_a_newer_file_as_a_source_is_refused() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let (newer_path, _) = build_newer_file(temp.path(), "newer.stalx");
+    let current_path = temp.path().join("current.stalx");
+    let mut current = Project::new("CaveB".to_string(), None);
+    current.add_section(SectionData {
+        name: Some("SectionB".to_string()),
+        shots: vec![ShotData {
+            length: 3.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    Database::open(&current_path)
+        .unwrap()
+        .save_project(&current)
+        .unwrap();
+    let before = snapshot(&newer_path);
+    let output = temp.path().join("merged.stalx");
+
+    let state = AppState::new().unwrap();
+    let merged = state.merge_projects(
+        vec![current_path.clone(), newer_path.clone()],
+        output.clone(),
+        "Merged".to_string(),
+        true,
+    );
+    println!(
+        "merge_projects with a newer source: success = {}, output written = {}, error = {:?}",
+        merged.success,
+        output.exists(),
+        merged.error
+    );
+    assert_refused_as_newer("merge_projects (newer source)", &merged);
+    assert!(
+        !output.exists(),
+        "a refused merge must not write the output"
+    );
+    assert!(
+        current_path.exists() && newer_path.exists(),
+        "a refused merge must not archive its sources"
+    );
+    let after = snapshot(&newer_path);
+    assert!(
+        before.0 == after.0,
+        "a refused merge wrote nothing to the source"
+    );
+    assert_eq!(before.1, after.1);
+    assert_eq!(undo_rows(&newer_path), 1);
+}

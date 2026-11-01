@@ -58,25 +58,45 @@ impl AppState {
         // Load all source projects
         let mut source_projects: Vec<Project> = Vec::new();
         for path in &source_paths {
-            match Database::open_existing(path) {
-                Ok(db) => match db.load_project() {
-                    Ok(mut project) => {
-                        project.file_path = Some(path.clone());
-                        // Assign IDs to any legacy closures that have id=0
-                        project.assign_closure_ids();
-                        source_projects.push(project);
-                    }
-                    Err(e) => {
-                        return CommandResult::failure(format!(
-                            "Failed to load project '{}': {}",
-                            path.display(),
-                            e
-                        ));
-                    }
-                },
+            let db = match Database::open_existing(path) {
+                Ok(db) => db,
                 Err(e) => {
                     return CommandResult::failure(format!(
                         "Failed to open project '{}': {}",
+                        path.display(),
+                        e
+                    ));
+                }
+            };
+            // [#576 B6-D1] The merged project is written at this build's schema, so a
+            // source a NEWER build saved would come out of it downgraded - what that
+            // build stored and this one does not know is dropped. That is the same loss
+            // a Save As of the project is refused for, so the merge is refused too,
+            // before anything is written or archived.
+            if let Some(version) = db.newer_schema_version() {
+                tracing::warn!(
+                    path = ?path,
+                    purpose = "never downgrade a project saved by a newer version",
+                    "Refused to merge a project saved by a newer version of Stalagmight"
+                );
+                return CommandResult::failure(format!(
+                    "Merge refused: '{}' was saved by a newer version of Stalagmight \
+                     (file format {version}). The merged project would be written in this \
+                     version's older format and lose what the newer one stored. Update \
+                     Stalagmight to merge it. No output file was written.",
+                    path.display()
+                ));
+            }
+            match db.load_project() {
+                Ok(mut project) => {
+                    project.file_path = Some(path.clone());
+                    // Assign IDs to any legacy closures that have id=0
+                    project.assign_closure_ids();
+                    source_projects.push(project);
+                }
+                Err(e) => {
+                    return CommandResult::failure(format!(
+                        "Failed to load project '{}': {}",
                         path.display(),
                         e
                     ));

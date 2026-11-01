@@ -52,6 +52,9 @@ opens the project **read-only** and never writes the file (#576 B6-D1):
   the same downgrade under another name.
 - **No SpeleoDB push either.** Start editing, force edit and Publish are refused
   before any network call, and the upload itself refuses as a backstop.
+- **Nor a merge that reads it.** Merge Projects writes its output at this build's
+  schema, so a newer file among the sources is refused (whether or not it is open)
+  before any output is written or any source archived.
 - **Viewing and export work** as for any read-only project, and closing it or
   opening another project ends the read-only state.
 
