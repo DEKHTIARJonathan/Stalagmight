@@ -355,7 +355,7 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
     lonMinStr = match[6];
     lonSecStr = match[7];
     lonDir = match[8]?.[0]?.toUpperCase();
-    hemisphereFrom.longitude = wordDecides(match[8], lonDegStr);
+    hemisphereFrom.longitude = wordDecides(match[8], lonDegStr, wordFollows(trimmed, match));
   } else {
     match = trimmed.match(dmsSpaceRegex);
     if (match) {
@@ -368,7 +368,7 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
       lonMinStr = match[6];
       lonSecStr = match[7];
       lonDir = match[8]?.[0]?.toUpperCase();
-      hemisphereFrom.longitude = wordDecides(match[8], lonDegStr);
+      hemisphereFrom.longitude = wordDecides(match[8], lonDegStr, wordFollows(trimmed, match));
     } else {
       match = trimmed.match(dmsSignedRegex);
       if (match) {
@@ -404,11 +404,19 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
           .slice(end)
           .match(/^(\s*)(North|South|East|Este|Est|West|[NSEW])(?![A-Za-z])(\s+[A-Za-z])?/i);
         if (before?.[4] === '+') latDegStr = `+${latDegStr}`;
+        const wordBefore = before?.[1] !== undefined;
         const latSide =
-          before && adjacentHemisphere(before[2]!, before[3] !== '', before[1] !== undefined, latDegStr ?? '', 'NS');
+          before && adjacentHemisphere(before[2]!, before[3] !== '', wordBefore, wordBefore, latDegStr ?? '', 'NS');
         const lonSide =
           after &&
-          adjacentHemisphere(after[2]!, after[1] !== '', after[2]!.length > 1 && after[3] !== undefined, lonDegStr ?? '', 'EW');
+          adjacentHemisphere(
+            after[2]!,
+            after[1] !== '',
+            after[2]!.length > 1 && after[3] !== undefined,
+            after[3] !== undefined,
+            lonDegStr ?? '',
+            'EW'
+          );
         // A wrong-axis letter on both sides says longitude first: no reading.
         const bothWrongAxis = latSide?.wrongAxis === true && lonSide?.wrongAxis === true;
 
@@ -521,12 +529,14 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
  * is read as text (`asText`, said in a note) when it is on the wrong axis or
  * contradicts the minus sign next to it - the signs then give the value, as they
  * did before letters next to the pair were read. Elsewhere a letter on the wrong
- * axis is no reading and the input is refused (`refuse`).
+ * axis is no reading and the input is refused (`refuse`). `nextToWord`: another
+ * word sits right beside it on its far side (see `wordDecides`).
  */
 function adjacentHemisphere(
   found: string,
   spaced: boolean,
   labelWord: boolean,
+  nextToWord: boolean,
   degrees: string,
   axis: 'NS' | 'EW'
 ): { letter?: string; asText?: string; refuse?: true; wrongAxis?: true; decides?: string } {
@@ -536,7 +546,7 @@ function adjacentHemisphere(
   if (inLabel && degrees.startsWith('-') && (letter === 'N' || letter === 'E')) return { asText: found };
   // Used as the hemisphere. Where it alone gives the value (an unsigned
   // degree) and it is a word or reads with a label word, say so.
-  const decides = inLabel ? (/^[+-]/.test(degrees) ? undefined : found) : wordDecides(found, degrees);
+  const decides = inLabel ? (/^[+-]/.test(degrees) ? undefined : found) : wordDecides(found, degrees, nextToWord);
   return decides === undefined ? { letter } : { letter, decides };
 }
 
@@ -544,11 +554,22 @@ function adjacentHemisphere(
  * A direction word (East, West, Este, Est; North, South) that gives an
  * unsigned degree its hemisphere - a word, unlike a letter next to the number,
  * can also be part of a name ("West entrance"), so the reading is said
- * (`hemisphereFromTextNote`). Undefined for a single letter or a signed degree,
- * whose hemisphere the sign gives or a contradiction note covers.
+ * (`hemisphereFromTextNote`). Only where another word sits beside it on its far
+ * side (`nextToWord`: `... West entrance`, `Cave South 20...`): a word that starts
+ * or ends the text next to the number cannot be part of a name, so reading it
+ * is no guess and a note there is noise (COORD-Q1). Undefined for a single
+ * letter or a signed degree, whose hemisphere the sign gives or a contradiction
+ * note covers.
  */
-function wordDecides(found: string | undefined, degrees: string | undefined): string | undefined {
-  return found !== undefined && found.length > 1 && degrees !== undefined && !/^[+-]/.test(degrees) ? found : undefined;
+function wordDecides(found: string | undefined, degrees: string | undefined, nextToWord: boolean): string | undefined {
+  return found !== undefined && found.length > 1 && nextToWord && degrees !== undefined && !/^[+-]/.test(degrees)
+    ? found
+    : undefined;
+}
+
+/** True when another word follows `match` in `text`, after a space (`... West entrance`). */
+function wordFollows(text: string, match: RegExpMatchArray): boolean {
+  return /^\s+[A-Za-z]/.test(text.slice((match.index ?? 0) + match[0].length));
 }
 
 /** "Took the hemisphere from "West" - read as -87.307500.", or undefined. */
@@ -644,7 +665,7 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
     match = trimmed.match(ddmRegex2);
   }
   let lonDir = match?.[6]?.charAt(0).toUpperCase();
-  const lonHemisphereFrom = wordDecides(match?.[6], match?.[4]);
+  const lonHemisphereFrom = wordDecides(match?.[6], match?.[4], match !== null && wordFollows(trimmed, match));
   if (!match) {
     match = trimmed.match(ddmNoLonLetterRegex) ?? trimmed.match(ddmNoLonLetterRegex2);
     lonDir = lonDirFromSigns(match?.[1], match?.[3]?.toUpperCase(), match?.[4]);

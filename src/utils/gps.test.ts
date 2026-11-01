@@ -1271,7 +1271,7 @@ describe('a hemisphere taken from a direction word is said (R5-1)', () => {
     const dms = parsedOk(`Entrance: 20°30'15"N 87°18'27" West entrance`);
     expect(dms.coordinates.longitude).toBeCloseTo(-DMS_LON, 9);
     expect(dms.note).toMatch(/hemisphere from "West"/);
-    const ddm = parsedOk(`20°30.5'N 87°18.5' West`);
+    const ddm = parsedOk(`20°30.5'N 87°18.5' West entrance`);
     expect(ddm.coordinates.longitude).toBeCloseTo(-DDM_LON, 9);
     expect(ddm.note).toMatch(/hemisphere from "West"/);
   });
@@ -1280,6 +1280,37 @@ describe('a hemisphere taken from a direction word is said (R5-1)', () => {
     expect(parsedOk(`Entrance: -20°30'15" 87°18'27"W`).note).toBeUndefined();
     expect(parsedOk(`Entrance: 20°30'15"N 87°18'27"W`).note).toBeUndefined();
     expect(parsedOk(`-20°30'15" -87°18'27" West entrance`).note).toBeUndefined();
+  });
+});
+
+describe('the word note only where the word sits next to another word (COORD-Q1)', () => {
+  // A direction word with no other word beside it cannot be part of a name, so
+  // reading it as the hemisphere is no guess and needs no note. The value is the
+  // same either way: only the note depends on the neighbouring word.
+  it.each([
+    [`20°30'15"N 87°18'27" West`, DMS_LAT, -DMS_LON],
+    [`20°30.5'N 87°18.5' West`, DDM_LAT, -DDM_LON],
+    [`-20°30'15" 87°18'27" West`, -DMS_LAT, -DMS_LON],
+    [`-20°30'15" 87°18'27"West`, -DMS_LAT, -DMS_LON],
+    [`South 20°30'15" -87°18'27"`, -DMS_LAT, -DMS_LON],
+    [`Entrance: South 20°30'15" -87°18'27"`, -DMS_LAT, -DMS_LON],
+  ])('%s: a word that starts or ends the text next to the number needs no note', (input, lat, lon) => {
+    const result = parsedOk(input);
+    expectCoordsClose(result, lat, lon);
+    expect(result.note).toBeUndefined();
+  });
+
+  it.each([
+    [`20°30'15"N 87°18'27" West entrance`, DMS_LAT, -DMS_LON, 'West'],
+    [`20°30.5'N 87°18.5' West entrance`, DDM_LAT, -DDM_LON, 'West'],
+    [`-20°30'15" 87°18'27" West entrance`, -DMS_LAT, -DMS_LON, 'West'],
+    [`-20°30'15" 87°18'27"West entrance`, -DMS_LAT, -DMS_LON, 'West'],
+    [`Cave South 20°30'15" -87°18'27"`, -DMS_LAT, -DMS_LON, 'South'],
+    [`Cave South20°30'15" -87°18'27"`, -DMS_LAT, -DMS_LON, 'South'],
+  ])('%s: a word next to another word keeps the note', (input, lat, lon, word) => {
+    const result = parsedOk(input);
+    expectCoordsClose(result, lat, lon);
+    expect(result.note).toMatch(new RegExp(`hemisphere from "${word}"`));
   });
 });
 
