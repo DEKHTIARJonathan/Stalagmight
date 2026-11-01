@@ -1639,16 +1639,7 @@ fn resolve_survey_appends_srv_for_non_srv_extension() {
         path: None,
         reference: None,
     };
-    let ctx = WpjContext {
-        dir: dir.to_path_buf(),
-        root: dir.to_path_buf(),
-        options: Vec::new(),
-        reference: None,
-        segment: String::new(),
-        derive_decl: false,
-        grid_relative: true,
-    };
-    let resolved = resolve_survey(&entry, &ctx).unwrap();
+    let resolved = resolve_survey(&entry, &dir).unwrap();
     assert_eq!(
         resolved.file_name().unwrap().to_string_lossy(),
         "FOO.OLD.SRV"
@@ -1660,15 +1651,7 @@ fn resolve_survey_rejects_path_like_name() {
     // A `.NAME` carrying a path separator / drive prefix is a traversal
     // attempt (`.NAME ../../../../etc/passwd`), not a node name - must be
     // refused (None ⇒ reported missing), never joined onto the dir.
-    let ctx = WpjContext {
-        dir: PathBuf::from("/proj"),
-        root: PathBuf::from("/proj"),
-        options: Vec::new(),
-        reference: None,
-        segment: String::new(),
-        derive_decl: false,
-        grid_relative: false,
-    };
+    let dir = PathBuf::from("/proj");
     for bad in ["../../etc/passwd", "..\\..\\secret", "/etc/shadow", "C:\\x"] {
         let entry = WpjEntry {
             is_book: false,
@@ -1680,7 +1663,7 @@ fn resolve_survey_rejects_path_like_name() {
             reference: None,
         };
         assert!(
-            resolve_survey(&entry, &ctx).is_none(),
+            resolve_survey(&entry, &dir).is_none(),
             "path-like .NAME {bad:?} must be rejected"
         );
     }
@@ -1692,28 +1675,54 @@ fn resolve_path_clamps_traversal_and_honors_absolute() {
     // A relative `..` chain cannot climb above the project root.
     assert_eq!(
         resolve_path(root, root, "../../../../etc"),
-        PathBuf::from("/proj/etc")
+        Ok(PathBuf::from("/proj/etc"))
     );
     // Relative descent works normally.
     assert_eq!(
         resolve_path(root, root, "Poligony"),
-        PathBuf::from("/proj/Poligony")
+        Ok(PathBuf::from("/proj/Poligony"))
     );
     // A `..` from a subdir pops back toward root but stops AT root.
     assert_eq!(
         resolve_path(Path::new("/proj/a/b"), root, "../../.."),
-        PathBuf::from("/proj")
+        Ok(PathBuf::from("/proj"))
     );
-    // An absolute / drive-qualified `.PATH` is honored verbatim (genuine
-    // Walls behavior), not discarded.
+    // An absolute local `.PATH` is honored verbatim (genuine Walls
+    // behavior), not discarded.
+    #[cfg(unix)]
     assert_eq!(
         resolve_path(root, root, "/data/caves"),
-        PathBuf::from("/data/caves")
+        Ok(PathBuf::from("/data/caves"))
     );
+    // A drive letter is absolute only on Windows; elsewhere it is refused
+    // rather than resolved against the working directory (#576 NF-W2C-2).
+    #[cfg(windows)]
     assert_eq!(
         resolve_path(root, root, "D:\\Caves"),
-        PathBuf::from("D:/Caves")
+        Ok(PathBuf::from("D:/Caves"))
     );
+    #[cfg(not(windows))]
+    assert_eq!(
+        resolve_path(root, root, "D:\\Caves"),
+        Err("its drive letter cannot be resolved on this system")
+    );
+    assert_eq!(
+        resolve_path(root, root, "D:Caves"),
+        Err("its drive letter cannot be resolved on this system")
+    );
+    // Network and device paths are refused from the text (#576 SEC-1).
+    for unc in [
+        "\\\\server\\share",
+        "//server/share",
+        "\\\\?\\C:\\x",
+        "\\\\.\\COM1",
+    ] {
+        assert_eq!(
+            resolve_path(root, root, unc),
+            Err("network (UNC) and device paths are never read"),
+            "{unc}"
+        );
+    }
 }
 
 #[test]
@@ -3060,4 +3069,162 @@ fn an_lrud_closer_followed_by_a_no_break_space_closes_only_at_the_end_of_the_lin
         assert_eq!(got.tokens, tokens, "{body:?}");
         assert_eq!(got.lrud.as_deref(), lrud, "{body:?}");
     }
+}
+
+// ----- .PATH policy, the .MAK rules (#576 SEC-1, NF-AN4-6, NF-W2C-2) -------
+
+/// A one-book `.wpj` in `proj` whose book's `.PATH` is `path_line` and whose
+/// survey `S` reads `S.SRV` from there.
+fn wpj_with_path(proj: &Path, path_line: &str) -> PathBuf {
+    let wpj = format!(
+        ";WALLS Project File\n\
+         .BOOK Root\n.NAME ROOT\n.STATUS 8\n\
+         .PATH {path_line}\n\
+         .SURVEY S\n.NAME S\n.STATUS 8\n\
+         .ENDBOOK\n"
+    );
+    let wpj_path = proj.join("T.wpj");
+    std::fs::write(&wpj_path, wpj).unwrap();
+    wpj_path
+}
+
+/// Decision SEC-1 ("same as .MAK"): a network (UNC) or device-namespace
+/// `.PATH` is refused from its text alone, before anything asks the file
+/// system about it - on Windows even checking whether `\\server\share\x`
+/// exists hands the user's credentials to that server. On macOS and Linux a
+/// path starting with two slashes names the local root, so a `.PATH` of
+/// `//<local dir>` proves the point: it used to be READ (the survey
+/// imported), and is refused now, with the reason named.
+#[cfg(unix)]
+#[test]
+fn a_network_or_device_path_is_refused_before_it_is_touched() {
+    let proj = temp_dir("unc_proj");
+    let local = temp_dir("unc_local");
+    std::fs::write(
+        local.join("S.SRV"),
+        "#UNITS meters order=DAV\nA B 10 90 0\n",
+    )
+    .unwrap();
+    let local_str = local.display().to_string();
+    for path_line in [
+        format!("/{local_str}"),
+        format!("\\{}", local_str.replace('/', "\\")),
+        "\\\\server\\share\\caves".to_string(),
+        "\\\\?\\C:\\caves".to_string(),
+        "\\\\.\\COM1".to_string(),
+    ] {
+        let parsed = parse_walls(&wpj_with_path(&proj, &path_line)).unwrap();
+        let read = parsed.surveys.iter().any(|s| s.resolved);
+        println!(
+            ".PATH {path_line}: survey read={read}, missing={:?}, warnings={:?}",
+            parsed.missing_files, parsed.warnings
+        );
+        assert!(!read, ".PATH {path_line} must not be read");
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains("survey 'S' was skipped")
+                    && w.contains("network (UNC) and device paths are never read")),
+            ".PATH {path_line}: {:?}",
+            parsed.warnings
+        );
+        assert_eq!(parsed.missing_files.len(), 1, "named as not imported");
+    }
+}
+
+/// NF-W2C-2: a drive-letter `.PATH` is absolute only on Windows. Elsewhere
+/// `D:\Caves` resolved as the RELATIVE path `D:/Caves`, i.e. against the
+/// process's working directory - whatever folder the app was started from.
+/// It is refused instead, as the `.MAK` reader refuses it.
+#[cfg(not(windows))]
+#[test]
+fn a_drive_letter_path_does_not_resolve_against_the_working_directory() {
+    let proj = temp_dir("drive_proj");
+    for path_line in ["D:\\Caves", "D:Caves"] {
+        let parsed = parse_walls(&wpj_with_path(&proj, path_line)).unwrap();
+        println!(
+            ".PATH {path_line}: missing={:?}, warnings={:?}",
+            parsed.missing_files, parsed.warnings
+        );
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains("survey 'S' was skipped")
+                    && w.contains("its drive letter cannot be resolved on this system")),
+            ".PATH {path_line}: {:?}",
+            parsed.warnings
+        );
+        assert!(
+            parsed.missing_files.iter().all(|m| !m.starts_with("D:")),
+            "no working-directory-relative path may be looked up: {:?}",
+            parsed.missing_files
+        );
+    }
+}
+
+/// A refused `.PATH` covers the books and surveys under it whose own `.PATH`
+/// is relative; an absolute local `.PATH` below it replaces the base again
+/// and is read (with the outside-the-project warning).
+#[cfg(unix)]
+#[test]
+fn a_refused_path_covers_its_relative_children_only() {
+    let proj = temp_dir("refused_proj");
+    let local = temp_dir("refused_local");
+    std::fs::write(
+        local.join("S.SRV"),
+        "#UNITS meters order=DAV\nA B 10 90 0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        local.join("T.SRV"),
+        "#UNITS meters order=DAV\nC D 10 90 0\n",
+    )
+    .unwrap();
+    let wpj = format!(
+        ";WALLS Project File\n\
+         .BOOK Root\n.NAME ROOT\n.STATUS 8\n\
+         .PATH \\\\server\\share\n\
+         .BOOK Inner\n.NAME INNER\n.STATUS 8\n.PATH sub\n\
+         .SURVEY S\n.NAME S\n.STATUS 8\n\
+         .ENDBOOK\n\
+         .BOOK Local\n.NAME LOCAL\n.STATUS 8\n.PATH {}\n\
+         .SURVEY T\n.NAME T\n.STATUS 8\n\
+         .ENDBOOK\n\
+         .ENDBOOK\n",
+        local.display()
+    );
+    let wpj_path = proj.join("T.wpj");
+    std::fs::write(&wpj_path, wpj).unwrap();
+    let parsed = parse_walls(&wpj_path).unwrap();
+    let resolved: Vec<(&str, bool)> = parsed
+        .surveys
+        .iter()
+        .map(|s| (s.name.as_str(), s.resolved))
+        .collect();
+    println!("surveys read: {resolved:?}, warnings={:?}", parsed.warnings);
+    assert_eq!(
+        resolved,
+        [("S", false), ("T", true)],
+        "{:?}",
+        parsed.warnings
+    );
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("survey 'S' was skipped")
+                && w.contains("network (UNC) and device paths are never read")),
+        "the relative child inherits the refusal: {:?}",
+        parsed.warnings
+    );
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("survey 'T' resolves through an absolute .PATH outside")),
+        "{:?}",
+        parsed.warnings
+    );
 }

@@ -68,7 +68,10 @@ pub(crate) struct WpjEntry {
 /// Inherited context accumulated down the book tree.
 #[derive(Clone)]
 pub(crate) struct WpjContext {
-    pub(crate) dir: PathBuf,
+    /// Where this entry's files resolve, or why its `.PATH` (or an
+    /// ancestor's, which a relative `.PATH` builds on) was refused
+    /// ([`resolve_path`]).
+    pub(crate) dir: Result<PathBuf, &'static str>,
     /// The `.wpj`'s own directory - the immutable project root. A relative
     /// `.PATH` may not climb above it (traversal guard); an absolute `.PATH`
     /// resets `dir` but leaves `root` unchanged.
@@ -107,7 +110,7 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
     let mut pending: Option<WpjEntry> = None;
 
     let root_context = WpjContext {
-        dir: root_dir.clone(),
+        dir: Ok(root_dir.clone()),
         root: root_dir.clone(),
         options: Vec::new(),
         reference: None,
@@ -126,11 +129,8 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
     macro_rules! flush_pending {
         () => {
             if let Some(entry) = pending.take() {
-                let parent_ctx = stack
-                    .last()
-                    .cloned()
-                    .unwrap_or_else(|| root_context.clone());
-                let ctx = derive_context(&parent_ctx, &entry);
+                let parent_ctx = stack.last().unwrap_or(&root_context);
+                let ctx = derive_context(parent_ctx, &entry);
                 if entry.is_book {
                     book_count += 1;
                     if project_name.is_empty() {
@@ -149,69 +149,82 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                     } else if entry.status & STATUS_TYPE_OTHER != 0 {
                         skipped_attachments += 1;
                     } else {
-                        // Defense-in-depth: an absolute / drive-qualified `.PATH`
-                        // is honored verbatim (genuine Walls does), but if it
-                        // escapes the project root the importer is reading outside
-                        // the `.wpj`'s own tree - tell the user rather than doing
-                        // it silently. (The read is NOT blocked: an explicit
-                        // absolute path is the author's deliberate choice.)
-                        if ctx.dir.is_absolute() && !ctx.dir.starts_with(&ctx.root) {
-                            let label = entry.name.clone().unwrap_or_else(|| entry.title.clone());
-                            warnings.push(format!(
-                                "survey '{label}' resolves through an absolute .PATH outside \
-                                 the project directory ({})",
-                                ctx.dir.display()
-                            ));
-                        }
-                        match resolve_survey(&entry, &ctx) {
-                            Some(file_path) if file_path.exists() => {
-                                match read_cp1252(&file_path) {
-                                    Ok(Cp1252Text {
-                                        text: contents,
-                                        replaced,
-                                    }) => {
-                                        warnings.extend(cp1252_replacement_warning(
-                                            Some(&file_path),
-                                            "Walls",
-                                            replaced,
-                                        ));
-                                        let (initial, initial_macros) =
-                                            build_initial_units(&ctx, &mut warnings);
-                                        let name = entry
-                                            .name
-                                            .clone()
-                                            .unwrap_or_else(|| entry.title.clone());
-                                        let survey = parse_srv_contents(
-                                            &contents,
-                                            &entry.title,
-                                            &name,
-                                            &ctx.segment,
-                                            &initial,
-                                            &initial_macros,
-                                            ctx.reference.clone(),
-                                            ctx.grid_relative,
-                                            ctx.derive_decl,
-                                            &mut warnings,
-                                        );
-                                        surveys.push(survey);
-                                    }
-                                    Err(e) => {
-                                        warnings.push(format!(
-                                            "Could not read survey '{}': {e}",
-                                            file_path.display()
-                                        ));
-                                    }
+                        let label = entry.name.clone().unwrap_or_else(|| entry.title.clone());
+                        // The survey's file, or the name to list it under as
+                        // not imported.
+                        let found = match &ctx.dir {
+                            // A refused `.PATH` (#576 SEC-1) is never handed to
+                            // the file system, not even to ask whether it exists.
+                            Err(reason) => {
+                                warnings.push(format!(
+                                    "survey '{label}' was skipped: its .PATH was refused \
+                                     ({reason}); it was not imported."
+                                ));
+                                Err(label.clone())
+                            }
+                            Ok(dir) => {
+                                // Defense-in-depth: an absolute local `.PATH` is
+                                // honored verbatim (genuine Walls does), but if it
+                                // escapes the project root the importer is reading
+                                // outside the `.wpj`'s own tree - tell the user
+                                // rather than doing it silently. (The read is NOT
+                                // blocked: an explicit absolute path is the
+                                // author's deliberate choice.)
+                                if dir.is_absolute() && !dir.starts_with(&ctx.root) {
+                                    warnings.push(format!(
+                                        "survey '{label}' resolves through an absolute .PATH \
+                                         outside the project directory ({})",
+                                        dir.display()
+                                    ));
+                                }
+                                match resolve_survey(&entry, dir) {
+                                    Some(file_path) if file_path.exists() => Ok(file_path),
+                                    other => Err(other.map_or_else(
+                                        || label.clone(),
+                                        |p| p.display().to_string(),
+                                    )),
                                 }
                             }
-                            other => {
-                                let shown =
-                                    other.map(|p| p.display().to_string()).unwrap_or_else(|| {
-                                        entry.name.clone().unwrap_or_else(|| entry.title.clone())
-                                    });
+                        };
+                        match found {
+                            Ok(file_path) => match read_cp1252(&file_path) {
+                                Ok(Cp1252Text {
+                                    text: contents,
+                                    replaced,
+                                }) => {
+                                    warnings.extend(cp1252_replacement_warning(
+                                        Some(&file_path),
+                                        "Walls",
+                                        replaced,
+                                    ));
+                                    let (initial, initial_macros) =
+                                        build_initial_units(&ctx, &mut warnings);
+                                    let survey = parse_srv_contents(
+                                        &contents,
+                                        &entry.title,
+                                        &label,
+                                        &ctx.segment,
+                                        &initial,
+                                        &initial_macros,
+                                        ctx.reference.clone(),
+                                        ctx.grid_relative,
+                                        ctx.derive_decl,
+                                        &mut warnings,
+                                    );
+                                    surveys.push(survey);
+                                }
+                                Err(e) => {
+                                    warnings.push(format!(
+                                        "Could not read survey '{}': {e}",
+                                        file_path.display()
+                                    ));
+                                }
+                            },
+                            Err(shown) => {
                                 missing_files.push(shown);
                                 surveys.push(ParsedSurvey {
                                     title: entry.title.clone(),
-                                    name: entry.name.clone().unwrap_or_else(|| entry.title.clone()),
+                                    name: label,
                                     segment: ctx.segment.clone(),
                                     date: None,
                                     surveyor: None,
@@ -325,9 +338,14 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
 /// Derive a child entry's inherited context from its parent's.
 pub(crate) fn derive_context(parent: &WpjContext, entry: &WpjEntry) -> WpjContext {
     let mut ctx = parent.clone();
-    // Resolve `.PATH`.
+    // Resolve `.PATH`. A refused parent folder stays refused for a relative
+    // `.PATH`, which builds on it; an absolute one replaces it.
     if let Some(p) = &entry.path {
-        ctx.dir = resolve_path(&parent.dir, &parent.root, p);
+        ctx.dir = match &parent.dir {
+            Ok(base) => resolve_path(base, &parent.root, p),
+            Err(_) if replaces_base(p) => resolve_path(&parent.root, &parent.root, p),
+            Err(reason) => Err(*reason),
+        };
     }
     // Accumulate `.OPTIONS`.
     if let Some(opts) = &entry.options {
@@ -369,8 +387,8 @@ pub(crate) fn derive_context(parent: &WpjContext, entry: &WpjEntry) -> WpjContex
     ctx
 }
 
-/// Resolve a `.SURVEY` entry to its `.SRV` file path.
-pub(crate) fn resolve_survey(entry: &WpjEntry, ctx: &WpjContext) -> Option<PathBuf> {
+/// Resolve a `.SURVEY` entry to its `.SRV` file path in `dir`.
+pub(crate) fn resolve_survey(entry: &WpjEntry, dir: &Path) -> Option<PathBuf> {
     let name = entry.name.as_ref()?;
     let name = name.trim();
     if name.is_empty() {
@@ -394,44 +412,73 @@ pub(crate) fn resolve_survey(entry: &WpjEntry, ctx: &WpjContext) -> Option<PathB
         vec![format!("{name}.SRV"), format!("{name}.srv")]
     };
     for cand in &candidates {
-        let p = ctx.dir.join(cand);
+        let p = dir.join(cand);
         if p.exists() {
             return Some(p);
         }
     }
     // Default to the first candidate even if missing (caller reports missing).
-    Some(ctx.dir.join(&candidates[0]))
+    Some(dir.join(&candidates[0]))
 }
 
-/// Resolve a `.PATH` against a parent directory: an absolute / drive-qualified
-/// path REPLACES the base (genuine Walls honors it - `Walls32 prjhier.cpp`
-/// `GetPathPrefix` uses an absolute `.PATH` as the prefix), a relative path
-/// concatenates; backslashes are normalized. A relative `..` is clamped at
-/// `root` (the `.wpj`'s own directory) so a crafted `.PATH ../../../../` can't
-/// walk the resolution dir out of the project tree.
-pub(crate) fn resolve_path(parent: &Path, root: &Path, path: &str) -> PathBuf {
+/// Whether a `.PATH` replaces the folder it is resolved against rather than
+/// building on it: an absolute, drive-qualified or network/device path.
+fn replaces_base(path: &str) -> bool {
     let normalized = path.replace('\\', "/");
+    normalized.starts_with("//") || Path::new(&normalized).is_absolute() || normalized.contains(':')
+}
+
+/// Resolve a `.PATH` against a parent directory, by the rules the Compass
+/// `.MAK` reader follows for its linked files (#576 SEC-1, decision "same as
+/// .MAK"). Backslashes are separators. An absolute local path REPLACES the
+/// base (genuine Walls honors it - `Walls32 prjhier.cpp` `GetPathPrefix`
+/// uses an absolute `.PATH` as the prefix); the caller warns when it leaves
+/// the project. A relative path concatenates, with `..` clamped at `root`
+/// (the `.wpj`'s own directory) so a crafted `.PATH ../../../../` can't walk
+/// the resolution dir out of the project tree.
+///
+/// Refused, from the text alone and before anything touches the file system:
+/// a network (UNC) or device-namespace path (`\\server\share`, `\\?\C:\...`,
+/// `\\.\COM1` - on Windows even asking whether `\\server\share\x` exists hands
+/// the user's credentials to that server); a drive letter that is not part
+/// of an absolute path on this system (`D:\Caves` on macOS/Linux, `D:Caves`
+/// anywhere), which would otherwise resolve against the process's working
+/// directory.
+pub(crate) fn resolve_path(
+    parent: &Path,
+    root: &Path,
+    path: &str,
+) -> Result<PathBuf, &'static str> {
+    let normalized = path.replace('\\', "/");
+    // `\\server\share`, `\\?\C:\...` and `\\.\COM1` all start with two separators.
+    if normalized.starts_with("//") {
+        return Err("network (UNC) and device paths are never read");
+    }
     let candidate = Path::new(&normalized);
-    if candidate.is_absolute() || normalized.contains(':') {
-        return PathBuf::from(normalized);
-    }
-    let mut dir = parent.to_path_buf();
-    for part in normalized.split('/') {
-        match part {
-            "" | "." => {}
-            // Never pop above the project root (traversal guard). When `dir`
-            // already sits at/above `root` - e.g. a parent set an absolute
-            // `.PATH` so `dir` is a different tree - `starts_with` is false and
-            // we leave it alone (that absolute base is the user's explicit dir).
-            ".." => {
-                if dir != root && dir.starts_with(root) {
-                    dir.pop();
+    if candidate.is_absolute() {
+        Ok(candidate.to_path_buf())
+    } else if normalized.contains(':') {
+        Err("its drive letter cannot be resolved on this system")
+    } else {
+        let mut dir = parent.to_path_buf();
+        for part in normalized.split('/') {
+            match part {
+                "" | "." => {}
+                // Never pop above the project root (traversal guard). When
+                // `dir` already sits at/above `root` - e.g. a parent set an
+                // absolute `.PATH` so `dir` is a different tree - `starts_with`
+                // is false and we leave it alone (that absolute base is the
+                // user's explicit dir).
+                ".." => {
+                    if dir != root && dir.starts_with(root) {
+                        dir.pop();
+                    }
                 }
+                other => dir.push(other),
             }
-            other => dir.push(other),
         }
+        Ok(dir)
     }
-    dir
 }
 
 /// Parse a `.REF` line: `northing easting zone conv elev flags latDMS lonDMS
