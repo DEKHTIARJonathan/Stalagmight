@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useId, type ReactNode } from 
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
+import { isMoveCarryRefusal } from '../../store/moveCarry';
 import { useUIStore } from '../../store/uiStore';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { useUnwindTarget, type ChainDirection } from '../../hooks/useUnwindTarget';
@@ -473,6 +474,8 @@ export default function UndoHistoryDropdown({
         isActionInProgressRef.current = false;
         setIsActionInProgress(false);
         actionQueueRef.current = [];
+        // A move-carry refusal (GHOST-2) is already its own notice: no error dialog.
+        if (isMoveCarryRefusal(result)) return;
         openDialog('error', {
           title: t('undo.errors.failedTitle', { mode: modeLabel }),
           message: buildErrorMessage(errorReason, context),

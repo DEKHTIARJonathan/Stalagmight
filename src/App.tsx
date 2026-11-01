@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
+import { isMoveCarryRefusal } from './store/moveCarry';
 import { useUIStore } from './store/uiStore';
 import { useSpeleoStore } from './store/speleoStore';
 import { useGasPlanStore, selectIsPlanDirty } from './store/gasPlanStore';
@@ -563,7 +564,9 @@ function App() {
       if (useProjectStore.getState().integrityIssues.length === 0) {
         closeIntegrityDialog();
       }
-    } catch {
+    } catch (e) {
+      // A move-carry refusal (GHOST-2) is not a failed repair and is its own notice.
+      if (isMoveCarryRefusal(e)) return;
       // repairProjectIntegrity re-throws on a real failure (e.g. the IPC rejected
       // during teardown) rather than reporting a fake no-op success. Surface it and
       // keep the dialog open - integrityIssues is untouched, so the banner/save-block

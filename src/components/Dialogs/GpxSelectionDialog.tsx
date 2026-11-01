@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
+import { isMoveCarryRefusal } from '../../store/moveCarry';
 import { useUIStore } from '../../store/uiStore';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
@@ -103,7 +104,9 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
       );
 
       if (!result.success) {
-        surfaceImportFailure('gpx-selection', importUi, { phase: 'command', error: result.error });
+        // A move carry refused it (GHOST-2) and said so: keep the dialog for the retry.
+        if (isMoveCarryRefusal(result)) setIsImporting(false);
+        else surfaceImportFailure('gpx-selection', importUi, { phase: 'command', error: result.error });
         return;
       }
 

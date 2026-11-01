@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
+import { isMoveCarryRefusal } from '../../store/moveCarry';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import {
@@ -373,7 +374,8 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       resetLoading();
 
       if (!result.success) {
-        reportFailure({ phase: 'command', error: result.error });
+        // A move carry refused it (GHOST-2) and said so: keep the dialog for the retry.
+        if (!isMoveCarryRefusal(result)) reportFailure({ phase: 'command', error: result.error });
         return;
       }
 

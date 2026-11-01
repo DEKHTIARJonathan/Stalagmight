@@ -10,6 +10,7 @@ import { getPanelId, getTabId, type SettingsCategory } from './SettingsSidebar';
 import { Button } from '../common/Button';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { isMoveCarryRefusal } from '../../store/moveCarry';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { defaultConfig, type Config } from '../../types/config';
 import { isValidationConfigValid } from '../../utils/validation';
@@ -159,7 +160,8 @@ export function ProjectSettingsDialog() {
       const result = await updateProjectSettings(trimmedName, validation);
       if (!result.success) {
         setSaving(false);
-        showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
+        // A move-carry refusal (GHOST-2) is already its own notice: no second toast.
+        if (!isMoveCarryRefusal(result)) showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
         return;
       }
     }
@@ -185,7 +187,8 @@ export function ProjectSettingsDialog() {
       const result = await setSurfaceElevation(elevationMeters);
       if (!result.success) {
         setSaving(false);
-        showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
+        // A move-carry refusal (GHOST-2) is already its own notice: no second toast.
+        if (!isMoveCarryRefusal(result)) showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
         return;
       }
     }

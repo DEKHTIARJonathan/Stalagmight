@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
+import { isMoveCarryRefusal } from '../../store/moveCarry';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc } from '../../utils/ipc';
 import {
@@ -147,7 +148,8 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
       resetLoading();
 
       if (!result.success) {
-        surfaceImportFailure('compass-import', importUi, { phase: 'command', error: result.error });
+        // A move carry refused it (GHOST-2) and said so: keep the dialog for the retry.
+        if (!isMoveCarryRefusal(result)) surfaceImportFailure('compass-import', importUi, { phase: 'command', error: result.error });
         return;
       }
 

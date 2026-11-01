@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useProjectStore } from '../../store/projectStore';
+import { isMoveCarryRefusal } from '../../store/moveCarry';
 import { useUIStore } from '../../store/uiStore';
 import {
   completeImportToSingleView,
@@ -146,7 +147,9 @@ export default function GpxPlacementDialog() {
       );
 
       if (!result.success) {
-        surfaceImportFailure('gpx-placement', importUi, { phase: 'command', error: result.error });
+        // A move carry refused it (GHOST-2) and said so: keep the dialog for the retry.
+        if (isMoveCarryRefusal(result)) setIsImporting(false);
+        else surfaceImportFailure('gpx-placement', importUi, { phase: 'command', error: result.error });
         return;
       }
 
