@@ -83,6 +83,24 @@ const MGRS_BAND_LETTERS = UTM_ZONE_LETTERS;
 const OLC_ALPHABET = '23456789CFGHJMPQRVWX';
 
 /**
+ * The longest text, other than a map link, that is read as coordinates. Real
+ * coordinate text, even a labelled paste, stays far below it. The parsers that
+ * find coordinates inside other text search with unanchored patterns whose time
+ * grows with the square of the length, and the dialogs parse on every
+ * keystroke, so longer text is refused before any pattern runs.
+ */
+const MAX_COORDINATE_TEXT_LENGTH = 1024;
+
+/** Text over `MAX_COORDINATE_TEXT_LENGTH` that is not a map link (checked without a pattern). */
+function tooLongForCoordinates(input: string): boolean {
+  const text = input.trim();
+  if (text.length <= MAX_COORDINATE_TEXT_LENGTH) return false;
+  const link =
+    text.includes('http') || (text.includes('maps') && text.includes('/')) || text.slice(0, 4).toLowerCase() === 'geo:';
+  return !link;
+}
+
+/**
  * Normalize user-entered GPS text:
  * - collapse tabs/newlines/non-breaking spaces
  * - collapse repeated whitespace
@@ -170,6 +188,7 @@ export function looksTransposed(lat: number, lon: number): boolean {
  * both ways - both `parseDD` would have accepted the swapped order too.
  */
 export function looksTransposedRawDD(input: string): boolean {
+  if (tooLongForCoordinates(input)) return false;
   const trimmed = normalizeGpsWhitespace(input);
   const match = trimmed.match(/^([+-]?\d+\.?\d*)[,\s]+([+-]?\d+\.?\d*)$/);
   if (!match || match[1] === undefined || match[2] === undefined) return false;
@@ -1614,6 +1633,8 @@ export function parseUrl(input: string, depthReference = 0): GpsParseResult | Gp
  * Returns the most likely format or undefined if unknown.
  */
 export function detectFormat(input: string): GpsFormat | undefined {
+  // No format for text too long to be coordinates; a link has none either.
+  if (input.trim().length > MAX_COORDINATE_TEXT_LENGTH) return undefined;
   const trimmed = normalizeGpsWhitespace(input);
 
   // URL detection (highest priority)
@@ -1672,6 +1693,15 @@ export function detectFormat(input: string): GpsFormat | undefined {
  * See `parseDD` for `depthReference`.
  */
 export function parseGps(input: string, depthReference = 0): GpsParseResult | GpsParseError {
+  if (tooLongForCoordinates(input)) {
+    return {
+      message: i18n.t('validation.gps.inputTooLong', {
+        length: input.trim().length,
+        max: MAX_COORDINATE_TEXT_LENGTH,
+      }),
+      original: input,
+    };
+  }
   const trimmed = normalizeGpsWhitespace(input);
 
   if (!trimmed) {

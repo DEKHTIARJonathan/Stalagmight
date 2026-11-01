@@ -1310,3 +1310,27 @@ describe('geo: link with a map centre and a search (R5 question b)', () => {
     expectCoordsClose(parsedOk('geo:20.5,-87.3?q=20.51,-87.31(Pin)'), 20.51, -87.31);
   });
 });
+
+describe('text too long to be a coordinate is refused before parsing (R5-5)', () => {
+  it('refuses non-link text over 1024 characters', () => {
+    expectRejected('1'.repeat(10000), /too long/);
+    expectRejected(`${'1'.repeat(1100)}, 2`, /too long/);
+    expectRejected(`${'x'.repeat(1010)} 20°30'15"N 87°18'27"W`, /too long/);
+  });
+
+  it('reads coordinate text up to 1024 characters', () => {
+    const pair = `20°30'15"N 87°18'27"W`;
+    const input = `${'x'.repeat(1024 - pair.length - 1)} ${pair}`;
+    expect(input.length).toBe(1024);
+    expectCoordsClose(parsedOk(input), DMS_LAT, -DMS_LON);
+  });
+
+  it('links keep their own handling', () => {
+    expectCoordsClose(parsedOk(`https://www.google.com/maps/@20.5,-87.3,15z?${'a'.repeat(1100)}`), 20.5, -87.3);
+  });
+
+  it('the badge and swap-hint helpers skip such text too', () => {
+    expect(detectFormat(`${'1'.repeat(1100)}, 2`)).toBeUndefined();
+    expect(looksTransposedRawDD(`${'0'.repeat(1100)}120, 45`)).toBe(false);
+  });
+});
