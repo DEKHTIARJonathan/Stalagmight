@@ -162,43 +162,54 @@ stay aligned 1:1.
 
 Drops are movable ([#246](https://github.com/Stalagmight/Stalagmight/issues/246)):
 drag the marker, arrow-key it along the route, Delete or double-click to reset. A
-pin redefines how much of that stage is breathed in - the route's cumulative gas
-at the pinned station, minus the cumulative already assigned to earlier drops,
-clamped to `[0, tank empty]`. The plan recomputes on
-`base_budget + sum(actual - safe)`:
+pin says how much of that stage is breathed in - the route's cumulative gas at
+the pinned station, minus the cumulative already assigned to earlier drops,
+clamped to `[0, tank empty]`. **A moved drop never buys reach**
+([#576](https://github.com/Stalagmight/Stalagmight/issues/576)): the plan credits
+the stage that amount capped at the strategy's own safe IN gas, so it recomputes
+on `base_budget + sum(min(breathed, safe) - safe)` and can never reach further
+than the same plan without the moved drops. The pins are re-checked on every
+recompute, so this holds whatever moved under a saved pin since it was set:
 
 - **Shallower** than the strategy point: the stage is dropped part-full, the
   surplus stranded, the budget shrinks and the reach shortens.
-- **Deeper**: the stage is breathed into its reserve, the budget grows, the reach
-  extends, and `stage_drop_over_reserve[k]` is set - the marker turns red and the
-  panel warns. A warning, not a block; the diver asked for it. Set only for a
-  genuine drag deeper (`contribution > safe + 1e-6`), and past tank-empty the
-  contribution clamps, so the drop snaps back to the empty point.
+- **Deeper**: the marker stays where the diver put it and turns red,
+  `stage_drop_over_reserve[k]` is set, the panel warns, and the drop gauge reads
+  what the stage gauge shows there - breathing the stage that far eats into its
+  reserve. The plan does not count that gas: the budget, the reach and the turn
+  stay those of the default drop. Set only for a genuine drag deeper
+  (`breathed > safe + 1e-6`); past tank-empty the breathed gas clamps, so the
+  drop snaps back to the empty point. A later drop is still placed after it, so
+  it can land at the turnaround.
 - **Onto the station the default already sits on**: an exact no-op. The default
   marker sits at the first station whose gas *reaches* the threshold, so its gas
-  usually overshoots; scoring that as a fresh contribution would fabricate an
-  over-reserve plan out of a jiggle.
-- **Off the route**, unresolvable, or non-finite: falls through to the strategy
-  default. Reachable in normal use - `.plnx` persists overrides, so a plan
-  reloaded after the survey or endpoint moved can carry a pin the new route no
-  longer passes.
+  usually overshoots; scoring that as a fresh pin would fabricate an over-reserve
+  flag out of a jiggle.
+- **Off the route** - on another branch, or past the end of the route - and
+  unresolvable or non-finite pins: the same as no pin, the strategy default.
+  Reachable in normal use - `.plnx` persists overrides, so a plan reloaded after
+  the survey, the endpoint, the way points or the rig changed can carry a pin the
+  new route no longer passes. Pricing such a pin from its own path, or from the
+  passage beyond the turn, once credited a pin left past the end of a shrunken
+  route with up to 1248 L against the 698 L plan without it.
+
+Before the cap, a deeper pin extended the reach by the gas breathed into the
+reserve. That made a saved pin dangerous to any later input change: a pin left on
+the station that WAS the default turned into a deeper drag as soon as the default
+moved shallower, and credited the overshoot.
 
 Arrival gas comes from the route's own cumulative gas at the pin's first pass -
 not from the station's gas-to-reach, which with way points is measured from the
 last way point and for a station passed on the way out reports the cost of coming
-*back* to it; an early drop scored against that inflated figure reads as a deep
-one and grows the budget. The one exception is a station past the end of the route
-on the same line, which a legitimately deeper drag reaches: there the route has
-nothing to say and `gas_in` is exact. A station on a different branch yields no
-arrival gas at all and keeps the strategy default. The walk runs against the base
-budget's route, which keeps the ordering acyclic - the final route depends on the
-budget, which depends on these contributions - and both coincide when nothing is
-overridden. A moved drop's displayed pressure is inverted off the Z curve by
-bisection (`drop_pressure_for_contribution`) from the stage's real fill - the
-same gauge every default drop (`fill - usable`) is read on - so a drop moved to
-exactly the default's litres reads the default pressure, and an overfilled stage
-pinned past the conservative-capped tank-empty clamp reads the overfill still in
-it, not 0. The reach stays exact-litres from the graph.
+*back* to it. The walk runs against the base budget's route, which keeps the
+ordering acyclic - the final route depends on the budget, which depends on these
+contributions - and both coincide when no drop strands gas. A moved drop's
+displayed pressure is inverted off the Z curve by bisection
+(`drop_pressure_for_contribution`) from the stage's real fill - the same gauge
+every default drop (`fill - usable`) is read on - so a drop moved to exactly the
+default's litres reads the default pressure, and an overfilled stage pinned past
+the conservative-capped tank-empty clamp reads the overfill still in it, not 0.
+The reach stays exact-litres from the graph.
 
 ## Routing
 

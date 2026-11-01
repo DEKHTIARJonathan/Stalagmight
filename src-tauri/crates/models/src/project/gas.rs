@@ -82,10 +82,11 @@ impl Project {
     ///
     /// A pinned drop redefines how much of that stage is breathed IN: the litres consumed to reach
     /// the pinned station (its route gas minus the cumulative at the prior drop), hard-clamped to
-    /// `[0, tank-empty]`.
-    /// The penetration budget becomes `base + Σ(actual - safe)`, so a drop dragged **shallower**
-    /// strands surplus stage gas (budget shrinks → reach shortens) and one dragged **deeper** breathes
-    /// into reserve (budget grows → reach extends, flagged `stage_drop_over_reserve`). Non-overridden
+    /// `[0, tank-empty]`. The penetration budget becomes `base + Σ(min(breathed, safe) - safe)`, so
+    /// a drop dragged **shallower** strands surplus stage gas (budget shrinks → reach shortens) and
+    /// one dragged **deeper** is shown where it was put, flagged `stage_drop_over_reserve`, but buys
+    /// no reach (#576): no plan reaches further than the same plan without its moved drops. A pin
+    /// the route does not pass is the same as no pin. Non-overridden
     /// downstream drops keep their safe pressure but shift position as the cumulative shifts; the
     /// back-gas turn pressure is independent of the stage drops and is unchanged. The reach math stays
     /// exact-litres (from the graph); only the moved drop's readout pressure is inverted from the Z
@@ -350,14 +351,15 @@ impl Project {
                 &plans,
                 &resolved_overrides,
                 &base_view,
-                &walk,
                 &default_drop_nodes,
             );
         // A pathological-but-valid cylinder (huge finite fill × volume) can overflow deliverable_gas
         // to a non-finite budget; treat that as all-unreachable (0.0) rather than leaking NaN/Inf to
         // the gauge readout. The staged paths already `.max(0.0)`-guard; this mirrors them. The
         // override budget is always `≥ back-gas ≥ 0` (every contribution is `≥ 0`), so the `.max(0.0)`
-        // is only a finite-guard floor - a shallow drag can never drive the budget negative.
+        // is only a finite-guard floor - a shallow drag can never drive the budget negative - and
+        // never above `base_budget` (each credit is capped at the stage's safe IN gas), so no pin
+        // can reach further than the plan without it (#576).
         let budget_litres = base_budget + budget_delta;
         let budget_litres = if budget_litres.is_finite() {
             budget_litres.max(0.0)
@@ -1304,71 +1306,62 @@ const OVER_RESERVE_EPS_LITRES: f64 = 1e-6;
 
 /// Fold the per-drop overrides (#246) into the drops, in ONE cumulative walk. Returns
 /// `(cumulative_thresholds, drop_bars, over_reserve, budget_delta_litres)`:
-/// - `cumulative_thresholds[k]` (litres) is where drop `k` lands on the route (fed to `staged_route`).
-/// - `drop_bars[k]` is the readout pressure - the strategy default, or (when overridden) the tank
-///   pressure left after breathing the litres consumed to the pinned station, inverted from the Z
-///   curve so it matches the gas the reach actually spent.
+/// - `cumulative_thresholds[k]` (litres) is where drop `k` lands on the route (fed to `staged_route`)
+///   - the pinned station for a pin, so the marker stays where the diver put it.
+/// - `drop_bars[k]` is the readout pressure - the strategy default, or (when overridden) the stage
+///   gauge after breathing the litres consumed to the pinned station, inverted from the Z curve.
 /// - `over_reserve[k]` is true only for a drag DEEPER than the safe point (breathing into reserve).
-/// - `budget_delta_litres` is `Σ(actual - safe)`, added to the base budget to move the reach.
+/// - `budget_delta_litres` is `Σ(credited - safe)`, added to the base budget. Never positive.
 ///
-/// A pinned station's contribution is the gas the diver has burned by the time they reach it, minus
-/// the effective-cumulative-so-far, hard-clamped to `[0, phys_cap]` - so dragging past tank-empty
-/// snaps the drop back to the empty point, and dragging a drop shallower than the one before it
-/// contributes 0 (drops the stage full) rather than going negative. An unresolvable / off-graph /
-/// non-finite override falls through to the strategy default, as does one that is not ON the route.
+/// A pinned station's breathed gas is the gas the diver has burned by the time they reach it, minus
+/// the cumulative so far, hard-clamped to `[0, phys_cap]` - so dragging past tank-empty snaps the
+/// drop back to the empty point, and dragging a drop shallower than the one before it breathes 0
+/// (drops the stage full) rather than going negative. What the plan CREDITS for the stage is that,
+/// capped at the strategy's own safe IN gas (#576, decided "re-check pins, cap at default"): a
+/// shallower pin strands gas and shrinks the reach exactly as before, but a deeper one is shown -
+/// red, at its station, reading its real gauge - without buying any reach. Moving a drop can
+/// therefore never make a plan reach further than the same plan without it, whatever moved under
+/// a persisted pin since it was set. Uncapped, a pin left on what USED to be the default station
+/// turned into a deeper drag the moment an input change moved the default shallower, and credited
+/// the overshoot.
+///
+/// A pin the BASE route does not pass is the same as no pin: it falls through to the strategy
+/// default, as does an unresolvable / off-graph / non-finite one. That covers a station on another
+/// branch and one past the end of the route: neither is a position along the dive the plan flies,
+/// and pricing it from its own path folds a passage the plan never enters into the budget - the
+/// unsafe direction (§6). Reachable in normal use, since `.plnx` persists overrides and a plan
+/// reloaded after the survey, the endpoint, the way points or the rig changed can carry a pin the
+/// new route no longer passes.
 ///
 /// ⚠ "Gas burned by the time they reach it" is the ROUTE's cumulative gas at the drop, never
 /// `gas_in[S]`. `gas_in` is measured from the LAST way point, so for a station the diver passes on
 /// the way OUT to that way point it reports the cost of coming back to it afterwards - which on a
 /// cave whose return leg does not retrace the outbound can be far larger than what the diver had
-/// actually burned when they swam past. Scoring an early drop against that inflated figure reads it
-/// as a deep one and GROWS the penetration budget: the unsafe direction (§6). Reading the route
-/// instead is right by construction, and it is also what makes an off-route pin fall back to the
-/// default rather than being priced from a passage the plan never enters.
+/// actually burned when they swam past. Reading the route is right by construction; the first pass
+/// is taken because a way-point route can double back over a station, and the earliest pass is the
+/// smallest figure.
 ///
 /// The route passed in is the BASE-budget one, which keeps the ordering acyclic: the final route
-/// depends on the budget, which depends on these very contributions. The two coincide whenever the
-/// delta is 0, i.e. whenever nothing is overridden.
+/// depends on the budget, which depends on these very contributions. With the cap the final budget
+/// never exceeds the base one, so every pin the walk honours is on the final route too unless an
+/// earlier drop stranded gas and shortened it.
 ///
 /// ⚠ Pin-to-the-default-station is a NO-OP. The default ▼ is rendered at the first route station
 /// whose route gas ≥ the stage's threshold, so that station's gas usually OVERSHOOTS the sub-station
-/// threshold; reading it as a fresh contribution would fabricate an over-reserve plan and extend the
-/// reach on a mere jiggle / release-in-place. `default_drop_nodes[k]` - stage `k`'s drop station on
-/// the UN-overridden route - recognises it exactly. (It replaces an earlier predecessor-tree
-/// heuristic, which could not stay exact once way points let a route double back over a station.)
+/// threshold; reading it as a fresh pin would fabricate an over-reserve flag (and, before the cap,
+/// extra reach) on a mere jiggle / release-in-place. `default_drop_nodes[k]` - stage `k`'s drop
+/// station on the UN-overridden route - recognises it exactly. (It replaces an earlier
+/// predecessor-tree heuristic, which could not stay exact once way points let a route double back
+/// over a station.)
 fn apply_stage_drop_overrides(
     plans: &[StageDropPlan],
     overrides: &[Option<usize>],
     base: &BudgetView,
-    walk: &WaypointWalk,
     default_drop_nodes: &[usize],
 ) -> (Vec<f64>, Vec<f64>, Vec<bool>, f64) {
-    // Gas burned on arrival at `si`, in the two cases where "along the route" is meaningful:
-    //
-    //   1. `si` IS on the route - take the route's own cumulative gas at the FIRST pass. First
-    //      because a way-point route can double back over a station, and the earliest pass is the
-    //      smallest figure, hence the smallest budget: the conservative direction.
-    //   2. `si` is past the end of the route on the SAME line, i.e. the route's target lies on the
-    //      path to it. The route here is the BASE-budget one, and a drop pinned deeper legitimately
-    //      pushes the budget out past it, so the deeper station the diver dragged to is off the base
-    //      route by construction. Its `gas_in` IS the gas along that continuation, so it is exact.
-    //
-    // Anything else - a station on a DIFFERENT branch - yields `None`, which the caller reads as
-    // "keep the strategy default". That is the only honest answer: a drop is a position along the
-    // route, so a station the plan never passes has no arrival gas at all, and pricing it from its
-    // own shortest path folds a passage the dive never enters into the penetration budget, which
-    // extends the reach: the unsafe direction (§6). Reachable without a hand-edited file, since
-    // `.plnx` persists overrides and a plan reloaded after the survey, the endpoint or the way
-    // points moved can carry a pin the new route no longer passes.
     let arrival_gas = |si: usize| -> Option<f64> {
-        if let Some(p) = base.route.iter().position(|&n| n == si) {
-            return base.route_gas.get(p).copied().filter(|g| g.is_finite());
-        }
-        let target = base.target?;
-        if path_to(&walk.pred, si).contains(&target) {
-            return walk.gas_in.get(si).copied().filter(|g| g.is_finite());
-        }
-        None
+        let p = base.route.iter().position(|&n| n == si)?;
+        base.route_gas.get(p).copied().filter(|g| g.is_finite())
     };
     let mut thresholds = Vec::with_capacity(plans.len());
     let mut bars = Vec::with_capacity(plans.len());
@@ -1377,27 +1370,28 @@ fn apply_stage_drop_overrides(
     let mut delta = 0.0_f64;
     for (k, p) in plans.iter().enumerate() {
         let pinned = overrides.get(k).copied().flatten();
-        let (contribution, bar, is_over) = match pinned {
+        let (breathed, bar, is_over) = match pinned {
             // Pinned to the stage's OWN default drop station: reproduce the un-dragged default so a
-            // jiggle / release-in-place can't fabricate over-reserve or extend the reach.
+            // jiggle / release-in-place can't fabricate over-reserve.
             Some(si) if default_drop_nodes.get(k) == Some(&si) => {
                 (p.safe_in_litres, p.default_bar, false)
             }
             Some(si) => match arrival_gas(si) {
                 Some(gas) => {
-                    let contribution = (gas - eff_cum).clamp(0.0, p.phys_cap_litres);
+                    let breathed = (gas - eff_cum).clamp(0.0, p.phys_cap_litres);
                     (
-                        contribution,
-                        drop_pressure_for_contribution(p, contribution),
-                        contribution > p.safe_in_litres + OVER_RESERVE_EPS_LITRES,
+                        breathed,
+                        drop_pressure_for_contribution(p, breathed),
+                        breathed > p.safe_in_litres + OVER_RESERVE_EPS_LITRES,
                     )
                 }
                 None => (p.safe_in_litres, p.default_bar, false),
             },
             None => (p.safe_in_litres, p.default_bar, false),
         };
-        delta += contribution - p.safe_in_litres;
-        eff_cum += contribution;
+        // Credit no more of the stage than its default drop would: a deeper pin buys no reach.
+        delta += breathed.min(p.safe_in_litres) - p.safe_in_litres;
+        eff_cum += breathed;
         thresholds.push(eff_cum);
         bars.push(bar.max(0.0));
         over.push(is_over);

@@ -640,9 +640,9 @@ fn gas_free_overfilled_stage_dragged_drop_reads_the_real_gauge() {
     // drop reads 250 - 80 = 170 bar on the real gauge. Dragged to station 3 (1500 L along
     // `linear_descent_project`), the stage gives 1500 L, so the readout must be the pressure the
     // stage gauge shows after releasing 1500 L from 250 bar - not a pressure on a scale that starts
-    // at the rated 207 (that read ~61.7 bar for these litres, ~34 bar below the real gauge).
-    // Back gas 24 L at 90 bar (Z == 1), usable 50 => exactly 1200 L, so the stage's credit is
-    // `budget - 1200`.
+    // at the rated 207 (that read ~61.7 bar for these litres, ~34 bar below the real gauge). The
+    // pin is deeper than the default, so it is flagged and buys no reach (#576 NF-PGAS-1): the
+    // budget stays the plain plan's.
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let sec = origin.section_id;
@@ -662,9 +662,9 @@ fn gas_free_overfilled_stage_dragged_drop_reads_the_real_gauge() {
         default_reserve: ReservePreset::Free,
         ..GasConfig::default() // conservative_tank_gas = true
     };
-    // (stage water volume, litres the pin is credited): 11 L releases the route's 1500 L; a 5 L
+    // (stage water volume, litres breathed by the pin): 11 L releases the route's 1500 L; a 5 L
     // stage clamps at its rated capacity (5 x 207 / Z(207)) and still holds the overfill above it.
-    for (v, credited) in [
+    for (v, breathed) in [
         (11.0, 1500.0),
         (5.0, deliverable_gas(207.0, 5.0, 207.0, false)),
     ] {
@@ -698,16 +698,17 @@ fn gas_free_overfilled_stage_dragged_drop_reads_the_real_gauge() {
         );
         let bar = f.stage_drop_bars[0];
         assert!(
-            (f.budget_litres - 1200.0 - credited).abs() < 1e-6,
-            "V {v}: the pin credits {credited:.1} L off the stage, budget {:.1}",
-            f.budget_litres
+            (f.budget_litres - base.budget_litres).abs() < 1e-9,
+            "V {v}: a deeper pin buys no reach, budget {:.1} against {:.1}",
+            f.budget_litres,
+            base.budget_litres
         );
         let released =
             deliverable_gas(250.0, v, 207.0, false) - deliverable_gas(bar, v, 207.0, false);
         assert!(
-            (released - credited).abs() < 1e-3,
+            (released - breathed).abs() < 1e-3,
             "V {v}: dragged drop reads {bar:.2} bar, but breathing the stage from 250 bar to that \
-             releases {released:.1} L, not the {credited:.1} L the drop was credited"
+             releases {released:.1} L, not the {breathed:.1} L breathed to the pin"
         );
         assert_eq!(f.stage_drop_over_reserve, vec![true]);
     }
@@ -1744,15 +1745,24 @@ fn gas_reach_field_override_drags_drop_shallower_shrinks_reach() {
 }
 
 #[test]
-fn gas_reach_field_override_drags_drop_deeper_is_over_reserve_and_extends_budget() {
+fn gas_reach_field_override_drags_drop_deeper_is_over_reserve_but_buys_no_reach() {
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let (bg, stage, cfg) = override_rig();
     let sec = origin.section_id;
+    let plain = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        &[bg.clone(), stage.clone()],
+        &cfg,
+    );
 
-    // Drag the drop DEEPER to station 3 (1500 L). Contribution 1500 > 600 safe (and < the 1800 L
-    // tank cap) ⇒ over-reserve. Budget 1500 + (1500 - 600) = 2400. Drop bar: held = 1800 - 1500 =
-    // 300 L ⇒ 15 bar - below the 30-bar reserve, which is exactly what the red flag warns about.
+    // Drag the drop DEEPER to station 3 (1500 L). The stage gives 1500 L there, more than its 600 L
+    // safe IN gas ⇒ over-reserve: the marker sits where the diver put it, red, reading the stage
+    // gauge there (held = 1800 - 1500 = 300 L ⇒ 15 bar, below the 30-bar reserve). But the plan
+    // credits the stage no more than its default 600 L (#576 NF-PGAS-1, "cap at default"), so the
+    // budget stays 1500 and the reach is the plain plan's, not 2400.
     let overrides = vec![Some(StationRef::new(sec, 3))];
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
@@ -1765,16 +1775,23 @@ fn gas_reach_field_override_drags_drop_deeper_is_over_reserve_and_extends_budget
         &overrides,
     );
     assert_eq!(f.stage_drop_refs, vec![StationRef::new(sec, 3)]);
-    assert!((f.budget_litres - 2400.0).abs() < 1e-6);
     assert!((f.stage_drop_bars[0] - 15.0).abs() < 1e-3);
     assert_eq!(f.stage_drop_over_reserve, vec![true]);
+    assert!(
+        (f.budget_litres - 1500.0).abs() < 1e-6,
+        "budget {:.1} L, the plan without the moved drop has 1500",
+        f.budget_litres
+    );
+    assert_eq!(f.reachable, plain.reachable);
+    assert_eq!(f.final_turn_ref, plain.final_turn_ref);
 }
 
 #[test]
 fn gas_reach_field_override_deeper_than_tank_empty_clamps_to_empty() {
-    // A stage that only holds 1000 L (fill 50 × water 20) dragged to station 3 (1500 L): the
-    // contribution HARD-clamps to the tank cap (1000 L), so the drop reads 0 bar (empty), is
-    // over-reserve, and the budget grows by only 1000 - 200, never crediting gas the tank lacks.
+    // A stage that only holds 700 L (fill 35 × water 20) dragged to station 2 (800 L, on the
+    // route): the gas breathed HARD-clamps to the tank cap (700 L), so the drop reads 0 bar (empty)
+    // and is over-reserve. The budget credits only the stage's 50 L safe IN gas (Half Minus,
+    // (35 - 30) / 2 = 2.5 bar x 20 L), as without the pin (#576 NF-PGAS-1).
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let bg = Cylinder::new(
@@ -1789,7 +1806,7 @@ fn gas_reach_field_override_deeper_than_tank_empty_clamps_to_empty() {
     let stage = Cylinder::new(
         20.0,
         207.0,
-        50.0,
+        35.0,
         TankMaterial::Aluminium,
         CylRole::Stage,
         None,
@@ -1800,8 +1817,18 @@ fn gas_reach_field_override_deeper_than_tank_empty_clamps_to_empty() {
         ..GasConfig::default()
     };
     let sec = origin.section_id;
-    // base budget = 900 (¼ back gas) + 200 (stage_in) = 1100.
-    let overrides = vec![Some(StationRef::new(sec, 3))];
+    // base budget = 900 (¼ back gas) + 50 (stage IN half) = 950: the route turns at station 2
+    // (800 L) and the default drop sits at station 1 (the first station past 50 L).
+    let plain = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        &[bg.clone(), stage.clone()],
+        &cfg,
+    );
+    assert!((plain.budget_litres - 950.0).abs() < 1e-6);
+    assert_eq!(plain.stage_drop_refs, vec![StationRef::new(sec, 1)]);
+    let overrides = vec![Some(StationRef::new(sec, 2))];
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
@@ -1812,9 +1839,10 @@ fn gas_reach_field_override_deeper_than_tank_empty_clamps_to_empty() {
         &cfg,
         &overrides,
     );
+    assert_eq!(f.stage_drop_refs, vec![StationRef::new(sec, 2)]);
     assert!(f.stage_drop_bars[0].abs() < 1e-3, "empty tank reads 0 bar");
     assert_eq!(f.stage_drop_over_reserve, vec![true]);
-    assert!((f.budget_litres - 1900.0).abs() < 1e-6); // 1100 + (1000 - 200)
+    assert!((f.budget_litres - 950.0).abs() < 1e-6);
 }
 
 #[test]
@@ -1948,7 +1976,7 @@ fn gas_reach_field_override_shifts_downstream_drop_keeping_it_safe() {
     // TwoStage default drops @ stations 1, 2 (stage_in 300 + 200; ⅙ back gas 1100 ⇒ budget 1600).
     // Drag stage 0 DEEPER to station 2 (800 L, within its 900 L cap ⇒ over-reserve, not clamped).
     // Stage 1 wasn't dragged, so it keeps its safe 200 L contribution but its drop shifts deeper
-    // (cumulative 800 + 200 = 1000 ⇒ station 3) and stays NOT over-reserve. Budget 1600 + 500 = 2100.
+    // (cumulative 800 + 200 = 1000 ⇒ station 3) and stays NOT over-reserve. Budget stays 1600.
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let bg = Cylinder::new(
@@ -2000,7 +2028,9 @@ fn gas_reach_field_override_shifts_downstream_drop_keeping_it_safe() {
         vec![StationRef::new(sec, 2), StationRef::new(sec, 3)]
     );
     assert_eq!(f.stage_drop_over_reserve, vec![true, false]);
-    assert!((f.budget_litres - 2100.0).abs() < 1e-6);
+    // The deeper pin buys no reach (#576 NF-PGAS-1): stage 0 is credited its 300 L default, so
+    // the budget stays the plain plan's 1600.
+    assert!((f.budget_litres - 1600.0).abs() < 1e-6);
 }
 
 #[test]
@@ -2119,6 +2149,184 @@ fn gas_reach_field_override_downstream_shallower_than_cumulative_drops_full() {
         (f.stage_drop_bars[1] - 70.0).abs() < 1e-3,
         "stage 1 dropped full at its 70-bar fill"
     );
+}
+
+/// The two-branch cave of the independent review of #576: the origin merged into a north line of
+/// 6 x 100 m legs (200 L each at 20 L/min and 10 m/min: 0/200/.../1200 L) and an east line of
+/// 2 x 205 m legs (410 L each: 0/410/820 L). Returns the project, the origin and both section ids.
+fn north_east_project() -> (Project, StationRef, u32, u32) {
+    let mut project = Project::new("Gas".to_string(), None);
+    let north = project
+        .add_section(SectionData {
+            shots: (0..6).map(|_| make_shot(100.0, 0.0, 0.0)).collect(),
+            ..Default::default()
+        })
+        .id;
+    let east = project
+        .add_section(SectionData {
+            shots: vec![make_shot(205.0, 0.0, 0.0), make_shot(205.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .merge_stations(StationRef::new(north, 0), StationRef::new(east, 0))
+        .unwrap();
+    (project, StationRef::new(north, 0), north, east)
+}
+
+#[test]
+fn gas_reach_field_a_moved_drop_never_credits_more_than_the_plan_without_it() {
+    // #576 NF-PGAS-1, decided "re-check pins, cap at default": moving a stage drop may strand gas
+    // (a shallower drop) but never buys reach, wherever it is pinned - on the route, past its end,
+    // or on another branch - and whatever moved under it since. Swept over a flat line and a
+    // two-branch cave, Half Minus 1/2-stage and Free, under-filled to over-filled cylinders, cap on
+    // and off, one or both drops pinned at every station: the budget never exceeds the same plan
+    // without the pins, and no station the plain plan cannot reach becomes reachable.
+    let mut flat = Project::new("Gas".to_string(), None);
+    let flat_sec = flat
+        .add_section(SectionData {
+            shots: (0..16).map(|_| make_shot(100.0, 0.0, 0.0)).collect(),
+            ..Default::default()
+        })
+        .id;
+    let (branches, branch_origin, _, _) = north_east_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let mut violations = Vec::new();
+    let mut runs = 0usize;
+    for (project, origin) in [
+        (&flat, StationRef::new(flat_sec, 0)),
+        (&branches, branch_origin),
+    ] {
+        for preset in [
+            ReservePreset::OneStage,
+            ReservePreset::TwoStage,
+            ReservePreset::Free,
+        ] {
+            for fill in [180.0, 207.0, 250.0, 300.0] {
+                for conservative in [true, false] {
+                    let tank = |v: f64, role: CylRole, usable: f64| Cylinder {
+                        usable_gas_bar: usable,
+                        ..Cylinder::new(v, 207.0, fill, TankMaterial::Steel, role, None).unwrap()
+                    };
+                    let rig = [
+                        tank(12.0, CylRole::BackGas, 100.0),
+                        tank(11.0, CylRole::Stage, 80.0),
+                        tank(7.0, CylRole::Stage, 60.0),
+                    ];
+                    let cfg = GasConfig {
+                        default_reserve: preset,
+                        conservative_tank_gas: conservative,
+                        ..GasConfig::default()
+                    };
+                    let plain =
+                        project.compute_gas_reach_field(Some(&origin), None, &diver, &rig, &cfg);
+                    let stations = plain.station_refs.clone();
+                    let mut pin_sets: Vec<Vec<Option<StationRef>>> = Vec::new();
+                    for (i, &s) in stations.iter().enumerate() {
+                        pin_sets.push(vec![Some(s)]);
+                        pin_sets.push(vec![None, Some(s)]);
+                        let next = stations[(i + 1) % stations.len()];
+                        pin_sets.push(vec![Some(s), Some(next)]);
+                    }
+                    for pins in &pin_sets {
+                        runs += 1;
+                        let f = project.compute_gas_reach_field_with_overrides(
+                            Some(&origin),
+                            None,
+                            &[],
+                            &[],
+                            &diver,
+                            &rig,
+                            &cfg,
+                            pins,
+                        );
+                        let gained = f
+                            .reachable
+                            .iter()
+                            .zip(&plain.reachable)
+                            .any(|(&with, &without)| with && !without);
+                        if f.budget_litres > plain.budget_litres + 1e-9 || gained {
+                            violations.push(format!(
+                                "{preset:?} fill {fill} cons {conservative} pins {pins:?}: budget \
+                                 {:.2} L against {:.2} L without the pins, new stations {gained}",
+                                f.budget_litres, plain.budget_litres
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(runs > 1500, "sweep ran {runs} plans");
+    assert!(
+        violations.is_empty(),
+        "{} of {runs} pinned plans gained reach, first:\n{}",
+        violations.len(),
+        violations[..violations.len().min(4)].join("\n")
+    );
+}
+
+#[test]
+fn gas_reach_field_a_pin_off_the_route_is_no_pin() {
+    // #576 NF-PGAS-1, the independent review's case. Free, back gas 24 L at 90 bar with 2 bar usable
+    // (48 L), an 11 L stage rated 207 filled to 300 with 80 bar usable, no endpoint: the plan turns
+    // at north 3 (697.64 L). A drop left pinned at north 4/5/6 - past the end of that route, e.g.
+    // saved before the plan shrank - was priced from the passage beyond the turn and credited
+    // 848 / 1048 / 1248 L. A pin the route does not pass is now the same as no pin.
+    let (project, origin, north, _) = north_east_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let rig = [
+        Cylinder {
+            usable_gas_bar: 2.0,
+            ..Cylinder::new(
+                24.0,
+                232.0,
+                90.0,
+                TankMaterial::Steel,
+                CylRole::BackGas,
+                None,
+            )
+            .unwrap()
+        },
+        Cylinder {
+            usable_gas_bar: 80.0,
+            ..Cylinder::new(
+                11.0,
+                207.0,
+                300.0,
+                TankMaterial::Aluminium,
+                CylRole::Stage,
+                None,
+            )
+            .unwrap()
+        },
+    ];
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::Free,
+        ..GasConfig::default()
+    };
+    let plain = project.compute_gas_reach_field(Some(&origin), None, &diver, &rig, &cfg);
+    assert_eq!(plain.final_turn_ref, Some(StationRef::new(north, 3)));
+    assert!((plain.budget_litres - 697.642).abs() < 1e-3);
+    for station in 4..=6 {
+        let f = project.compute_gas_reach_field_with_overrides(
+            Some(&origin),
+            None,
+            &[],
+            &[],
+            &diver,
+            &rig,
+            &cfg,
+            &[Some(StationRef::new(north, station))],
+        );
+        assert!(
+            f == plain,
+            "pin at north {station}: budget {:.2} L, turn {:?}, against {:.2} L without it",
+            f.budget_litres,
+            f.final_turn_ref,
+            plain.budget_litres
+        );
+    }
 }
 
 #[test]

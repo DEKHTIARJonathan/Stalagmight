@@ -309,8 +309,9 @@ pub struct GasReachField {
     /// `stage_drop_bars`. `true` only when the diver dragged that drop DEEPER than its
     /// strategy-computed (gas-safe) point, so the stage is breathed past its reserve to reach the
     /// pinned station - the UI flags it red. Every entry is `false` for the un-dragged default
-    /// (and for All-thirds, which has no drops). The over-reserve reach it produces is honest but
-    /// unsafe; the flag is the warning, not a block (the diver asked for it).
+    /// (and for All-thirds, which has no drops). The flag is a warning, not a block (the diver
+    /// asked for it): the plan credits the stage no more than its default drop would, so an
+    /// over-reserve drop never extends the reach (#576).
     pub stage_drop_over_reserve: Vec<bool>,
     /// Swum distance (metres) from the origin to each stage-drop station, aligned with
     /// `stage_drop_refs` / `stage_drop_bars`, for the Plan readout (#245). Same swum-distance basis

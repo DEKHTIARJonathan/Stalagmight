@@ -2820,7 +2820,7 @@
       "stageDropPressure": "Stage {{n}} drop",
       "resetDrop": "reset",
       "resetDropHint": "Move this stage drop back to its strategy-computed point.",
-      "overReserveWarning": "A drop was moved past its reserve; the plan breathes into stage reserve gas.",
+      "overReserveWarning": "A drop was moved past its reserve point: breathing the stage that far uses its reserve gas. The plan does not count that gas, so the reach stays that of the default drop.",
       "budget": "Turn budget",
       "maxPenetration": "Gas to farthest point",
       "maxPenetrationHint": "Gas consumed to reach the deepest in-budget station (a volume, not a distance).",
