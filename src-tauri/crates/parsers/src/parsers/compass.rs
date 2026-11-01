@@ -4236,4 +4236,120 @@ mod tests {
             );
         }
     }
+
+    /// A named pipe at `path`, made with the system's `mkfifo`.
+    #[cfg(unix)]
+    fn make_fifo(path: &Path) {
+        let status = std::process::Command::new("mkfifo")
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "premise: mkfifo made {}", path.display());
+    }
+
+    /// Run `f` on its own thread and give it five seconds. Reading a FIFO
+    /// nobody writes blocks forever, so on a timeout the FIFO at `release` is
+    /// opened for writing and closed again - the reader then sees an empty file
+    /// and the thread can finish - and the result is `None`.
+    #[cfg(unix)]
+    fn within_five_seconds<T: Send + 'static>(
+        release: &Path,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> Option<T> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = sender.send(f());
+        });
+        let started = std::time::Instant::now();
+        let outcome = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .ok();
+        println!(
+            "  returned after {:.1} s{}",
+            started.elapsed().as_secs_f64(),
+            if outcome.is_some() {
+                ""
+            } else {
+                " (still blocked; released by the test)"
+            }
+        );
+        if outcome.is_none() {
+            drop(std::fs::OpenOptions::new().write(true).open(release));
+        }
+        let _ = worker.join();
+        outcome
+    }
+
+    /// #576 B27(g): a path that is not a regular file - here a FIFO named like
+    /// a `.DAT` - blocked the import forever, and imports run on the app's
+    /// main thread. It is refused at once.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_like_a_dat_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.dat");
+        make_fifo(&fifo);
+        let path = fifo.clone();
+        let outcome = within_five_seconds(&fifo, move || {
+            parse_compass(&path)
+                .map(|p| p.surveys.len())
+                .map_err(|e| e.to_string())
+        });
+        println!("parse_compass(pipe.dat): {outcome:?}");
+        let err = outcome
+            .expect("the read must not block on a FIFO")
+            .expect_err("a FIFO is not a survey file");
+        assert!(err.contains("not a regular file"), "{err}");
+    }
+
+    /// #576 B27(g): the same for a FIFO a `.MAK` links - it is skipped and
+    /// named, and the rest of the project imports.
+    #[cfg(unix)]
+    #[test]
+    fn a_mak_linking_a_fifo_skips_it_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("here.dat"), synthetic_dat("Synthetic Cave")).unwrap();
+        let fifo = dir.path().join("pipe.dat");
+        make_fifo(&fifo);
+        let mak = dir.path().join("project.mak");
+        std::fs::write(&mak, synthetic_mak(&["here.dat", "pipe.dat"])).unwrap();
+        let outcome = within_five_seconds(&fifo, move || {
+            parse_compass(&mak)
+                .map(|p| (p.surveys.len(), p.warnings))
+                .map_err(|e| e.to_string())
+        });
+        println!("parse_compass(project.mak): {outcome:?}");
+        let (surveys, warnings) = outcome
+            .expect("the read must not block on a FIFO")
+            .expect("here.dat still imports");
+        assert_eq!(surveys, 1);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.starts_with("'pipe.dat' could not be read")
+                    && w.contains("not a regular file")),
+            "{warnings:?}"
+        );
+    }
+
+    /// #576 B27(g): survey text files (`.DAT`, `.MAK` and every `.DAT` it
+    /// links, `.SRV`, `.WPJ`) are read up to 128 MB; a larger one is refused
+    /// before it is read, naming the limit. The file here is sparse, so it
+    /// costs no disk.
+    #[test]
+    fn a_dat_over_the_survey_text_limit_is_refused_naming_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("huge.dat");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(128 * 1024 * 1024 + 1).unwrap();
+        drop(file);
+        let result = parse_compass(&path).map(|p| p.surveys.len());
+        let shown = result.as_ref().map_err(ToString::to_string);
+        println!("parse_compass(128 MB + 1 byte .dat): {shown:?}");
+        let err = result.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            err.contains("128 MB"),
+            "the refusal names the limit: {err:?}"
+        );
+    }
 }

@@ -15,6 +15,7 @@
 //! bytes that match no directive at all - an import that comes back empty with
 //! nothing to explain it.
 
+use std::io::Read;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -55,6 +56,112 @@ pub(crate) fn strip_bom_owned(mut bytes: Vec<u8>) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// The importers' file-size ceilings, one per format family (#576 B27(g)), so
+/// the policy lives in one table instead of in each importer. A ceiling
+/// refuses a file outright, so each sits well above the largest real file of
+/// its kind while still bounding what an untrusted file can make the app
+/// allocate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FileFamily {
+    /// Ariane `.tmlu` and GPX: XML, the largest real files on record (a 57 MB
+    /// Ariane `Data.xml`; multi-day GPS logs reach hundreds of MB). The
+    /// zipped `.tml`'s `Data.xml` has the same ceiling on what it decompresses
+    /// to (`tml::decode`). Wired by a later change.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the .tmlu / .gpx readers are wired to it separately"
+        )
+    )]
+    Xml,
+    /// Compass `.DAT` and `.MAK` (and every `.DAT` a `.MAK` links), Walls
+    /// `.SRV` and `.WPJ`: survey text, typically a few MB, which decodes to up
+    /// to 3x its size in memory.
+    SurveyText,
+    /// mNemo `.dmp`, whose importer checks the same 50 MB itself.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the .dmp reader is wired to it separately")
+    )]
+    Dmp,
+}
+
+impl FileFamily {
+    /// The most bytes a file of this family may hold.
+    pub(crate) const fn byte_limit(self) -> u64 {
+        const MB: u64 = 1024 * 1024;
+        match self {
+            Self::Xml => 512 * MB,
+            Self::SurveyText => 128 * MB,
+            Self::Dmp => 50 * MB,
+        }
+    }
+
+    /// The family as the refusal names it.
+    fn description(self) -> &'static str {
+        match self {
+            Self::Xml => "XML survey files (.tmlu, .gpx)",
+            Self::SurveyText => "survey text files (.DAT, .MAK, .SRV, .WPJ)",
+            Self::Dmp => "mNemo .dmp files",
+        }
+    }
+}
+
+/// Render a byte limit the way the person reading the error thinks about it:
+/// whole megabytes from 1 MB up, exact bytes below (where test limits live).
+pub(crate) fn describe_byte_limit(bytes: u64) -> String {
+    const MB: u64 = 1024 * 1024;
+    if bytes >= MB {
+        format!("{} MB", bytes / MB)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+/// Read a whole file for an importer (#576 B27(g)). Anything that is not a
+/// regular file is refused before it is opened - a FIFO or a device would
+/// block the read, or never end it - and so is a file larger than its
+/// family's [`FileFamily::byte_limit`], with a message naming the limit. The
+/// read itself is capped too, so a file that grows after the size check
+/// cannot take more.
+pub(crate) fn read_capped(path: &Path, family: FileFamily) -> Result<Vec<u8>> {
+    read_with_limit(path, family, family.byte_limit())
+}
+
+/// [`read_capped`] with the limit spelled out, so a test can exercise it
+/// without writing the real ceiling's worth of bytes.
+fn read_with_limit(path: &Path, family: FileFamily, limit: u64) -> Result<Vec<u8>> {
+    let too_large = || {
+        anyhow!(
+            "'{}' is larger than the {} limit for {}; it was not read.",
+            path.display(),
+            describe_byte_limit(limit),
+            family.description()
+        )
+    };
+    let metadata =
+        std::fs::metadata(path).with_context(|| format!("reading {}", path.display()))?;
+    if !metadata.is_file() {
+        bail!(
+            "'{}' is not a regular file (a folder, device or pipe), so it was not read.",
+            path.display()
+        );
+    }
+    if metadata.len() > limit {
+        return Err(too_large());
+    }
+    // Within the limit, so a safe size to reserve up front.
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    std::fs::File::open(path)
+        .and_then(|file| file.take(limit.saturating_add(1)).read_to_end(&mut bytes))
+        .with_context(|| format!("reading {}", path.display()))?;
+    if bytes.len() as u64 > limit {
+        return Err(too_large());
+    }
+    Ok(bytes)
+}
+
 /// The Windows-1252 code points for `0x80..=0x9F`, the only range where it
 /// differs from ISO-8859-1 (which is byte == code point). Written as escapes so
 /// the table stays ASCII in source. `U+FFFD` marks the five undefined slots.
@@ -87,9 +194,10 @@ pub(crate) struct Cp1252Text {
 /// Walls (both Windows programs) write their text in. Each byte becomes one
 /// `char`, so accented surveyor names and comments never fail the read, and
 /// the five bytes the code page leaves undefined become U+FFFD - counted, so
-/// the caller can say so with [`cp1252_replacement_warning`].
+/// the caller can say so with [`cp1252_replacement_warning`]. Every such file
+/// is survey text, read through [`read_capped`] with that family's ceiling.
 pub(crate) fn read_cp1252(path: &Path) -> Result<Cp1252Text> {
-    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let bytes = read_capped(path, FileFamily::SurveyText)?;
     let bytes = strip_bom(&bytes)?;
     let replaced = bytes
         .iter()
@@ -220,5 +328,70 @@ mod tests {
                 "the error must name the encoding, got {err:?}"
             );
         }
+    }
+
+    /// #576 B27(g): one table, pinned so a change to a ceiling is deliberate.
+    #[test]
+    fn the_size_ceilings_per_format_family() {
+        assert_eq!(describe_byte_limit(FileFamily::Xml.byte_limit()), "512 MB");
+        assert_eq!(
+            describe_byte_limit(FileFamily::SurveyText.byte_limit()),
+            "128 MB"
+        );
+        assert_eq!(describe_byte_limit(FileFamily::Dmp.byte_limit()), "50 MB");
+        assert_eq!(describe_byte_limit(1024), "1024 bytes");
+    }
+
+    /// A file at the limit is read whole; one byte more is refused with the
+    /// limit and the family named.
+    #[test]
+    fn a_capped_read_refuses_one_byte_over_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cave.srv");
+        std::fs::write(&path, [b'x'; 16]).unwrap();
+        assert_eq!(
+            read_with_limit(&path, FileFamily::SurveyText, 16)
+                .unwrap()
+                .len(),
+            16
+        );
+        let err = read_with_limit(&path, FileFamily::SurveyText, 15)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(
+            err.contains("larger than the 15 bytes limit for survey text files"),
+            "{err}"
+        );
+    }
+
+    /// A folder is not a file to read.
+    #[test]
+    fn a_capped_read_refuses_a_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = read_capped(dir.path(), FileFamily::SurveyText)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(err.contains("not a regular file"), "{err}");
+    }
+
+    /// A FIFO is refused before it is opened - opening one for reading blocks
+    /// until somebody writes, which nobody will.
+    #[cfg(unix)]
+    #[test]
+    fn a_capped_read_refuses_a_fifo_without_opening_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.dat");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(status.success(), "premise: mkfifo");
+        let err = read_capped(&fifo, FileFamily::SurveyText)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(err.contains("not a regular file"), "{err}");
     }
 }

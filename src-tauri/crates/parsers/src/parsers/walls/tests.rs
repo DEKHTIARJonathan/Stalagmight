@@ -2965,3 +2965,37 @@ fn lrud_to_end_of_chain_cross_section_is_reported() {
         "{warnings:?}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_fifo_named_like_a_srv_is_refused_at_once() {
+    // #576 B27(g): Walls reads through the same capped, regular-files-only
+    // reader as Compass, so a FIFO named like a `.SRV` no longer blocks the
+    // import (and the app's main thread) forever.
+    let dir = temp_dir("fifo-srv");
+    let fifo = dir.join("pipe.srv");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(status.success(), "premise: mkfifo");
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let path = fifo.clone();
+    let worker = std::thread::spawn(move || {
+        let _ = sender.send(parse_walls(&path).map(|_| ()).map_err(|e| e.to_string()));
+    });
+    let outcome = receiver
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .ok();
+    println!("parse_walls(pipe.srv) within 5 s: {outcome:?}");
+    if outcome.is_none() {
+        // Still blocked: open the FIFO for writing so the reader sees an
+        // empty file and the thread can finish.
+        drop(std::fs::OpenOptions::new().write(true).open(&fifo));
+    }
+    let _ = worker.join();
+    let err = outcome
+        .expect("the read must not block on a FIFO")
+        .expect_err("a FIFO is not a survey file");
+    assert!(err.contains("not a regular file"), "{err}");
+}
