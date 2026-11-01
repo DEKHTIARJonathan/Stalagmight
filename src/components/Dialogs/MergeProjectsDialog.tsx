@@ -8,7 +8,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { ProjectMetadata } from '../../types/project';
 import { ensureExtension, projectSaveFilters, PROJECT_EXTENSION } from '../../utils/fileDialogs';
-import { extractFilename } from '../../utils/path';
+import { siblingPath } from '../../utils/path';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { trackDialogComplete, setProjectActionSource } from '../../utils/telemetry';
@@ -82,16 +82,13 @@ export default function MergeProjectsDialog() {
         setIsLoading(false);
         return;
       }
-      const firstProjectPath = firstProject.file_path;
-      // Everything before the file name, trailing separator included - '/' or
-      // '\' alike, so a Windows project keeps its folder and its separator.
-      const defaultDir = firstProjectPath.slice(0, firstProjectPath.length - extractFilename(firstProjectPath).length);
       const defaultFileName = `${outputName.trim()}.stalx`;
 
-      // Show save dialog to let user choose output location
+      // Show save dialog to let user choose output location: next to the first
+      // project, with its separator ('\' counts only in a Windows-shaped path).
       const outputPath = await saveDialog({
         title: 'Save Merged Project',
-        defaultPath: `${defaultDir}${defaultFileName}`,
+        defaultPath: siblingPath(firstProject.file_path, defaultFileName),
         filters: projectSaveFilters(),
       });
 

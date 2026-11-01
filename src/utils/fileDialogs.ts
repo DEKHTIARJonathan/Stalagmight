@@ -1,4 +1,5 @@
 import type { OpenDialogOptions, SaveDialogOptions } from '@tauri-apps/plugin-dialog';
+import { isWindowsPath } from './path';
 
 export type TestFileDialogAnswer = string | string[] | null;
 export interface TestFileDialogQueueEntry {
@@ -280,8 +281,9 @@ function resolveAndroidPath(uri: string): string {
   return uri;
 }
 
+/** POSIX `/...`, or Windows-shaped: `C:\...`, network `\\srv\share\...` or verbatim `\\?\C:\...`. */
 function isAbsolutePath(p: string): boolean {
-  return p.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(p);
+  return p.startsWith('/') || isWindowsPath(p);
 }
 
 interface AndroidDir { label: string; path: string }

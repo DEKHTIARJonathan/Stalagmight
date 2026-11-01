@@ -55,4 +55,28 @@ describe('MetadataPanel Show in folder fallback', () => {
   it('opens the containing folder of a POSIX path', async () => {
     expect(await fallbackFolderFor('/home/user/caves/CaveA.stalx')).toBe('/home/user/caves');
   });
+
+  // On Linux and macOS '\' is an ordinary file-name character, so a path that is
+  // not Windows-shaped must open exactly the folder the '/'-only split gave.
+  it.each([
+    '/home/u/caves/CaveA.stalx',
+    '/home/u/we\\ird.stalx',
+    '/CaveA.stalx',
+    'CaveA.stalx',
+    '/home/u/caves//CaveA.stalx',
+  ])('opens the same folder as before for the POSIX path %s', async (filePath) => {
+    expect(await fallbackFolderFor(filePath)).toBe(filePath.substring(0, filePath.lastIndexOf('/')));
+  });
+
+  // A bare 'C:' is the current directory on drive C, not its root.
+  it('keeps the root of a project at a Windows drive root', async () => {
+    expect(await fallbackFolderFor('C:\\CaveA.stalx')).toBe('C:\\');
+  });
+
+  it.each([
+    ['\\\\srv\\share\\CaveA.stalx', '\\\\srv\\share'],
+    ['C:/caves\\CaveA.stalx', 'C:/caves'],
+  ])('opens the containing folder of the Windows path %s', async (filePath, expected) => {
+    expect(await fallbackFolderFor(filePath)).toBe(expected);
+  });
 });

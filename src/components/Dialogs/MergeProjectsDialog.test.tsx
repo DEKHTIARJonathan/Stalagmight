@@ -120,4 +120,25 @@ describe('MergeProjectsDialog default output location', () => {
   it('keeps proposing the first project folder for a POSIX path', async () => {
     expect(await proposedDefaultPath('/home/user/caves/CaveA.stalx')).toBe('/home/user/caves/CaveA_merged.stalx');
   });
+
+  // On Linux and macOS '\' is an ordinary file-name character, so a path that is
+  // not Windows-shaped must get exactly the string the '/'-only split gave.
+  it.each([
+    '/home/u/caves/CaveA.stalx',
+    '/home/u/we\\ird.stalx',
+    '/CaveA.stalx',
+    'CaveA.stalx',
+    '/home/u/caves//CaveA.stalx',
+  ])('proposes the same folder as before for the POSIX path %s', async (firstPath) => {
+    const before = `${firstPath.substring(0, firstPath.lastIndexOf('/'))}/CaveA_merged.stalx`;
+    expect(await proposedDefaultPath(firstPath)).toBe(before);
+  });
+
+  it.each([
+    ['C:\\CaveA.stalx', 'C:\\CaveA_merged.stalx'],
+    ['\\\\srv\\share\\CaveA.stalx', '\\\\srv\\share\\CaveA_merged.stalx'],
+    ['C:/caves\\CaveA.stalx', 'C:/caves\\CaveA_merged.stalx'],
+  ])('proposes the first project folder for the Windows path %s', async (firstPath, expected) => {
+    expect(await proposedDefaultPath(firstPath)).toBe(expected);
+  });
 });

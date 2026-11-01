@@ -1,7 +1,7 @@
 import { type FC, useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invokeIpc } from '../../utils/ipc';
-import { extractFilename } from '../../utils/path';
+import { parentDir } from '../../utils/path';
 import type { ProjectMetadata } from '../../types/project';
 import { ResizablePanel } from '../common/Panel';
 import { ElidedPath } from '../common/ElidedPath';
@@ -77,9 +77,8 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
       console.error('Failed to show in folder:', error);
       // Fallback: try to open the directory
       try {
-        // The folder is everything before the file name, on either separator.
-        const filePath = singleProject.file_path;
-        const dirPath = filePath.slice(0, filePath.length - extractFilename(filePath).length).replace(/[\\/]$/, '');
+        // '\' separates only in a Windows-shaped path; a drive root keeps its '\'.
+        const dirPath = parentDir(singleProject.file_path);
         await invokeIpc(
           'plugin:opener|open_path',
           { path: dirPath },
