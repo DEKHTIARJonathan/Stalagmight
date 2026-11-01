@@ -1182,24 +1182,30 @@ mod tests {
     /// scripted run saves between two Unwinds; a person pausing between them always does.
     #[test]
     fn a_save_carries_the_unwind_chain_position_onto_the_fresh_file() {
+        // [#576 A3] The carry lives in the side-table registry now; the behavioural
+        // pin is `save_sidecar_tests::a_linked_save_carries_every_side_table`. What
+        // this keeps is the ORDER the pipeline runs it in.
         let io = std::include_str!("project_io.rs");
         let snapshot = io
-            .find("load_speleo_undo_chain")
-            .expect("the save path must snapshot the chain pointer before rebuilding");
-        let reapply = io
-            .find("save_speleo_undo_chain")
-            .expect("...and re-apply it to the fresh file");
+            .find("self.snapshot_sidecars(")
+            .expect("the save path must snapshot the side tables before rebuilding");
+        let staged = io
+            .find("Database::open(&temp_path)")
+            .expect("the save path stages into a fresh temp database");
         assert!(
-            snapshot < reapply,
+            snapshot < staged,
             "the snapshot has to be read from the OLD database - taken after the rebuild it \
              would read the fresh file's empty table and preserve nothing"
         );
         // Re-applied while the temp database is still open, like its `speleo_link` sibling.
+        let reapply = io
+            .find("self.write_sidecars(")
+            .expect("...and re-apply them to the fresh file");
         let closed = io
             .find("// Close the temp database before renaming")
             .expect("the save path closes the temp db before the rename");
         assert!(
-            reapply < closed,
+            staged < reapply && reapply < closed,
             "the write must land before the temp database is dropped and renamed"
         );
 
@@ -1207,17 +1213,19 @@ mod tests {
         // by missing it: it decides which undo rows are cut from the next upload, so a save
         // that dropped it would let a loaded revision's history ride into the commit as
         // though this session had authored it - the duplication it exists to prevent,
-        // reintroduced by an idle autosave.
-        let snapshot_wm = io
-            .find("load_speleo_undo_watermark")
-            .expect("the save path must snapshot the inherited-history watermark");
-        let reapply_wm = io
-            .find("save_speleo_undo_watermark")
-            .expect("...and re-apply it to the fresh file");
-        assert!(
-            snapshot_wm < reapply_wm && reapply_wm < closed,
-            "read from the OLD database, written before the temp file is renamed"
-        );
+        // reintroduced by an idle autosave. Both ride the same registry entry.
+        let registry = std::include_str!("save_sidecars.rs");
+        for needle in [
+            "self.undo_chain = db.load_speleo_undo_chain()?",
+            "self.undo_watermark = db.load_speleo_undo_watermark()?",
+            "db.save_speleo_undo_chain(Some(sha))?",
+            "db.save_speleo_undo_watermark(Some(ts))?",
+        ] {
+            assert!(
+                registry.contains(needle),
+                "the undo-chain markers entry must read and write both markers: {needle}"
+            );
+        }
     }
 
     /// [#303] The watermark outlives an edit; the chain pointer does not.

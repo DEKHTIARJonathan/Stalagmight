@@ -556,6 +556,7 @@ mod warnings;
 mod write;
 
 pub use open::{has_stalx_extension, with_stalx_extension};
+pub use write::SAVE_PROJECT_TABLES;
 
 /// How many `resolved_warnings` rows a carry-over will examine (#517). Exported
 /// so a caller's test can size a fixture against the real ceiling instead of

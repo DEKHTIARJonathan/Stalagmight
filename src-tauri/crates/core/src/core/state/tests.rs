@@ -17524,8 +17524,12 @@ fn failed_atomic_history_replacement_falls_back_to_empty_stacks() {
     assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
 }
 
+/// [#576 A3-D2] Undo-chain markers that cannot be read STOP the save. They used to
+/// be answered by saving the survey with no undo history at all; the maintainer's
+/// policy for the markers is now "stop": nothing is written, the file is untouched,
+/// and the live history is kept for a save that can carry them.
 #[test]
-fn unreadable_undo_markers_save_without_history() {
+fn unreadable_undo_markers_refuse_the_save() {
     let temp_dir = TempDir::new().unwrap();
     let path = temp_dir.path().join("unreadable-undo-markers.stalx");
     {
@@ -17578,44 +17582,28 @@ fn unreadable_undo_markers_save_without_history() {
         )
         .unwrap();
 
+    let before = std::fs::read(&path).unwrap();
     let result = state.save_project(None);
 
-    assert!(result.success, "the survey save continues: {result:?}");
+    assert!(!result.success, "the save must be refused: {result:?}");
     assert!(
         result
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "UNDO_HISTORY_DROPPED"),
-        "history loss must be visible to the caller: {result:?}"
-    );
-    let db_guard = state.database.lock().unwrap();
-    let db = db_guard.as_ref().expect("saved database reopened");
-    assert!(db.load_undo_stack_with_timestamps().unwrap().is_empty());
-    assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
-    assert_eq!(db.load_speleo_undo_chain().unwrap(), None);
-    assert_eq!(db.load_speleo_undo_watermark().unwrap(), None);
-    drop(db_guard);
-
-    let undo_stack = state.undo_stack.lock().unwrap();
-    assert!(
-        !undo_stack.can_undo(),
-        "the live undo stack must be cleared"
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("UNDO_MARKERS_UNREADABLE: ")),
+        "the refusal carries its marker: {result:?}"
     );
     assert!(
-        !undo_stack.can_redo(),
-        "the live redo stack must be cleared"
+        std::fs::read(&path).unwrap() == before,
+        "a refused save leaves the file untouched"
     );
-    drop(undo_stack);
-
-    // The replacement database is valid now. A later save must not resurrect the
-    // unclassified rows from memory after the marker-failure fallback has cleared them.
-    assert!(state.save_project(None).success);
-    let db_guard = state.database.lock().unwrap();
-    let db = db_guard
-        .as_ref()
-        .expect("database reopened after second save");
-    assert!(db.load_undo_stack_with_timestamps().unwrap().is_empty());
-    assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
+    // (The fixture's `undo()` is refused by the read-only gate, so both entries are
+    // still on the undo side.)
+    assert_eq!(
+        state.undo_stack.lock().unwrap().len(),
+        2,
+        "the live undo history is kept"
+    );
 }
 
 /// [#303] Changing the undo mode really does need the edit gate.

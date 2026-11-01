@@ -159,6 +159,17 @@ pub const PATH_TOO_LONG_CODE: &str = "FS_PATH_TOO_LONG";
 /// refusal would never reach a surface at all.
 pub const IGNORES_UNREADABLE_CODE: &str = "IGNORES_UNREADABLE";
 
+/// Prefix stamped onto a save `CommandResult` error when the open project's
+/// SpeleoDB link could not be read and the save would rewrite the file without it
+/// (#576 B35(b), A3). Same routing reason as [`IGNORES_UNREADABLE_CODE`].
+pub const SPELEODB_LINK_UNREADABLE_CODE: &str = "SPELEODB_LINK_UNREADABLE";
+
+/// Prefix stamped onto a save `CommandResult` error when the open project's
+/// SpeleoDB undo-history markers (`speleo_undo_chain` / `speleo_undo_watermark`,
+/// #303) could not be read (#576 A3). Same routing reason as
+/// [`IGNORES_UNREADABLE_CODE`].
+pub const UNDO_MARKERS_UNREADABLE_CODE: &str = "UNDO_MARKERS_UNREADABLE";
+
 /// Prefix stamped onto a save `CommandResult` error when the open project was
 /// saved by a NEWER Stalagmight and is open read-only (#576 B6-D1): saving would
 /// rewrite it at this build's older schema and drop whatever the newer one

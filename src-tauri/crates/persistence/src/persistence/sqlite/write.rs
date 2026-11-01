@@ -6,8 +6,33 @@ use crate::models::Project;
 
 use super::{Database, SCHEMA_VERSION};
 
+/// Every table [`Database::save_project`] writes from the [`Project`] model: the
+/// survey tables it wipes and rewrites, and `project_settings`, whose keys it
+/// upserts or deletes.
+///
+/// The app's save builds a FRESH file and renames it over the destination, so a
+/// table neither listed here nor carried by hand is emptied by every save. The
+/// save pipeline's side-table registry (`core::state::save_sidecars`) carries the
+/// rest, and its coverage test pins that the two lists together name every table
+/// `init_schema` creates (#576 A3). The sibling test pins that this list is what
+/// the transaction below actually writes.
+pub const SAVE_PROJECT_TABLES: &[&str] = &[
+    "project",
+    "sections",
+    "shots",
+    "station_merges",
+    "zero_datums",
+    "section_offsets",
+    "station_offsets",
+    "station_comments",
+    "loop_closures",
+    "imported_file_hashes",
+    "imported_section_hashes",
+    "project_settings",
+];
+
 impl Database {
-    /// Save a project to the database
+    /// Save a project to the database. Writes exactly [`SAVE_PROJECT_TABLES`].
     pub fn save_project(&mut self, project: &Project) -> Result<()> {
         tracing::debug!(
             "Saving project: name={}, sections={}",

@@ -8861,3 +8861,47 @@ fn unrecognised_shot_kinds_saturates_an_over_bound_section_id() {
         "an over-bound section id saturates the encode instead of panicking"
     );
 }
+
+/// [#576 A3] `SAVE_PROJECT_TABLES` is what `Database::save_project` writes - in
+/// both directions. The save pipeline's side-table registry trusts this list to
+/// say which tables the core write rebuilds from the `Project`, so a table the
+/// transaction stops writing (or starts writing) without the list following it
+/// would let a table be dropped, or carried twice, by every save. Structural,
+/// because the alternative is a fixture holding a row in every table.
+#[test]
+fn save_project_tables_is_what_the_core_save_writes() {
+    let src = include_str!("write.rs");
+    let body = &src[src.find("pub fn save_project").unwrap()..];
+    let named = |prefix: &str| -> std::collections::BTreeSet<String> {
+        body.match_indices(prefix)
+            .map(|(at, _)| {
+                body[at + prefix.len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect::<String>()
+            })
+            .collect()
+    };
+    let mut written = named("DELETE FROM ");
+    written.extend(named("INSERT INTO "));
+    written.extend(named("INSERT OR REPLACE INTO "));
+    let listed: std::collections::BTreeSet<String> = SAVE_PROJECT_TABLES
+        .iter()
+        .map(|t| (*t).to_string())
+        .collect();
+    assert_eq!(
+        written, listed,
+        "SAVE_PROJECT_TABLES must name exactly the tables save_project writes"
+    );
+    let schema: std::collections::BTreeSet<String> = Database::in_memory()
+        .unwrap()
+        .list_raw_table_names()
+        .unwrap()
+        .into_iter()
+        .collect();
+    assert!(
+        listed.is_subset(&schema),
+        "every listed table exists in a fresh schema: {:?}",
+        listed.difference(&schema).collect::<Vec<_>>()
+    );
+}

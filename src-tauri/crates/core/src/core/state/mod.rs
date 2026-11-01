@@ -19,6 +19,7 @@ mod project_load;
 mod project_merge;
 mod raw_data;
 mod recent_projects;
+mod save_sidecars;
 mod speleodb;
 mod speleodb_admin;
 mod speleodb_cache;
@@ -111,6 +112,15 @@ mod open_undo_bugs_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod reverse_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod save_sidecar_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
