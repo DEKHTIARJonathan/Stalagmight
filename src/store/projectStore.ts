@@ -14,7 +14,7 @@ import {
 import { hasEligibleClosures } from '../utils/closures';
 import { applyReverseAftermath, composeReverseTransforms, flushPlanAnchors, remapPlanPins } from '../utils/reverseAftermath';
 import { useUIStore } from './uiStore';
-import { autosaveFailureMessage, surfaceSaveFailure } from '../utils/saveFeedback';
+import { autosaveFailureMessage, surfaceSaveFailure, surfaceSaveWarnings } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
 import { useSpeleoStore } from './speleoStore';
 import { useExportStore } from './exportStore';
@@ -1429,6 +1429,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
             TOAST_KEYS.SPELEODB_UNLINKED_COPY,
             'warning'
           );
+        // [#576 A3-D2] What the copy went without (e.g. its display settings).
+        surfaceSaveWarnings(result.warnings);
         // The heals above ran on the LIVE project before the pipeline decided to
         // write a copy, so the frontend's mirror is stale here too - and the
         // healed state reached only the copy, never the managed file, which
@@ -1468,6 +1470,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         autosaveFailure: null,
         autosaveFailureKind: null,
       });
+      // [#576 A3-D2] Saved, but not everything: the dropped undo history, the
+      // display settings, a file that could not be reopened - told, not silent.
+      surfaceSaveWarnings(result.warnings);
       // If the save healed the project in memory (re-minted duplicate UUIDs,
       // dropped orphan section offsets, sanitized non-finite geometry), the
       // frontend's shots/stations are now stale vs the saved file - refresh so the

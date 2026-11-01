@@ -37,6 +37,19 @@ export const FS_PATH_TOO_LONG = 'FS_PATH_TOO_LONG';
 export const IGNORES_UNREADABLE = 'IGNORES_UNREADABLE';
 
 /**
+ * Markers for a save refused because another side table the save has to carry
+ * could not be read from the open file (#576 A3-D2: these stop the save rather
+ * than rebuild the file without them): the SpeleoDB link, and the SpeleoDB
+ * undo-history markers. Mirror `SPELEODB_LINK_UNREADABLE_CODE` /
+ * `UNDO_MARKERS_UNREADABLE_CODE` in `src-tauri/crates/core/src/core/loading.rs`.
+ * Routed exactly like `IGNORES_UNREADABLE`: Review & Repair cannot fix either.
+ */
+export const SPELEODB_LINK_UNREADABLE = 'SPELEODB_LINK_UNREADABLE';
+export const UNDO_MARKERS_UNREADABLE = 'UNDO_MARKERS_UNREADABLE';
+
+const SIDE_TABLE_UNREADABLE_MARKERS = [SPELEODB_LINK_UNREADABLE, UNDO_MARKERS_UNREADABLE];
+
+/**
  * Marker for a refusal because the open project was saved by a NEWER Stalagmight
  * and is open read-only (#576 B6-D1). Mirrors `NEWER_FILE_READ_ONLY_CODE` in
  * `src-tauri/crates/core/src/core/loading.rs`. It LEADS a refused save, and rides
@@ -53,6 +66,7 @@ export type SaveErrorKind =
   | 'path-not-found'
   | 'path-too-long'
   | 'ignores-unreadable'
+  | 'side-table-unreadable'
   | 'newer-file'
   | 'other';
 
@@ -67,8 +81,26 @@ export function classifySaveError(error?: string | null): SaveErrorKind {
   if (error.startsWith(FS_PATH_NOT_FOUND)) return 'path-not-found';
   if (error.startsWith(FS_PATH_TOO_LONG)) return 'path-too-long';
   if (error.startsWith(IGNORES_UNREADABLE)) return 'ignores-unreadable';
+  if (SIDE_TABLE_UNREADABLE_MARKERS.some((m) => error.startsWith(m))) return 'side-table-unreadable';
   if (error.startsWith(NEWER_FILE_READ_ONLY)) return 'newer-file';
   return 'other';
+}
+
+/**
+ * A refusal whose cause is a side table the open file could not give up (#517,
+ * #576 A3-D2). Its message is already a full sentence, and Review & Repair -
+ * which repairs cross-references - cannot fix it.
+ */
+export function isUnreadableRefusal(kind: SaveErrorKind | null | undefined): boolean {
+  return kind === 'ignores-unreadable' || kind === 'side-table-unreadable';
+}
+
+/** The backend's sentence for an unreadable-side-table refusal, its marker removed. */
+export function unreadableRefusalMessage(error: string): string {
+  return [IGNORES_UNREADABLE, ...SIDE_TABLE_UNREADABLE_MARKERS].reduce(
+    (message, marker) => stripSaveErrorMarker(message, marker),
+    error,
+  );
 }
 
 /**

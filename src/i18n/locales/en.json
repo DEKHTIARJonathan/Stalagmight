@@ -3764,5 +3764,11 @@
     "normal": "Permanent",
     "jump": "Jump",
     "reference": "Reference"
+  },
+  "saveWarnings": {
+    "undoHistoryDropped": "Saved, but the undo history could not be kept and was cleared.",
+    "displaySettingsNotSaved": "Saved, but display settings could not be kept - they reset on reopen.",
+    "databaseNotReopened": "Saved, but the file could not be reopened - reopen the project.",
+    "other": "Saved, with a warning: {{message}}"
   }
 }

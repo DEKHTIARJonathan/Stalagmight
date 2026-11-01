@@ -70,19 +70,66 @@ handling.
 ```
 1. Lock project, resolve save path, ensure .stalx extension, refuse early if the
    destination folder is not reachable (see Failure classification below)
-2. Load display settings from current database or in-memory cache
+2. Snapshot the side tables from the open file and resolve the save mode
+   (see Side tables and save modes below) - a refusal here writes nothing
 3. Write project data to temp file (file.stalx.tmp)
-4. Copy display settings to temp database
-5. Persist undo/redo stacks synchronously into the temp database
-6. Close temp database, atomically rename to final path
-7. Reopen database at final path
-8. Update project.file_path
-9. Swap in the new database handle
-10. Update recent projects list in config
-11. Return CommandResult with saved_path
+4. Write the side tables into the temp database, the undo/redo stacks last
+5. Close temp database, atomically rename to final path
+6. Reopen database at final path
+7. Update project.file_path
+8. Swap in the new database handle
+9. Update recent projects list in config
+10. Return CommandResult with saved_path, plus a warning for anything the save
+    went ahead without
 ```
 
-Steps 1-6 are the critical path for data safety. Step 5 writes the undo/redo stacks while the file is still staged, so a partial rewrite is never renamed into place.
+Steps 1-5 are the critical path for data safety. Step 4 writes every side table, the undo/redo stacks included, while the file is still staged, so a partial rewrite is never renamed into place.
+
+### Side tables and save modes
+
+`Database::save_project` rebuilds exactly the tables in `SAVE_PROJECT_TABLES`
+(`persistence/sqlite/write.rs`) from the `Project` model. Every other table lives
+outside the model, and because the save writes a FRESH temp file, each one has to
+be carried by hand: snapshotted from the open file in step 2, written into the temp
+in step 4. A table nobody carries is emptied by every save - which shipped twice
+(#191, the SpeleoDB link; #303, the Unwind chain pointer).
+
+The `Sidecar` registry (`core/state/save_sidecars.rs`) is the one list of those
+tables, each with what happens when it cannot be carried (#576 A3, policy "stop
+unless cosmetic"):
+
+| Side table | Cannot be read or written | Why |
+|---|---|---|
+| `resolved_warnings` (ignored warnings) | The save stops: `IGNORES_UNREADABLE` | The user's own decisions (#517) |
+| `speleo_link` | The save stops: `SPELEODB_LINK_UNREADABLE` | The project's identity, not decoration |
+| `speleo_undo_chain` + `speleo_undo_watermark` | The save stops: `UNDO_MARKERS_UNREADABLE` | They decide which undo rows are the user's own (#303) |
+| `display_settings` | Saved without them, warning `DISPLAY_SETTINGS_NOT_SAVED` | Per-machine view state |
+| `undo_stack` + `redo_stack` | Saved with an EMPTY history, warning `UNDO_HISTORY_DROPPED` | A partial history is never written |
+
+A stopped save has written nothing: an unreadable table is refused before the temp
+file exists, and a failed write discards the temp, so the destination is untouched.
+Two exceptions keep a way out. A SpeleoDB link that cannot be read refuses only a
+save that would rewrite the open file; a Save As to another file goes ahead, as an
+unlinked project (#576 B35(b)). And the undo history stops a save only when even
+emptying it fails.
+
+The coverage test (`save_sidecar_tests`) pins that every table `init_schema`
+creates is either in `SAVE_PROJECT_TABLES` or registered - so a new table has to
+be given a policy before any save can drop it.
+
+The save MODE is resolved once, in step 2, instead of being inferred at each step
+(inferring a first save from a missing database handle is what sent autosaves to
+`<stem>_1.stalx`, B35(c)):
+
+| `SaveMode` | When | The session |
+|---|---|---|
+| `FirstSave` | A deferred new project's first write; an implicit one picks a free name | Moves onto the file |
+| `InPlace` | Ctrl+S, autosave, the pre-push flush, or a path naming the open file | Stays |
+| `SaveAs` | An explicit destination elsewhere | Moves onto the file |
+| `DetachedCopy` | An explicit destination for a SpeleoDB-managed project | Stays on the managed file (see Save a Copy) |
+
+A detached copy sheds the link and both undo-chain markers; every other mode
+carries every side table.
 
 ### `section_offsets` rows are never all-zero
 
@@ -106,9 +153,9 @@ app never writes such a row, so save-load-save on a file this app wrote is a
 fixpoint, and a legacy file is one from its first save onward.
 
 For a SpeleoDB-managed project given an explicit destination (Save a Copy, see
-below), the pipeline diverges after step 5: the copy is written and renamed into
+below), the pipeline diverges after step 4: the copy is written and renamed into
 place, recorded in Recent Projects, and the function returns with
-`CommandResult.unlinked_copy_path` set - steps 7, 8 and 9 are skipped on
+`CommandResult.unlinked_copy_path` set - steps 6, 7 and 8 are skipped on
 purpose, because the session stays on the managed file.
 
 ### Frontend (`saveProject` in `projectStore.ts`)
@@ -121,7 +168,15 @@ purpose, because the session stays on the managed file.
 3. If saved_path in result, update project.file_path in store
 4. refreshUndoState() - lightweight, just fetches can_undo/can_redo booleans
 5. Set isDirty: false
+6. surfaceSaveWarnings(result.warnings) - a warning toast for each thing the save
+   went ahead without (also on the copy path in step 2)
 ```
+
+A successful save's `CommandResult.warnings` is what it could not keep:
+`UNDO_HISTORY_DROPPED`, `DISPLAY_SETTINGS_NOT_SAVED` and `DATABASE_NOT_REOPENED`.
+Each becomes one warning toast (`saveFeedback.ts`, key `save-warning:<code>`): the
+save succeeded with a caveat, nothing needs deciding, and the next save starts
+clean - so not a dialog and not a banner (docs/notifications.md).
 
 The frontend calls `refreshProjectState()` after a save ONLY when the project entered the save with integrity issues (the backend's save-time heals mutate the live project). A clean save skips it: it changes no computed data (stations, stats, warnings), so recomputing everything would be wasted work. The only state that changes is `file_path` (on first save or save-as), which the backend returns via `CommandResult.saved_path`. When the save produced a detached copy instead (see Save a Copy below), the path comes back in `unlinked_copy_path` and `saved_path` is absent.
 
@@ -152,6 +207,9 @@ attempted, with the same marker idiom.)
 | `FS_PATH_NOT_FOUND` | The folder is gone, or its drive is not connected | Error dialog, "the folder no longer exists or the drive is not connected" |
 | `FS_PATH_TOO_LONG` | The path is past what the OS will open (Windows `MAX_PATH`) | Error dialog, "save to a shorter path" |
 | `NEWER_FILE_READ_ONLY` | The project was saved by a newer Stalagmight and is open read-only (see above) | Warning toast, never Review & Repair |
+| `IGNORES_UNREADABLE` | The ignored-warnings table could not be read (#517) | Error dialog / autosave banner with the backend's sentence, never Review & Repair |
+| `SPELEODB_LINK_UNREADABLE` | The SpeleoDB link could not be read and the save would rewrite the open file | As `IGNORES_UNREADABLE` |
+| `UNDO_MARKERS_UNREADABLE` | The SpeleoDB undo-history markers could not be read | As `IGNORES_UNREADABLE` |
 | (none) | Everything else - disk full, corruption | Error dialog, backend message verbatim |
 
 SQLite reports ALL of these as the same errno-free "unable to open database
@@ -169,7 +227,8 @@ pull cache (`<cache>/speleodb/<project_id>/project.stalx` - see
 therefore does not relocate the session; it writes a detached copy:
 
 - The copy carries display settings, resolved warnings and the undo/redo
-  stacks, but NOT the `speleo_link` row - it is a plain unmanaged project.
+  stacks, but NOT the `speleo_link` row or the two undo-chain markers - it is a
+  plain unmanaged project.
 - The session stays on the managed file: `project.file_path`, the database
   handle and the dirty state are untouched. The backend reports the copy via
   `CommandResult.unlinked_copy_path` and deliberately leaves `saved_path`
@@ -240,7 +299,7 @@ Undo and redo stacks are persisted to the SQLite database synchronously on each 
 
 1. While the undo stack lock is held, entries are collected and serialized
 2. Entries are written to the database synchronously (no background thread)
-3. A failed write is logged via `tracing::warn`, both stacks are cleared, and the save result carries an `UNDO_HISTORY_DROPPED` warning; if clearing also fails, the save is aborted with `save_failure` and the temp file is removed
+3. A failed write is logged via `tracing::warn`, both stacks are cleared, and the save result carries an `UNDO_HISTORY_DROPPED` warning, which the frontend shows as a warning toast; if clearing also fails, the save is aborted with `save_failure` and the temp file is removed
 
 ### Details
 
@@ -264,6 +323,7 @@ The `save_project` backend command returns the save path as a string in `Command
 | File | Purpose |
 |------|---------|
 | `src-tauri/crates/core/src/core/state/project_io.rs` | Backend `save_project`, atomic save logic (`open_project` lives in `project_load.rs`) |
+| `src-tauri/crates/core/src/core/state/save_sidecars.rs` | The side-table registry, its failure policies and `SaveMode` |
 | `src-tauri/crates/core/src/core/command.rs` | `CommandResult` with `saved_path` field |
 | `src/store/projectStore.ts` | Frontend `saveProject()` action |
 | `src/hooks/useAutoSave.ts` | Debounced auto-save hook |

@@ -13,6 +13,12 @@ export const TOAST_KEYS = {
   EDIT_DISABLED: 'edit-disabled',
   /** A save refused because a newer Stalagmight saved the project (#576 B6-D1). */
   NEWER_FILE_READ_ONLY: 'newer-file-read-only',
+  /*
+   * PREFIX for what a successful save went without (#576 A3-D2): the shown key is
+   * `save-warning:<code>`, one per warning code, so repeated autosaves collapse
+   * while two different losses never replace each other (the EXPORT_NOTE idiom).
+   */
+  SAVE_WARNING: 'save-warning',
   /** Catch-all for a command failure no specific handler claims (docs/notifications.md). */
   COMMAND_FAILED: 'command-failed',
   UNDO_FAILED: 'undo-failed',

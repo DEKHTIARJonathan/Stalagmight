@@ -2,8 +2,8 @@ import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import {
   classifySaveError,
-  stripSaveErrorMarker,
-  IGNORES_UNREADABLE,
+  isUnreadableRefusal,
+  unreadableRefusalMessage,
   type SaveErrorKind,
 } from './saveErrors';
 import { trackDialogComplete } from './telemetry';
@@ -59,7 +59,7 @@ export function surfaceSaveFailure(
     return;
   }
   const routesToIntegrity =
-    !opts?.skipIntegrityRouting && classifySaveError(error) !== 'ignores-unreadable';
+    !opts?.skipIntegrityRouting && !isUnreadableRefusal(classifySaveError(error));
   if (routesToIntegrity && useProjectStore.getState().integritySaveBlocked) {
     useProjectStore.getState().openIntegrityDialog();
     return;
@@ -88,7 +88,8 @@ function saveFailureMessage(kind: SaveErrorKind, error: string): string {
       return i18n.t('dialogs.saveFailure.pathTooLong');
     // Already a full sentence from the backend; only its routing marker comes off.
     case 'ignores-unreadable':
-      return stripSaveErrorMarker(error, IGNORES_UNREADABLE);
+    case 'side-table-unreadable':
+      return unreadableRefusalMessage(error);
     default:
       return error;
   }
@@ -115,7 +116,7 @@ export function shouldShowAutosaveBanner(state: {
   integrityIssueCount: number;
 }): boolean {
   if (state.autosaveFailure === null) return false;
-  if (state.autosaveFailureKind === 'ignores-unreadable') return true;
+  if (isUnreadableRefusal(state.autosaveFailureKind)) return true;
   return !(state.integritySaveBlocked && state.integrityIssueCount > 0);
 }
 
@@ -133,13 +134,51 @@ export function autosaveFailureMessage(error?: string | null): string {
     case 'path-too-long':
       return i18n.t('banners.autosave.pathTooLong');
     case 'ignores-unreadable':
-      return stripSaveErrorMarker(error ?? '', IGNORES_UNREADABLE);
+    case 'side-table-unreadable':
+      return unreadableRefusalMessage(error ?? '');
     // [#576 B6-D1] Unreachable through autosave, which never runs on such a
     // project (useAutoSave), but a marker must never reach a surface.
     case 'newer-file':
       return i18n.t('banners.newerFile.saveRefused');
     default:
       return error ?? i18n.t('banners.autosave.genericFailure');
+  }
+}
+
+/**
+ * What a SUCCESSFUL save could not keep, by the code the backend stamps on
+ * `CommandResult.warnings` (`save_sidecars.rs` / `project_io.rs`).
+ */
+const SAVE_WARNING_TEXT: Record<string, string> = {
+  // The undo history could not be written and was removed from the saved file.
+  UNDO_HISTORY_DROPPED: 'saveWarnings.undoHistoryDropped',
+  // The project's display settings could not be carried into the saved file.
+  DISPLAY_SETTINGS_NOT_SAVED: 'saveWarnings.displaySettingsNotSaved',
+  // Written, but the file could not be reopened afterwards.
+  DATABASE_NOT_REOPENED: 'saveWarnings.databaseNotReopened',
+};
+
+/**
+ * Tell the user what a SUCCESSFUL save went ahead without (#576 A3-D2, NF-AN2-1).
+ *
+ * The backend reports it on `CommandResult.warnings`, which nothing read before -
+ * so a save that dropped the undo history said only "saved". Each one is a
+ * warning toast (docs/notifications.md: the action succeeded with a caveat): not
+ * a dialog, because there is nothing to decide, and not a banner, because it is
+ * not ongoing - the next save starts clean. One dedup key per code, so a burst of
+ * autosaves collapses into one notice and two different losses never replace
+ * each other. A code this build has no words for still reaches the user, with the
+ * backend's own sentence.
+ */
+export function surfaceSaveWarnings(warnings: ValidationWarning[] | undefined): void {
+  for (const warning of warnings ?? []) {
+    const textKey = SAVE_WARNING_TEXT[warning.code];
+    const message = textKey
+      ? i18n.t(textKey)
+      : i18n.t('saveWarnings.other', { message: warning.message });
+    useUIStore
+      .getState()
+      .showToast(message, `${TOAST_KEYS.SAVE_WARNING}:${warning.code}`, 'warning');
   }
 }
 
