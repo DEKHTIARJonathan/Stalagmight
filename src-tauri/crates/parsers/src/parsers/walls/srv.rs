@@ -459,15 +459,39 @@ pub(crate) struct ExtractedSpans {
     pub(crate) lrud: Option<String>,
 }
 
-/// True when `close` occurs at or after `start` in `chars` AND that closer is at
-/// end-of-body or immediately followed by whitespace - i.e. a *properly
-/// terminated* span. Returns the closer's index. Genuine Walls only treats a
-/// token-initial `<`/`*` as an LRUD when the matching `>`/`*` is followed by
-/// whitespace or end-of-line (`wall-srv.cpp`: `!pNote[1] || isspace(pNote[1])`);
-/// otherwise the delimiter is part of a station name.
-pub(crate) fn find_span_end(chars: &[char], start: usize, close: char) -> Option<usize> {
-    (start..chars.len())
-        .find(|&j| chars[j] == close && chars.get(j + 1).is_none_or(|c| c.is_whitespace()))
+/// The first `close` at or after `start` in `chars` that *properly terminates*
+/// a span, as `(closer index, index to resume scanning at)`. Genuine Walls
+/// only treats a token-initial `<`/`*` as an LRUD when the matching `>`/`*` is
+/// followed by whitespace or end-of-line (`wall-srv.cpp`: `!pNote[1] ||
+/// isspace(pNote[1])`); otherwise the delimiter is part of a station name.
+///
+/// "Whitespace" here is a Walls separator ([`is_walls_separator`]), the rule
+/// the tokenizer splits fields by - with one exception (#576 WALLS-LRUD,
+/// decision "only trailing NBSP closes"): a closer followed by nothing but
+/// no-break spaces (U+00A0, often pasted from a word processor) and
+/// separators up to the end of the line still closes, and that blank tail is
+/// consumed with it. Anywhere else a U+00A0 joins the fields it sits
+/// between, so `*A*<NBSP>B` is one station name, not LRUD `A` plus station
+/// `<NBSP>B`; at the end of the line there is nothing left to join, so an
+/// LRUD followed by one is not lost.
+pub(crate) fn find_span_end(chars: &[char], start: usize, close: char) -> Option<(usize, usize)> {
+    (start..chars.len()).find_map(|j| {
+        if chars[j] != close {
+            return None;
+        }
+        match chars.get(j + 1) {
+            None => Some((j, j + 1)),
+            Some(&c) if is_walls_separator(c) => Some((j, j + 1)),
+            Some('\u{a0}')
+                if chars[j + 1..]
+                    .iter()
+                    .all(|&c| c == '\u{a0}' || is_walls_separator(c)) =>
+            {
+                Some((j, chars.len()))
+            }
+            Some(_) => None,
+        }
+    })
 }
 
 /// Walk a vector line body, pulling out `<...>`/`*...*` (LRUD) and `(...)`
@@ -506,9 +530,9 @@ pub(crate) fn extract_spans(body: &str) -> ExtractedSpans {
             // an unterminated `*8` swallowed the rest of the line as a bogus LRUD.
             '<' | '*' if current.is_empty() => {
                 let close = if c == '<' { '>' } else { '*' };
-                if let Some(end) = find_span_end(&chars, i + 1, close) {
+                if let Some((end, resume)) = find_span_end(&chars, i + 1, close) {
                     lrud = Some(chars[i + 1..end].iter().collect());
-                    i = end + 1;
+                    i = resume;
                     continue;
                 }
                 current.push(c); // unterminated → literal name character

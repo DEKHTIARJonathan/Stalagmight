@@ -2999,3 +2999,65 @@ fn a_fifo_named_like_a_srv_is_refused_at_once() {
         .expect_err("a FIFO is not a survey file");
     assert!(err.contains("not a regular file"), "{err}");
 }
+
+// ----- LRUD closer followed by a no-break space (#576 WALLS-LRUD) ----------
+
+/// Decision WALLS-LRUD-D1 ("only trailing NBSP closes"): an LRUD closer counts
+/// when it is followed by end of line, an ASCII separator, or nothing but
+/// no-break spaces (and separators) to the end of the line. Anywhere else a
+/// U+00A0 joins the fields it sits between, as the tokenizer reads it, so a
+/// station named `*A*<NBSP>B` is one name, not LRUD `A` plus station
+/// `<NBSP>B`.
+#[test]
+fn an_lrud_closer_followed_by_a_no_break_space_closes_only_at_the_end_of_the_line() {
+    let cases: [(&str, &[&str], Option<&str>); 6] = [
+        // A name that starts with an LRUD delimiter and has a U+00A0 after
+        // its "closer" is a name.
+        (
+            "*A*\u{a0}B C 10 0 0",
+            &["*A*\u{a0}B", "C", "10", "0", "0"],
+            None,
+        ),
+        (
+            "<A>\u{a0}B C 10 0 0",
+            &["<A>\u{a0}B", "C", "10", "0", "0"],
+            None,
+        ),
+        // ... and so is one whose U+00A0 is followed by a separator.
+        (
+            "*A*\u{a0} B 10 0 0",
+            &["*A*\u{a0}", "B", "10", "0", "0"],
+            None,
+        ),
+        // An LRUD at the end of the line with a trailing U+00A0 (or a U+00A0
+        // and a space) still closes, so it is not lost.
+        (
+            "A B 10 0 0 *1 2 3 4*\u{a0}",
+            &["A", "B", "10", "0", "0"],
+            Some("1 2 3 4"),
+        ),
+        (
+            "A B 10 0 0 <1 2 3 4>\u{a0}\u{a0} ",
+            &["A", "B", "10", "0", "0"],
+            Some("1 2 3 4"),
+        ),
+        // The plain case is unchanged.
+        (
+            "A B 10 0 0 *1 2 3 4*",
+            &["A", "B", "10", "0", "0"],
+            Some("1 2 3 4"),
+        ),
+    ];
+    let outcomes: Vec<_> = cases
+        .iter()
+        .map(|&(body, tokens, lrud)| {
+            let got = extract_spans(body);
+            println!("{body:?} -> tokens={:?} lrud={:?}", got.tokens, got.lrud);
+            (body, tokens, lrud, got)
+        })
+        .collect();
+    for (body, tokens, lrud, got) in outcomes {
+        assert_eq!(got.tokens, tokens, "{body:?}");
+        assert_eq!(got.lrud.as_deref(), lrud, "{body:?}");
+    }
+}
