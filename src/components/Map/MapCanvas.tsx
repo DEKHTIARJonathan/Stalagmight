@@ -588,6 +588,11 @@ function MapCanvas() {
     detailPanelOpen,
     detailPanelTab,
   } = useUIStore(useShallow(selectMapCanvasUI));
+  // `placementMode` is replaced wholesale on every placement pointer move, so
+  // effects and callbacks that only ask "is placement on?" take this boolean;
+  // depending on the object re-registered their listeners ~60x/s (#576 D9).
+  // Those that need its payload read it from the store when they run.
+  const placementActive = placementMode !== null;
 
   // The gas overlay belongs to the Plan workspace mode (the former showGasPlan
   // sub-mode). Derived so the existing showGasPlan-gated effects below are unchanged.
@@ -833,7 +838,7 @@ function MapCanvas() {
   // Check snap for placement mode
   const checkPlacementSnap = useCallback(
     (screenX: number, screenY: number) => {
-      if (!map.current || !config || !placementMode || !surveyLayerRef.current) {
+      if (!map.current || !config || !placementActive || !surveyLayerRef.current) {
         return null;
       }
 
@@ -841,12 +846,12 @@ function MapCanvas() {
         screenX, screenY, config.map.snap.threshold
       );
     },
-    [config, placementMode]
+    [config, placementActive]
   );
 
   // Handle placement confirmation
   const handlePlacementConfirm = useCallback(() => {
-    if (!map.current || !placementMode || !mapContainer.current) return;
+    if (!map.current || !placementActive || !mapContainer.current) return;
 
     const placement = confirmPlacement();
     if (!placement || !placement.cursorPosition) return;
@@ -871,19 +876,19 @@ function MapCanvas() {
     }
 
     setPlacementCursor(null);
-  }, [placementMode, confirmPlacement]);
+  }, [placementActive, confirmPlacement]);
 
   // Handle placement cancel
   const handlePlacementCancel = useCallback(() => {
     // Get the onCancel callback before canceling
-    const onCancel = placementMode?.onCancel;
+    const onCancel = useUIStore.getState().placementMode?.onCancel;
     cancelPlacementMode();
     setPlacementCursor(null);
     // Call the cancel callback if provided
     if (onCancel) {
       onCancel();
     }
-  }, [placementMode, cancelPlacementMode]);
+  }, [cancelPlacementMode]);
 
   // Clear snap when tool changes to non-snap tool
   useEffect(() => {
@@ -2676,13 +2681,13 @@ function MapCanvas() {
       // Cancel merge (requires visible stations to select targets)
       clearMergeStations();
       // Cancel placement mode properly (calls onCancel callback and clears cursor)
-      if (placementMode) {
+      if (placementActive) {
         handlePlacementCancel();
       }
       // Note: Do NOT clear snappedStation or measure state
       // These operations work with hidden stations - highlight layer shows them
     }
-  }, [showStations, clearSelectionByType, setHoveredStation, clearMergeStations, placementMode, handlePlacementCancel]);
+  }, [showStations, clearSelectionByType, setHoveredStation, clearMergeStations, placementActive, handlePlacementCancel]);
 
   // Clear shot selection and hover when shots visibility changes to OFF
   useEffect(() => {
@@ -2734,7 +2739,7 @@ function MapCanvas() {
     if (!map.current) return;
 
     // Placement mode manages its own cursor - don't override
-    if (placementMode) return;
+    if (placementActive) return;
 
     // In supported tools with Ctrl held, show grab cursor for panning
     const ctrlPan = activeTool !== 'pan' && ctrlHeld;
@@ -2757,12 +2762,7 @@ function MapCanvas() {
     // first run the layer does not exist yet, and none of the other deps change on
     // map load, so without it the starting tool's resting cursor would never reach
     // SurveyLayer at all.
-  }, [activeTool, ctrlHeld, isHoveringFeature, placementMode, mapLoaded]);
-
-  // Narrowed to a boolean before the gesture effects consume it: `placementMode`
-  // is replaced wholesale on every cursor update, so depending on the object
-  // itself would re-run them on each pointer move during placement.
-  const placementActive = placementMode !== null;
+  }, [activeTool, ctrlHeld, isHoveringFeature, placementActive, mapLoaded]);
 
   // ONE gesture decision for the whole component, destructured to primitives so
   // the effects below can depend on it. Three consumers read it: the dragPan
@@ -3235,7 +3235,7 @@ function MapCanvas() {
     // Don't intercept Ctrl+click (used for Ctrl+drag panning)
     // Don't intercept during placement mode (let placement click through)
     const handleClickCapture = (e: MouseEvent) => {
-      if (placementMode) return;
+      if (placementActive) return;
       if (e.button === 0 && !e.ctrlKey) {
         e.stopPropagation();
         e.stopImmediatePropagation();
@@ -3246,7 +3246,7 @@ function MapCanvas() {
     // Right-click capture: cancel zoom box if active, otherwise zoom out at click point
     const handleContextMenuCapture = (e: MouseEvent) => {
       // Don't intercept during placement mode
-      if (placementMode) return;
+      if (placementActive) return;
 
       e.preventDefault();
       e.stopPropagation();
@@ -3286,7 +3286,7 @@ function MapCanvas() {
       canvas.removeEventListener('click', handleClickCapture, { capture: true });
       canvas.removeEventListener('contextmenu', handleContextMenuCapture, { capture: true });
     };
-  }, [activeTool, zoomStep, zoomMin, placementMode, zoomBox.start]);
+  }, [activeTool, zoomStep, zoomMin, placementActive, zoomBox.start]);
 
   // Get satellite tile URL based on provider config
   // Uses the custom stalagmight-tiles:// protocol; the backend caches under the
@@ -3879,7 +3879,7 @@ function MapCanvas() {
 
   // Handle Escape key for placement mode
   useEffect(() => {
-    if (!placementMode) return;
+    if (!placementActive) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -3890,17 +3890,17 @@ function MapCanvas() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [placementMode, handlePlacementCancel]);
+  }, [placementActive, handlePlacementCancel]);
 
   // Update cursor style for placement mode
   useEffect(() => {
     if (!map.current) return;
 
-    if (placementMode) {
+    if (placementActive) {
       map.current.getCanvas().style.cursor = 'crosshair';
     } else {
       // Reset cursor based on current tool. This effect keys on `activeTool` as
-      // well as `placementMode`, so it also runs on an ordinary tool switch,
+      // well as `placementActive`, so it also runs on an ordinary tool switch,
       // AFTER the passive effect above (effects run in declaration order) - a
       // raw write here therefore lands on top of the precedence that effect just
       // applied. Today the end state is still correct, because a later hover
@@ -3912,7 +3912,7 @@ function MapCanvas() {
         map.current.getCanvas().style.cursor = toolCursor(activeTool);
       }
     }
-  }, [placementMode, activeTool]);
+  }, [placementActive, activeTool]);
 
   // `touchAction` - block browser gestures only where the tool or mode owns the
   // drag - comes from the single `mapGestureMode` call above.
@@ -3921,7 +3921,7 @@ function MapCanvas() {
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
       // Handle placement mode
-      if (placementMode && mapContainer.current && map.current) {
+      if (placementActive && mapContainer.current && map.current) {
         const rect = mapContainer.current.getBoundingClientRect();
         const screenX = e.clientX - rect.left;
         const screenY = e.clientY - rect.top;
@@ -3977,7 +3977,7 @@ function MapCanvas() {
         }
       }
     },
-    [moveDrag, zoomBox.start, handleMoveDragMove, handleZoomBoxMove, checkSnapToStation, placementMode, checkPlacementSnap, updatePlacementCursor, updatePlacementSnap]
+    [moveDrag, zoomBox.start, handleMoveDragMove, handleZoomBoxMove, checkSnapToStation, placementActive, checkPlacementSnap, updatePlacementCursor, updatePlacementSnap]
   );
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
@@ -4032,7 +4032,7 @@ function MapCanvas() {
   // Handle placement mode click
   const handlePlacementClick = useCallback(
     (e: React.PointerEvent) => {
-      if (!placementMode || !map.current || !mapContainer.current) return;
+      if (!placementActive || !map.current || !mapContainer.current) return;
 
       // Left click confirms placement
       if (e.button === 0) {
@@ -4056,20 +4056,20 @@ function MapCanvas() {
         handlePlacementConfirm();
       }
     },
-    [placementMode, handlePlacementConfirm, gpsOrigin, updatePlacementCursor, updatePlacementSnap, checkPlacementSnap, noteMapInteraction]
+    [placementActive, handlePlacementConfirm, gpsOrigin, updatePlacementCursor, updatePlacementSnap, checkPlacementSnap, noteMapInteraction]
   );
 
   // Handle placement mode right-click (cancel)
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
-      if (placementMode) {
+      if (placementActive) {
         e.preventDefault();
         e.stopPropagation();
         noteMapInteraction();
         handlePlacementCancel();
       }
     },
-    [placementMode, handlePlacementCancel, noteMapInteraction]
+    [placementActive, handlePlacementCancel, noteMapInteraction]
   );
 
   // Determine pointerdown handler based on mode and tool
@@ -4088,13 +4088,13 @@ function MapCanvas() {
       // fresh press always overwrites, and there is no stale value for a later
       // gesture to inherit.
       pressClientRef.current = { x: e.clientX, y: e.clientY };
-      if (placementMode) {
+      if (placementActive) {
         handlePlacementClick(e);
       } else if (activeTool === 'zoom') {
         handleZoomBoxStart(e);
       }
     },
-    [placementMode, activeTool, handlePlacementClick, handleZoomBoxStart]
+    [placementActive, activeTool, handlePlacementClick, handleZoomBoxStart]
   );
 
   // What the move-tool hint banner talks about (#409), or null when there is nothing to

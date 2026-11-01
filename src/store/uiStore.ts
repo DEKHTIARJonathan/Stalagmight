@@ -2115,7 +2115,11 @@ export const useUIStore = create<UIStore>((set) => ({
     ),
   updatePlacementSnap: (stationRef) =>
     set((state) =>
-      state.placementMode
+      // Called on every placement pointer move; an unchanged snap is no write
+      // (returning `state` notifies nobody), so the map is not re-rendered for it.
+      state.placementMode &&
+      (state.placementMode.snappedToStation?.section_id !== stationRef?.section_id ||
+        state.placementMode.snappedToStation?.station_index !== stationRef?.station_index)
         ? {
             placementMode: {
               ...state.placementMode,
