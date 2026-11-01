@@ -31,12 +31,11 @@ empty list there aggregates to `undefined`, which App.tsx reads as "no receipt
 to show". A new per-run accumulator has to be added to the struct in the same
 change that introduces it.
 
-Three live completion sites pass that aggregate to `onComplete`: early import,
-late import, and the `done` phase. A fourth, the pending-segment import, is
-dormant: it fires on `SavedManualPlacingState.pendingSegmentImport`, which
-nothing writes any more (`buildSavedState` omits it, and it is the only place
-a saved state is built). Pre-existing, and left in place - it still carries the
-aggregate, so it stays correct if a caller ever sets that field again.
+Three completion sites pass that aggregate to `onComplete`: early import,
+late import, and the `done` phase. A segment placed on the map is imported by
+the placement callback (`importPlacedSegmentNow`) before the wizard reopens, so
+the reopened instance never imports on mount; with an empty segment queue it
+goes straight to `placing`.
 
 `importedSectionIds` is the other per-run accumulator on that struct, and it
 fails LOUDER when it is not carried: App.tsx gates `suggest_orphan_placements`

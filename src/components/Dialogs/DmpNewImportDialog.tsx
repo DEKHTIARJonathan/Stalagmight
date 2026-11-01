@@ -180,8 +180,6 @@ export interface SavedManualPlacingState {
   confirmedOverlaps?: Array<[number, ConfirmedOverlapInfo]>;
   existingShotUpdates?: ExistingShotUpdateLocal[];
   earlyImported?: Array<[number, number]>;
-  /** DMP indices of a segment just placed that needs immediate import on dialog restore. */
-  pendingSegmentImport?: number[];
   /**
    * Every `import_receipt` this wizard run has banked so far (#487).
    *
@@ -1088,7 +1086,7 @@ export default function DmpNewImportDialog({
     saved?.projectKey ?? useProjectStore.getState().project?.created_at ?? null
   );
   // Accumulate the import_receipt from each import_sections call (early/segment/
-  // late/pending) into one #391 summary for the whole wizard run, keyed by
+  // late) into one #391 summary for the whole wizard run, keyed by
   // constant file-level provenance (source label/name/total sections) spread
   // into every call below.
   //
@@ -2194,117 +2192,12 @@ export default function DmpNewImportDialog({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // On restore: import a just-placed segment immediately so it appears on the map
-  const pendingSegmentImportedRef = useRef(false);
-  useEffect(() => {
-    if (!saved?.pendingSegmentImport || saved.pendingSegmentImport.length === 0) return;
-    if (pendingSegmentImportedRef.current) return;
-    pendingSegmentImportedRef.current = true;
-
-    const importPendingSegment = async () => {
-      setIsImporting(true);
-      try {
-        const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-        const { configs, emittedDmpIndices, emptySections } = buildBatchImport(
-          connectionsRef.current,
-          zeroDatumIdx,
-          dmpFile,
-          selectionConfig,
-          sectionEditsRef.current,
-          fullPoolRef.current,
-          directPlacementsRef.current,
-          earlyImportedRef.current,
-          undefined,
-          resolvedTheme,
-        );
-        reportEmptySections(emptySections);
-
-        // Filter to only the sections in the pending segment, remapping from_importing indices
-        const pendingSet = new Set(saved.pendingSegmentImport);
-        const segmentConfigs: BackendImportSectionConfig[] = [];
-        const segmentDmpIndices: number[] = [];
-        // Map original config position → new position in segmentConfigs
-        const posRemap = new Map<number, number>();
-        for (let i = 0; i < configs.length; i++) {
-          const dmpIdx = emittedDmpIndices[i];
-          if (dmpIdx != null && pendingSet.has(dmpIdx)) {
-            posRemap.set(i, segmentConfigs.length);
-            segmentConfigs.push({ ...configs[i]!, section_index: segmentConfigs.length });
-            segmentDmpIndices.push(dmpIdx);
-          }
-        }
-        // Remap from_importing target_section_index to new positions
-        for (const cfg of segmentConfigs) {
-          if (cfg.placement.type === 'from_importing') {
-            const oldTarget = (cfg.placement as { target_section_index: number }).target_section_index;
-            const newTarget = posRemap.get(oldTarget);
-            if (newTarget != null) {
-              (cfg.placement as { target_section_index: number }).target_section_index = newTarget;
-            }
-          }
-        }
-
-        if (segmentConfigs.length > 0) {
-          const pendingExistingShotUpdates = backendExistingShotUpdatesForSections(
-            existingShotUpdatesRef.current,
-            pendingSet,
-          );
-          const result = refuseMutationDuringCarry() ?? await invokeIpc<CommandResult>('import_sections', {
-            sections: segmentConfigs,
-            fileHash: selectionConfig.fileHash ?? null,
-            sectionHashes: selectionConfig.sectionHashes ?? null,
-            existingShotUpdates: pendingExistingShotUpdates.length > 0 ? pendingExistingShotUpdates : null,
-            virtualShotMode: 'AllReferences',
-            ...dmpProvenance,
-          }, { purpose: 'import segment sections' });
-
-          if (result.success) {
-            if (result.section_ids.length > 0) {
-              importedSectionIdsRef.current.push(...result.section_ids);
-            }
-            if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
-
-            await refreshProjectState();
-            markSuccessfulDmpImportDirty();
-
-            for (let i = 0; i < segmentDmpIndices.length; i++) {
-              const sectionId = result.section_ids[i];
-              if (sectionId != null) {
-                earlyImportedRef.current.set(segmentDmpIndices[i]!, sectionId);
-              }
-            }
-            existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
-              existingShotUpdatesRef.current,
-              pendingSet,
-            );
-          }
-        }
-      } catch (e) {
-        // Non-fatal - segment will be retried in late import
-        console.error('[pendingSegmentImport] Error:', e);
-      } finally {
-        setIsImporting(false);
-      }
-
-      // If this was the last segment, finish the import - don't wait for the
-      // placing phase which would race with isImporting state.
-      if (segmentQueue.length === 0) {
-        trackDialogComplete('dmp-import-new');
-        onComplete(importedSectionIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
-      }
-    };
-
-    importPendingSegment();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // When restored from manual placement with an empty segment queue, transition to placing.
-  // Skip if a pending segment import is in progress - it will call onComplete directly.
   useEffect(() => {
-    if (phase === 'manual_placing' && segmentQueue.length === 0 && !saved?.pendingSegmentImport?.length) {
+    if (phase === 'manual_placing' && segmentQueue.length === 0) {
       setPhase('placing');
     }
-  }, [phase, segmentQueue.length, saved?.pendingSegmentImport?.length]);
+  }, [phase, segmentQueue.length]);
 
   // Handle 'placing' phase - late import of remaining sections after manual_placing.
   // Overlap treatment and connection redirect already happened during early import.
