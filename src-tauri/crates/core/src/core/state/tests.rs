@@ -16760,7 +16760,8 @@ fn test_save_project_implicit_first_save_autorename_when_target_exists() {
         location: None,
     });
 
-    // Simulate deferred-create behavior: reserved file_path but no open database yet.
+    // Simulate deferred-create behavior: reserved file_path, no open database yet,
+    // and the explicit flag `create_project_full` sets for exactly this state.
     {
         let mut guard = state.project.lock().unwrap();
         let project = guard.as_mut().unwrap();
@@ -16770,6 +16771,7 @@ fn test_save_project_implicit_first_save_autorename_when_target_exists() {
         let mut db_guard = state.database.lock().unwrap();
         *db_guard = None;
     }
+    state.set_initial_save_deferred_for_tests(true);
 
     let result = state.save_project(None);
     assert!(
@@ -16786,6 +16788,172 @@ fn test_save_project_implicit_first_save_autorename_when_target_exists() {
     assert!(expected_autorenamed_path.exists());
     let project = state.get_project_state().unwrap();
     assert_eq!(project.file_path.as_ref(), Some(&expected_autorenamed_path));
+}
+
+/// A saved project with one shot, an "Ignore" on that shot and a stored display
+/// setting, whose live database handle is then dropped exactly the way the
+/// `DATABASE_NOT_REOPENED` branch of `save_project` leaves it: the file was
+/// renamed into place, `file_path` points at it, the deferred flag is cleared,
+/// and the handle is `None`. Returns `(state, path, _temp)`.
+fn session_after_a_failed_reopen() -> (AppState, PathBuf, TempDir) {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("X.stalx");
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "X".to_string(),
+        location: None,
+    });
+    assert!(
+        state
+            .execute(Command::CreateSection {
+                name: Some("First".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#ff0000".to_string(),
+                direction: None,
+                shots: vec![test_shot_data(5.0)],
+            })
+            .success
+    );
+    assert!(state.save_project(Some(path.clone())).success);
+
+    let project = state.get_project_state().unwrap();
+    let section = &project.sections[0];
+    let shot = &section.shots[0];
+    state
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: section.id,
+            shot_id: shot.id,
+            warning_code: "LONG_SHOT".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: Some("checked".to_string()),
+            shot_uuid: shot.uuid.clone(),
+        })
+        .unwrap();
+    state.save_display_setting("stationSize", "7").unwrap();
+
+    *state.database.lock().unwrap() = None;
+    assert!(!state.initial_save_deferred());
+    assert!(
+        state
+            .execute(Command::CreateSection {
+                name: Some("Second".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#00ff00".to_string(),
+                direction: None,
+                shots: vec![test_shot_data(3.0)],
+            })
+            .success
+    );
+    (state, path, temp_dir)
+}
+
+/// [#576 B35(c)] After the reopen that follows a successful rename fails, the next
+/// implicit save (every autosave) must still write the open file. It used to take
+/// the missing handle for "first implicit save" and go through
+/// `next_available_project_path`, writing `X_1.stalx` without the ignores or the
+/// stored display settings and silently moving the session there.
+#[test]
+fn an_implicit_save_after_a_failed_reopen_stays_on_the_open_file() {
+    let (state, path, temp_dir) = session_after_a_failed_reopen();
+    let renamed = temp_dir.path().join("X_1.stalx");
+
+    let result = state.save_project(None);
+    assert!(result.success, "save failed: {:?}", result.error);
+
+    let session_path = state.get_project_state().unwrap().file_path;
+    let db = Database::open_existing(&path).unwrap();
+    let sections = db.load_project().unwrap().sections.len();
+    let ignores = db.load_resolved_warnings_verbatim().unwrap().len();
+    let setting = db.get_display_setting("stationSize").unwrap();
+    eprintln!("saved_path: {:?}", result.saved_path);
+    eprintln!("session file_path: {session_path:?}");
+    eprintln!("X_1.stalx exists: {}", renamed.exists());
+    eprintln!("X.stalx: {sections} sections (expected 2), {ignores} ignores (expected 1), stationSize {setting:?} (expected Some(\"7\"))");
+    if renamed.exists() {
+        let moved = Database::open_existing(&renamed).unwrap();
+        eprintln!(
+            "X_1.stalx: {} ignores, stationSize {:?}",
+            moved.load_resolved_warnings_verbatim().unwrap().len(),
+            moved.get_display_setting("stationSize").unwrap()
+        );
+    }
+    assert!(!renamed.exists(), "the save moved the session to X_1.stalx");
+    assert_eq!(session_path.as_ref(), Some(&path));
+    assert_eq!(sections, 2, "the edit did not reach X.stalx");
+    assert_eq!(ignores, 1, "the ignore was dropped");
+    assert_eq!(
+        setting.as_deref(),
+        Some("7"),
+        "the display setting was dropped"
+    );
+    assert!(
+        state.database.lock().unwrap().is_some(),
+        "the session must have its database handle back"
+    );
+}
+
+/// [#576 B35(c)] A display setting changed while the handle was gone lands in the
+/// in-memory cache; reopening the file must not let the file's older value win.
+#[test]
+fn a_display_setting_changed_without_a_handle_survives_the_reopen() {
+    let (state, path, _temp_dir) = session_after_a_failed_reopen();
+    state.save_display_setting("stationSize", "9").unwrap();
+
+    assert!(state.save_project(None).success);
+
+    let stored = Database::open_existing(&path)
+        .unwrap()
+        .get_display_setting("stationSize")
+        .unwrap();
+    assert_eq!(stored.as_deref(), Some("9"));
+}
+
+/// [#576 B35(c)] When the missing handle cannot be reopened either, an implicit
+/// save is refused - writing the file without the side tables it alone holds would
+/// destroy them - and the file on disk is left as it was. Save As to another file
+/// stays available, so the edits are never stranded.
+#[test]
+fn an_implicit_save_is_refused_when_the_missing_handle_cannot_be_reopened() {
+    let (state, path, temp_dir) = session_after_a_failed_reopen();
+    let renamed = temp_dir.path().join("X_1.stalx");
+    // Whatever holds the file shut, the reopen fails the way it did after the
+    // rename. A file SQLite cannot read is the portable way to make it fail
+    // (mode bits do not stop root, and CI runs as root).
+    std::fs::write(&path, b"not a database").unwrap();
+
+    let result = state.save_project(None);
+    eprintln!("save success: {} error: {:?}", result.success, result.error);
+    eprintln!("X_1.stalx exists: {}", renamed.exists());
+    eprintln!(
+        "session file_path: {:?}",
+        state.get_project_state().unwrap().file_path
+    );
+    assert!(!result.success, "the save must be refused");
+    assert!(!renamed.exists(), "the save wrote X_1.stalx");
+    assert_eq!(std::fs::read(&path).unwrap(), b"not a database");
+    assert_eq!(
+        state.get_project_state().unwrap().file_path.as_ref(),
+        Some(&path)
+    );
+
+    let elsewhere = temp_dir.path().join("Rescue.stalx");
+    let rescue = state.save_project(Some(elsewhere.clone()));
+    assert!(
+        rescue.success,
+        "Save As must still work: {:?}",
+        rescue.error
+    );
+    assert_eq!(
+        Database::open_existing(&elsewhere)
+            .unwrap()
+            .load_project()
+            .unwrap()
+            .sections
+            .len(),
+        2
+    );
 }
 
 #[test]

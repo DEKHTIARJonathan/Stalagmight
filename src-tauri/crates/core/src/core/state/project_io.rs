@@ -479,10 +479,19 @@ impl AppState {
             None => return CommandResult::failure("No save path specified".to_string()),
         };
 
+        // A missing database handle does not mean "first save": a failed reopen
+        // leaves one behind too (`DATABASE_NOT_REOPENED` below), on a project whose
+        // file exists and is the only place its ignores, display settings and
+        // SpeleoDB link live. Every side-table read below comes from this handle.
+        if let Some(refusal) = self.restore_missing_database(project, &save_path) {
+            return refusal;
+        }
+
         // On the first implicit save (path omitted), avoid overwriting an existing file.
         // Deferred new projects can reserve a canonical path; if it now exists, auto-rename.
-        let has_open_database = self.database.lock().map(|db| db.is_some()).unwrap_or(false);
-        if is_implicit_save && !has_open_database {
+        // Decided by the explicit flag: inferring it from the missing handle sent every
+        // autosave after a failed reopen to `<stem>_1.stalx` (#576 B35(c)).
+        if is_implicit_save && self.initial_save_deferred() {
             let candidate_path = Self::next_available_project_path(&save_path);
             if candidate_path != save_path {
                 tracing::warn!(
@@ -1116,6 +1125,92 @@ impl AppState {
         let mut result = CommandResult::success().with_path(save_path_str);
         Self::warn_history_dropped(&mut result, history_dropped);
         result
+    }
+
+    /// Reinstall the open project's database handle when it is missing on a project
+    /// whose file exists (#576 B35(c)). Returns the refusal `save_project` must hand
+    /// back when the file cannot be reopened and this save would replace it.
+    ///
+    /// The handle is legitimately absent only for a deferred new project (no file
+    /// yet) or one never saved (no `file_path`); both are left alone. Otherwise it is
+    /// missing because a reopen failed - after the rename (`DATABASE_NOT_REOPENED`),
+    /// or after a failed rename when the previous file would not reopen either - and
+    /// the save's side-table snapshots would read "nothing" from it.
+    ///
+    /// Display settings changed while the handle was gone went to the in-memory
+    /// cache, which the save reads only when the file has none; they are written
+    /// into the reopened file, as they would have been with the handle in place.
+    ///
+    /// A Save As to a DIFFERENT file goes ahead without the handle: the open file,
+    /// and the side tables in it, stay untouched on disk, and it is the user's way
+    /// out when the open file cannot be reopened.
+    fn restore_missing_database(
+        &self,
+        project: &Project,
+        save_path: &Path,
+    ) -> Option<CommandResult> {
+        if self.initial_save_deferred() {
+            return None;
+        }
+        let open_path = project.file_path.as_ref()?;
+        let mut db_guard = self
+            .database
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if db_guard.is_some() {
+            return None;
+        }
+        match Database::open_existing(open_path) {
+            Ok(db) => {
+                let cached = self
+                    .display_settings_cache
+                    .lock()
+                    .map(|cache| cache.clone())
+                    .unwrap_or_default();
+                for (key, value) in &cached {
+                    if let Err(e) = db.save_display_setting(key, value) {
+                        tracing::warn!(
+                            key = %key,
+                            error = %e,
+                            purpose = "preserve display settings on save",
+                            "Failed to write a cached display setting into the reopened database"
+                        );
+                    }
+                }
+                tracing::info!(
+                    path = ?open_path,
+                    purpose = "read the project's side tables before saving",
+                    "Reopened the project database the session had lost"
+                );
+                *db_guard = Some(db);
+                None
+            }
+            Err(e) if !same_file(open_path, save_path) => {
+                tracing::warn!(
+                    error = %e,
+                    path = ?open_path,
+                    destination = ?save_path,
+                    purpose = "save to another file without the unreadable open file",
+                    "Could not reopen the project database; saving to the other file without its side tables"
+                );
+                None
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    path = ?open_path,
+                    purpose = "refuse to rewrite a project without its side tables",
+                    "Refused to save: the project database could not be reopened"
+                );
+                Some(CommandResult::failure(format!(
+                    "Can't save: the project file could not be reopened ({}). Saving would \
+                     rewrite it without its ignored warnings, display settings and SpeleoDB \
+                     link, so nothing was written - the file on disk is unchanged. Use Save \
+                     As to save your changes to another file.",
+                    crate::core::loading::clamp_quoted_error(&e.to_string()),
+                )))
+            }
+        }
     }
 
     fn warn_history_dropped(result: &mut CommandResult, dropped: bool) {
