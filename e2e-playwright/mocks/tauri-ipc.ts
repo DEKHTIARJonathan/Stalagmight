@@ -2237,25 +2237,39 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const backCyls = cylinders.filter((c) => c.role === 'back_gas' && c.enabled !== false);
             const sumWv = backCyls.reduce((s, c) => s + (c.water_volume_l ?? 0), 0);
             const frac = effective === 'two_stage' ? 1 / 6 : effective === 'one_stage' ? 1 / 4 : 1 / 3;
-            const avgStart =
-              sumWv > 0
-                ? backCyls.reduce((s, c) => s + (c.fill_bar ?? 0) * (c.water_volume_l ?? 0), 0) / sumWv
-                : 0;
-            // All-thirds turn rises by the safety margin (mock ignores Z: turn = avgStart·(1-⅓)+margin).
-            const backgas_turn_bar =
-              sumWv > 0
-                ? Math.max(0, avgStart * (1 - frac) + (effective === 'all_thirds' ? margin : 0))
-                : null;
-            const stage_drop_bars = dropSourceStages.map((c) => {
+            // The engine's one per-cylinder gauge rule (gas.rs `in_usable_bar`, #576 A18(e)),
+            // without the Z derate: the bar a cylinder spends on the way in, a share of its
+            // conservative-capped basis read off its REAL gauge and clamped to [0, fill]. The
+            // turn gauge, the stage drops and the usable column all derive from it, so an
+            // overfilled tank reads as the engine reads it (11 L rated 207 filled 230 with a
+            // 30-bar reserve drops at 230 - 88.5 = 141.5, not on the capped scale at 118.5).
+            const inUsableBar = (c: (typeof cylinders)[number], stageCounted: boolean): number => {
+              if (c.role !== 'back_gas' && c.role !== 'stage') return 0;
               const fill = c.fill_bar ?? 0;
               const rated = c.rated_pressure_bar ?? fill;
               const basis = gasConfig.conservative_tank_gas !== false ? Math.min(fill, rated) : fill;
-              if (effective === 'free') {
-                const u = Math.max(0, Math.min(c.usable_gas_bar ?? 0, basis));
-                return Math.max(0, fill - u);
-              }
-              return Math.min(basis, 0.5 * (basis + reserve));
-            });
+              const toFill = (bar: number) => Math.max(0, Math.min(bar, fill));
+              if (effective === 'free') return Math.max(0, Math.min(c.usable_gas_bar ?? 0, basis));
+              // ⅓ less the safety margin, for back gas and stages alike.
+              if (effective === 'all_thirds') return toFill(basis / 3 - margin);
+              if (c.role === 'back_gas') return toFill(frac * basis);
+              return stageCounted ? toFill(0.5 * (basis - reserve)) : 0;
+            };
+            // Turn gauge: the volume-weighted mean of each back-gas tank's `fill - usable`.
+            const backgas_turn_bar =
+              sumWv > 0
+                ? Math.max(
+                    0,
+                    backCyls.reduce(
+                      (s, c) => s + (c.water_volume_l ?? 0) * ((c.fill_bar ?? 0) - inUsableBar(c, false)),
+                      0,
+                    ) / sumWv,
+                  )
+                : null;
+            // A drop reads `fill - usable` on the stage's own gauge.
+            const stage_drop_bars = dropSourceStages.map((c) =>
+              Math.max(0, (c.fill_bar ?? 0) - inUsableBar(c, true)),
+            );
             // Cumulative swum distance to each drop ref along the route (aligned with stage_drop_refs).
             const cumDist: number[] = [];
             {
@@ -2275,32 +2289,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               );
               return j >= 0 ? (cumDist[j] ?? 0) : 0;
             });
-            // Per-row usable bar (#245), aligned 1:1 with INPUT cylinders (disabled/non-budget = 0).
-            // The mock ignores the Z derate, so deliverable/water-vol ≈ fill. Rust unit tests pin
-            // the exact math; this just gives the table shape-correct values.
-            const isBudget = (r?: string) => r === 'back_gas' || r === 'stage';
+            // Per-row usable bar (#245), aligned 1:1 with INPUT cylinders (disabled/non-budget = 0):
+            // the same gauge rule as the turn and the drops. Half Minus counts only the first
+            // `required` enabled stages. Rust unit tests pin the exact (Z-derated) math.
             let enabledStageI = 0;
             const cylinder_usable_bars = cylinders.map((c) => {
               if (c.enabled === false) return 0;
-              const fill = c.fill_bar ?? 0;
-              const rated = c.rated_pressure_bar ?? fill;
-              const basis = gasConfig.conservative_tank_gas !== false ? Math.min(fill, rated) : fill;
-              if (effective === 'free') {
-                // Clamp to `basis` (min(fill, rated) under conservative), matching the engine's
-                // free_usable_bar - not raw fill - so the mock doesn't diverge on overfilled tanks.
-                return isBudget(c.role) ? Math.max(0, Math.min(c.usable_gas_bar ?? 0, basis)) : 0;
-              }
-              if (effective === 'all_thirds') {
-                // ⅓ less the safety margin (mock ignores Z), clamped ≥ 0 - mirrors the engine.
-                return isBudget(c.role) ? Math.max(0, fill / 3 - margin) : 0;
-              }
-              if (c.role === 'back_gas') return frac * fill;
-              if (c.role === 'stage') {
-                const counted = enabledStageI < required;
-                enabledStageI += 1;
-                return counted ? Math.max(0, 0.5 * (basis - reserve)) : 0;
-              }
-              return 0;
+              const counted = c.role === 'stage' && enabledStageI++ < required;
+              return inUsableBar(c, counted);
             });
             // Cumulative gas at each way point (#298). Like the drop math above this is a
             // shape-correct stand-in, not the engine's multi-leg walk: it reports each way point's
