@@ -2539,6 +2539,16 @@
     "speleoLinkUnreadable": {
       "lead": "This project's SpeleoDB link could not be read, so it opened as a local project.",
       "detail": "Saving over this file is turned off so the link is not lost. Use Save As to keep your changes in another file."
+    },
+    "settingsUnreadable": {
+      "lead": "Some stored project settings could not be read: {{names}}.",
+      "detail": "Saving is off so the file keeps its stored values - defaults are in use for now. You can still view and export; reopen the project to try again.",
+      "saveRefused": "Not saved: stored project settings could not be read.",
+      "names": {
+        "validation": "validation thresholds",
+        "surface_elevation": "entrance elevation",
+        "default_azimuth_reference": "default north reference"
+      }
     }
   },
   "integrityRepair": {

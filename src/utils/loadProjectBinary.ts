@@ -67,6 +67,11 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
    *  project opened as a local one, but every save over this file is refused (the
    *  rebuilt file would lose the row), so the UI says so on open. */
   speleoLinkUnreadable: boolean;
+  /** [#576 B15] The stored per-project settings the backend could not read on
+   *  this load (`validation`, `surface_elevation`, `default_azimuth_reference`).
+   *  The project opened with defaults in their place and every save is refused
+   *  while they are unread. Binary envelope only, like `newerSchemaVersion`. */
+  unreadableProjectSettings: string[];
 }
 
 /**
@@ -111,6 +116,9 @@ export interface BinaryEnvelope {
   /** [#576 B35(b) review] The link row could not be read; absent from an
    *  envelope that predates it. */
   speleo_link_unreadable?: boolean;
+  /** [#576 B15] Stored project settings the load could not read. A top-level map
+   *  key: absent from an envelope that predates it. */
+  unreadable_project_settings?: string[];
   project_header: ProjectHeaderBinary;
   shot_count: number;
   shots_floats: Uint8Array;
@@ -465,6 +473,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     // [#576 B6-D1] Same synchronous settling for the newer-version read-only gate.
     newerSchemaVersion: env.newer_schema_version ?? null,
     speleoLinkUnreadable: env.speleo_link_unreadable === true,
+    unreadableProjectSettings: env.unreadable_project_settings ?? [],
     surveyData,
   };
 }

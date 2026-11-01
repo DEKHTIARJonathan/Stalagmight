@@ -60,6 +60,16 @@ const SIDE_TABLE_UNREADABLE_MARKERS = [SPELEODB_LINK_UNREADABLE, UNDO_MARKERS_UN
  */
 export const NEWER_FILE_READ_ONLY = 'NEWER_FILE_READ_ONLY';
 
+/**
+ * Marker for a refusal because stored per-project settings could not be read when
+ * the project was opened (#576 B15): the session holds defaults in their place,
+ * and any save would write those over the stored values. Mirrors
+ * `PROJECT_SETTINGS_UNREADABLE_CODE` in `src-tauri/crates/core/src/core/loading.rs`.
+ * Routed like `NEWER_FILE_READ_ONLY`: a blocked save on a project whose banner
+ * already says why.
+ */
+export const PROJECT_SETTINGS_UNREADABLE = 'PROJECT_SETTINGS_UNREADABLE';
+
 /** What a failed save's `CommandResult.error` says went wrong. */
 export type SaveErrorKind =
   | 'permission'
@@ -68,6 +78,7 @@ export type SaveErrorKind =
   | 'ignores-unreadable'
   | 'side-table-unreadable'
   | 'newer-file'
+  | 'settings-unreadable'
   | 'other';
 
 /**
@@ -83,6 +94,7 @@ export function classifySaveError(error?: string | null): SaveErrorKind {
   if (error.startsWith(IGNORES_UNREADABLE)) return 'ignores-unreadable';
   if (SIDE_TABLE_UNREADABLE_MARKERS.some((m) => error.startsWith(m))) return 'side-table-unreadable';
   if (error.startsWith(NEWER_FILE_READ_ONLY)) return 'newer-file';
+  if (error.startsWith(PROJECT_SETTINGS_UNREADABLE)) return 'settings-unreadable';
   return 'other';
 }
 

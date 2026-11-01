@@ -239,6 +239,9 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * result; cleared on close, create, and a Save As that moves the session away.
    */
   speleoLinkUnreadable: boolean;
+  /** [#576 B15] Stored project settings the load could not read; while any are
+   *  listed the backend refuses every save (and autosave does not try). */
+  unreadableProjectSettings: string[];
   stations: Station[];
   /**
    * Struct-of-Arrays representation of the loaded project's bulk
@@ -633,6 +636,7 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
     databaseOpen: false,
     newerSchemaVersion: null,
     speleoLinkUnreadable: false,
+    unreadableProjectSettings: [],
     stations: [],
     surveyData: null,
     stationsAdjusted: null,
@@ -905,6 +909,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   databaseOpen: false,
   newerSchemaVersion: null,
   speleoLinkUnreadable: false,
+  unreadableProjectSettings: [],
   stations: [],
   surveyData: null,
   stationsAdjusted: null,
@@ -1107,6 +1112,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // same set() as the project: a newer file is read-only from the first frame.
           newerSchemaVersion: result.newerSchemaVersion,
           speleoLinkUnreadable: result.speleoLinkUnreadable,
+          unreadableProjectSettings: result.unreadableProjectSettings,
           isDirty: false,
           // Reset integrity state on project switch so a dismissal from the
           // previous project can never carry over and suppress this one's banner.
@@ -1360,6 +1366,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // This build created it, so it is this build's to edit (#576 B6-D1).
         newerSchemaVersion: null,
         speleoLinkUnreadable: false,
+        unreadableProjectSettings: [],
         stations: [],
         stationsAdjusted: null,
         surveyDataAdjusted: null,

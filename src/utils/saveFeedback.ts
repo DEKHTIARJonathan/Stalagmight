@@ -58,6 +58,19 @@ export function surfaceSaveFailure(
       .showToast(i18n.t('banners.newerFile.saveRefused'), TOAST_KEYS.NEWER_FILE_READ_ONLY, 'warning');
     return;
   }
+  // [#576 B15] Stored settings the open could not read refuse every save, and the
+  // banner already says which and why: a blocked action, so a warning toast - not
+  // an error dialog, and never Review & Repair, which cannot read them either.
+  if (classifySaveError(error) === 'settings-unreadable') {
+    useUIStore
+      .getState()
+      .showToast(
+        i18n.t('banners.settingsUnreadable.saveRefused'),
+        TOAST_KEYS.SETTINGS_UNREADABLE,
+        'warning',
+      );
+    return;
+  }
   const routesToIntegrity =
     !opts?.skipIntegrityRouting && !isUnreadableRefusal(classifySaveError(error));
   if (routesToIntegrity && useProjectStore.getState().integritySaveBlocked) {
@@ -140,6 +153,10 @@ export function autosaveFailureMessage(error?: string | null): string {
     // project (useAutoSave), but a marker must never reach a surface.
     case 'newer-file':
       return i18n.t('banners.newerFile.saveRefused');
+    // [#576 B15] Unreachable through autosave, which never runs while settings
+    // are unread (useAutoSave), but a marker must never reach a surface.
+    case 'settings-unreadable':
+      return i18n.t('banners.settingsUnreadable.saveRefused');
     default:
       return error ?? i18n.t('banners.autosave.genericFailure');
   }

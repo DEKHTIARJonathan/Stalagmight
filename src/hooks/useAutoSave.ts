@@ -106,6 +106,10 @@ export function useAutoSave(): AutoSaveState {
       // refused), but autosave must not be the thing that finds out.
       if (selectNewerFileReadOnly(state)) return;
 
+      // [#576 B15] Nor while stored project settings could not be read: every
+      // save is refused until the project is reopened (the banner says why).
+      if (state.unreadableProjectSettings.length > 0) return;
+
       // If we're already executing a save, don't restart timers
       if (savingRef.current) return;
 
@@ -158,6 +162,7 @@ export function useAutoSave(): AutoSaveState {
           !store.project?.file_path ||
           !store.config?.general?.auto_save ||
           selectNewerFileReadOnly(store) ||
+          store.unreadableProjectSettings.length > 0 ||
           isAutosaveHeld()
         ) {
           setStatus('idle');

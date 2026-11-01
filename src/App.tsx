@@ -59,6 +59,7 @@ function App() {
   const dismissHistoryDiscarded = useProjectStore((s) => s.dismissHistoryDiscarded);
   const newerFileReadOnly = useProjectStore(selectNewerFileReadOnly);
   const speleoLinkUnreadable = useProjectStore((s) => s.speleoLinkUnreadable);
+  const unreadableProjectSettings = useProjectStore((s) => s.unreadableProjectSettings);
   const autosaveFailure = useProjectStore((s) => s.autosaveFailure);
   const autosaveFailureKind = useProjectStore((s) => s.autosaveFailureKind);
   const clearAutosaveFailure = useProjectStore((s) => s.clearAutosaveFailure);
@@ -661,6 +662,30 @@ function App() {
             {t('banners.speleoLinkUnreadable.lead')}{' '}
             <span className="text-text-secondary font-normal">
               {t('banners.speleoLinkUnreadable.detail')}
+            </span>
+          </span>
+        </div>
+      )}
+
+      {/* [#576 B15] Unread-settings banner. Stored per-project settings the backend
+          could not read on open are held as defaults, and every save is refused so
+          the file keeps its stored values. An ongoing condition (until the project is
+          reopened), so a banner (docs/notifications.md) that names WHICH settings, and
+          no Dismiss: it is the one place the user learns why saving is off. */}
+      {unreadableProjectSettings.length > 0 && project && !loading.isLoading && (
+        <div
+          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
+          role="status"
+          data-testid="settings-unreadable-banner"
+        >
+          <span className="text-warning font-medium flex-1 min-w-0">
+            {t('banners.settingsUnreadable.lead', {
+              names: unreadableProjectSettings
+                .map((key) => t(`banners.settingsUnreadable.names.${key}`, { defaultValue: key }))
+                .join(', '),
+            })}{' '}
+            <span className="text-text-secondary font-normal">
+              {t('banners.settingsUnreadable.detail')}
             </span>
           </span>
         </div>

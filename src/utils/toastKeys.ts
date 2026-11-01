@@ -19,6 +19,8 @@ export const TOAST_KEYS = {
    * while two different losses never replace each other (the EXPORT_NOTE idiom).
    */
   SAVE_WARNING: 'save-warning',
+  /** A save refused because stored project settings could not be read on open (#576 B15). */
+  SETTINGS_UNREADABLE: 'settings-unreadable',
   /** Catch-all for a command failure no specific handler claims (docs/notifications.md). */
   COMMAND_FAILED: 'command-failed',
   UNDO_FAILED: 'undo-failed',
