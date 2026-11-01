@@ -2763,7 +2763,7 @@
       "needsStages": "Add {{count}} stage cylinder(s) to your rig to use this strategy.",
       "stageReserveLabel": "Stage reserve",
       "safetyMarginLabel": "Safety margin",
-      "safetyMarginHint": "Extra gas held back from every cylinder on top of thirds - a conservatism knob for teams of two or specific caves.",
+      "safetyMarginHint": "Extra pressure held back in every cylinder on top of thirds: each tank turns this many bar earlier on its gauge. A conservatism knob for teams of two or specific caves.",
       "advancedTitle": "Advanced gas strategy",
       "advancedBody": "Use only if you're trained to balance gas across back gas and stages.",
       "advancedConfirm": "I understand",

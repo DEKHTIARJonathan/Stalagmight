@@ -12,7 +12,7 @@ use super::physics::{
     gas_rate, sac_to_rmv,
 };
 use super::{
-    drop_pressure_for_contribution, free_in_gas, free_usable_bar, is_swim_leg, penetration_budget,
+    drop_pressure_for_contribution, free_usable_bar, is_swim_leg, penetration_budget,
     required_stages, route_metrics, stage_drop_plans, usable_oc_gas,
 };
 use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset, ReserveProfile};
@@ -558,8 +558,8 @@ fn gas_conservative_budget_never_exceeds_precise_for_any_strategy_or_fill() {
 }
 
 #[test]
-fn gas_free_in_gas_never_exceeds_precise_or_the_rated_window() {
-    // `free_in_gas` over a wide sweep, absurd inputs included (fills past the Z fit's ~714-bar
+fn gas_free_credit_never_exceeds_precise_or_the_rated_window() {
+    // A Free tank's credit over a wide sweep, absurd inputs included (fills past the Z fit's ~714-bar
     // turn-over, rated below its Z == 1 knee, usable past the fill, negative and NaN usable):
     // - conservative never credits more than precise;
     // - conservative never credits more than the same usable bar at the rated pressure (the figure
@@ -594,8 +594,15 @@ fn gas_free_in_gas_never_exceeds_precise_or_the_rated_window() {
                         ..Cylinder::new(v, rated, fill, TankMaterial::Steel, CylRole::BackGas, None)
                             .unwrap()
                     };
-                    let cons = free_in_gas(&c, true);
-                    let prec = free_in_gas(&c, false);
+                    let free = |conservative| {
+                        penetration_budget(
+                            std::slice::from_ref(&c),
+                            ReservePreset::Free,
+                            &ReserveProfile::default(),
+                            conservative,
+                        )
+                    };
+                    let (cons, prec) = (free(true), free(false));
                     let basis = fill.min(rated);
                     let u = free_usable_bar(&c, true);
                     let rated_window = (deliverable_gas(basis, v, rated, true)
@@ -709,9 +716,8 @@ fn gas_free_overfilled_stage_dragged_drop_reads_the_real_gauge() {
 #[test]
 fn gas_stage_drop_dragged_to_its_safe_litres_reads_its_default_bar() {
     // Round trip for every staged strategy and fill: a drop whose contribution is exactly the
-    // strategy's safe IN gas must read the strategy's own default drop pressure. Free (NF-AN1-2)
-    // reads both on the real gauge; Half Minus keeps its conservative-capped scale for now (its
-    // definition awaits the A18(e) decision, NF-AN1-1), and round-trips on that scale.
+    // strategy's safe IN gas must read the strategy's own default drop pressure. Both read the
+    // real gauge (Free since NF-AN1-2, Half Minus since A18(e) / NF-AN1-1).
     let mut violations = Vec::new();
     for fill in [150.0, 207.0, 250.0, 300.0] {
         let stage = Cylinder {
@@ -747,6 +753,289 @@ fn gas_stage_drop_dragged_to_its_safe_litres_reads_its_default_bar() {
         }
     }
     assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+#[test]
+fn gas_all_thirds_turns_at_a_third_of_the_gauge_and_credits_that_gas() {
+    // #576 A18(e), decided "thirds of the gauge": a 12 L tank at 207 bar turns at 207 - 69 = 138
+    // bar, and the map credits exactly the gas breathed from 207 down to 138 (739.76 L). The
+    // volume rule credited a third of the Z-corrected litres (792.45 L) and converted it back to
+    // bar as if air were ideal (a 140.96-bar gauge, 706.36 L breathed), so map and gauge disagreed.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        12.0,
+        207.0,
+        207.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let f =
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg], &GasConfig::default());
+    let window =
+        deliverable_gas(207.0, 12.0, 207.0, false) - deliverable_gas(138.0, 12.0, 207.0, false);
+    assert!((window - 739.76).abs() < 0.01, "window {window}");
+    assert!(
+        (f.backgas_turn_bar.unwrap() - 138.0).abs() < 1e-9
+            && (f.cylinder_usable_bars[0] - 69.0).abs() < 1e-9
+            && (f.budget_litres - window).abs() < 1e-6,
+        "turn {:.2} bar, column {:.2} bar, budget {:.2} L; a third of the gauge is turn 138, \
+         column 69, budget {window:.2} L",
+        f.backgas_turn_bar.unwrap(),
+        f.cylinder_usable_bars[0],
+        f.budget_litres
+    );
+}
+
+#[test]
+fn gas_gauge_column_and_map_agree_for_every_strategy_and_fill() {
+    // #576 A18(e). Every rule is a pressure rule on the real gauge, so for every strategy, fill
+    // (under-filled, rated, over-filled, HP at rated, below the Z == 1 knee), cap setting and
+    // safety margin: the budget is exactly the gas between each budget cylinder's real fill and
+    // `fill - column`; each stage drop reads `fill - column`; and the back-gas turn gauge is the
+    // volume-weighted mean of `fill - column` over the back gas.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let mut violations = Vec::new();
+    for (rated, fill) in [
+        (207.0, 180.0),
+        (207.0, 207.0),
+        (207.0, 250.0),
+        (207.0, 300.0),
+        (232.0, 232.0),
+        (300.0, 300.0),
+        (207.0, 90.0),
+    ] {
+        let tank = |v: f64, role: CylRole, usable: f64| Cylinder {
+            usable_gas_bar: usable,
+            ..Cylinder::new(v, rated, fill, TankMaterial::Steel, role, None).unwrap()
+        };
+        let rigs = [
+            vec![tank(12.0, CylRole::BackGas, 100.0)],
+            vec![
+                tank(12.0, CylRole::BackGas, 100.0),
+                tank(11.0, CylRole::Stage, 80.0),
+            ],
+            vec![
+                tank(12.0, CylRole::BackGas, 100.0),
+                tank(12.0, CylRole::BackGas, 100.0),
+                tank(11.0, CylRole::Stage, 80.0),
+                tank(7.0, CylRole::Stage, 60.0),
+            ],
+        ];
+        for preset in [
+            ReservePreset::AllThirds,
+            ReservePreset::OneStage,
+            ReservePreset::TwoStage,
+            ReservePreset::Free,
+        ] {
+            for conservative in [true, false] {
+                for margin in [0.0, 10.0] {
+                    let mut cfg = GasConfig {
+                        default_reserve: preset,
+                        conservative_tank_gas: conservative,
+                        ..GasConfig::default()
+                    };
+                    cfg.reserve_profile.all_thirds_safety_margin_bar = margin;
+                    for rig in &rigs {
+                        let f =
+                            project.compute_gas_reach_field(Some(&origin), None, &diver, rig, &cfg);
+                        let case = format!(
+                            "{preset:?} rated {rated} fill {fill} cons {conservative} margin \
+                             {margin} tanks {}",
+                            rig.len()
+                        );
+                        let window = |c: &Cylinder, col: f64| {
+                            deliverable_gas(
+                                c.fill_bar,
+                                c.water_volume_l,
+                                c.rated_pressure_bar,
+                                false,
+                            ) - deliverable_gas(
+                                c.fill_bar - col,
+                                c.water_volume_l,
+                                c.rated_pressure_bar,
+                                false,
+                            )
+                        };
+                        let from_columns: f64 = rig
+                            .iter()
+                            .zip(&f.cylinder_usable_bars)
+                            .map(|(c, &col)| window(c, col))
+                            .sum();
+                        if (f.budget_litres - from_columns).abs() > 1e-6 {
+                            violations.push(format!(
+                                "{case}: budget {:.2} L, the columns' gas {from_columns:.2} L",
+                                f.budget_litres
+                            ));
+                        }
+                        let (mut wv, mut wv_turn) = (0.0, 0.0);
+                        for (c, &col) in rig.iter().zip(&f.cylinder_usable_bars) {
+                            if matches!(c.role, CylRole::BackGas) {
+                                wv += c.water_volume_l;
+                                wv_turn += c.water_volume_l * (c.fill_bar - col);
+                            }
+                        }
+                        let turn = f.backgas_turn_bar.unwrap();
+                        if (turn - wv_turn / wv).abs() > 1e-9 {
+                            violations.push(format!(
+                                "{case}: turn gauge {turn:.2} bar, the column says {:.2}",
+                                wv_turn / wv
+                            ));
+                        }
+                        let stage_cols: Vec<(f64, f64)> = rig
+                            .iter()
+                            .zip(&f.cylinder_usable_bars)
+                            .filter(|(c, &col)| matches!(c.role, CylRole::Stage) && col > 0.0)
+                            .map(|(c, &col)| (c.fill_bar, col))
+                            .collect();
+                        for (k, &bar) in f.stage_drop_bars.iter().enumerate() {
+                            let want = stage_cols.get(k).map(|(fl, col)| fl - col);
+                            if want.is_none_or(|w| (bar - w).abs() > 1e-9) {
+                                violations.push(format!(
+                                    "{case}: stage {k} drop {bar:.2} bar, the column says {want:?}"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "{} violations, first:\n{}",
+        violations.len(),
+        violations[..violations.len().min(6)].join("\n")
+    );
+}
+
+#[test]
+fn gas_gauge_rules_never_credit_more_than_the_volume_rules_they_replaced() {
+    // #576 A18(e). A gauge third of a tank never holds more gas than a third of its gas (the top
+    // of a tank holds less per bar), so switching every rule to the gauge may only ever SHRINK the
+    // budget. Per cylinder, against the volume rules (conservative cap applied to the litres as
+    // before): thirds = D(basis)/3 less the gas in the top `margin` bar of the basis; Half-Minus
+    // back gas = frac x D(basis); a counted Half-Minus stage = D(basis) - D((basis + reserve)/2).
+    // Bit-equal or below; identical below the Z == 1 knee, where gas is linear in pressure.
+    let d = |p: f64, v: f64| deliverable_gas(p, v, f64::INFINITY, false);
+    let mut violations = Vec::new();
+    for rated in [96.0, 150.0, 207.0, 232.0, 300.0_f64] {
+        for fill in [
+            20.0_f64, 60.0, 90.0, 96.0, 120.0, 180.0, 207.0, 232.0, 250.0, 300.0, 350.0, 450.0,
+        ] {
+            for conservative in [true, false] {
+                let basis = if conservative { fill.min(rated) } else { fill };
+                let stage = Cylinder::new(
+                    11.0,
+                    rated,
+                    fill,
+                    TankMaterial::Aluminium,
+                    CylRole::Stage,
+                    None,
+                )
+                .unwrap();
+                let bg = Cylinder {
+                    role: CylRole::BackGas,
+                    water_volume_l: 12.0,
+                    ..stage.clone()
+                };
+                let profile = |margin: f64, reserve: f64| ReserveProfile {
+                    all_thirds_safety_margin_bar: margin,
+                    stage_reserve_bar: reserve,
+                    ..ReserveProfile::default()
+                };
+                let mut check = |what: &str, new: f64, old: f64| {
+                    let tol = 1e-9 * old.abs().max(1.0);
+                    if new > old + tol || (fill <= 96.0 && (new - old).abs() > 1e-6) {
+                        violations.push(format!(
+                            "{what} rated {rated} fill {fill} cons {conservative}: gauge rule \
+                             {new} L, volume rule {old} L"
+                        ));
+                    }
+                };
+                for margin in [0.0, 10.0, 50.0] {
+                    let new = penetration_budget(
+                        std::slice::from_ref(&bg),
+                        ReservePreset::AllThirds,
+                        &profile(margin, 30.0),
+                        conservative,
+                    );
+                    let old = (d(basis, 12.0) / 3.0
+                        - (d(basis, 12.0) - d((basis - margin).max(0.0), 12.0)))
+                    .max(0.0);
+                    check(&format!("thirds margin {margin}"), new, old);
+                }
+                for reserve in [0.0, 30.0, 100.0_f64] {
+                    let new = penetration_budget(
+                        &[bg.clone(), stage.clone()],
+                        ReservePreset::OneStage,
+                        &profile(0.0, reserve),
+                        conservative,
+                    );
+                    let drop = (0.5 * (basis + reserve)).clamp(0.0, basis);
+                    let old = 0.25 * d(basis, 12.0) + (d(basis, 11.0) - d(drop, 11.0)).max(0.0);
+                    check(&format!("one stage reserve {reserve}"), new, old);
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "{} violations, first:\n{}",
+        violations.len(),
+        violations[..violations.len().min(6)].join("\n")
+    );
+}
+
+#[test]
+fn gas_overfilled_half_minus_stage_drops_on_the_real_gauge() {
+    // #576 NF-AN1-1 (settled by A18(e)). An 11 L stage rated 207 bar but filled to 230, Half
+    // Minus with a 30-bar reserve under the conservative cap: the stage's IN half is
+    // (207 - 30) / 2 = 88.5 bar of its gauge, so it is dropped at 230 - 88.5 = 141.5 bar, and the
+    // map credits the gas between 230 and 141.5. The capped scale showed 118.5 bar, while the real
+    // gauge at the drop station read about 138 bar.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        12.0,
+        232.0,
+        90.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = Cylinder::new(
+        11.0,
+        207.0,
+        230.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    let f = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg, stage], &cfg);
+    let stage_in =
+        deliverable_gas(230.0, 11.0, 207.0, false) - deliverable_gas(141.5, 11.0, 207.0, false);
+    // Back gas at 90 bar (Z == 1): a quarter of the gauge is 22.5 bar x 12 L = 270 L.
+    assert!(
+        (f.stage_drop_bars[0] - 141.5).abs() < 1e-9,
+        "drop {:.2} bar, the gauge rule says 141.5",
+        f.stage_drop_bars[0]
+    );
+    assert!((f.cylinder_usable_bars[1] - 88.5).abs() < 1e-9);
+    assert!(
+        (f.budget_litres - 270.0 - stage_in).abs() < 1e-6,
+        "budget {:.2} L, back gas 270 L + stage {stage_in:.2} L",
+        f.budget_litres
+    );
 }
 
 #[test]
@@ -1019,7 +1308,10 @@ fn gas_all_thirds_safety_margin_shrinks_budget_and_column() {
 }
 
 #[test]
-fn penetration_budget_all_thirds_is_usable_over_three() {
+fn penetration_budget_all_thirds_is_a_third_of_the_gauge() {
+    // #576 A18(e): thirds of the GAUGE. An 11.1 L tank at 207 bar turns at 138 bar and is credited
+    // the gas between 207 and 138 - less than a third of its gas, since the top of a tank holds
+    // less gas per bar (684.28 L against 733.02 L).
     let bg = Cylinder::new(
         11.1,
         207.0,
@@ -1036,7 +1328,11 @@ fn penetration_budget_all_thirds_is_usable_over_three() {
         &ReserveProfile::default(),
         true,
     );
-    assert!((budget - usable_oc_gas(&cyls, true) / 3.0).abs() < 1e-6);
+    let window =
+        deliverable_gas(207.0, 11.1, 207.0, false) - deliverable_gas(138.0, 11.1, 207.0, false);
+    assert!((budget - window).abs() < 1e-6);
+    assert!((budget - 684.28).abs() < 0.01);
+    assert!(budget < usable_oc_gas(&cyls, true) / 3.0);
 }
 
 #[test]
@@ -1890,12 +2186,13 @@ fn gas_reach_field_gauges_use_effective_strategy_and_conservative_cap() {
         &[bg(), bg(), stage.clone()],
         &cfg,
     );
-    // avg start 90 × (1 - ¼) = 67.5 (Z=1 so usable=90·24; drop = ¼·90·24/24 = 22.5 → 90-22.5).
+    // Turn at a quarter of the back-gas gauge: 90 - 90/4 = 67.5.
     assert!((f.backgas_turn_bar.unwrap() - 67.5).abs() < 1e-6);
-    // Stage drop uses the CONSERVATIVE-capped basis min(230,207)=207 → (207+30)/2 = 118.5 (NOT
-    // (230+30)/2=130 from the raw overfill) - pins that the gauge matches the engine's drop.
+    // The stage's IN half is taken of the CONSERVATIVE-capped basis min(230,207)=207 - (207-30)/2 =
+    // 88.5 bar, not (230-30)/2 = 100 from the raw overfill - and read off its REAL gauge: dropped at
+    // 230 - 88.5 = 141.5 (#576 NF-AN1-1; the capped scale showed 118.5 while the tank read ~138).
     assert_eq!(f.stage_drop_bars.len(), 1);
-    assert!((f.stage_drop_bars[0] - 118.5).abs() < 1e-6);
+    assert!((f.stage_drop_bars[0] - 141.5).abs() < 1e-6);
 
     // TwoStage REQUESTED with only ONE stage → effective falls back to AllThirds: back-gas frac ⅓,
     // and NO stage-drop gauges (mirrors the budget/route fallback).
@@ -2651,10 +2948,11 @@ fn gas_reach_field_jump_multiplier_raises_only_jump_legs() {
 
 #[test]
 fn gas_reach_field_partial_frontier_between_interior_stations() {
-    // AllThirds budget = deliverable(250 bar, 12 L)/3 = 3000 / Z(250)≈1.0753 / 3 ≈ 929.9 L
-    // (Z-derated thirds), which sits between gas_in(station 2)=800 and gas_in(station 3)=1500 →
-    // reach {0,1,2}, turn at station 2. The budget is pinned to an INDEPENDENT hand-computed
-    // literal (catches a wrong /3, a dropped Z, or a bad fit), not re-derived from the function.
+    // AllThirds budget = the gas between 250 and 166.67 bar (a third of the gauge, #576 A18(e)) on
+    // 12 L = 12 x (250 / Z(250)=1.07525 - 166.67 / Z(166.67)=1.02294) ≈ 834.9 L (Z-derated), which
+    // sits between gas_in(station 2)=800 and gas_in(station 3)=1500 → reach {0,1,2}, turn at
+    // station 2. The budget is pinned to an INDEPENDENT hand-computed literal (catches a wrong /3,
+    // a dropped Z, or a bad fit), not re-derived from the function.
     let (project, origin) = linear_descent_project();
     let sec = origin.section_id;
     let diver = Diver::new(20.0, None).unwrap();
@@ -2669,7 +2967,7 @@ fn gas_reach_field_partial_frontier_between_interior_stations() {
     .unwrap();
     let field =
         project.compute_gas_reach_field(Some(&origin), None, &diver, &[cyl], &GasConfig::default());
-    assert!((field.budget_litres - 929.9).abs() < 1.0);
+    assert!((field.budget_litres - 834.9).abs() < 1.0);
     assert_eq!(field.reachable.iter().filter(|&&r| r).count(), 3); // stations 0,1,2
     let idx = |sr| field.station_refs.iter().position(|r| *r == sr).unwrap();
     assert!(field.reachable[idx(StationRef::new(sec, 2))]);

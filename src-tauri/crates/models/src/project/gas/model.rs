@@ -271,9 +271,10 @@ pub struct RouteProfilePoint {
 ///
 /// `backgas_turn_bar` and `stage_drop_bars` are the **readout gauges**, computed here (the single
 /// source of truth) so the UI never re-derives the budget math and drifts from the reachable
-/// overlay: the back-gas turn pressure under the effective strategy's fraction, and each counted
-/// stage's Half-Minus drop pressure. Both honour the conservative cap + normalized reserve +
-/// stage-count fallback. `backgas_turn_bar` is `None` when the rig has no back gas;
+/// overlay: the back-gas turn pressure under the effective strategy's share of the gauge, and each
+/// counted stage's drop pressure. Every rule is a gauge rule (#576), and the budget credits exactly
+/// the gas between each cylinder's real fill and its turn or drop pressure, so gauge and map agree.
+/// Both honour the conservative cap + normalized reserve + stage-count fallback. `backgas_turn_bar` is `None` when the rig has no back gas;
 /// `stage_drop_bars` is empty for All-thirds / a fell-back staged strategy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct GasReachField {
@@ -318,9 +319,10 @@ pub struct GasReachField {
     /// Per-cylinder penetration allowance (bar) the engine used, aligned 1:1 with the INPUT
     /// cylinder order (disabled tanks and non-budget roles are `0.0`) so the table can show a
     /// "usable gas" value per row (#245). Under the reserve presets these are engine-COMPUTED
-    /// (`fill - turn/drop`): a back-gas tank shows its strategy fraction of usable, a counted
-    /// stage its Half-Minus IN half; under **Free** they echo the diver's clamped input. The
-    /// single source of truth for the column, so it can never drift from the budget/gauges.
+    /// (`fill - turn/drop`): a back-gas tank shows its strategy share of the gauge, a counted
+    /// stage its Half-Minus IN half; under **Free** they echo the diver's clamped input. The budget
+    /// credits exactly the gas between each row's fill and `fill - usable`, so the column can never
+    /// drift from the budget/gauges.
     pub cylinder_usable_bars: Vec<f64>,
     /// Swum line length of the planned route (metres): the one-way penetration distance, summed as
     /// 3-D slope segments over the route's real shot legs (zero-distance merge/closure ties

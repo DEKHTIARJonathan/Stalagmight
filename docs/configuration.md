@@ -254,7 +254,7 @@ survey_rmv_multiplier = 1.0         # Task-loading RMV bump on the survey-in leg
 stressed_rmv_multiplier = 1.5       # Stressed-RMV multiplier for bailout / contingency
 jump_rmv_multiplier = 1.5           # Extra RMV on jump legs; stacks multiplicatively with survey_rmv_multiplier
 include_reference_legs = false      # Escape hatch: treat reference shots as swimmable again
-conservative_tank_gas = true        # "Call it an 80" derate instead of precise fill x volume x Z
+conservative_tank_gas = true        # "Call it an 80": strategy shares of min(fill, rated), not of an overfill
 # survey_speed_m_per_min (unset = same speed both ways) and the dpv scooter
 # profile (unset = no scooter) are optional; see `src-tauri/crates/models/src/config/gas.rs`.
 
