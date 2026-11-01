@@ -315,6 +315,12 @@ function MapCanvas() {
   const scaleControlAddedRef = useRef<boolean>(false);
   const [zoomBox, setZoomBox] = useState<ZoomBoxState>({ start: null, end: null });
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
+  // Ref mirror of `moveDrag` for the SurveyLayer callbacks, which must stay
+  // render-stable (#430) and so cannot close over the state itself.
+  const moveDragRef = useRef<MoveDragState | null>(null);
+  useLayoutEffect(() => {
+    moveDragRef.current = moveDrag;
+  }, [moveDrag]);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
   // True briefly after placement confirmation to suppress the spurious MapLibre click
@@ -1125,6 +1131,16 @@ function MapCanvas() {
       },
       onContextMenu: (target, event) => {
         noteMapInteraction();
+        // With a move ghost in flight a right-click is inert: the feature menu
+        // offers Delete / Merge / Add Shot, and any of them would change the
+        // survey under the ref the ghost was picked up against. The native menu
+        // stays suppressed; Escape cancels and a left still click drops. The
+        // touch long-press is gated on the same ghost (SurveyLayer's
+        // `modalInteractionActive`).
+        if (moveDragRef.current) {
+          event.originalEvent.preventDefault();
+          return;
+        }
         baseToolCallbacks.onContextMenu?.(target, event);
       },
       onHiddenStationClick: () => {

@@ -120,7 +120,8 @@ drop from a pan is not who owns the button but how far the press travelled:
 
 | Gesture while carrying | What happens |
 |------------------------|--------------|
-| Press and release under `CUSTOM_PAN_CLAIM_PX` (3px) of travel - a **click** | The drop: commit, or the snap-merge dialog |
+| Primary-button press and release under `CUSTOM_PAN_CLAIM_PX` (3px) of travel - a **click** | The drop: commit, or the snap-merge dialog |
+| A still right- or middle-click | Nothing: the ghost stays in flight. Only the primary button drops, and a right-click opens no context menu while carrying, on a station or shot or not (and no native browser menu) |
 | Press, travel, release - a **drag** | MapLibre pans; nothing commits, the ghost stays in flight and keeps following the cursor |
 | Release outside the canvas | Never reaches `handlePointerUp`; the drag-release forwarder ends MapLibre's pan, the ghost survives |
 | Escape | Cancels the ghost outright (the `moveDrag` Escape effect), pan or no pan |
