@@ -446,6 +446,8 @@ pub fn convert_walls_to_import_configs(
     for survey in &kept {
         let split = split_into_chains(&survey.vectors, |v| (v.from.as_str(), v.to.as_str()));
         let multi = split.len() > 1;
+        // To-typed legs whose section is dropped below for want of a next leg.
+        let mut stranded_lruds = 0usize;
         for (chain_idx, chain) in split.iter().enumerate() {
             if chain.is_empty() {
                 continue;
@@ -491,7 +493,13 @@ pub fn convert_walls_to_import_configs(
                 // belongs to its TO station - i.e. the FROM of the NEXT shot - so
                 // it is adopted from the previous leg in the chain. (A To survey
                 // thus shifts each cross-section one shot forward; the final To
-                // station's LRUD has no outgoing shot and is dropped.)
+                // station's LRUD has no outgoing shot and is dropped - and
+                // counted for the receipt, #576 B31.)
+                let measured =
+                    v.left.is_some() || v.right.is_some() || v.up.is_some() || v.down.is_some();
+                if v.lrud_is_to && measured && pos + 1 == chain.len() {
+                    stranded_lruds += 1;
+                }
                 let own_lrud = if v.lrud_is_to {
                     (None, None, None, None)
                 } else {
@@ -627,6 +635,19 @@ pub fn convert_walls_to_import_configs(
                 date: survey.date,
                 azimuth_reference,
             });
+        }
+        // Same words as the Compass importer's `end_of_chain_lrud_note`.
+        let label = &survey.label;
+        match stranded_lruds {
+            0 => {}
+            1 => warnings.push(format!(
+                "Survey '{label}': 1 end-of-chain cross-section had no shot to attach to and was \
+                 dropped (the survey records LRUDs at each shot's To station)."
+            )),
+            n => warnings.push(format!(
+                "Survey '{label}': {n} end-of-chain cross-sections had no shot to attach to and \
+                 were dropped (the survey records LRUDs at each shot's To station)."
+            )),
         }
     }
 

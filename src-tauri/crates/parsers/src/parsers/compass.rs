@@ -18,7 +18,7 @@
 //!   `FromImporting` merges + loop closures;
 //! - a `.MAK` fixed station becomes a GPS zero datum (UTM → WGS84 via `proj4rs`).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
@@ -27,7 +27,8 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use compass_data::{
-    BackSightCorrectionFactors, CorrectionFactors, Datum, DeclinationMode, Project, Shot, Survey,
+    BackSightCorrectionFactors, CorrectionFactors, Datum, DeclinationMode, LRUDAssociation,
+    Project, Shot, Survey,
 };
 
 use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource};
@@ -156,6 +157,11 @@ struct CompassFileState {
     convergence: f64,
     convergence_applied: bool,
     declination_mode: DeclinationMode,
+    /// The `.MAK`'s LRUD association override: `Some(true)` puts every
+    /// survey's LRUDs at the To station (`!OT`), `Some(false)` at the From
+    /// station (`!Ot`), `None` leaves each survey's FORMAT flag in charge
+    /// (#576 B31).
+    lrud_on_to_override: Option<bool>,
 }
 
 impl Default for CompassFileState {
@@ -166,6 +172,7 @@ impl Default for CompassFileState {
             convergence: 0.0,
             convergence_applied: false,
             declination_mode: DeclinationMode::default(),
+            lrud_on_to_override: None,
         }
     }
 }
@@ -254,6 +261,7 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
             convergence: raw_state.base_location.convergence_angle,
             convergence_applied: false,
             declination_mode: DeclinationMode::default(),
+            lrud_on_to_override: None,
         };
         if let Some(fc) = &raw_state.file_convergence {
             file_state.convergence = fc.angle;
@@ -262,6 +270,11 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
         if let Some(pp) = &raw_state.project_parameters {
             file_state.declination_mode = pp.declination_mode;
             file_state.convergence_applied = pp.utm_convergence_applied;
+            // "If the flag is set to capital "O." all other methods of
+            // controlling the LRUD associations are overridden" (Compass
+            // Project Manager help, "Parameters").
+            file_state.lrud_on_to_override =
+                pp.override_lrud_association.then_some(pp.lrud_to_station);
         }
         if i == 0 {
             // Mirror the first-file state into the project-wide fields
@@ -647,6 +660,9 @@ struct SurveyCtx {
     apply_corrections: bool,
     corrections: Option<CorrectionFactors>,
     backsight_corrections: Option<BackSightCorrectionFactors>,
+    /// Each row's LRUDs were measured at its TO station, not its FROM (#576
+    /// B31): the FORMAT's last character is `T`, or the `.MAK` overrides it.
+    lrud_on_to: bool,
 }
 
 /// Resolved georeference anchor for the project.
@@ -703,6 +719,93 @@ fn lrud_meters(raw: f64) -> Option<f64> {
     } else {
         Some(value)
     }
+}
+
+/// A cross-section in meters; `None` for a dimension that was not measured.
+#[derive(Clone, Copy, Default)]
+struct Lrud {
+    left: Option<f64>,
+    right: Option<f64>,
+    up: Option<f64>,
+    down: Option<f64>,
+}
+
+impl Lrud {
+    fn of(shot: &Shot) -> Self {
+        Self {
+            left: lrud_meters(shot.left),
+            right: lrud_meters(shot.right),
+            up: lrud_meters(shot.up),
+            down: lrud_meters(shot.down),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.left.is_none() && self.right.is_none() && self.up.is_none() && self.down.is_none()
+    }
+}
+
+/// A To-associated survey's cross-sections, by the station they were measured
+/// at (#576 B31).
+///
+/// A shot stores the cross-section of its FROM station. When a survey records
+/// each row's LRUDs at the row's TO station, that section belongs on the shot
+/// that LEAVES the station: the next shot in the chain, or - for a chain that
+/// starts there, such as a branch - the first row of the survey that ends
+/// there. A section measured at a station no shot of the survey leaves has
+/// nowhere to go and is counted for the receipt.
+struct ToStationLruds<'a> {
+    /// The first kept row ending at each station that measured a section.
+    by_station: HashMap<&'a str, Lrud>,
+    /// Sections measured at a station no kept shot leaves.
+    stranded: usize,
+}
+
+impl<'a> ToStationLruds<'a> {
+    fn new(shots: &[&'a Shot]) -> Self {
+        let starts: HashSet<&str> = shots.iter().map(|s| s.from.as_str()).collect();
+        let mut by_station: HashMap<&'a str, Lrud> = HashMap::new();
+        let mut stranded = 0;
+        for shot in shots {
+            let lrud = Lrud::of(shot);
+            if lrud.is_empty() {
+                continue;
+            }
+            if starts.contains(shot.to.as_str()) {
+                by_station.entry(shot.to.as_str()).or_insert(lrud);
+            } else {
+                stranded += 1;
+            }
+        }
+        Self {
+            by_station,
+            stranded,
+        }
+    }
+
+    /// The section at `station`, for a shot leaving it; `previous` is the row
+    /// ahead of that shot in its chain (which ends at `station`), if any.
+    fn at(&self, station: &str, previous: Option<&Shot>) -> Lrud {
+        previous
+            .map(Lrud::of)
+            .filter(|lrud| !lrud.is_empty())
+            .or_else(|| self.by_station.get(station).copied())
+            .unwrap_or_default()
+    }
+}
+
+/// The receipt line for `stranded` To-station cross-sections of one survey
+/// that no shot could carry (#576 B31), or `None` when there were none. The
+/// Walls importer words its own line the same way.
+fn end_of_chain_lrud_note(survey: &str, stranded: usize) -> Option<String> {
+    let counted = match stranded {
+        0 => return None,
+        1 => "1 end-of-chain cross-section had no shot to attach to and was dropped".to_string(),
+        n => format!("{n} end-of-chain cross-sections had no shot to attach to and were dropped"),
+    };
+    Some(format!(
+        "Survey '{survey}': {counted} (the survey records LRUDs at each shot's To station)."
+    ))
 }
 
 /// Slope length (m) of a shot with the survey's length correction applied; 0.0
@@ -929,6 +1032,7 @@ fn elevation_gain(length_m: f64, inclination_deg: f64) -> f64 {
 fn shot_to_shot_data(
     shot: &Shot,
     ctx: &SurveyCtx,
+    lrud: Lrud,
     depth_in: f64,
     depth_out: f64,
     is_virtual: bool,
@@ -944,10 +1048,10 @@ fn shot_to_shot_data(
         depth_out,
         pitch_in: readings.pitch_in,
         pitch_out: readings.pitch_out,
-        left: lrud_meters(shot.left),
-        right: lrud_meters(shot.right),
-        up: lrud_meters(shot.up),
-        down: lrud_meters(shot.down),
+        left: lrud.left,
+        right: lrud.right,
+        up: lrud.up,
+        down: lrud.down,
         comment: shot.comment.as_deref().and_then(non_empty),
         // Compass `X` (exclude-all) marks a leg the surveyor pulled out of
         // the computed cave. The chain classifier decides Jump vs Reference
@@ -1038,11 +1142,20 @@ fn build_ctx(
             survey.name, convergence_angle
         ));
     }
+    // FORMAT `T` = "To Station" (Compass "Survey Data File Format"); the
+    // 11/12-character formats carry no flag and mean From.
+    let lrud_on_to = file_state.lrud_on_to_override.unwrap_or_else(|| {
+        matches!(
+            survey.parameters.format_parameters.lrud_association(),
+            Some(LRUDAssociation::ToStation)
+        )
+    });
     SurveyCtx {
         azimuth_reference,
         apply_corrections: opts.apply_corrections,
         corrections,
         backsight_corrections,
+        lrud_on_to,
     }
 }
 
@@ -1462,6 +1575,16 @@ pub fn convert_compass_to_import_configs(
     }
     let mut chains: Vec<PendingChain> = Vec::new();
     for kept_survey in &kept {
+        let to_station_lruds = kept_survey
+            .ctx
+            .lrud_on_to
+            .then(|| ToStationLruds::new(&kept_survey.shots));
+        if let Some(lruds) = &to_station_lruds {
+            warnings.extend(end_of_chain_lrud_note(
+                &kept_survey.survey.name,
+                lruds.stranded,
+            ));
+        }
         let split = split_into_chains(&kept_survey.shots);
         let multi = split.len() > 1;
         for (chain_idx, chain) in split.iter().enumerate() {
@@ -1475,12 +1598,20 @@ pub fn convert_compass_to_import_configs(
                 names.push(kept_survey.shots[idx].to.clone());
             }
             let mut shots_data = Vec::with_capacity(chain.len());
-            for &idx in chain {
+            for (pos, &idx) in chain.iter().enumerate() {
                 let shot = kept_survey.shots[idx];
                 let flags = parse_flags(shot.flags.as_ref());
+                let lrud = match &to_station_lruds {
+                    Some(lruds) => lruds.at(
+                        &shot.from,
+                        pos.checked_sub(1).map(|p| kept_survey.shots[chain[p]]),
+                    ),
+                    None => Lrud::of(shot),
+                };
                 shots_data.push(shot_to_shot_data(
                     shot,
                     &kept_survey.ctx,
+                    lrud,
                     depth_of(&shot.from),
                     depth_of(&shot.to),
                     flags.exclude_all,
@@ -1645,8 +1776,7 @@ pub fn convert_compass_to_import_configs(
         }
     }
     let mut closures: Vec<ImportClosure> = Vec::new();
-    let mut closure_keys: std::collections::HashSet<(u32, u32, u32, u32)> =
-        std::collections::HashSet::new();
+    let mut closure_keys: HashSet<(u32, u32, u32, u32)> = HashSet::new();
     for (ci, chain) in chains.iter().enumerate() {
         let merge_st = placement_merge_station[ci];
         let parent_section = placement_parent[ci].map(|p| chains[p].section_index);
@@ -3557,6 +3687,159 @@ mod tests {
         assert!(
             (drop - mean).abs() < 1e-6,
             "the leg descends by the 30 deg mean, {mean:.3} m, got {drop:+.3} m"
+        );
+    }
+
+    /// The four LRUDs of a shot, in meters, rounded for printing.
+    fn lrud_of(shot: &ShotData) -> [Option<f64>; 4] {
+        [shot.left, shot.right, shot.up, shot.down]
+            .map(|v| v.map(|m| (m * 10_000.0).round() / 10_000.0))
+    }
+
+    /// The receipt line for `n` LRUDs a To-associated survey `A` could not place.
+    fn end_of_chain_line(n: usize) -> String {
+        if n == 1 {
+            "Survey 'A': 1 end-of-chain cross-section had no shot to attach to and was dropped \
+             (the survey records LRUDs at each shot's To station)."
+                .to_string()
+        } else {
+            format!(
+                "Survey 'A': {n} end-of-chain cross-sections had no shot to attach to and were \
+                 dropped (the survey records LRUDs at each shot's To station)."
+            )
+        }
+    }
+
+    /// #576 B31: a FORMAT ending in `T` records each row's LRUD at the shot's
+    /// TO station (Compass "Survey Data File Format": "LRUD Association:
+    /// F=From Station, T=To Station"; Survex `compass_lrud_on_to`). A shot
+    /// carries the LRUD of its FROM station, so a row's cross-section belongs
+    /// on the NEXT shot - it used to land one station early.
+    #[test]
+    fn a_to_associated_survey_puts_each_lrud_one_station_later() {
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADNT",
+            &[
+                "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00",
+                "A2 A3 10.00 90.00 0.00 5.00 5.00 5.00 5.00",
+            ],
+        );
+        let shots = all_shots(&configs);
+        for (i, s) in shots.iter().enumerate() {
+            println!("To survey shot {i}: LRUD (L, R, U, D) {:?}", lrud_of(s));
+        }
+        for w in &warnings {
+            println!("  warning: {w}");
+        }
+        let one_foot = Some(0.3048);
+        assert_eq!(lrud_of(shots[0]), [None; 4], "A1 has no measured section");
+        assert_eq!(
+            lrud_of(shots[1]),
+            [one_foot; 4],
+            "the 1 ft section measured at A2 rides on A2 -> A3"
+        );
+        assert!(
+            warnings.contains(&end_of_chain_line(1)),
+            "the 5 ft section at A3 has no shot from A3: {warnings:?}"
+        );
+
+        // The default (From) association is untouched.
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADNF",
+            &[
+                "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00",
+                "A2 A3 10.00 90.00 0.00 5.00 5.00 5.00 5.00",
+            ],
+        );
+        let shots = all_shots(&configs);
+        assert_eq!(lrud_of(shots[0]), [one_foot; 4]);
+        assert_eq!(lrud_of(shots[1]), [Some(1.524); 4]);
+        assert!(warnings.iter().all(|w| !w.contains("cross-section")));
+    }
+
+    /// #576 B31: a To LRUD belongs to a STATION, so a chain that starts at a
+    /// station another row ended at (a branch) picks up that station's
+    /// section; only a section whose station starts no shot at all is lost.
+    #[test]
+    fn a_to_associated_lrud_reaches_a_branch_that_starts_at_its_station() {
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADNT",
+            &[
+                "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00",
+                "A2 A3 10.00 90.00 0.00 2.00 2.00 2.00 2.00",
+                "A2 B1 10.00 0.00 0.00 3.00 3.00 3.00 3.00",
+                "B1 B2 10.00 0.00 0.00 4.00 4.00 4.00 4.00",
+            ],
+        );
+        assert_eq!(configs.len(), 2, "premise: the branch is its own section");
+        let shots = all_shots(&configs);
+        for (i, s) in shots.iter().enumerate() {
+            println!("To survey shot {i}: LRUD {:?}", lrud_of(s));
+        }
+        let ft = |n: f64| [Some((n * FEET_TO_METERS * 10_000.0).round() / 10_000.0); 4];
+        // Chain 1: A1 -> A2 -> A3; chain 2 (branch): A2 -> B1 -> B2.
+        assert_eq!(lrud_of(shots[0]), [None; 4], "A1 -> A2");
+        assert_eq!(lrud_of(shots[1]), ft(1.0), "A2 -> A3 carries A2's section");
+        assert_eq!(
+            lrud_of(shots[2]),
+            ft(1.0),
+            "A2 -> B1 carries A2's section too"
+        );
+        assert_eq!(lrud_of(shots[3]), ft(3.0), "B1 -> B2 carries B1's section");
+        assert!(
+            warnings.contains(&end_of_chain_line(2)),
+            "A3's and B2's sections have no shot: {warnings:?}"
+        );
+    }
+
+    /// #576 B31: the `.MAK` can override every survey's association (`!O` with
+    /// `T` or `t` - Compass Project Manager help, "Parameters": "If the flag is
+    /// set to capital "O." all other methods of controlling the LRUD
+    /// associations are overridden").
+    #[test]
+    fn a_mak_lrud_override_beats_the_survey_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = [
+            "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00",
+            "A2 A3 10.00 90.00 0.00 5.00 5.00 5.00 5.00",
+        ];
+        std::fs::write(
+            dir.path().join("from.dat"),
+            synthetic_survey_text("A", "DDDDLRUDLADNF", &rows),
+        )
+        .unwrap();
+        let shots_for = |flags: &str| {
+            let mak = dir.path().join(format!("p{flags}.mak"));
+            std::fs::write(
+                &mak,
+                format!(
+                    "@100.0,200.0,300.0,13,0.5;\r\n&North American 1983;\r\n!{flags};\r\n\
+                     #from.dat;\r\n"
+                ),
+            )
+            .unwrap();
+            let parsed = parse_compass(&mak).unwrap();
+            let (configs, _, _) =
+                convert_compass_to_import_configs(&parsed, &CompassImportOptions::default())
+                    .unwrap();
+            all_shots(&configs)
+                .iter()
+                .map(|s| lrud_of(s))
+                .collect::<Vec<_>>()
+        };
+        let overridden = shots_for("OT");
+        println!("!OT on an F survey: {overridden:?}");
+        assert_eq!(
+            overridden[0], [None; 4],
+            "!OT puts every LRUD at the To station"
+        );
+        assert_eq!(overridden[1], [Some(0.3048); 4]);
+        let not_overridden = shots_for("oT");
+        println!("!oT on an F survey: {not_overridden:?}");
+        assert_eq!(
+            not_overridden[0],
+            [Some(0.3048); 4],
+            "without O the survey's own F applies"
         );
     }
 }

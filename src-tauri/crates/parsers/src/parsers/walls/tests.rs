@@ -2932,3 +2932,36 @@ fn a_utf16_srv_is_refused_by_name() {
         "the error must name the encoding, got {err:?}"
     );
 }
+
+#[test]
+fn lrud_to_end_of_chain_cross_section_is_reported() {
+    // #576 B31: with `LRUD=To` the last leg's section is measured at a station
+    // no shot leaves, so the model has nowhere to put it. It is dropped - and
+    // the receipt now says so, in the same words as the Compass importer.
+    let srv = "#UNITS meters order=DAV LRUD=To\n\
+               A B 10 90 0 <1,2,3,4>\n\
+               B C 10 90 0 <5,6,7,8>\n";
+    let (configs, _c, warnings) = convert_one(parse_srv(srv));
+    println!("warnings: {warnings:?}");
+    assert_eq!(
+        configs[0].shots[1].left,
+        Some(1.0),
+        "premise: B's section moved"
+    );
+    assert!(
+        warnings.iter().any(|w| w
+            == "Survey 'Test Survey': 1 end-of-chain cross-section had no shot to attach to \
+                and was dropped (the survey records LRUDs at each shot's To station)."),
+        "{warnings:?}"
+    );
+
+    // A From survey loses nothing and says nothing.
+    let srv = "#UNITS meters order=DAV\n\
+               A B 10 90 0 <1,2,3,4>\n\
+               B C 10 90 0 <5,6,7,8>\n";
+    let (_configs, _c, warnings) = convert_one(parse_srv(srv));
+    assert!(
+        warnings.iter().all(|w| !w.contains("cross-section")),
+        "{warnings:?}"
+    );
+}

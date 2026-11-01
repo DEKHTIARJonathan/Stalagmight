@@ -16,7 +16,10 @@ Changes from upstream v0.0.7:
   the survey format) so backsight columns aren't mis-read as comment text; added
   `split_flags_and_comment`.
 - **`SurveyFormat`**: added public accessors `has_backsights()`, `length_units()`,
-  `inclination_units()` so consumers can interpret units.
+  `inclination_units()` so consumers can interpret units, and
+  `lrud_association()` (with `LRUDAssociation` re-exported from the crate root)
+  so a consumer can tell a survey that records LRUDs at each shot's To station
+  from the default From.
 - **`project::Station`**: `name` / `location` fields made public so consumers can
   resolve georeference anchors from the `.MAK` link stations.
 - **`DatFile::load`**: read `.DAT` files as Windows-1252/latin1 instead of UTF-8,
