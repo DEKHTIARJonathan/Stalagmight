@@ -1398,8 +1398,9 @@ export function parseWhat3words(input: string): GpsParseResult | GpsParseError {
  * A `q=lat,lon(label)` query is the shared pin and wins over the path, which
  * is then only where the map opens: Android's "pin at" form is
  * `geo:0,0?q=lat,lon(label)`. A `q=` that is a search (an address) carries no
- * coordinates, so with the 0,0 path it is rejected rather than read as 0,0.
- * Null when the input is not a geo: URI with coordinates.
+ * coordinates of the point, so it is rejected rather than read as the path:
+ * 0,0, or the spot the search map opens on. An empty `q=` leaves the path as
+ * the point, except 0,0. Null when the input is not a geo: URI with coordinates.
  */
 function parseGeoUri(
   trimmed: string,
@@ -1414,9 +1415,10 @@ function parseGeoUri(
     /^(?:\s|%20|\+)*(-?\d+\.?\d*)(?:,|%2C)(?:\s|%20|\+)*(-?\d+\.?\d*)(?:\s|%20|\+)*(?:\(|%28|$)/i
   );
   let [latText, lonText] = [path[1], path[2]];
+  const search = query !== undefined && query.replace(/\s|%20|\+/gi, '') !== '';
   if (pin?.[1] !== undefined && pin[2] !== undefined) {
     [latText, lonText] = [pin[1], pin[2]];
-  } else if (query !== undefined && parseFloat(latText) === 0 && parseFloat(lonText) === 0) {
+  } else if (search || (query !== undefined && parseFloat(latText) === 0 && parseFloat(lonText) === 0)) {
     return { message: i18n.t('validation.gps.geoQueryNotCoordinates'), original: input };
   }
   const lat = parseFloat(latText);

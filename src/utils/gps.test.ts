@@ -1297,3 +1297,16 @@ describe('the dash note only where the dash changed the reading (R5-3)', () => {
     expect(parsedOk('20.5, \u201387.3').note).toMatch(/as a minus sign/);
   });
 });
+
+describe('geo: link with a map centre and a search (R5 question b)', () => {
+  it('refuses a non-zero path with an address q=, like geo:0,0', () => {
+    expectRejected('geo:20.5,-87.3?q=Some+Place', /search/);
+    expectRejected('geo:20.5,-87.3?z=12&q=CaveA%20Entrance', /search/);
+  });
+
+  it('still reads the path with no search, and the q= pin', () => {
+    expectCoordsClose(parsedOk('geo:20.5,-87.3?q='), 20.5, -87.3);
+    expectCoordsClose(parsedOk('geo:20.5,-87.3?z=12'), 20.5, -87.3);
+    expectCoordsClose(parsedOk('geo:20.5,-87.3?q=20.51,-87.31(Pin)'), 20.51, -87.31);
+  });
+});
