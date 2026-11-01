@@ -3,6 +3,8 @@
 //! - A file from before the first public release (schema below 2) is refused
 //!   with its own load-error code and a message that says to re-import, and is
 //!   left byte-for-byte as it was.
+//! - An older file that IS supported is upgraded on open, and one copy of it as
+//!   it was is kept beside it first (`<name>.stalx.pre-v<old>.backup`).
 //!
 //! All data is synthetic: a project built in memory, saved by this build, then
 //! re-stamped as an older file. No fixture is read or written.
@@ -107,4 +109,39 @@ fn the_load_path_refuses_a_pre_release_file_with_its_own_code() {
         before,
         "a refused file is left as it was"
     );
+}
+
+/// [#576 B6-D2] The production load path upgrades an older file and keeps one
+/// copy of it, as it was, beside it - the only way back from a one-way upgrade.
+#[test]
+fn the_load_path_keeps_a_copy_of_an_older_file_before_upgrading_it() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let path = build_file(
+        temp.path(),
+        "CaveA.stalx",
+        "UPDATE project SET schema_version = 16; PRAGMA user_version = 16;",
+    );
+    let before = std::fs::read(&path).unwrap();
+
+    let state = state_with_sink();
+    let loaded = state
+        .do_load_project_full(path.clone())
+        .unwrap_or_else(|e| panic!("a supported older file must open: {e:?}"));
+    assert_eq!(loaded.project.sections[0].shots.len(), 2);
+
+    let copy = temp.path().join("CaveA.stalx.pre-v16.backup");
+    let kept = std::fs::read(&copy).unwrap_or_default();
+    println!(
+        "copy {:?}: {} bytes, identical to the file before the upgrade: {}",
+        copy.file_name().unwrap(),
+        kept.len(),
+        kept == before
+    );
+    assert!(kept == before, "the copy is the file exactly as it was");
+    let stamped: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert!(stamped > 16, "and the file itself was upgraded");
 }

@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use anyhow::Result;
-use rusqlite::{params, Connection, DatabaseName};
+use rusqlite::{params, Connection, DatabaseName, Transaction, TransactionBehavior};
 
 use crate::models::FEATURE_ID_STRIDE;
 
@@ -375,20 +376,9 @@ impl Database {
         if !has_last_edit_at_column {
             self.conn
                 .execute("ALTER TABLE speleo_link ADD COLUMN last_edit_at TEXT", [])?;
-            // Backfill (#197 review): a row already dirtied under v9 has
-            // has_unpushed_edits=1 but no last_edit_at. Without a timestamp,
-            // edits_captured_by_push(None, push_start) is false, so a confirmed push
-            // could NEVER clear that legacy dirty bit - the project would show
-            // un-pushed edits forever and re-push a no-op on every Done. The edit
-            // demonstrably predates any future push, so stamp the Unix epoch
-            // (guaranteed <= any push-start) and let the next confirmed push clear it.
-            // Fresh v10 rows stamp last_edit_at at edit time, so this only ever
-            // touches a pre-existing dirty row during the one-time v9→v10 migration.
-            self.conn.execute(
-                "UPDATE speleo_link SET last_edit_at = '1970-01-01T00:00:00+00:00' \
-                 WHERE has_unpushed_edits = 1 AND last_edit_at IS NULL",
-                [],
-            )?;
+            // The backfill also runs from the `current < 10` arm of
+            // `ensure_schema_version`, so it no longer depends on this column add.
+            Self::backfill_legacy_dirty_last_edit_at(&self.conn)?;
             tracing::info!("Added last_edit_at column to speleo_link table (schema v10)");
         }
 
@@ -525,6 +515,33 @@ impl Database {
         }
 
         tracing::debug!("Schema migration complete");
+        Ok(())
+    }
+
+    /// Stamp the Unix epoch into `last_edit_at` of a speleo_link row dirtied
+    /// before v10 (schema v9 to v10).
+    ///
+    /// (#197 review) A row already dirtied under v9 has has_unpushed_edits=1 but
+    /// no last_edit_at. Without a timestamp, edits_captured_by_push(None,
+    /// push_start) is false, so a confirmed push could NEVER clear that legacy
+    /// dirty bit - the project would show un-pushed edits forever and re-push a
+    /// no-op on every Done. The edit demonstrably predates any future push, so
+    /// stamp the Unix epoch (guaranteed <= any push-start) and let the next
+    /// confirmed push clear it. Fresh v10 rows stamp last_edit_at at edit time.
+    ///
+    /// [#576 B6] Called from BOTH the column add in `migrate_schema` and the
+    /// version-gated `current < 10` arm. It used to run only when the column was
+    /// absent, and the ALTER and this UPDATE committed separately, so a crash
+    /// between them left the column present, the backfill unrun and the stamp
+    /// still 9 - and no later open ever ran it. A dirty row with no timestamp in
+    /// a file below v10 can only be a v9 edit, so re-running it there is exact,
+    /// and idempotent (`last_edit_at IS NULL`).
+    fn backfill_legacy_dirty_last_edit_at(conn: &Connection) -> Result<()> {
+        conn.execute(
+            "UPDATE speleo_link SET last_edit_at = '1970-01-01T00:00:00+00:00' \
+             WHERE has_unpushed_edits = 1 AND last_edit_at IS NULL",
+            [],
+        )?;
         Ok(())
     }
 
@@ -800,12 +817,16 @@ impl Database {
     /// Existing TEXT data is CAST to BLOB; on read, `decompress_json_under` detects
     /// whether content is gzip-compressed or plain UTF-8, so old entries remain
     /// readable without re-encoding.
+    ///
+    /// [#576 B6] No transaction and no `PRAGMA foreign_keys` toggle of its own any
+    /// more: it runs inside the one transaction `ensure_schema_version` wraps the
+    /// whole chain in (where the pragma would be a no-op anyway), and nothing has a
+    /// foreign key into the undo tables, so dropping and renaming them is safe with
+    /// enforcement on.
     pub(super) fn migrate_undo_redo_to_blob(&self) -> Result<()> {
         tracing::info!("Migrating undo/redo tables to BLOB columns (v2→v3)");
 
-        self.conn.execute("PRAGMA foreign_keys = OFF;", [])?;
-        let tx = self.conn.unchecked_transaction()?;
-
+        let tx = &self.conn;
         for table in &["undo_stack", "redo_stack"] {
             let has_table: bool = tx
                 .query_row(
@@ -854,8 +875,6 @@ impl Database {
             tracing::info!("Migrated {table} to BLOB columns");
         }
 
-        tx.commit()?;
-        self.enable_foreign_keys()?;
         Ok(())
     }
 
@@ -1313,6 +1332,26 @@ impl Database {
             return Ok(());
         }
 
+        // [#576 B6] ONE transaction for the whole chain and its stamp, so an
+        // upgrade lands completely or not at all. Every step used to commit on
+        // its own (autocommit, or an arm-local transaction) and the stamp after
+        // them, so a crash or an arm failing part-way left a half-migrated file:
+        // columns an earlier step had added, the stamp still old. `user_version`
+        // is transactional in SQLite, so it commits with the steps. IMMEDIATE
+        // takes the write lock up front: nothing else can write the file between
+        // the copy below and the first migration write, and on media that cannot
+        // be written this fails before any step runs, exactly as the first write
+        // used to. Dropped on an error, which rolls everything back.
+        let chain = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+
+        // [#576 B6-D2] Keep one copy of the file as it was before this upgrade,
+        // before the first change. Not for an unstamped file whose row claims the
+        // current version or a newer one: nothing is stamped there (see the end
+        // of this function), so it is not an upgrade.
+        if !(claimed_only && current >= SCHEMA_VERSION) {
+            self.keep_pre_upgrade_copy(current)?;
+        }
+
         if current > SCHEMA_VERSION {
             // Only reachable with `claimed_only`: a real stamp above
             // SCHEMA_VERSION returned above. The row's word is enough to skip
@@ -1334,6 +1373,9 @@ impl Database {
         // or a pragma_table_info-guarded ALTER - so it is safe to reach on every
         // open of a file we decline to stamp below.
         self.migrate_schema()?;
+        if current < 10 {
+            Self::backfill_legacy_dirty_last_edit_at(&self.conn)?;
+        }
         if current < 3 {
             self.migrate_undo_redo_to_blob()?;
         }
@@ -1349,15 +1391,13 @@ impl Database {
             // alone would look already-correct on the next open: the migration
             // would decline, the invalidation would never run, and v12 would be
             // stamped over permanently stale undo history and warning
-            // dismissals. One transaction removes that window. The invalidation
-            // runs on this same connection, so its statements join this
-            // transaction.
-            let tx = self.conn.unchecked_transaction()?;
-            let flipped = Self::migrate_pitch_to_down_convention(&tx)?;
+            // dismissals. The chain's one transaction removes that window: the
+            // invalidation runs on this same connection, so its statements join
+            // it, and they commit with the flip and the stamp or not at all.
+            let flipped = Self::migrate_pitch_to_down_convention(&self.conn)?;
             if !flipped.is_empty() {
                 self.invalidate_pre_pitch_flip_state(&flipped)?;
             }
-            tx.commit()?;
         }
         if current < 13 {
             Self::migrate_is_reference_to_kind(&self.conn)?;
@@ -1373,11 +1413,9 @@ impl Database {
             self.drop_legacy_undo_history()?;
         }
         if current < 14 {
-            // One transaction only to batch the per-row UPDATEs: the callee issues one
-            // `execute` per affected shot and documents that the caller wraps them.
-            let tx = self.conn.unchecked_transaction()?;
-            Self::migrate_azimuths_to_canonical_range(&tx)?;
-            tx.commit()?;
+            // The callee issues one `execute` per affected shot and documents that
+            // the caller wraps them: the chain's transaction batches them.
+            Self::migrate_azimuths_to_canonical_range(&self.conn)?;
         }
         if current < 15 {
             // Ariane collaboration mode is gone: drop its single-row sidecar
@@ -1479,6 +1517,73 @@ impl Database {
             );
         }
 
+        chain.commit()?;
+        Ok(())
+    }
+
+    /// [#576 B6-D2] Copy the file this connection has open to
+    /// `<name>.stalx.pre-v<from_version>.backup` beside it, ONCE: when that copy
+    /// already exists it is kept as it is, so a later upgrade from the same version
+    /// never replaces the first copy of the file as it was. The recovery dialog
+    /// lists it with the other backups.
+    ///
+    /// Called inside the migration chain's IMMEDIATE transaction before its first
+    /// write, so the bytes on disk are the committed file before any upgrade step
+    /// touched them (the open's quick_check already rolled back any hot journal).
+    /// Skipped for an in-memory database and for a file with no project yet (an
+    /// empty placeholder `Database::open` is about to fill): there is nothing to
+    /// keep. A copy that cannot be written refuses the upgrade - the upgrade is
+    /// one-way, and this copy is the only way back - and leaves no partial copy.
+    fn keep_pre_upgrade_copy(&self, from_version: i32) -> Result<()> {
+        let Some(path) = self.conn.path().filter(|p| !p.is_empty()) else {
+            return Ok(());
+        };
+        if !self.has_project_data()? {
+            return Ok(());
+        }
+        let path = Path::new(path);
+        let Some(file_name) = path.file_name() else {
+            return Ok(());
+        };
+        let sibling = |suffix: &str| {
+            let mut name = file_name.to_os_string();
+            name.push(suffix);
+            path.with_file_name(name)
+        };
+        let copy = sibling(&format!(".pre-v{from_version}.backup"));
+        if copy.symlink_metadata().is_ok() {
+            tracing::info!(
+                copy = ?copy,
+                purpose = "keep one copy per upgrade",
+                "A pre-upgrade copy from this version already exists; keeping it"
+            );
+            return Ok(());
+        }
+        // Written under a name the backup listing does not offer, then renamed,
+        // so a half-written copy never shows up as a backup.
+        let partial = sibling(&format!(".pre-v{from_version}.partial"));
+        let written = std::fs::copy(path, &partial)
+            .and_then(|_| std::fs::File::open(&partial)?.sync_all())
+            .and_then(|()| std::fs::rename(&partial, &copy));
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&partial);
+            tracing::error!(
+                copy = ?copy,
+                error = %e,
+                purpose = "keep one copy per upgrade",
+                "Could not keep a copy of the project before upgrading it; not upgrading"
+            );
+            anyhow::bail!(
+                "Could not keep a copy of this project before upgrading it to the current \
+                 file format, so it was not upgraded and was left as it was: {e}"
+            );
+        }
+        tracing::info!(
+            copy = ?copy,
+            from_version,
+            purpose = "keep one copy per upgrade",
+            "Kept a copy of the project as it was before the upgrade"
+        );
         Ok(())
     }
 

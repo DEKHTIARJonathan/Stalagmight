@@ -2221,7 +2221,11 @@ interrupted save never leaves a half-written project - see [saving.md](saving.md
 The schema is versioned (`SCHEMA_VERSION` in
 `src-tauri/crates/persistence/src/persistence/sqlite.rs`) and migrated forward when an older file is
 opened, down to schema 2, the first released schema (v0.0.3): an older, pre-release
-file is refused with a message to re-import its survey. A file stamped with a NEWER schema - saved by a newer Stalagmight - is opened
+file is refused with a message to re-import its survey. An upgrade runs in one
+transaction and first keeps one copy of the file as it was,
+`<name>.stalx.pre-v<old>.backup`, which the recovery dialog offers (see
+[saving.md](saving.md#files-saved-by-an-older-version-upgraded-on-open-one-copy-kept)).
+A file stamped with a NEWER schema - saved by a newer Stalagmight - is opened
 read-only instead: nothing is migrated or written, its undo history stays in the file
 untouched, editing is blocked behind a banner ("This project was saved by a newer
 version of Stalagmight. Update to edit it."), and every save and SpeleoDB push of it

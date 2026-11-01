@@ -44,6 +44,29 @@ opens them, and asserts every table's columns equal a freshly created file's, th
 saves and reloads the migrated project. A column added to `init_schema` without the
 matching `migrate_schema` step fails it.
 
+### Files saved by an older version: upgraded on open, one copy kept
+
+Opening a file stamped below `SCHEMA_VERSION` (and at or above the floor) upgrades
+it in place, and the upgrade is one-way: several steps drop the persisted undo
+history, and v12 rewrote every pitch. So before the first change,
+`ensure_schema_version` keeps **one copy of the file as it was**, beside it, as
+`<name>.stalx.pre-v<old>.backup` (#576 B6-D2). It is never overwritten: a later
+upgrade from the same version keeps the first copy. The Restore list of the
+recovery dialog offers it with the other backups. No copy is taken of a file that
+is already current, of an empty file becoming a new project, or of an unstamped
+file whose project row claims the current version (nothing is stamped there, so it
+is not an upgrade). If the copy cannot be written, the file is not upgraded and the
+open fails with a message saying so.
+
+The whole chain - `migrate_schema`, every version arm and the stamp - runs in ONE
+`BEGIN IMMEDIATE` transaction (#576 B6), so an upgrade lands completely or not at
+all: a step that fails part-way, or a crash, leaves the file as unmigrated as it
+was, and the next open runs the chain again. The copy is taken inside that
+transaction before its first write, so nothing else can change the file in
+between. The v9 to v10 `speleo_link.last_edit_at` backfill also runs from its
+version arm, not only when the column is missing, so a file left between that
+ALTER and its backfill by a crash in an older build still gets it.
+
 ### Files saved by a newer version: open read-only
 
 A file whose `PRAGMA user_version` is ABOVE this build's `SCHEMA_VERSION` was saved
