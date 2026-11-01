@@ -26,6 +26,9 @@ use quick_xml::Writer;
 
 use crate::models::comment_split;
 use crate::models::{normalize_azimuth, Project, SectionId, Shot, StationRef};
+use crate::parsers::tml::schema::{
+    self, color_to_ariane, element as el, pitch_to_inclination, ElementName, Spelling,
+};
 
 use super::atomic::{write_atomic, write_atomic_bytes};
 use super::tml_azimuth::AzimuthExport;
@@ -34,134 +37,12 @@ use super::tml_topology::{
 };
 
 // ============================================================================
-// Element-name map (long vs. short)
+// Schema
 // ============================================================================
-
-/// Provides XML element names matching the target format.
-struct Names {
-    cave_file: &'static str,
-    cave_name: &'static str,
-    unit: &'static str,
-    use_magnetic_azimuth: &'static str,
-    first_start_absolute_elevation: &'static str,
-    data: &'static str,
-    survey_data: &'static str,
-    id: &'static str,
-    from_id: &'static str,
-    shot_type: &'static str,
-    section: &'static str,
-    azimuth: &'static str,
-    length: &'static str,
-    depth: &'static str,
-    depth_in: &'static str,
-    inclination: &'static str,
-    left: &'static str,
-    right: &'static str,
-    up: &'static str,
-    down: &'static str,
-    comment: &'static str,
-    explorer: &'static str,
-    date: &'static str,
-    color: &'static str,
-    excluded: &'static str,
-    latitude: &'static str,
-    longitude: &'static str,
-    closure_to_id: &'static str,
-    locked: &'static str,
-    name: &'static str,
-    profiletype: &'static str,
-    uuid: &'static str,
-}
-
-/// Long names (used by `.tml` ZIP files).
-const LONG: Names = Names {
-    cave_file: "CaveFile",
-    cave_name: "caveName",
-    unit: "unit",
-    use_magnetic_azimuth: "useMagneticAzimuth",
-    first_start_absolute_elevation: "firstStartAbsoluteElevation",
-    data: "Data",
-    survey_data: "SurveyData",
-    id: "ID",
-    from_id: "FromID",
-    shot_type: "Type",
-    section: "Section",
-    azimuth: "Azimut",
-    length: "Length",
-    depth: "Depth",
-    depth_in: "DepthIn",
-    inclination: "Inclination",
-    left: "Left",
-    right: "Right",
-    up: "Up",
-    down: "Down",
-    comment: "Comment",
-    explorer: "Explorer",
-    date: "Date",
-    color: "Color",
-    excluded: "Excluded",
-    latitude: "Latitude",
-    longitude: "Longitude",
-    closure_to_id: "ClosureToID",
-    locked: "Locked",
-    name: "Name",
-    profiletype: "Profiletype",
-    uuid: "UUID",
-};
-
-/// Short names (used by `.tmlu` plain-XML files).
-const SHORT: Names = Names {
-    cave_file: "CaveFile",
-    cave_name: "caveName",
-    unit: "unit",
-    use_magnetic_azimuth: "useMagneticAzimuth",
-    first_start_absolute_elevation: "firstStartAbsoluteElevation",
-    data: "Data",
-    survey_data: "SRVD",
-    id: "ID",
-    from_id: "FRID",
-    shot_type: "TY",
-    section: "SC",
-    azimuth: "AZ",
-    length: "LG",
-    depth: "DP",
-    depth_in: "DPI",
-    inclination: "INC",
-    left: "L",
-    right: "R",
-    up: "U",
-    down: "D",
-    comment: "CM",
-    explorer: "EX",
-    date: "DT",
-    color: "CL",
-    excluded: "EXC",
-    latitude: "LT",
-    longitude: "LGT",
-    closure_to_id: "CID",
-    locked: "LCK",
-    name: "NM",
-    profiletype: "PT",
-    uuid: "UU",
-};
-
-/// Convert a model pitch into Ariane's `<Inclination>`.
-///
-/// The model is +down (positive descends, matching `depth_in` / `depth_out`).
-/// Ariane is taken to be +up, like every other survey format we read: Walls
-/// and Compass both store +up in-file, and the mNemo device reports +up. That
-/// could not be confirmed from data. Across every Ariane file available, all
-/// 5,686 shots carry `Inclination` 0, because these surveys are depth-gauge
-/// based and Ariane never populates the field. So this is an inference from the
-/// surrounding ecosystem, not a measurement, and it is unobservable on real
-/// files; it only changes what we emit. `None` and `0` both export as a plain
-/// `0.0` rather than `-0.0`. Inverse of `parsers::tml::inclination_to_pitch`.
-fn pitch_to_inclination(pitch: Option<f64>) -> f64 {
-    match pitch {
-        Some(p) if p != 0.0 => -p,
-        _ => 0.0,
-    }
-}
+//
+// Element names, shot-type strings, the `DepthIn` sentinel and the inclination
+// and colour conversions all come from `parsers::tml::schema`, the one table
+// the importer reads with too (#576 B4). Nothing here spells an element.
 
 /// Pitch for a synthesized reverse leg (the reversed and pre-zero-datum
 /// duplicates Ariane needs, since it carries a single forward azimuth per shot).
@@ -192,7 +73,7 @@ struct ExportShot {
     /// direction, so it carries a real type but no identity of its own.
     uuid: Option<String>,
     from_id: i64,
-    shot_type: &'static str, // "START", "REAL", "VIRTUAL", "CLOSURE"
+    shot_type: &'static str, // one of the `schema::TYPE_*` values
     section: String,
     azimuth: f64,
     length: f64,
@@ -260,21 +141,21 @@ pub fn export_tml_for_speleodb(project: &Project, path: &Path) -> Result<()> {
 }
 
 fn export_with_profile(project: &Project, path: &Path, profile: TmlProfile) -> Result<Vec<String>> {
-    let (xml, notes) = build_xml(project, names_for_path(path), profile)?;
+    let (xml, notes) = build_xml(project, spelling_for_path(path), profile)?;
     write_output(path, &xml)?;
     Ok(notes)
 }
 
-fn names_for_path(path: &Path) -> &'static Names {
+fn spelling_for_path(path: &Path) -> Spelling {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_lowercase)
         .unwrap_or_default();
     if ext == "tml" {
-        &LONG
+        Spelling::Long
     } else {
-        &SHORT
+        Spelling::Short
     }
 }
 
@@ -295,7 +176,11 @@ fn write_output(path: &Path, xml: &[u8]) -> Result<()> {
 // XML generation
 // ============================================================================
 
-fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<(Vec<u8>, Vec<String>)> {
+fn build_xml(
+    project: &Project,
+    sp: Spelling,
+    profile: TmlProfile,
+) -> Result<(Vec<u8>, Vec<String>)> {
     let azimuth_export = AzimuthExport::decide(project);
     // The two azimuth compromises are decisions the FILE carries and the
     // project does not, so they are stated rather than done quietly (#438):
@@ -333,31 +218,35 @@ fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<(Vec<u
     )))?;
 
     // <CaveFile>
-    writer.write_event(Event::Start(BytesStart::new(n.cave_file)))?;
+    writer.write_event(Event::Start(BytesStart::new(
+        el::cave_file::NAME.spelled(sp),
+    )))?;
 
     // Metadata elements
-    write_text_element(&mut writer, n.cave_name, &project.name)?;
-    write_text_element(
+    write_field(&mut writer, sp, el::cave_name::NAME, &project.name)?;
+    write_field(
         &mut writer,
-        n.first_start_absolute_elevation,
+        sp,
+        el::first_start_absolute_elevation::NAME,
         &format_f64(project.surface_elevation.unwrap_or(0.0)),
     )?;
 
     // <Data>
-    writer.write_event(Event::Start(BytesStart::new(n.data)))?;
+    writer.write_event(Event::Start(BytesStart::new(el::data::NAME.spelled(sp))))?;
 
     for shot in &shots {
-        write_shot(&mut writer, n, shot)?;
+        write_shot(&mut writer, sp, shot)?;
     }
 
     // </Data>
-    writer.write_event(Event::End(BytesEnd::new(n.data)))?;
+    writer.write_event(Event::End(BytesEnd::new(el::data::NAME.spelled(sp))))?;
 
     // Remaining metadata after Data (matching Ariane's ordering)
-    write_text_element(&mut writer, n.unit, "m")?;
-    write_text_element(
+    write_field(&mut writer, sp, el::unit::NAME, "m")?;
+    write_field(
         &mut writer,
-        n.use_magnetic_azimuth,
+        sp,
+        el::use_magnetic_azimuth::NAME,
         if azimuth_export.is_magnetic() {
             "true"
         } else {
@@ -366,7 +255,7 @@ fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<(Vec<u
     )?;
 
     // </CaveFile>
-    writer.write_event(Event::End(BytesEnd::new(n.cave_file)))?;
+    writer.write_event(Event::End(BytesEnd::new(el::cave_file::NAME.spelled(sp))))?;
 
     drop(writer);
     Ok((buf, notes))
@@ -383,54 +272,89 @@ fn write_text_element<W: std::io::Write>(
     Ok(())
 }
 
+/// [`write_text_element`] for a schema element, in the document's spelling.
+fn write_field<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    sp: Spelling,
+    element: ElementName,
+    text: &str,
+) -> Result<()> {
+    write_text_element(writer, element.spelled(sp), text)
+}
+
 fn write_shot<W: std::io::Write>(
     writer: &mut Writer<W>,
-    n: &Names,
+    sp: Spelling,
     shot: &ExportShot,
 ) -> Result<()> {
-    writer.write_event(Event::Start(BytesStart::new(n.survey_data)))?;
+    let row = el::survey_data::NAME.spelled(sp);
+    writer.write_event(Event::Start(BytesStart::new(row)))?;
 
     // Write fields in alphabetical order (matching Ariane's output)
-    write_text_element(writer, n.azimuth, &format_f64(shot.azimuth))?;
-    write_text_element(writer, n.closure_to_id, &shot.closure_to_id.to_string())?;
-    write_text_element(writer, n.color, &shot.color)?;
+    write_field(writer, sp, el::azimuth::NAME, &format_f64(shot.azimuth))?;
+    write_field(
+        writer,
+        sp,
+        el::closure_to_id::NAME,
+        &shot.closure_to_id.to_string(),
+    )?;
+    write_field(writer, sp, el::color::NAME, &shot.color)?;
 
     let comment_str = shot.comment.as_deref().unwrap_or("");
-    write_text_element(writer, n.comment, comment_str)?;
+    write_field(writer, sp, el::comment::NAME, comment_str)?;
 
     let date_str = shot.date.as_deref().unwrap_or(DEFAULT_EXPORT_DATE);
-    write_text_element(writer, n.date, date_str)?;
+    write_field(writer, sp, el::date::NAME, date_str)?;
 
-    write_text_element(writer, n.depth, &format_f64(shot.depth))?;
-    write_text_element(writer, n.depth_in, &format_f64(emitted_depth_in(shot)))?;
-    write_text_element(writer, n.down, &format_f64(shot.down))?;
-    write_text_element(writer, n.excluded, "false")?;
+    write_field(writer, sp, el::depth::NAME, &format_f64(shot.depth))?;
+    write_field(
+        writer,
+        sp,
+        el::depth_in::NAME,
+        &format_f64(emitted_depth_in(shot)),
+    )?;
+    write_field(writer, sp, el::down::NAME, &format_f64(shot.down))?;
+    write_field(writer, sp, el::excluded::NAME, "false")?;
 
-    let explorer_str = shot.explorer.as_deref().unwrap_or("unknown");
-    write_text_element(writer, n.explorer, explorer_str)?;
+    let explorer_str = shot
+        .explorer
+        .as_deref()
+        .unwrap_or(schema::EXPLORER_PLACEHOLDER);
+    write_field(writer, sp, el::explorer::NAME, explorer_str)?;
 
-    write_text_element(writer, n.from_id, &shot.from_id.to_string())?;
-    write_text_element(writer, n.id, &shot.id.to_string())?;
-    write_text_element(writer, n.inclination, &format_f64(shot.inclination))?;
-    write_text_element(writer, n.latitude, &format_f64(shot.latitude))?;
-    write_text_element(writer, n.left, &format_f64(shot.left))?;
-    write_text_element(writer, n.length, &format_f64(shot.length))?;
-    write_text_element(writer, n.locked, if shot.locked { "true" } else { "false" })?;
-    write_text_element(writer, n.longitude, &format_f64(shot.longitude))?;
+    write_field(writer, sp, el::from_id::NAME, &shot.from_id.to_string())?;
+    write_field(writer, sp, el::id::NAME, &shot.id.to_string())?;
+    write_field(
+        writer,
+        sp,
+        el::inclination::NAME,
+        &format_f64(shot.inclination),
+    )?;
+    write_field(writer, sp, el::latitude::NAME, &format_f64(shot.latitude))?;
+    write_field(writer, sp, el::left::NAME, &format_f64(shot.left))?;
+    write_field(writer, sp, el::length::NAME, &format_f64(shot.length))?;
+    let locked = if shot.locked { "true" } else { "false" };
+    write_field(writer, sp, el::locked::NAME, locked)?;
+    write_field(writer, sp, el::longitude::NAME, &format_f64(shot.longitude))?;
 
     // Ariane conventions: START has START name, CLOSURE uses CLOSURE:CLOSURE.
     let name_str = match shot.shot_type {
-        "START" => "START",
-        "CLOSURE" => "CLOSURE:CLOSURE",
+        schema::TYPE_START => schema::NAME_START,
+        schema::TYPE_CLOSURE => schema::NAME_CLOSURE,
         _ => "",
     };
-    write_text_element(writer, n.name, name_str)?;
+    write_field(writer, sp, el::name::NAME, name_str)?;
 
-    write_text_element(writer, n.profiletype, "VERTICAL")?;
-    write_text_element(writer, n.right, &format_f64(shot.right))?;
-    write_text_element(writer, n.section, &shot.section)?;
-    write_text_element(writer, n.shot_type, shot.shot_type)?;
-    write_text_element(writer, n.up, &format_f64(shot.up))?;
+    write_field(
+        writer,
+        sp,
+        el::profiletype::NAME,
+        schema::PROFILE_TYPE_VERTICAL,
+    )?;
+    write_field(writer, sp, el::right::NAME, &format_f64(shot.right))?;
+    write_field(writer, sp, el::section::NAME, &shot.section)?;
+    write_field(writer, sp, el::shot_type::NAME, shot.shot_type)?;
+    write_field(writer, sp, el::up::NAME, &format_f64(shot.up))?;
 
     // Stable per-shot UUID. Emitted for every block that stands for a REAL
     // PROJECT SHOT - the forward blocks and the reversed "(pre-zero-datum)" /
@@ -453,10 +377,10 @@ fn write_shot<W: std::io::Write>(
     // cannot see a forward/reverse pair as a duplicate - pinned by
     // `a_reversed_leg_is_a_shots_only_appearance_so_nothing_is_reminted`.
     if let Some(uuid) = &shot.uuid {
-        write_text_element(writer, n.uuid, uuid)?;
+        write_field(writer, sp, el::uuid::NAME, uuid)?;
     }
 
-    writer.write_event(Event::End(BytesEnd::new(n.survey_data)))?;
+    writer.write_event(Event::End(BytesEnd::new(row)))?;
     Ok(())
 }
 
@@ -464,9 +388,6 @@ fn write_shot<W: std::io::Write>(
 /// consumer - SpeleoDB rejects the whole file when it is missing or empty - so a
 /// dateless section still gets a parseable one.
 const DEFAULT_EXPORT_DATE: &str = "2000-01-01";
-
-/// Ariane's `DepthIn` sentinel: "this shot starts where the previous one ended".
-const DEPTH_IN_SENTINEL: f64 = -1.0;
 
 /// The `DepthIn` value to write for `shot`.
 ///
@@ -484,13 +405,13 @@ const DEPTH_IN_SENTINEL: f64 = -1.0;
 /// them.
 fn emitted_depth_in(shot: &ExportShot) -> f64 {
     if shot.depth_in_same_as_prev {
-        return DEPTH_IN_SENTINEL;
+        return schema::DEPTH_IN_SAME_AS_PREVIOUS;
     }
     // `round_as_written` lands on a multiple of 1e-6, so the nearest value that is
     // NOT the sentinel is a full micrometre away - an epsilon compare here is an
     // exact-equality test on the written value, without tripping `float_cmp`.
-    if (round_as_written(shot.depth_in) - DEPTH_IN_SENTINEL).abs() < f64::EPSILON {
-        return DEPTH_IN_SENTINEL - 1e-6;
+    if (round_as_written(shot.depth_in) - schema::DEPTH_IN_SAME_AS_PREVIOUS).abs() < f64::EPSILON {
+        return schema::DEPTH_IN_SAME_AS_PREVIOUS - 1e-6;
     }
     shot.depth_in
 }
@@ -557,7 +478,7 @@ fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> 
 
     let orphans: Vec<&ExportShot> = shots
         .iter()
-        .filter(|s| s.from_id == -1 && s.shot_type != "START")
+        .filter(|s| s.from_id == -1 && s.shot_type != schema::TYPE_START)
         .collect();
 
     let Some(first) = orphans.first() else {
@@ -574,7 +495,7 @@ fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> 
 
     // Without a closure Ariane never runs the loop solve, so the orphan is inert and
     // the file draws. Say so once and let the export through.
-    if !shots.iter().any(|s| s.shot_type == "CLOSURE") {
+    if !shots.iter().any(|s| s.shot_type == schema::TYPE_CLOSURE) {
         tracing::warn!(
             orphan_count = orphans.len(),
             sections = listed,
@@ -836,7 +757,7 @@ fn build_export_shots_with_report(
                 id: start_id,
                 uuid: None,
                 from_id: -1,
-                shot_type: "START",
+                shot_type: schema::TYPE_START,
                 section: section_name.clone(),
                 azimuth: 0.0,
                 length: 0.0,
@@ -880,9 +801,9 @@ fn build_export_shots_with_report(
                     uuid: Some(shot_export_uuid(shot)),
                     from_id: prev_id,
                     shot_type: if shot.kind.is_virtual() {
-                        "VIRTUAL"
+                        schema::TYPE_VIRTUAL
                     } else {
-                        "REAL"
+                        schema::TYPE_REAL
                     },
                     section: section_name.clone(),
                     azimuth: emit_reference.to_true(shot.azimuth_in),
@@ -946,9 +867,9 @@ fn build_export_shots_with_report(
                         uuid: Some(shot_export_uuid(shot)),
                         from_id: prev_id,
                         shot_type: if shot.kind.is_virtual() {
-                            "VIRTUAL"
+                            schema::TYPE_VIRTUAL
                         } else {
-                            "REAL"
+                            schema::TYPE_REAL
                         },
                         section: split_name.clone(),
                         // Ariane carries a single forward azimuth per shot. The reverse
@@ -1021,9 +942,9 @@ fn build_export_shots_with_report(
                             uuid: Some(shot_export_uuid(shot)),
                             from_id: prev_id,
                             shot_type: if shot.kind.is_virtual() {
-                                "VIRTUAL"
+                                schema::TYPE_VIRTUAL
                             } else {
-                                "REAL"
+                                schema::TYPE_REAL
                             },
                             section: section_name.clone(),
                             azimuth: emit_reference.to_true(shot.azimuth_in),
@@ -1087,9 +1008,9 @@ fn build_export_shots_with_report(
                             uuid: Some(shot_export_uuid(shot)),
                             from_id: prev_id,
                             shot_type: if shot.kind.is_virtual() {
-                                "VIRTUAL"
+                                schema::TYPE_VIRTUAL
                             } else {
-                                "REAL"
+                                schema::TYPE_REAL
                             },
                             section: rev_name.clone(),
                             azimuth: reverse_pre_zero_azimuth(
@@ -1157,9 +1078,9 @@ fn build_export_shots_with_report(
                             uuid: Some(shot_export_uuid(shot)),
                             from_id: prev_id,
                             shot_type: if shot.kind.is_virtual() {
-                                "VIRTUAL"
+                                schema::TYPE_VIRTUAL
                             } else {
-                                "REAL"
+                                schema::TYPE_REAL
                             },
                             section: rev_name.clone(),
                             azimuth: reverse_pre_zero_azimuth(
@@ -1218,7 +1139,7 @@ fn build_export_shots_with_report(
                 id: start_id,
                 uuid: None,
                 from_id: -1,
-                shot_type: "START",
+                shot_type: schema::TYPE_START,
                 section: section_name.clone(),
                 azimuth: 0.0,
                 length: 0.0,
@@ -1275,9 +1196,9 @@ fn build_export_shots_with_report(
                 uuid: Some(shot_export_uuid(shot)),
                 from_id: prev_id,
                 shot_type: if shot.kind.is_virtual() {
-                    "VIRTUAL"
+                    schema::TYPE_VIRTUAL
                 } else {
-                    "REAL"
+                    schema::TYPE_REAL
                 },
                 section: section_name.clone(),
                 azimuth: emit_reference.to_true(shot.azimuth_in),
@@ -1449,7 +1370,7 @@ fn build_export_shots_with_report(
     // used to run before the lookup and say nothing.
     for block in &mut blocks {
         for shot in &mut block.shots {
-            if shot.shot_type != "REAL" && shot.shot_type != "VIRTUAL" {
+            if shot.shot_type != schema::TYPE_REAL && shot.shot_type != schema::TYPE_VIRTUAL {
                 continue;
             }
             let joined_station: Option<String> =
@@ -1556,7 +1477,7 @@ fn build_export_shots_with_report(
             .iter()
             .find(|s| s.id == closure.station_a.section_id)
             .map(|s| color_to_ariane(&s.color))
-            .unwrap_or_else(|| "0x4ecdc4ff".to_string());
+            .unwrap_or_else(|| schema::FALLBACK_ARIANE_COLOR.to_string());
 
         // The depths of the two Ariane NODES the closure ties together. A closure
         // carrying `depth: 0.0` is not merely cosmetic: a reader takes the chain as
@@ -1604,7 +1525,7 @@ fn build_export_shots_with_report(
             id: closure_id,
             uuid: None,
             from_id,
-            shot_type: "CLOSURE",
+            shot_type: schema::TYPE_CLOSURE,
             section: section_name,
             azimuth: 0.0,
             length: closure_length,
@@ -1657,7 +1578,7 @@ fn build_export_shots_with_report(
         let start_index_by_id: HashMap<i64, usize> = all_shots
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.shot_type == "START")
+            .filter(|(_, s)| s.shot_type == schema::TYPE_START)
             .map(|(i, s)| (s.id, i))
             .collect();
 
@@ -2178,7 +2099,7 @@ fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
             id: pad_id,
             uuid: None,
             from_id: -1,
-            shot_type: "VIRTUAL",
+            shot_type: schema::TYPE_VIRTUAL,
             section: anchor.section.clone(),
             azimuth: 0.0,
             length: 0.0,
@@ -2218,16 +2139,6 @@ fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
 /// must not be interpreted as an Ariane backsight during export.
 fn reverse_pre_zero_azimuth(azimuth_in: f64) -> f64 {
     normalize_azimuth(azimuth_in + 180.0)
-}
-
-/// Convert `#RRGGBB` to Ariane's `0xRRGGBBff` format.
-fn color_to_ariane(hex: &str) -> String {
-    let hex = hex.trim_start_matches('#');
-    if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        format!("0x{hex}ff")
-    } else {
-        "0x4ecdc4ff".to_string()
-    }
 }
 
 // ============================================================================

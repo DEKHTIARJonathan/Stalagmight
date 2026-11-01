@@ -337,7 +337,7 @@ Parsed but dropped:
 
 - **The Inclination zero/null collision.** `Inclination`/`INC` has the same
   format-forced ambiguity as LRUD (above): Ariane has no null, so
-  `pitch_to_inclination` (`export/tml.rs:153-158`) writes both `None` (never
+  `pitch_to_inclination` (`parsers/tml/schema.rs`) writes both `None` (never
   sighted) and `Some(0.0)` (genuinely level) as the same wire `0.0`. Unlike
   LRUD, though, a plain "0.0 means absent" read would fabricate data:
   `Validator::validate_shot`'s inclination/depth cross-check treats an absent
@@ -401,5 +401,5 @@ Structural:
 
 - **The mainline fragments at branch points.** Which branch continues the section is decided by file order, not by which branch is the mainline, so a long trunk can arrive split into "(branch N)" sections ([#412](https://github.com/Stalagmight/Stalagmight/issues/412)).
 - Ariane's shape/cross-section geometry (`Shape`/`SH` elements) is not imported.
-- The `Inclination` field is parsed and normalised to Stalagmight's positive-down pitch on import (`parsers::tml::inclination_to_pitch`), but station coordinates stay depth-based, so pitch never feeds the geometry - see [docs/inclination.md](inclination.md), which is canonical for the sign convention.
+- The `Inclination` field is parsed and normalised to Stalagmight's positive-down pitch on import (`parsers::tml::schema::inclination_to_pitch`), but station coordinates stay depth-based, so pitch never feeds the geometry - see [docs/inclination.md](inclination.md), which is canonical for the sign convention.
 - Only the first GPS coordinate found in the file is used as the project origin.

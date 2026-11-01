@@ -27,6 +27,10 @@ mod azimuth;
 mod decode;
 mod import_options;
 mod linearize;
+pub mod schema;
+
+use schema::element as el;
+pub use schema::inclination_to_pitch;
 // `test-support` (never on in production builds) keeps these fixture builders
 // compiled for the root crate's tests, which can no longer see a dependency's
 // `#[cfg(test)]` items now that the parsers live in their own crate.
@@ -244,37 +248,39 @@ struct RawShot {
 
 /// Normalize an XML element name to a canonical key. Byte-slice form used by
 /// the hot XML loop so we don't have to allocate a `String` from the quick-xml
-/// element name on every Start/End/Empty event.
+/// element name on every Start/End/Empty event. The names come from
+/// [`schema::element`], the one table the exporter writes from too.
 fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
     match name {
-        b"ID" | b"Id" => Some("id"),
+        el::id::LONG | schema::ID_LEGACY_SPELLING => Some("id"),
         // Ariane 26+ writes a stable per-row id here and preserves it across
         // edits; we read it so a file that leaves Ariane and comes back keeps
         // its shot identity instead of getting a fresh mint (#423).
-        b"UUID" | b"UU" => Some("uuid"),
-        b"FromID" | b"FRID" => Some("from_id"),
-        b"ClosureToID" | b"CID" => Some("closure_to_id"),
-        b"Type" | b"TY" => Some("type"),
-        b"Section" | b"SC" => Some("section"),
-        b"Azimut" | b"AZ" => Some("azimuth"),
-        b"Length" | b"LG" => Some("length"),
-        b"Depth" | b"DP" => Some("depth"),
-        b"DepthIn" | b"DPI" => Some("depth_in"),
-        b"Inclination" | b"INC" => Some("inclination"),
-        b"Left" | b"L" => Some("left"),
-        b"Right" | b"R" => Some("right"),
-        b"Up" | b"U" => Some("up"),
-        b"Down" | b"D" => Some("down"),
-        b"Comment" | b"CM" => Some("comment"),
-        b"Explorer" | b"EX" => Some("explorer"),
-        b"Date" | b"DT" => Some("date"),
-        b"Color" | b"CL" => Some("color"),
-        b"Excluded" | b"EXC" => Some("excluded"),
-        b"Latitude" | b"LT" => Some("latitude"),
-        b"Longitude" | b"LGT" => Some("longitude"),
+        el::uuid::LONG | el::uuid::SHORT => Some("uuid"),
+        el::from_id::LONG | el::from_id::SHORT => Some("from_id"),
+        el::closure_to_id::LONG | el::closure_to_id::SHORT => Some("closure_to_id"),
+        el::shot_type::LONG | el::shot_type::SHORT => Some("type"),
+        el::section::LONG | el::section::SHORT => Some("section"),
+        el::azimuth::LONG | el::azimuth::SHORT => Some("azimuth"),
+        el::length::LONG | el::length::SHORT => Some("length"),
+        el::depth::LONG | el::depth::SHORT => Some("depth"),
+        el::depth_in::LONG | el::depth_in::SHORT => Some("depth_in"),
+        el::inclination::LONG | el::inclination::SHORT => Some("inclination"),
+        el::left::LONG | el::left::SHORT => Some("left"),
+        el::right::LONG | el::right::SHORT => Some("right"),
+        el::up::LONG | el::up::SHORT => Some("up"),
+        el::down::LONG | el::down::SHORT => Some("down"),
+        el::comment::LONG | el::comment::SHORT => Some("comment"),
+        el::explorer::LONG | el::explorer::SHORT => Some("explorer"),
+        el::date::LONG | el::date::SHORT => Some("date"),
+        el::color::LONG | el::color::SHORT => Some("color"),
+        el::excluded::LONG | el::excluded::SHORT => Some("excluded"),
+        el::latitude::LONG | el::latitude::SHORT => Some("latitude"),
+        el::longitude::LONG | el::longitude::SHORT => Some("longitude"),
         // `Name`/`NM` is deliberately absent: Ariane uses it as a per-shot marker
         // ("START", "CLOSURE:CLOSURE", else ""), and import takes shot type from
-        // `Type`/`TY`, so nothing would read it.
+        // `Type`/`TY`, so nothing would read it. `Locked` and `Profiletype` are
+        // write-only for the same reason.
         _ => None,
     }
 }
@@ -329,13 +335,13 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                 let name_bytes = name_bytes.as_ref();
 
                 match name_bytes {
-                    b"CaveFile" => in_cave_file = true,
-                    b"Data" => in_data = true,
-                    b"SurveyData" | b"SRVD" => {
+                    el::cave_file::LONG => in_cave_file = true,
+                    el::data::LONG => in_data = true,
+                    el::survey_data::LONG | el::survey_data::SHORT => {
                         in_shot = true;
                         current_fields.clear();
                     }
-                    b"Shape" | b"SH" => {
+                    el::shape::LONG | el::shape::SHORT => {
                         // Fast-forward past the Shape/SH subtree -
                         // quick-xml will scan its bytes without
                         // emitting events back to us.
@@ -377,7 +383,7 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                 let name_bytes = name_bytes.as_ref();
 
                 match name_bytes {
-                    b"SurveyData" | b"SRVD" => {
+                    el::survey_data::LONG | el::survey_data::SHORT => {
                         if in_shot {
                             // Counted as a missing ID because that is
                             // `build_raw_shot`'s ONLY fallible path today (the
@@ -398,8 +404,8 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                             in_shot = false;
                         }
                     }
-                    b"Data" => in_data = false,
-                    b"CaveFile" => in_cave_file = false,
+                    el::data::LONG => in_data = false,
+                    el::cave_file::LONG => in_cave_file = false,
                     _ => {
                         current_element_key = None;
                         current_element_raw.clear();
@@ -420,12 +426,12 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                     let text = e.unescape().unwrap_or_default().trim().to_string();
                     if !text.is_empty() {
                         match current_element_raw.as_slice() {
-                            b"caveName" => metadata.cave_name = text,
-                            b"unit" => metadata.unit = text,
-                            b"useMagneticAzimuth" => {
+                            el::cave_name::LONG => metadata.cave_name = text,
+                            el::unit::LONG => metadata.unit = text,
+                            el::use_magnetic_azimuth::LONG => {
                                 metadata.use_magnetic_azimuth = text.eq_ignore_ascii_case("true");
                             }
-                            b"firstStartAbsoluteElevation" => {
+                            el::first_start_absolute_elevation::LONG => {
                                 // `"NaN"`, `"inf"` and `1e309` all parse
                                 // happily. This value is scaled by the unit
                                 // conversion and handed out on `TmlFile` and
@@ -583,7 +589,9 @@ const EXPLORER_SURVEYOR_SEPARATOR: &str = " / ";
 /// throwing the whole field away (#427). Case-insensitive: the placeholder is
 /// a word this format writes, not a value, and `Unknown` is the same word.
 fn is_explorer_placeholder(value: &str) -> bool {
-    value.is_empty() || value.eq_ignore_ascii_case("None") || value.eq_ignore_ascii_case("unknown")
+    value.is_empty()
+        || value.eq_ignore_ascii_case("None")
+        || value.eq_ignore_ascii_case(schema::EXPLORER_PLACEHOLDER)
 }
 
 /// The text of `<tag>…</tag>` inside an already-unescaped field value, with the
@@ -675,10 +683,10 @@ fn build_raw_shot(
     // third-party tool need not: match every spelling before falling through to
     // the unknown-type path.
     let shot_type = match fields.get("type").map(String::as_str) {
-        Some(t) if t.eq_ignore_ascii_case("REAL") => TmlShotType::Real,
-        Some(t) if t.eq_ignore_ascii_case("VIRTUAL") => TmlShotType::Virtual,
-        Some(t) if t.eq_ignore_ascii_case("START") => TmlShotType::Start,
-        Some(t) if t.eq_ignore_ascii_case("CLOSURE") => TmlShotType::Closure,
+        Some(t) if t.eq_ignore_ascii_case(schema::TYPE_REAL) => TmlShotType::Real,
+        Some(t) if t.eq_ignore_ascii_case(schema::TYPE_VIRTUAL) => TmlShotType::Virtual,
+        Some(t) if t.eq_ignore_ascii_case(schema::TYPE_START) => TmlShotType::Start,
+        Some(t) if t.eq_ignore_ascii_case(schema::TYPE_CLOSURE) => TmlShotType::Closure,
         Some(other) => {
             tracing::warn!(shot_type = other, id, "Unknown shot type, treating as Real");
             anomalies.unknown_shot_types = anomalies.unknown_shot_types.saturating_add(1);
@@ -694,7 +702,7 @@ fn build_raw_shot(
             .unwrap_or_default(),
     );
 
-    let color = convert_ariane_color(fields.get("color").map(String::as_str));
+    let color = schema::color_from_ariane(fields.get("color").map(String::as_str));
 
     let date = fields
         .get("date")
@@ -718,7 +726,7 @@ fn build_raw_shot(
         azimuth: parse_f64(fields, "azimuth"),
         length: parse_f64(fields, "length"),
         depth: parse_f64(fields, "depth"),
-        depth_in: parse_f64_default(fields, "depth_in", -1.0),
+        depth_in: parse_f64_default(fields, "depth_in", schema::DEPTH_IN_SAME_AS_PREVIOUS),
         inclination: parse_f64(fields, "inclination"),
         left: parse_f64(fields, "left"),
         right: parse_f64(fields, "right"),
@@ -779,40 +787,6 @@ fn strip_section_description(section: &str) -> String {
     } else {
         section.to_string()
     }
-}
-
-// ============================================================================
-// Color conversion
-// ============================================================================
-
-/// Convert Ariane color `0xRRGGBBAA` → `#RRGGBB`. Falls back to default teal.
-fn convert_ariane_color(color_str: Option<&str>) -> String {
-    const DEFAULT_COLOR: &str = "#4ecdc4";
-
-    let Some(s) = color_str else {
-        return DEFAULT_COLOR.to_string();
-    };
-    let s = s.trim();
-    if s.is_empty() {
-        return DEFAULT_COLOR.to_string();
-    }
-
-    // Strip "0x" prefix
-    let hex = if let Some(stripped) = s.strip_prefix("0x") {
-        stripped
-    } else if let Some(stripped) = s.strip_prefix("0X") {
-        stripped
-    } else {
-        return DEFAULT_COLOR.to_string();
-    };
-
-    // Expect 8 hex chars (RRGGBBAA)
-    if hex.len() != 8 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return DEFAULT_COLOR.to_string();
-    }
-
-    // Take first 6 chars (RRGGBB), skip alpha
-    format!("#{}", &hex[..6])
 }
 
 // ============================================================================
@@ -1100,7 +1074,7 @@ fn apply_unit_conversion(
         for shot in &mut section.shots {
             shot.length *= FEET_TO_METERS;
             shot.depth *= FEET_TO_METERS;
-            if shot.depth_in != -1.0 {
+            if !schema::is_depth_in_sentinel(shot.depth_in) {
                 shot.depth_in *= FEET_TO_METERS;
             }
             shot.left *= FEET_TO_METERS;
@@ -1813,39 +1787,10 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
 /// `-1.0` measured here would misread every ordinary Ariane file, where the
 /// sentinel is spelled out on nearly every shot.
 fn resolve_tml_depth_in(shot: &TmlShot, prev_depth: Option<f64>, start_depth: f64) -> f64 {
-    if shot.depth_in != -1.0 {
-        shot.depth_in
-    } else {
+    if schema::is_depth_in_sentinel(shot.depth_in) {
         prev_depth.unwrap_or(start_depth)
-    }
-}
-
-/// Convert Ariane's `<Inclination>` into a model pitch.
-///
-/// Ariane is taken to be +up, like every other survey format we read: Walls and
-/// Compass both store +up in-file, and the mNemo device reports +up. The model
-/// is +down (positive descends, matching `depth_in` / `depth_out`), so the sign
-/// flips here.
-///
-/// This could not be confirmed against data. Across every Ariane file available,
-/// all 5,686 shots carry `Inclination` 0 (these are depth-gauge surveys and
-/// Ariane does not populate the field), so the flip is an inference from the
-/// surrounding ecosystem rather than a measurement, and on real files it is a
-/// no-op. `0` maps to a plain `0.0`, never `-0.0`, so a round-trip through
-/// Ariane does not show up as a phantom edit. Inverse of
-/// `export::tml::pitch_to_inclination`.
-///
-/// Applied to every `.tml` regardless of who wrote it, deliberately: export
-/// writes the same convention, so a file Stalagmight produces re-imports
-/// correctly as though Ariane had written it. A standalone `.tml` from a
-/// pre-#296 build holds raw +down pitch here and so imports inverted, with no
-/// migration to repair it; that is accepted rather than sniffed for, since real
-/// Ariane files carry `Inclination` 0. See `docs/inclination.md`.
-pub fn inclination_to_pitch(inclination: f64) -> f64 {
-    if inclination == 0.0 {
-        0.0
     } else {
-        -inclination
+        shot.depth_in
     }
 }
 
@@ -1853,7 +1798,7 @@ pub fn inclination_to_pitch(inclination: f64) -> f64 {
 /// "not recorded" exactly when reading it as `Some(0.0)` would fabricate an
 /// `INCLINATION_DEPTH_MISMATCH` warning.
 ///
-/// `export::tml::pitch_to_inclination` collapses both `None` (never measured)
+/// `schema::pitch_to_inclination` collapses both `None` (never measured)
 /// and `Some(0.0)` (genuinely level) to the same wire `0.0`, so import cannot
 /// tell them apart from the inclination field alone (#482). Gate on the real
 /// condition instead of a proxy: compute what the shot's own geometry implies
@@ -2012,6 +1957,68 @@ mod tests {
     use super::test_helpers::*;
     use super::*;
 
+    /// The reader keys every per-shot element the exporter writes from the same
+    /// `schema::element` table, in BOTH spellings, onto the field it means
+    /// (#576 B4). The three elements the exporter writes for Ariane's sake and
+    /// the import has no use for map to nothing, explicitly.
+    #[test]
+    fn every_schema_shot_element_reads_back_as_its_field_in_both_spellings() {
+        let expected: &[(schema::ElementName, Option<&str>)] = &[
+            (el::azimuth::NAME, Some("azimuth")),
+            (el::closure_to_id::NAME, Some("closure_to_id")),
+            (el::color::NAME, Some("color")),
+            (el::comment::NAME, Some("comment")),
+            (el::date::NAME, Some("date")),
+            (el::depth::NAME, Some("depth")),
+            (el::depth_in::NAME, Some("depth_in")),
+            (el::down::NAME, Some("down")),
+            (el::excluded::NAME, Some("excluded")),
+            (el::explorer::NAME, Some("explorer")),
+            (el::from_id::NAME, Some("from_id")),
+            (el::id::NAME, Some("id")),
+            (el::inclination::NAME, Some("inclination")),
+            (el::latitude::NAME, Some("latitude")),
+            (el::left::NAME, Some("left")),
+            (el::length::NAME, Some("length")),
+            (el::locked::NAME, None),
+            (el::longitude::NAME, Some("longitude")),
+            (el::name::NAME, None),
+            (el::profiletype::NAME, None),
+            (el::right::NAME, Some("right")),
+            (el::section::NAME, Some("section")),
+            (el::shot_type::NAME, Some("type")),
+            (el::up::NAME, Some("up")),
+            (el::uuid::NAME, Some("uuid")),
+        ];
+        for (element, key) in expected {
+            for spelling in [element.long, element.short] {
+                assert_eq!(
+                    normalize_key_bytes(spelling.as_bytes()),
+                    *key,
+                    "<{spelling}> must read as {key:?}"
+                );
+            }
+        }
+        // Every per-shot element of the schema is accounted for above: the
+        // file-level ones and the skipped `Shape` are the only others.
+        let file_level = [
+            el::cave_file::NAME,
+            el::cave_name::NAME,
+            el::unit::NAME,
+            el::use_magnetic_azimuth::NAME,
+            el::first_start_absolute_elevation::NAME,
+            el::data::NAME,
+            el::survey_data::NAME,
+            el::shape::NAME,
+        ];
+        assert_eq!(
+            schema::element::ALL.len(),
+            expected.len() + file_level.len(),
+            "a new schema element needs a row in this table"
+        );
+        assert_eq!(normalize_key_bytes(b"Id"), Some("id"));
+    }
+
     /// A tiny NEGATIVE azimuth must normalise to `0.0`, not `360.0`.
     ///
     /// `rem_euclid` alone returns exactly `360.0` for such an input, which is OUT of the
@@ -2106,8 +2113,8 @@ mod tests {
 
     #[test]
     fn test_color_conversion_standard() {
-        assert_eq!(convert_ariane_color(Some("0x8f6112ff")), "#8f6112");
-        assert_eq!(convert_ariane_color(Some("0xFF0000FF")), "#FF0000");
+        assert_eq!(schema::color_from_ariane(Some("0x8f6112ff")), "#8f6112");
+        assert_eq!(schema::color_from_ariane(Some("0xFF0000FF")), "#FF0000");
     }
 
     #[test]
@@ -2151,11 +2158,11 @@ mod tests {
 
     #[test]
     fn test_color_conversion_fallback() {
-        assert_eq!(convert_ariane_color(None), "#4ecdc4");
-        assert_eq!(convert_ariane_color(Some("")), "#4ecdc4");
-        assert_eq!(convert_ariane_color(Some("invalid")), "#4ecdc4");
-        assert_eq!(convert_ariane_color(Some("0xZZZZZZZZ")), "#4ecdc4");
-        assert_eq!(convert_ariane_color(Some("0x123")), "#4ecdc4"); // too short
+        assert_eq!(schema::color_from_ariane(None), "#4ecdc4");
+        assert_eq!(schema::color_from_ariane(Some("")), "#4ecdc4");
+        assert_eq!(schema::color_from_ariane(Some("invalid")), "#4ecdc4");
+        assert_eq!(schema::color_from_ariane(Some("0xZZZZZZZZ")), "#4ecdc4");
+        assert_eq!(schema::color_from_ariane(Some("0x123")), "#4ecdc4"); // too short
     }
 
     // -------------------------------------------------------------------

@@ -345,6 +345,8 @@ dropped or capped.
 | Component | File | Role |
 |-----------|------|------|
 | Export logic | `src-tauri/crates/export/src/export/tml.rs` | XML generation, ZIP packaging, topology resolution, the two profiles |
+| Shared schema | `src-tauri/crates/parsers/src/parsers/tml/schema.rs` | The one statement of every element name (both spellings), the shot-type strings, the `DepthIn` sentinel and the inclination and colour conversions; the importer reads with the same table |
+| Byte pins | `src-tauri/crates/export/src/export/tml_golden_tests.rs` | Whole-document goldens of the user and sidecar exports; a change to the written bytes updates them in the same commit |
 | Export command | `src-tauri/src/commands/export.rs` | `export_tml` IPC handler |
 | SpeleoDB sidecar | `src-tauri/crates/core/src/core/state/speleodb_push.rs` | `speleodb_render_tml` renders the co-push sidecar via `export_tml_for_speleodb` |
 | Store method | `src/store/projectStore.ts` | `exportTml()` frontend binding |

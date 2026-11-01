@@ -323,6 +323,66 @@ fn the_user_tml_export_is_the_tmlu_golden_spelled_long() {
     );
 }
 
+/// What the exporter writes, our own reader reads back as the same fields -
+/// in BOTH spellings, and for the fields a typo would have silently zeroed
+/// (LRUD, inclination, colour, explorer, date). The two spellings must parse
+/// to the identical survey.
+#[test]
+fn every_written_field_reads_back_identically_in_both_spellings() {
+    use crate::parsers::tml::{parse_tml, TmlFile, TmlShot};
+
+    let project = golden_project();
+    let dir = tempfile::TempDir::new().unwrap();
+    let long = dir.path().join("fields.tml");
+    let short = dir.path().join("fields.tmlu");
+    export_tml(&project, &long).unwrap();
+    export_tml(&project, &short).unwrap();
+    let from_long = parse_tml(&long).unwrap();
+    let from_short = parse_tml(&short).unwrap();
+    assert_eq!(
+        serde_json::to_value(&from_long).unwrap(),
+        serde_json::to_value(&from_short).unwrap(),
+        "the .tml and .tmlu of one project must parse to the same survey"
+    );
+
+    let find = |tml: &TmlFile, uuid: &str| -> (String, TmlShot) {
+        tml.sections
+            .iter()
+            .find_map(|s| {
+                s.shots
+                    .iter()
+                    .find(|shot| shot.uuid.as_deref() == Some(uuid))
+                    .map(|shot| (s.name.clone(), shot.clone()))
+            })
+            .unwrap()
+    };
+    // The first root shot went out reversed (it sits before the zero datum),
+    // so its walls and pitch are mirrored.
+    let (section, first) = find(&from_short, "00000000-0000-4000-8000-000000000001");
+    assert_eq!(section, "Main (pre-zero-datum)");
+    assert!((first.right - 1.5).abs() < f64::EPSILON, "{first:?}");
+    assert!(first.left.abs() < f64::EPSILON, "{first:?}");
+    assert!((first.down - 0.25).abs() < f64::EPSILON, "{first:?}");
+    assert!((first.inclination - -4.0).abs() < f64::EPSILON, "{first:?}");
+    assert!((first.length - 5.0).abs() < f64::EPSILON, "{first:?}");
+    assert_eq!(first.color, "#336699");
+    assert_eq!(first.explorer.as_deref(), Some("Diver A / Diver B"));
+    assert_eq!(first.date, chrono::NaiveDate::from_ymd_opt(2024, 3, 5));
+    assert!(first.comment.as_deref().unwrap().contains("second line"));
+
+    let (_, second) = find(&from_short, "00000000-0000-4000-8000-000000000002");
+    assert!((second.left - 2.0).abs() < f64::EPSILON, "{second:?}");
+    let (_, jump) = find(&from_short, "00000000-0000-4000-8000-000000000031");
+    assert_eq!(
+        jump.shot_type,
+        crate::parsers::tml::TmlShotType::Virtual,
+        "{jump:?}"
+    );
+    assert!((jump.length - 7.0).abs() < f64::EPSILON);
+    assert!((from_short.first_start_absolute_elevation - 12.5).abs() < f64::EPSILON);
+    assert_eq!(from_short.cave_name, "CaveA");
+}
+
 #[test]
 fn the_speleodb_sidecar_export_is_pinned_byte_for_byte() {
     assert_golden(

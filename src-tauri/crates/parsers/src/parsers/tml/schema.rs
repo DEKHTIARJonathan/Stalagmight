@@ -1,0 +1,311 @@
+//! The Ariane TML/TMLU schema, stated once for both directions (#576 B4).
+//!
+//! The importer (`parsers::tml`) and the exporter (`export::tml`) used to carry
+//! their own copies of every element name, the shot-type strings, the `DepthIn`
+//! sentinel and the inclination and colour conversions. The copies agreed, but
+//! nothing made them: a typo in one `.tmlu` short name would have shipped a
+//! field that our own reader then read back as `0.0`, and no round trip
+//! asserted the LRUD or colour fields closely enough to notice. Everything here
+//! is the single definition both sides use.
+//!
+//! `.tml` files (a ZIP holding `Data.xml`) spell elements long (`Azimut`),
+//! `.tmlu` files (plain XML) spell them short (`AZ`); the file-level metadata
+//! elements are spelled the same in both.
+
+/// Which of the two spellings a document uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Spelling {
+    /// `.tml`: `SurveyData`, `Azimut`, `Length`, ...
+    Long,
+    /// `.tmlu`: `SRVD`, `AZ`, `LG`, ...
+    Short,
+}
+
+/// One element, spelled both ways.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ElementName {
+    pub long: &'static str,
+    pub short: &'static str,
+}
+
+impl ElementName {
+    /// The element's name in a document of the given spelling.
+    pub const fn spelled(self, spelling: Spelling) -> &'static str {
+        match spelling {
+            Spelling::Long => self.long,
+            Spelling::Short => self.short,
+        }
+    }
+}
+
+/// The first literal of a list: an element's short spelling when it has one,
+/// its long spelling otherwise.
+macro_rules! first_literal {
+    ($first:literal $(, $rest:literal)*) => {
+        $first
+    };
+}
+
+/// One module per element, holding its [`ElementName`] and the byte forms the
+/// importer's hot loop matches against (`const` items, so they are usable as
+/// `match` patterns, which a field of a struct constant is not). An element
+/// spelled the same in both formats gets no `SHORT`: matching `LONG | SHORT`
+/// on two equal constants would be an unreachable pattern.
+macro_rules! elements {
+    ($( $(#[$doc:meta])* $module:ident => $long:literal $(| $short:literal)?; )*) => {
+        $(
+            $(#[$doc])*
+            pub mod $module {
+                use super::super::ElementName;
+
+                pub const NAME: ElementName = ElementName {
+                    long: $long,
+                    short: first_literal!($($short,)? $long),
+                };
+                pub const LONG: &[u8] = $long.as_bytes();
+                $( pub const SHORT: &[u8] = $short.as_bytes(); )?
+            }
+        )*
+
+        /// Every element, in declaration order.
+        pub const ALL: &[super::ElementName] = &[$($module::NAME),*];
+    };
+}
+
+/// Element names. Long spelling first, then the `.tmlu` short one where it
+/// differs.
+pub mod element {
+    elements! {
+        // ---- File level ----
+        /// The document root.
+        cave_file => "CaveFile";
+        cave_name => "caveName";
+        /// Length unit of the whole file.
+        unit => "unit";
+        /// File-level north reference flag (#438).
+        use_magnetic_azimuth => "useMagneticAzimuth";
+        /// Entrance elevation above sea level (#431).
+        first_start_absolute_elevation => "firstStartAbsoluteElevation";
+        /// Holds the shot rows.
+        data => "Data";
+        /// One shot row.
+        survey_data => "SurveyData" | "SRVD";
+        /// Per-shot cross-section polygons; the importer skips the subtree and
+        /// the exporter writes none.
+        shape => "Shape" | "SH";
+
+        // ---- Per shot, in the alphabetical order Ariane writes them ----
+        azimuth => "Azimut" | "AZ";
+        closure_to_id => "ClosureToID" | "CID";
+        color => "Color" | "CL";
+        comment => "Comment" | "CM";
+        date => "Date" | "DT";
+        depth => "Depth" | "DP";
+        /// Start depth, or [`super::DEPTH_IN_SAME_AS_PREVIOUS`].
+        depth_in => "DepthIn" | "DPI";
+        down => "Down" | "D";
+        excluded => "Excluded" | "EXC";
+        explorer => "Explorer" | "EX";
+        from_id => "FromID" | "FRID";
+        /// All caps in both spellings; see [`super::ID_LEGACY_SPELLING`].
+        id => "ID";
+        inclination => "Inclination" | "INC";
+        latitude => "Latitude" | "LT";
+        left => "Left" | "L";
+        length => "Length" | "LG";
+        /// Written by the exporter; the importer does not read it.
+        locked => "Locked" | "LCK";
+        longitude => "Longitude" | "LGT";
+        /// Ariane's per-row marker ([`super::NAME_START`],
+        /// [`super::NAME_CLOSURE`], else empty). Written by the exporter; the
+        /// importer takes the shot type from `Type` and does not read it.
+        name => "Name" | "NM";
+        /// Written by the exporter; the importer does not read it.
+        profiletype => "Profiletype" | "PT";
+        right => "Right" | "R";
+        section => "Section" | "SC";
+        /// `<Type>`: one of the `TYPE_*` values below.
+        shot_type => "Type" | "TY";
+        up => "Up" | "U";
+        /// Ariane 26+'s stable per-row id (#423).
+        uuid => "UUID" | "UU";
+    }
+}
+
+/// A spelling of `ID` some third-party files use. Read, never written.
+pub const ID_LEGACY_SPELLING: &[u8] = b"Id";
+
+/// `<Type>` values. Ariane writes them upper case; the reader matches any case.
+pub const TYPE_START: &str = "START";
+pub const TYPE_REAL: &str = "REAL";
+pub const TYPE_VIRTUAL: &str = "VIRTUAL";
+pub const TYPE_CLOSURE: &str = "CLOSURE";
+
+/// `<Name>` on a START row.
+pub const NAME_START: &str = "START";
+/// `<Name>` on a CLOSURE row.
+pub const NAME_CLOSURE: &str = "CLOSURE:CLOSURE";
+
+/// The only `<Profiletype>` the exporter writes.
+pub const PROFILE_TYPE_VERTICAL: &str = "VERTICAL";
+
+/// Ariane's spelling of "nobody filled in this person". The exporter writes it
+/// for a section with no surveyor; the reader drops it per half of the field
+/// (#427), together with `None` and the empty string.
+pub const EXPLORER_PLACEHOLDER: &str = "unknown";
+
+/// Ariane's `DepthIn` sentinel: "this shot starts where the previous one
+/// ended". The format's marker, not ours: a literal `-1.0` in a file means
+/// "inherit" even though -1 m is a legal depth, so the exporter nudges a
+/// genuine -1.0 off it before writing (`export::tml::emitted_depth_in`).
+pub const DEPTH_IN_SAME_AS_PREVIOUS: f64 = -1.0;
+
+/// Whether a `DepthIn` value read from a file is the sentinel. Exact: the
+/// sentinel is a spelling (`-1.0`), not a measurement with a tolerance.
+pub fn is_depth_in_sentinel(depth_in: f64) -> bool {
+    depth_in == DEPTH_IN_SAME_AS_PREVIOUS
+}
+
+/// Colour Ariane gets for a section whose own colour is not `#RRGGBB`.
+pub const FALLBACK_ARIANE_COLOR: &str = "0x4ecdc4ff";
+/// The model colour a file row without a usable `<Color>` imports as.
+pub const FALLBACK_MODEL_COLOR: &str = "#4ecdc4";
+
+/// Convert a model pitch into Ariane's `<Inclination>`.
+///
+/// The model is +down (positive descends, matching `depth_in` / `depth_out`).
+/// Ariane is taken to be +up, like every other survey format we read: Walls
+/// and Compass both store +up in-file, and the mNemo device reports +up. That
+/// could not be confirmed from data. Across every Ariane file available, all
+/// 5,686 shots carry `Inclination` 0, because these surveys are depth-gauge
+/// based and Ariane never populates the field. So this is an inference from the
+/// surrounding ecosystem, not a measurement, and it is unobservable on real
+/// files; it only changes what we emit. `None` and `0` both export as a plain
+/// `0.0` rather than `-0.0`. Inverse of [`inclination_to_pitch`].
+pub fn pitch_to_inclination(pitch: Option<f64>) -> f64 {
+    match pitch {
+        Some(p) if p != 0.0 => -p,
+        _ => 0.0,
+    }
+}
+
+/// Convert Ariane's `<Inclination>` into a model pitch.
+///
+/// The sign flips for the reason [`pitch_to_inclination`] gives, and could not
+/// be confirmed against data either. `0` maps to a plain `0.0`, never `-0.0`,
+/// so a round-trip through Ariane does not show up as a phantom edit.
+///
+/// Applied to every `.tml` regardless of who wrote it, deliberately: export
+/// writes the same convention, so a file Stalagmight produces re-imports
+/// correctly as though Ariane had written it. A standalone `.tml` from a
+/// pre-#296 build holds raw +down pitch here and so imports inverted, with no
+/// migration to repair it; that is accepted rather than sniffed for, since real
+/// Ariane files carry `Inclination` 0. See `docs/inclination.md`.
+pub fn inclination_to_pitch(inclination: f64) -> f64 {
+    if inclination == 0.0 {
+        0.0
+    } else {
+        -inclination
+    }
+}
+
+/// Convert a model `#RRGGBB` colour to Ariane's `0xRRGGBBff`, falling back to
+/// [`FALLBACK_ARIANE_COLOR`] for anything else.
+pub fn color_to_ariane(hex: &str) -> String {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        format!("0x{hex}ff")
+    } else {
+        FALLBACK_ARIANE_COLOR.to_string()
+    }
+}
+
+/// Convert Ariane's `0xRRGGBBAA` to a model `#RRGGBB` (the alpha is dropped),
+/// falling back to [`FALLBACK_MODEL_COLOR`]. Inverse of [`color_to_ariane`] for
+/// every colour that function writes.
+pub fn color_from_ariane(color: Option<&str>) -> String {
+    let Some(s) = color.map(str::trim).filter(|s| !s.is_empty()) else {
+        return FALLBACK_MODEL_COLOR.to_string();
+    };
+    let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) else {
+        return FALLBACK_MODEL_COLOR.to_string();
+    };
+    if hex.len() != 8 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return FALLBACK_MODEL_COLOR.to_string();
+    }
+    format!("#{}", &hex[..6])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Both spellings of every element are distinct across elements, so a
+    /// reader keying on the name can never confuse two fields.
+    #[test]
+    fn no_two_elements_share_a_spelling() {
+        let mut seen = std::collections::HashSet::new();
+        for name in element::ALL {
+            assert!(seen.insert(name.long), "{} spelled twice", name.long);
+            if name.short != name.long {
+                assert!(seen.insert(name.short), "{} spelled twice", name.short);
+            }
+        }
+    }
+
+    /// Spelling selects the right half.
+    #[test]
+    fn spelled_picks_the_documents_spelling() {
+        assert_eq!(element::azimuth::NAME.spelled(Spelling::Long), "Azimut");
+        assert_eq!(element::azimuth::NAME.spelled(Spelling::Short), "AZ");
+        assert_eq!(element::id::NAME.spelled(Spelling::Short), "ID");
+        assert_eq!(element::azimuth::LONG, b"Azimut");
+        assert_eq!(element::azimuth::SHORT, b"AZ");
+    }
+
+    /// The sign flip is its own inverse, and zero stays a positive zero.
+    #[test]
+    fn inclination_and_pitch_invert() {
+        for pitch in [30.0_f64, -30.0, 90.0, -90.0, 0.5, -0.5, 1e-9] {
+            let back = inclination_to_pitch(pitch_to_inclination(Some(pitch)));
+            assert!(
+                (back - pitch).abs() < f64::EPSILON,
+                "{pitch} came back {back}"
+            );
+        }
+        for zero in [
+            pitch_to_inclination(None),
+            pitch_to_inclination(Some(0.0)),
+            pitch_to_inclination(Some(-0.0)),
+            inclination_to_pitch(0.0),
+            inclination_to_pitch(-0.0),
+        ] {
+            assert!(zero == 0.0 && zero.is_sign_positive());
+        }
+    }
+
+    /// Every colour the exporter writes reads back as itself, and the
+    /// fallbacks are each other's image.
+    #[test]
+    fn colors_invert() {
+        for model in ["#000000", "#ffffff", "#336699", "#AbCdEf"] {
+            assert_eq!(color_from_ariane(Some(&color_to_ariane(model))), model);
+        }
+        assert_eq!(
+            color_from_ariane(Some(&color_to_ariane("not-a-colour"))),
+            FALLBACK_MODEL_COLOR
+        );
+        assert_eq!(color_from_ariane(Some("0X8F6112FF")), "#8F6112");
+        for junk in [None, Some(""), Some("  "), Some("8f6112ff"), Some("0x8f61")] {
+            assert_eq!(color_from_ariane(junk), FALLBACK_MODEL_COLOR);
+        }
+    }
+
+    #[test]
+    fn the_depth_in_sentinel_is_exact() {
+        assert!(is_depth_in_sentinel(-1.0));
+        assert!(!is_depth_in_sentinel(-1.000_001));
+        assert!(!is_depth_in_sentinel(-0.999_999));
+        assert!(!is_depth_in_sentinel(1.0));
+    }
+}

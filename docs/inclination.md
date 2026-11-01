@@ -18,7 +18,7 @@ which fixed a DMP import that skipped the conversion.
 | mNemo DMP | +up (device: `-90` = straight down) | `parse_section` (`src-tauri/crates/parsers/src/parsers/dmp.rs`) |
 | Walls `.srv` | +up | `walls/srv.rs`, negates `inc_up` into `pitch_in`/`pitch_out` |
 | Compass | +up | `compass.rs`, `pitch_in: Some(-inclination)` |
-| Ariane `.tml` / `.tmlu` | +up (inferred, see below) | `parsers::tml::inclination_to_pitch`, inverse `export::tml::pitch_to_inclination` |
+| Ariane `.tml` / `.tmlu` | +up (inferred, see below) | `parsers::tml::schema::inclination_to_pitch`, inverse `schema::pitch_to_inclination` (one module, shared by the importer and the exporter) |
 
 DMP normalises inside `parse_section`, not at a `ShotData` conversion, because
 there is no Rust one on the import path. DMP import returns the parsed `DmpFile`
