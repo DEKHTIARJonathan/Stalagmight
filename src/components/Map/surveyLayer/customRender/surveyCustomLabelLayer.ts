@@ -170,6 +170,9 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
     this.gl = gl;
     this.disabled = false;
     this.disabledReason = null;
+    // A re-add after a WebGL context restore runs here on the NEW context: re-arm
+    // the first-frames GL error check, whose budget the lost context spent (#576 D38).
+    this.checkedFrames = 0;
     // linkProgramBundle() already logs getShaderInfoLog / getProgramInfoLog ungated.
     this.bundle = linkProgramBundle(
       gl, LABEL_VERTEX_SRC, LABEL_FRAGMENT_SRC, LABEL_UNIFORMS, LABEL_ATTRIBS, '[customRender] label',
