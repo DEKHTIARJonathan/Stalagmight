@@ -19,8 +19,8 @@
  * Z-order: the layer order is snapshotted just before MapLibre tears the style
  * down - in the capture phase on the canvas container, which runs before
  * MapLibre's own `webglcontextlost` listener on the canvas itself - and each
- * custom layer is re-inserted before the layer that followed it then
- * ({@link reattachPlan}).
+ * custom layer is re-inserted before the first layer that followed it then and
+ * is on the map now ({@link reattachInOrder}).
  */
 import type { Map as MaplibreMap } from 'maplibre-gl';
 
@@ -36,37 +36,37 @@ export interface ReattachableLayer {
 }
 
 /**
- * The order to re-add `customIds` in, each with the layer to insert it before,
- * so the stack ends up exactly as `order` (the pre-loss order, bottom to top).
+ * Re-add the custom layers `owners` holds so the stack ends up as `order` (the
+ * pre-loss order, bottom to top).
  *
- * Works top-down: when a custom layer is placed, every layer that followed it is
- * either a stock layer the restored style already has, or a custom layer placed
- * earlier in this plan, so "the first follower that is on the map" is its true
- * successor. Custom ids absent from `order` (nothing drawing) are skipped. Pure.
+ * Works top-down, and picks each layer's insertion point against the LIVE map
+ * (`onMap`) at the moment it is re-added: the first layer that followed it in
+ * `order` and is on the map now. Everything above it has been dealt with by then,
+ * so that is its true successor - including when a custom layer above it did not
+ * land (its controller had nothing to draw any more, or the re-add failed and it
+ * tore itself down). Trusting the plan instead put the layer below before one that
+ * is not on the map, which MapLibre refuses ("Cannot add layer ... before
+ * non-existing layer"), so one failed re-add took the survey geometry with it
+ * (#576 D38 review). Ids in `order` without an owner, and owners whose layer is not
+ * in `order` (nothing drawing at the loss), are skipped.
  */
-export function reattachPlan(
+export function reattachInOrder(
   order: readonly string[],
-  customIds: readonly string[],
+  owners: ReadonlyMap<string, ReattachableLayer>,
   onMap: (id: string) => boolean,
-): Array<{ id: string; beforeId: string | undefined }> {
-  const custom = new Set(customIds);
-  const placed = new Set<string>();
-  const plan: Array<{ id: string; beforeId: string | undefined }> = [];
+): void {
   for (let i = order.length - 1; i >= 0; i--) {
-    const id = order[i]!;
-    if (!custom.has(id)) continue;
+    const owner = owners.get(order[i]!);
+    if (!owner) continue;
     let beforeId: string | undefined;
     for (let j = i + 1; j < order.length; j++) {
-      const next = order[j]!;
-      if (placed.has(next) || (!custom.has(next) && onMap(next))) {
-        beforeId = next;
+      if (onMap(order[j]!)) {
+        beforeId = order[j];
         break;
       }
     }
-    plan.push({ id, beforeId });
-    placed.add(id);
+    owner.reattach(beforeId);
   }
-  return plan;
 }
 
 export interface GlContextRecoveryOptions {
@@ -106,12 +106,11 @@ export function watchGlContextLoss(map: MaplibreMap, opts: GlContextRecoveryOpti
     if (!lost) return;
     lost = false;
     const owners = new Map(opts.layers().map((l) => [l.layerId, l]));
-    // Without a snapshot, fall back to each layer's insertion order on top.
-    const plan = order
-      ? reattachPlan(order, [...owners.keys()], (id) => Boolean(map.getLayer(id)))
-      : [...owners.keys()].map((id) => ({ id, beforeId: undefined }));
+    const snapshot = order;
     order = null;
-    for (const { id, beforeId } of plan) owners.get(id)?.reattach(beforeId);
+    if (snapshot) reattachInOrder(snapshot, owners, (id) => Boolean(map.getLayer(id)));
+    // Without a snapshot, fall back to each layer's insertion order on top.
+    else for (const owner of owners.values()) owner.reattach(undefined);
     opts.afterRestore();
     map.triggerRepaint();
   };

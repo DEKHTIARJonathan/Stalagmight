@@ -69,6 +69,9 @@ export interface FakeSurveyMap {
   restoreStyle(): void;
   /** Ids of the custom layers currently on the map. */
   customLayers(): string[];
+  /** The errors of `addLayer` calls refused because their `beforeId` was not on the
+   *  map - MapLibre fires an ErrorEvent and does NOT add the layer. */
+  rejectedAdds(): string[];
 }
 
 export function makeFakeSurveyMap(): FakeSurveyMap {
@@ -77,6 +80,7 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
   const canvas = new CountingTarget();
   const container = new CountingTarget();
   const custom = new Set<string>();
+  const rejected: string[] = [];
   let serialized: FakeStyle | null = null;
 
   const newStyle = (): FakeStyle => ({ layers: [], sources: new Set(), layout: new Map() });
@@ -106,6 +110,12 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
     addLayer(layer: { id: string; type?: string; onAdd?: (m: unknown, gl: unknown) => void }, beforeId?: string) {
       const s = target.style!._s;
       const at = beforeId !== undefined ? s.layers.indexOf(beforeId) : -1;
+      // Like MapLibre's Style.addLayer (maplibre-gl 5.16): a beforeId that is not
+      // on the map is an ErrorEvent, and the layer is NOT added.
+      if (beforeId !== undefined && at < 0) {
+        rejected.push(`Cannot add layer "${layer.id}" before non-existing layer "${beforeId}".`);
+        return;
+      }
       if (at >= 0) s.layers.splice(at, 0, layer.id);
       else s.layers.push(layer.id);
       if (layer.type === 'custom') {
@@ -197,5 +207,6 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
       target.style = { ...styleApi(s), _s: s };
     },
     customLayers: () => [...custom],
+    rejectedAdds: () => [...rejected],
   };
 }
