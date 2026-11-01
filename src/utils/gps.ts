@@ -114,15 +114,17 @@ const DASH_AS_MINUS = /(^|[^A-Za-z0-9.]|(?:^|[^A-Za-z])[NSEW])([\u2010-\u2015\uF
  * primes, acute accents and curly quotes for minutes and seconds; two
  * apostrophes for a seconds mark; and the Unicode minus and hyphen/dash
  * characters that copy-paste turns a '-' into. A dash where a minus sign
- * stands (`DASH_AS_MINUS`) becomes one; `parseGps` says so in a note.
+ * stands (`DASH_AS_MINUS`) becomes one; `parseGps` says so in a note. With
+ * `dashesAsMinus` false that dash is left as a dash (a horizontal bar, which
+ * no parser reads), so `parseGps` can tell whether reading it changed anything.
  */
-function canonicalizeGpsSymbols(text: string): string {
+function canonicalizeGpsSymbols(text: string, dashesAsMinus = true): string {
   return text
     .replace(/[\u00BA\u02DA]/g, '\u00B0')
     .replace(/[\u2018\u2019\u2032\u00B4\u02B9]/g, "'")
     .replace(/[\u201C\u201D\u2033\u02BA]/g, '"')
     .replace(/''/g, '"')
-    .replace(DASH_AS_MINUS, '$1-')
+    .replace(DASH_AS_MINUS, dashesAsMinus ? '$1-' : '$1\u2015')
     .replace(/[\u2010-\u2013\u2212]/g, '-');
 }
 
@@ -1697,9 +1699,19 @@ export function parseGps(input: string, depthReference = 0): GpsParseResult | Gp
   }
 
   const result = parseGpsText(canonicalizeGpsSymbols(trimmed), depthReference, input);
-  // A dash where a minus sign stands was read as one (`DASH_AS_MINUS`): say so.
+  // A dash where a minus sign stands was read as one (`DASH_AS_MINUS`): say so
+  // where that changed the reading. A dash the result does not use (one in a
+  // label, `Pos <dash>1: ...`) gives the same coordinates when left alone.
   const dash = [...trimmed.matchAll(DASH_AS_MINUS)][0]?.[2];
   if (dash === undefined || !('coordinates' in result)) return result;
+  const dashLeftAlone = parseGpsText(canonicalizeGpsSymbols(trimmed, false), depthReference, input);
+  if (
+    'coordinates' in dashLeftAlone &&
+    dashLeftAlone.coordinates.latitude === result.coordinates.latitude &&
+    dashLeftAlone.coordinates.longitude === result.coordinates.longitude
+  ) {
+    return result;
+  }
   const dashNote = i18n.t('validation.gps.dashReadAsMinus', { dash });
   return { ...result, note: result.note === undefined ? dashNote : `${dashNote} ${result.note}` };
 }

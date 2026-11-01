@@ -1282,3 +1282,18 @@ describe('a hemisphere taken from a direction word is said (R5-1)', () => {
     expect(parsedOk(`-20°30'15" -87°18'27" West entrance`).note).toBeUndefined();
   });
 });
+
+describe('the dash note only where the dash changed the reading (R5-3)', () => {
+  it('no note for a dash that is not the sign of a coordinate', () => {
+    for (const input of [`Pos \u20141: 20°30'15"N 87°18'27"W`, `20°30'15"N 87°18'27"W \u201312`]) {
+      const result = parsedOk(input);
+      expectCoordsClose(result, DMS_LAT, -DMS_LON);
+      expect(result.note, input).toBeUndefined();
+    }
+  });
+
+  it('still notes a dash that is the sign', () => {
+    expect(parsedOk(`\u201421°30'15" -87°18'27"`).note).toMatch(/as a minus sign/);
+    expect(parsedOk('20.5, \u201387.3').note).toMatch(/as a minus sign/);
+  });
+});
