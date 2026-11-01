@@ -34,6 +34,8 @@
     "lint:third-party:test": "node scripts/check-third-party-licenses.test.mjs",
     "lint:test-ids": "node scripts/check-test-ids.mjs",
     "lint:test-ids:test": "node scripts/check-test-ids.test.mjs",
+    "lint:prepush-checklist": "node scripts/check-prepush-checklist.mjs",
+    "lint:prepush-checklist:test": "node scripts/check-prepush-checklist.test.mjs",
     "lint:pw-timing:test": "node scripts/pw-timing-reporter.test.mjs && node scripts/pw-timing-summary.test.mjs",
     "coverage:ui": "E2E_COVERAGE=1 VITE_COVERAGE=1 pnpm test:ui",
     "coverage:merge": "node scripts/merge-coverage.mjs",

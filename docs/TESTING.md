@@ -88,17 +88,22 @@ The retired WDIO suite's residual coverage lives in the journeys
 ## What CI gates
 
 The authoritative list of commands to run before pushing is the **Pre-Push
-Checklist in [`CLAUDE.md`](../CLAUDE.md)** - it is kept in sync with the
-workflows, and is not repeated here.
+Checklist in [`CLAUDE.md`](../CLAUDE.md)** - every gate the three workflows
+below run is on it (`pnpm lint:prepush-checklist` in `leak-scan.yml` fails the
+build when one is missing), and it is not repeated here.
 
 Three workflows gate `master`:
 
 - **`ci.yml` (`check`)** - the Rust and TypeScript gate: `cargo fmt --check`
   (root package + every workspace member), `cargo clippy --workspace` at deny
-  level, `cargo test --workspace --features telemetry`, `tsc`, the
-  agent-harness typecheck, the Vitest suite, and the file-size / read-only-gating
-  tripwires. Each tripwire runs its own `:test` fixture first, so the rule itself
-  is pinned.
+  level, the release-profile `cargo check --release` (the only compile with
+  `debug_assertions` off), `tsc`, the test-ID contract, the agent-harness
+  typecheck, the release-tooling suite (`scripts/test-release.sh`), the
+  file-size / read-only-gating tripwires, the Vitest suite,
+  `cargo test --workspace --features telemetry`, the ts-rs bindings drift check
+  (`src-tauri/bindings/` must match what the tests just wrote) and the vendored
+  `compass_data` tests. Each tripwire runs its own `:test` fixture first, so the
+  rule itself is pinned.
 - **`e2e-smoke.yml` (`smoke`)** - in order: `pnpm lint:e2e-parallel` (the
   Playwright parallel-safety scanner), `pnpm typecheck:playwright`,
   `pnpm test:mock-contract`, `pnpm lint:pw-timing:test`, then the `@smoke`
@@ -108,8 +113,9 @@ Three workflows gate `master`:
   steps live here rather than in `check` because `check` path-ignores
   `e2e-playwright/**` - the very changes they guard.
 - **`leak-scan.yml`** - `lint:private-leaks` + `lint:no-em-dash` over the whole
-  tracked tree, plus `lint:third-party` (THIRD-PARTY-LICENSES.md against the
-  hashes of the two lockfiles, the generator and its cargo-about config). It is
+  tracked tree, `lint:third-party` (THIRD-PARTY-LICENSES.md against the
+  hashes of the two lockfiles, the generator and its cargo-about config), and
+  `lint:prepush-checklist` (the CLAUDE.md checklist lists every CI gate). It is
   the one workflow with **no** `paths-ignore`, because `check` and `smoke` both
   skip `**/*.md` and `docs/**` - exactly where a leak, a Unicode dash or a stale
   attribution bundle lands.

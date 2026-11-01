@@ -310,26 +310,30 @@ Each ratchet is paired with its own `:test` because CI pairs them (`ci.yml`) - t
 self-test pins the heuristic the gate depends on, and both are sub-second. **Run the
 clippy line verbatim.** A bare `cargo clippy` is not the gate: without
 `--features telemetry --all-targets` it misses what CI checks, and *with* the feature
-but without `TELEMETRY_ENDPOINT` set, `src-tauri/build.rs` fails the build script - so
+but without `TELEMETRY_ENDPOINT` set, the telemetry crate's build script
+(`src-tauri/crates/telemetry/build.rs`) fails - so
 you report the gate red for a reason that has nothing to do with the diff.
 
 ⚠ **`--workspace` and the fmt LOOP are both load-bearing since the crate split
 (#492), and omitting either reports green on code neither command read.**
 `src-tauri/Cargo.toml` is a real package that also happens to be the workspace root,
 so a cargo command aimed at it defaults to **that package alone** and silently skips
-all of `src-tauri/crates/*`. `cargo clippy --workspace` (`ci.yml:185`) is what CI
+all of `src-tauri/crates/*`. `cargo clippy --workspace` (`ci.yml`, step "Clippy (deny-level lint gate)") is what CI
 runs. Formatting has no `--workspace`, which is why CI runs the root check **and**
-then loops over every member manifest (`ci.yml:75-80`) - rustfmt reads only the
+then loops over every member manifest (`ci.yml`, step "Rust formatting (cargo fmt --check)") - rustfmt reads only the
 crate it is pointed at, so a member's formatting violation passes the root check and
 reds CI. Both halves have been observed doing exactly that: a gate run without them
 passed a diff whose only changes were in two member crates, one of which was
 misformatted.
 
 ⚠ **This table is deliberately NOT the whole merge gate, and "gates green" must not be
-reported as if it were.** The `check` job also runs `cargo test --features telemetry`,
-`pnpm test` (vitest), and `pnpm typecheck:agent`; those take minutes and are the
-**Pre-Push Checklist's** job (`CLAUDE.md`). Say *which* gates you ran, and that the
-test suites were deferred to CI.
+reported as if it were.** The `check` job also runs the release-profile
+`cargo check --release`, `cargo test --features telemetry` with the ts-rs bindings
+drift check after it, the vendored `compass_data` tests, `./scripts/test-release.sh`,
+`pnpm test` (vitest) and `pnpm typecheck:agent`, and `smoke` runs the `@smoke`
+Playwright set; those take minutes and are the **Pre-Push Checklist's** job
+(`CLAUDE.md`, which a leak-scan gate keeps complete). Say *which* gates you ran, and
+that the test suites were deferred to CI.
 
 ⚠ A **failing gate is a 🔴 in its own right** - report it, and say which gates you ran
 and which the diff made irrelevant. Neither file-size ratchet covers anything outside
