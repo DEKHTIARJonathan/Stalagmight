@@ -6,6 +6,8 @@ pub mod image;
 pub mod json;
 pub mod tml;
 mod tml_azimuth;
+#[cfg(test)]
+mod tml_golden_tests;
 mod tml_topology;
 
 pub use atomic::{write_atomic, write_atomic_bytes};
