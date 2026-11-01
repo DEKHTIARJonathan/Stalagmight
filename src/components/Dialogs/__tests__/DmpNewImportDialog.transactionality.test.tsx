@@ -779,3 +779,60 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     expect(screen.queryByTestId('cancel-remove-button')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * #576 D6: the wizard's late import goes through the store's single edit path
+ * (`importSections` -> `executeCommand`), so it gets that path's aftermath -
+ * among it the deferred-save flag (`noteImportResolvedDeferredSave`) and the
+ * integrity re-check - instead of the two steps the wizard used to replicate by
+ * hand. The case that mattered: a brand-new project without a zero datum, left
+ * with "Keep and close", kept `databaseOpen` false (warning resolution and
+ * dive-plan saving disabled) although the import had written the file.
+ */
+describe('DMP wizard: wizard imports run through the store edit path (#576 D6)', () => {
+  beforeEach(() => {
+    ipcOrder = [];
+    nextSectionId = 7;
+    invokeIpcMock.mockReset();
+    invokeIpcMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      ipcOrder.push(cmd);
+      if (cmd === 'import_sections') {
+        const configs = (args?.sections as unknown[] | undefined) ?? [];
+        return { success: true, section_ids: configs.map(() => nextSectionId++), import_receipt: receipt(), warnings: [] };
+      }
+      return null;
+    });
+    useUIStore.setState({ activeDialog: null, dialogData: {}, placementMode: null, importContext: null });
+    // A project created with a deferred first save: no file yet, so the DB-backed
+    // surfaces are off until something writes it.
+    useProjectStore.setState({ project: null, databaseOpen: false, isDirty: false });
+  });
+
+  it('opens the deferred-save gate and re-checks integrity after the late import', async () => {
+    const onComplete = vi.fn();
+    // Reopened after the user placed section 0 by hand: queue drained, the placement
+    // recorded but not imported yet, so the late import sends it.
+    renderWizard(
+      savedState({
+        segmentQueue: [],
+        directPlacements: [
+          {
+            anchorSectionIndex: 0,
+            anchorStationIndex: 0,
+            placement: { type: 'manual', align_station_index: 0, offset: { x: 0, y: 0, z: 0 } },
+          },
+        ],
+      }),
+      { onComplete, selected: [0] },
+    );
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    const afterImport = ipcOrder.slice(ipcOrder.indexOf('import_sections'));
+    expect(afterImport[0]).toBe('import_sections');
+    expect({
+      databaseOpen: useProjectStore.getState().databaseOpen,
+      integrityRechecked: afterImport.includes('check_project_integrity'),
+      dirty: useProjectStore.getState().isDirty,
+    }).toEqual({ databaseOpen: true, integrityRechecked: true, dirty: true });
+  });
+});

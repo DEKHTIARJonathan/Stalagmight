@@ -319,7 +319,7 @@ When all suggestions are exhausted (or skipped), the early import runs on the tr
    4. For disconnected components, search the full suggestion pool for fallback `existing`-type anchors
    5. Multi-pass emit: retry sections whose `from_importing` target hasn't been emitted yet
    6. Adjust station indices for deleted overlap shots
-3. IPC call: `import_sections(sections, fileHash, existingShotUpdates)`
+3. `import_sections(sections, fileHash, existingShotUpdates)` through the store's `importSections`, i.e. `executeCommand`'s edit path (refresh, dirty flags, deferred-save resolution, integrity re-check - #576 D6). The one import still issued directly is the segment placed on the map (`importPlacedSegmentNow`), from the placement callback after the wizard has closed.
 
 Sections unreachable after all passes remain in the wizard's manual segment-placement flow until the user places or discards them.
 

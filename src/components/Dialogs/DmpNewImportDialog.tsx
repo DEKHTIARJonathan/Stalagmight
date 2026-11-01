@@ -1989,14 +1989,18 @@ export default function DmpNewImportDialog({
             existingShotUpdatesRef.current,
             emittedSet,
           );
-          const result = refuseMutationDuringCarry() ?? await invokeIpc<CommandResult>('import_sections', {
-            sections: configs,
-            fileHash: selectionConfig.fileHash ?? null,
-            sectionHashes: selectionConfig.sectionHashes ?? null,
-            existingShotUpdates: earlyExistingShotUpdates.length > 0 ? earlyExistingShotUpdates : null,
-            virtualShotMode: 'AllReferences',
-            ...dmpProvenance(),
-          }, { purpose: 'import reachable sections (early import)' });
+          // Through the store's edit path (#576 D6), like the anchor import: it
+          // refuses during a move carry, serializes behind other edits, refreshes,
+          // marks dirty (local and SpeleoDB), resolves a deferred first save and
+          // re-checks integrity - the wizard used to replicate only some of that.
+          const result = await importSections(
+            configs,
+            selectionConfig.fileHash,
+            selectionConfig.sectionHashes,
+            'AllReferences',
+            dmpProvenance(),
+            earlyExistingShotUpdates.length > 0 ? earlyExistingShotUpdates : null,
+          );
 
           if (!result.success) {
             setError(result.error ?? 'Import failed');
@@ -2007,12 +2011,6 @@ export default function DmpNewImportDialog({
             importedSectionIdsRef.current.push(...result.section_ids);
           }
           if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
-
-          await refreshProjectState();
-          // Imports bypass executeCommand, so mark dirty ourselves - the sections
-          // then register as unsaved (autosave + the project-close guard);
-          // window-close is guarded separately by isImportInProgress (App.tsx) (#110).
-          markSuccessfulDmpImportDirty();
 
           // Build DMP index -> section_id mapping for late import.
           // Use backend response ordering directly; it matches submitted configs.
@@ -2064,7 +2062,7 @@ export default function DmpNewImportDialog({
       transitionToPlacingInFlightRef.current = false;
       suggestionActionInFlightRef.current = false;
     }
-  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, refreshProjectState, reportEmptySections, resolvedTheme]);
+  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, importSections, reportEmptySections, resolvedTheme]);
 
   // On mount: import zero datum section and fire suggest_all_import_placements
   useEffect(() => {
@@ -2238,14 +2236,15 @@ export default function DmpNewImportDialog({
             existingShotUpdatesRef.current,
             emittedSet,
           );
-          const result = refuseMutationDuringCarry() ?? await invokeIpc<CommandResult>('import_sections', {
-            sections: configs,
-            fileHash: selectionConfig.fileHash ?? null,
-            sectionHashes: selectionConfig.sectionHashes ?? null,
-            existingShotUpdates: lateExistingShotUpdates.length > 0 ? lateExistingShotUpdates : null,
-            virtualShotMode: 'AllReferences',
-            ...dmpProvenance(),
-          }, { purpose: 'import remaining sections (late import)' });
+          // Store edit path, as the early import (#576 D6).
+          const result = await importSections(
+            configs,
+            selectionConfig.fileHash,
+            selectionConfig.sectionHashes,
+            'AllReferences',
+            dmpProvenance(),
+            lateExistingShotUpdates.length > 0 ? lateExistingShotUpdates : null,
+          );
 
           if (!result.success) {
             setError(result.error ?? 'Late import failed');
@@ -2257,8 +2256,6 @@ export default function DmpNewImportDialog({
           }
           if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
 
-          await refreshProjectState();
-          markSuccessfulDmpImportDirty();
           existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
             existingShotUpdatesRef.current,
             emittedSet,
