@@ -6,9 +6,9 @@ use anyhow::Result;
 use crate::parsers::encoding::{cp1252_replacement_warning, read_cp1252, Cp1252Text};
 
 use super::{
-    apply_units_options, parse_srv_contents, split_first_token, ParsedSurvey, ParsedWalls,
-    WallsRef, WallsUnits, STATUS_DERIVE_DECL, STATUS_DETACHED, STATUS_DONT_DERIVE_DECL,
-    STATUS_GRID_RELATIVE, STATUS_NOT_GRID_RELATIVE, STATUS_TYPE_OTHER,
+    apply_units_options, is_walls_separator, parse_srv_contents, split_first_token, ParsedSurvey,
+    ParsedWalls, WallsRef, WallsUnits, STATUS_DERIVE_DECL, STATUS_DETACHED,
+    STATUS_DONT_DERIVE_DECL, STATUS_GRID_RELATIVE, STATUS_NOT_GRID_RELATIVE, STATUS_TYPE_OTHER,
 };
 
 /// Parse a bare `.SRV` file as a one-survey project (no `.WPJ` tree).
@@ -234,7 +234,9 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
         if line.is_empty() || line.starts_with(';') {
             continue;
         }
-        let (directive, rest) = split_first_token(line);
+        // Split the line trimmed of Walls separators only, so an `.OPTIONS`
+        // value ending in U+00A0 keeps it, as the same text does in a `.SRV`.
+        let (directive, rest) = split_first_token(raw.trim_end_matches(is_walls_separator));
         let dir_up = directive.to_ascii_uppercase();
         match dir_up.as_str() {
             ".BOOK" => {
@@ -286,7 +288,7 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
             }
             ".OPTIONS" => {
                 if let Some(e) = pending.as_mut() {
-                    e.options = Some(rest.trim().to_string());
+                    e.options = Some(rest.trim_matches(is_walls_separator).to_string());
                 }
             }
             ".PATH" => {

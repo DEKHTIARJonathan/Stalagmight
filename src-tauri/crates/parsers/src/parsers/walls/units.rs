@@ -393,10 +393,10 @@ pub(crate) fn apply_tape_option(
 
 pub(crate) fn set_prefix(units: &mut WallsUnits, level: usize, value: &str) {
     let v = unquote(value);
-    units.prefix[level] = if v.trim().is_empty() {
+    units.prefix[level] = if v.trim_matches(is_walls_separator).is_empty() {
         None
     } else {
-        Some(v.trim().to_string())
+        Some(v.trim_matches(is_walls_separator).to_string())
     };
 }
 
@@ -454,16 +454,24 @@ pub(crate) fn is_anonymous(tok: &str) -> bool {
 }
 
 pub(crate) fn unquote(s: &str) -> &str {
-    let s = s.trim();
+    let s = s.trim_matches(is_walls_separator);
     s.strip_prefix('"')
         .and_then(|x| x.strip_suffix('"'))
         .unwrap_or(s)
 }
 
+/// Split a directive line into its keyword and its argument. The keyword ends
+/// at the first whitespace character, U+00A0 included (no keyword holds one).
+/// The argument starts past the Walls separators after that, so a U+00A0
+/// opening it stays in the station name or value it begins, as it would in a
+/// vector line.
 pub(crate) fn split_first_token(line: &str) -> (&str, &str) {
     let trimmed = line.trim_start();
-    match trimmed.find(char::is_whitespace) {
-        Some(pos) => (&trimmed[..pos], trimmed[pos..].trim_start()),
+    match trimmed.char_indices().find(|&(_, c)| c.is_whitespace()) {
+        Some((pos, c)) => (
+            &trimmed[..pos],
+            trimmed[pos + c.len_utf8()..].trim_start_matches(is_walls_separator),
+        ),
         None => (trimmed, ""),
     }
 }

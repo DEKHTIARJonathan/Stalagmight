@@ -790,6 +790,147 @@ fn a_no_break_space_in_a_walls_units_prefix_does_not_split_the_prefix() {
     );
 }
 
+/// A U+00A0 that opens a station name belongs to it wherever the name sits.
+/// The tokenizer keeps it mid-line, but the whole-line trim and the `#Fix`
+/// argument trim stripped it, so `<0xA0>B2` was one station as a TO name and
+/// another (`B2`) at the start of a line or in a `#Fix`: the survey fell apart
+/// in two and the fix landed on the wrong station, with no warning.
+#[test]
+fn a_leading_no_break_space_names_the_same_walls_station_in_every_position() {
+    let dir = temp_dir("nbspleading");
+    let p = dir.join("lead.srv");
+    std::fs::write(
+        &p,
+        b"#UNITS meters order=DAV\nA1 \xa0B2 10 90 0\n\xa0B2 C3 10 90 0\n#Fix \xa0B2 100 200 5\n",
+    )
+    .unwrap();
+
+    let parsed = parse_walls(&p).unwrap();
+    let survey = &parsed.surveys[0];
+    let vectors: Vec<(String, String)> = survey
+        .vectors
+        .iter()
+        .map(|v| (v.from.clone(), v.to.clone()))
+        .collect();
+    let fixes: Vec<String> = survey.fixes.iter().map(|f| f.name.clone()).collect();
+    println!("vectors (from, to): {vectors:?}");
+    println!("fixes: {fixes:?}");
+    println!("warnings: {:?}", parsed.warnings);
+    assert_eq!(vectors.len(), 2, "both shots are read");
+    assert_eq!(fixes.len(), 1, "the #Fix is read");
+    println!(
+        "station read as the TO name mid-line (line 2):  {:?}",
+        vectors[0].1
+    );
+    println!(
+        "station read as the FROM name at line start (line 3): {:?}",
+        vectors[1].0
+    );
+    println!(
+        "station read as the #Fix name (line 4):          {:?}",
+        fixes[0]
+    );
+    assert_eq!(vectors[0].1, "\u{a0}B2", "the tokenizer keeps the U+00A0");
+    assert_eq!(
+        vectors[1].0, vectors[0].1,
+        "line 2 TO and line 3 FROM are one station"
+    );
+    assert_eq!(fixes[0], vectors[0].1, "the #Fix names that station");
+}
+
+/// A prefix is the front of every station name under it, so a U+00A0 at the
+/// start or end of a prefix value stays in it, the same as in a station name
+/// typed out with that prefix. The prefix trims stripped it, so `#Prefix
+/// <0xA0>X` then `A1` named `X:A1` while a shot to `<0xA0>X:A1` named another
+/// station.
+#[test]
+fn a_no_break_space_at_the_edge_of_a_walls_prefix_stays_in_the_station_names() {
+    let dir = temp_dir("nbspprefixedge");
+    let p = dir.join("prefix.srv");
+    std::fs::write(
+        &p,
+        b"#UNITS meters order=DAV\n\
+          #Prefix \xa0X\nA1 A2 10 90 0\n\
+          #Units Prefix=\xa0X\nA2 A3 10 90 0\n\
+          #Prefix\nA3 \xa0X:A4 10 90 0\n\
+          #Prefix Y\xa0\nB1 B2 10 90 0\n\
+          #Units Prefix=Y\xa0\nB2 B3 10 90 0\n\
+          #Prefix\nB3 Y\xa0:B4 10 90 0\n",
+    )
+    .unwrap();
+
+    let parsed = parse_walls(&p).unwrap();
+    let vectors: Vec<(String, String)> = parsed.surveys[0]
+        .vectors
+        .iter()
+        .map(|v| (v.from.clone(), v.to.clone()))
+        .collect();
+    for (label, v) in [
+        "#Prefix <0xA0>X",
+        "#Units Prefix=<0xA0>X",
+        "no prefix, <0xA0>X:A4 typed out",
+        "#Prefix Y<0xA0> (line end)",
+        "#Units Prefix=Y<0xA0> (line end)",
+        "no prefix, Y<0xA0>:B4 typed out",
+    ]
+    .iter()
+    .zip(&vectors)
+    {
+        println!("{label:34} -> {v:?}");
+    }
+    println!("warnings: {:?}", parsed.warnings);
+    let s = |name: &str| name.to_string();
+    assert_eq!(
+        vectors,
+        [
+            (s("\u{a0}X:A1"), s("\u{a0}X:A2")),
+            (s("\u{a0}X:A2"), s("\u{a0}X:A3")),
+            (s("A3"), s("\u{a0}X:A4")),
+            (s("Y\u{a0}:B1"), s("Y\u{a0}:B2")),
+            (s("Y\u{a0}:B2"), s("Y\u{a0}:B3")),
+            (s("B3"), s("Y\u{a0}:B4")),
+        ],
+        "every prefix position keeps the U+00A0 a typed-out name has"
+    );
+    assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+}
+
+/// The same holds for a prefix a `.wpj` hands down in `.OPTIONS`: a U+00A0
+/// ending the line is the end of the prefix, not padding to trim.
+#[test]
+fn a_no_break_space_ending_a_wpj_options_prefix_stays_in_the_station_names() {
+    let dir = temp_dir("nbspwpjoptions");
+    std::fs::write(
+        dir.join("S.SRV"),
+        b"#UNITS meters order=DAV\nB1 B2 10 90 0\nB2 Y\xa0:B3 10 90 0\n",
+    )
+    .unwrap();
+    let wpj_path = dir.join("T.wpj");
+    std::fs::write(
+        &wpj_path,
+        b";WALLS Project File\n.BOOK Root\n.NAME ROOT\n.STATUS 8\n\
+          .SURVEY S\n.NAME S\n.OPTIONS Prefix=Y\xa0\n.STATUS 8\n.ENDBOOK\n",
+    )
+    .unwrap();
+
+    let parsed = parse_walls(&wpj_path).unwrap();
+    let vectors: Vec<(String, String)> = parsed.surveys[0]
+        .vectors
+        .iter()
+        .map(|v| (v.from.clone(), v.to.clone()))
+        .collect();
+    println!("vectors (from, to): {vectors:?}");
+    println!("warnings: {:?}", parsed.warnings);
+    assert_eq!(
+        vectors,
+        [
+            ("Y\u{a0}:B1".to_string(), "Y\u{a0}:B2".to_string()),
+            ("Y\u{a0}:B2".to_string(), "Y\u{a0}:B3".to_string()),
+        ],
+        "the .OPTIONS prefix keeps its trailing U+00A0"
+    );
+}
+
 /// The preview's and the receipt's warnings that speak about the encoding.
 fn encoding_warnings(parsed: &ParsedWalls) -> (Vec<String>, Vec<String>) {
     let preview = build_preview(parsed).warnings;

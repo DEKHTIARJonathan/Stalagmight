@@ -48,7 +48,12 @@ pub(crate) fn parse_srv_contents(
 
     for (line_no, raw) in contents.lines().enumerate() {
         let line = raw.trim_end_matches(['\r', '\n']);
+        // `trimmed` only classifies the line (blank, comment, directive). The
+        // text that gets parsed is trimmed of Walls separators only, so a
+        // U+00A0 at either end of the line stays in the station name or value
+        // it touches, as it does mid-line.
         let trimmed = line.trim();
+        let fields = line.trim_matches(is_walls_separator);
         if trimmed.is_empty() {
             continue;
         }
@@ -78,7 +83,7 @@ pub(crate) fn parse_srv_contents(
 
         // Directive line.
         if trimmed.starts_with('#') {
-            let expanded = match expand_macros(trimmed, &macros) {
+            let expanded = match expand_macros(fields.trim_start(), &macros) {
                 Ok(s) => s,
                 Err(e) => {
                     warnings.push(format!("{name}:{}: {e}", line_no + 1));
@@ -102,7 +107,7 @@ pub(crate) fn parse_srv_contents(
         }
 
         // Vector / data line.
-        let expanded = match expand_macros(trimmed, &macros) {
+        let expanded = match expand_macros(fields, &macros) {
             Ok(s) => s,
             Err(e) => {
                 warnings.push(format!("{name}:{}: {e}", line_no + 1));
@@ -203,9 +208,9 @@ pub(crate) fn handle_directive(
         "segment" | "seg" | "s" => {
             apply_segment(segment, rest.trim());
         }
-        "prefix" | "prefix1" => set_prefix(units, 0, rest.trim()),
-        "prefix2" => set_prefix(units, 1, rest.trim()),
-        "prefix3" => set_prefix(units, 2, rest.trim()),
+        "prefix" | "prefix1" => set_prefix(units, 0, rest.trim_matches(is_walls_separator)),
+        "prefix2" => set_prefix(units, 1, rest.trim_matches(is_walls_separator)),
+        "prefix3" => set_prefix(units, 2, rest.trim_matches(is_walls_separator)),
         "fix" => {
             if let Some(fix) = parse_fix(rest, units, georef) {
                 fixes.push(fix);
