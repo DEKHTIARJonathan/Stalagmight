@@ -405,6 +405,23 @@ impl AppState {
             return CommandResult::failure("No project open".to_string());
         };
 
+        // [#576 B6-D1] A project a NEWER build saved is never written by this one -
+        // not in place (Ctrl+S, autosave, the pre-push flush) and not elsewhere
+        // either: a Save As would write this build's schema of it, the same silent
+        // downgrade under a different name. Checked first, under the project lock
+        // its flag was committed under, so a refused save leaves the live project
+        // exactly as loaded (the heals below mutate it).
+        if let Some(reason) = self.newer_file_refusal() {
+            tracing::warn!(
+                purpose = "never downgrade a project saved by a newer version",
+                "Refused to save a project saved by a newer version of Stalagmight"
+            );
+            return CommandResult::failure(format!(
+                "{}: Saving is disabled: {reason}",
+                crate::core::loading::NEWER_FILE_READ_ONLY_CODE
+            ));
+        }
+
         // Refuse to persist a project with unresolvable cross-references (a station an
         // endpoint anchors on was deleted) BEFORE the heals below mutate the live
         // project. The heals (UUID mint/dedup, orphan-offset drop, and the DESTRUCTIVE
@@ -1441,6 +1458,8 @@ impl AppState {
         // load commit, so closing a project takes its banner with it rather than
         // leaving it up over the welcome screen.
         self.set_history_discarded(false);
+        // [#576 B6-D1] Nor is there a newer-version file to keep read-only.
+        self.set_newer_file_schema(None);
         tracing::debug!("close_project: project dropped");
 
         tracing::debug!("close_project: acquiring database lock");

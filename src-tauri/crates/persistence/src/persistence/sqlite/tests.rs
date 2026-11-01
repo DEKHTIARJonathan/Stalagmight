@@ -2805,17 +2805,20 @@ fn a_pre_v17_file_loses_its_explicit_null_section_undo_history_on_open() {
     assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
 }
 
-/// A `PRAGMA user_version` ABOVE `SCHEMA_VERSION` must not be a way to keep the
-/// payloads every migration arm exists to drop.
+/// [#576 B6-D1] A file stamped ABOVE `SCHEMA_VERSION` is opened without a single
+/// write: no migration, and no undo purge either.
 ///
 /// `ensure_schema_version` runs no arm for a file from the future - there is
-/// nothing sensible it could run - so a stamp of 99 used to walk straight past
-/// the v7, v13, v15, v16 and v17 drops with the stacks intact. That is a
-/// one-pragma bypass of the v17 arm in particular, whose payloads still PARSE
-/// and whose replay wipes a section's name, surveyor and date. The history goes
-/// instead; the project data is left exactly as the file holds it.
+/// nothing sensible it could run - so its stacks still hold payloads no arm here
+/// has vetted (a forged stamp of 99 over pre-v17 entries whose replay wipes a
+/// section's name, surveyor and date). This build used to DELETE them on open.
+/// It no longer does: a file a newer build wrote is opened read-only, its history
+/// belongs to that build, and the load path keeps it out of this build's undo
+/// stack instead (core `newer_schema_tests::a_newer_files_history_is_never_restored`).
+/// The file itself - history, stamp and every byte - is left as the newer build
+/// wrote it.
 #[test]
-fn a_file_claiming_a_future_schema_loses_its_undo_history_but_keeps_its_project() {
+fn a_file_stamped_with_a_future_schema_opens_without_a_single_write() {
     let temp_dir = TempDir::new().unwrap();
     let path = temp_dir.path().join("from-the-future.stalx");
     {
@@ -2861,14 +2864,20 @@ fn a_file_claiming_a_future_schema_loses_its_undo_history_but_keeps_its_project(
         drop(db);
     }
 
+    let bytes_before = std::fs::read(&path).unwrap();
+    let mtime_before = std::fs::metadata(&path).unwrap().modified().unwrap();
+
     let db = Database::open_existing(&path).unwrap();
-    assert!(
-        db.load_undo_stack_with_timestamps().unwrap().is_empty(),
-        "a forged future user_version kept undo payloads no migration arm could vet"
+    let undo = db.load_undo_stack_with_timestamps().unwrap().len();
+    let redo = db.load_redo_stack_with_timestamps().unwrap().len();
+    println!("after open_existing: undo rows = {undo}, redo rows = {redo}");
+    assert_eq!(
+        undo, 1,
+        "the open must leave a newer file's undo history alone"
     );
-    assert!(
-        db.load_redo_stack_with_timestamps().unwrap().is_empty(),
-        "a forged future user_version kept redo payloads no migration arm could vet"
+    assert_eq!(
+        redo, 1,
+        "the open must leave a newer file's redo history alone"
     );
     // The stamp itself is left alone - this build has not migrated anything and
     // must not claim it has - and the project still loads.
@@ -2876,6 +2885,89 @@ fn a_file_claiming_a_future_schema_loses_its_undo_history_but_keeps_its_project(
     let project = db.load_project().unwrap();
     assert_eq!(project.name, "Future");
     assert_eq!(project.sections.len(), 1);
+    drop(db);
+
+    let bytes_after = std::fs::read(&path).unwrap();
+    let mtime_after = std::fs::metadata(&path).unwrap().modified().unwrap();
+    println!(
+        "bytes identical = {}, mtime identical = {}",
+        bytes_before == bytes_after,
+        mtime_before == mtime_after
+    );
+    assert!(
+        bytes_before == bytes_after,
+        "opening a newer file must not change a byte of it"
+    );
+    assert_eq!(mtime_before, mtime_after, "nor touch its mtime");
+}
+
+/// [#576 B6-D1] `newer_schema_version` reads the stamp, and only a stamp ABOVE
+/// this build's counts: a current file and an unstamped one whose project row
+/// merely claims the future are not "newer" (the row is an unverified claim,
+/// #485, and that shape is not one any build writes).
+#[test]
+fn newer_schema_version_reports_only_a_stamp_above_this_build() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("version.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("CaveA".to_string(), None))
+            .unwrap();
+        assert_eq!(
+            db.newer_schema_version(),
+            None,
+            "a current file is not newer"
+        );
+        db.conn
+            .execute_batch("UPDATE project SET schema_version = 99; PRAGMA user_version = 0;")
+            .unwrap();
+        assert_eq!(
+            db.newer_schema_version(),
+            None,
+            "a row's claim without the stamp is not a newer file"
+        );
+        db.set_user_version(SCHEMA_VERSION + 1).unwrap();
+        assert_eq!(db.newer_schema_version(), Some(SCHEMA_VERSION + 1));
+    }
+}
+
+/// [#576 B6-D1] The session handle for a newer file is read-only: reads work,
+/// every write - including the ungated display-setting one - fails, and the file
+/// is left exactly as it was.
+#[test]
+fn into_read_only_reads_but_cannot_write() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("read_only_view.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("CaveA".to_string(), None))
+            .unwrap();
+        db.set_user_version(SCHEMA_VERSION + 1).unwrap();
+    }
+    let bytes_before = std::fs::read(&path).unwrap();
+
+    let db = Database::open_existing(&path)
+        .unwrap()
+        .into_read_only(&path)
+        .unwrap();
+    assert_eq!(db.load_project().unwrap().name, "CaveA");
+    assert_eq!(db.newer_schema_version(), Some(SCHEMA_VERSION + 1));
+    let write = db.save_display_setting("showGrid", "true");
+    println!("display-setting write through the read-only handle: {write:?}");
+    assert!(
+        write.is_err(),
+        "a write through the read-only handle must fail"
+    );
+    assert!(
+        db.save_project_name("Renamed").is_err(),
+        "and so must a project write"
+    );
+    drop(db);
+
+    assert!(
+        std::fs::read(&path).unwrap() == bytes_before,
+        "nothing reached the file"
+    );
 }
 
 #[test]

@@ -98,6 +98,13 @@ pub struct LoadProjectFullBinaryResult {
     /// (the same value the backend edit gate was set from), so the frontend can
     /// settle its read-only gate before the project renders (#270).
     pub is_remote: bool,
+    /// [#576 B6-D1] The file's schema version when a NEWER Stalagmight saved it,
+    /// else `None`. Mirrors `LoadProjectFullResult::newer_schema_version` (the
+    /// same value the backend's read-only state was committed from), so the
+    /// frontend's gate and banner settle with the load like `is_remote`. A
+    /// top-level key of the map-encoded envelope: a reader that predates it finds
+    /// it absent rather than misaligned, so no format bump.
+    pub newer_schema_version: Option<i32>,
     pub project_header: ProjectHeaderBinary,
 
     pub shot_count: u32,
@@ -203,6 +210,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         warnings,
         display_settings,
         is_remote,
+        newer_schema_version,
     } = result;
 
     // Compute the frozen shots while the whole project is still in scope (its
@@ -397,6 +405,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         version: BINARY_FORMAT_VERSION,
         loading_id,
         is_remote,
+        newer_schema_version,
         project_header,
         shot_count: shot_count as u32,
         shots_floats: ByteBuf::from(shots_floats),
@@ -566,6 +575,7 @@ mod tests {
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
             is_remote: false,
+            newer_schema_version: None,
         };
 
         let bytes = encode(result).unwrap();
@@ -638,6 +648,7 @@ mod tests {
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
             is_remote: false,
+            newer_schema_version: None,
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
@@ -705,6 +716,7 @@ mod tests {
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
             is_remote: false,
+            newer_schema_version: None,
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
@@ -743,6 +755,7 @@ mod tests {
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
             is_remote: false,
+            newer_schema_version: None,
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();

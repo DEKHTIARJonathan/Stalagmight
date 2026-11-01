@@ -1213,20 +1213,24 @@ impl Database {
             tracing::warn!(
                 current = stamped,
                 expected = SCHEMA_VERSION,
-                "Database schema version is newer than this app"
+                purpose = "open a project saved by a newer version read-only",
+                "Database schema version is newer than this app; leaving the file untouched"
             );
-            // The file is opened anyway (the project tables are read with the
-            // columns this build knows), but its undo history is not. Every
-            // migration arm below exists because some persisted payload became
-            // ambiguous or unsafe to replay, and a version this build has never
-            // heard of runs NONE of them - so a file merely CLAIMING to be from
-            // the future keeps exactly the pre-v17 payloads the v17 arm exists
-            // to drop, which is all it takes to turn `PRAGMA user_version = 99`
-            // into a replay that wipes a section's name, surveyor and date.
-            // Dropping the history is the fail-safe: it costs a best-effort,
-            // capped, local-only stack, and the project data itself is left
-            // exactly as the file holds it.
-            self.drop_legacy_undo_history()?;
+            // [#576 B6-D1] A file a NEWER build wrote is opened without a single
+            // write: no arm (there is nothing sensible this build could run) and,
+            // unlike before, no undo purge either. The project is opened
+            // read-only (`AppState::newer_file_schema`), so its history stays
+            // the newer build's to replay, and the file is left byte-for-byte
+            // as that build wrote it.
+            //
+            // The purge used to be the fail-safe against replaying payloads no
+            // arm here has vetted - a file merely CLAIMING to be from the future
+            // keeps exactly the pre-v17 entries the v17 arm drops, which is all it
+            // takes to turn `PRAGMA user_version = 99` into a replay that wipes a
+            // section's name, surveyor and date. That guarantee now lives in the
+            // load path instead: it restores none of a newer file's history into
+            // this build's undo stack (`project_load.rs`), and nothing here may
+            // edit the project anyway.
             return Ok(());
         }
 

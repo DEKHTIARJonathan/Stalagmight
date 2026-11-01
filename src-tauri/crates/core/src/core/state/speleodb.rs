@@ -1680,6 +1680,11 @@ impl AppState {
     /// BASE-vs-tip fence). A force-editor is exempt from the #202 lock re-verify and
     /// from every lock-release path (it holds no lock).
     pub fn speleodb_force_edit(&self) -> Result<(), SpeleoErrorDto> {
+        // [#576 B6-D1] A project a newer build saved cannot be edited here, so
+        // there is no edit session to force.
+        if let Some(reason) = self.newer_file_refusal() {
+            return Err(local_dto(SpeleoDbError::Io(reason)));
+        }
         if !self.speleodb_allow_force_edit() {
             return Err(local_dto(SpeleoDbError::Io(
                 "force-edit is disabled; enable it in SpeleoDB settings first".to_owned(),
@@ -1724,6 +1729,12 @@ impl AppState {
     /// `Diverged` arms leave both gates untouched - so a force-editor stays
     /// force-editing (keeps their edits) rather than reverting to read-only.
     pub fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
+        // [#576 B6-D1] Before any of it: a project a newer build saved cannot be
+        // edited here, and taking the server lock for it would only keep every
+        // collaborator out of a project this session can never change or push.
+        if let Some(reason) = self.newer_file_refusal() {
+            return Err(local_dto(SpeleoDbError::Io(reason)));
+        }
         // The lock-ops span opens FIRST, before a single fact is read: everything
         // below is decided from facts (the session generation, the link, the
         // token, the mutex holder) that another lock operation could invalidate,

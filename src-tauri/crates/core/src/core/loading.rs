@@ -159,6 +159,14 @@ pub const PATH_TOO_LONG_CODE: &str = "FS_PATH_TOO_LONG";
 /// refusal would never reach a surface at all.
 pub const IGNORES_UNREADABLE_CODE: &str = "IGNORES_UNREADABLE";
 
+/// Prefix stamped onto a save `CommandResult` error when the open project was
+/// saved by a NEWER Stalagmight and is open read-only (#576 B6-D1): saving would
+/// rewrite it at this build's older schema and drop whatever the newer one
+/// stored. A marker of its own for the same routing reason as
+/// [`IGNORES_UNREADABLE_CODE`]: the frontend turns it into a read-only notice,
+/// not an error dialog, and never into Review & Repair.
+pub const NEWER_FILE_READ_ONLY_CODE: &str = "NEWER_FILE_READ_ONLY";
+
 /// How much of an underlying error may be quoted into a user-facing message.
 ///
 /// SQLite error text embeds the offending SQL and identifiers, which on a file
@@ -867,6 +875,19 @@ pub struct LoadProjectFullResult {
     /// synchronously with the load instead of waiting on a `speleodb_link_status`
     /// round trip that arrives after the project has already rendered (#270).
     pub is_remote: bool,
+    /// [#576 B6-D1] The file's schema version when a NEWER Stalagmight saved it -
+    /// the SAME value this load committed as `AppState::newer_file_schema`, which
+    /// opens the project read-only - else `None`. Handed to the frontend so its
+    /// read-only gate and banner settle with the load, exactly as `is_remote`.
+    ///
+    /// Carried on the BINARY envelope only (`load_binary::encode`), which is what
+    /// the frontend loads through; the JSON `load_project_full` - kept for
+    /// back-compat and tests - does not serialize it, so this type's generated
+    /// TypeScript binding is unchanged. Either way the backend refuses every edit
+    /// and save of such a project; the flag only decides what the UI presents.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub newer_schema_version: Option<i32>,
 }
 
 // ============================================================================
@@ -1261,6 +1282,7 @@ mod tests {
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
             is_remote: false,
+            newer_schema_version: None,
         };
         assert_wire(
             &serde_json::to_value(&load).expect("serialize load result"),

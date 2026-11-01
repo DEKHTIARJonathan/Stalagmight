@@ -81,6 +81,24 @@ impl AppState {
                 return CommandResult::failure(format!("{e}"));
             }
         };
+        // [#576 B6-D1] A file a newer build saved is viewed, never written: see
+        // the same step in `do_load_project_full`.
+        let newer_schema = db.newer_schema_version();
+        let db = match newer_schema {
+            None => db,
+            Some(_) => match db.into_read_only(&path) {
+                Ok(db) => db,
+                Err(e) => {
+                    tracing::error!(
+                        path = ?path,
+                        purpose = "resume editing",
+                        reason = %e,
+                        "Failed to reopen a newer-version project read-only"
+                    );
+                    return CommandResult::failure(format!("{e}"));
+                }
+            },
+        };
 
         let mut project = match db.load_project() {
             Ok(p) => p,
@@ -136,7 +154,12 @@ impl AppState {
         // two load entry points can't diverge. Idempotent; non-fatal.
         let live_shot_uuids = project.shot_uuid_by_position();
         project.ensure_shot_uuids();
-        if let Err(e) = db.backfill_resolved_warning_uuids(&live_shot_uuids) {
+        // [#576 B6-D1] A write - skipped on a newer file, which is never written.
+        let backfilled = match newer_schema {
+            None => db.backfill_resolved_warning_uuids(&live_shot_uuids),
+            Some(_) => Ok(0),
+        };
+        if let Err(e) = backfilled {
             tracing::warn!(
                 error = %e,
                 purpose = "upgrade legacy ignores to UUID keying",
@@ -181,38 +204,48 @@ impl AppState {
         // loader default to its own would bound the open at 2x the constant, because the
         // undo strings are still resident while the redo stack inflates.
         let history_budget = Database::load_history_budget();
-        let undo_entries =
-            match db.load_undo_stack_with_timestamps_within(history_row_cap, &history_budget) {
-                Ok(loaded) => loaded
-                    .into_iter()
-                    .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-                    .collect::<Vec<_>>(),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "restore edit history",
-                        "Failed to load undo stack from database; starting with empty history"
-                    );
-                    history_discarded = true;
-                    Vec::new()
+        // [#576 B6-D1] A newer file's history is not read at all: see the same step
+        // in `do_load_project_full`.
+        let undo_entries = match newer_schema {
+            Some(_) => Vec::new(),
+            None => {
+                match db.load_undo_stack_with_timestamps_within(history_row_cap, &history_budget) {
+                    Ok(loaded) => loaded
+                        .into_iter()
+                        .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                        .collect::<Vec<_>>(),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            purpose = "restore edit history",
+                            "Failed to load undo stack from database; starting with empty history"
+                        );
+                        history_discarded = true;
+                        Vec::new()
+                    }
                 }
-            };
-        let redo_entries =
-            match db.load_redo_stack_with_timestamps_within(history_row_cap, &history_budget) {
-                Ok(loaded) => loaded
-                    .into_iter()
-                    .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-                    .collect::<Vec<_>>(),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "restore edit history",
-                        "Failed to load redo stack from database; starting with empty redo history"
-                    );
-                    history_discarded = true;
-                    Vec::new()
+            }
+        };
+        let redo_entries = match newer_schema {
+            Some(_) => Vec::new(),
+            None => {
+                match db.load_redo_stack_with_timestamps_within(history_row_cap, &history_budget) {
+                    Ok(loaded) => loaded
+                        .into_iter()
+                        .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                        .collect::<Vec<_>>(),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            purpose = "restore edit history",
+                            "Failed to load redo stack from database; starting with empty redo history"
+                        );
+                        history_discarded = true;
+                        Vec::new()
+                    }
                 }
-            };
+            }
+        };
         // [#303] ...and the inherited-history watermark that goes with them. Read from the
         // SAME database handle, before it is swapped, so it describes these entries.
         // `UndoStack::next_stamp` needs it to keep a new entry above the cut the push
@@ -246,6 +279,10 @@ impl AppState {
         // only ever describe the project in the slot. Unconditional, so a clean load
         // clears the previous project's verdict.
         self.set_history_discarded(history_discarded);
+
+        // [#576 B6-D1] Same acquisition, same reason: the read-only state of a file a
+        // newer build saved describes exactly the project in the slot.
+        self.set_newer_file_schema(newer_schema);
 
         // [Track B] (#191) Read-only edit gate: remote ⇒ edit disabled,
         // local-only ⇒ enabled (see do_load_project_full). Off the link read above,
@@ -481,6 +518,21 @@ impl AppState {
                 early_return_err!(LoadError::new("DATABASE", msg));
             }
         };
+        // [#576 B6-D1] A file a NEWER build saved opens read-only, and is never
+        // written: `open_existing` ran no migration and no undo purge on it, the
+        // load-time backfills below are skipped, its history is not restored, and
+        // the session holds it through a READ-ONLY connection so nothing else that
+        // reaches the handle (display settings are deliberately ungated) can write
+        // it either. Committed below as `newer_file_schema`, which closes the edit
+        // gate and refuses every save; the frontend learns it from the result.
+        let newer_schema = db.newer_schema_version();
+        let db = match newer_schema {
+            None => db,
+            Some(_) => match db.into_read_only(&path) {
+                Ok(db) => db,
+                Err(e) => early_return_err!(LoadError::new("DATABASE", e.to_string())),
+            },
+        };
         check_cancelled!();
         progress.complete_phase(LoadingPhase::OpeningDatabase);
 
@@ -525,7 +577,12 @@ impl AppState {
         // anchors on the shot UUID. The
         // minted UUIDs persist on the next save (matching save_project's call).
         project.ensure_shot_uuids();
-        match db.backfill_resolved_warning_uuids(&live_shot_uuids) {
+        // [#576 B6-D1] A write - skipped on a newer file, which is never written.
+        let backfilled = match newer_schema {
+            None => db.backfill_resolved_warning_uuids(&live_shot_uuids),
+            Some(_) => Ok(0),
+        };
+        match backfilled {
             Ok(n) if n > 0 => tracing::info!(
                 upgraded = n,
                 purpose = "upgrade legacy ignores to UUID keying",
@@ -563,7 +620,17 @@ impl AppState {
         // fail-closed choice, so a corrupt or future byte cannot invent a
         // swimmable leg - but that substitution is a guess, not a verdict. Stash
         // them so the frontend can ask the user what each one really is.
-        match db.unrecognised_shot_kinds() {
+        //
+        // [#576 B6-D1] Not on a newer file. Its unknown kinds are most likely kinds
+        // the newer build added; they are shown fail-closed as Reference all the
+        // same, but rewriting them on disk is exactly the write such a file must
+        // never get, and asking the user to re-pick each one would only lead to an
+        // edit the read-only project refuses.
+        let scanned = match newer_schema {
+            None => db.unrecognised_shot_kinds(),
+            Some(_) => Ok(Vec::new()),
+        };
+        match scanned {
             Ok(found) => {
                 if !found.is_empty() {
                     tracing::warn!(
@@ -601,7 +668,8 @@ impl AppState {
             }
         }
 
-        if db.is_kind_classification_pending() {
+        // [#576 B6-D1] Never on a newer file: the pass writes its verdicts through.
+        if newer_schema.is_none() && db.is_kind_classification_pending() {
             let reclassified =
                 project.classify_virtual_shots(&crate::models::ClassifyScope::WholeProject);
             tracing::info!(
@@ -782,38 +850,53 @@ impl AppState {
         // loader default to its own would bound the open at 2x the constant, because the
         // undo strings are still resident while the redo stack inflates.
         let history_budget = Database::load_history_budget();
-        let undo_entries =
-            match db.load_undo_stack_with_timestamps_within(history_row_cap, &history_budget) {
-                Ok(loaded) => loaded
-                    .into_iter()
-                    .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-                    .collect::<Vec<_>>(),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "restore edit history",
-                        "Failed to load undo stack from database; starting with empty history"
-                    );
-                    history_discarded = true;
-                    Vec::new()
+        // [#576 B6-D1] A newer file's history is not read at all. It stays in the
+        // file for the build that wrote it, but no migration arm here has vetted
+        // its payloads - the hazard the open-time purge used to cover (a forged
+        // future stamp over pre-v17 entries replays into a wiped section name) -
+        // and the project is read-only, so there is nothing for it to undo. Not
+        // read rather than read-and-dropped: a format this build does not know can
+        // fail to parse, and that must not raise the discarded-history banner.
+        let undo_entries = match newer_schema {
+            Some(_) => Vec::new(),
+            None => {
+                match db.load_undo_stack_with_timestamps_within(history_row_cap, &history_budget) {
+                    Ok(loaded) => loaded
+                        .into_iter()
+                        .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                        .collect::<Vec<_>>(),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            purpose = "restore edit history",
+                            "Failed to load undo stack from database; starting with empty history"
+                        );
+                        history_discarded = true;
+                        Vec::new()
+                    }
                 }
-            };
-        let redo_entries =
-            match db.load_redo_stack_with_timestamps_within(history_row_cap, &history_budget) {
-                Ok(loaded) => loaded
-                    .into_iter()
-                    .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-                    .collect::<Vec<_>>(),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "restore edit history",
-                        "Failed to load redo stack from database; starting with empty redo history"
-                    );
-                    history_discarded = true;
-                    Vec::new()
+            }
+        };
+        let redo_entries = match newer_schema {
+            Some(_) => Vec::new(),
+            None => {
+                match db.load_redo_stack_with_timestamps_within(history_row_cap, &history_budget) {
+                    Ok(loaded) => loaded
+                        .into_iter()
+                        .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                        .collect::<Vec<_>>(),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            purpose = "restore edit history",
+                            "Failed to load redo stack from database; starting with empty redo history"
+                        );
+                        history_discarded = true;
+                        Vec::new()
+                    }
                 }
-            };
+            }
+        };
         // [#303] ...and the inherited-history watermark that goes with them. Read from the
         // SAME database handle, before it is swapped, so it describes these entries.
         // `UndoStack::next_stamp` needs it to keep a new entry above the cut the push
@@ -874,6 +957,10 @@ impl AppState {
         // never reaches this finalize section, so it cannot leave its verdict on the
         // project the user actually opened.
         self.set_history_discarded(history_discarded);
+        // [#576 B6-D1] The newer-version read-only state, under the same acquisition
+        // and for the same reason. The value handed to the frontend below, so the
+        // two gates cannot disagree about this load (the #270 shape).
+        self.set_newer_file_schema(newer_schema);
 
         // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one
         // carrying a speleo_link row) opened WITHOUT a write lock is read-only.
@@ -978,6 +1065,8 @@ impl AppState {
             // Same verdict the edit gate above was derived from, so the frontend
             // gate and the backend gate can never disagree about this load (#270).
             is_remote,
+            // [#576 B6-D1] Likewise the newer-version read-only state.
+            newer_schema_version: newer_schema,
         })
     }
 }

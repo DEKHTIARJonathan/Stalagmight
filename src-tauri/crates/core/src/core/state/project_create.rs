@@ -172,6 +172,8 @@ impl AppState {
         // brand-new empty project. Create is a project-slot commit like a load, and every
         // commit must write this.
         self.set_history_discarded(false);
+        // [#576 B6-D1] This build created it, so it is this build's to edit.
+        self.set_newer_file_schema(None);
 
         CommandResult::success()
     }
@@ -529,6 +531,8 @@ impl AppState {
         // brand-new empty project. Create is a project-slot commit like a load, and every
         // commit must write this.
         self.set_history_discarded(false);
+        // [#576 B6-D1] This build created it, so it is this build's to edit.
+        self.set_newer_file_schema(None);
 
         // Track whether the initial save is still pending: a deferred new project
         // has no file on disk yet, so its first import must durably persist it.

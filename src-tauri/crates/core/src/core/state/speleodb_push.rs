@@ -628,6 +628,13 @@ impl AppState {
         link: &crate::models::SpeleoLink,
         message: Option<String>,
     ) -> Result<PushOutcome, SpeleoErrorDto> {
+        // [#576 B6-D1] Never upload a project a newer build saved. Unreachable
+        // through the verbs today - `speleodb_start_editing` refuses it, so the
+        // gate Done/Push need stays closed - and kept here, at the one upload
+        // every push funnels through, so it stays that way.
+        if let Some(reason) = self.newer_file_refusal() {
+            return Err(local_dto(SpeleoDbError::Io(reason)));
+        }
         let project_id = &link.project_id;
 
         // Authoritative server tip - the revision topology, NOT the unreliable

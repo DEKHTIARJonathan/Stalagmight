@@ -268,6 +268,11 @@ impl AppState {
         //    link (abandoning its lock);
         //  - unresolvable cross-references: the one DETERMINISTIC `save_project` failure,
         //    checked here so step 2's relocate cannot strand a freshly-created project.
+        //  - [#576 B6-D1] a project a newer build saved: publishing saves it into
+        //    the cache, and that save is refused - after the create POST.
+        if let Some(reason) = self.newer_file_refusal() {
+            return Err(local_dto(SpeleoDbError::Io(reason)));
+        }
         if params.name.trim().is_empty() {
             return Err(local_dto(SpeleoDbError::Io(
                 "a project name is required to publish".to_owned(),

@@ -541,6 +541,13 @@ impl AppState {
                 return f;
             }
         }
+        // [#576 B6-D1] A file a NEWER build saved is read-only whether or not it
+        // is the open project: renaming it is a write into a schema this build
+        // does not know. The open one was refused just above; this is the closed
+        // one the recent-projects panel can reach.
+        if let Some(version) = db.newer_schema_version() {
+            return super::app_state::newer_file_edit_refusal("Rename project", version);
+        }
 
         if let Err(e) = db.save_project_name(trimmed) {
             return CommandResult::failure(format!("Failed to rename project: {e}"));

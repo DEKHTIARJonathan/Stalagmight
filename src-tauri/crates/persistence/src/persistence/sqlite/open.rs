@@ -160,6 +160,50 @@ impl Database {
         Ok(db)
     }
 
+    /// [#576 B6-D1] The schema version stamped on this file when it is ABOVE the
+    /// one this build knows - the file was saved by a newer Stalagmight - else
+    /// `None`.
+    ///
+    /// Read off `PRAGMA user_version`, the same stamp `ensure_schema_version`
+    /// keys its "newer than this app" branch on, so the two can never disagree
+    /// about a file: every build stamps it on every file it writes. The project
+    /// row's `schema_version` is deliberately not consulted - on an unstamped
+    /// file it is an unverified claim (#485), and that shape is not one any
+    /// build writes.
+    pub fn newer_schema_version(&self) -> Option<i32> {
+        self.get_user_version()
+            .ok()
+            .filter(|version| *version > SCHEMA_VERSION)
+    }
+
+    /// [#576 B6-D1] Re-open `path` - the file this handle was opened from by
+    /// [`Self::open_existing`] - through a READ-ONLY connection, consuming the
+    /// read-write one so a session cannot keep both.
+    ///
+    /// For a file a newer build wrote ([`Self::newer_schema_version`]): the
+    /// project is viewed, never written, and a read-only connection is what
+    /// makes that hold for every path that reaches the handle - including the
+    /// ones that are deliberately ungated (display settings) - instead of only
+    /// for the ones that remember to check. A write through it fails with
+    /// `SQLITE_READONLY` and leaves the file as it was.
+    ///
+    /// The checks `open_existing` ran (quick_check, project data, foreign keys)
+    /// are not repeated: they described this same file a moment ago. The read
+    /// tuning pragmas are, because they are per connection.
+    pub fn into_read_only(self, path: &Path) -> Result<Self> {
+        drop(self);
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .context("Failed to reopen the database read-only")?;
+        let db = Self { conn };
+        db.enable_foreign_keys()?;
+        let _ = db
+            .conn
+            .pragma_update(None, "mmap_size", 256i64 * 1024 * 1024);
+        let _ = db.conn.pragma_update(None, "cache_size", -32_000i64);
+        let _ = db.conn.pragma_update(None, "temp_store", "MEMORY");
+        Ok(db)
+    }
+
     /// Open a database for read-only metadata extraction only.
     ///
     /// Skips the per-file integrity check, foreign-key validation, schema

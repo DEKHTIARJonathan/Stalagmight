@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64};
 use std::sync::{Arc, Mutex};
 
 use crate::cache::TileCache;
@@ -187,6 +187,18 @@ pub struct AppState {
     /// Transient, never persisted: it describes THIS read of the file, and the next save
     /// overwrites the unreadable rows anyway.
     pub(super) history_discarded: AtomicBool,
+    /// [#576 B6-D1] The schema version stamped on the open project's file when a
+    /// NEWER Stalagmight saved it; 0 when it did not (every real version is >= 1).
+    /// Such a project is open READ-ONLY: `guard_mutation` refuses every edit and
+    /// `save_project` every save, so this build can never rewrite the file at its
+    /// own, older schema and silently drop what the newer one stored.
+    ///
+    /// Transient, never persisted, and deliberately separate from `edit_enabled`:
+    /// that flag belongs to the SpeleoDB lock flows, which open it on a lock
+    /// acquire - a newer file must stay closed whatever the lock says. Written on
+    /// every project-slot commit (both loads, both creates, close), like
+    /// `history_discarded`.
+    pub(super) newer_file_schema: AtomicI32,
     /// Memoized closure-adjusted station coordinates for the display-mode toggle.
     /// See [`AdjustedStationsCache`]. Transient; never persisted.
     pub(super) adjusted_cache: Mutex<Option<AdjustedStationsCache>>,
@@ -270,6 +282,8 @@ impl AppState {
             unrecognised_shot_kinds: Mutex::new(None),
             // Default-false: no project is open, so no history has been discarded.
             history_discarded: AtomicBool::new(false),
+            // Default 0 (none): no project is open, so none came from a newer build.
+            newer_file_schema: AtomicI32::new(0),
             adjusted_cache: Mutex::new(None),
             adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),
@@ -410,7 +424,18 @@ impl AppState {
     ///
     /// `MUTATION_ENTRYPOINTS` (tests.rs) enumerates the gated set (incl. the two
     /// warning verbs).
+    ///
+    /// [#576 B6-D1] A project saved by a NEWER Stalagmight is refused FIRST, ahead
+    /// of the lock: it is read-only whatever the SpeleoDB lock state says, and the
+    /// reason the user is told must be the version, not the lock. Same
+    /// `EDIT_DISABLED` code, so every caller that already treats a gated refusal
+    /// as "read-only, not a failure" keeps doing so, followed by
+    /// `NEWER_FILE_READ_ONLY` so the frontend's notice can say which read-only
+    /// this is without trusting its own copy of the flag.
     pub(super) fn guard_mutation(&self, what: &str) -> Result<(), CommandResult> {
+        if let Some(version) = self.newer_file_schema() {
+            return Err(newer_file_edit_refusal(what, version));
+        }
         if self.edit_enabled() {
             return Ok(());
         }
@@ -1022,4 +1047,53 @@ impl AppState {
         self.history_discarded
             .load(std::sync::atomic::Ordering::SeqCst)
     }
+
+    /// [#576 B6-D1] Record the schema version of the just-committed project's file
+    /// when a newer build saved it (`None` otherwise). Unconditional assignment on
+    /// every project-slot commit, like [`Self::set_history_discarded`], so a newer
+    /// project's read-only state can never leak into the next one.
+    pub(crate) fn set_newer_file_schema(&self, version: Option<i32>) {
+        self.newer_file_schema
+            .store(version.unwrap_or(0), std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// [#576 B6-D1] The open project's file schema version when a NEWER
+    /// Stalagmight saved it - the project is then open read-only - else `None`.
+    pub fn newer_file_schema(&self) -> Option<i32> {
+        match self
+            .newer_file_schema
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            0 => None,
+            version => Some(version),
+        }
+    }
+
+    /// [#576 B6-D1] The refusal for anything that would write the open project when
+    /// a newer build saved it, or `None` when the project is this build's to write.
+    /// Shared by the save and the SpeleoDB push/lock verbs so they all say the same
+    /// thing; `guard_mutation` carries the same reason behind its own code.
+    pub(super) fn newer_file_refusal(&self) -> Option<String> {
+        self.newer_file_schema().map(newer_file_reason)
+    }
+}
+
+/// [#576 B6-D1] Why a project saved by a newer Stalagmight cannot be written here.
+/// Plain words: it reaches the log and, through the coded refusals, the user.
+fn newer_file_reason(version: i32) -> String {
+    format!(
+        "this project was saved by a newer version of Stalagmight (file format {version}) \
+         and is open read-only. Update Stalagmight to edit it."
+    )
+}
+
+/// [#576 B6-D1] The refusal of an edit (`what`) to a file a newer build saved:
+/// `EDIT_DISABLED`, then `NEWER_FILE_READ_ONLY`, then the reason.
+pub(super) fn newer_file_edit_refusal(what: &str, version: i32) -> CommandResult {
+    CommandResult::failure(format!(
+        "{}: {}: {what} is disabled: {}",
+        crate::core::command::EDIT_DISABLED_CODE,
+        crate::core::loading::NEWER_FILE_READ_ONLY_CODE,
+        newer_file_reason(version)
+    ))
 }
