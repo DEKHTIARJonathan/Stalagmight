@@ -1096,6 +1096,46 @@ describe('a hemisphere letter is never taken from inside a word (R4 F5)', () => 
   });
 });
 
+describe('a dash-like character before a number reads as a minus sign, with a note (R4 F6)', () => {
+  const dashes = ['\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\uFE63', '\uFF0D'].map(
+    (dash) => [dash.charCodeAt(0).toString(16).toUpperCase(), dash] as const
+  );
+
+  it.each(dashes)('U+%s', (_codePoint, dash) => {
+    const result = parsedOk(`${dash}21°30'15" -87°18'27"`);
+    expect(result.coordinates.latitude).toBeCloseTo(-(21 + 30 / 60 + 15 / 3600), 9);
+    expect(result.coordinates.longitude).toBeCloseTo(-DMS_LON, 9);
+    expect(result.note).toBe(`Read "${dash}" as a minus sign.`);
+  });
+
+  it('also in a labelled paste and before decimal degrees', () => {
+    expect(parsedOk(`Entrance: \u201420°30'15" 87°18'27"`).coordinates.latitude).toBeCloseTo(-DMS_LAT, 9);
+    const dd = parsedOk('20.5, \uFF0D87.3');
+    expect(dd.coordinates.longitude).toBe(-87.3);
+    expect(dd.note).toMatch(/as a minus sign/);
+  });
+
+  it('the Unicode minus sign itself needs no note', () => {
+    expect(parsedOk('\u221220.5, 87.3').note).toBeUndefined();
+  });
+
+  it('also right after a hemisphere letter', () => {
+    const result = parsedOk('S\u20141.89, 69.2');
+    expect(result.coordinates.latitude).toBe(-1.89);
+    expect(result.note).toMatch(/as a minus sign/);
+  });
+
+  it('keeps the letter after a labelled pair (no hemisphere dropped)', () => {
+    expectCoordsClose(parsedOk(`\u201458°38'12" 0°32'3.6"West`), -(58 + 38 / 60 + 12 / 3600), -(32 / 60 + 3.6 / 3600));
+  });
+
+  it('a dash inside a word is not a sign', () => {
+    const result = parsedOk(`Entrance\u20142: 20°30'15"N 87°18'27"W`);
+    expectCoordsClose(result, DMS_LAT, -DMS_LON);
+    expect(result.note).toBeUndefined();
+  });
+});
+
 describe('a minus sign that overrides N or E in a labelled paste (R4 F7)', () => {
   it('carries the same note as the strict reader', () => {
     const ddm = parsedOk(`Entrance: -0°30.5'N 87°18.5'W`);

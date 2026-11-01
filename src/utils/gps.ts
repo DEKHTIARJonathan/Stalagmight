@@ -97,12 +97,24 @@ function normalizeGpsWhitespace(input: string): string {
 }
 
 /**
+ * A dash-like character (hyphen, non-breaking hyphen, figure, en or em dash,
+ * horizontal bar, small or fullwidth hyphen-minus) where a minus sign stands:
+ * right before a number, after a space, punctuation or a lone hemisphere
+ * letter, never inside a word or a number. Read as a minus sign, never dropped
+ * (dropping it flips the hemisphere), and never silently: it could also have
+ * been meant as a separator. The Unicode minus sign (U+2212) is a minus sign
+ * and needs no note.
+ */
+const DASH_AS_MINUS = /(^|[^A-Za-z0-9.]|(?:^|[^A-Za-z])[NSEW])([\u2010-\u2015\uFE63\uFF0D])(?=\d)/gi;
+
+/**
  * Map the look-alike characters keyboards and word processors produce onto the
  * ASCII marks the parsers read: masculine ordinal (U+00BA, Spanish and Mexican
  * keyboards) and ring above (U+02DA, macOS Option+K) for the degree sign;
  * primes, acute accents and curly quotes for minutes and seconds; two
  * apostrophes for a seconds mark; and the Unicode minus and hyphen/dash
- * characters that copy-paste turns a '-' into.
+ * characters that copy-paste turns a '-' into. A dash where a minus sign
+ * stands (`DASH_AS_MINUS`) becomes one; `parseGps` says so in a note.
  */
 function canonicalizeGpsSymbols(text: string): string {
   return text
@@ -110,6 +122,7 @@ function canonicalizeGpsSymbols(text: string): string {
     .replace(/[\u2018\u2019\u2032\u00B4\u02B9]/g, "'")
     .replace(/[\u201C\u201D\u2033\u02BA]/g, '"')
     .replace(/''/g, '"')
+    .replace(DASH_AS_MINUS, '$1-')
     .replace(/[\u2010-\u2013\u2212]/g, '-');
 }
 
@@ -1586,7 +1599,16 @@ export function parseGps(input: string, depthReference = 0): GpsParseResult | Gp
     }
   }
 
-  const text = canonicalizeGpsSymbols(trimmed);
+  const result = parseGpsText(canonicalizeGpsSymbols(trimmed), depthReference, input);
+  // A dash where a minus sign stands was read as one (`DASH_AS_MINUS`): say so.
+  const dash = [...trimmed.matchAll(DASH_AS_MINUS)][0]?.[2];
+  if (dash === undefined || !('coordinates' in result)) return result;
+  const dashNote = i18n.t('validation.gps.dashReadAsMinus', { dash });
+  return { ...result, note: result.note === undefined ? dashNote : `${dashNote} ${result.note}` };
+}
+
+/** `parseGps` for input that is not a link, with look-alike marks mapped to ASCII. */
+function parseGpsText(text: string, depthReference: number, input: string): GpsParseResult | GpsParseError {
   const format = detectFormat(text);
 
   // Grid references and codes have their own parsers.
