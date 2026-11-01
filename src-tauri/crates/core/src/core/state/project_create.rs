@@ -176,6 +176,8 @@ impl AppState {
         self.set_newer_file_schema(None);
         // [#576 C5] A project opens in Survey, here as in the frontend.
         self.reset_workspace_mode();
+        // [#576 B15] ...and nothing in it went unread.
+        self.set_unreadable_project_settings(Vec::new());
 
         CommandResult::success()
     }
@@ -538,6 +540,8 @@ impl AppState {
         self.set_newer_file_schema(None);
         // [#576 C5] A project opens in Survey, here as in the frontend.
         self.reset_workspace_mode();
+        // [#576 B15] ...and nothing in it went unread.
+        self.set_unreadable_project_settings(Vec::new());
 
         // Track whether the initial save is still pending: a deferred new project
         // has no file on disk yet, so its first import must durably persist it.

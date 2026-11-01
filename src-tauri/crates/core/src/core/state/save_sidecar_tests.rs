@@ -1,4 +1,4 @@
-//! [#576 A3] What a save owes the side tables it cannot read or write.
+//! [#576 A3, B15] What a save owes the side tables it cannot read or write.
 //!
 //! The save builds a FRESH `.stalx.tmp` and renames it over the destination, so a
 //! table it fails to carry is gone from the file. The policy (maintainer decision
@@ -8,6 +8,9 @@
 //!   nothing is written, the file on disk is untouched;
 //! - display settings are cosmetic: the save goes ahead and says so in a warning;
 //! - undo history keeps drop-and-warn, and the warning is in the result.
+//!
+//! And B15-D1: per-project settings the open could not read refuse every save, so
+//! the file keeps its stored values.
 //!
 //! Write failures have no organic trigger (the temp file is fresh), so they are
 //! injected through the test-only `save_sidecars::fault` hook. Read failures are
@@ -350,6 +353,208 @@ fn a_failed_history_write_saves_without_history_and_says_so() {
     assert!(disk.link.is_some(), "the link was carried");
     assert_eq!(disk.ignores, 1, "the ignores were carried");
     assert!((disk.second_shot_length - 9.0).abs() < 1e-9);
+}
+
+// --- B15: stored project settings the open could not read ------------------------
+
+/// A project whose stored validation thresholds, entrance elevation and north
+/// reference are all non-default, with the settings table then broken so the
+/// open cannot read any of them.
+fn file_with_unreadable_settings(dir: &Path) -> PathBuf {
+    let path = dir.join("CaveB.stalx");
+    let mut project = Project::new("CaveB".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("SectionB".to_string()),
+        color: "#654321".to_string(),
+        shots: vec![ShotData {
+            length: 4.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    project.validation.warn_shot_length_max = 77.0;
+    project.surface_elevation = Some(123.0);
+    project.default_azimuth_reference = Some(crate::models::AzimuthReference::magnetic(
+        4.5,
+        crate::models::CorrectionSource::FileDeclared,
+    ));
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&project).unwrap();
+    drop(db);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("ALTER TABLE project_settings RENAME COLUMN value TO broken_value;")
+        .unwrap();
+    path
+}
+
+/// The stored values, read back through a copy whose column is put right again.
+fn stored_settings(dir: &Path, path: &Path) -> Vec<(String, String)> {
+    let copy = dir.join("readback.stalx");
+    std::fs::copy(path, &copy).unwrap();
+    let conn = rusqlite::Connection::open(&copy).unwrap();
+    // Still broken unless a save replaced the table with a fresh one.
+    let _ = conn.execute_batch("ALTER TABLE project_settings RENAME COLUMN broken_value TO value;");
+    let mut stmt = conn
+        .prepare("SELECT key, value FROM project_settings ORDER BY key")
+        .unwrap();
+    let rows = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    rows
+}
+
+/// B15: a settings read that failed used to read as "not set", so the next save
+/// wrote the defaults over the stored values (and DELETEd the elevation and the
+/// north reference). Now the project opens and edits as usual, and every save -
+/// in place and Save As - is refused, so the file keeps its values.
+#[test]
+fn unreadable_project_settings_are_never_saved_over() {
+    let dir = TempDir::new().unwrap();
+    let path = file_with_unreadable_settings(dir.path());
+    let stored_before = stored_settings(dir.path(), &path);
+    println!("stored before the save: {stored_before:?}");
+
+    let state = AppState::new().unwrap();
+    let opened = state.open_project(path.clone());
+    assert!(
+        opened.success,
+        "the project still opens: {:?}",
+        opened.error
+    );
+    let live = state.get_project_state().unwrap();
+    let edited = state.execute(Command::UpdateShot {
+        section_id: live.sections[0].id,
+        shot_id: live.sections[0].shots[0].id,
+        updates: ShotUpdates {
+            length: Some(6.0),
+            ..Default::default()
+        },
+    });
+    assert!(edited.success, "editing works: {:?}", edited.error);
+    let before = std::fs::read(&path).unwrap();
+
+    let in_place = state.save_project(None);
+    let save_as = state.save_project(Some(dir.path().join("elsewhere.stalx")));
+
+    println!(
+        "save in place: success={} error={:?}",
+        in_place.success, in_place.error
+    );
+    println!(
+        "save as:       success={} error={:?}",
+        save_as.success, save_as.error
+    );
+    println!(
+        "stored after the save:  {:?}",
+        stored_settings(dir.path(), &path)
+    );
+    assert!(!in_place.success, "a save in place must be refused");
+    assert!(!save_as.success, "a Save As must be refused too");
+    for refused in [&in_place, &save_as] {
+        let error = refused.error.as_deref().unwrap_or_default();
+        assert!(
+            error.starts_with("PROJECT_SETTINGS_UNREADABLE: "),
+            "the refusal carries its marker, got: {error}"
+        );
+    }
+    assert!(
+        std::fs::read(&path).unwrap() == before,
+        "the file on disk must be untouched"
+    );
+    assert!(!dir.path().join("elsewhere.stalx").exists());
+    assert_eq!(stored_settings(dir.path(), &path), stored_before);
+}
+
+/// `do_load_project_full` reports progress through the installed sink; nobody is
+/// listening here.
+struct NoListener;
+
+impl crate::core::events::EventSink for NoListener {
+    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
+
+    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+        false
+    }
+}
+
+const ALL_THREE: [&str; 3] = [
+    "validation",
+    "surface_elevation",
+    "default_azimuth_reference",
+];
+
+/// B15: the project still opens - through both load paths - and the user is told
+/// WHICH settings could not be read: the production load hands the list to the
+/// frontend on its result, and both paths commit it as the state the save
+/// refusal reads. Closing the project clears it.
+#[test]
+fn the_open_reports_which_settings_could_not_be_read() {
+    let dir = TempDir::new().unwrap();
+    let path = file_with_unreadable_settings(dir.path());
+
+    let state = AppState::new().unwrap();
+    state.set_event_sink(std::sync::Arc::new(NoListener));
+    let loaded = state.do_load_project_full(path.clone()).unwrap();
+    println!(
+        "load_project_full: opened={} unreadable_project_settings={:?}",
+        loaded.project.sections.len() == 1,
+        loaded.unreadable_project_settings
+    );
+    assert_eq!(loaded.unreadable_project_settings, ALL_THREE);
+    assert_eq!(state.unreadable_project_settings(), ALL_THREE);
+    // The defaults are what the session holds meanwhile.
+    assert_eq!(loaded.project.surface_elevation, None);
+    assert_eq!(loaded.project.default_azimuth_reference, None);
+    let refused = state.save_project(None);
+    let error = refused.error.unwrap_or_default();
+    println!("save: {error}");
+    assert!(error.contains(
+        "validation thresholds, entrance elevation and default north reference could not be read"
+    ));
+
+    assert!(state.close_project().success);
+    assert!(
+        state.unreadable_project_settings().is_empty(),
+        "close clears it"
+    );
+
+    let legacy = AppState::new().unwrap();
+    assert!(legacy.open_project(path).success);
+    assert_eq!(legacy.unreadable_project_settings(), ALL_THREE);
+}
+
+/// The other half: "not set" is still "not set". A file whose settings rows are
+/// simply absent - or whose table predates the feature - opens with nothing
+/// reported and saves as before; only an UNREADABLE value refuses.
+#[test]
+fn absent_project_settings_are_not_unreadable_and_still_save() {
+    let dir = TempDir::new().unwrap();
+    for (name, breakage) in [
+        ("rows.stalx", "DELETE FROM project_settings;"),
+        ("table.stalx", "DROP TABLE project_settings;"),
+    ] {
+        let path = dir.path().join(name);
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("CaveC".to_string(), None))
+            .unwrap();
+        drop(db);
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch(breakage)
+            .unwrap();
+
+        let state = AppState::new().unwrap();
+        assert!(state.open_project(path.clone()).success, "{name} opens");
+        assert!(
+            state.unreadable_project_settings().is_empty(),
+            "{name}: absent settings are not unreadable"
+        );
+        let saved = state.save_project(None);
+        assert!(saved.success, "{name} still saves: {:?}", saved.error);
+    }
 }
 
 // --- The registry itself ----------------------------------------------------------

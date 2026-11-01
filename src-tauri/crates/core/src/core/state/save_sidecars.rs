@@ -20,6 +20,11 @@
 //! | display settings | saved without them, with a warning | per-machine view state |
 //! | undo history | saved without it, with a warning | never written partially |
 //!
+//! One more refusal shares the policy without being an entry: per-project settings
+//! (`project_settings`, which the core save writes from the model) that the OPEN
+//! could not read are held as defaults, so every save stops while they are unread
+//! ([`unread_settings_refusal`], #576 B15).
+//!
 //! A stopped save writes nothing: no temp file is left and the destination is
 //! untouched. A warning rides the successful save's `CommandResult.warnings`, which
 //! the frontend shows (`surfaceSaveWarnings`). The coverage test in
@@ -32,8 +37,8 @@ use std::path::Path;
 
 use super::AppState;
 use crate::core::loading::{
-    clamp_quoted_error, IGNORES_UNREADABLE_CODE, SPELEODB_LINK_UNREADABLE_CODE,
-    UNDO_MARKERS_UNREADABLE_CODE,
+    clamp_quoted_error, IGNORES_UNREADABLE_CODE, PROJECT_SETTINGS_UNREADABLE_CODE,
+    SPELEODB_LINK_UNREADABLE_CODE, UNDO_MARKERS_UNREADABLE_CODE,
 };
 use crate::core::{CommandResult, ValidationWarning, WarningSeverity};
 use crate::models::{Project, SectionId, SpeleoLink};
@@ -564,6 +569,40 @@ fn read_speleo_link(
             Ok(None)
         }
     }
+}
+
+/// [#576 B15] The refusal for every save while stored per-project settings the
+/// open could not read are held as defaults (`AppState::unreadable_project_settings`),
+/// or `None` when there are none.
+///
+/// `project_settings` itself is core-written (its keys come from the model), so
+/// it is not a registry entry; but an unreadable value is the same hazard as an
+/// unreadable side table (the save would rebuild the file without what is
+/// stored), and it gets the same policy: the save stops before anything is
+/// written. Every save, Save As included (maintainer decision B15-D1); export
+/// still works.
+pub(super) fn unread_settings_refusal(keys: &[String]) -> Option<CommandResult> {
+    let names: Vec<&str> = keys
+        .iter()
+        .map(|key| match key.as_str() {
+            "validation" => "validation thresholds",
+            "surface_elevation" => "entrance elevation",
+            "default_azimuth_reference" => "default north reference",
+            other => other,
+        })
+        .collect();
+    let listed = match names.as_slice() {
+        [] => return None,
+        [one] => (*one).to_owned(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    };
+    let pronoun = if names.len() == 1 { "it" } else { "them" };
+    Some(CommandResult::failure(format!(
+        "{PROJECT_SETTINGS_UNREADABLE_CODE}: Can't save: this project's stored {listed} could \
+         not be read when it was opened. Saving would replace {pronoun} with defaults, so \
+         nothing was written - the file on disk is unchanged. Export still works; close and \
+         reopen the project to try again."
+    )))
 }
 
 /// Rewrite both history stacks of `db` in one transaction - the undo history's

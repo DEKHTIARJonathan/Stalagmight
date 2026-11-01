@@ -205,6 +205,14 @@ pub struct AppState {
     /// commit (both loads, both creates, close) beside `newer_file_schema`. See
     /// `workspace_mode.rs`.
     pub(super) workspace_mode: super::workspace_mode::WorkspaceModeCell,
+    /// [#576 B15] The stored per-project settings (`project_settings` keys) the
+    /// open project's load could not read. The project opened with defaults in
+    /// their place, so `save_project` refuses every save while this is non-empty:
+    /// a save writes these settings back from the model, and would put the
+    /// defaults over the stored values. Transient, never persisted; written on
+    /// every project-slot commit (both loads, both creates, close), like
+    /// `newer_file_schema`.
+    pub(super) unreadable_project_settings: Mutex<Vec<String>>,
     /// Memoized closure-adjusted station coordinates for the display-mode toggle.
     /// See [`AdjustedStationsCache`]. Transient; never persisted.
     pub(super) adjusted_cache: Mutex<Option<AdjustedStationsCache>>,
@@ -292,6 +300,8 @@ impl AppState {
             newer_file_schema: AtomicI32::new(0),
             // Survey: no project is open, and every project opens in Survey.
             workspace_mode: super::workspace_mode::WorkspaceModeCell::default(),
+            // Empty: no project is open, so no stored setting went unread.
+            unreadable_project_settings: Mutex::new(Vec::new()),
             adjusted_cache: Mutex::new(None),
             adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),
@@ -1095,6 +1105,25 @@ impl AppState {
             0 => None,
             version => Some(version),
         }
+    }
+
+    /// [#576 B15] Record which stored per-project settings the just-committed
+    /// project's load could not read. Unconditional assignment on every
+    /// project-slot commit, like [`Self::set_newer_file_schema`].
+    pub(crate) fn set_unreadable_project_settings(&self, keys: Vec<String>) {
+        *self
+            .unreadable_project_settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = keys;
+    }
+
+    /// [#576 B15] The stored per-project settings the open project's load could
+    /// not read; while any are listed, every save is refused.
+    pub fn unreadable_project_settings(&self) -> Vec<String> {
+        self.unreadable_project_settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// [#576 B6-D1] The refusal for anything that would write the open project when

@@ -186,6 +186,19 @@ impl Database {
     }
 
     pub fn load_project(&self) -> Result<Project> {
+        self.load_project_with_report().map(|(project, _)| project)
+    }
+
+    /// [`Self::load_project`], plus what it could not read and filled with a
+    /// default instead.
+    ///
+    /// [#576 B15] The per-project settings are the case that matters: a stored
+    /// value that cannot be READ is not "not set". The project still loads, with
+    /// the default in its place, and the report names the key - so the open path
+    /// can refuse every save while it is unread, instead of writing the default
+    /// over the stored value (`save_project` writes these settings back from the
+    /// model).
+    pub fn load_project_with_report(&self) -> Result<(Project, ProjectLoadReport)> {
         tracing::debug!("Loading project from database");
 
         // First check if project table has data and log what's there
@@ -704,12 +717,19 @@ impl Database {
         // the global config, so legacy projects (no row) fall back to the
         // hardcoded default here; the AppState open paths re-check for absence
         // and seed from the user's global config instead (see project_io.rs).
-        let validation = self.load_project_validation()?.unwrap_or_default();
+        let mut report = ProjectLoadReport::default();
+        let validation = report
+            .setting("validation", self.load_project_validation())
+            .unwrap_or_default();
 
         // Entrance elevation (#431). Unlike `validation`, a missing row has no
         // legacy-seeding fallback - `None` genuinely means "unknown".
-        let surface_elevation = self.load_project_surface_elevation()?;
-        let default_azimuth_reference = self.load_project_default_azimuth_reference()?;
+        let surface_elevation =
+            report.setting("surface_elevation", self.load_project_surface_elevation());
+        let default_azimuth_reference = report.setting(
+            "default_azimuth_reference",
+            self.load_project_default_azimuth_reference(),
+        );
 
         // Pre-populate the section_id → index lookup so callers get
         // O(1) get_section without needing rebuild_section_index().
@@ -733,7 +753,7 @@ impl Database {
                 }
             }
         }
-        Ok(Project {
+        let project = Project {
             name,
             location,
             created_at,
@@ -759,7 +779,8 @@ impl Database {
             // Nothing loaded from disk is a proven solver fixpoint; the load path
             // re-solves offsets from scratch anyway (`redrive_offsets_after_load`).
             realign_fixpoint: None,
-        })
+        };
+        Ok((project, report))
     }
 
     /// Load loop closures from database
@@ -1310,18 +1331,50 @@ impl Database {
         Ok(())
     }
 
+    /// The stored text of one `project_settings` key.
+    ///
+    /// [#576 B15] "Not set" and "could not be read" are different answers, and only
+    /// the first may become a default: the save writes these settings back from the
+    /// project, so a read error taken for "not set" replaced the stored value with
+    /// the default on the next save. A missing key - or no table at all, in a file
+    /// written before it existed and opened read-only, which does not migrate - is
+    /// "not set". Every other failure is an error. A value of the wrong SQLite type
+    /// is unparseable, like a malformed one: warned about and read as not set.
+    fn project_setting_text(&self, key: &str) -> Result<Option<String>> {
+        let has_table: i64 = self.conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='project_settings'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_table == 0 {
+            return Ok(None);
+        }
+        let value = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = ?1",
+                [key],
+                |row| row.get::<_, rusqlite::types::Value>(0),
+            )
+            .optional()?;
+        Ok(match value {
+            None => None,
+            Some(rusqlite::types::Value::Text(text)) => Some(text),
+            Some(other) => {
+                tracing::warn!(
+                    key,
+                    value_type = %other.data_type(),
+                    "stored project setting is not text; reading it as not set"
+                );
+                None
+            }
+        })
+    }
+
     pub fn load_project_validation(
         &self,
     ) -> Result<Option<crate::models::config::ValidationConfig>> {
-        let json: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT value FROM project_settings WHERE key = 'validation'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .unwrap_or(None);
+        let json = self.project_setting_text("validation")?;
         Ok(json.and_then(|s| serde_json::from_str(&s).ok()))
     }
 
@@ -1331,15 +1384,7 @@ impl Database {
     /// before this feature) - reads as `None`, which is the correct "unknown"
     /// value for those files; no migration needed.
     pub fn load_project_surface_elevation(&self) -> Result<Option<f64>> {
-        let text: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT value FROM project_settings WHERE key = 'surface_elevation'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .unwrap_or(None);
+        let text = self.project_setting_text("surface_elevation")?;
         Ok(text.and_then(|s| {
             // `"NaN"`, `"inf"` and `1e309` all parse happily; a corrupted or
             // hand-edited `.stalx` (same untrusted provenance as a `.tml`) can
@@ -1364,15 +1409,7 @@ impl Database {
     /// A row that does not parse is treated the same way and warned about,
     /// rather than defaulting to some other rotation.
     pub fn load_project_default_azimuth_reference(&self) -> Result<Option<AzimuthReference>> {
-        let json: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT value FROM project_settings WHERE key = 'default_azimuth_reference'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .unwrap_or(None);
+        let json = self.project_setting_text("default_azimuth_reference")?;
         Ok(json.and_then(|s| {
             let parsed = serde_json::from_str::<AzimuthReference>(&s).ok().map(|r| {
                 // Re-impose the type's invariants on a hand-edited row.
@@ -1386,5 +1423,37 @@ impl Database {
             }
             parsed
         }))
+    }
+}
+
+/// What [`Database::load_project_with_report`] could not read and filled with a
+/// default instead.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ProjectLoadReport {
+    /// [#576 B15] The `project_settings` keys (`validation`, `surface_elevation`,
+    /// `default_azimuth_reference`) whose stored value exists but could not be
+    /// read. Absent and merely unparseable values are not listed: those are "not
+    /// set", as before.
+    pub unreadable_settings: Vec<&'static str>,
+}
+
+impl ProjectLoadReport {
+    /// The setting `key` as read, or `None` - recorded as unreadable - when the
+    /// read failed.
+    fn setting<T>(&mut self, key: &'static str, read: Result<Option<T>>) -> Option<T> {
+        match read {
+            Ok(value) => value,
+            Err(e) => {
+                tracing::warn!(
+                    key,
+                    error = %e,
+                    purpose = "keep stored project settings out of reach of a save",
+                    "A stored project setting could not be read; using the default for this \
+                     session"
+                );
+                self.unreadable_settings.push(key);
+                None
+            }
+        }
     }
 }

@@ -423,6 +423,22 @@ impl AppState {
             ));
         }
 
+        // [#576 B15] Stored per-project settings the open could not read are held as
+        // DEFAULTS in the model, and the core save writes them back: any save, in
+        // place or elsewhere, would put the defaults over the stored values. Refused
+        // under the side-table policy for the same reason, and before the heals for
+        // the reason above.
+        if let Some(refusal) =
+            super::save_sidecars::unread_settings_refusal(&self.unreadable_project_settings())
+        {
+            tracing::warn!(
+                purpose = "never write defaults over unread project settings",
+                "Refused to save: stored project settings could not be read when the project \
+                 was opened"
+            );
+            return refusal;
+        }
+
         // Refuse to persist a project with unresolvable cross-references (a station an
         // endpoint anchors on was deleted) BEFORE the heals below mutate the live
         // project. The heals (UUID mint/dedup, orphan-offset drop, and the DESTRUCTIVE
@@ -1064,6 +1080,8 @@ impl AppState {
         self.set_newer_file_schema(None);
         // [#576 C5] Nor a workspace: the next project opens in Survey.
         self.reset_workspace_mode();
+        // [#576 B15] ...nor stored settings that went unread.
+        self.set_unreadable_project_settings(Vec::new());
         tracing::debug!("close_project: project dropped");
 
         tracing::debug!("close_project: acquiring database lock");

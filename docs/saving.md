@@ -131,6 +131,27 @@ The save MODE is resolved once, in step 2, instead of being inferred at each ste
 A detached copy sheds the link and both undo-chain markers; every other mode
 carries every side table.
 
+### Stored project settings that could not be read
+
+The validation thresholds, the entrance elevation and the default north reference
+live in `project_settings`, which the core save writes from the `Project` model. A
+value that exists but cannot be READ on open (an I/O error, a structurally broken
+table) is therefore not "not set": the load fills in the default, and a save would
+write that default over the stored value (#576 B15). The open path keeps the two
+apart (`Database::load_project_with_report`):
+
+- **The project opens normally**, with defaults in place of the unread values. A
+  missing key, or a file older than the table, is still simply "not set", and an
+  unparseable value keeps its warn-and-default.
+- **The user is told which settings.** The load commits the list as
+  `AppState::unreadable_project_settings` and hands it to the frontend on the binary
+  load envelope (`unreadable_project_settings`); `App.tsx` shows a banner naming them.
+- **Every save is refused** - in place and Save As - with
+  `PROJECT_SETTINGS_UNREADABLE`, before the save-time heals touch the project, so the
+  file keeps its stored values. `surfaceSaveFailure` shows it as a warning toast, and
+  auto-save does not try. Export still works; closing or reopening the project ends
+  the state.
+
 ### `section_offsets` rows are never all-zero
 
 The `section_offsets` table records sections that are **actually displaced**. A
@@ -210,6 +231,7 @@ attempted, with the same marker idiom.)
 | `IGNORES_UNREADABLE` | The ignored-warnings table could not be read (#517) | Error dialog / autosave banner with the backend's sentence, never Review & Repair |
 | `SPELEODB_LINK_UNREADABLE` | The SpeleoDB link could not be read and the save would rewrite the open file | As `IGNORES_UNREADABLE` |
 | `UNDO_MARKERS_UNREADABLE` | The SpeleoDB undo-history markers could not be read | As `IGNORES_UNREADABLE` |
+| `PROJECT_SETTINGS_UNREADABLE` | Stored project settings could not be read when the project was opened (see above) | Warning toast; the banner says which |
 | (none) | Everything else - disk full, corruption | Error dialog, backend message verbatim |
 
 SQLite reports ALL of these as the same errno-free "unable to open database
@@ -273,6 +295,8 @@ Auto-save only fires when all of these are true:
 - No save is already in progress
 - The project was not saved by a newer version of Stalagmight (`selectNewerFileReadOnly`;
   every save of such a project is refused, so an attempt could only fail on every debounce)
+- None of the project's stored settings went unread on open (`unreadableProjectSettings`;
+  every save is refused while one did, for the same reason)
 
 ### Configuration
 

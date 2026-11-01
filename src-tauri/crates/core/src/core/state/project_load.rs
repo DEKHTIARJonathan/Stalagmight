@@ -100,8 +100,8 @@ impl AppState {
             },
         };
 
-        let mut project = match db.load_project() {
-            Ok(p) => p,
+        let (mut project, load_report) = match db.load_project_with_report() {
+            Ok(loaded) => loaded,
             Err(e) => {
                 tracing::error!(
                     path = ?path,
@@ -114,6 +114,14 @@ impl AppState {
         };
 
         project.file_path = Some(path.clone());
+        // [#576 B15] Stored settings the load could not read: the project opens
+        // with defaults in their place, and every save is refused while they are
+        // unread (committed with the project below).
+        let unread_settings: Vec<String> = load_report
+            .unreadable_settings
+            .iter()
+            .map(|key| (*key).to_owned())
+            .collect();
 
         // Same legacy-seeding as do_load_project_full: a project with no stored
         // `validation` row gets the user's global thresholds, not the hardcoded
@@ -285,6 +293,9 @@ impl AppState {
         self.set_newer_file_schema(newer_schema);
         // [#576 C5] A project opens in Survey, here as in the frontend.
         self.reset_workspace_mode();
+        // [#576 B15] Same acquisition, same reason: the stored settings this load
+        // could not read belong to the project in the slot, and refuse its saves.
+        self.set_unreadable_project_settings(unread_settings);
 
         // [Track B] (#191) Read-only edit gate: remote ⇒ edit disabled,
         // local-only ⇒ enabled (see do_load_project_full). Off the link read above,
@@ -540,13 +551,21 @@ impl AppState {
 
         // === PHASE 1: Loading project data (20%) ===
         progress.start_phase(LoadingPhase::LoadingProjectData);
-        let mut project = match db.load_project() {
-            Ok(p) => p,
+        let (mut project, load_report) = match db.load_project_with_report() {
+            Ok(loaded) => loaded,
             Err(e) => {
                 early_return_err!(LoadError::new("DATABASE", e.to_string()));
             }
         };
         project.file_path = Some(path.clone());
+        // [#576 B15] Stored settings the load could not read: the project opens
+        // with defaults in their place, and every save is refused while they are
+        // unread (committed with the project below).
+        let unread_settings: Vec<String> = load_report
+            .unreadable_settings
+            .iter()
+            .map(|key| (*key).to_owned())
+            .collect();
         // Legacy projects (saved before #57) have no persisted `validation` row;
         // load_project() filled `project.validation` with the hardcoded default.
         // Override it with the user's GLOBAL thresholds (the "defaults for new
@@ -981,6 +1000,9 @@ impl AppState {
         self.set_newer_file_schema(newer_schema);
         // [#576 C5] A project opens in Survey, here as in the frontend.
         self.reset_workspace_mode();
+        // [#576 B15] Same acquisition, same reason: the stored settings this load
+        // could not read belong to the project in the slot, and refuse its saves.
+        self.set_unreadable_project_settings(unread_settings.clone());
 
         // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one
         // carrying a speleo_link row) opened WITHOUT a write lock is read-only.
@@ -1089,6 +1111,8 @@ impl AppState {
             newer_schema_version: newer_schema,
             // [#576 B35(b) review] Read off the same link read the edit gate used.
             speleo_link_unreadable,
+            // [#576 B15] ...and the settings whose unread state refuses saves.
+            unreadable_project_settings: unread_settings,
         })
     }
 }

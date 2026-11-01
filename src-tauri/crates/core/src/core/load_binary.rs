@@ -109,6 +109,11 @@ pub struct LoadProjectFullBinaryResult {
     /// the file's SpeleoDB link row could not be read, so saving over the file is
     /// refused. A top-level key like `newer_schema_version`, so no format bump.
     pub speleo_link_unreadable: bool,
+    /// [#576 B15] The stored per-project settings the load could not read (saves
+    /// are refused while they are unread). Mirrors
+    /// `LoadProjectFullResult::unreadable_project_settings`. A top-level key, like
+    /// `newer_schema_version`: absent to a reader that predates it.
+    pub unreadable_project_settings: Vec<String>,
     pub project_header: ProjectHeaderBinary,
 
     pub shot_count: u32,
@@ -216,6 +221,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         is_remote,
         newer_schema_version,
         speleo_link_unreadable,
+        unreadable_project_settings,
     } = result;
 
     // Compute the frozen shots while the whole project is still in scope (its
@@ -412,6 +418,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         is_remote,
         newer_schema_version,
         speleo_link_unreadable,
+        unreadable_project_settings,
         project_header,
         shot_count: shot_count as u32,
         shots_floats: ByteBuf::from(shots_floats),
@@ -583,6 +590,7 @@ mod tests {
             is_remote: false,
             newer_schema_version: None,
             speleo_link_unreadable: false,
+            unreadable_project_settings: Vec::new(),
         };
 
         let bytes = encode(result).unwrap();
@@ -657,6 +665,7 @@ mod tests {
             is_remote: false,
             newer_schema_version: None,
             speleo_link_unreadable: false,
+            unreadable_project_settings: Vec::new(),
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
@@ -726,6 +735,7 @@ mod tests {
             is_remote: false,
             newer_schema_version: None,
             speleo_link_unreadable: false,
+            unreadable_project_settings: Vec::new(),
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
@@ -766,6 +776,7 @@ mod tests {
             is_remote: false,
             newer_schema_version: None,
             speleo_link_unreadable: false,
+            unreadable_project_settings: Vec::new(),
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();

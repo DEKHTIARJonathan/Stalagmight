@@ -23745,6 +23745,7 @@ fn profile_stalx_load() {
         is_remote: false,
         newer_schema_version: None,
         speleo_link_unreadable: false,
+        unreadable_project_settings: Vec::new(),
     };
     let bin = crate::core::load_binary::encode(result).expect("encode");
     let t8 = Instant::now();

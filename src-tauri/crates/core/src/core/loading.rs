@@ -170,6 +170,13 @@ pub const SPELEODB_LINK_UNREADABLE_CODE: &str = "SPELEODB_LINK_UNREADABLE";
 /// [`IGNORES_UNREADABLE_CODE`].
 pub const UNDO_MARKERS_UNREADABLE_CODE: &str = "UNDO_MARKERS_UNREADABLE";
 
+/// Prefix stamped onto a save `CommandResult` error when stored per-project
+/// settings (validation thresholds, entrance elevation, default north reference)
+/// could not be read when the project was opened (#576 B15): the session holds
+/// defaults in their place, and any save would write those over the stored
+/// values. Every save is refused until the project is reopened.
+pub const PROJECT_SETTINGS_UNREADABLE_CODE: &str = "PROJECT_SETTINGS_UNREADABLE";
+
 /// Prefix stamped onto a save `CommandResult` error when the open project was
 /// saved by a NEWER Stalagmight and is open read-only (#576 B6-D1): saving would
 /// rewrite it at this build's older schema and drop whatever the newer one
@@ -908,6 +915,15 @@ pub struct LoadProjectFullResult {
     #[serde(skip)]
     #[ts(skip)]
     pub speleo_link_unreadable: bool,
+    /// [#576 B15] The stored per-project settings this load could not read
+    /// (`validation`, `surface_elevation`, `default_azimuth_reference`) - the SAME
+    /// list this load committed as `AppState::unreadable_project_settings`, which
+    /// refuses every save. The project opened with defaults in their place; the
+    /// frontend names them so the user knows why saving is off. Binary envelope
+    /// only, like `newer_schema_version`, so no generated binding changes.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub unreadable_project_settings: Vec<String>,
 }
 
 // ============================================================================
@@ -1304,6 +1320,7 @@ mod tests {
             is_remote: false,
             newer_schema_version: None,
             speleo_link_unreadable: false,
+            unreadable_project_settings: Vec::new(),
         };
         assert_wire(
             &serde_json::to_value(&load).expect("serialize load result"),
