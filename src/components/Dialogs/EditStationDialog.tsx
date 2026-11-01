@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
@@ -7,11 +8,12 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
-import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
+import { parseGps, detectFormat, gpsSwapHint, type GpsFormat } from '../../utils/gps';
 import type { GpsCoordinates } from '../../types/project';
 import type { StationRef } from '../../types/project';
 
 export default function EditStationDialog() {
+  const { t } = useTranslation();
   const precision = useDecimalPrecision();
   const { closeDialog, dialogData } = useUIStore();
   const { stations, project, setZeroDatum, removeZeroDatum, updateStationComment } = useProjectStore();
@@ -38,6 +40,11 @@ export default function EditStationDialog() {
   const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(null);
   const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
+  // How an ambiguous part of the text was read (e.g. UTM "33S" as the southern
+  // hemisphere), and the advisory "may be swapped" hint - same as the Zero
+  // Datum config dialog.
+  const [gpsNote, setGpsNote] = useState<string | null>(null);
+  const [gpsSwapWarning, setGpsSwapWarning] = useState(false);
   const [comment, setComment] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,18 +83,24 @@ export default function EditStationDialog() {
       setGpsCoords(null);
       setGpsFormat(null);
       setGpsError(null);
+      setGpsNote(null);
+      setGpsSwapWarning(false);
       return;
     }
-    const fmt = detectFormat(value);
-    setGpsFormat(fmt ?? null);
     const result = parseGps(value);
+    // The badge names the format actually read (or, for text that did not
+    // parse, the one it was read as / looks like).
+    setGpsFormat(result.format ?? detectFormat(value) ?? null);
     if ('coordinates' in result) {
       setGpsCoords(result.coordinates);
       setGpsError(null);
+      setGpsNote(result.note ?? null);
     } else {
       setGpsCoords(null);
       setGpsError(result.message);
+      setGpsNote(null);
     }
+    setGpsSwapWarning(gpsSwapHint(value, result));
   }, []);
 
   const handleSave = async () => {
@@ -294,6 +307,16 @@ export default function EditStationDialog() {
                 <div className="text-xs text-success pl-1" data-testid="station-gps-parsed">
                   Lat: {formatFixed(gpsCoords.latitude, undefined, precision.gps)}, Lon:{' '}
                   {formatFixed(gpsCoords.longitude, undefined, precision.gps)}
+                </div>
+              )}
+              {gpsCoords && gpsNote && (
+                <div className="text-xs text-warning pl-1" data-testid="station-gps-note">
+                  {gpsNote}
+                </div>
+              )}
+              {gpsSwapWarning && (
+                <div className="text-xs text-warning pl-1" data-testid="station-gps-transposed-warning">
+                  {t('dialogs.zeroDatumConfig.transposedWarning')}
                 </div>
               )}
               <p className="text-xs text-text-secondary pt-1">

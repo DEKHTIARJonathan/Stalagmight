@@ -10,7 +10,7 @@ import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
-import { parseGps, detectFormat, looksTransposed, looksTransposedRawDD, type GpsFormat } from '../../utils/gps';
+import { parseGps, detectFormat, gpsSwapHint, type GpsFormat } from '../../utils/gps';
 import { MAX_DEPTH_REFERENCE_M } from '../../utils/gpsBounds';
 import { formatFixed } from '../../i18n/format';
 import { convertToEditableShots } from '../../hooks/useImportState';
@@ -371,6 +371,15 @@ export default function ZeroDatumConfigDialog({
   const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(initialConfig?.gps ?? null);
   const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(initialConfig?.gps ? 'DD' : null);
   const [gpsError, setGpsError] = useState<string | null>(null);
+  // How an ambiguous part of the text was read (e.g. UTM "33S" as the southern
+  // hemisphere), shown under the preview so the reading is never silent.
+  const [gpsNote, setGpsNote] = useState<string | null>(null);
+  // Soft (non-blocking) heuristic (#F7): the text looks like latitude and
+  // longitude were swapped. Coexists with `gpsError` - never replaces it, and
+  // never blocks Confirm. `gpsSwapHint` also covers text that FAILED to parse
+  // (a swapped "120, 45" only ever produces a range error) and stays quiet when
+  // the text itself says which value is the latitude (letters, UTM, a link).
+  const [gpsTransposedWarning, setGpsTransposedWarning] = useState(false);
 
   // Depth/elevation of the zero-datum point relative to the surface (#524).
   // Optional: blank keeps today's behaviour (`depth_reference: 0`, "not
@@ -469,18 +478,6 @@ export default function ZeroDatumConfigDialog({
     if (!gpsCoords) return null;
     return { latitude: gpsCoords.latitude, longitude: gpsCoords.longitude };
   }, [gpsCoords]);
-
-  // Soft (non-blocking) heuristic (#F7): a plausibly-valid pair that still
-  // looks like the fields were swapped. Coexists with `gpsError` - never
-  // replaces it, and never blocks Confirm. Falls back to the raw-pair variant
-  // when parsing FAILED (`gpsCoords` is null): a swapped "120, 45" never
-  // produces coordinates to run the coords-based check on, so without this
-  // branch it got only the generic range error and no swap hint at all.
-  const gpsTransposedWarning = useMemo(() => {
-    if (gpsCoords) return looksTransposed(gpsCoords.latitude, gpsCoords.longitude);
-    if (gpsError) return looksTransposedRawDD(gpsInput);
-    return false;
-  }, [gpsCoords, gpsError, gpsInput]);
 
   // Dirty guard (#F9): GPS text entered, the section renamed, a metadata
   // field touched, the zero-datum STATION PICK changed, or a shot
@@ -585,18 +582,24 @@ export default function ZeroDatumConfigDialog({
       setGpsCoords(null);
       setGpsFormat(null);
       setGpsError(null);
+      setGpsNote(null);
+      setGpsTransposedWarning(false);
       return;
     }
-    const detected = detectFormat(value);
-    setGpsFormat(detected || null);
     const result = parseGps(value, depthReference);
+    // The badge names the format actually read (or, for text that did not
+    // parse, the one it was read as / looks like).
+    setGpsFormat(result.format ?? detectFormat(value) ?? null);
     if ('coordinates' in result) {
       setGpsCoords(result.coordinates);
       setGpsError(null);
+      setGpsNote(result.note ?? null);
     } else {
       setGpsCoords(null);
       setGpsError(result.message);
+      setGpsNote(null);
     }
+    setGpsTransposedWarning(gpsSwapHint(value, result));
   }, []);
 
   // Depth-reference input handler: just stages the text. The effect below
@@ -807,6 +810,11 @@ export default function ZeroDatumConfigDialog({
                 <div className="text-xs text-success pl-1" data-testid="zero-datum-gps-parsed">
                   Lat: {formatFixed(gpsCoords.latitude, undefined, precision.gps)}, Lon:{' '}
                   {formatFixed(gpsCoords.longitude, undefined, precision.gps)}
+                </div>
+              )}
+              {gpsCoords && gpsNote && (
+                <div className="text-xs text-warning pl-1" data-testid="zero-datum-gps-note">
+                  {gpsNote}
                 </div>
               )}
               {gpsTransposedWarning && (

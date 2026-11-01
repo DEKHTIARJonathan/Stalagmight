@@ -780,4 +780,54 @@ describe('ZeroDatumConfigDialog GPS hints', () => {
     expect(screen.getByTestId('zero-datum-gps-error')).toBeInTheDocument();
     expect(screen.getByTestId('zero-datum-gps-transposed-warning')).toBeInTheDocument();
   });
+
+  it('does not show the swap hint for a far-north UTM point (#576 D39e)', () => {
+    // Svalbard, 78.96N: a grid reference cannot have its axes swapped.
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '33X 512345 8765432' } });
+    expect(screen.getByTestId('zero-datum-gps-parsed')).toHaveTextContent('Lat: 78.958757');
+    expect(screen.queryByTestId('zero-datum-gps-transposed-warning')).not.toBeInTheDocument();
+  });
+
+  it('says how UTM "33S" was read and confirms the value it previews (#576 D37)', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '33S 512345 8765432' } });
+    expect(screen.getByTestId('zero-datum-gps-parsed')).toHaveTextContent('Lat: -11.168093');
+    expect(screen.getByTestId('zero-datum-gps-note')).toHaveTextContent('southern hemisphere');
+    fireEvent.click(screen.getByTestId('zero-datum-config-confirm'));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onConfirm.mock.calls[0]![0].gps.latitude).toBeCloseTo(-11.1680928, 5);
+  });
+
+  it('keeps the sign of a -0 DDM degree and says the minus sign won (#576 D39e)', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: "-0°30.5'N 87°18.5'W" } });
+    expect(screen.getByTestId('zero-datum-gps-parsed')).toHaveTextContent('Lat: -0.508333');
+    expect(screen.getByTestId('zero-datum-gps-note')).toHaveTextContent('minus sign');
+  });
+
+  it('rejects a UTM band letter the northing cannot have and keeps Confirm disabled', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: '33U 512345 8765432' } });
+    expect(screen.getByTestId('zero-datum-gps-error')).toHaveTextContent('band U');
+    expect(screen.queryByTestId('zero-datum-gps-parsed')).not.toBeInTheDocument();
+    expect(screen.getByTestId('zero-datum-config-confirm')).toBeDisabled();
+  });
+
+  it('badges the format actually read', () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId('zero-datum-gps-input'), { target: { value: "20°30'N 87°18'W" } });
+    expect(screen.getByTestId('zero-datum-gps-format')).toHaveTextContent('DDM');
+  });
+
+  it('clears the note and the hint with the text', () => {
+    renderDialog();
+    const input = screen.getByTestId('zero-datum-gps-input');
+    fireEvent.change(input, { target: { value: '33S 512345 8765432' } });
+    expect(screen.getByTestId('zero-datum-gps-note')).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: '' } });
+    expect(screen.queryByTestId('zero-datum-gps-note')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('zero-datum-gps-parsed')).not.toBeInTheDocument();
+    expect(screen.getByTestId('zero-datum-config-confirm')).toBeDisabled();
+  });
 });
