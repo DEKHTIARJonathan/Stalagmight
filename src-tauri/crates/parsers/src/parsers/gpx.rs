@@ -128,6 +128,44 @@ fn local_name(e: &quick_xml::events::BytesStart<'_>) -> Vec<u8> {
     strip_ns(qname.as_ref()).to_vec()
 }
 
+/// The XML reader every GPX loop reads through once `<gpx>` has opened, so the
+/// document's end is judged in one place (#576 B14). quick-xml reports a
+/// document that simply stops as a clean end of file, so a GPX cut off by a
+/// dying GPS or a partial download read as a shorter, complete track, and a
+/// number cut in half (352.4 cut to 35) became a real reading. Any end of
+/// file while an element is still open fails the parse instead, as the
+/// Ariane reader does (`tml::parse_xml_content`).
+struct GpxReader<'a> {
+    inner: Reader<&'a [u8]>,
+    /// Elements opened and not yet closed, `<gpx>` included.
+    open: u32,
+}
+
+impl GpxReader<'_> {
+    /// The next event, or an error for malformed XML or a document that
+    /// ends with elements still open.
+    fn next_event<'b>(&mut self, buf: &'b mut Vec<u8>) -> Result<Event<'b>> {
+        match self.inner.read_event_into(buf) {
+            Ok(event @ Event::Start(_)) => {
+                self.open += 1;
+                Ok(event)
+            }
+            Ok(event @ Event::End(_)) => {
+                self.open = self.open.saturating_sub(1);
+                Ok(event)
+            }
+            Ok(Event::Eof) if self.open > 0 => bail!(
+                "The GPX ends at byte {} with {} element(s) still open - the file appears \
+                 truncated or damaged. Export the track from the device or app again.",
+                self.inner.buffer_position(),
+                self.open
+            ),
+            Ok(event) => Ok(event),
+            Err(e) => bail!("XML parse error: {e}"),
+        }
+    }
+}
+
 /// Parse a GPX file from the given path.
 pub fn parse_gpx(path: &Path) -> Result<GpxFile> {
     parse_gpx_str(&read_utf8(path, FileFamily::Xml)?)
@@ -135,7 +173,7 @@ pub fn parse_gpx(path: &Path) -> Result<GpxFile> {
 
 /// Parse GPX from a string (for testing).
 pub fn parse_gpx_str(xml: &str) -> Result<GpxFile> {
-    let mut reader = Reader::from_str(xml);
+    let mut xml_reader = Reader::from_str(xml);
 
     let mut gpx = GpxFile {
         name: None,
@@ -148,7 +186,7 @@ pub fn parse_gpx_str(xml: &str) -> Result<GpxFile> {
 
     // Find the <gpx> root element
     loop {
-        match reader.read_event_into(&mut buf) {
+        match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
                 let tag = local_name(e);
                 if tag == b"gpx" {
@@ -163,12 +201,18 @@ pub fn parse_gpx_str(xml: &str) -> Result<GpxFile> {
     }
 
     buf.clear();
+    // From here on every event goes through the reader that counts what is
+    // open, starting with <gpx> itself (#576 B14).
+    let mut reader = GpxReader {
+        inner: xml_reader,
+        open: 1,
+    };
 
     // Parse children of <gpx>
     let mut depth = 1u32;
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 let tag = local_name(e);
                 // Extract lat/lon now while `e` is still alive
                 let lat_lon = if tag == b"wpt" || tag == b"trkpt" || tag == b"rtept" {
@@ -201,7 +245,7 @@ pub fn parse_gpx_str(xml: &str) -> Result<GpxFile> {
                     _ => {}
                 }
             }
-            Ok(Event::Empty(ref e)) => {
+            Event::Empty(ref e) => {
                 let tag = local_name(e);
                 if tag == b"wpt" {
                     let (lat, lon) = parse_lat_lon(e)?;
@@ -215,14 +259,13 @@ pub fn parse_gpx_str(xml: &str) -> Result<GpxFile> {
                     });
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -272,20 +315,19 @@ fn parse_lat_lon(e: &quick_xml::events::BytesStart<'_>) -> Result<(f64, f64)> {
 }
 
 /// Read the text content of the current element (between start and end tags).
-fn read_text(reader: &mut Reader<&[u8]>) -> Result<String> {
+fn read_text(reader: &mut GpxReader<'_>) -> Result<String> {
     let mut buf = Vec::new();
     let mut text = String::new();
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Text(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Text(ref e) => {
                 text.push_str(&e.unescape().context("Invalid text content")?);
             }
-            Ok(Event::End(_)) | Ok(Event::Eof) => break,
-            Ok(Event::Start(_)) => {
+            Event::End(_) | Event::Eof => break,
+            Event::Start(_) => {
                 // Nested element - skip it entirely
                 skip_element(reader)?;
             }
-            Err(e) => bail!("XML parse error: {e}"),
             _ => {}
         }
         buf.clear();
@@ -294,20 +336,19 @@ fn read_text(reader: &mut Reader<&[u8]>) -> Result<String> {
 }
 
 /// Skip past the current element and all its children (after Start has been consumed).
-fn skip_element(reader: &mut Reader<&[u8]>) -> Result<()> {
+fn skip_element(reader: &mut GpxReader<'_>) -> Result<()> {
     let mut buf = Vec::new();
     let mut depth = 1u32;
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(_)) => depth += 1,
-            Ok(Event::End(_)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     return Ok(());
                 }
             }
-            Ok(Event::Eof) => return Ok(()),
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => return Ok(()),
             _ => {}
         }
         buf.clear();
@@ -315,14 +356,14 @@ fn skip_element(reader: &mut Reader<&[u8]>) -> Result<()> {
 }
 
 /// Parse <metadata> and extract the <name> child if present.
-fn parse_metadata_name(reader: &mut Reader<&[u8]>) -> Result<Option<String>> {
+fn parse_metadata_name(reader: &mut GpxReader<'_>) -> Result<Option<String>> {
     let mut buf = Vec::new();
     let mut name = None;
     let mut depth = 1u32;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 depth += 1;
                 let tag = local_name(e);
                 if tag == b"name" && depth == 2 {
@@ -333,14 +374,13 @@ fn parse_metadata_name(reader: &mut Reader<&[u8]>) -> Result<Option<String>> {
                     }
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -353,7 +393,7 @@ fn parse_metadata_name(reader: &mut Reader<&[u8]>) -> Result<Option<String>> {
 fn parse_waypoint_children(
     latitude: f64,
     longitude: f64,
-    reader: &mut Reader<&[u8]>,
+    reader: &mut GpxReader<'_>,
 ) -> Result<GpxWaypoint> {
     let mut wpt = GpxWaypoint {
         name: None,
@@ -368,8 +408,8 @@ fn parse_waypoint_children(
     let mut depth = 1u32;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 depth += 1;
                 let tag = local_name(e);
                 if depth == 2 {
@@ -411,14 +451,13 @@ fn parse_waypoint_children(
                     }
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -428,7 +467,7 @@ fn parse_waypoint_children(
 }
 
 /// Parse a <trk> element.
-fn parse_track(reader: &mut Reader<&[u8]>) -> Result<GpxTrack> {
+fn parse_track(reader: &mut GpxReader<'_>) -> Result<GpxTrack> {
     let mut trk = GpxTrack {
         name: None,
         comment: None,
@@ -439,8 +478,8 @@ fn parse_track(reader: &mut Reader<&[u8]>) -> Result<GpxTrack> {
     let mut depth = 1u32;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 depth += 1;
                 let tag = local_name(e);
                 match tag.as_slice() {
@@ -472,14 +511,13 @@ fn parse_track(reader: &mut Reader<&[u8]>) -> Result<GpxTrack> {
                     _ => {}
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -489,14 +527,14 @@ fn parse_track(reader: &mut Reader<&[u8]>) -> Result<GpxTrack> {
 }
 
 /// Parse a <trkseg> element.
-fn parse_track_segment(reader: &mut Reader<&[u8]>) -> Result<GpxTrackSegment> {
+fn parse_track_segment(reader: &mut GpxReader<'_>) -> Result<GpxTrackSegment> {
     let mut seg = GpxTrackSegment { points: Vec::new() };
     let mut buf = Vec::new();
     let mut depth = 1u32;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 depth += 1;
                 let tag = local_name(e);
                 if tag == b"trkpt" {
@@ -505,7 +543,7 @@ fn parse_track_segment(reader: &mut Reader<&[u8]>) -> Result<GpxTrackSegment> {
                     depth -= 1;
                 }
             }
-            Ok(Event::Empty(ref e)) => {
+            Event::Empty(ref e) => {
                 let tag = local_name(e);
                 if tag == b"trkpt" {
                     let (lat, lon) = parse_lat_lon(e)?;
@@ -517,14 +555,13 @@ fn parse_track_segment(reader: &mut Reader<&[u8]>) -> Result<GpxTrackSegment> {
                     });
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -537,7 +574,7 @@ fn parse_track_segment(reader: &mut Reader<&[u8]>) -> Result<GpxTrackSegment> {
 fn parse_point_children(
     latitude: f64,
     longitude: f64,
-    reader: &mut Reader<&[u8]>,
+    reader: &mut GpxReader<'_>,
 ) -> Result<GpxTrackPoint> {
     let mut pt = GpxTrackPoint {
         latitude,
@@ -550,8 +587,8 @@ fn parse_point_children(
     let mut depth = 1u32;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 depth += 1;
                 let tag = local_name(e);
                 if depth == 2 {
@@ -572,14 +609,13 @@ fn parse_point_children(
                     }
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -589,7 +625,7 @@ fn parse_point_children(
 }
 
 /// Parse a <rte> element.
-fn parse_route(reader: &mut Reader<&[u8]>) -> Result<GpxRoute> {
+fn parse_route(reader: &mut GpxReader<'_>) -> Result<GpxRoute> {
     let mut rte = GpxRoute {
         name: None,
         comment: None,
@@ -600,8 +636,8 @@ fn parse_route(reader: &mut Reader<&[u8]>) -> Result<GpxRoute> {
     let mut depth = 1u32;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 depth += 1;
                 let tag = local_name(e);
                 match tag.as_slice() {
@@ -635,7 +671,7 @@ fn parse_route(reader: &mut Reader<&[u8]>) -> Result<GpxRoute> {
                     _ => {}
                 }
             }
-            Ok(Event::Empty(ref e)) => {
+            Event::Empty(ref e) => {
                 let tag = local_name(e);
                 if tag == b"rtept" {
                     let (lat, lon) = parse_lat_lon(e)?;
@@ -648,14 +684,13 @@ fn parse_route(reader: &mut Reader<&[u8]>) -> Result<GpxRoute> {
                     });
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -668,7 +703,7 @@ fn parse_route(reader: &mut Reader<&[u8]>) -> Result<GpxRoute> {
 fn parse_route_point_children(
     latitude: f64,
     longitude: f64,
-    reader: &mut Reader<&[u8]>,
+    reader: &mut GpxReader<'_>,
 ) -> Result<GpxRoutePoint> {
     let mut pt = GpxRoutePoint {
         name: None,
@@ -682,8 +717,8 @@ fn parse_route_point_children(
     let mut depth = 1u32;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
+        match reader.next_event(&mut buf)? {
+            Event::Start(ref e) => {
                 depth += 1;
                 let tag = local_name(e);
                 if depth == 2 {
@@ -711,14 +746,13 @@ fn parse_route_point_children(
                     }
                 }
             }
-            Ok(Event::End(_)) => {
+            Event::End(_) => {
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
             }
-            Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error: {e}"),
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
@@ -1529,5 +1563,88 @@ mod tests {
             .expect("the read must not block on a FIFO")
             .expect_err("a FIFO is not a GPX file");
         assert!(err.contains("not a regular file"), "{err}");
+    }
+
+    /// A four-point track whose elevations are none, 350, 349 and 352.4.
+    const TRUNCATION_GPX: &str = r#"<?xml version="1.0"?>
+<gpx version="1.1">
+  <trk><name>Cut</name><trkseg>
+    <trkpt lat="0.0" lon="0.0"></trkpt>
+    <trkpt lat="0.0" lon="0.0005"><ele>350</ele></trkpt>
+    <trkpt lat="0.0" lon="0.0010"><ele>349</ele></trkpt>
+    <trkpt lat="0.0" lon="0.0015"><ele>352.4</ele></trkpt>
+  </trkseg></trk>
+</gpx>"#;
+
+    /// `TRUNCATION_GPX` cut right after the first occurrence of `marker`.
+    fn truncated_after(marker: &str) -> &'static str {
+        let end = TRUNCATION_GPX.find(marker).unwrap() + marker.len();
+        &TRUNCATION_GPX[..end]
+    }
+
+    /// The elevations a parse produced, or its error.
+    fn parse_outcome(xml: &str) -> std::result::Result<Vec<Option<f64>>, String> {
+        parse_gpx_str(xml)
+            .map(|g| {
+                g.tracks
+                    .iter()
+                    .flat_map(|t| &t.segments)
+                    .flat_map(|s| &s.points)
+                    .map(|p| p.elevation)
+                    .collect()
+            })
+            .map_err(|e| e.to_string())
+    }
+
+    /// #576 B14 (decision: refuse, like Ariane): quick-xml reports a document
+    /// that simply stops as a clean end of file, so a GPX cut off by a dying
+    /// GPS or a partial download imported as a shorter track - and a number
+    /// cut in half became a real reading (352.4 m imported as 35 m, a 300 m
+    /// drop). Any end of file with elements still open now fails the parse,
+    /// naming where it ends and how much is open.
+    #[test]
+    fn a_truncated_gpx_is_refused() {
+        let cuts = [
+            ("inside an <ele> number", "lon=\"0.0015\"><ele>35", Some(5)),
+            ("between two points", "<ele>349</ele></trkpt>", Some(3)),
+            ("after the track", "</trk>", Some(1)),
+            // quick-xml's own syntax error, never a parse.
+            ("inside a tag", "<trkpt lat=\"0.0\" lo", None),
+        ];
+        let outcomes: Vec<_> = cuts
+            .iter()
+            .map(|&(label, marker, open)| {
+                let xml = truncated_after(marker);
+                let outcome = parse_outcome(xml);
+                println!("cut {label} (byte {}): {outcome:?}", xml.len());
+                (label, xml.len(), open, outcome)
+            })
+            .collect();
+        for (label, len, open, outcome) in outcomes {
+            let err = outcome.expect_err("a truncated GPX must not parse");
+            if let Some(open) = open {
+                assert!(
+                    err.contains(&format!(
+                        "ends at byte {len} with {open} element(s) still open"
+                    )),
+                    "{label}: {err}"
+                );
+            }
+        }
+    }
+
+    /// The whole document still parses, and so does one whose last point is
+    /// self-closed - an empty element opens nothing.
+    #[test]
+    fn a_complete_gpx_still_parses_after_the_truncation_check() {
+        assert_eq!(
+            parse_outcome(TRUNCATION_GPX).unwrap(),
+            vec![None, Some(350.0), Some(349.0), Some(352.4)]
+        );
+        let self_closed = r#"<gpx><trk><trkseg>
+            <trkpt lat="0.0" lon="0.0"><ele>1</ele></trkpt>
+            <trkpt lat="0.0" lon="0.0005"/>
+        </trkseg></trk></gpx>"#;
+        assert_eq!(parse_outcome(self_closed).unwrap(), vec![Some(1.0), None]);
     }
 }
