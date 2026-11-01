@@ -30,8 +30,8 @@ use tempfile::TempDir;
 use super::{AppState, VirtualShotMode};
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    ImportPlacement, ImportSectionConfig, Project, SectionData, ShotData, MAX_SECTIONS_IN_ID_SPACE,
-    MAX_SECTION_ID,
+    ImportPlacement, ImportSectionConfig, Project, SectionData, ShotData, FEATURE_ID_STRIDE,
+    MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
 };
 use crate::persistence::Database;
 
@@ -196,6 +196,83 @@ fn an_import_that_exactly_fills_the_id_space_is_accepted() {
         vec![MAX_SECTION_ID],
         "the last id in the space is spent, exactly once"
     );
+}
+
+/// The other half of the shot-id window (#576 NF-AN2-8): a section's shots
+/// number `[id * STRIDE, (id + 1) * STRIDE)` and a section holds at most
+/// `STRIDE - 1` of them (`Project::add_shot`; a file holding more is refused
+/// on load since A18(d)). An import carrying a longer section is refused as a
+/// WHOLE, up front, naming the section and the limit - like the section-id
+/// budget above - instead of building and validating every section before it
+/// and then rolling them back.
+#[test]
+fn an_import_section_longer_than_its_shot_window_is_refused_whole() {
+    let per_section = FEATURE_ID_STRIDE as usize - 1;
+    let state = state_with_spent_section_ids(0);
+    let mut full = import_config(0);
+    full.shots = vec![shot(3.0); per_section];
+    let mut long = import_config(1);
+    long.shots = vec![shot(3.0); per_section + 1];
+
+    let started = std::time::Instant::now();
+    let result = state.execute_import_sections(
+        vec![full, long],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    println!(
+        "import of a {per_section}-shot and a {}-shot section: success={} after {:.2} s, error={:?}",
+        per_section + 1,
+        result.success,
+        started.elapsed().as_secs_f64(),
+        result.error
+    );
+
+    assert!(
+        !result.success,
+        "a {}-shot section cannot be numbered",
+        per_section + 1
+    );
+    let error = result.error.unwrap_or_default();
+    assert!(
+        error.contains("\"Imported 1\"")
+            && error.contains(&format!("{} shots", per_section + 1))
+            && error.contains(&format!("{per_section} shots one section can hold"))
+            && error.contains("Nothing was imported"),
+        "the refusal must name the section, its length and the limit, got: {error}"
+    );
+    let project = state.get_project_state().unwrap();
+    assert!(project.sections.is_empty(), "nothing may be created");
+    assert_eq!(project.next_section_id, 0, "and no id may be spent");
+    assert!(
+        !state.can_undo(),
+        "a refused import is not an undoable unit"
+    );
+}
+
+/// A section that exactly fills its window still imports: the check is exact.
+#[test]
+fn an_import_section_that_exactly_fills_its_shot_window_is_accepted() {
+    let per_section = FEATURE_ID_STRIDE as usize - 1;
+    let state = state_with_spent_section_ids(0);
+    let mut full = import_config(0);
+    full.shots = vec![shot(3.0); per_section];
+
+    let result = state.execute_import_sections(
+        vec![full],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+
+    assert!(result.success, "import failed: {:?}", result.error);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots.len(), per_section);
 }
 
 /// A section of `shots` shots on a project that has spent EVERY section id

@@ -570,7 +570,10 @@ impl Section {
     /// counter is free by construction; this skips the scan
     /// [`Self::take_shot_id`] does, which would make building an n-shot section
     /// O(n^2). A vector longer than the window keeps counting past it, as every
-    /// append always did - `Section::new` has no per-section shot cap.
+    /// append always did - `Section::new` has no per-section shot cap of its
+    /// own; the doors that mint sections from outside data (`create_section`,
+    /// the batch import gate, the loader) refuse more than
+    /// [`crate::MAX_SHOTS_PER_SECTION`] before they get here.
     fn push_while_building(&mut self, data: ShotData) {
         let id = self.next_shot_id;
         self.next_shot_id = id.saturating_add(1);

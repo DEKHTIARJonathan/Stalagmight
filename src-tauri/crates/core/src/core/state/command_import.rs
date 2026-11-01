@@ -3,6 +3,7 @@ use crate::core::{Command, CommandResult};
 use crate::models::{
     AzimuthReference, ClosureStrategy, Coordinates, Project, SectionData, SectionId, ShotData,
     ShotKind, StationRef, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
+    MAX_SHOTS_PER_SECTION,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -382,6 +383,29 @@ impl AppState {
                     update.section_id, update.shot_id
                 ));
             }
+        }
+
+        // Per-section shot budget (#576 NF-AN2-8), the other half of the id
+        // window the section-id budget below guards: a section's shot ids are
+        // `section_id * FEATURE_ID_STRIDE + position`, so it holds at most
+        // `MAX_SHOTS_PER_SECTION`. `create_section` refuses a longer one too,
+        // but only once the loop reaches it - after every section before it
+        // was built and validated, and then rolled back - so the batch is
+        // checked whole, up front, like the section-id budget.
+        if let Some(config) = sections
+            .iter()
+            .find(|config| config.shots.len() > MAX_SHOTS_PER_SECTION)
+        {
+            let name = config.name.as_deref().map_or_else(
+                || "unnamed".to_string(),
+                |n| crate::models::sanitize_display_text(n, 64),
+            );
+            return CommandResult::failure(format!(
+                "Import refused: section \"{name}\" has {} shots, more than the \
+                 {MAX_SHOTS_PER_SECTION} shots one section can hold (shot ids encode as \
+                 section_id * {FEATURE_ID_STRIDE} + position). Nothing was imported.",
+                config.shots.len()
+            ));
         }
 
         // Section-id budget (#555), checked for the WHOLE batch before any
