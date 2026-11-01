@@ -265,11 +265,20 @@ is the weaker unit by LINE COVERED (`speed x burn` - not halved: primary flies
 in, backup flies out), less a reserve fraction for battery age and flow
 (`DpvRig::usable_range_m`; reserve normalized into `[0, 0.9]`).
 
-Riding a span spends that allowance in **range, not line**: at or above the
-slower unit's cruise speed a metre of line costs a metre of range, and a
-below-cruise span costs `slower_cruise / speed` per metre - the battery drains
-by the clock, not the odometer (`range_per_metre`, `gas/scooter.rs`). So
-`scooter_distance_m` is range *spent* and can exceed the line covered. A station
+Riding a span spends that allowance in **range, not line**: each unit's battery
+drains by its own clock, not the odometer. A metre ridden at `speed` costs unit
+`u` the fraction `1 / (burn_u x min(speed, cruise_u))` of its battery, and the
+span charges the allowance whichever unit that metre drains harder, scaled to
+metres: `max_u weaker_range / (burn_u x min(speed, cruise_u))`
+(`range_per_metre`, `gas/scooter.rs`; the reserve scales both sides and
+cancels). On a matched rig at or above cruise that is a metre per metre. With a
+45 m/min x 45 min primary and a 30 m/min x 90 min backup (10% reserve, cap
+1822.5 m), a span ridden at 30 m/min costs 1.5 m per metre, so the scootered
+line stops at 1215 m - the primary's 45 x 0.9 minutes at 30 m/min. Exact for a
+plan whose scootered spans are all limited by the same unit (every one-span
+plan); where different spans are limited by different units, the single number
+is on the conservative side. So `scooter_distance_m` is range *spent* and can
+exceed the line covered. A station
 whose route spends more than the usable range drops out of the reach masks, and
 `turn_on_scooter_range` reports when the range cap - not gas - is what moved the
 turnaround (set from the route target itself, not a cave-global scan). Riding

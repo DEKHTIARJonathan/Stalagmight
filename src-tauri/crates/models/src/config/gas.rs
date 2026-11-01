@@ -180,6 +180,10 @@ impl DpvRig {
     /// must still leave a working one able to cover the scootered line; **not halved**, because the
     /// primary only ever flies in and the backup only ever flies out, so each is asked for one
     /// direction and halving on top would reserve for a double failure.
+    ///
+    /// The cap counts metres at cruise. A span ridden slower drains each unit's battery by its
+    /// own clock, so it is charged more than a metre per metre - whichever unit it drains harder
+    /// (`range_per_metre` in `project/gas/scooter.rs`).
     pub fn usable_range_m(&self) -> f64 {
         let weaker = self.primary.range_m().min(self.backup.range_m());
         (weaker * (1.0 - self.range_reserve_fraction)).max(0.0)

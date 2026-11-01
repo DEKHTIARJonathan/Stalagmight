@@ -119,8 +119,9 @@ impl Project {
     /// line to a station must be within [`DpvRig::usable_range_m`]. It never touches the gas half.
     /// The exit mirrors the entry span for span - you collect the units where you parked them - so
     /// `gas_out == gas_in` and the fraction reserves stay correct as they are. What a metre of
-    /// scootered line COSTS against that cap depends on the span's speed, since the cap converts
-    /// battery minutes into metres at the units' cruise (see [`scooter::range_per_metre`]).
+    /// scootered line COSTS against that cap depends on the span's speed, since the cap counts
+    /// metres at cruise while each unit's battery runs by its own clock (see
+    /// [`scooter::range_per_metre`]).
     pub fn compute_gas_reach_field_with_overrides(
         &self,
         origin: Option<&StationRef>,
@@ -738,8 +739,9 @@ struct WaypointWalk {
     /// Scooter RANGE (metres) spent reaching every station after the whole chain, accumulated along
     /// the SAME gas-optimal path as `gas_in` - the destination price, the analogue of `gas_in`.
     /// Capped against the rig's usable range to decide whether the dive can END here. Equal to the
-    /// scootered line's length at or above cruise; larger below it, where a metre costs more than a
-    /// metre of the allowance (`scooter::range_per_metre`).
+    /// scootered line's length where the weaker unit is ridden at or above its cruise and binds;
+    /// larger otherwise, where a metre drains one unit's clock faster than the cap's metres assume
+    /// (`scooter::range_per_metre`).
     scoot_in: Vec<f64>,
     /// The overlay's scootered distance: `scoot_in` lowered to the pass-through value on chain
     /// stations and settled across zero-cost ties, exactly as `reach_gas` is to `gas_in`. Keeping
@@ -812,9 +814,8 @@ fn waypoint_walk(
         };
         let speed = seg.speed_m_per_min;
         // [scooter range metres, minutes] per metre of line on this segment. The range rider is NOT
-        // a flat 1 per metre: below the rig's cruise it climbs, because the cap converts battery
-        // minutes to metres at cruise and only there (see `scooter::range_per_metre`). It is 0 on a
-        // swum span.
+        // a flat 1 per metre: it charges whichever unit's battery clock the span drains harder,
+        // which climbs below cruise (see `scooter::range_per_metre`). It is 0 on a swum span.
         let riders = [seg.range_per_metre, 1.0 / speed];
         (in_rmv / speed, riders)
     };

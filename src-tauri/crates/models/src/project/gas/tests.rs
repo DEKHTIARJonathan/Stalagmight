@@ -5084,3 +5084,70 @@ fn gas_reach_field_riding_below_cruise_turns_the_dive_earlier() {
         slow.scooter_distance_m
     );
 }
+
+#[test]
+fn gas_reach_field_mismatched_dpv_rig_turns_on_the_faster_units_clock() {
+    // #576 A15. Primary 45 m/min x 45 min (2025 m, the weaker unit by line), backup 30 m/min x
+    // 90 min, 10% reserve: the cap is 1822.5 m. One span ridden at 30 m/min on a flat line of
+    // 100 m shots. The primary flies in at 30 m/min and is spent after 45 x 0.9 x 30 = 1215 m, so
+    // station 12 (1200 m) is the last in range - not station 18, which the slower unit's cruise
+    // (30 / 30 = a metre per metre) admitted. Gas is unlimited, so the range is what turns it.
+    let mut project = Project::new("Gas".to_string(), None);
+    let sec = project
+        .add_section(SectionData {
+            shots: (0..30).map(|_| make_shot(100.0, 0.0, 0.0)).collect(),
+            ..Default::default()
+        })
+        .id;
+    let origin = StationRef::new(sec, 0);
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        dpv: Some(DpvRig {
+            primary: DpvUnit {
+                speed_m_per_min: 45.0,
+                burn_minutes: 45.0,
+            },
+            backup: DpvUnit {
+                speed_m_per_min: 30.0,
+                burn_minutes: 90.0,
+            },
+            range_reserve_fraction: 0.1,
+        }),
+        ..GasConfig::default()
+    };
+    let plan = |speed: f64| {
+        project.compute_gas_reach_field_with_overrides(
+            Some(&origin),
+            None,
+            &[],
+            &[seg(speed, true)],
+            &diver,
+            &[unlimited_backgas()],
+            &cfg,
+            &[],
+        )
+    };
+    let deepest = |f: &GasReachField| {
+        (0..=30)
+            .filter(|&i| field_reachable(f, StationRef::new(sec, i)))
+            .max()
+            .unwrap()
+    };
+    let slow = plan(30.0);
+    assert_eq!(slow.scooter_range_limit_m, Some(1822.5));
+    assert_eq!(
+        deepest(&slow),
+        12,
+        "the primary covers 1215 m at 30 m/min; scooter range spent {}",
+        slow.scooter_distance_m
+    );
+    assert!(slow.turn_on_scooter_range);
+    assert!(
+        (slow.scooter_distance_m - 1800.0).abs() < 1e-6,
+        "1200 m of line at 1.5 m of range per metre"
+    );
+    // At the primary's cruise nothing changes: a metre of line is a metre of range.
+    let cruise = plan(45.0);
+    assert_eq!(deepest(&cruise), 18);
+    assert!((cruise.scooter_distance_m - 1800.0).abs() < 1e-6);
+}
