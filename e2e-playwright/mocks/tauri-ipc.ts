@@ -1558,6 +1558,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               newer_schema_version: mockNewerSchema,
               // #576 B35(b) review: the backend could not read this file's link row.
               speleo_link_unreadable: mockSpeleoLinkUnreadable,
+              // `BinaryEnvelope::unreadable_project_settings` (#576 B15): no spec
+              // mocks an unreadable settings row, so every mocked load reads them all.
+              unreadable_project_settings: [],
               project_header: {
                 name: jsonResult.project.name ?? 'Test Project',
                 location: jsonResult.project.location ?? null,

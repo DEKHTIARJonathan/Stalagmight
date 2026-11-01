@@ -143,6 +143,14 @@ mod tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod unreadable_link_open_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::panic,
     clippy::indexing_slicing,
     clippy::print_stdout,
@@ -150,14 +158,6 @@ mod tests;
               outcomes are the evidence a run captures"
 )]
 mod workspace_mode_tests;
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::print_stdout,
-    reason = "test module: panics on a failed assumption are the point, and the printed \
-              values are the evidence a run captures"
-)]
-mod unreadable_link_open_tests;
 // `any(test, feature = "test-support")`: the root crate's tests reach the
 // AppState test setters in here (via the `test-support` feature the root's
 // [dev-dependencies] enable); the source-scan tripwires inside stay
