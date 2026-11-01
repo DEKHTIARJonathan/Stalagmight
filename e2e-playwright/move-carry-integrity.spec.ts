@@ -395,6 +395,67 @@ test.describe('Move carry integrity (GHOST-2)', () => {
     expect(await getDragGhostState(page)).toBeNull();
   });
 
+  test('Move Segment: Escape while the pickup round trip is pending ends the carry', async ({ page }) => {
+    // Same hold as the test above: the carry is in flight from the click, but
+    // `moveDrag` stays null until `get_rigid_connected_section_ids` answers.
+    await page.evaluate(() => {
+      type Invoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+      const w = window as unknown as {
+        __TAURI_INTERNALS__: { invoke: Invoke };
+        __segmentHold__?: { anchoredLoaded: boolean; requested: boolean; release: () => void };
+      };
+      const originalInvoke = w.__TAURI_INTERNALS__.invoke;
+      let release = (): void => {};
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const hold = { anchoredLoaded: false, requested: false, release: () => release() };
+      w.__segmentHold__ = hold;
+      w.__TAURI_INTERNALS__.invoke = async (cmd, args) => {
+        if (cmd === 'get_rigid_connected_section_ids') {
+          hold.requested = true;
+          await held;
+          return [args?.sectionId];
+        }
+        const result = await originalInvoke(cmd, args);
+        if (cmd === 'get_anchored_section_ids') hold.anchoredLoaded = true;
+        return result;
+      };
+    });
+    await recordMutations(page);
+    await page.keyboard.press('v');
+    await waitForActiveTool(page, 'move_segment');
+    const hold = (key: 'anchoredLoaded' | 'requested') =>
+      page.evaluate(
+        (k) => (window as unknown as { __segmentHold__?: Record<string, boolean> }).__segmentHold__?.[k] ?? false,
+        key
+      );
+    await expect.poll(() => hold('anchoredLoaded'), { timeout: 5000 }).toBe(true);
+
+    const station = await mostIsolatedStation(page);
+    const box = await canvasBox(page);
+    await page.mouse.click(box.x + station.x, box.y + station.y);
+    await expect.poll(() => hold('requested'), { timeout: 5000 }).toBe(true);
+    expect(await getDragGhostState(page), 'no ghost until the round trip returns').toBeNull();
+
+    await page.keyboard.press('Escape');
+
+    // The late answer puts no ghost up for the carry Escape ended.
+    await page.evaluate(() => (window as unknown as { __segmentHold__?: { release: () => void } }).__segmentHold__?.release());
+    await nextFrames(page);
+    expect(await getDragGhostState(page), 'no ghost after Escape').toBeNull();
+
+    // So a click on empty map drops nothing.
+    await clickCanvasAndSettle(page, await findEmptyPoint(page));
+    expect(await receivedMutations(page), 'nothing sent').toEqual([]);
+
+    // And no carry is left to refuse the next edit: the undo goes straight through.
+    await page.keyboard.press('Control+z');
+    await expect.poll(() => receivedMutations(page)).toEqual(['undo']);
+    // Escape is the user's own gesture: no cancel notice.
+    await expect(page.locator(MOVE_CANCELLED_TOAST)).toHaveCount(0);
+  });
+
   test('the snap-merge dialog is part of the carry: a survey change closes it and nothing is sent', async ({ page }) => {
     await recordMutations(page);
     await page.keyboard.press('t');

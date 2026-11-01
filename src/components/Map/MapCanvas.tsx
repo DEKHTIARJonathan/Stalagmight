@@ -2921,15 +2921,16 @@ function MapCanvas() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [zoomBox.start]);
 
-  // Escape key cancels move drag operations (station, segment, shot)
+  // Escape key cancels move drag operations (station, segment, shot). Listening
+  // always, not only while `moveDrag` is set: a carry is in flight from the pickup
+  // click, and in the Move Segment pickup window (the connected-section fetch still
+  // out) `moveDrag` is null while the carry is live.
   useEffect(() => {
-    if (!moveDrag) return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        cancelMoveCarryState();
-      }
+      if (e.key !== 'Escape') return;
+      if (!moveDrag && !isMoveCarryLive(moveCarryTokenRef.current)) return;
+      e.preventDefault();
+      cancelMoveCarryState();
     };
 
     window.addEventListener('keydown', handleKeyDown);
