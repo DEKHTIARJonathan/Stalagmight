@@ -19,6 +19,10 @@ export default function OverwriteConfirmDialog() {
   // "Save and Close" defers here when the chosen file exists; once the overwrite
   // saves, finish the close it started (otherwise the close half is dropped).
   const closeAfterSave = dialogData.closeAfterSave === true;
+  // [#576 E10-D1] Save As could not tell whether the file exists (the probe
+  // failed), so it asks rather than saving over it unasked. Same question, but
+  // it must not claim the file is there.
+  const existenceUnknown = dialogData.existenceUnknown === true;
 
   const handleConfirm = async () => {
     if (!path) {
@@ -68,13 +72,23 @@ export default function OverwriteConfirmDialog() {
   return (
     <DialogWrapper title="Overwrite File?" onClose={closeDialog} size="md" data-testid="overwrite-confirm-dialog">
       <div className="space-y-4">
-        <p className="text-text-secondary">
-          A file named <span className="font-medium text-text-primary">{fileName}</span> already exists.
-          Do you want to replace it?
-        </p>
+        {existenceUnknown ? (
+          <p className="text-text-secondary" data-testid="overwrite-confirm-unknown">
+            Stalagmight could not check whether a file named{' '}
+            <span className="font-medium text-text-primary">{fileName}</span> already exists.
+            If it does, saving will replace it.
+          </p>
+        ) : (
+          <p className="text-text-secondary">
+            A file named <span className="font-medium text-text-primary">{fileName}</span> already exists.
+            Do you want to replace it?
+          </p>
+        )}
 
         <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
-          This will overwrite the existing file. This action cannot be undone.
+          {existenceUnknown
+            ? 'Any existing file with this name will be overwritten. This action cannot be undone.'
+            : 'This will overwrite the existing file. This action cannot be undone.'}
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">

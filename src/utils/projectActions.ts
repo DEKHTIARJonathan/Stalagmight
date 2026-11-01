@@ -63,8 +63,9 @@ export function newProjectGuarded(): void {
 
 /**
  * Save As: pick a path, then either defer to the overwrite-confirm dialog (the
- * file already exists) or save directly. Carries the caller's "close after a
- * successful save" intent (Save and Close) through the deferred overwrite flow.
+ * file already exists, or whether it does could not be checked) or save directly.
+ * Carries the caller's "close after a successful save" intent (Save and Close)
+ * through the deferred overwrite flow.
  *
  * A failed save is routed through `surfaceSaveFailure` (integrity blocks → Review
  * & Repair; permission denials already surfaced their own guidance dialog). The
@@ -81,19 +82,28 @@ export async function saveProjectAs(opts?: {
     if (!selected) return null;
 
     const finalPath = ensureExtension(selected, PROJECT_EXTENSION);
+    // [#576 E10-D1] A probe that FAILS (permissions, a sandbox scope, a network
+    // drive) says nothing about whether the file is there, so it asks exactly
+    // like a probe that found it. It used to fall through to the save, replacing
+    // an existing survey with no prompt at all.
+    let existenceUnknown = false;
+    let present: boolean;
     try {
-      if (await exists(finalPath)) {
-        // The overwrite-confirm dialog performs the actual save. Carry the
-        // close-after-save intent so the deferred flow still closes the project.
-        openDialog('confirm-overwrite', {
-          path: finalPath,
-          fileName: extractFilename(finalPath),
-          closeAfterSave: opts?.closeAfterSave ?? false,
-        });
-        return null;
-      }
+      present = await exists(finalPath);
     } catch {
-      // exists() failed - proceed with the save (the backend reports real errors).
+      present = true;
+      existenceUnknown = true;
+    }
+    if (present) {
+      // The overwrite-confirm dialog performs the actual save. Carry the
+      // close-after-save intent so the deferred flow still closes the project.
+      openDialog('confirm-overwrite', {
+        path: finalPath,
+        fileName: extractFilename(finalPath),
+        closeAfterSave: opts?.closeAfterSave ?? false,
+        ...(existenceUnknown ? { existenceUnknown: true } : {}),
+      });
+      return null;
     }
 
     const result = await useProjectStore.getState().saveProject(finalPath);
