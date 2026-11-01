@@ -283,6 +283,8 @@ impl AppState {
         // [#576 B6-D1] Same acquisition, same reason: the read-only state of a file a
         // newer build saved describes exactly the project in the slot.
         self.set_newer_file_schema(newer_schema);
+        // [#576 C5] A project opens in Survey, here as in the frontend.
+        self.reset_workspace_mode();
 
         // [Track B] (#191) Read-only edit gate: remote ⇒ edit disabled,
         // local-only ⇒ enabled (see do_load_project_full). Off the link read above,
@@ -961,6 +963,8 @@ impl AppState {
         // and for the same reason. The value handed to the frontend below, so the
         // two gates cannot disagree about this load (the #270 shape).
         self.set_newer_file_schema(newer_schema);
+        // [#576 C5] A project opens in Survey, here as in the frontend.
+        self.reset_workspace_mode();
 
         // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one
         // carrying a speleo_link row) opened WITHOUT a write lock is read-only.

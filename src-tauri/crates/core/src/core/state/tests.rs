@@ -24257,18 +24257,22 @@ fn done_without_edit_session_is_noop_not_a_release() {
 
 /// The chokepoint enumeration tripwire (D-B6): every SURVEY-CONTENT mutation entry
 /// listed in MUTATION_ENTRYPOINTS must reject on a read-only remote project with the
-/// EDIT_DISABLED code (repair included, since #576 D39(a)).
+/// EDIT_DISABLED code, and (#576 C5, `workspace_mode_tests`) on a local project
+/// whose workspace is Plan or Export with EDIT_DISABLED + WORKSPACE_READ_ONLY,
+/// except the two entries on the read-only-workspace allowlist. Both tests drive
+/// the same [`probe_mutation_entrypoints`], which calls every listed entry once.
 ///
-/// CAVEAT - this list is hand-maintained and only checks its own length, so it
-/// catches a forgotten guard on a KNOWN entry, NOT a brand-new `execute_*`/
-/// `set_*_for_path` method added without a `guard_mutation` call (that would compile
-/// and pass green). The exhaustive `is_lifecycle_passthrough` match closes the hole
-/// for new `Command` *variants*; a source-scan test asserting every gated method body
-/// contains `guard_mutation` would close it for new *methods* (follow-up). And note
-/// the deliberately-ungated local-only writes documented on `guard_mutation`
-/// (display settings, import-dedup) are NOT in this list - but warning
-/// resolve/unresolve ARE gated (#197) and appear at the end.
-const MUTATION_ENTRYPOINTS: &[&str] = &[
+/// CAVEAT - this list is hand-maintained (#576 C5-D3: to be derived from the IPC
+/// command manifest when C3 lands), so it catches a forgotten guard on a KNOWN
+/// entry, NOT a brand-new `execute_*`/`set_*_for_path` method added without a
+/// `guard_mutation` call (that would compile and pass green). The exhaustive
+/// `is_lifecycle_passthrough` match closes the hole for new `Command` *variants*.
+/// A new method that does call `guard_mutation` is refused in Plan/Export by
+/// default; only an explicit `guard_metadata_mutation` caller is allowed there.
+/// And note the deliberately-ungated local-only writes documented on
+/// `guard_mutation` (display settings, import-dedup) are NOT in this list - but
+/// warning resolve/unresolve ARE gated (#197) and appear at the end.
+pub(super) const MUTATION_ENTRYPOINTS: &[&str] = &[
     // execute() + a representative spread of non-lifecycle Command variants. The
     // guard runs BEFORE the variant match, so one code path gates them all - but
     // probing the GEOMETRY variants the move/drag tools use (MoveStation/Segment/
@@ -24310,161 +24314,178 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "delete_resolved_warning_gated",
 ];
 
-#[test]
-fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
-    // Tripwire doc: when a new state-mutating entry is added, route it through
-    // guard_mutation AND add its name to MUTATION_ENTRYPOINTS + a call below.
-    assert_eq!(
-        MUTATION_ENTRYPOINTS.len(),
-        25,
-        "update both the routing and this list when adding a mutation entry"
-    );
-
-    let assert_disabled = |label: &str, r: &CommandResult| {
-        assert!(!r.success, "{label} must be rejected when edit disabled");
-        assert!(
-            r.error
-                .as_deref()
-                .is_some_and(|e| e.starts_with(EDIT_DISABLED_CODE)),
-            "{label} must carry the EDIT_DISABLED code, got: {:?}",
-            r.error
-        );
+/// Call every entry point in [`MUTATION_ENTRYPOINTS`] once, in list order, against
+/// the OPEN project (which must have been saved: `set_project_name_for_path` is
+/// gated only for the open project's own path). One outcome per entry: `Ok` when
+/// the entry point accepted the call, `Err(error)` when it refused it - the
+/// `CommandResult` error, or the `String` error of the entries that return a
+/// `Result`. On an editable project the accepted calls really mutate it, so later
+/// entries may fail for their own reasons; callers assert on the refusal codes.
+pub(super) fn probe_mutation_entrypoints(
+    state: &AppState,
+    sid: SectionId,
+    shid: ShotId,
+) -> Vec<(&'static str, Result<(), String>)> {
+    let outcome = |r: CommandResult| {
+        if r.success {
+            Ok(())
+        } else {
+            Err(r.error.unwrap_or_default())
+        }
     };
-
-    // --- execute() and its in-execute arms ---
-    {
-        let (state, sid, shid, _temp) = remote_fixture();
-        assert_disabled(
+    let open_path = state
+        .get_project_state()
+        .and_then(|p| p.file_path)
+        .expect("the probe needs a saved, open project");
+    let offset = Coordinates::new(1.0, 2.0, 0.0);
+    let shot_holder = crate::core::CommentHolder::Shot {
+        section_id: sid,
+        shot_id: shid,
+    };
+    let warning = crate::persistence::ResolvedWarning {
+        section_id: sid,
+        shot_id: shid,
+        warning_code: "SHORT_SHOT".to_string(),
+        resolved_at: chrono::Utc::now(),
+        resolved_comment: None,
+        shot_uuid: None,
+    };
+    let import_config = ImportSectionConfig {
+        reverse: false,
+        section_index: 0,
+        name: Some("Imp".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(3.0)],
+        station_comments: Vec::new(),
+        placement: ImportPlacement::Origin,
+        azimuth_reference: None,
+    };
+    vec![
+        // execute() and its in-execute arms. The guard runs BEFORE the variant
+        // match, so one code path gates them all - but the GEOMETRY variants the
+        // move/drag tools use are probed explicitly so a future reclassification
+        // into is_lifecycle_passthrough can't silently reopen the move-shot
+        // read-only hole (the "shots vanish" report).
+        (
             "execute",
-            &state.execute(Command::UpdateShot {
+            outcome(state.execute(Command::UpdateShot {
                 section_id: sid,
                 shot_id: shid,
                 updates: ShotUpdates::default(),
-            }),
-        );
-        // Geometry variants (the move/drag tools) - explicitly gated so a future
-        // reclassification into is_lifecycle_passthrough can't silently reopen the
-        // move-shot read-only hole.
-        assert_disabled(
+            })),
+        ),
+        (
             "execute:MoveStation",
-            &state.execute(Command::MoveStation {
+            outcome(state.execute(Command::MoveStation {
                 station_ref: StationRef::new(sid, 1),
-                offset: Coordinates::new(1.0, 2.0, 0.0),
-            }),
-        );
-        assert_disabled(
+                offset,
+            })),
+        ),
+        (
+            "execute:MoveSegment",
+            outcome(state.execute(Command::MoveSegment {
+                section_id: sid,
+                offset,
+            })),
+        ),
+        (
+            "execute:MoveSection",
+            outcome(state.execute(Command::MoveSection {
+                section_id: sid,
+                offset,
+            })),
+        ),
+        (
+            "execute:Batch",
+            outcome(state.execute(Command::Batch {
+                commands: vec![Command::MoveStation {
+                    station_ref: StationRef::new(sid, 1),
+                    offset,
+                }],
+            })),
+        ),
+        (
             "execute:ReverseSection",
-            &state.execute(Command::ReverseSection {
+            outcome(state.execute(Command::ReverseSection {
                 section_id: sid,
                 swap_left_right: false,
-            }),
-        );
-        assert_disabled(
+            })),
+        ),
+        (
             "execute:Batch:ReverseSection",
-            &state.execute(Command::Batch {
+            outcome(state.execute(Command::Batch {
                 commands: vec![Command::ReverseSection {
                     section_id: sid,
                     swap_left_right: false,
                 }],
-            }),
-        );
-        assert_disabled(
-            "execute:MoveSegment",
-            &state.execute(Command::MoveSegment {
-                section_id: sid,
-                offset: Coordinates::new(1.0, 2.0, 0.0),
-            }),
-        );
-        assert_disabled(
-            "execute:MoveSection",
-            &state.execute(Command::MoveSection {
-                section_id: sid,
-                offset: Coordinates::new(1.0, 2.0, 0.0),
-            }),
-        );
-        assert_disabled(
-            "execute:Batch",
-            &state.execute(Command::Batch {
-                commands: vec![Command::MoveStation {
-                    station_ref: StationRef::new(sid, 1),
-                    offset: Coordinates::new(1.0, 2.0, 0.0),
-                }],
-            }),
-        );
-        assert_disabled(
+            })),
+        ),
+        (
             "execute:MoveComment",
-            &state.execute(Command::MoveComment {
-                source: crate::core::CommentHolder::Shot {
-                    section_id: sid,
-                    shot_id: shid,
-                },
-                target: crate::core::CommentHolder::Shot {
-                    section_id: sid,
-                    shot_id: shid,
-                },
+            outcome(state.execute(Command::MoveComment {
+                source: shot_holder.clone(),
+                target: shot_holder,
                 swap: false,
-            }),
-        );
-    }
-
-    // --- history entrypoints ---
-    {
-        let (state, _sid, _shid, _temp) = remote_fixture();
-        assert_disabled("undo", &state.undo());
-        assert_disabled("redo", &state.redo());
-        assert_disabled("undo_to", &state.undo_to(0));
-        assert_disabled("redo_to", &state.redo_to(0));
-    }
-
-    // --- direct-lock bypass methods ---
-    {
-        let (state, sid, shid, _temp) = remote_fixture();
-        assert_disabled(
+            })),
+        ),
+        // history entrypoints
+        ("undo", outcome(state.undo())),
+        ("redo", outcome(state.redo())),
+        ("undo_to", outcome(state.undo_to(0))),
+        ("redo_to", outcome(state.redo_to(0))),
+        // direct-lock bypass methods
+        (
             "update_project_settings",
-            &state.update_project_settings("Renamed".to_string(), state.get_config().validation),
-        );
-        assert_disabled(
+            outcome(
+                state.update_project_settings("Renamed".to_string(), state.get_config().validation),
+            ),
+        ),
+        (
             "set_surface_elevation",
-            &state.set_surface_elevation(Some(12.0)),
-        );
-        // repair refuses with the coded error itself, not a zero result that read as
-        // a clean repair (#576 D39(a)).
-        let repair = state
-            .repair_open_project_integrity()
-            .expect_err("repair must be rejected when edit disabled");
-        assert!(
-            repair.starts_with(EDIT_DISABLED_CODE),
-            "repair_open_project_integrity must carry the EDIT_DISABLED code, got: {repair:?}"
-        );
-        assert_disabled(
+            outcome(state.set_surface_elevation(Some(12.0))),
+        ),
+        (
+            "repair_open_project_integrity",
+            state.repair_open_project_integrity().map(|_| ()),
+        ),
+        (
             "execute_delete_shot_and_split",
-            &state.execute_delete_shot_and_split(sid, shid, "A".to_string(), "B".to_string()),
-        );
-        assert_disabled(
+            outcome(state.execute_delete_shot_and_split(
+                sid,
+                shid,
+                "A".to_string(),
+                "B".to_string(),
+            )),
+        ),
+        (
             "execute_delete_shot_range_split",
-            &state.execute_delete_shot_range_split(
+            outcome(state.execute_delete_shot_range_split(
                 sid,
                 shid,
                 shid,
                 "A".to_string(),
                 "B".to_string(),
-            ),
-        );
-        assert_disabled(
+            )),
+        ),
+        (
             "execute_delete_shot_range_shift",
-            &state.execute_delete_shot_range_shift(sid, shid, shid),
-        );
-        assert_disabled(
+            outcome(state.execute_delete_shot_range_shift(sid, shid, shid)),
+        ),
+        (
             "execute_delete_last_shot_and_section",
-            &state.execute_delete_last_shot_and_section(sid, shid),
-        );
-        assert_disabled(
+            outcome(state.execute_delete_last_shot_and_section(sid, shid)),
+        ),
+        (
             "execute_split_shot_at_distance",
-            &state.execute_split_shot_at_distance(sid, shid, 1.0),
-        );
-        assert_disabled(
+            outcome(state.execute_split_shot_at_distance(sid, shid, 1.0)),
+        ),
+        (
             "execute_create_and_merge",
-            &state.execute_create_and_merge(
+            outcome(state.execute_create_and_merge(
                 Some("Imp".to_string()),
                 None,
                 None,
@@ -24474,79 +24495,74 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                 0,
                 StationRef::new(sid, 1),
                 ClosureStrategy::Batch,
-            ),
-        );
-        assert_disabled(
+            )),
+        ),
+        (
             "execute_import_sections",
-            &state.execute_import_sections(
-                vec![ImportSectionConfig {
-                    reverse: false,
-                    section_index: 0,
-                    name: Some("Imp".to_string()),
-                    surveyor: None,
-                    date: None,
-                    color: "#00ff00".to_string(),
-                    direction: None,
-                    quality: 1.0,
-                    shots: vec![test_shot_data(3.0)],
-                    station_comments: Vec::new(),
-                    placement: ImportPlacement::Origin,
-                    azimuth_reference: None,
-                }],
+            outcome(state.execute_import_sections(
+                vec![import_config],
                 Vec::new(),
                 None,
                 Vec::new(),
                 Vec::new(),
                 VirtualShotMode::Auto,
-            ),
-        );
-    }
-
-    // --- by-path metadata methods ---
-    {
-        let (state, _sid, _shid, _temp) = remote_fixture();
-        // The by-path methods are gated only when path == the OPEN project.
-        let open_path = state.get_project_state().unwrap().file_path.unwrap();
-        assert_disabled(
+            )),
+        ),
+        // by-path / metadata methods (gated only when path == the OPEN project)
+        (
             "set_project_name_for_path",
-            &state.set_project_name_for_path(open_path, "Renamed Remote".to_string()),
-        );
-    }
+            outcome(state.set_project_name_for_path(open_path, "Renamed Again".to_string())),
+        ),
+        // warning resolve/unresolve (#197): gated because resolved_warnings
+        // proliferates to the server. They return Result<(), String>; the code is
+        // carried as the String error prefix, exactly as the frontend's read-only
+        // handler pattern-matches it.
+        (
+            "save_resolved_warning_gated",
+            state.save_resolved_warning_gated(&warning),
+        ),
+        (
+            "delete_resolved_warning_gated",
+            state.delete_resolved_warning_gated(sid, shid, "SHORT_SHOT", None),
+        ),
+    ]
+}
 
-    // --- warning resolve/unresolve (#197) ---
-    // These return Result<(), String> (not CommandResult); the EDIT_DISABLED code is
-    // carried as the String error prefix, exactly as the frontend's read-only handler
-    // pattern-matches it.
-    {
-        let (state, sid, shid, _temp) = remote_fixture();
-        let warning = crate::persistence::ResolvedWarning {
-            section_id: sid,
-            shot_id: shid,
-            warning_code: "SHORT_SHOT".to_string(),
-            resolved_at: chrono::Utc::now(),
-            resolved_comment: None,
-            shot_uuid: None,
-        };
-        let resolve_err = state
-            .save_resolved_warning_gated(&warning)
-            .expect_err("resolve must be rejected when edit disabled");
+#[test]
+fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
+    // Tripwire doc: when a new state-mutating entry is added, route it through
+    // guard_mutation AND add its name to MUTATION_ENTRYPOINTS + a call in
+    // probe_mutation_entrypoints.
+    assert_eq!(
+        MUTATION_ENTRYPOINTS.len(),
+        25,
+        "update both the routing and this list when adding a mutation entry"
+    );
+
+    let (state, sid, shid, _temp) = remote_fixture();
+    let outcomes = probe_mutation_entrypoints(&state, sid, shid);
+    let probed: Vec<&str> = outcomes.iter().map(|(label, _)| *label).collect();
+    assert_eq!(
+        probed, MUTATION_ENTRYPOINTS,
+        "probe_mutation_entrypoints must call exactly the listed entry points, in order"
+    );
+    for (label, outcome) in &outcomes {
+        // Repair included: since #576 D39(a) its refusal is the coded error itself,
+        // not a zero result that read as a clean repair.
+        let error = outcome
+            .as_ref()
+            .err()
+            .unwrap_or_else(|| panic!("{label} must be rejected when edit disabled"));
         assert!(
-            resolve_err.starts_with(EDIT_DISABLED_CODE),
-            "save_resolved_warning_gated must carry the EDIT_DISABLED code, got: {resolve_err:?}"
-        );
-        let unresolve_err = state
-            .delete_resolved_warning_gated(sid, shid, "SHORT_SHOT", None)
-            .expect_err("unresolve must be rejected when edit disabled");
-        assert!(
-            unresolve_err.starts_with(EDIT_DISABLED_CODE),
-            "delete_resolved_warning_gated must carry the EDIT_DISABLED code, got: {unresolve_err:?}"
-        );
-        // The gate fires BEFORE any DB write, so the dirty bit must NOT have flipped.
-        assert!(
-            !dirty_bit(&state),
-            "a rejected resolve/unresolve must not dirty the project"
+            error.starts_with(EDIT_DISABLED_CODE),
+            "{label} must carry the EDIT_DISABLED code, got: {error:?}"
         );
     }
+    // The gate fires BEFORE any DB write, so the dirty bit must NOT have flipped.
+    assert!(
+        !dirty_bit(&state),
+        "a rejected mutation must not dirty the project"
+    );
 }
 
 #[test]

@@ -1460,6 +1460,8 @@ impl AppState {
         self.set_history_discarded(false);
         // [#576 B6-D1] Nor is there a newer-version file to keep read-only.
         self.set_newer_file_schema(None);
+        // [#576 C5] Nor a workspace: the next project opens in Survey.
+        self.reset_workspace_mode();
         tracing::debug!("close_project: project dropped");
 
         tracing::debug!("close_project: acquiring database lock");

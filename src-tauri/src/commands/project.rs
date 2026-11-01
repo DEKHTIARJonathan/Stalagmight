@@ -448,6 +448,17 @@ pub fn history_discarded(state: State<'_, AppState>) -> bool {
     state.history_discarded()
 }
 
+/// [#576 C5] The frontend reports its workspace mode (`survey` / `plan` /
+/// `export`) on every mode change. While it is Plan or Export the mutation
+/// chokepoint refuses every survey edit with the coded `WORKSPACE_READ_ONLY`
+/// refusal, so a gap in the UI's read-only gating cannot reach the project.
+/// The backend resets it to Survey on every project open, create and close, as
+/// the frontend does.
+#[tauri::command]
+pub fn set_workspace_mode(state: State<'_, AppState>, mode: crate::core::WorkspaceMode) {
+    state.set_workspace_mode(mode);
+}
+
 #[tauri::command]
 pub async fn create_project_full(
     app_handle: tauri::AppHandle,

@@ -219,6 +219,27 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // close and create, as the backend clears `AppState::newer_file_schema`.
       let mockNewerSchema: number | null = null;
       let openProjectNewerSchema: number | null = null;
+      // #576 C5: the workspace mode the frontend last reported (`set_workspace_mode`).
+      // While it is Plan or Export the backend refuses every guarded survey edit
+      // (`WORKSPACE_GUARDED_COMMANDS` below); reset to Survey on every project
+      // create, load and close, as the backend does.
+      let mockWorkspaceMode: 'survey' | 'plan' | 'export' = 'survey';
+      // The IPC commands whose backend handler runs `AppState::guard_mutation` and is
+      // NOT on its read-only-workspace allowlist (`update_project_settings`,
+      // `set_project_name_for_path` stay editable in every mode). The ones that
+      // return `Result<_, String>` reject; the rest resolve a failed CommandResult.
+      const WORKSPACE_GUARDED_COMMANDS = new Set([
+        'create_section', 'update_section', 'delete_section', 'reverse_section', 'move_section',
+        'move_segment', 'execute_batch', 'create_shot', 'update_shot', 'delete_shot', 'set_shot_kind',
+        'create_loop_closure', 'remove_loop_closure', 'merge_stations', 'unmerge_stations',
+        'unmerge_station_pair', 'set_zero_datum', 'remove_zero_datum', 'set_station_comment',
+        'move_comment', 'move_station', 'undo', 'redo', 'undo_to', 'redo_to', 'set_surface_elevation',
+        'repair_project_integrity', 'delete_shot_and_split', 'delete_shot_range_split',
+        'delete_shot_range_shift', 'delete_last_shot_and_section', 'split_shot_at_distance',
+        'create_section_and_merge', 'import_sections', 'execute_tml_import', 'execute_compass_import',
+        'execute_walls_import', 'execute_gpx_import', 'resolve_warning', 'unresolve_warning',
+      ]);
+      const WORKSPACE_GUARDED_REJECTS = new Set(['repair_project_integrity', 'resolve_warning', 'unresolve_warning']);
       // Window teardown calls, so an exit-guard spec can assert the POSITIVE
       // outcome of an unguarded close instead of only "no dialog appeared".
       let windowDestroyCount = 0;
@@ -976,7 +997,26 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           return override as unknown;
         }
 
+        // #576 C5: the backend's read-only-workspace backstop (guard_mutation).
+        if (mockWorkspaceMode !== 'survey' && WORKSPACE_GUARDED_COMMANDS.has(cmd)) {
+          const label = mockWorkspaceMode === 'plan' ? 'Plan' : 'Export';
+          const error =
+            `EDIT_DISABLED: WORKSPACE_READ_ONLY: ${cmd} is disabled: the ${label} workspace is ` +
+            `read-only. Switch to Survey to edit.`;
+          if (WORKSPACE_GUARDED_REJECTS.has(cmd)) return Promise.reject(error);
+          return { success: false, error, warnings: [], section_ids: [] };
+        }
+
         switch (cmd) {
+          case 'set_workspace_mode': {
+            const mode = args?.mode;
+            if (mode !== 'survey' && mode !== 'plan' && mode !== 'export') {
+              return Promise.reject(`unknown variant \`${String(mode)}\`, expected one of \`survey\`, \`plan\`, \`export\``);
+            }
+            mockWorkspaceMode = mode;
+            return null;
+          }
+
           case 'update_project_settings': {
             // Per-project settings (#57): name + validation thresholds.
             if (currentProject) {
@@ -1023,6 +1063,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const name = (args?.name as string) ?? 'Untitled Project';
             // A project this build created is this build's to save (#576 B6-D1).
             openProjectNewerSchema = null;
+            mockWorkspaceMode = 'survey'; // #576 C5: a project opens in Survey
             const projectLocation = (args?.projectLocation as string | null | undefined) ?? null;
             const savePathArg = (args?.savePath as string | undefined) ?? undefined;
             const saveDirectoryArg = (args?.saveDirectory as string | undefined) ?? undefined;
@@ -1581,6 +1622,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
             // The backend commits the same verdict as the open project's state.
             openProjectNewerSchema = mockNewerSchema;
+            mockWorkspaceMode = 'survey'; // #576 C5: a project opens in Survey
             const bytes = MessagePack.encode(envelope);
             // Return as plain number[] so the frontend's
             // `Array.isArray` fallback converts to Uint8Array without
@@ -1626,6 +1668,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             currentProject = null;
             projectPath = null;
             openProjectNewerSchema = null;
+            mockWorkspaceMode = 'survey'; // #576 C5
             return { success: true, section_ids: [] };
           }
 

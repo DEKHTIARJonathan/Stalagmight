@@ -239,6 +239,14 @@ pub enum Command {
 /// #204/#209).
 pub const EDIT_DISABLED_CODE: &str = "EDIT_DISABLED";
 
+/// Second code behind [`EDIT_DISABLED_CODE`] on a mutation refused because the
+/// frontend's workspace is Plan or Export, which are read-only (#576 C5,
+/// `AppState::set_workspace_mode`). Behind `EDIT_DISABLED` so every caller that
+/// already treats a gated refusal as "read-only, not a failure" keeps doing so;
+/// the frontend reads this one to say which read-only it is, the same pattern as
+/// `loading::NEWER_FILE_READ_ONLY_CODE`.
+pub const WORKSPACE_READ_ONLY_CODE: &str = "WORKSPACE_READ_ONLY";
+
 /// Coded-failure prefix for a mutation blocked by the lazy 20-min lock re-verify
 /// (#202) because a definitive server answer showed the write lock is no longer
 /// held by us. Same string-prefix idiom as [`EDIT_DISABLED_CODE`],

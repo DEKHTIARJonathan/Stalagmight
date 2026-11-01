@@ -174,6 +174,8 @@ impl AppState {
         self.set_history_discarded(false);
         // [#576 B6-D1] This build created it, so it is this build's to edit.
         self.set_newer_file_schema(None);
+        // [#576 C5] A project opens in Survey, here as in the frontend.
+        self.reset_workspace_mode();
 
         CommandResult::success()
     }
@@ -198,8 +200,9 @@ impl AppState {
         };
         // Read-only edit gate (#191, D-B5): a settings change mutates the project,
         // so it is gated on a read-only remote project (returns the EDIT_DISABLED
-        // coded failure).
-        if let Err(f) = self.guard_mutation("Update project settings") {
+        // coded failure). [#576 C5] On the read-only-workspace allowlist: the name
+        // and validation thresholds stay editable in Plan/Export on purpose.
+        if let Err(f) = self.guard_metadata_mutation("Update project settings") {
             return f;
         }
         let before_snapshot = self.capture_project_snapshot().ok();
@@ -533,6 +536,8 @@ impl AppState {
         self.set_history_discarded(false);
         // [#576 B6-D1] This build created it, so it is this build's to edit.
         self.set_newer_file_schema(None);
+        // [#576 C5] A project opens in Survey, here as in the frontend.
+        self.reset_workspace_mode();
 
         // Track whether the initial save is still pending: a deferred new project
         // has no file on disk yet, so its first import must durably persist it.

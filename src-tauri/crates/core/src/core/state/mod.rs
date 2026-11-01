@@ -37,6 +37,7 @@ mod undo_capture;
 mod undo_policy;
 mod undo_restore;
 mod warnings;
+mod workspace_mode;
 
 #[cfg(test)]
 mod adversarial_tests;
@@ -129,6 +130,16 @@ mod shot_uuid_tests;
     clippy::print_stdout
 )]
 mod tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              outcomes are the evidence a run captures"
+)]
+mod workspace_mode_tests;
 // `any(test, feature = "test-support")`: the root crate's tests reach the
 // AppState test setters in here (via the `test-support` feature the root's
 // [dev-dependencies] enable); the source-scan tripwires inside stay
@@ -138,3 +149,4 @@ mod tests_support;
 
 pub use app_state::AppState;
 pub use command_import::VirtualShotMode;
+pub use workspace_mode::WorkspaceMode;

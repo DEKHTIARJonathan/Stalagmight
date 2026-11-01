@@ -394,8 +394,12 @@ test.describe('Dive-plan persistence (#244)', () => {
     });
     await expect(page.locator('[data-testid="dive-plan-save"]')).toBeEnabled();
 
+    // The survey is edited in Survey: Plan is read-only, and the backend refuses a survey
+    // edit there (#576 C5). The plan and its pins survive the round trip (#244).
+    await page.locator('[data-testid="mode-survey"]').click();
     await deleteShotAt(page, 2);
     await deleteShotAt(page, 2); // shot[3] is now at index 2 after the first delete.
+    await enterPlan(page);
 
     // The #310 fix landed in this same branch: losing both neighbours of a pinned way point
     // marks that pin unresolved (`gasPlanStore.ts`'s `unresolved.waypoints`, per the doc comment

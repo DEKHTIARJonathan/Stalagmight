@@ -199,6 +199,12 @@ pub struct AppState {
     /// every project-slot commit (both loads, both creates, close), like
     /// `history_discarded`.
     pub(super) newer_file_schema: AtomicI32,
+    /// [#576 C5] The workspace mode the frontend last reported. Plan and Export
+    /// are read-only: `guard_mutation` refuses every guarded edit while either is
+    /// active. Transient, never persisted, reset to Survey on every project-slot
+    /// commit (both loads, both creates, close) beside `newer_file_schema`. See
+    /// `workspace_mode.rs`.
+    pub(super) workspace_mode: super::workspace_mode::WorkspaceModeCell,
     /// Memoized closure-adjusted station coordinates for the display-mode toggle.
     /// See [`AdjustedStationsCache`]. Transient; never persisted.
     pub(super) adjusted_cache: Mutex<Option<AdjustedStationsCache>>,
@@ -284,6 +290,8 @@ impl AppState {
             history_discarded: AtomicBool::new(false),
             // Default 0 (none): no project is open, so none came from a newer build.
             newer_file_schema: AtomicI32::new(0),
+            // Survey: no project is open, and every project opens in Survey.
+            workspace_mode: super::workspace_mode::WorkspaceModeCell::default(),
             adjusted_cache: Mutex::new(None),
             adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),
@@ -400,8 +408,9 @@ impl AppState {
     }
 
     /// THE mutation chokepoint (#191, D-B6). Every SURVEY-CONTENT mutation entry
-    /// (`execute` + all its `execute_*` siblings, `undo`/`redo`/`undo_to`/`redo_to`,
-    /// `set_project_name_for_path`) calls this FIRST, after
+    /// (`execute` + all its `execute_*` siblings, `undo`/`redo`/`undo_to`/`redo_to`;
+    /// `set_project_name_for_path` and `update_project_settings` through
+    /// [`Self::guard_metadata_mutation`]) calls this FIRST, after
     /// taking `command_lock` and before mutating. `Err` aborts the mutation when
     /// the open project is a remote SpeleoDB project opened read-only. No-op (`Ok`)
     /// for local-only (default-true `edit_enabled`) projects and non-mutating reads.
@@ -432,7 +441,26 @@ impl AppState {
     /// as "read-only, not a failure" keeps doing so, followed by
     /// `NEWER_FILE_READ_ONLY` so the frontend's notice can say which read-only
     /// this is without trusting its own copy of the flag.
+    ///
+    /// [#576 C5] Then, while the frontend's workspace is Plan or Export, EVERY
+    /// caller is refused (`EDIT_DISABLED` + `WORKSPACE_READ_ONLY`): deny by
+    /// default, so a new entry point is read-only in those modes without anyone
+    /// remembering it. The two deliberate exceptions call
+    /// [`Self::guard_metadata_mutation`] instead.
     pub(super) fn guard_mutation(&self, what: &str) -> Result<(), CommandResult> {
+        self.guard_metadata_mutation(what)?;
+        self.guard_workspace(what)
+    }
+
+    /// [#576 C5] `guard_mutation` WITHOUT the read-only-workspace check: the
+    /// newer-file and SpeleoDB gates only. The allowlist of what may be edited in
+    /// Plan and Export, and it is exactly two callers - keep it that short:
+    /// - `update_project_settings` (project name + validation thresholds) and
+    /// - `set_project_name_for_path` (project rename),
+    ///
+    /// which ProjectSettingsDialog deliberately keeps enabled in every mode
+    /// (docs/app-modes.md). Everything else that mutates calls `guard_mutation`.
+    pub(super) fn guard_metadata_mutation(&self, what: &str) -> Result<(), CommandResult> {
         if let Some(version) = self.newer_file_schema() {
             return Err(newer_file_edit_refusal(what, version));
         }

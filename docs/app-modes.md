@@ -48,15 +48,43 @@ imported project with no closures, Plan mode runs with
 not be. `DataTable`, `SectionsPanel`, `WarningResolution` and `DetailPanel` all
 shipped with exactly that bug.
 
-**There is no server backstop for this half of the predicate.** The backend's
-`AppState::guard_mutation` rejects a mutation only when `edit_enabled` is false,
-and that flag is false only for a remote SpeleoDB project opened without the
-write lock (`src-tauri/crates/core/src/core/state/app_state.rs`) - or when the open project
-was saved by a newer Stalagmight (`newer_file_schema`, #576 B6-D1; see
-[saving.md](saving.md#files-saved-by-a-newer-version-open-read-only)), which it refuses
-first, whatever the lock says. A local project in Plan or Export is
-`edit_enabled == true` server-side, so read-only there rests entirely on UI gating -
-which is why the gating is linted.
+**The backend backstops the `appMode` half (#576 C5), not the `geometryMode`
+half.** The frontend reports every `appMode` change to the backend
+(`set_workspace_mode`, sent by `src/store/workspaceModeSync.ts`, started from
+`main.tsx`), and the backend resets its copy to Survey on every project open,
+create and close - the same reset `applyDisplaySettings` does. While the mode is
+Plan or Export, `AppState::guard_mutation` refuses every entry point that calls it
+with `EDIT_DISABLED: WORKSPACE_READ_ONLY: ...`, which the frontend shows as its own
+notice ("switch to Survey", `editGate.workspaceReadOnlyNotice`), not as the
+SpeleoDB lock notice. It is **deny by default**: a new entry point that calls
+`guard_mutation` is refused in Plan and Export without anyone having to remember.
+The allowlist is two entries, on purpose: the project name + validation-threshold
+save (`update_project_settings`) and the project rename
+(`set_project_name_for_path`), which `ProjectSettingsDialog` keeps enabled in every
+mode; they call `guard_metadata_mutation`, which skips only the workspace check.
+
+That gate sits after the two older ones, which still refuse first: a project saved
+by a newer Stalagmight (`newer_file_schema`, #576 B6-D1; see
+[saving.md](saving.md#files-saved-by-a-newer-version-open-read-only)) and a remote
+SpeleoDB project opened without the write lock (`edit_enabled == false`). All three
+live in `src-tauri/crates/core/src/core/state/app_state.rs` and
+`state/workspace_mode.rs`; the refused set is pinned by `MUTATION_ENTRYPOINTS` and
+`state/workspace_mode_tests.rs`. That list is still hand-maintained; it is to be
+derived from the IPC command manifest when that lands (#576 C3).
+
+Survey's **Closures Computed View is not mirrored**: it is a Survey sub-view, and
+its undo/redo carve-out (below) has to keep working - the backend cannot tell that
+undo from any other. Read-only there rests on UI gating alone, and so does every
+mode in the instant before the mode change reaches the backend. The backend gate
+is the backstop, not the gate: keep gating every entry point in the UI, which is
+why the gating is linted.
+
+Command reachability is not a boundary to lean on either. `tauri.conf.json` sets
+`withGlobalTauri: true` (the agent harness drives the app through
+`window.__TAURI__`), but turning it off would not make the commands unreachable
+from a script in the webview: Tauri 2 always injects `window.__TAURI_INTERNALS__`,
+which `@tauri-apps/api` itself invokes through. Whatever a page script can do, the
+backend gates above are what stop it.
 
 ### The one sanctioned gate
 
@@ -146,8 +174,13 @@ and docks over the freshly loaded ones. `uiStore.planDocks.test.ts` pins it.
   leaks into the next project.
 - Run `pnpm lint:readonly-gates` before pushing; a new raw `closureAdjusted`
   comparison or a direct `isMapReadOnly` import fails the CI `check` job.
+- A new backend mutation entry point calls `guard_mutation` (refused in Plan
+  and Export) unless it is deliberately editable there; then it calls
+  `guard_metadata_mutation`, joins the allowlist in `workspace_mode_tests.rs`,
+  and this page says why.
 - For e2e: specs enter a mode by clicking `[data-testid="mode-plan"]` /
-  `mode-export`. A new IPC command needs a case in
+  `mode-export`, and the mock refuses the guarded commands there as the backend
+  does (`WORKSPACE_GUARDED_COMMANDS`). A new IPC command needs a case in
   `e2e-playwright/mocks/tauri-ipc.ts` (unknown commands fall through to a warning
   and `null`, which the UI reads as failure), and the mock must initialize any
   store state your new gate reads, or the control is silently dead in every spec.

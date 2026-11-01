@@ -24,6 +24,7 @@ import { useNetworkStore } from './store/networkStore';
 import { shotMaterialization } from './types/survey-data';
 import { getPerfTimings } from './utils/memoryProbe';
 import { routeOpenedFile } from './utils/openOrImport';
+import { startWorkspaceModeSync } from './store/workspaceModeSync';
 import type { TestFileDialogQueueEntry } from './utils/fileDialogs';
 
 // Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
@@ -54,6 +55,11 @@ installGlobalErrorCapture();
 // Keyboard-only focus rings: tag <html data-input-modality> from the first
 // interaction (set before render so there's no initial ring flash).
 initInputModalityTracking();
+
+// [#576 C5] Tell the backend which workspace mode we are in, now and on every
+// change: Plan and Export are read-only, and the backend refuses survey edits
+// there as the backstop to the UI's own gating (docs/app-modes.md).
+startWorkspaceModeSync();
 
 // The frame-gap freeze detector is no longer started automatically - it
 // was producing a stream of `freeze #N` entries in the memory probe for

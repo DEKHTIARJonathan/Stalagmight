@@ -33,6 +33,14 @@ export function isReverifyDivergedError(error?: string | null): boolean {
   return !!error && error.startsWith(EDIT_REVERIFY_DIVERGED);
 }
 
+/**
+ * Second code the backend puts behind `EDIT_DISABLED` when it refuses an edit
+ * because the workspace is Plan or Export, which are read-only (#576 C5; the
+ * frontend reports the mode through `set_workspace_mode`). Mirrors
+ * `WORKSPACE_READ_ONLY_CODE` in `src-tauri/crates/core/src/core/command.rs`.
+ */
+export const WORKSPACE_READ_ONLY = 'WORKSPACE_READ_ONLY';
+
 /** User-facing toast shown when a read-only project rejects an edit. Says "write
     lock" like the rest of the SpeleoDB copy: the point is that someone else has
     exclusive write access, not that the file itself is locked.
@@ -41,8 +49,12 @@ export function isReverifyDivergedError(error?: string | null): boolean {
     newer Stalagmight, which the backend marks with `NEWER_FILE_READ_ONLY` behind
     `EDIT_DISABLED`. That one has nothing to do with the lock - Start editing is
     refused too - so it gets its own line. Decided from the error itself, not the
-    store's flag, so it stays right even where the flag has not caught up. */
+    store's flag, so it stays right even where the flag has not caught up.
+
+    [#576 C5] Or the read-only WORKSPACE (`WORKSPACE_READ_ONLY`): Plan and Export
+    never edit the survey, whatever the project, so its line points at Survey. */
 export function READ_ONLY_EDIT_NOTICE(error?: string | null): string {
   if (error?.includes(NEWER_FILE_READ_ONLY)) return i18n.t('editGate.newerFileNotice');
+  if (error?.includes(WORKSPACE_READ_ONLY)) return i18n.t('editGate.workspaceReadOnlyNotice');
   return i18n.t('editGate.readOnlyNotice');
 }

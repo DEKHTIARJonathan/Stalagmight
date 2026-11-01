@@ -132,6 +132,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.set_project_name_for_path",
     "command.set_shot_kind",
     "command.set_station_comment",
+    "command.set_workspace_mode",
     "command.set_zero_datum",
     "command.speleodb_add_collaborator",
     "command.speleodb_add_team",
@@ -1108,7 +1109,10 @@ mod tests {
         //   + 1 the discarded-history banner (#473) asks the backend whether the
         //       project it just opened could read its edit history at all:
         //       command.history_discarded = 737.
-        assert_eq!(EVENT_NAMES.len(), 737);
+        //   + 1 the frontend reports its workspace mode so the backend can refuse
+        //       edits in the read-only Plan/Export workspaces (#576 C5):
+        //       command.set_workspace_mode = 738.
+        assert_eq!(EVENT_NAMES.len(), 738);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

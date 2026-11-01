@@ -536,8 +536,10 @@ impl AppState {
                 .as_ref()
                 .is_some_and(|open| open.file_path.as_deref() == Some(path.as_path()))
         };
+        // [#576 C5] On the read-only-workspace allowlist: a rename is allowed in
+        // Plan/Export like the project-settings name save.
         if is_open_project {
-            if let Err(f) = self.guard_mutation("Rename project") {
+            if let Err(f) = self.guard_metadata_mutation("Rename project") {
                 return f;
             }
         }

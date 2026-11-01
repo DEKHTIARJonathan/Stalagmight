@@ -1786,6 +1786,7 @@ pub fn run() {
             commands::project::close_project,
             commands::project::take_unrecognised_shot_kinds,
             commands::project::history_discarded,
+            commands::project::set_workspace_mode,
             commands::project::get_project_state,
             commands::project::get_adjusted_stations,
             commands::project::get_station_distances_from,
