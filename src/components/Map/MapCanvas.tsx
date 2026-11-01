@@ -368,6 +368,12 @@ function MapCanvas() {
   // Token to invalidate stale getConnectedSectionIds results (incremented on each drag start,
   // checked in .then()/.catch() to discard late async results after mouseup)
   const segmentDragTokenRef = useRef(0);
+  // The token of the latest Move Segment pickup. While it still equals
+  // segmentDragTokenRef that pickup is live: pending until getConnectedSectionIds
+  // returns and `moveDrag` is set, then carried until a drop or Escape bumps the
+  // token. The right-click gate reads it because `moveDrag` is still null while
+  // the pickup is pending.
+  const segmentPickupTokenRef = useRef<number | null>(null);
   // --- Drag hot-path refs (bypass React state to avoid re-render per mousemove) ---
   // Current drag position (updated imperatively on every mousemove)
   const moveDragLngLatRef = useRef<{ lng: number; lat: number } | null>(null);
@@ -1023,6 +1029,7 @@ function MapCanvas() {
 
         // Set a pending drag token to detect stale async results
         const dragToken = ++segmentDragTokenRef.current;
+        segmentPickupTokenRef.current = dragToken;
 
         // Fetch connected section IDs at drag start
         getConnectedSectionIds(segmentSectionId).then((ids) => {
@@ -1136,8 +1143,10 @@ function MapCanvas() {
         // survey under the ref the ghost was picked up against. The native menu
         // stays suppressed; Escape cancels and a left still click drops. The
         // touch long-press is gated on the same ghost (SurveyLayer's
-        // `modalInteractionActive`).
-        if (moveDragRef.current) {
+        // `modalInteractionActive`). A Move Segment pickup counts from the
+        // click, not from when its connected-section fetch returns and the
+        // ghost goes up, or the menu would open under that ghost.
+        if (moveDragRef.current || segmentPickupTokenRef.current === segmentDragTokenRef.current) {
           event.originalEvent.preventDefault();
           return;
         }
