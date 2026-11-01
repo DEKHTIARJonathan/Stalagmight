@@ -269,6 +269,8 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
   let lonDir: string | undefined;
   // Patterns 1 and 2 carry direction letters; pattern 3 is signed degrees only.
   let lettered = true;
+  // Notes beyond `signLetterNotes`, e.g. a letter next to the pair read as text.
+  const extraNotes: string[] = [];
 
   // Patterns 1 and 2 end in the longitude letter: E or W, or the direction
   // word it starts (East, West; Este/Est), never the first letter of another
@@ -342,30 +344,44 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
         const latNegative = latDegStr?.startsWith('-') === true;
         const lonNegative = lonDegStr?.startsWith('-') === true;
 
-        // A hemisphere letter right before the latitude or right after the
-        // longitude is theirs and is used, never ignored: in
+        // A hemisphere letter or word right before the latitude or right
+        // after the longitude (`adjacentHemisphere`): in
         // `Entrance: -20°30'15" 87°18'27"W` the W makes the longitude west.
-        // One on the wrong axis is not a reading, so the input is refused.
         // A '+' between that letter and the latitude is the latitude's sign.
+        // Groups: the end of a word before the letter (`Station N`), the letter, the
+        // space between it and the number; and after the longitude the space,
+        // the letter, and a word after it. Before the latitude a letter after a
+        // word reads as part of a name; after the longitude a lone letter is
+        // where the hemisphere goes (`87°18'27" W 12m`), so only a direction
+        // word followed by another word does (`South entrance`).
         const end = (match.index ?? 0) + match[0].length;
         const before = trimmed
           .slice(0, match.index)
-          .match(/(?:^|[^A-Za-z])(North|South|East|Este|Est|West|[NSEW])\s*(\+?)$/i);
-        const lonLetter = trimmed
+          .match(/(?:^|([A-Za-z])\s+|[^A-Za-z])(North|South|East|Este|Est|West|[NSEW])(\s*)(\+?)$/i);
+        const after = trimmed
           .slice(end)
-          .match(/^\s*(North|South|East|Este|Est|West|[NSEW])(?![A-Za-z])/i)?.[1];
-        const latLetterUpper = before?.[1]?.charAt(0).toUpperCase();
-        const lonLetterUpper = lonLetter?.charAt(0).toUpperCase();
-        const wrongAxis = latLetterUpper === 'E' || latLetterUpper === 'W' || lonLetterUpper === 'N' || lonLetterUpper === 'S';
-        if (before?.[2] === '+') latDegStr = `+${latDegStr}`;
+          .match(/^(\s*)(North|South|East|Este|Est|West|[NSEW])(?![A-Za-z])(\s+[A-Za-z])?/i);
+        if (before?.[4] === '+') latDegStr = `+${latDegStr}`;
+        const latSide =
+          before && adjacentHemisphere(before[2]!, before[3] !== '', before[1] !== undefined, latDegStr ?? '', 'NS');
+        const lonSide =
+          after &&
+          adjacentHemisphere(after[2]!, after[1] !== '', after[2]!.length > 1 && after[3] !== undefined, lonDegStr ?? '', 'EW');
+        // A wrong-axis letter on both sides says longitude first: no reading.
+        const bothWrongAxis = latSide?.wrongAxis === true && lonSide?.wrongAxis === true;
 
         // Require at least one negative value for signed format to avoid ambiguity
-        if ((!latNegative && !lonNegative) || wrongAxis) {
+        if ((!latNegative && !lonNegative) || latSide?.refuse || lonSide?.refuse || bothWrongAxis) {
           match = null; // Both positive = ambiguous, reject
         } else {
-          latDir = latLetterUpper ?? (latNegative ? 'S' : 'N');
-          lonDir = lonLetterUpper ?? (lonNegative ? 'W' : 'E');
-          lettered = latLetterUpper !== undefined || lonLetterUpper !== undefined;
+          latDir = latSide?.letter ?? (latNegative ? 'S' : 'N');
+          lonDir = lonSide?.letter ?? (lonNegative ? 'W' : 'E');
+          lettered = latSide?.letter !== undefined || lonSide?.letter !== undefined;
+          for (const side of [latSide, lonSide]) {
+            if (side?.asText !== undefined) {
+              extraNotes.push(i18n.t('validation.gps.letterReadAsText', { text: side.asText }));
+            }
+          }
         }
       }
     }
@@ -436,7 +452,7 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
     };
   }
 
-  const note = signLetterNotes([latDegStr, latDir, lat], [lonDegStr, lonDir, lon]);
+  const note = joinNotes(signLetterNotes([latDegStr, latDir, lat], [lonDegStr, lonDir, lon]), ...extraNotes);
   return {
     coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
     format: 'DMS',
@@ -444,6 +460,38 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
     ...(lettered ? { orderExplicit: true } : {}),
     ...(note !== undefined ? { note } : {}),
   };
+}
+
+/**
+ * A hemisphere letter or direction word found right outside a signed pair in
+ * other text, before the latitude (`axis` 'NS') or after the longitude ('EW').
+ * It is the hemisphere (`letter`), except when it is `inLabel`: set apart from
+ * the number by a space and read together with a word on its other side
+ * (`labelWord`, as the caller judges it: `Point E -20°...`, `Station N -20°...`,
+ * `... South entrance`), where it may as well be part of that label. There it
+ * is read as text (`asText`, said in a note) when it is on the wrong axis or
+ * contradicts the minus sign next to it - the signs then give the value, as they
+ * did before letters next to the pair were read. Elsewhere a letter on the wrong
+ * axis is no reading and the input is refused (`refuse`).
+ */
+function adjacentHemisphere(
+  found: string,
+  spaced: boolean,
+  labelWord: boolean,
+  degrees: string,
+  axis: 'NS' | 'EW'
+): { letter?: string; asText?: string; refuse?: true; wrongAxis?: true } {
+  const letter = found.charAt(0).toUpperCase();
+  const inLabel = spaced && labelWord;
+  if (!axis.includes(letter)) return inLabel ? { asText: found, wrongAxis: true } : { refuse: true, wrongAxis: true };
+  if (inLabel && degrees.startsWith('-') && (letter === 'N' || letter === 'E')) return { asText: found };
+  return { letter };
+}
+
+/** The notes that apply, joined; undefined when there are none. */
+function joinNotes(...notes: Array<string | undefined>): string | undefined {
+  const present = notes.filter((n): n is string => n !== undefined);
+  return present.length > 0 ? present.join(' ') : undefined;
 }
 
 /**

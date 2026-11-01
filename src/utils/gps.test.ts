@@ -1216,3 +1216,34 @@ describe('a fractional degree followed by minutes in a labelled paste (R5-6)', (
     expectCoordsClose(parsedOk(`No.20°30'15"N 87°18'27"W`), DMS_LAT, -DMS_LON);
   });
 });
+
+describe('label text next to a signed pair (R5-2)', () => {
+  // 9d60e8d5 read these correctly: each degree carries its own minus sign, so
+  // the letter or word next to it is part of the label.
+  it.each([
+    `Point E -20°30'15" -87°18'27"`,
+    `Station W -20°30'15" -87°18'27"`,
+    `-20°30'15" -87°18'27" South entrance`,
+  ])('%s keeps its value and says the letter was read as text', (input) => {
+    const result = parsedOk(input);
+    expect(result.coordinates.latitude).toBeCloseTo(-DMS_LAT, 9);
+    expect(result.coordinates.longitude).toBeCloseTo(-DMS_LON, 9);
+    expect(result.note).toMatch(/part of the text/);
+  });
+
+  it('a separate letter or word against a minus sign is read as text, not as a contradiction', () => {
+    for (const input of [`Station N -20°30'15" -87°18'27"`, `-20°30'15" -87°18'27" East entrance`]) {
+      const result = parsedOk(input);
+      expect(result.coordinates.latitude, input).toBeCloseTo(-DMS_LAT, 9);
+      expect(result.coordinates.longitude, input).toBeCloseTo(-DMS_LON, 9);
+      expect(result.note, input).toMatch(/part of the text/);
+      expect(result.note, input).not.toMatch(/minus sign/);
+    }
+  });
+
+  it('still refuses a wrong-axis letter touching a number, or one the signs do not settle', () => {
+    expectRejected(`Pos E-20°30'15" -87°18'27"`);
+    expectRejected(`Pos: -20°30'15" -87°18'27"N`);
+    expectRejected(`Pos W -20°30'15" -87°18'27" S`); // longitude first, by its letters
+  });
+});
