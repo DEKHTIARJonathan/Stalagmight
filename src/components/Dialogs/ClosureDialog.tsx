@@ -43,8 +43,9 @@ export default function ClosureDialog() {
   const onCancel = dialogData.onCancel as (() => void) | undefined;
   // Move commands to batch with closure for single-undo snap-to-merge
   const preCommands = dialogData.preCommands as BatchCommand[] | undefined;
-  // The carry those moves belong to: confirming here IS that carry's commit (GHOST-2).
-  const moveCarryToken = (dialogData.moveCarryToken as number | null | undefined) ?? null;
+  // The move carry those moves belong to, when a move tool opened this (GHOST-2):
+  // confirming here IS that carry's commit. Absent when nothing is being carried.
+  const moveCarryToken = dialogData.moveCarryToken as number | null | undefined;
   const isFromMove = !!preCommands;
 
   const handleClose = () => {
@@ -65,7 +66,9 @@ export default function ClosureDialog() {
       const effectiveStrategy = isFromMove ? 'Move' as ClosureStrategy : 'Batch';
       const closureCmd: BatchCommand = { type: 'create_loop_closure', station_a: stationA, station_b: stationB, closure_strategy: effectiveStrategy };
       const result = preCommands
-        ? await commitMoveCarry(moveCarryToken, () => executeBatch([...preCommands, closureCmd]))
+        ? await (moveCarryToken === undefined
+            ? executeBatch([...preCommands, closureCmd])
+            : commitMoveCarry(moveCarryToken, () => executeBatch([...preCommands, closureCmd])))
         : await createLoopClosure(stationA, stationB, effectiveStrategy);
       if (result.success) {
         clearMergeStations();
