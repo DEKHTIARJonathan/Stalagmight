@@ -260,12 +260,12 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
   // Pattern 1: With degree/minute/second symbols AND direction letters
   // Matches: 48°51'30"N 2°17'40"E (or with spaces)
   const dmsSymbolWithDirRegex =
-    /(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([NSns])[,\s]+(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([EWew])/i;
+    /([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([EWew])/i;
 
   // Pattern 2: Space-separated with direction letters (required for disambiguation)
   // Matches: 48 51 30 N 2 17 40 E
   const dmsSpaceRegex =
-    /(-?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([NSns])\s+(-?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([EWew])/i;
+    /([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([NSns])\s+([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([EWew])/i;
 
   // Pattern 3: Signed degrees with symbols (no direction letters)
   // Matches: -33°51'54" 151°12'33" or 33°51'54" -151°12'33"
@@ -379,12 +379,31 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
     };
   }
 
+  const note = signLetterNotes([latDegStr, latDir, lat], [lonDegStr, lonDir, lon]);
   return {
     coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
     format: 'DMS',
     original: input,
     ...(lettered ? { orderExplicit: true } : {}),
+    ...(note !== undefined ? { note } : {}),
   };
+}
+
+/**
+ * The note for degrees whose sign and hemisphere letter disagree, one
+ * [degrees as typed, letter, value read] per coordinate. A minus sign wins over
+ * N or E (the long-standing grammar), a plus sign loses to S or W; either way
+ * the reading is said, never silent. Undefined when nothing disagrees.
+ */
+function signLetterNotes(...coordinates: Array<[string, string | undefined, number]>): string | undefined {
+  const notes = coordinates.flatMap(([degrees, letter, value]) => {
+    const minusOverrides = degrees.startsWith('-') && (letter === 'N' || letter === 'E');
+    const plusOverridden = degrees.startsWith('+') && (letter === 'S' || letter === 'W');
+    if (!minusOverrides && !plusOverridden) return [];
+    const key = minusOverrides ? 'validation.gps.signOverridesLetter' : 'validation.gps.plusOverriddenByLetter';
+    return [i18n.t(key, { letter, value: formatFixed(value, undefined, 6) })];
+  });
+  return notes.length > 0 ? notes.join(' ') : undefined;
 }
 
 const DMS_FORMAT_MESSAGE =
@@ -406,11 +425,11 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
   // Stricter DDM regex - requires degree symbol and direction letters
   // The minutes must contain a decimal point to distinguish from DMS
   const ddmRegex =
-    /(-?\d+)[°]\s*(\d+\.\d+)[′']?\s*([NSns])[,\s]+(-?\d+)[°]\s*(\d+\.\d+)[′']?\s*([EWew])/i;
+    /([+-]?\d+)[°]\s*(\d+\.\d+)[′']?\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.\d+)[′']?\s*([EWew])/i;
 
   // Also allow format without decimal if it has the prime symbol
   const ddmRegex2 =
-    /(-?\d+)[°]\s*(\d+\.?\d*)[′']\s*([NSns])[,\s]+(-?\d+)[°]\s*(\d+\.?\d*)[′']\s*([EWew])/i;
+    /([+-]?\d+)[°]\s*(\d+\.?\d*)[′']\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.?\d*)[′']\s*([EWew])/i;
 
   let match = trimmed.match(ddmRegex);
   if (!match) {
@@ -464,11 +483,13 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
     };
   }
 
+  const note = signLetterNotes([match[1], latDir, lat], [match[4], lonDir, lon]);
   return {
     coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
     format: 'DDM',
     original: input,
     orderExplicit: true,
+    ...(note !== undefined ? { note } : {}),
   };
 }
 
@@ -596,7 +617,8 @@ const hasSign = (text: string) => /^[+-]/.test(text);
  * Read `text` as one latitude/longitude pair in degrees. Returns null when the
  * text is not shaped like a pair (the caller then tries the lenient parsers),
  * an error when it is a pair that cannot be read unambiguously, else the result.
- * A minus sign wins over a contradicting N or E, as in parseDMS, with a note.
+ * A minus sign wins over a contradicting N or E, as in parseDMS, and a plus
+ * sign loses to S or W, each with a note (`signLetterNotes`).
  */
 function parseDegreePair(
   text: string,
@@ -656,23 +678,13 @@ function parseDegreePair(
     return fail('Seconds must be between 0 and 59.99');
   }
 
-  const notes: string[] = [];
   const valueOf = (c: DegreeComponent): number => {
     const [deg, min, sec] = c.parts;
     let value = Math.abs(parseFloat(deg!));
     if (min !== undefined) value += parseFloat(min) / 60;
     if (sec !== undefined) value += parseFloat(sec) / 3600;
     // Read the sign off the text: parseFloat('-0') is -0, which fails `< 0`.
-    const minus = deg!.startsWith('-');
-    if (minus && (c.letter === 'N' || c.letter === 'E')) {
-      notes.push(
-        i18n.t('validation.gps.signOverridesLetter', {
-          letter: c.letter,
-          value: formatFixed(-value, undefined, 6),
-        })
-      );
-    }
-    return minus || c.letter === 'S' || c.letter === 'W' ? -value : value;
+    return deg!.startsWith('-') || c.letter === 'S' || c.letter === 'W' ? -value : value;
   };
   const latitude = valueOf(lat);
   const longitude = valueOf(lon);
@@ -680,12 +692,13 @@ function parseDegreePair(
   const validation = validateCoordinates(latitude, longitude);
   if (!validation.valid) return fail(validation.errors.join('; '));
 
+  const note = signLetterNotes([lat.parts[0]!, lat.letter, latitude], [lon.parts[0]!, lon.letter, longitude]);
   return {
     coordinates: { latitude, longitude, depth_reference: depthReference },
     format,
     original,
     orderExplicit: first.letter !== undefined || second.letter !== undefined,
-    ...(notes.length > 0 ? { note: notes.join(' ') } : {}),
+    ...(note !== undefined ? { note } : {}),
   };
 }
 

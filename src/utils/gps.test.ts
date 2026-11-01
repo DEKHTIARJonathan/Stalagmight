@@ -1034,3 +1034,51 @@ describe('a sign that agrees with its hemisphere letter (R4 F3)', () => {
     expectRejected(`20°30'15" 87°18'27"W`, /letter/);
   });
 });
+
+describe('a plus sign that contradicts S or W (R4 F4)', () => {
+  it('keeps the letter and says the plus sign was overridden', () => {
+    const south = parsedOk('+21.5 S, 47.25 W');
+    expect(south.coordinates.latitude).toBe(-21.5);
+    expect(south.coordinates.longitude).toBe(-47.25);
+    expect(south.note).toMatch(/plus sign and "S"/);
+
+    const west = parsedOk('+20.5 N, +87.3 W');
+    expect(west.coordinates.latitude).toBe(20.5);
+    expect(west.coordinates.longitude).toBe(-87.3);
+    expect(west.note).toMatch(/plus sign and "W"/);
+  });
+
+  it('a plus that agrees with N or E needs no note', () => {
+    expect(parsedOk('+20.5 N, +87.3 E').note).toBeUndefined();
+  });
+
+  it('notes the same contradiction in a labelled paste', () => {
+    const result = parsedOk(`Entrance: +21°30'0"S 47°15'0"W`);
+    expect(result.coordinates.latitude).toBeCloseTo(-21.5, 9);
+    expect(result.note).toMatch(/plus sign and "S"/);
+  });
+
+  it('does not read a +degree as a signed pair and drop the letter after it', () => {
+    expectRejected(`Entrance: -24°56'52" +83°17'26"W`);
+  });
+});
+
+describe('a minus sign that overrides N or E in a labelled paste (R4 F7)', () => {
+  it('carries the same note as the strict reader', () => {
+    const ddm = parsedOk(`Entrance: -0°30.5'N 87°18.5'W`);
+    expect(ddm.coordinates.latitude).toBeCloseTo(-30.5 / 60, 9);
+    expect(ddm.note).toMatch(/minus sign and "N"/);
+
+    const dms = parsedOk(`Entrance: -20°30'15"N 87°18'27"W`);
+    expect(dms.coordinates.latitude).toBeCloseTo(-DMS_LAT, 9);
+    expect(dms.note).toMatch(/minus sign and "N"/);
+
+    const lon = parsedOk(`Entrance: 20°30'15"N -87°18'27"E`);
+    expect(lon.coordinates.longitude).toBeCloseTo(-DMS_LON, 9);
+    expect(lon.note).toMatch(/minus sign and "E"/);
+  });
+
+  it('a minus that agrees with S needs no note', () => {
+    expect(parsedOk(`Entrance: -20°30'15"S 87°18'27"W`).note).toBeUndefined();
+  });
+});
