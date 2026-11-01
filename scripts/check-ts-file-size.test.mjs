@@ -12,7 +12,11 @@
 // lint:ts-file-size:test).
 
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { prodLoc, classify, maskNonCode, WARN_LOC, FAIL_LOC } from './check-ts-file-size.mjs';
+import { listSrcFiles, walkFiles, isTestPath, isGeneratedPath, symlinkProblem } from './lib/src-files.mjs';
 
 let passed = 0;
 const failures = [];
@@ -148,6 +152,48 @@ test('a new/grown file over the hard cap reports the budget error', () => {
 test('a grandfathered over-cap file only warns while it is not growing', () => {
   assert.equal(classify('DmpNewImportDialog.tsx', 3657, 3657).level, 'warn');
   assert.equal(classify('DmpNewImportDialog.tsx', 3600, 3657).level, 'warn'); // shrank - still just a warn
+});
+
+// --- scripts/lib/src-files.mjs: the one src/ lister every src gate uses (#576 E16)
+
+test('isTestPath / isGeneratedPath: one predicate pair for every src gate', () => {
+  for (const rel of ['src/a/__tests__/x.ts', 'src/a/x.test.tsx', 'src/a/x.spec.ts', 'src/test/setup.ts']) assert.ok(isTestPath(rel), rel);
+  for (const rel of ['src/a/x.ts', 'src/testing/x.ts', 'src/a/contest.ts']) assert.ok(!isTestPath(rel), rel);
+  assert.ok(isGeneratedPath('src/types/ipc/Shot.ts'));
+  assert.ok(isGeneratedPath('src/types/ipc.generated.ts'));
+  assert.ok(!isGeneratedPath('src/types/ipcHelpers.ts'));
+});
+
+test('listSrcFiles walks untracked files, prunes tests/generated/node_modules, returns symlinks unfollowed', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'src-files-'));
+  try {
+    const mk = (rel, text = 'x') => {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), text);
+    };
+    mk('src/b.tsx');
+    mk('src/a/c.ts');
+    mk('src/a/readme.md');
+    mk('src/__tests__/t.test.ts');
+    mk('src/test/setup.ts');
+    mk('src/types/ipc/Shot.ts');
+    mk('src/node_modules/dep/index.ts');
+    mk('elsewhere.ts');
+    fs.symlinkSync('../elsewhere.ts', path.join(root, 'src', 'linked.ts'));
+    fs.symlinkSync('missing.ts', path.join(root, 'src', 'dangling.ts'));
+    const { files, symlinks } = listSrcFiles(root);
+    assert.deepEqual(files, ['src/a/c.ts', 'src/b.tsx']);
+    assert.deepEqual(symlinks, [
+      { rel: 'src/dangling.ts', target: 'missing.ts' },
+      { rel: 'src/linked.ts', target: '../elsewhere.ts' },
+    ]);
+    assert.match(symlinkProblem(symlinks[1]), /src\/linked\.ts is a symlink \(-> \.\.\/elsewhere\.ts\)/);
+    assert.deepEqual(listSrcFiles(root, { exts: ['.tsx'] }).files, ['src/b.tsx']);
+    assert.deepEqual(walkFiles(root, 'src', { exts: ['.md'] }).files, ['src/a/readme.md']);
+    assert.throws(() => walkFiles(root, 'nope'), /ENOENT/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 // --- report ------------------------------------------------------------------

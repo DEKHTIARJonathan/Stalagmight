@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
+import { listSrcFiles, symlinkProblem } from './lib/src-files.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SOURCE_ROOT = path.join(REPO_ROOT, 'src');
 
 export const INTERACTIVE_TAGS = new Set([
   'a',
@@ -175,26 +175,23 @@ export function analyzeSource(fileName, sourceText) {
   return findings;
 }
 
-function productionTsxFiles(root) {
-  const files = [];
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    const fullPath = path.join(root, entry.name);
-    if (entry.isDirectory()) files.push(...productionTsxFiles(fullPath));
-    else if (
-      entry.name.endsWith('.tsx') &&
-      !entry.name.includes('.test.') &&
-      !fullPath.includes(`${path.sep}__tests__${path.sep}`)
-    ) {
-      files.push(fullPath);
-    }
-  }
-  return files;
-}
-
-export function scan(root = SOURCE_ROOT) {
-  return productionTsxFiles(root).flatMap((fileName) =>
-    analyzeSource(fileName, fs.readFileSync(fileName, 'utf8')),
-  );
+// Production .tsx under <repoRoot>/src, via the shared lister (#576 E16): the
+// same test/generated exclusions as the other src gates, and a symlink is
+// reported as a finding instead of being followed (it used to be read through).
+export function scan(repoRoot = REPO_ROOT) {
+  const { files, symlinks } = listSrcFiles(repoRoot, { exts: ['.tsx'] });
+  const linkFindings = symlinks.map((link) => ({
+    fileName: path.join(repoRoot, link.rel),
+    line: 0,
+    message: symlinkProblem(link),
+  }));
+  return [
+    ...linkFindings,
+    ...files.flatMap((rel) => {
+      const fileName = path.join(repoRoot, rel);
+      return analyzeSource(fileName, fs.readFileSync(fileName, 'utf8'));
+    }),
+  ];
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

@@ -43,10 +43,10 @@
 //
 // Usage:  node scripts/check-readonly-gates.mjs   (or: pnpm lint:readonly-gates)
 
-import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { listSrcFiles, symlinkProblem } from './lib/src-files.mjs';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -135,20 +135,10 @@ export const DIRECT_READ_ONLY_ACCESS_EXEMPT = {
     'pre-existing RoH-safe composition, out of #275 blocker scope',
 };
 
-const SRC_PREFIX = 'src/';
-const TEST_RE = /(^|\/)__tests__\/|\.test\.[cm]?[jt]sx?$/;
 const CLOSURE_ADJUSTED_RE =
   /(===|!==)\s*['"]closureAdjusted['"]|['"]closureAdjusted['"]\s*(===|!==)/;
 const RAW_IS_MAP_READ_ONLY_RE = /\bisMapReadOnly\b/;
 const RAW_SELECT_SPELEO_READ_ONLY_RE = /\bselectSpeleoReadOnly\b/;
-
-function gitTrackedTsFiles() {
-  const out = execFileSync('git', ['ls-files', '-z', '--', 'src/*.ts', 'src/*.tsx', 'src/**/*.ts', 'src/**/*.tsx'], {
-    cwd: REPO_ROOT,
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  return out.toString('utf8').split('\0').filter(Boolean);
-}
 
 // Strip a trailing `//` line comment before matching, so a comment that merely
 // MENTIONS the pattern (common in this file's own docs, or explanatory code
@@ -221,20 +211,15 @@ export function usesSpeleoReadOnly(text) {
 }
 
 function main() {
-  let files;
-  try {
-    files = gitTrackedTsFiles();
-  } catch (e) {
-    console.error(`check-readonly-gates: could not list tracked files (run from a git repo): ${e.message}`);
-    return 1;
-  }
+  // The shared src/ lister (#576 E16): a filesystem walk (an unstaged file
+  // cannot dodge the gate), the same test/generated exclusions as the other
+  // src gates, and a symlink is reported instead of being read through.
+  const { files, symlinks } = listSrcFiles(REPO_ROOT);
 
   const violationsA = [];
   const violationsB = [];
 
-  for (const rel of files.sort()) {
-    if (!rel.startsWith(SRC_PREFIX)) continue;
-    if (TEST_RE.test(rel)) continue;
+  for (const rel of files) {
     const full = path.join(REPO_ROOT, rel);
     let text;
     try {
@@ -269,9 +254,9 @@ function main() {
     }
   }
 
-  const violations = [...violationsA, ...violationsB];
+  const violations = [...symlinks.map(symlinkProblem), ...violationsA, ...violationsB];
   if (violations.length === 0) {
-    console.log(`✓ readonly-gates: ${files.length} tracked TS/TSX files checked, no new raw closureAdjusted gates or direct isMapReadOnly/selectSpeleoReadOnly access.`);
+    console.log(`✓ readonly-gates: ${files.length} production TS/TSX files under src/ checked, no new raw closureAdjusted gates or direct isMapReadOnly/selectSpeleoReadOnly access.`);
     return 0;
   }
 

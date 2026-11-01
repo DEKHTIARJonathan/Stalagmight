@@ -138,9 +138,30 @@ assert.deepEqual(
   [],
 );
 
-const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-test-id-root-'));
-fs.writeFileSync(path.join(sourceRoot, 'App.tsx'), 'export const App = () => <button>Run</button>;');
-assert.match(scan(sourceRoot)[0]?.message ?? '', /has no data-testid/);
-fs.rmSync(sourceRoot, { recursive: true, force: true });
+// scan() walks <repoRoot>/src through the shared lister (scripts/lib/src-files.mjs).
+const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-test-id-root-'));
+try {
+  const src = path.join(repoRoot, 'src');
+  fs.mkdirSync(path.join(src, '__tests__'), { recursive: true });
+  fs.mkdirSync(path.join(src, 'test'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'App.tsx'), 'export const App = () => <button>Run</button>;');
+  // Test code is out of scope, in every one of its three shapes.
+  fs.writeFileSync(path.join(src, '__tests__', 'App.test.tsx'), 'export const T = () => <button>x</button>;');
+  fs.writeFileSync(path.join(src, 'App.spec.tsx'), 'export const S = () => <button>x</button>;');
+  fs.writeFileSync(path.join(src, 'test', 'render.tsx'), 'export const R = () => <button>x</button>;');
+  let findings = scan(repoRoot);
+  assert.deepEqual(findings.map((f) => path.relative(repoRoot, f.fileName)), ['src/App.tsx']);
+  assert.match(findings[0].message, /has no data-testid/);
+
+  // A symlinked .tsx used to be read THROUGH the link; it is now reported and
+  // fails the gate, the same verdict check-ts-file-size gives it (#576 E16).
+  fs.writeFileSync(path.join(repoRoot, 'outside.tsx'), 'export const O = () => <button>x</button>;');
+  fs.symlinkSync('../outside.tsx', path.join(src, 'Linked.tsx'));
+  findings = scan(repoRoot);
+  assert.ok(findings.some((f) => /Linked\.tsx is a symlink/.test(f.message)), JSON.stringify(findings));
+  assert.ok(!findings.some((f) => f.fileName.endsWith('outside.tsx')), 'the link target must not be read');
+} finally {
+  fs.rmSync(repoRoot, { recursive: true, force: true });
+}
 
 console.log('Test-ID gate fixtures passed.');

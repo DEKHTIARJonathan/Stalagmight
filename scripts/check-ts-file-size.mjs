@@ -24,13 +24,14 @@
 //     stop growing.
 // Anything at/above `WARN_LOC` that isn't a violation prints a non-fatal warning.
 //
-// Scope: filesystem-walked `src/**/*.ts` + `src/**/*.tsx` (mirrors the Rust
-// ratchet's listRustFiles walk, not `git ls-files` - an untracked file must
-// still be caught), excluding:
-//   - test files: `__tests__/` directories, `*.test.*`, `*.spec.*`
+// Scope: filesystem-walked `src/**/*.ts` + `src/**/*.tsx` via the shared
+// scripts/lib/src-files.mjs lister (not `git ls-files` - an untracked file must
+// still be caught), excluding its one test/generated predicate pair:
+//   - test files: `__tests__/` directories, `*.test.*`, `*.spec.*`, `src/test/**`
 //   - generated IPC types: `src/types/ipc/**`, `src/types/ipc.generated.ts`
 //     (ts-rs output - see CLAUDE.md "IPC Types Are Generated")
-//   - `src/test/**` (test harness/setup, not production code)
+// A symlink in scope is never followed and FAILS the gate (it cannot be
+// measured without reading something the gate did not walk).
 //
 // Runs in the `check` job (ci.yml), next to the Rust file-size step. The strip
 // heuristic is pinned by scripts/check-ts-file-size.test.mjs.
@@ -41,6 +42,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { listSrcFiles, symlinkProblem } from './lib/src-files.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC_DIR = path.join(REPO_ROOT, 'src');
@@ -54,17 +56,6 @@ const BASELINE_PATH = path.join(REPO_ROOT, 'ts-file-size-baseline.json');
 // right next to the grown file, so it's review-visible, not silent.)
 export const WARN_LOC = 1500;
 export const FAIL_LOC = 2000;
-
-// Test files - excluded from the metric entirely (mirrors the Rust ratchet's
-// whole-file test exclusion; TS tests never live inline in a production file).
-const TEST_PATH_RE = /(^|\/)__tests__(\/|$)/;
-const TEST_NAME_RE = /\.(test|spec)\.[cm]?[jt]sx?$/;
-
-// Generated IPC types (ts-rs output) and the test harness/setup tree - neither
-// is production code subject to the ratchet.
-const GENERATED_RE = /^src\/types\/ipc\//;
-const GENERATED_FILE_RE = /^src\/types\/ipc\.generated\.ts$/;
-const TEST_HARNESS_RE = /^src\/test\//;
 
 // Files allowed to exceed the budget without ratcheting, each with a written
 // reason. The baseline already grandfathers today's large files, so this is only
@@ -202,42 +193,13 @@ function relPosix(full) {
   return path.relative(REPO_ROOT, full).split(path.sep).join('/');
 }
 
-function isExcluded(rel) {
-  if (TEST_PATH_RE.test(rel) || TEST_NAME_RE.test(rel)) return true;
-  if (GENERATED_RE.test(rel) || GENERATED_FILE_RE.test(rel)) return true;
-  if (TEST_HARNESS_RE.test(rel)) return true;
-  return false;
-}
-
-// Walks the filesystem rather than `git ls-files` (mirrors the Rust ratchet's
-// listRustFiles) so an untracked file can't dodge the gate by never being
-// staged. `node_modules` is skipped as a defensive measure in case a dep tree
-// ever lands under src (it doesn't today).
-function listTsFiles(dir) {
-  const out = [];
-  const entries = fs
-    .readdirSync(dir, { withFileTypes: true })
-    .sort((a, b) => a.name.localeCompare(b.name));
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === 'node_modules') continue;
-      out.push(...listTsFiles(full));
-    } else if (entry.isFile() && (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx'))) {
-      out.push(full);
-    }
-  }
-  return out;
-}
-
 // Map repo-relative path -> production LOC for every scoped .ts/.tsx file.
-function measureTree(warnings = []) {
+// Symlinks in scope land in `symlinkErrors` (each fails the gate).
+function measureTree(warnings = [], symlinkErrors = []) {
   const out = {};
-  for (const full of listTsFiles(SRC_DIR)) {
-    const rel = relPosix(full);
-    if (isExcluded(rel)) continue;
-    out[rel] = prodLoc(fs.readFileSync(full, 'utf8'), warnings);
-  }
+  const { files, symlinks } = listSrcFiles(REPO_ROOT);
+  for (const link of symlinks) symlinkErrors.push(symlinkProblem(link));
+  for (const rel of files) out[rel] = prodLoc(fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8'), warnings);
   return out;
 }
 
@@ -337,7 +299,8 @@ function main() {
   }
 
   const warnings = [];
-  const measured = measureTree(warnings);
+  const symlinkErrors = [];
+  const measured = measureTree(warnings, symlinkErrors);
 
   // --update rebuilds the baseline from scratch (writing the script's own
   // thresholds), so it neither loads nor validates the old file - it always
@@ -368,7 +331,7 @@ function main() {
   }
 
   const recorded = baseline.files ?? {};
-  const errors = [];
+  const errors = [...symlinkErrors];
   const softWarnings = [];
 
   for (const rel of Object.keys(measured).sort()) {
