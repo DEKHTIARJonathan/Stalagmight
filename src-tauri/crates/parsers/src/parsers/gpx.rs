@@ -26,7 +26,7 @@ const GPX_AZIMUTH_REFERENCE: AzimuthReference = AzimuthReference {
     correction: 0.0,
     source: CorrectionSource::FileDeclared,
 };
-use crate::parsers::encoding::read_utf8;
+use crate::parsers::encoding::{read_utf8, FileFamily};
 
 // ============================================================================
 // IPC-visible types
@@ -130,7 +130,7 @@ fn local_name(e: &quick_xml::events::BytesStart<'_>) -> Vec<u8> {
 
 /// Parse a GPX file from the given path.
 pub fn parse_gpx(path: &Path) -> Result<GpxFile> {
-    parse_gpx_str(&read_utf8(path)?)
+    parse_gpx_str(&read_utf8(path, FileFamily::Xml)?)
 }
 
 /// Parse GPX from a string (for testing).
@@ -1038,7 +1038,7 @@ fn resolve_placement(
 // ============================================================================
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout)]
 mod tests {
     use super::*;
 
@@ -1505,5 +1505,29 @@ mod tests {
             err.contains("UTF-16"),
             "the error must name the encoding, got {err:?}"
         );
+    }
+
+    /// #576 B27(g): a path that is not a regular file - here a FIFO named like
+    /// a `.gpx` - blocked the import forever, and imports run on the app's
+    /// main thread. It is refused at once, by the capped reader every
+    /// importer shares.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_like_a_gpx_is_refused_at_once() {
+        use crate::parsers::encoding::fifo_test_support::{make_fifo, within_five_seconds};
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.gpx");
+        make_fifo(&fifo);
+        let path = fifo.clone();
+        let outcome = within_five_seconds(&fifo, move || {
+            parse_gpx(&path)
+                .map(|g| g.tracks.len())
+                .map_err(|e| e.to_string())
+        });
+        println!("parse_gpx(pipe.gpx): {outcome:?}");
+        let err = outcome
+            .expect("the read must not block on a FIFO")
+            .expect_err("a FIFO is not a GPX file");
+        assert!(err.contains("not a regular file"), "{err}");
     }
 }

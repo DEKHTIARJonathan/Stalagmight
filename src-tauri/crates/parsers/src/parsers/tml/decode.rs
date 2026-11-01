@@ -11,7 +11,10 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::parsers::encoding::{cp1252_char, describe_replaced_count, strip_bom_owned};
+use crate::parsers::encoding::{
+    cp1252_char, describe_replaced_count, read_capped, regular_file_metadata, strip_bom_owned,
+    FileFamily,
+};
 
 // ============================================================================
 // XML loading
@@ -35,7 +38,8 @@ pub(super) fn load_xml(path: &Path) -> Result<LoadedXml> {
     match ext.as_str() {
         "tml" => load_xml_from_zip(path),
         "tmlu" => {
-            let bytes = fs::read(path).context("Failed to read TMLU file")?;
+            // The XML family's capped, regular-files-only reader (#576 B27(g)).
+            let bytes = read_capped(path, FileFamily::Xml)?;
             decode_xml_bytes(bytes)
         }
         _ => bail!("Unsupported file extension '.{ext}'. Expected .tml or .tmlu"),
@@ -55,6 +59,8 @@ fn load_xml_from_zip(path: &Path) -> Result<LoadedXml> {
 /// `load_xml_from_zip` with the decompression cap spelled out, so a test can
 /// exercise the limit without building half a gigabyte.
 fn load_xml_from_zip_capped(path: &Path, cap: u64) -> Result<LoadedXml> {
+    // A FIFO would block the open itself (#576 B27(g)).
+    regular_file_metadata(path)?;
     let file = fs::File::open(path).context("Failed to open TML file")?;
     let mut archive = zip::ZipArchive::new(file).context("Failed to read TML as ZIP archive")?;
 
@@ -651,5 +657,32 @@ mod tests {
 
         let tml = parse_tml(&path).unwrap();
         assert_eq!(tml.cave_name, "Test Cave");
+    }
+
+    /// #576 B27(g): a path that is not a regular file - a FIFO named like a
+    /// `.tmlu` or a `.tml` - blocked the import forever, and imports run on
+    /// the app's main thread. Both are refused at once.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_like_a_tml_or_tmlu_is_refused_at_once() {
+        use crate::parsers::encoding::fifo_test_support::{make_fifo, within_five_seconds};
+        for name in ["pipe.tmlu", "pipe.tml"] {
+            let dir = tempfile::tempdir().unwrap();
+            let fifo = dir.path().join(name);
+            make_fifo(&fifo);
+            let path = fifo.clone();
+            let outcome = within_five_seconds(&fifo, move || {
+                parse_tml(&path)
+                    .map(|t| t.sections.len())
+                    .map_err(|e| format!("{e:#}"))
+            });
+            println!("parse_tml({name}): {outcome:?}");
+            assert!(
+                outcome.is_some(),
+                "the read of {name} must not block on a FIFO"
+            );
+            let err = outcome.unwrap().unwrap_err();
+            assert!(err.contains("not a regular file"), "{name}: {err}");
+        }
     }
 }

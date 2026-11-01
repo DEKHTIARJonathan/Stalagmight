@@ -66,24 +66,14 @@ pub(crate) enum FileFamily {
     /// Ariane `.tmlu` and GPX: XML, the largest real files on record (a 57 MB
     /// Ariane `Data.xml`; multi-day GPS logs reach hundreds of MB). The
     /// zipped `.tml`'s `Data.xml` has the same ceiling on what it decompresses
-    /// to (`tml::decode`). Wired by a later change.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the .tmlu / .gpx readers are wired to it separately"
-        )
-    )]
+    /// to (`tml::decode`).
     Xml,
     /// Compass `.DAT` and `.MAK` (and every `.DAT` a `.MAK` links), Walls
     /// `.SRV` and `.WPJ`: survey text, typically a few MB, which decodes to up
     /// to 3x its size in memory.
     SurveyText,
-    /// mNemo `.dmp`, whose importer checks the same 50 MB itself.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the .dmp reader is wired to it separately")
-    )]
+    /// mNemo `.dmp`: semicolon-separated integers, never this large for a
+    /// real dump.
     Dmp,
 }
 
@@ -119,6 +109,23 @@ pub(crate) fn describe_byte_limit(bytes: u64) -> String {
     }
 }
 
+/// The metadata of `path`, or a refusal when it is not a regular file (#576
+/// B27(g)): opening a FIFO for reading blocks until somebody writes, and a
+/// device may never end. Checked before anything opens the path, so a reader
+/// that streams instead of reading whole (the zipped `.tml`) refuses the same
+/// paths [`read_capped`] does.
+pub(crate) fn regular_file_metadata(path: &Path) -> Result<std::fs::Metadata> {
+    let metadata =
+        std::fs::metadata(path).with_context(|| format!("reading {}", path.display()))?;
+    if !metadata.is_file() {
+        bail!(
+            "'{}' is not a regular file (a folder, device or pipe), so it was not read.",
+            path.display()
+        );
+    }
+    Ok(metadata)
+}
+
 /// Read a whole file for an importer (#576 B27(g)). Anything that is not a
 /// regular file is refused before it is opened - a FIFO or a device would
 /// block the read, or never end it - and so is a file larger than its
@@ -140,14 +147,7 @@ fn read_with_limit(path: &Path, family: FileFamily, limit: u64) -> Result<Vec<u8
             family.description()
         )
     };
-    let metadata =
-        std::fs::metadata(path).with_context(|| format!("reading {}", path.display()))?;
-    if !metadata.is_file() {
-        bail!(
-            "'{}' is not a regular file (a folder, device or pipe), so it was not read.",
-            path.display()
-        );
-    }
+    let metadata = regular_file_metadata(path)?;
     if metadata.len() > limit {
         return Err(too_large());
     }
@@ -244,9 +244,10 @@ pub(crate) fn cp1252_replacement_warning(
     ))
 }
 
-/// Read a UTF-8 text file (GPX, mNemo `.dmp`).
-pub(crate) fn read_utf8(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+/// Read a UTF-8 text file (GPX, mNemo `.dmp`) through [`read_capped`] with
+/// its `family`'s ceiling.
+pub(crate) fn read_utf8(path: &Path, family: FileFamily) -> Result<String> {
+    let bytes = read_capped(path, family)?;
     String::from_utf8(strip_bom_owned(bytes)?)
         .map_err(|e| anyhow!("{} is not valid UTF-8 text: {e}", path.display()))
 }
@@ -393,5 +394,55 @@ mod tests {
             .map(|e| e.to_string())
             .unwrap_or_default();
         assert!(err.contains("not a regular file"), "{err}");
+    }
+}
+
+/// FIFO helpers for the importers' "not a regular file" tests (#576 B27(g)):
+/// opening a FIFO for reading blocks until somebody writes, so a reader that
+/// does not refuse one hangs the test instead of failing it.
+#[cfg(all(test, unix))]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+pub(crate) mod fifo_test_support {
+    use std::path::Path;
+
+    /// A named pipe at `path`, made with the system's `mkfifo`.
+    pub(crate) fn make_fifo(path: &Path) {
+        let status = std::process::Command::new("mkfifo")
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "premise: mkfifo made {}", path.display());
+    }
+
+    /// Run `f` on its own thread and give it five seconds. On a timeout the
+    /// FIFO at `release` is opened for writing and closed again - the blocked
+    /// reader then sees an empty file and the thread can finish - and the
+    /// result is `None`.
+    pub(crate) fn within_five_seconds<T: Send + 'static>(
+        release: &Path,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> Option<T> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = sender.send(f());
+        });
+        let started = std::time::Instant::now();
+        let outcome = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .ok();
+        println!(
+            "  returned after {:.1} s{}",
+            started.elapsed().as_secs_f64(),
+            if outcome.is_some() {
+                ""
+            } else {
+                " (still blocked; released by the test)"
+            }
+        );
+        if outcome.is_none() {
+            drop(std::fs::OpenOptions::new().write(true).open(release));
+        }
+        let _ = worker.join();
+        outcome
     }
 }

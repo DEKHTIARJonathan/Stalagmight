@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use ts_rs::TS;
 
-use crate::parsers::encoding::read_utf8;
+use crate::parsers::encoding::{read_utf8, FileFamily};
 
 // ============================================================================
 // Constants
@@ -632,10 +632,6 @@ fn parse_section(data: Vec<u8>) -> Result<ParsedSection> {
     })
 }
 
-/// Maximum DMP file size (50 MB). DMP files are text-based semicolon-separated
-/// integers and should never be this large for legitimate survey data.
-const MAX_DMP_FILE_SIZE: u64 = 50 * 1024 * 1024;
-
 /// Most warnings a [`DmpFile`] carries before folding the rest into one line -
 /// the import receipt's own cap, so a file that breaks every section cannot
 /// flood the preview either.
@@ -671,21 +667,9 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
         bail!("File is not a DMP file: {}", path.display());
     }
 
-    // Check file size before reading into memory
-    let file_size = std::fs::metadata(path)
-        .context("Failed to read DMP file metadata")?
-        .len();
-    if file_size > MAX_DMP_FILE_SIZE {
-        bail!(
-            "DMP file is too large ({:.1} MB, max {:.0} MB): {}",
-            file_size as f64 / (1024.0 * 1024.0),
-            MAX_DMP_FILE_SIZE as f64 / (1024.0 * 1024.0),
-            path.display()
-        );
-    }
-
-    // Read and parse file content
-    let content = read_utf8(path)?;
+    // Read through the shared capped reader (#576 B27(g)): a regular file of
+    // at most the `.dmp` family's 50 MB, checked before anything is read.
+    let content = read_utf8(path, FileFamily::Dmp)?;
 
     // Parse semicolon-separated integers
     let data: Vec<u8> = content
@@ -3454,5 +3438,28 @@ mod tests {
             "{:?}",
             dmp.warnings.last()
         );
+    }
+
+    /// #576 B27(g): a FIFO named like a `.dmp` passed the size check (a pipe
+    /// reports length 0) and then blocked the read forever. It is refused at
+    /// once, by the capped reader every importer shares.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_named_like_a_dmp_is_refused_at_once() {
+        use crate::parsers::encoding::fifo_test_support::{make_fifo, within_five_seconds};
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.dmp");
+        make_fifo(&fifo);
+        let path = fifo.clone();
+        let outcome = within_five_seconds(&fifo, move || {
+            parse_dmp(&path)
+                .map(|d| d.sections.len())
+                .map_err(|e| e.to_string())
+        });
+        println!("parse_dmp(pipe.dmp): {outcome:?}");
+        let err = outcome
+            .expect("the read must not block on a FIFO")
+            .expect_err("a FIFO is not a DMP file");
+        assert!(err.contains("not a regular file"), "{err}");
     }
 }
