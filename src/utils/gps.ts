@@ -628,7 +628,13 @@ function parseDegreePair(
       return fail(i18n.t('validation.gps.hemisphereLetters'));
     }
     const bare = first.letter === undefined ? first : second;
-    if (!hasSign(bare.parts[0]!)) return fail(i18n.t('validation.gps.letterMissing'));
+    const lettered = bare === first ? second : first;
+    // Signed degrees read an unsigned degree as N or E once the other carries
+    // a minus, and a minus that agrees with S or W is such a sign: this is how
+    // `20°30'15" -87°18'27"W` and `S -20°30'15", 87°18'27"` have always read.
+    const minusAgrees =
+      lettered.parts[0]!.startsWith('-') && (lettered.letter === 'S' || lettered.letter === 'W');
+    if (!hasSign(bare.parts[0]!) && !minusAgrees) return fail(i18n.t('validation.gps.letterMissing'));
   } else if (format !== 'DD' && !hasSign(first.parts[0]!) && !hasSign(second.parts[0]!)) {
     // Unsigned minutes/seconds with no letters: N/E would be a guess (as before).
     return fail(format === 'DMS' ? DMS_FORMAT_MESSAGE : DDM_FORMAT_MESSAGE);

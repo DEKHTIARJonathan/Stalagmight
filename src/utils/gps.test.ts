@@ -1013,3 +1013,24 @@ describe('geo: links with a q= pin (R4 F1, F2)', () => {
     expectRejected('geo:0,0?q=120.5,-87.3', /Latitude/);
   });
 });
+
+describe('a sign that agrees with its hemisphere letter (R4 F3)', () => {
+  // These parsed to the correct value on 9d60e8d5 and must keep it.
+  it('accepts a minus that agrees with W on the lettered half, the other half unsigned', () => {
+    expectCoordsClose(parsedOk(`20°30'15" -87°18'27"W`), DMS_LAT, -DMS_LON);
+    expectCoordsClose(parsedOk(`20°30'15", -87°18'27" W`), DMS_LAT, -DMS_LON);
+  });
+
+  it('accepts a minus that agrees with a leading S, the other half unsigned', () => {
+    expectCoordsClose(parsedOk(`S -20°30'15", 87°18'27"`), -DMS_LAT, DMS_LON);
+  });
+
+  it('reads the same shape in decimal degrees and decimal minutes', () => {
+    expectCoordsClose(parsedOk('20.5, -87.3 W'), 20.5, -87.3);
+    expectCoordsClose(parsedOk(`20°30.5' -87°18.5'W`), DDM_LAT, -DDM_LON);
+  });
+
+  it('still rejects one letter when neither half carries a sign', () => {
+    expectRejected(`20°30'15" 87°18'27"W`, /letter/);
+  });
+});
