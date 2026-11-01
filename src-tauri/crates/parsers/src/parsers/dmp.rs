@@ -400,6 +400,16 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
     } else {
         (0.0, 0, 0, 0)
     };
+    // That v3 layout has no device dump behind it, so a v3 time that is not a
+    // time of day reads as absent: 0:00:00, what v2 records and what the
+    // temporal rerank skips, instead of a time that rolls into another day.
+    // The hour and minute bounds are the ones `parse_section` holds the
+    // section's own time to.
+    let (hour, minute, second) = if version == 3 && (hour >= 24 || minute >= 60 || second >= 60) {
+        (0, 0, 0)
+    } else {
+        (hour, minute, second)
+    };
 
     // Marker index (all versions)
     let marker_index = buffer.read()?;
@@ -1398,6 +1408,62 @@ mod tests {
     #[test]
     fn v3_shots_at_25_6_c_each_consume_the_whole_21_byte_record() {
         assert_v3_three_shot_section_parses(256);
+    }
+
+    /// The v3 per-shot layout is inferred from the reference writer alone, so
+    /// a v3 hour/minute/second that is not a time of day must read as absent
+    /// (0:00:00, what v2 records and what `deriveDmpTiming` skips) rather than
+    /// feed the temporal rerank a time that rolls into another day.
+    #[test]
+    fn a_v3_shot_time_outside_the_day_is_read_as_absent() {
+        // (hour, minute, second) per Standard shot, and what parsing must give.
+        let cases: [((u8, u8, u8), (u8, u8, u8)); 6] = [
+            ((10, 31, 5), (10, 31, 5)),
+            ((23, 59, 59), (23, 59, 59)),
+            ((24, 0, 0), (0, 0, 0)),
+            ((10, 60, 0), (0, 0, 0)),
+            ((10, 31, 60), (0, 0, 0)),
+            ((200, 7, 9), (0, 0, 0)),
+        ];
+        let mut data: Vec<u8> = vec![3, 68, 89, 101]; // version + section magic
+        data.extend([24, 6, 15, 10, 30]); // date: 2024-06-15 10:30
+        data.extend(b"AAA"); // name
+        data.push(0); // direction In
+        for ((hour, minute, second), _) in cases {
+            data.push(2); // Standard
+            data.extend([1, 194, 1, 204, 3, 232, 0, 200, 1, 44, 0, 0, 0, 0]); // 7 * int16
+            data.extend([0, 185]); // temperature 18.5 C
+            data.extend([hour, minute, second]);
+            data.push(1); // marker_index
+        }
+        data.push(3); // EndOfSurvey
+        data.extend([0; 20]);
+
+        let section = parse_section(data).expect("synthetic v3 section must parse");
+        let times: Vec<(u8, u8, u8)> = section
+            .shots
+            .iter()
+            .filter(|s| s.shot_type == DmpShotType::Standard)
+            .map(|s| (s.hour, s.minute, s.second))
+            .collect();
+        for (((raw_h, raw_m, raw_s), _), &(h, m, s)) in cases.iter().zip(&times) {
+            let used = if (h, m, s) == (0, 0, 0) {
+                "absent"
+            } else {
+                "used"
+            };
+            println!(
+                "v3 shot raw time {raw_h:02}:{raw_m:02}:{raw_s:02} -> parsed {h:02}:{m:02}:{s:02} ({used})"
+            );
+        }
+        let expected: Vec<(u8, u8, u8)> = cases.iter().map(|&(_, want)| want).collect();
+        assert_eq!(times, expected);
+        // Only the time is dropped; the rest of each shot reads as before.
+        assert!(section
+            .shots
+            .iter()
+            .filter(|s| s.shot_type == DmpShotType::Standard)
+            .all(|s| s.temperature == 18.5 && s.length == 10.0 && s.marker_index == 1));
     }
 
     /// A `.dmp` is semicolon-separated integers, and the version is the first
