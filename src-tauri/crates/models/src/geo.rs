@@ -474,7 +474,6 @@ mod tests {
         for (lon0, east) in [(179.999, 1_000.0), (-179.999, -1_000.0)] {
             let origin = GpsCoordinates::new(-16.8, lon0, 0.0).unwrap();
             let (lat, lon) = local_to_gps(east, 0.0, &origin);
-            println!("origin lon {lon0}, {east} m east -> lon {lon:.6}");
             assert!(
                 (lon - lon0).abs() < 0.01,
                 "origin lon {lon0}, {east} m east: lon {lon} jumped across the globe"

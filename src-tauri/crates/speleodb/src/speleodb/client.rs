@@ -1693,7 +1693,6 @@ mod tests {
     fn mime_for_reads_the_stalx_extension_in_any_case() {
         for name in ["CaveB.STALX", "CaveB.Stalx"] {
             let mime = mime_for(Path::new(name));
-            println!("mime_for({name}) = {mime}");
             assert_eq!(mime, "application/vnd.sqlite3", "{name}");
         }
     }
