@@ -7,7 +7,7 @@
 //! inclination-or-depth-gauge, foresight/backsight survey model into
 //! Stalagmight's depth-based import configs, mirroring [`crate::parsers::compass`]:
 //!
-//! - `.WPJ` is a flat, indented, ISO-8859-1 line file: `.BOOK`/`.ENDBOOK`
+//! - `.WPJ` is a flat, indented, Windows-1252 line file: `.BOOK`/`.ENDBOOK`
 //!   nest, `.SURVEY` is a leaf, `.NAME` is the base filename (`.SRV` default
 //!   extension), `.STATUS` is a bitfield (skip `DETACHED`/`TYPE_OTHER`), and
 //!   `.OPTIONS` (`#units` args) + `.REF` (UTM/lat-long reference) inherit

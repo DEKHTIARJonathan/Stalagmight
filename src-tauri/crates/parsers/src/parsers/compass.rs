@@ -33,7 +33,7 @@ use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource};
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
-use crate::parsers::encoding::{read_latin1, reject_bom};
+use crate::parsers::encoding::{read_cp1252, reject_bom};
 use crate::parsers::geo::{non_empty, FEET_TO_METERS};
 
 /// Distances/LRUD at or above this are Compass "missing data" sentinels.
@@ -401,10 +401,10 @@ fn dat_truncation_warning(
 }
 
 fn parse_dat(path: &Path) -> Result<ParsedCompass> {
-    let contents = read_latin1(path)?;
+    let contents = read_cp1252(path)?;
     let (raw_surveys, remainder) = Survey::parse_dat_file_with_remainder(&contents)
         .map_err(|e| anyhow!("Failed to parse Compass .DAT file: {e}"))?;
-    // `read_latin1` maps one file byte to one `char`, so the chars ahead of
+    // `read_cp1252` maps one file byte to one `char`, so the chars ahead of
     // the remainder count the bytes consumed - the offset into the file, past
     // any byte-order mark (stripped before parsing).
     let offset = contents.chars().count() - remainder.chars().count();
@@ -1827,7 +1827,7 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
@@ -3094,6 +3094,38 @@ mod tests {
         assert!(
             err.contains("byte-order mark"),
             "the error must name the mark, got {err:?}"
+        );
+    }
+
+    /// Compass is a Windows program and writes its `.DAT` text in
+    /// Windows-1252, where `0x92` is the right single quote a word processor
+    /// types for an apostrophe. Read as ISO-8859-1 it is U+0092, an invisible
+    /// C1 control, so the comment the user sees reads "dont" with a hole in it.
+    #[test]
+    fn a_windows_1252_apostrophe_in_a_dat_comment_survives_the_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = synthetic_survey_record("Synthetic Cave", "A", "7 10 1979");
+        // The record ends on its one shot line; give that shot a comment.
+        let mut bytes = record.trim_end().as_bytes().to_vec();
+        bytes.extend_from_slice(b" don\x92t\r\n");
+        let path = dir.path().join("apostrophe.dat");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let parsed = parse_compass(&path).unwrap();
+        let comment = parsed.surveys[0].survey.shots[0]
+            .comment
+            .clone()
+            .unwrap_or_default();
+        let code_points: Vec<String> = comment
+            .chars()
+            .map(|c| format!("U+{:04X}", u32::from(c)))
+            .collect();
+        println!("shot comment: {comment:?} = {}", code_points.join(" "));
+        assert_eq!(
+            comment,
+            "don\u{2019}t",
+            "0x92 is U+2019 in Windows-1252, got {}",
+            code_points.join(" ")
         );
     }
 }

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::parsers::encoding::read_latin1;
+use crate::parsers::encoding::read_cp1252;
 
 use super::{
     apply_units_options, parse_srv_contents, split_first_token, ParsedSurvey, ParsedWalls,
@@ -13,7 +13,7 @@ use super::{
 
 /// Parse a bare `.SRV` file as a one-survey project (no `.WPJ` tree).
 pub(crate) fn parse_single_srv(path: &Path) -> Result<ParsedWalls> {
-    let contents = read_latin1(path)?;
+    let contents = read_cp1252(path)?;
     let name = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -76,7 +76,7 @@ pub(crate) struct WpjContext {
 }
 
 pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
-    let contents = read_latin1(path)?;
+    let contents = read_cp1252(path)?;
     let root_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
 
     let mut warnings: Vec<String> = Vec::new();
@@ -153,7 +153,7 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                         }
                         match resolve_survey(&entry, &ctx) {
                             Some(file_path) if file_path.exists() => {
-                                match read_latin1(&file_path) {
+                                match read_cp1252(&file_path) {
                                     Ok(contents) => {
                                         let (initial, initial_macros) =
                                             build_initial_units(&ctx, &mut warnings);

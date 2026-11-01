@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::Datelike;
 
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
-use crate::parsers::encoding::read_latin1;
+use crate::parsers::encoding::read_cp1252;
 
 use super::*;
 
@@ -701,8 +701,36 @@ fn latin1_decoding() {
     let p = dir.join("name.srv");
     // 0xE4 == 'ä' in Latin-1.
     std::fs::write(&p, [b';', b' ', 0xE4, b'\n']).unwrap();
-    let s = read_latin1(&p).unwrap();
+    let s = read_cp1252(&p).unwrap();
     assert!(s.contains('\u{00E4}'));
+}
+
+/// Walls is a Windows program, so a `.SRV` is Windows-1252 text and `0x85` is
+/// an ellipsis. Read as ISO-8859-1 it is U+0085 (NEXT LINE), which Rust counts
+/// as whitespace, so a station named `A1<0x85>B2` was torn into two tokens and
+/// every field after it shifted one column to the right.
+#[test]
+fn a_windows_1252_byte_in_a_station_name_does_not_split_the_name() {
+    let dir = temp_dir("cp1252name");
+    let p = dir.join("names.srv");
+    let mut bytes = b"#UNITS meters order=DAV\nA1".to_vec();
+    bytes.push(0x85);
+    bytes.extend_from_slice(b"B2 C1 10 90 0\n");
+    std::fs::write(&p, &bytes).unwrap();
+
+    let parsed = parse_walls(&p).unwrap();
+    let vectors: Vec<(String, String, f64)> = parsed.surveys[0]
+        .vectors
+        .iter()
+        .map(|v| (v.from.clone(), v.to.clone(), v.length_m))
+        .collect();
+    println!("vectors (from, to, length_m): {vectors:?}");
+    println!("warnings: {:?}", parsed.warnings);
+    assert_eq!(
+        vectors,
+        [("A1\u{2026}B2".to_string(), "C1".to_string(), 10.0)],
+        "0x85 is U+2026 in Windows-1252 and part of the station name"
+    );
 }
 
 #[test]
@@ -2475,8 +2503,8 @@ fn utf16le(text: &str) -> Vec<u8> {
     bytes
 }
 
-/// `read_latin1` maps each byte to a code point, so a BOM arrives as three
-/// Latin-1 chars glued to line 1 and its directive stops being one. Without
+/// `read_cp1252` maps each byte to one char, so a BOM arrives as three
+/// Windows-1252 chars glued to line 1 and its directive stops being one. Without
 /// the strip the `#DATE` here is dropped with no warning at all, and a file
 /// whose line 1 is `#UNITS` or `#FIX` silently imports in the wrong units or
 /// at the wrong place.

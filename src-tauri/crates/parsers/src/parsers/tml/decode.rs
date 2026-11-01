@@ -11,7 +11,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::parsers::encoding::strip_bom_owned;
+use crate::parsers::encoding::{cp1252_char, strip_bom_owned};
 
 // ============================================================================
 // XML loading
@@ -116,16 +116,6 @@ fn find_data_entry(archive: &zip::ZipArchive<fs::File>) -> Option<String> {
 /// How far into the file we look for the XML declaration's `encoding=`.
 const DECLARATION_SCAN_BYTES: usize = 256;
 
-/// The Windows-1252 code points for `0x80..=0x9F`, the only range where it
-/// differs from ISO-8859-1 (which is byte == code point). Written as escapes so
-/// the table stays ASCII in source. `U+FFFD` marks the five undefined slots.
-const CP1252_HIGH: [char; 32] = [
-    '\u{20ac}', '\u{fffd}', '\u{201a}', '\u{0192}', '\u{201e}', '\u{2026}', '\u{2020}', '\u{2021}',
-    '\u{02c6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{fffd}', '\u{017d}', '\u{fffd}',
-    '\u{fffd}', '\u{2018}', '\u{2019}', '\u{201c}', '\u{201d}', '\u{2022}', '\u{2013}', '\u{2014}',
-    '\u{02dc}', '\u{2122}', '\u{0161}', '\u{203a}', '\u{0153}', '\u{fffd}', '\u{017e}', '\u{0178}',
-];
-
 /// Turn file bytes into XML text.
 ///
 /// The contract, in order:
@@ -144,10 +134,11 @@ const CP1252_HIGH: [char; 32] = [
 /// error. Either way the receipt now says what happened, including how many
 /// characters were lost - a wrong accent beats a refused file, but not silently.
 ///
-/// The Latin decode is done here rather than through a decoder crate on
-/// purpose: nothing in the dependency tree provides one (`quick-xml` is built
-/// without its `encoding` feature), and two code pages do not justify adding
-/// one.
+/// The Latin decode is done in this crate (the Windows-1252 table is shared
+/// with the Compass and Walls readers in [`crate::parsers::encoding`]) rather
+/// than through a decoder crate on purpose: nothing in the dependency tree
+/// provides one (`quick-xml` is built without its `encoding` feature), and two
+/// code pages do not justify adding one.
 ///
 /// A leading UTF-8 byte-order mark is dropped before any of that, and a UTF-16
 /// one is refused outright - see [`crate::parsers::encoding`].
@@ -235,8 +226,8 @@ fn decode_single_byte_latin(bytes: &[u8], label: &str) -> Option<(String, &'stat
     let text = bytes
         .iter()
         .map(|&b| {
-            if windows && (0x80..=0x9f).contains(&b) {
-                CP1252_HIGH[usize::from(b - 0x80)]
+            if windows {
+                cp1252_char(b)
             } else {
                 char::from(b)
             }

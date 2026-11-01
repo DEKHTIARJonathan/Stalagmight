@@ -3,7 +3,7 @@
 //! Windows tooling writes "UTF-8 with BOM" by default (Notepad, PowerShell 5.1
 //! `Out-File`, a common VS Code setting), so a survey file's first line can
 //! arrive with `EF BB BF` glued to it.  The Walls and Compass readers map each
-//! byte to a Latin-1 code point and the `.dmp` reader parses its first token as
+//! byte to a Windows-1252 char and the `.dmp` reader parses its first token as
 //! an integer, so those three bytes void the file's first `#UNITS` / `.BOOK` /
 //! cave name with no warning at all, or fail the import outright (#429). The
 //! XML readers (GPX, TML/TMLU) survive a mark today, but only because
@@ -88,12 +88,33 @@ fn read_mark(path: &Path) -> std::io::Result<Vec<u8>> {
     Ok(mark)
 }
 
-/// Read a file written in a single-byte Latin code page - Walls is ISO-8859-1,
-/// Compass is Windows-1252 - by decoding each byte as a code point, which
-/// avoids failing on accented surveyor names and comments.
-pub(crate) fn read_latin1(path: &Path) -> Result<String> {
+/// The Windows-1252 code points for `0x80..=0x9F`, the only range where it
+/// differs from ISO-8859-1 (which is byte == code point). Written as escapes so
+/// the table stays ASCII in source. `U+FFFD` marks the five undefined slots.
+const CP1252_HIGH: [char; 32] = [
+    '\u{20ac}', '\u{fffd}', '\u{201a}', '\u{0192}', '\u{201e}', '\u{2026}', '\u{2020}', '\u{2021}',
+    '\u{02c6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{fffd}', '\u{017d}', '\u{fffd}',
+    '\u{fffd}', '\u{2018}', '\u{2019}', '\u{201c}', '\u{201d}', '\u{2022}', '\u{2013}', '\u{2014}',
+    '\u{02dc}', '\u{2122}', '\u{0161}', '\u{203a}', '\u{0153}', '\u{fffd}', '\u{017e}', '\u{0178}',
+];
+
+/// Decode one byte as Windows-1252: `0x80..=0x9F` through [`CP1252_HIGH`],
+/// every other byte as the code point of the same value.
+pub(crate) fn cp1252_char(byte: u8) -> char {
+    if (0x80..=0x9f).contains(&byte) {
+        CP1252_HIGH[usize::from(byte - 0x80)]
+    } else {
+        char::from(byte)
+    }
+}
+
+/// Read a file written in Windows-1252, the ANSI code page that Compass and
+/// Walls (both Windows programs) write their text in. Each byte becomes one
+/// `char`, so accented surveyor names and comments never fail the read, and
+/// the five bytes the code page leaves undefined become U+FFFD.
+pub(crate) fn read_cp1252(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(strip_bom(&bytes)?.iter().map(|&b| char::from(b)).collect())
+    Ok(strip_bom(&bytes)?.iter().map(|&b| cp1252_char(b)).collect())
 }
 
 /// Read a UTF-8 text file (GPX, mNemo `.dmp`).
@@ -170,6 +191,47 @@ mod tests {
             reject_bom(&dir.path().join("absent.mak")).is_err(),
             "a missing file is still a read failure"
         );
+    }
+
+    /// Every byte decodes to exactly one char: `0x80..=0x9F` through the
+    /// Windows-1252 table (the five slots it leaves undefined as U+FFFD, as the
+    /// TML reader decodes them), every other byte as the same code point. A
+    /// leading UTF-8 mark is still dropped first.
+    #[test]
+    fn read_cp1252_decodes_the_c1_range_as_windows_1252() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("all-bytes.srv");
+        let mut bytes = UTF8_BOM.to_vec();
+        bytes.extend(0..=u8::MAX);
+        std::fs::write(&path, &bytes).unwrap();
+
+        let text: Vec<char> = read_cp1252(&path).unwrap().chars().collect();
+        assert_eq!(text.len(), 256, "one char per byte, mark dropped");
+        for (byte, &c) in (0..=u8::MAX).zip(&text) {
+            if (0x80..=0x9f).contains(&byte) {
+                assert!(
+                    !('\u{80}'..='\u{9f}').contains(&c),
+                    "byte {byte:#04x} decoded to the C1 control U+{:04X}",
+                    u32::from(c)
+                );
+            } else {
+                assert_eq!(c, char::from(byte), "byte {byte:#04x}");
+            }
+        }
+        for (byte, expected) in [
+            (0x80_u8, '\u{20ac}'),
+            (0x85, '\u{2026}'),
+            (0x92, '\u{2019}'),
+            (0x96, '\u{2013}'),
+            (0x9f, '\u{0178}'),
+            (0x81, '\u{fffd}'),
+            (0x8d, '\u{fffd}'),
+            (0x8f, '\u{fffd}'),
+            (0x90, '\u{fffd}'),
+            (0x9d, '\u{fffd}'),
+        ] {
+            assert_eq!(text[usize::from(byte)], expected, "byte {byte:#04x}");
+        }
     }
 
     #[test]
