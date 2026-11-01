@@ -30,8 +30,13 @@ vi.mock('@tanstack/react-virtual', () => ({
   }),
 }));
 
+import type { TFunction } from 'i18next';
 import { SegmentsTable } from './SegmentsTable';
+import { buildSegmentColumns } from './segmentsGridColumns';
+import { SEG_COL } from './segmentsGridEdits';
 import { useGasPlanStore } from '../../store/gasPlanStore';
+import { useUIStore } from '../../store/uiStore';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 import { defaultConfig } from '../../types/config';
 import { segmentColor } from '../../utils/segmentColors';
 import type { DpvRig, GasReachField } from '../../types/ipc.generated';
@@ -317,6 +322,84 @@ describe('SegmentsTable', () => {
       render(<SegmentsTable />);
       editCell('segment-cell-0-speed', '0.01');
       expect(useGasPlanStore.getState().segments[0]?.speed_m_per_min).toBe(0.1);
+    });
+  });
+
+  /**
+   * D39d: a speed of 0 or below is no pace at all - clamped to 0.1 m/min it inflates the
+   * span's gas use and collapses reach. The pre-grid PositiveNumberField never committed one;
+   * the grid refuses it through the speed column's `validate`, the same way the Cylinders grid
+   * refuses a negative pressure. Positive values keep the clamp above.
+   */
+  describe('speed <= 0 is rejected, not clamped (D39d)', () => {
+    it('the speed column validate refuses <= 0 and accepts positives and a clear', () => {
+      const t = ((key: string) => key) as unknown as TFunction;
+      const speed = buildSegmentColumns({
+        t,
+        units: 'metric',
+        hasRig: false,
+        boundaryLabelAt: () => '',
+        boundaryTitleAt: () => undefined,
+        parksAfter: () => false,
+        inheritedSpeedDisplay: 10,
+        onToggleScooter: () => {},
+      }).find((col) => col.key === SEG_COL.speed);
+      const row = { speed_m_per_min: null, on_scooter: false };
+      for (const value of [0, -0, -12, -0.05]) {
+        expect(speed?.validate?.(value, row)).toBe('gasPanel.segments.nonPositiveSpeed');
+      }
+      // Under-range and over-range positives still commit (the reducer clamps them), and a
+      // cleared cell (`null`) is the return-to-inherited gesture, never an error.
+      for (const value of [0.05, 18, 5000, null]) {
+        expect(speed?.validate?.(value, row)).toBeNull();
+      }
+    });
+
+    it('rejects a typed 0 or negative speed: no commit, the editor stays open and flashes', () => {
+      useGasPlanStore.setState({ reachField: fakeField() });
+      render(<SegmentsTable />);
+
+      for (const typed of ['0', '-12']) {
+        editCell('segment-cell-0-speed', typed);
+        const editor = screen.getByTestId('segment-cell-editor');
+        expect(editor).toHaveValue(typed);
+        expect(screen.getByTestId('segment-invalid-flash')).toBeInTheDocument();
+        fireEvent.keyDown(editor, { key: 'Escape' });
+        expect(screen.queryByTestId('segment-cell-editor')).not.toBeInTheDocument();
+      }
+
+      expect(useGasPlanStore.getState().segments[0]?.speed_m_per_min).toBeNull();
+      // Nothing reached `setSegments`, so the cached field was never nulled for a recompute.
+      expect(useGasPlanStore.getState().reachField).not.toBeNull();
+    });
+
+    it('skips a pasted 0 or negative speed and reports it as skipped', () => {
+      useGasPlanStore.getState().addWaypoint(A);
+      useGasPlanStore.getState().addWaypoint(B);
+      const toasts: { message: string; key: string; kind: string }[] = [];
+      const original = useUIStore.getState().showToast;
+      useUIStore.setState({
+        showToast: (message: string, key: string, kind: string) => toasts.push({ message, key, kind }),
+      });
+      try {
+        render(<SegmentsTable />);
+        fireEvent.mouseDown(screen.getByTestId('segment-cell-0-speed'));
+        fireEvent.paste(scroller(), { clipboardData: { getData: () => '-12\n0\n15' } });
+
+        expect(useGasPlanStore.getState().segments.map((s) => s.speed_m_per_min)).toEqual([
+          null,
+          null,
+          15,
+        ]);
+        // The skipped-paste surfacing (#590): the two refused cells are reported, not dropped
+        // silently.
+        expect(toasts).toHaveLength(1);
+        expect(toasts[0]?.key).toBe(TOAST_KEYS.PLAN_SEGMENTS_PASTE);
+        expect(toasts[0]?.kind).toBe('warning');
+        expect(toasts[0]?.message).toContain('2 skipped');
+      } finally {
+        useUIStore.setState({ showToast: original });
+      }
     });
   });
 
