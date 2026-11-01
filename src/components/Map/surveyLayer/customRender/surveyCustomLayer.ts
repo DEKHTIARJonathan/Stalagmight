@@ -5,8 +5,10 @@
  * publication machinery. An edit becomes a buffer re-upload + `triggerRepaint`.
  *
  * GL discipline (per the CustomLayerInterface contract):
- *  - onAdd(map, gl): compile programs, create + upload buffers. Called again by
- *    MapLibre on context restore, so it fully rebuilds.
+ *  - onAdd(map, gl): compile programs, create + upload buffers. Runs again when
+ *    the controller re-adds this layer after a WebGL context restore (MapLibre
+ *    itself never re-adds custom layers - see glContextRecovery.ts), so it fully
+ *    rebuilds.
  *  - render(gl, opts): binds its OWN program / buffers / attributes / uniforms
  *    every frame, assumes nothing about incoming GL state, and sets the
  *    premultiplied-alpha blend MapLibre expects (ONE, ONE_MINUS_SRC_ALPHA).
@@ -30,6 +32,7 @@ import {
   type ProgramBundle,
   linkProgramBundle,
   deleteProgramBundle,
+  layerGlError,
   bindVec2,
   bindFloat,
   bindColor,
@@ -483,7 +486,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
    */
   private checkFrameError(gl: WebGL2RenderingContext, data: CustomRenderData): void {
     if (this.checkedFrames >= MAX_CHECKED_FRAMES) return;
-    const err = gl.getError();
+    const err = layerGlError(gl);
     if (err !== gl.NO_ERROR) {
       const code = `0x${err.toString(16)}`;
       const reason = `gl-error-${code}`;

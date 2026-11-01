@@ -344,6 +344,43 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
     expect(c.isActive()).toBe(false);
     expect(removed).toContain(CUSTOM_ID);
   });
+
+  // #576 D38: MapLibre drops custom layers on a WebGL context loss and never
+  // re-adds them; the controller re-adds the SAME layer object, so its onAdd
+  // re-uploads from the data it still holds.
+  it('reattach() re-adds the same live layer object before the given layer', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.sync(makeParams());
+    const live = h.layerState.last;
+    map.removeLayer(CUSTOM_ID); // what the context loss did
+    const addLayer = vi.spyOn(map, 'addLayer');
+    c.reattach('survey-interact-shots');
+    expect(addLayer).toHaveBeenCalledOnce();
+    expect(addLayer.mock.calls[0]![0]).toBe(live);
+    expect(addLayer.mock.calls[0]![1]).toBe('survey-interact-shots');
+    expect(c.isActive()).toBe(true);
+  });
+
+  it('reattach() that cannot draw on the new context is fatal; inactive is a no-op', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const onFatal = vi.fn();
+    const { map } = makeFakeMap();
+    const idle = new SurveyCustomController(map, CUSTOM_ID, {});
+    const addLayer = vi.spyOn(map, 'addLayer');
+    idle.reattach(undefined);
+    expect(addLayer).not.toHaveBeenCalled();
+
+    const c = new SurveyCustomController(map, CUSTOM_ID, { onFatal });
+    c.sync(makeParams());
+    map.removeLayer(CUSTOM_ID);
+    h.layerState.disabledAfterAdd = true;
+    h.layerState.disabledReason = 'program-link-failed';
+    c.reattach(undefined);
+    expect(onFatal).toHaveBeenCalledWith('program-link-failed');
+    expect(c.isActive()).toBe(false);
+  });
 });
 
 describe('SurveyCustomController dispose (unmount-lite hook + cache release)', () => {

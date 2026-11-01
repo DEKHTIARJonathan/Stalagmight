@@ -73,6 +73,7 @@ export interface FakeSurveyMap {
 
 export function makeFakeSurveyMap(): FakeSurveyMap {
   const listeners = new Map<string, Set<Listener>>();
+  const onceWrappers = new Map<Listener, Listener>();
   const canvas = new CountingTarget();
   const container = new CountingTarget();
   const custom = new Set<string>();
@@ -131,15 +132,21 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
       set.add(fn);
       listeners.set(type, set);
     },
+    // Like MapLibre, off() also removes a listener registered with once().
     once(type: string, fn: Listener) {
       const wrapped: Listener = (e) => {
         listeners.get(type)?.delete(wrapped);
+        onceWrappers.delete(fn);
         fn(e);
       };
+      onceWrappers.set(fn, wrapped);
       target.on(type, wrapped);
     },
     off(type: string, fn: Listener) {
       listeners.get(type)?.delete(fn);
+      const wrapped = onceWrappers.get(fn);
+      if (wrapped) listeners.get(type)?.delete(wrapped);
+      onceWrappers.delete(fn);
     },
     getCanvas: () => canvas,
     getCanvasContainer: () => container,

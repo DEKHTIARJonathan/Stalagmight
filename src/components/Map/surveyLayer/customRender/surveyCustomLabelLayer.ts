@@ -29,6 +29,7 @@ import {
   type ProgramBundle,
   linkProgramBundle,
   deleteProgramBundle,
+  layerGlError,
   bindVec2,
   bindFloat,
   bindColor,
@@ -180,12 +181,12 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
       return;
     }
     // Reset the glyph texture handle so uploadAtlas does a fresh texImage2D.
-    // MapLibre can re-invoke onAdd on a GL context restore WITHOUT a preceding
-    // onRemove; the old texture belongs to the dead context, so drop the stale
-    // handle (uploadBuffers already rebuilds the glyph buffers unconditionally
-    // via freeGpu -- this is the texture's matching reset). Without it,
-    // uploadAtlas' `!this.tex` + `sizeChanged` guards would skip the upload and
-    // the custom labels would silently fail to re-appear after the restore.
+    // onAdd runs again when the controller re-adds this layer after a GL context
+    // restore (glContextRecovery.ts); the old texture belongs to the dead
+    // context, so drop any stale handle (uploadBuffers already rebuilds the glyph
+    // buffers unconditionally via freeGpu -- this is the texture's matching
+    // reset). Without it, uploadAtlas' `!this.tex` + `sizeChanged` guards would
+    // skip the upload and the custom labels would silently fail to re-appear.
     this.tex = null;
     this.texWidth = 0;
     this.texHeight = 0;
@@ -352,7 +353,7 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
 
   private checkFrameError(gl: WebGL2RenderingContext, data: LabelRenderData): void {
     if (this.checkedFrames >= MAX_CHECKED_FRAMES) return;
-    const err = gl.getError();
+    const err = layerGlError(gl);
     if (err !== gl.NO_ERROR) {
       const code = `0x${err.toString(16)}`;
       const reason = `gl-error-${code}`;

@@ -84,7 +84,7 @@ export class DragGhostController {
   constructor(
     private readonly map: maplibregl.Map,
     private readonly opts: DragGhostOptions,
-    private readonly layerId = 'survey-drag-ghost',
+    readonly layerId = 'survey-drag-ghost',
   ) {}
 
   /** True while a custom ghost layer is the live path (test / host read-back). */
@@ -159,6 +159,20 @@ export class DragGhostController {
     this.layer = null;
     this.set = null;
     this.mode = 'idle';
+  }
+
+  /**
+   * Re-add a live custom ghost after a WebGL context restore (MapLibre never
+   * re-adds custom layers; see glContextRecovery.ts). The stock ghost needs
+   * nothing: its source and layers are in the restored style. A re-add that
+   * cannot draw falls back to the stock ghost, as a mid-drag self-disable does.
+   */
+  reattach(beforeId: string | undefined): void {
+    const layer = this.layer;
+    if (this.mode !== 'custom' || !layer) return;
+    this.map.addLayer(layer, beforeId);
+    if (layer.isDisabled()) this.handleSelfDisable(layer.getDisabledReason() ?? 'unknown');
+    else this.map.triggerRepaint();
   }
 
   /** Create + add the custom ghost layer. Returns false (so begin falls back to

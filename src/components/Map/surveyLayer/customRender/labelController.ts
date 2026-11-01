@@ -216,7 +216,7 @@ export interface SurveyLabelControllerOptions {
 
 export class SurveyLabelController {
   private readonly map: MaplibreMap;
-  private readonly layerId: string;
+  readonly layerId: string;
   private layer: SurveyCustomLabelLayer | null = null;
   private active = false;
   /** The glyph atlas - created once the font resolves (or injected in tests). */
@@ -978,6 +978,23 @@ export class SurveyLabelController {
     console.info('[customRender] label layer enabled', {
       glyphs: data.buffers.glyphCount,
     });
+    this.map.triggerRepaint();
+  }
+
+  /**
+   * Re-add the live label layer after a WebGL context restore (MapLibre never
+   * re-adds custom layers; see surveyLayer/glContextRecovery.ts). Its onAdd
+   * re-uploads the glyph buffers and atlas from the layer's data. A re-add that
+   * cannot draw is fatal, as on enable. No-op when nothing was drawing.
+   */
+  reattach(beforeId: string | undefined): void {
+    const layer = this.layer;
+    if (!this.active || !layer || this.destroyed || this.fatal) return;
+    this.map.addLayer(layer, beforeId);
+    if (layer.isDisabled()) {
+      this.tearDownFatal(layer.getDisabledReason() ?? 'unknown');
+      return;
+    }
     this.map.triggerRepaint();
   }
 

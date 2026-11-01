@@ -63,7 +63,7 @@ export class MeasurePathController {
   constructor(
     private readonly map: maplibregl.Map,
     deps: MeasurePathDeps = {},
-    private readonly layerId = 'survey-measure-path-custom',
+    readonly layerId = 'survey-measure-path-custom',
   ) {
     this.makeLayer =
       deps.makeLayer ??
@@ -134,6 +134,25 @@ export class MeasurePathController {
   /** Tear down on SurveyLayer destroy. */
   destroy(): void {
     this.clear();
+  }
+
+  /**
+   * Re-add the live layer after a WebGL context restore (MapLibre never re-adds
+   * custom layers; see surveyLayer/glContextRecovery.ts); its onAdd re-uploads
+   * from the layer's data. A re-add that cannot draw drops the layer and reports
+   * the failure, as on add. No-op when no path is shown.
+   */
+  reattach(beforeId: string | undefined): void {
+    const layer = this.layer;
+    if (!layer) return;
+    this.map.addLayer(layer as unknown as maplibregl.CustomLayerInterface, beforeId);
+    if (layer.isDisabled()) {
+      const reason = layer.getDisabledReason() ?? 'unknown';
+      this.clear();
+      this.emitFatal(reason);
+      return;
+    }
+    this.map.triggerRepaint();
   }
 
   /** Create + add the layer at the resolved z-order. Drops the dead layer and

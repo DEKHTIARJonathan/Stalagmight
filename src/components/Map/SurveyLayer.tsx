@@ -78,8 +78,22 @@ import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/ma
 import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
 import { InteractOverlayHideController, overlayPaintDigest, overlayTouchesRemovedSections } from './surveyLayer/interactOverlayHide';
 import { HoverFrame } from './surveyLayer/hoverFrame';
+import { watchGlContextLoss } from './surveyLayer/glContextRecovery';
 import type { SemanticMapTarget } from './surveyLayer/semanticTarget';
 import { SemanticTargetPreference } from './surveyLayer/semanticTargetPreference';
+
+/** flushUpdate's arguments, in order. */
+type FlushArgs = [
+  sections: Section[],
+  stations: Station[],
+  loopClosures: LoopClosure[] | undefined,
+  gpsOrigin: GpsOrigin | null,
+  showDepthGradient: boolean,
+  depthRange: DepthRange,
+  precision: DecimalPrecision | undefined,
+  showIssueSeverity: boolean,
+  warnings: ProjectWarning[],
+];
 
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
@@ -253,6 +267,11 @@ export default class SurveyLayer {
     warnings: ProjectWarning[];
   } | null = null;
   private updateScheduled = false;
+  /** The latest flush that landed while the map had no style (a lost WebGL
+   *  context), replayed once the context is back (#576 D38). */
+  private updateWhileStyleless: FlushArgs | null = null;
+  /** Detach for the WebGL context-loss recovery (glContextRecovery.ts). */
+  private detachGlContextWatch: (() => void) | null = null;
   /** Coalesced-call counter, surfaced to memory probe for instrumentation. */
   private coalescedUpdateCallsSinceLastFlush = 0;
   // Unified drag-preview source (#mem drag fixes): ONE GeoJSON source holding
@@ -443,6 +462,41 @@ export default class SurveyLayer {
     // The custom layers bake devicePixelRatio into their device-pixel sizes, so a
     // DPR change (window dragged to a different-scale monitor) must rebuild them.
     this.dprWatcherDispose = watchDevicePixelRatio(() => this.handleDprChange());
+    // MapLibre drops every custom layer on a WebGL context loss and never re-adds
+    // them; bring them back on restore (#576 D38). Bottom to top: the order the
+    // recovery falls back to if it has no layer-order snapshot.
+    this.detachGlContextWatch = watchGlContextLoss(map, {
+      layers: () =>
+        [this.customRender, this.measurePath, this.customLabels, this.dragGhost].filter(
+          (c): c is NonNullable<typeof c> => c !== null,
+        ),
+      // Hidden overlay layers would be serialized hidden into the restored style.
+      beforeLoss: () => this.interactHide.restore(),
+      afterRestore: () => this.replayAfterContextRestore(),
+    });
+  }
+
+  /**
+   * After a WebGL context restore the custom layers are back with the data they
+   * held at the loss, but anything that arrived meanwhile bailed on the missing
+   * style. Re-run the last flush - the one the lost window swallowed, if any - so
+   * geometry, labels, the measured path and the overlays match the store again.
+   */
+  private replayAfterContextRestore(): void {
+    const args: FlushArgs | null =
+      this.updateWhileStyleless ??
+      (this.cachedSections.length > 0 || this.cachedStations.length > 0
+        ? [this.cachedSections, this.cachedStations, this.cachedLoopClosures, this.gpsOrigin,
+          this.showDepthGradient, this.depthRange, this.cachedPrecision, this.showIssueSeverity,
+          this.cachedWarnings]
+        : null);
+    this.updateWhileStyleless = null;
+    if (args) this.flushUpdateSync(...args);
+    // Closure dimming is a paint property the lost window could not write.
+    this.updateClosureAnchoredOpacity(this.anchoredSectionIds);
+    if (this.immovableStationFeatureIds.size > 0) {
+      this.updateImmovableClosureOpacity(this.immovableStationFeatureIds);
+    }
   }
 
   /**
@@ -1797,7 +1851,10 @@ export default class SurveyLayer {
    */
   private syncCustomMeasurePath(): void {
     if (!this.measurePath) return;
-    if (!this.map || !hasLiveStyle(this.map) || !this.geoIndex) {
+    // No style (map removed, or a lost WebGL context): nothing to draw into, and
+    // clear() would read the dead style. A context restore replays this.
+    if (!this.map || !hasLiveStyle(this.map)) return;
+    if (!this.geoIndex) {
       this.measurePath.clear();
       return;
     }
@@ -2400,6 +2457,8 @@ export default class SurveyLayer {
 
   // Set line-opacity on loop closures layer: 0.25 when both endpoints are in anchored sections
   private updateClosureAnchoredOpacity(anchoredIds: Set<number>): void {
+    // No style during a lost WebGL context; replayAfterContextRestore re-applies.
+    if (!hasLiveStyle(this.map)) return;
     const idsArray = [...anchoredIds];
 
     if (idsArray.length > 0) {
@@ -2452,6 +2511,7 @@ export default class SurveyLayer {
   }
 
   private updateImmovableClosureOpacity(immovableStationIds: Set<number>): void {
+    if (!hasLiveStyle(this.map)) return; // as updateClosureAnchoredOpacity
     if (immovableStationIds.size > 0) {
       // Build station key strings matching closure feature "sectionId:stationIndex" format
       const immovableKeyStrings: string[] = [];
@@ -3342,7 +3402,12 @@ export default class SurveyLayer {
   ): void {
     // Early bail when the map is gone or its style has been torn down - the
     // coalescer's queueMicrotask can race with MapCanvas unmount → map.remove().
-    if (!hasLiveStyle(this.map)) return;
+    // A lost WebGL context also has no style: keep the args for the restore.
+    if (!hasLiveStyle(this.map)) {
+      this.updateWhileStyleless = [sections, stations, loopClosures, gpsOrigin, showDepthGradient,
+        depthRange, precision, showIssueSeverity, warnings];
+      return;
+    }
 
     this.coalescedUpdateCallsSinceLastFlush = 0;
     this.gpsOrigin = gpsOrigin;
@@ -3552,8 +3617,8 @@ export default class SurveyLayer {
    * (#mem), the DPR watcher, the hover and drag-follow animation frames, the drag
    * ghost's bake timer + land listener, the interact-overlay hide's fallback timer
    * + listener (whose late restore called `map.getLayer` on the removed map and
-   * threw, #576 D16), and the touch long-press timer + canvas listeners.
-   * Idempotent.
+   * threw, #576 D16), the touch long-press timer + canvas listeners, and the
+   * WebGL context-loss watch. Idempotent.
    */
   release(): void {
     this.customRender?.dispose();
@@ -3569,6 +3634,9 @@ export default class SurveyLayer {
     // once the map is gone.
     this.detachLongPressTouch?.();
     this.detachLongPressTouch = null;
+    this.detachGlContextWatch?.();
+    this.detachGlContextWatch = null;
+    this.updateWhileStyleless = null;
   }
 
   destroy() {

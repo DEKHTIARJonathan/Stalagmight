@@ -187,8 +187,8 @@ absorbed. Three paths reach it:
   not link (`program-link-failed`). The controller sees `isDisabled()` right
   after `addLayer`, removes the dead layer, and latches fatal. A successful
   link also resolves the program's uniform/attribute locations into its bundle
-  (`glProgram.ts`), so a context restore - which re-runs `onAdd` - rebuilds
-  the program and its location cache together.
+  (`glProgram.ts`), so a context restore - which re-runs `onAdd`, see below -
+  rebuilds the program and its location cache together.
 - **Mid-render**: each layer calls `gl.getError()` after its draws for the first
   5 frames only (a `getError` is a pipeline stall, and WebKitGTK can drop a
   layer silently), self-disabling with a `gl-error-0x<code>` reason. This fires
@@ -207,6 +207,17 @@ flip-flopping through an enable that would fail again. The **drag ghost is the o
 exception**: if its custom layer cannot start or dies mid-drag,
 `dragGhostController.ts` spins up the historical GeoJSON preview at the live
 offset, so a drag is never left without a preview.
+
+A **WebGL context loss** (GPU reset, driver crash, some sleep/resume cycles,
+WebKit memory pressure) is not a failure of these layers but would end the same
+way: MapLibre drops every custom layer when the context is lost and never
+re-adds one on restore - it re-applies a serialized style that skips them.
+`surveyLayer/glContextRecovery.ts` snapshots the layer order just before the
+loss and, once the restored style has loaded, has each controller re-add its
+live layer object at its old position (`reattach`); the layer's `onAdd` then
+re-uploads from its own data. SurveyLayer replays the last flush afterwards,
+including one that arrived while the context was lost. The Global View layer
+does not do this yet.
 
 ## Debug and dev hooks
 

@@ -26,6 +26,7 @@ import {
   type ProgramBundle,
   linkProgramBundle,
   deleteProgramBundle,
+  layerGlError,
   bindVec2,
   bindFloat,
   bindColor,
@@ -243,7 +244,7 @@ export class SurveyGhostLayer implements CustomLayerInterface {
 
   private checkFrameError(gl: WebGL2RenderingContext): void {
     if (this.checkedFrames >= MAX_CHECKED_FRAMES) return;
-    const err = gl.getError();
+    const err = layerGlError(gl);
     if (err !== gl.NO_ERROR) {
       const reason = `gl-error-0x${err.toString(16)}`;
       this.disabled = true;

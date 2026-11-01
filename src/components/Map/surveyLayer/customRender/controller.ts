@@ -212,7 +212,7 @@ const HIGHLIGHT_NONE = 0;
 
 export class SurveyCustomController {
   private readonly map: MaplibreMap;
-  private readonly layerId: string;
+  readonly layerId: string;
   private layer: SurveyCustomLayer | null = null;
   private active = false;
   private lastParams: CustomSyncParams | null = null;
@@ -395,6 +395,25 @@ export class SurveyCustomController {
       stations: data.circle.stationCount,
       bytes: data.line.byteLength + data.circle.byteLength,
     });
+    this.map.triggerRepaint();
+  }
+
+  /**
+   * Re-add the live layer after a WebGL context restore, which MapLibre never
+   * does for a custom layer (see surveyLayer/glContextRecovery.ts). The SAME
+   * layer object goes back, so MapLibre re-runs its onAdd: programs recompile and
+   * buffers re-upload from the layer's data on the new context. A re-add that
+   * cannot draw is the same unrecoverable state as a failed enable. No-op when
+   * nothing was drawing.
+   */
+  reattach(beforeId: string | undefined): void {
+    const layer = this.layer;
+    if (!this.active || !layer || this.disposed || this.fatal) return;
+    this.map.addLayer(layer, beforeId);
+    if (layer.isDisabled()) {
+      this.tearDownFatal(layer.getDisabledReason() ?? 'unknown');
+      return;
+    }
     this.map.triggerRepaint();
   }
 
