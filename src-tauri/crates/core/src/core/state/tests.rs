@@ -24559,6 +24559,84 @@ fn implicit_save_on_a_linked_project_still_carries_the_link_and_the_dirty_bit() 
     );
 }
 
+/// A linked, edited (dirty) session whose `speleo_link` row is still on disk but no
+/// longer reads: the column the reader needs was renamed, an error confined to the
+/// link table. Returns `(state, open_path, _temp)`.
+fn linked_session_with_an_unreadable_link() -> (AppState, PathBuf, TempDir) {
+    let (state, sid, shid, temp) = remote_fixture_editable();
+    let open_path = state.open_project_path().unwrap();
+    assert!(
+        state
+            .execute(Command::UpdateShot {
+                section_id: sid,
+                shot_id: shid,
+                updates: ShotUpdates {
+                    length: Some(9.0),
+                    ..Default::default()
+                },
+            })
+            .success
+    );
+    assert!(dirty_bit(&state), "the edit set the dirty bit");
+    rusqlite::Connection::open(&open_path)
+        .unwrap()
+        .execute_batch("ALTER TABLE speleo_link RENAME COLUMN project_name TO project_title;")
+        .unwrap();
+    assert!(Database::open_for_metadata(&open_path)
+        .unwrap()
+        .load_speleo_link()
+        .is_err());
+    (state, open_path, temp)
+}
+
+/// [#576 B35(b)] A link that cannot be read must not be "no link". The save
+/// rebuilds the managed file from a fresh temp, so treating the read error as an
+/// unlinked project wrote the file without its `speleo_link` row: the project
+/// silently became a plain local file, its base revision and dirty bit gone.
+#[test]
+fn an_unreadable_link_refuses_the_save_instead_of_unlinking_the_project() {
+    let (state, open_path, _temp) = linked_session_with_an_unreadable_link();
+    let on_disk = std::fs::read(&open_path).unwrap();
+
+    let result = state.save_project(None);
+
+    let link_now = Database::open_for_metadata(&open_path)
+        .unwrap()
+        .load_speleo_link()
+        .map(|link| link.map(|l| (l.project_id, l.has_unpushed_edits)));
+    eprintln!("save success: {} error: {:?}", result.success, result.error);
+    eprintln!("speleo_link in the managed file after the save: {link_now:?}");
+    assert!(!result.success, "the save must be refused");
+    assert!(
+        std::fs::read(&open_path).unwrap() == on_disk,
+        "the refused save rewrote the managed file"
+    );
+    assert!(!open_path.with_extension("stalx.tmp").exists());
+    assert_eq!(state.open_project_path().unwrap(), open_path);
+}
+
+/// [#576 B35(b)] The way out: a Save As to another file still works, and the
+/// managed file is left as it was.
+#[test]
+fn an_unreadable_link_still_allows_save_as_to_another_file() {
+    let (state, open_path, temp) = linked_session_with_an_unreadable_link();
+    let on_disk = std::fs::read(&open_path).unwrap();
+    let rescue = temp.path().join("rescue.stalx");
+
+    let result = state.save_project(Some(rescue.clone()));
+
+    assert!(result.success, "Save As failed: {:?}", result.error);
+    assert!(
+        std::fs::read(&open_path).unwrap() == on_disk,
+        "the Save As rewrote the managed file"
+    );
+    let saved = Database::open_existing(&rescue)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    assert!((saved.sections[0].shots[0].length - 9.0).abs() < 1e-9);
+}
+
 #[test]
 fn save_as_on_an_unlinked_project_still_relocates_the_session() {
     // The pre-existing Save As contract for plain local projects, pinned so the

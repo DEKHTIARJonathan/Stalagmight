@@ -759,11 +759,50 @@ impl AppState {
         // clearing has_unpushed_edits (exactly the "local save NEVER clears the
         // dirty bit" invariant). Snapshot it here and re-apply to the fresh file
         // below. base_commit_sha + the dirty bit are carried verbatim.
+        //
+        // [#576 B35(b)] A link that cannot be READ is not "no link". Taken as one,
+        // the rebuilt file had no `speleo_link` row and the managed project silently
+        // became a plain local file - its base revision and dirty bit gone, and its
+        // cache slot debris the next pull may replace. So a save that would rewrite
+        // the open file is refused (no temp exists yet; the file keeps its row), as
+        // the resolved-warnings read above does. A Save As to ANOTHER file leaves
+        // the open file untouched and is the user's way out, so it goes ahead,
+        // unlinked as before.
         let speleo_link = {
             let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
-            db_guard
-                .as_ref()
-                .and_then(|db| db.load_speleo_link().ok().flatten())
+            match db_guard.as_ref().map(Database::load_speleo_link) {
+                None => None,
+                Some(Ok(link)) => link,
+                Some(Err(e)) => {
+                    let rewrites_open_file = project
+                        .file_path
+                        .as_ref()
+                        .is_some_and(|open| same_file(open, &save_path));
+                    if rewrites_open_file {
+                        tracing::error!(
+                            error = %e,
+                            purpose = "preserve SpeleoDB hand-off link on save",
+                            "Refused to save: the speleo_link table could not be read, and the \
+                             save would rebuild the file without it"
+                        );
+                        return CommandResult::failure(format!(
+                            "Can't save: this project's SpeleoDB link could not be read ({}). \
+                             Saving would rewrite the file without it, so nothing was written - \
+                             the file on disk is unchanged. Use Save As to save your changes to \
+                             another file.",
+                            crate::core::loading::clamp_quoted_error(&e.to_string()),
+                        ));
+                    }
+                    tracing::warn!(
+                        error = %e,
+                        destination = ?save_path,
+                        purpose = "save to another file without the unreadable link",
+                        "The speleo_link table could not be read; saving to the other file as \
+                         an unlinked project"
+                    );
+                    None
+                }
+            }
         };
 
         // Save a Copy: an EXPLICIT destination on a SpeleoDB-managed project does
@@ -910,11 +949,21 @@ impl AppState {
         // because the per-site version of this rule has already been missed once.
         if !copy_only {
             if let Some(link) = &speleo_link {
+                // [#576 B35(b)] Fail closed: renamed into place, a file without its
+                // link row silently un-links the project (see the read above), so
+                // the temp is discarded and the destination stays as it was.
                 if let Err(e) = db.save_speleo_link(Some(link)) {
-                    tracing::warn!(
+                    drop(db);
+                    let _ = std::fs::remove_file(&temp_path);
+                    tracing::error!(
                         error = %e,
                         purpose = "preserve SpeleoDB hand-off link on save",
-                        "Failed to copy speleo_link onto the fresh save file"
+                        "Failed to copy speleo_link onto the fresh save file; save abandoned"
+                    );
+                    return save_failure(
+                        "Failed to carry the SpeleoDB link into the saved file",
+                        &save_path,
+                        &e,
                     );
                 }
             }
