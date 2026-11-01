@@ -2,8 +2,8 @@ use super::project_io::save_failure;
 use super::AppState;
 use crate::core::CommandResult;
 use crate::models::{
-    Project, SectionId, StationKey, StationRef, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE,
-    MAX_SECTION_ID,
+    Project, SectionId, SectionIdentity, StationKey, StationRef, FEATURE_ID_STRIDE,
+    MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
 };
 use crate::persistence::Database;
 use std::path::PathBuf;
@@ -129,6 +129,14 @@ impl AppState {
         let mut section_id_map: std::collections::HashMap<(usize, SectionId), SectionId> =
             std::collections::HashMap::new();
 
+        // Import bookkeeping already in the merged project, so a hash two sources
+        // share lands once - both tables are `UNIQUE(hash)`, and a repeat would
+        // fail the whole save.
+        let mut seen_file_hashes: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut seen_section_hashes: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
         // Append sections from all projects
         for (proj_idx, source_project) in source_projects.iter().enumerate() {
             for section in &source_project.sections {
@@ -150,25 +158,37 @@ impl AppState {
                 // consumer that needs document-wide uniqueness - the SpeleoDB
                 // sidecar - already drops repeats itself
                 // (`export::tml::harden_for_speleodb`).
-                merged_project.add_section(section.to_section_data());
-
-                // #438: `SectionData` cannot carry the north reference, so the
-                // copy would land on the merged project's default - reverting a
-                // corrected section to identity and rendering (and exporting) it
-                // rotated by its own declination.
                 //
-                // The RESOLVED reference, from the section's OWN project: a
-                // section that inherited its source project's default has to
-                // keep that value here, where the default is a different one.
-                // Merging the defaults themselves would be the wrong question -
-                // two projects can hold different ones legitimately, and only
-                // the per-section answer is unambiguous - so every copied
-                // section carries its own and the merged project declares no
-                // default at all.
-                let resolved = source_project.azimuth_reference_for(section);
-                if let Some(copied) = merged_project.get_section_mut(new_section_id) {
-                    copied.azimuth_reference = Some(resolved);
-                }
+                // Everything else about the section that `SectionData` cannot
+                // carry rides in a `SectionIdentity` (A17, #576). A plain
+                // `add_section` resets `reverse_parity` and the captured gauge
+                // pair, which decide the station the least-squares solve holds
+                // for a datum-less component: losing them moved that gauge to the
+                // parity default, translating the component's adjusted geometry
+                // (Closures Computed, Plan, Export) by the closure residual, and
+                // the merged file's first save then pinned the wrong station.
+                // `shot_uuids` stays empty on purpose: each uuid already rides in
+                // `ShotData`, and `Section::new` de-duplicates them per section
+                // as described above, which restoring the list verbatim would
+                // undo.
+                //
+                // #438: the same goes for the north reference - without it the
+                // copy would land on the merged project's default, reverting a
+                // corrected section to identity and rendering (and exporting) it
+                // rotated by its own declination. The RESOLVED reference, from
+                // the section's OWN project: a section that inherited its source
+                // project's default has to keep that value here, where the
+                // default is a different one. Merging the defaults themselves
+                // would be the wrong question - two projects can hold different
+                // ones legitimately, and only the per-section answer is
+                // unambiguous - so every copied section carries its own and the
+                // merged project declares no default at all.
+                let identity = SectionIdentity {
+                    shot_uuids: Vec::new(),
+                    azimuth_reference: Some(source_project.azimuth_reference_for(section)),
+                    ..SectionIdentity::of(section)
+                };
+                merged_project.add_section_with_identity(section.to_section_data(), &identity);
 
                 // Record the mapping
                 section_id_map.insert((proj_idx, old_section_id), new_section_id);
@@ -359,6 +379,21 @@ impl AppState {
                         }
                     }
                     Some(_) => {}
+                }
+            }
+
+            // Union the import hashes (A17, #576): they are how the import
+            // wizards recognise a file or DMP section that is already in the
+            // project, and a merge that dropped them let any source's survey be
+            // imported again with no duplicate warning.
+            for hash in &source_project.imported_file_hashes {
+                if seen_file_hashes.insert(hash.clone()) {
+                    merged_project.imported_file_hashes.push(hash.clone());
+                }
+            }
+            for hash in &source_project.imported_section_hashes {
+                if seen_section_hashes.insert(hash.clone()) {
+                    merged_project.imported_section_hashes.push(hash.clone());
                 }
             }
 

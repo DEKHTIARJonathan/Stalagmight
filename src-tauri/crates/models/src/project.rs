@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use super::{
-    AzimuthReference, GpsBounds, LoopClosure, Section, SectionData, SectionId, SectionUpdates,
-    ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire, StationRef,
-    ZeroDatum,
+    AzimuthReference, GpsBounds, LoopClosure, Section, SectionData, SectionId, SectionIdentity,
+    SectionUpdates, ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire,
+    StationRef, ZeroDatum,
 };
 use super::{LoopClosureWire, ZeroDatumWire};
 
@@ -716,6 +716,30 @@ impl Project {
     /// Add a new section to the project
     pub fn add_section(&mut self, data: SectionData) -> &Section {
         let section = Section::new(self.next_section_id, data);
+        self.push_new_section(section)
+    }
+
+    /// Add a new section that keeps the identity [`SectionData`] cannot carry -
+    /// its reverse parity, the captured gauge pair and its north reference - for
+    /// a section COPIED from another project (A17, #576). [`Self::add_section`]
+    /// builds through [`Section::new`], which resets all three to a freshly
+    /// created section's defaults; for a datum-less component with an eligible
+    /// closure that moves the least-squares gauge onto another station.
+    ///
+    /// Takes the next section id exactly as [`Self::add_section`] does, so the
+    /// callers' section-id budget checks hold for both.
+    pub fn add_section_with_identity(
+        &mut self,
+        data: SectionData,
+        identity: &SectionIdentity,
+    ) -> &Section {
+        let section = Section::restore_with_identity(self.next_section_id, data, identity);
+        self.push_new_section(section)
+    }
+
+    /// Append a section built for the next section id, keeping the section and
+    /// shot-uuid caches in step.
+    fn push_new_section(&mut self, section: Section) -> &Section {
         self.next_section_id += 1;
         let new_idx = self.sections.len();
         self.section_index_cache.insert(section.id, new_idx);
