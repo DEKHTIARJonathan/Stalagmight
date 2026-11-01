@@ -789,7 +789,13 @@ likewise only ever bumped while holding `project`; see the module doc in
   `remove_created_shot` - read the live offsets at the moment they run); skipping
   it altogether was #413's finding 7, where a jump kept the drift
   `reconcile_geometry`'s `realign_merges` heals and left sections metres from
-  where Ctrl+Z the same number of times leaves them
+  where Ctrl+Z the same number of times leaves them. A FAILED step gets the same
+  epilogue (#576 A18(a)): once a jump - or a single `undo()`/`redo()` - is past its
+  index / empty-stack check, the failure arm reconciles geometry and marks the
+  remote copy un-pushed too, because the steps before it landed and the failing
+  arm itself may have mutated before reporting. Only a failure AT the check (an
+  invalid index, nothing to undo) leaves the dirty bit alone. The frontend mirrors
+  that for every "failed at step N of M", N = 1 included
 - **Click button while open**: performs single undo/redo, refreshes the list, stays open
 - **Keyboard**: Arrow keys navigate, Enter selects, Escape closes
 - Actions are queued and processed sequentially (`actionQueueRef`)

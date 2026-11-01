@@ -26,24 +26,32 @@ impl AppState {
             return f;
         }
         self.invalidate_adjusted_cache();
-        let result = self.undo_inner();
-        if result.success {
-            // Dirty-bit flip (#191, D-B16): a successful undo is an edit of a
-            // remote project. Set-only; no-op for local-only.
-            self.mark_remote_dirty();
-            // Reconcile derived offsets after the restore. For snapshot-restore
-            // undos (Merge/Move/Delete/Repair) the restored `before` is already a
-            // valid aligned state, so realign_merges early-returns (no-op) - EXCEPT
-            // undo-of-Repair, whose `before` carries the >=tolerance drift Repair
-            // healed. There, reconcile re-derives those offsets: the undo reverts the
-            // STRUCTURAL repair (dropped dangling refs / converted closures come back)
-            // while keeping geometry valid, rather than re-introducing broken derived
-            // offsets the user can't act on. Offsets are derived state (re-solved on
-            // every load), so this is the intended contract, not a loss. (A
-            // sub-tolerance offset change is below realign_merges' threshold, so the
-            // `before` snapshot's offsets are preserved exactly there.)
-            self.reconcile_geometry();
+        // [#576 A18(a) / NF-AN3-1] The index check `undo_to` makes, before anything can
+        // change: an empty stack is the one failure that provably mutated nothing.
+        if let Err(nothing) = self.history_step_available(HistoryMove::Undo) {
+            return nothing;
         }
+        let result = self.undo_inner();
+        // Dirty-bit flip (#191, D-B16): an undo is an edit of a remote project.
+        // Set-only; no-op for local-only. [#576 A18(a)] A FAILED step past the check
+        // above gets it too: an arm reports its failure only after running its
+        // inverse, and the inverse mutates as it goes (see `undo_to`). Over-marking
+        // costs at most a no-op 304 push; a missed mark let Done skip the upload of
+        // real changes and a re-pull replace the copy without asking.
+        self.mark_remote_dirty();
+        // Reconcile derived offsets after the restore - and after a failed step's
+        // partial one, for the same reason. For snapshot-restore
+        // undos (Merge/Move/Delete/Repair) the restored `before` is already a
+        // valid aligned state, so realign_merges early-returns (no-op) - EXCEPT
+        // undo-of-Repair, whose `before` carries the >=tolerance drift Repair
+        // healed. There, reconcile re-derives those offsets: the undo reverts the
+        // STRUCTURAL repair (dropped dangling refs / converted closures come back)
+        // while keeping geometry valid, rather than re-introducing broken derived
+        // offsets the user can't act on. Offsets are derived state (re-solved on
+        // every load), so this is the intended contract, not a loss. (A
+        // sub-tolerance offset change is below realign_merges' threshold, so the
+        // `before` snapshot's offsets are preserved exactly there.)
+        self.reconcile_geometry();
         result
     }
 
@@ -583,14 +591,42 @@ impl AppState {
             return f;
         }
         self.invalidate_adjusted_cache();
-        let result = self.redo_inner();
-        if result.success {
-            // Dirty-bit flip (#191, D-B16): a successful redo is an edit of a
-            // remote project. Set-only; no-op for local-only.
-            self.mark_remote_dirty();
-            self.reconcile_geometry();
+        // [#576 A18(a) / NF-AN3-1] As in `undo()`: past the empty-stack check, a failed
+        // step gets the same epilogue as a successful one.
+        if let Err(nothing) = self.history_step_available(HistoryMove::Redo) {
+            return nothing;
         }
+        let result = self.redo_inner();
+        // Dirty-bit flip (#191, D-B16): a redo is an edit of a remote project - and so
+        // is a failed one that got this far (#576 A18(a)). Set-only; no-op for
+        // local-only.
+        self.mark_remote_dirty();
+        self.reconcile_geometry();
         result
+    }
+
+    /// [#576 A18(a)] The "is there a step to take" check single-step undo/redo make
+    /// before touching anything, mirroring `undo_to`/`redo_to`'s index validation.
+    ///
+    /// It draws the line the dirty bit needs: a failure HERE changed nothing, while a
+    /// failure after it may have (the arms report only after running their inverse),
+    /// so only failures past it mark the remote copy un-pushed. Same messages the
+    /// inner steps use, so callers see no difference on an empty stack.
+    fn history_step_available(&self, direction: HistoryMove) -> Result<(), CommandResult> {
+        let Ok(stack) = self.undo_stack.lock() else {
+            return Err(CommandResult::failure(
+                "Failed to lock undo stack".to_string(),
+            ));
+        };
+        match direction {
+            HistoryMove::Undo if !stack.can_undo() => {
+                Err(CommandResult::failure("Nothing to undo".to_string()))
+            }
+            HistoryMove::Redo if !stack.can_redo() => {
+                Err(CommandResult::failure("Nothing to redo".to_string()))
+            }
+            HistoryMove::Undo | HistoryMove::Redo => Ok(()),
+        }
     }
 
     /// Redo implementation (caller must hold command_lock)
@@ -1338,6 +1374,12 @@ impl AppState {
                 // The user is left holding that state, so it gets the same
                 // reconcile every completed step gets.
                 self.reconcile_geometry();
+                // [#576 A18(a)] ...and the same dirty flip the success path makes
+                // after the loop: the steps before this one changed the project, and
+                // this one may have. Returning before the flip left a SpeleoDB copy
+                // marked clean, so Done skipped the upload and released, and a re-pull
+                // could replace the copy without asking.
+                self.mark_remote_dirty();
                 return if reversed.is_empty() {
                     failure
                 } else {
@@ -1427,6 +1469,8 @@ impl AppState {
                     result.error.unwrap_or_else(|| "Unknown error".to_string())
                 ));
                 self.reconcile_geometry();
+                // [#576 A18(a)] As in `undo_to`: past the index check, mark the copy.
+                self.mark_remote_dirty();
                 return if reversed.is_empty() {
                     failure
                 } else {

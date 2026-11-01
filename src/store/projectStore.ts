@@ -496,15 +496,17 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
 }
 
 /**
- * Detect partial failure in multi-step undo/redo.
- * Backend returns "Undo failed at step N of M: reason" (or "Redo failed...")
- * when some steps succeeded before the failure. If step > 1, state was mutated.
+ * The failing step N of a multi-step undo/redo failure, or `null` for any other error.
+ * Backend returns "Undo failed at step N of M: reason" (or "Redo failed...") once the
+ * jump got past its index check. Steps before N landed and cannot be rolled back, and
+ * step N itself can have mutated before it reported (#576 A18(a)) - so EVERY such
+ * failure changed the project, N = 1 included.
  */
-function isPartialMultiStepFailure(error: string | null): boolean {
-  if (!error) return false;
+function multiStepFailureStep(error: string | null): number | null {
+  if (!error) return null;
   const match = error.match(/failed at step (\d+) of (\d+)/);
-  if (!match || !match[1]) return false;
-  return parseInt(match[1], 10) > 1;
+  if (!match || !match[1]) return null;
+  return parseInt(match[1], 10);
 }
 
 /**
@@ -850,9 +852,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // dirty bit into the SpeleoDB store (no-op for a local project).
         useSpeleoStore.getState().markDirty();
       } else {
-        if (checkPartialFailure && isPartialMultiStepFailure(result.error)) {
+        const failedStep = checkPartialFailure ? multiStepFailureStep(result.error) : null;
+        if (failedStep !== null) {
+          // #576 A18(a): ANY failed jump changed the project - step 1 included, since
+          // the failing step can mutate before it reports - and the backend marks the
+          // SpeleoDB copy un-pushed for every one of them. Mirroring only N > 1 left
+          // the two dirty bits disagreeing (and both clean after a step-1 failure).
           set({ isDirty: true });
           useSpeleoStore.getState().markDirty();
+        }
+        if (failedStep !== null && failedStep > 1) {
           // A partial multi-step failure still renumbered: the steps BEFORE the
           // failing one already flipped their sections and cannot be rolled back,
           // which is why the backend attaches the entries it applied to the

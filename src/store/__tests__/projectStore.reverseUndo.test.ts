@@ -30,6 +30,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useProjectStore } from '../projectStore';
 import { useGasPlanStore } from '../gasPlanStore';
 import { useUIStore } from '../uiStore';
+import { useSpeleoStore } from '../speleoStore';
 import type { ReversedSection } from '../../types/ipc/ReversedSection';
 import type { Station } from '../../types/project';
 
@@ -274,6 +275,22 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     await useProjectStore.getState().undoTo(2);
 
     expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(3));
+  });
+
+  it('marks the copy dirty even when step 1 itself failed (#576 A18(a))', async () => {
+    // The failing step can mutate before it reports, so the backend marks the
+    // SpeleoDB copy un-pushed for ANY failed jump past its index check. Mirroring
+    // only N > 1 left the frontend's dirty bits clean while the backend's was set.
+    useSpeleoStore.getState().setLinkOnOpen({ permission: 'ADMIN' });
+    useProjectStore.setState({ isDirty: false });
+    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+
+    serveState(line(FORWARD), undefined, 'Undo failed at step 1 of 3: boom');
+    const result = await useProjectStore.getState().undoTo(2);
+
+    expect(result.success).toBe(false);
+    expect(useProjectStore.getState().isDirty).toBe(true);
+    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
   });
 });
 

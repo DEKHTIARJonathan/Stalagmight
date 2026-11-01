@@ -5967,6 +5967,175 @@ mod tests {
         );
     }
 
+    // --- #576 A18(a): a failed undo/redo still marks the SpeleoDB copy dirty ----------
+
+    /// An editing remote copy with a CLEAN link, a stack built in code, and a
+    /// section the stack's real entries can undo. `poison_below` puts an entry the
+    /// undo cannot apply at the BOTTOM of the undo stack, under the real one.
+    fn clean_editing_copy_with_history() -> (TempDir, AppState) {
+        let (temp, state) = remote_readonly_fixture();
+        state.set_edit_enabled(true);
+        // An entry no undo can apply (`UndoData::None`), at the bottom of the stack.
+        state
+            .undo_stack
+            .lock()
+            .expect("undo stack")
+            .push_with_data(Command::CloseProject, crate::core::undo::UndoData::None);
+        for name in ["A", "B"] {
+            assert!(
+                state
+                    .execute(Command::CreateSection {
+                        name: Some(name.to_owned()),
+                        surveyor: None,
+                        date: None,
+                        color: "#abcdef".to_owned(),
+                        direction: None,
+                        shots: vec![ShotData {
+                            length: 5.0,
+                            ..Default::default()
+                        }],
+                    })
+                    .success,
+                "section {name} is created on the editing copy"
+            );
+        }
+        // As a confirmed push leaves it: everything above is on the server.
+        state
+            .speleodb_mutate_link(|l| {
+                l.has_unpushed_edits = false;
+                l.last_edit_at = None;
+            })
+            .expect("clean the link");
+        (temp, state)
+    }
+
+    fn remote_dirty(state: &AppState) -> bool {
+        state.speleodb_open_link().expect("link").has_unpushed_edits
+    }
+
+    #[test]
+    fn a_partial_undo_to_marks_the_remote_copy_dirty() {
+        // [#576 A18(a)] undo_to(2): steps 1-2 undo B and A, step 3 fails on the entry
+        // beneath them. The two undone sections are real changes, but the failure arm
+        // returned before the only dirty flip, so Done skipped the upload of a "clean"
+        // link and released, and a later re-pull replaced the copy without asking.
+        let (_temp, state) = clean_editing_copy_with_history();
+
+        let result = state.undo_to(2);
+
+        assert!(!result.success, "step 3 cannot be undone");
+        assert!(
+            result
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("Undo failed at step 3 of 3")),
+            "got {:?}",
+            result.error
+        );
+        assert_eq!(
+            state.get_project_state().expect("project").sections.len(),
+            0,
+            "steps 1-2 really undid both sections"
+        );
+        assert!(
+            remote_dirty(&state),
+            "has_unpushed_edits={} after a partial undo_to that removed two sections",
+            remote_dirty(&state)
+        );
+    }
+
+    #[test]
+    fn a_failed_single_undo_past_the_empty_check_marks_the_remote_copy_dirty() {
+        // [#576 NF-AN3-1] The single-step arm had the same hole: a failing step can have
+        // mutated before it reported, and nothing marked the copy.
+        let (_temp, state) = clean_editing_copy_with_history();
+        assert!(state.undo().success && state.undo().success);
+        state
+            .speleodb_mutate_link(|l| l.has_unpushed_edits = false)
+            .expect("clean the link");
+
+        assert!(!state.undo().success, "the bottom entry cannot be undone");
+
+        assert!(
+            remote_dirty(&state),
+            "a failed undo that got past the empty-stack check marks the copy"
+        );
+    }
+
+    #[test]
+    fn an_undo_with_nothing_to_undo_leaves_the_remote_copy_clean() {
+        // [#576 A18(a)] DO-NOT-REGRESS: the index check is the line - an empty stack
+        // changed nothing and must not cost a no-op push or veto a lock release.
+        let (_temp, state) = remote_readonly_fixture();
+        state.set_edit_enabled(true);
+
+        assert!(!state.undo().success);
+        assert!(!state.redo().success);
+        assert!(!state.undo_to(0).success);
+        assert!(!state.redo_to(0).success);
+        assert!(!remote_dirty(&state));
+    }
+
+    /// [`clean_editing_copy_with_history`] with its two sections undone and a redo
+    /// entry that cannot replay (it deletes a section that does not exist) slipped
+    /// UNDER them on the redo stack.
+    fn clean_copy_with_a_failing_redo_beneath() -> (TempDir, AppState) {
+        let (temp, state) = clean_editing_copy_with_history();
+        assert!(state.undo().success && state.undo().success);
+        {
+            let mut stack = state.undo_stack.lock().expect("undo stack");
+            let a = stack.pop_redo().expect("A on top of redo");
+            let b = stack.pop_redo().expect("B under it");
+            stack.push_redo(crate::core::undo::UndoEntry {
+                replayed_at: None,
+                command_bytes: None,
+                command: Command::DeleteSection { section_id: 999 },
+                undo_data: crate::core::undo::UndoData::InverseCommand(Command::CloseProject),
+                timestamp: None,
+            });
+            stack.push_redo(b);
+            stack.push_redo(a);
+        }
+        state
+            .speleodb_mutate_link(|l| l.has_unpushed_edits = false)
+            .expect("clean the link");
+        (temp, state)
+    }
+
+    #[test]
+    fn a_partial_redo_to_marks_the_remote_copy_dirty() {
+        // [#576 A18(a)] The redo half: steps 1-2 re-create A and B, step 3 fails.
+        let (_temp, state) = clean_copy_with_a_failing_redo_beneath();
+
+        let result = state.redo_to(2);
+
+        assert!(!result.success);
+        assert_eq!(
+            state.get_project_state().expect("project").sections.len(),
+            2,
+            "steps 1-2 really re-created both sections"
+        );
+        assert!(
+            remote_dirty(&state),
+            "has_unpushed_edits={} after a partial redo_to that re-created two sections",
+            remote_dirty(&state)
+        );
+    }
+
+    #[test]
+    fn a_failed_single_redo_past_the_empty_check_marks_the_remote_copy_dirty() {
+        // [#576 NF-AN3-1] The single-step redo arm.
+        let (_temp, state) = clean_copy_with_a_failing_redo_beneath();
+        assert!(state.redo().success && state.redo().success);
+        state
+            .speleodb_mutate_link(|l| l.has_unpushed_edits = false)
+            .expect("clean the link");
+
+        assert!(!state.redo().success, "the bottom redo cannot replay");
+
+        assert!(remote_dirty(&state));
+    }
+
     /// The `.stalx` of a project we hold the SpeleoDB write lock on can be DELETED, and
     /// that has to hand the lock back too.
     ///
