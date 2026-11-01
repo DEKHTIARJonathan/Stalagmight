@@ -616,7 +616,7 @@ pub fn execute_gpx_import(
         }
     };
 
-    let sections = match crate::parsers::gpx::convert_gpx_to_import_configs(
+    let (sections, converter_warnings) = match crate::parsers::gpx::convert_gpx_to_import_configs(
         &gpx,
         import_waypoints,
         import_tracks,
@@ -624,7 +624,7 @@ pub fn execute_gpx_import(
         &section_placements,
         depth_inverted,
     ) {
-        Ok(s) => s,
+        Ok(result) => result,
         Err(e) => {
             tracing::error!(
                 path = ?path,
@@ -660,7 +660,14 @@ pub fn execute_gpx_import(
         VirtualShotMode::Auto,
     );
 
-    decorate_receipt(&mut result, "GPX", &path, sections_found, None, Vec::new());
+    decorate_receipt(
+        &mut result,
+        "GPX",
+        &path,
+        sections_found,
+        None,
+        converter_warnings,
+    );
 
     finalize_deferred_import(state.inner(), result)
 }
