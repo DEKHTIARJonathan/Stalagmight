@@ -1466,6 +1466,48 @@ mod tests {
             .all(|s| s.temperature == 18.5 && s.length == 10.0 && s.marker_index == 1));
     }
 
+    /// The out-of-day clamp above is for v3 only, whose layout has no device
+    /// dump behind it. A v4 shot's time is read as recorded, even when it is not
+    /// a time of day.
+    #[test]
+    fn a_v4_shot_time_outside_the_day_keeps_its_raw_time() {
+        let cases: [(u8, u8, u8); 5] = [
+            (10, 31, 5),
+            (24, 0, 0),
+            (10, 60, 0),
+            (10, 31, 60),
+            (200, 7, 9),
+        ];
+        let mut data: Vec<u8> = vec![4, 68, 89, 101]; // version + section magic
+        data.extend([24, 6, 15, 10, 30]); // date: 2024-06-15 10:30
+        data.extend(b"AAA"); // name
+        data.push(0); // direction In
+        for (hour, minute, second) in cases {
+            data.push(2); // Standard
+            data.extend([1, 194, 1, 204, 3, 232, 0, 200, 1, 44, 0, 0, 0, 0]); // 7 * int16
+            data.extend([0, 100, 0, 150, 0, 200, 0, 80]); // LRUD 4 * int16
+            data.extend([0, 185]); // temperature 18.5 C
+            data.extend([hour, minute, second]);
+            data.push(1); // marker_index
+        }
+        data.push(3); // EndOfSurvey
+        data.extend([0; 28]);
+
+        let section = parse_section(data).expect("synthetic v4 section must parse");
+        let times: Vec<(u8, u8, u8)> = section
+            .shots
+            .iter()
+            .filter(|s| s.shot_type == DmpShotType::Standard)
+            .map(|s| (s.hour, s.minute, s.second))
+            .collect();
+        for ((raw_h, raw_m, raw_s), &(h, m, s)) in cases.iter().zip(&times) {
+            println!(
+                "v4 shot raw time {raw_h:02}:{raw_m:02}:{raw_s:02} -> parsed {h:02}:{m:02}:{s:02}"
+            );
+        }
+        assert_eq!(times, cases.to_vec());
+    }
+
     /// A `.dmp` is semicolon-separated integers, and the version is the first
     /// of them. A UTF-8 BOM glues U+FEFF onto that integer, so a file saved
     /// through a Windows text editor fails to import at all.
