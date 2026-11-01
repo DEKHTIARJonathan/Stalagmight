@@ -8,7 +8,9 @@
 //! - declination + UTM convergence + per-survey correction factors are baked
 //!   into the stored azimuth/length so the imported geometry matches what
 //!   Compass plots;
-//! - feet are converted to meters;
+//! - feet are converted to meters (a `.DAT` stores lengths and LRUDs in decimal
+//!   feet and inclinations in decimal degrees whatever its FORMAT line says;
+//!   FORMAT only describes the surveyor's notebook);
 //! - station elevations are integrated from `length * sin(inclination)` along the
 //!   station graph (anchored at the `.MAK` fixed station's UTM elevation, or 0)
 //!   and stored as Stalagmight absolute depth (positive = down);
@@ -25,8 +27,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use compass_data::{
-    BackSightCorrectionFactors, CorrectionFactors, Datum, DeclinationMode, InclinationUnits,
-    LengthUnits, Project, Shot, Survey,
+    BackSightCorrectionFactors, CorrectionFactors, Datum, DeclinationMode, Project, Shot, Survey,
 };
 
 use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource};
@@ -76,10 +77,12 @@ pub struct CompassFile {
     pub utm_zone: Option<i32>,
     pub has_georeference: bool,
     pub declination_mode: String,
-    /// Length unit declared by the file's surveys: `"feet"`, `"meters"`,
-    /// `"mixed"` (surveys disagree), or `null` (no surveys / unknown).
-    /// Drives the unit blurb on the import dialog so we don't tell a
-    /// metric survey we're converting feet.
+    /// Length unit the file's surveys STORE their numbers in: always
+    /// `"feet"`, or `null` when there are no surveys. A `.DAT` stores decimal
+    /// feet whatever unit its FORMAT says the notebook used (#576 B28), so
+    /// every import converts from feet. Drives the unit blurb on the import
+    /// dialog; the `"meters"` / `"mixed"` labels it also understands are no
+    /// longer produced.
     pub length_unit: Option<String>,
     pub surveys: Vec<CompassSurveySummary>,
     pub warnings: Vec<String>,
@@ -453,30 +456,12 @@ fn parse_dat(path: &Path) -> Result<ParsedCompass> {
 /// warnings, work an import that already parsed and converted the file has
 /// no use for.
 pub fn preview_scalars(parsed: &ParsedCompass) -> (u32, Option<String>) {
-    // Collapse per-survey length units to a single project-wide label.
-    // Compass `D` (decimal feet) → "feet"; `M` → "meters".  Multi-survey
-    // files where the unit isn't uniform get "mixed" so the dialog can
-    // surface the discrepancy instead of silently picking one.
-    let length_unit = {
-        let mut iter = parsed
-            .surveys
-            .iter()
-            .map(|s| s.survey.parameters.format_parameters.length_units());
-        match iter.next() {
-            None => None,
-            Some(first) => {
-                let uniform = iter.all(|u| u == first);
-                if !uniform {
-                    Some("mixed".to_string())
-                } else {
-                    Some(match first {
-                        Some(LengthUnits::Meters) => "meters".to_string(),
-                        _ => "feet".to_string(),
-                    })
-                }
-            }
-        }
-    };
+    // The unit the numbers are STORED in, which is what the import converts
+    // from: a `.DAT` keeps decimal feet even for a survey whose FORMAT says the
+    // notebook was metric (#576 B28), so there is no "meters" or "mixed" case
+    // to report. Reporting the notebook unit here would tell the user a metric
+    // survey's lengths were "kept as-is" while they are converted from feet.
+    let length_unit = (!parsed.surveys.is_empty()).then(|| "feet".to_string());
     (parsed.surveys.len() as u32, length_unit)
 }
 
@@ -659,16 +644,9 @@ struct SurveyCtx {
     /// reported as a warning instead of being folded in, because geometry is
     /// drawn in true north and Compass's own display frame is the grid.
     azimuth_reference: AzimuthReference,
-    length_to_m: f64,
     apply_corrections: bool,
     corrections: Option<CorrectionFactors>,
     backsight_corrections: Option<BackSightCorrectionFactors>,
-    /// Inclination unit used by this survey.  Compass supports five
-    /// (Degrees, PercentGrade, DegreesAndMinutes, Grads, DepthGauge);
-    /// `shot_geometry` converts each to plain degrees before feeding
-    /// the trig in elevation_gain.  `None` (= unrecognized) is treated
-    /// as Degrees with a warning at parse time.
-    inclination_units: InclinationUnits,
 }
 
 /// Resolved georeference anchor for the project.
@@ -707,18 +685,19 @@ fn angle_missing(raw: f64) -> bool {
     !raw.is_finite() || raw <= MISSING_ANGLE_THRESHOLD || raw >= MISSING_VALUE_THRESHOLD
 }
 
-/// Length variant of the sentinel test: lengths (and DepthGauge depth
-/// readings) use only the "+999" half of the sentinel range, plus the
-/// shared non-finite guard.
+/// Length variant of the sentinel test: lengths use only the "+999" half of
+/// the sentinel range, plus the shared non-finite guard.
 fn length_missing(raw: f64) -> bool {
     !raw.is_finite() || raw >= MISSING_VALUE_THRESHOLD
 }
 
-fn lrud_meters(raw: f64, length_to_m: f64) -> Option<f64> {
+/// A stored LRUD in meters. A `.DAT` stores LRUDs in decimal feet whatever the
+/// FORMAT's passage unit says (#576 B28).
+fn lrud_meters(raw: f64) -> Option<f64> {
     if !raw.is_finite() || raw <= -1.0 || raw >= MISSING_VALUE_THRESHOLD {
         return None;
     }
-    let value = raw * length_to_m;
+    let value = raw * FEET_TO_METERS;
     if value.abs() < f64::EPSILON {
         None
     } else {
@@ -738,26 +717,13 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     } else {
         shot.azimuth
     };
-    // For Degrees / Grads / PercentGrade / DegreesAndMinutes the raw
-    // value is sentinel-tested as an angle.  For DepthGauge the field
-    // is a depth reading whose absolute value can equal the missing-
-    // threshold, so only the "+ infinity" half of the sentinel applies
-    // - pass the raw through.
-    let mut inclination = match ctx.inclination_units {
-        InclinationUnits::DepthGauge => {
-            if length_missing(shot.inclination) {
-                0.0
-            } else {
-                shot.inclination
-            }
-        }
-        _ => {
-            if angle_missing(shot.inclination) {
-                0.0
-            } else {
-                shot.inclination
-            }
-        }
+    // Every inclination is stored in decimal degrees, whatever unit the
+    // FORMAT says the notebook used - depth gauge (`W`) included (#576 B28) -
+    // so the field is sentinel-tested as an angle for every survey.
+    let mut inclination = if angle_missing(shot.inclination) {
+        0.0
+    } else {
+        shot.inclination
     };
     let mut length = if length_missing(shot.length) {
         0.0
@@ -766,13 +732,8 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     };
     if ctx.apply_corrections {
         if let Some(cf) = &ctx.corrections {
+            // CORRECTIONS are degrees and feet, like the readings they adjust.
             azimuth += cf.azimuth;
-            // Corrections live in the survey's declared inclination
-            // unit; they apply naturally for Degrees/Grads/Percent/DM.
-            // For DepthGauge the field is a depth in length units;
-            // adding the inclination-correction (also a length under
-            // the DepthGauge convention per the Compass spec) is
-            // dimensionally consistent.
             inclination += cf.inclination;
             length += cf.length;
         }
@@ -780,23 +741,17 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     // #438: measured, not corrected. The survey's declination and convergence
     // live on `ctx.azimuth_reference` and are applied when geometry is computed.
     let azimuth_final = crate::models::normalize_azimuth(azimuth);
-    let length_m = length * ctx.length_to_m;
-    // Single normalisation point: convert whatever Compass unit the
-    // survey declared into degrees so the rest of the pipeline
-    // (elevation_gain, shot_to_shot_data's pitch sign flip) stays
-    // unit-agnostic.  DepthGauge needs the slope length to resolve
-    // asin(depth / length) - pass the raw length (same units as the
-    // depth reading) so the ratio is dimensionless.
-    let inclination_deg = inclination_to_degrees(inclination, &ctx.inclination_units, length);
-    // Backstop only: build_ctx sanitizes declination/convergence/corrections
-    // and inclination_to_degrees clamps the DepthGauge asin ratio, so with
-    // finite raw inputs these are already finite. 0.0 carries the same
+    // A `.DAT` stores lengths in decimal feet whatever the FORMAT's length
+    // unit says (#576 B28).
+    let length_m = length * FEET_TO_METERS;
+    // Backstop only: build_ctx sanitizes declination/convergence/corrections,
+    // so with finite raw inputs these are already finite. 0.0 carries the same
     // missing semantics the raw sentinel guards above produce; the per-shot
     // corruption warning fires at the pass-1 scan, not here.
     (
         finite_or_zero(azimuth_final),
         finite_or_zero(length_m),
-        finite_or_zero(inclination_deg),
+        finite_or_zero(inclination),
     )
 }
 
@@ -824,15 +779,12 @@ fn finite_or_zero(v: f64) -> f64 {
 ///
 /// We need to turn the back-sight around to FROM → TO:
 ///   * Azimuth: add 180° after declination/convergence.
-///   * Inclination: convert through `inclination_to_degrees` first (the raw
-///     reading is in the survey's declared unit - Grads / DDD.MM / Percent
-///     Grade / DepthGauge - and only the Degrees case is pass-through).
-///     Then flip sign to undo the TO-side reading direction (yielding
+///   * Inclination: flip sign to undo the TO-side reading direction (yielding
 ///     fore-direction in Compass's +up convention), and flip again to land
 ///     in Stalagmight's +down - the two flips cancel, so the final stored
-///     `pitch_out` equals the degree-converted back-inclination.  Without
-///     the unit conversion, Grads / DDD.MM / Percent surveys with
-///     back-sights store `pitch_out` in the wrong units.
+///     `pitch_out` equals the back-inclination. Like the fore-sight it is
+///     stored in decimal degrees whatever the FORMAT's inclination unit
+///     (#576 B28), so no unit conversion applies.
 ///
 /// Returns `(azimuth_out_grid_deg, pitch_out_deg_positive_down)` if both
 /// back-sight readings are present and non-sentinel, else `None`.
@@ -848,36 +800,20 @@ fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
     } else {
         back_inc_raw
     };
-    // Same raw-length-with-fore-sight-corrections that `shot_geometry`
-    // computes; needed by `inclination_to_degrees` for the DepthGauge
-    // depth/length ratio.  Survey-level CORRECTIONS apply to the
-    // physical slope distance regardless of sighting direction, so the
-    // fore-sight `cf.length` is the right offset for the back-sight too.
-    let mut slope_length_raw = if length_missing(shot.length) {
-        0.0
-    } else {
-        shot.length
-    };
     if ctx.apply_corrections {
         if let Some(bcf) = &ctx.backsight_corrections {
             back_az += bcf.azimuth;
             back_inc += bcf.inclination;
-        }
-        if let Some(cf) = &ctx.corrections {
-            slope_length_raw += cf.length;
         }
     }
     // Measured, like the fore-sight (#438): no declination or convergence here.
     let back_az_measured = crate::models::normalize_azimuth(back_az);
     // Flip 180° so the bearing points FROM → TO, matching azimuth_in.
     let azimuth_out_fore_direction = crate::models::normalize_azimuth(back_az_measured + 180.0);
-    // Convert the back-inclination into degrees first - Grads / DDD.MM /
-    // PercentGrade / DepthGauge are NOT pass-through.  After conversion,
-    // back_inc_deg is the TO→FROM slope in Compass +up; the double sign
-    // flip (TO→FROM ⇒ FROM→TO, then +up ⇒ +down) cancels, so the value
-    // we store IS that degree-converted reading.
-    let back_inc_deg = inclination_to_degrees(back_inc, &ctx.inclination_units, slope_length_raw);
-    let pitch_out_down_positive = back_inc_deg;
+    // back_inc is the TO→FROM slope in Compass +up; the double sign flip
+    // (TO→FROM ⇒ FROM→TO, then +up ⇒ +down) cancels, so the value we store IS
+    // that reading.
+    let pitch_out_down_positive = back_inc;
     // Backstop: a computed non-finite backsight must become "no backsight"
     // (the caller mirrors the fore-sight, which is a no-op in the fore/back
     // circular mean), NEVER a fabricated due-north Some(0.0) that would
@@ -923,10 +859,10 @@ fn shot_to_shot_data(
         // Stalagmight pitch is positive downward; Compass inclination is positive up.
         pitch_in: Some(-inclination),
         pitch_out,
-        left: lrud_meters(shot.left, ctx.length_to_m),
-        right: lrud_meters(shot.right, ctx.length_to_m),
-        up: lrud_meters(shot.up, ctx.length_to_m),
-        down: lrud_meters(shot.down, ctx.length_to_m),
+        left: lrud_meters(shot.left),
+        right: lrud_meters(shot.right),
+        up: lrud_meters(shot.up),
+        down: lrud_meters(shot.down),
         comment: shot.comment.as_deref().and_then(non_empty),
         // Compass `X` (exclude-all) marks a leg the surveyor pulled out of
         // the computed cave. The chain classifier decides Jump vs Reference
@@ -948,23 +884,12 @@ fn build_ctx(
     opts: &CompassImportOptions,
     warnings: &mut Vec<String>,
 ) -> SurveyCtx {
-    let format = &survey.parameters.format_parameters;
-    let length_to_m = match format.length_units() {
-        Some(LengthUnits::Meters) => 1.0,
-        _ => FEET_TO_METERS,
-    };
-    let inclination_units = format
-        .inclination_units()
-        .unwrap_or(InclinationUnits::Degrees);
-    if matches!(inclination_units, InclinationUnits::DepthGauge) {
-        warnings.push(format!(
-            "Survey '{}': inclination unit is DepthGauge (W); each shot's inclination \
-             is interpreted as a vertical depth delta and converted to a slope angle \
-             via asin(depth / length).  Depth-gauge surveys with zero-length shots \
-             can't produce a slope and will be treated as horizontal.",
-            survey.name
-        ));
-    }
+    // The FORMAT's length and inclination units describe the surveyor's
+    // NOTEBOOK, not the file: Compass stores every length and LRUD in decimal
+    // feet and every inclination in decimal degrees ("Survey Data File Format",
+    // Compass Editor help), and Survex reads them that way - for a depth-gauge
+    // (`W`) survey too, which Survex only marks as diving style. So nothing
+    // here depends on those units (#576 B28).
     let (mut declination, declination_source) = survey_declination(
         file_state.declination_mode,
         survey,
@@ -1030,69 +955,9 @@ fn build_ctx(
     }
     SurveyCtx {
         azimuth_reference,
-        length_to_m,
         apply_corrections: opts.apply_corrections,
         corrections,
         backsight_corrections,
-        inclination_units,
-    }
-}
-
-/// Convert a Compass-format inclination value to plain degrees.
-///
-/// Compass stores inclinations in one of five units (declared in the
-/// survey's format parameters).  The whole rest of `shot_geometry` /
-/// `elevation_gain` operates in degrees, so this is the single
-/// normalisation point.
-///
-/// * `Degrees` (D)              - pass through
-/// * `Grads` (R)                - × 0.9 (400 grads / 360°)
-/// * `PercentGrade` (G)         - atan(percent / 100)
-/// * `DegreesAndMinutes` (M)    - DDD.MM packed, minutes in the
-///                                fractional part (e.g. 12.34 → 12 + 34/60)
-/// * `DepthGauge` (W)           - `raw` is a vertical depth reading
-///                                (in the survey's length units), not an
-///                                angle.  Convert to a slope via
-///                                `asin(depth / slope_length)`.  The two
-///                                values must be in the SAME units so
-///                                the ratio is dimensionless; callers
-///                                pass the raw (pre-meter-conversion)
-///                                slope length to satisfy this.  If the
-///                                length is zero we fall back to 0° (a
-///                                parse-time warning has already fired
-///                                for DepthGauge surveys).
-fn inclination_to_degrees(raw: f64, units: &InclinationUnits, slope_length_raw: f64) -> f64 {
-    match units {
-        InclinationUnits::Degrees => raw,
-        InclinationUnits::Grads => raw * 0.9,
-        InclinationUnits::PercentGrade => (raw / 100.0).atan().to_degrees(),
-        InclinationUnits::DegreesAndMinutes => {
-            // DDD.MM format: integer part is degrees, fractional part *
-            // 100 is minutes (so 12.34 means 12° 34').  Preserve sign.
-            let sign = raw.signum();
-            let abs = raw.abs();
-            let degrees = abs.trunc();
-            let minutes = (abs - degrees) * 100.0;
-            sign * (degrees + minutes / 60.0)
-        }
-        InclinationUnits::DepthGauge => {
-            if slope_length_raw.abs() < f64::EPSILON {
-                0.0
-            } else {
-                // `raw` is a depth reading in the survey's length units
-                // (feet for `D` length, meters for `M`).  `shot_geometry`
-                // and `shot_backsight_geometry` deliberately pass the
-                // pre-meter-conversion `length` so the ratio is
-                // dimensionless regardless of which length unit the
-                // survey declared.  Compass convention: positive depth =
-                // down (target below origin); Compass inclination is +up;
-                // hence a +5 ft depth reading corresponds to a negative
-                // (downward) inclination.
-                let depth = raw;
-                let ratio = (depth / slope_length_raw).clamp(-1.0, 1.0);
-                -ratio.asin().to_degrees()
-            }
-        }
     }
 }
 
@@ -1880,11 +1745,9 @@ mod tests {
         assert!(!configs.is_empty());
 
         // The private corpus uses a survey FORMAT whose 4th character is `W`
-        // (DepthGauge), so each shot's "inclination" column is actually a
-        // vertical depth offset in the shot's length units, not a slope
-        // angle in degrees.  The pipeline converts it via
-        // `-asin(depth / length)` into a Compass +up slope which Stalagmight
-        // then stores as +down pitch.
+        // (depth gauge). The stored inclination column is still an ordinary
+        // angle in decimal degrees, negative = down (#576 B28): the FORMAT
+        // only records how the notebook was kept.
         let anchor_config = configs
             .iter()
             .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
@@ -1893,12 +1756,18 @@ mod tests {
             assert_eq!(station_index, 0);
         }
         let shot = &anchor_config.shots[0];
-        // DepthGauge surveys produce a finite, non-trivial pitch out of a
-        // raw "inclination" column that would otherwise be near-zero.
+        // The first shot stores -5.86 over 49 ft: 5.86 deg DOWN, a 1.525 m
+        // descent - the expectation this test held before 19b3cb53 read the
+        // column as a depth difference with the sign reversed (a 1.79 m climb).
         assert!(shot.depth_in.abs() < 0.01, "depth_in {}", shot.depth_in);
         assert!(
-            shot.pitch_in.is_some_and(|p| p.abs() > 0.5),
-            "expected a meaningful DepthGauge-derived pitch, got {:?}",
+            (shot.depth_out - 1.5252).abs() < 0.01,
+            "depth_out {}",
+            shot.depth_out
+        );
+        assert!(
+            shot.pitch_in.is_some_and(|p| (p - 5.86).abs() < 0.01),
+            "expected the stored 5.86 deg descent, got {:?}",
             shot.pitch_in
         );
 
@@ -2565,47 +2434,6 @@ mod tests {
         assert_eq!(preview.utm_zone, Some(13));
     }
 
-    #[test]
-    fn backsight_inclination_converted_to_degrees_for_grads() {
-        // backsight_grads.dat declares FORMAT inclination unit `R` (Grads)
-        // and carries one shot with a backsight column.  Compass Grads:
-        // 400 grads = 360°, so `100 grads = 90°` and `-100 grads = -90°`.
-        //
-        // Forward: BEARING=90, INC=+100 grads (= +90° up).
-        // Back   : BEARING=270 (= 90+180), INC=-100 grads (B looking back
-        //          at A which is below - back-inc is the down-reading).
-        //
-        // The two-sign-flip in `shot_backsight_geometry` (TO→FROM ⇒ FROM→TO,
-        // then Compass +up ⇒ Stalagmight +down) collapses to identity on
-        // the VALUE - so pitch_out should equal the degree-converted
-        // back_inc, i.e. -100 grads * 0.9 = -90°.  Before the unit-
-        // conversion fix the function returned the raw -100 (a grads
-        // reading stored as if it were degrees), which is the regression
-        // this test pins.
-        let parsed = parse_compass(&fixture("backsight_grads.dat")).unwrap();
-        let (configs, _, _) =
-            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
-        let shot = configs
-            .iter()
-            .flat_map(|c| c.shots.iter())
-            .next()
-            .expect("at least one shot");
-        let pitch_out = shot.pitch_out.expect("backsight should yield pitch_out");
-        assert!(
-            (pitch_out + 90.0).abs() < 0.01,
-            "pitch_out should be -90° after Grads→degrees + back-to-fore + +down; got {pitch_out}"
-        );
-        // Sanity: pitch_in is also degree-converted on the fore-sight
-        // path.  +100 grads → +90° up; Stalagmight stores as -90° (+down).
-        let pitch_in = shot
-            .pitch_in
-            .expect("fore inclination should populate pitch_in");
-        assert!(
-            (pitch_in + 90.0).abs() < 0.01,
-            "pitch_in should be -90° after Grads→degrees + +down; got {pitch_in}"
-        );
-    }
-
     /// One survey record - cave name first line - in the smallest shape the
     /// vendored parser accepts, with its own two stations so records can be
     /// concatenated into a multi-survey file. Synthetic - no fixture data.
@@ -3254,5 +3082,219 @@ mod tests {
             receipt.iter().all(|w| !w.contains("windows-1252")),
             "got {receipt:?}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // #576 W2-COMPASS: in-memory synthetic surveys (no file on disk).
+    // -----------------------------------------------------------------------
+
+    /// One survey's header lines for `format`, with or without the backsight
+    /// columns. Synthetic - no fixture data.
+    fn synthetic_header(survey_name: &str, format: &str, backsights: bool) -> String {
+        let columns = if backsights {
+            "FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT AZM2 INC2 FLAGS COMMENTS"
+        } else {
+            "FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS"
+        };
+        format!(
+            "Synthetic Cave\r\n\
+             SURVEY NAME: {survey_name}\r\n\
+             SURVEY DATE: 7 10 1979\r\n\
+             SURVEY TEAM:\r\n\
+             Nobody\r\n\
+             DECLINATION: 0.00  FORMAT: {format}  CORRECTIONS: 0.00 0.00 0.00\r\n\
+             \r\n\
+             {columns}\r\n\
+             \r\n"
+        )
+    }
+
+    /// One survey record: the header for `format` plus `rows`, ended with the
+    /// form feed Compass writes after every survey.
+    fn synthetic_survey_text(survey_name: &str, format: &str, rows: &[&str]) -> String {
+        // The backsight flag is the 12th FORMAT character in the 12- and
+        // 13-character forms and the 14th in the 15-character form.
+        let flag = match format.len() {
+            12 | 13 => format.chars().nth(11),
+            15 => format.chars().nth(13),
+            _ => None,
+        };
+        let mut text = synthetic_header(survey_name, format, flag == Some('B'));
+        for row in rows {
+            text.push_str(row);
+            text.push_str("\r\n");
+        }
+        text.push_str("\x0c\r\n");
+        text
+    }
+
+    /// Parse `.DAT` text the way `parse_dat` does once it has read the file,
+    /// so a test can build its surveys in memory.
+    fn parse_dat_text(text: &str) -> ParsedCompass {
+        let (surveys, remainder) = Survey::parse_dat_file_with_remainder(text).unwrap();
+        assert!(
+            only_record_separators(remainder),
+            "premise: the synthetic text parses to the end, left {remainder:?}"
+        );
+        ParsedCompass {
+            cave_name: String::new(),
+            datum: None,
+            utm_zone: None,
+            declination_mode: DeclinationMode::default(),
+            fixed_stations: Vec::new(),
+            surveys: surveys
+                .into_iter()
+                .map(|survey| SurveyWithState {
+                    survey,
+                    state: CompassFileState::default(),
+                })
+                .collect(),
+            warnings: Vec::new(),
+        }
+    }
+
+    /// Convert one synthetic survey named `A` with the default options.
+    fn convert_text(
+        format: &str,
+        rows: &[&str],
+    ) -> (Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>) {
+        let parsed = parse_dat_text(&synthetic_survey_text("A", format, rows));
+        convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap()
+    }
+
+    fn all_shots(configs: &[ImportSectionConfig]) -> Vec<&ShotData> {
+        configs.iter().flat_map(|c| c.shots.iter()).collect()
+    }
+
+    /// #576 B28: a `.DAT` stores every length and LRUD in decimal feet - the
+    /// FORMAT line only records how the surveyor wrote them in the notebook
+    /// (Compass's "Survey Data File Format" page; Survex reads them the same
+    /// way). A metric-notebook survey storing `32.81` is a 10 m leg, not a
+    /// 32.81 m one, and its `3.28` LRUD is 1 m.
+    #[test]
+    fn a_metric_format_survey_still_stores_feet() {
+        let rows = ["A1 A2 32.81 90.00 -10.00 3.28 3.28 3.28 3.28"];
+        let (configs, _, _) = convert_text("DMMDLRUDLADN", &rows);
+        let shot = all_shots(&configs)[0];
+        println!(
+            "FORMAT DMMDLRUDLADN, stored 32.81 / LRUD 3.28 -> length {:.3} m, left {:?} m",
+            shot.length, shot.left
+        );
+        assert!(
+            (shot.length - 32.81 * FEET_TO_METERS).abs() < 1e-9,
+            "the stored 32.81 is decimal feet, got {} m",
+            shot.length
+        );
+        for (name, v) in [
+            ("left", shot.left),
+            ("up", shot.up),
+            ("down", shot.down),
+            ("right", shot.right),
+        ] {
+            let v = v.unwrap();
+            assert!(
+                (v - 3.28 * FEET_TO_METERS).abs() < 1e-9,
+                "{name}: the stored 3.28 is decimal feet, got {v} m"
+            );
+        }
+
+        // The import dialog and the receipt say what was done to the numbers:
+        // they were converted from feet, whatever the notebook used.
+        let parsed = parse_dat_text(&synthetic_survey_text("A", "DMMDLRUDLADN", &rows));
+        assert_eq!(preview_scalars(&parsed).1.as_deref(), Some("feet"));
+        assert_eq!(build_preview(&parsed).length_unit.as_deref(), Some("feet"));
+    }
+
+    /// #576 B28: a `.DAT` stores every inclination in decimal degrees, whatever
+    /// unit the FORMAT says the notebook used (degrees `D`, percent grade `G`,
+    /// degrees-and-minutes `M`, grads `R`, depth gauge `W`). Each stored value
+    /// below is a downward angle, so it imports as a `+down` pitch of the same
+    /// size and the leg descends by `length * sin(angle)`.
+    #[test]
+    fn every_inclination_unit_stores_decimal_degrees() {
+        let mut wrong: Vec<String> = Vec::new();
+        for (unit, stored) in [
+            ('D', -45.0_f64),
+            ('G', -45.0),
+            ('M', -12.5),
+            ('R', -45.0),
+            ('W', -30.0),
+        ] {
+            let format = format!("DDD{unit}LRUDLADN");
+            let row = format!("A1 A2 32.81 90.00 {stored:.2} 1.00 1.00 1.00 1.00");
+            let (configs, _, _) = convert_text(&format, &[&row]);
+            let shot = all_shots(&configs)[0];
+            let pitch = shot.pitch_in.unwrap();
+            let drop = shot.depth_out - shot.depth_in;
+            let expected_drop = 32.81 * FEET_TO_METERS * (-stored).to_radians().sin();
+            println!(
+                "FORMAT {format}: stored {stored:.2} -> pitch_in {pitch:.3} (+down), \
+                 depth change {drop:+.3} m (expected {:.3}, {expected_drop:+.3} m)",
+                -stored
+            );
+            if (pitch + stored).abs() > 1e-9 || (drop - expected_drop).abs() > 1e-6 {
+                wrong.push(format);
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "every stored inclination is decimal degrees; read otherwise for {wrong:?}"
+        );
+    }
+
+    /// #576 B28 (decision D-8): a depth-gauge (`W`) survey's inclination field
+    /// is an ordinary angle in degrees, negative = down, exactly as Survex
+    /// reads it (it only marks the survey as diving style). A stored `-5.86`
+    /// on a 49 ft leg is a 1.525 m DESCENT; 19b3cb53 read it as a depth
+    /// difference with the sign backwards and made the leg climb 1.79 m.
+    #[test]
+    fn a_depth_gauge_survey_descends_on_a_negative_inclination() {
+        let (configs, _, warnings) = convert_text(
+            "DDDWLRUDLADN",
+            &[
+                "A1 A2 49.00 0.00 -5.86 1.00 1.00 1.00 1.00",
+                "A2 A3 20.00 0.00 -30.00 1.00 1.00 1.00 1.00",
+            ],
+        );
+        let shots = all_shots(&configs);
+        for (i, s) in shots.iter().enumerate() {
+            println!(
+                "W shot {i}: pitch_in {:?}, depth {:.3} -> {:.3}",
+                s.pitch_in, s.depth_in, s.depth_out
+            );
+        }
+        let first_drop = shots[0].depth_out - shots[0].depth_in;
+        assert!(
+            (first_drop - 1.5249).abs() < 1e-3,
+            "-5.86 deg over 49 ft descends 1.525 m, got {first_drop:+.3} m"
+        );
+        let second_drop = shots[1].depth_out - shots[1].depth_in;
+        assert!(
+            (second_drop - 20.0 * FEET_TO_METERS * 0.5).abs() < 1e-6,
+            "-30 deg over 20 ft descends 3.048 m, got {second_drop:+.3} m"
+        );
+        assert!((shots[0].pitch_in.unwrap() - 5.86).abs() < 1e-9);
+        assert!(
+            warnings.iter().all(|w| !w.contains("DepthGauge")),
+            "no warning describes a depth-difference reading any more: {warnings:?}"
+        );
+    }
+
+    /// #576 B28: the backsight inclination is decimal degrees too, so a grads
+    /// FORMAT no longer scales it (this replaces the dababa5c test that pinned
+    /// the x0.9 conversion on `backsight_grads.dat`).
+    #[test]
+    fn a_grads_format_backsight_inclination_stores_degrees() {
+        let (configs, _, _) = convert_text(
+            "DDDRLRUDLADBF",
+            &["A1 A2 32.81 90.00 -45.00 1.00 1.00 1.00 1.00 270.00 45.00"],
+        );
+        let shot = all_shots(&configs)[0];
+        println!(
+            "FORMAT DDDRLRUDLADBF, fore -45.00 back 45.00 -> pitch_in {:?} pitch_out {:?}",
+            shot.pitch_in, shot.pitch_out
+        );
+        assert!((shot.pitch_in.unwrap() - 45.0).abs() < 1e-9);
+        assert!((shot.pitch_out.unwrap() - 45.0).abs() < 1e-9);
     }
 }
