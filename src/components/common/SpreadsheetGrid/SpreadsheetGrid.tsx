@@ -32,7 +32,7 @@ import { DEFAULT_GRID_LABELS, type GridLabels } from './gridLabels';
 import { GridContextMenu } from './GridContextMenu';
 import { GridHeaderRow } from './GridHeaderRow';
 import { activateCellIn, directTypedValue } from './gridActivate';
-import { measureColumnWidth, fillExtent } from './gridAutoFit';
+import { measureColumnWidth, fillExtent, AUTOFIT_CHROME_PX } from './gridAutoFit';
 import { planClear } from './gridClear';
 import {
   arrowTarget,
@@ -1569,7 +1569,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     if (max > 0) {
       commitWidths({
         ...widthsRef.current,
-        [key]: clamp(max + 18, MIN_COL_WIDTH, AUTOFIT_MAX_COL_WIDTH),
+        [key]: clamp(max + AUTOFIT_CHROME_PX, MIN_COL_WIDTH, AUTOFIT_MAX_COL_WIDTH),
       });
     }
   }, [commitWidths, testIdPrefix]);

@@ -398,6 +398,59 @@ test.describe('Data table column preferences', () => {
       'shot_id',
     ]);
   });
+
+  /**
+   * D11 (#576): autofit measured the clipped cell box, whose scrollWidth is the
+   * column width itself, so each double-click ADDED its padding allowance (about
+   * 17 px) instead of fitting: the column only ever grew, toward the 600 px cap,
+   * and every step was persisted. Real layout is needed - jsdom measures 0.
+   */
+  test('double-clicking a resize edge fits the column to its content, and again changes nothing (D11)', async ({
+    page,
+  }) => {
+    const headerWidth = async (key: string) =>
+      Math.round((await page.getByTestId(`grid-header-${key}`).boundingBox())!.width);
+    // Nothing in the column (header text, any rendered cell text) is cut off.
+    const truncated = (key: string) =>
+      page.evaluate((k) => {
+        const header = document.querySelector(`[data-testid="grid-header-${k}"] span`) as HTMLElement;
+        const cells = Array.from(
+          document.querySelectorAll(`[data-testid^="grid-cell-"][data-testid$="-${k}"] .sg-cell-text`),
+        ) as HTMLElement[];
+        return [header, ...cells].filter((el) => el.scrollWidth > el.clientWidth).length;
+      }, key);
+
+    // A column dragged wide shrinks back to its content.
+    const before = await beginColumnDrag(page, 'depth_in', 150);
+    await page.mouse.up();
+    await expect.poll(() => headerWidth('depth_in')).toBeGreaterThan(before + 100);
+    const wide = await headerWidth('depth_in');
+    await page.getByTestId('grid-col-resize-depth_in').dblclick();
+    await expect.poll(() => headerWidth('depth_in')).toBeLessThan(wide - 50);
+    const fitted = await headerWidth('depth_in');
+    expect(await truncated('depth_in')).toBe(0);
+
+    // Fitting is idempotent: a second double-click leaves the width alone.
+    await page.getByTestId('grid-col-resize-depth_in').dblclick();
+    await page.waitForTimeout(200);
+    expect(await headerWidth('depth_in')).toBe(fitted);
+
+    // Same on a column that starts at its declared width: repeated
+    // double-clicks settle on one width instead of stepping toward 600 px.
+    const widths: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      await page.getByTestId('grid-col-resize-length').dblclick();
+      await page.waitForTimeout(200);
+      widths.push(await headerWidth('length'));
+    }
+    expect(widths[1]).toBe(widths[0]);
+    expect(widths[2]).toBe(widths[0]);
+    expect(await truncated('length')).toBe(0);
+    // The measuring pass leaves no layout override behind on the cells it read.
+    expect(await page.locator('[data-grid-id] [style*="max-content"]').count()).toBe(0);
+    // And that is the width persisted to config.
+    await expect.poll(async () => latestPersistedWidth(page, 'length'), { timeout: 5000 }).toBe(widths[0]);
+  });
 });
 
 test.describe('Data table column preferences - restore direction (#357 item 16)', () => {
