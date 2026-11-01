@@ -82,6 +82,7 @@ quadratic fitted to the conservative end of tabulated air Z (1.045 at 207 bar) a
 clamped to `>= 1.0` so the derate can never become a credit. With
 `conservative_tank_gas` on (the default) the pressure is first capped to rated -
 the "call-it-an-80" convention - so an overfill counts only its rated capacity.
+Free applies the cap as a ceiling on the usable bar instead (see below).
 
 Only `back_gas` and `stage` roles are penetration gas; `dil_out`, `bailout` and
 `deco` are excluded everywhere. A cylinder with `enabled = false` is filtered out
@@ -108,9 +109,17 @@ The All-thirds safety margin (`all_thirds_safety_margin_bar`, default 0) holds
 back the deliverable gas in the top N bar of every budget cylinder, on top of
 thirds; it only shrinks usable gas, so `normalize` caps a large value and resets a
 negative one. Free hands the diver the whole calculation: they type a usable-bar
-allowance per cylinder and the engine budgets exactly the Z-derated span from full
-down to `fill - usable`, clamped to `[0, capped fill]` so an oversized value
-cannot credit gas the tank does not hold.
+allowance per cylinder and the engine budgets exactly the Z-derated span from the
+real fill down to `fill - usable` - the pressure the turn gauge and a Free stage's
+drop show. The usable bar is clamped to `[0, capped fill]` so an oversized value
+cannot credit gas the tank does not hold; under the conservative cap that ceiling
+is the rated pressure, and it is all the cap does to a Free tank. It does not slide
+an overfill's window down to `[rated - usable, rated]`: Z rises with pressure, so
+the top of a tank holds less gas per bar, and the same usable bar holds less gas
+at an overfill than at rated (12 L rated 207 bar, filled to 250, 100 bar usable:
+1018 L between 250 and 150 bar, against 1096 L between 207 and 107). An overfill
+never buys extra penetration, and switching the cap off never credits a Free tank
+less.
 
 A staged strategy the rig cannot support falls back to All-thirds.
 `effective_preset` counts enabled `stage` cylinders; short of `required_stages`
@@ -162,8 +171,13 @@ arrival gas at all and keeps the strategy default. The walk runs against the bas
 budget's route, which keeps the ordering acyclic - the final route depends on the
 budget, which depends on these contributions - and both coincide when nothing is
 overridden. A moved drop's displayed pressure is inverted off the Z curve by
-bisection (`drop_pressure_for_contribution`); the reach stays exact-litres from
-the graph.
+bisection (`drop_pressure_for_contribution`) on the same scale as the strategy's
+default drop, so a drop moved to exactly the default's litres reads the default
+pressure: Free inverts from the real fill (its default `fill - usable` is a real
+gauge reading, and an overfilled Free stage pinned past the conservative-capped
+tank-empty clamp reads the overfill still in it, not 0), Half Minus from the
+conservative-capped fill (the real fill with the cap off) its `(fill + reserve)/2`
+default is computed on. The reach stays exact-litres from the graph.
 
 ## Routing
 

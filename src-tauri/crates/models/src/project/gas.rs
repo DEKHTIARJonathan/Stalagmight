@@ -351,7 +351,6 @@ impl Project {
                 &base_view,
                 &walk,
                 &default_drop_nodes,
-                conservative,
             );
         // A pathological-but-valid cylinder (huge finite fill × volume) can overflow deliverable_gas
         // to a non-finite budget; treat that as all-unreachable (0.0) rather than leaking NaN/Inf to
@@ -1238,16 +1237,20 @@ fn is_swim_leg(a: &StationRef, b: &StationRef) -> bool {
 
 /// One stage's drop, as the override recompute (#246) needs it. `safe_in_litres` is the strategy's
 /// IN gas off this stage (Half-Minus half / Free usable span); `phys_cap_litres` is its FULL
-/// deliverable (breathing it to empty - the hard clamp a deeper drag can't cross); `default_bar` is
-/// the un-dragged drop-pressure gauge. The `fill/water/rated/basis` fields let a moved drop invert
-/// its litres-consumed back to a pressure on the conservative-capped basis scale.
+/// conservative-capped deliverable (breathing it to empty - the hard clamp a deeper drag can't
+/// cross); `default_bar` is the un-dragged drop-pressure gauge. The `water/rated/gauge_*` fields let
+/// a moved drop invert its litres-consumed back to a pressure on the SAME scale as `default_bar`:
+/// the stage starts at `gauge_full_bar` on the [`deliverable_gas`] curve `gauge_conservative`
+/// selects. Free reads the real gauge (real fill, precise curve), as its `fill - usable` default
+/// does; Half Minus reads the conservative-capped basis its `(basis + reserve)/2` default is on.
 struct StageDropPlan {
     safe_in_litres: f64,
     phys_cap_litres: f64,
     default_bar: f64,
     water_volume_l: f64,
     rated_pressure_bar: f64,
-    basis: f64,
+    gauge_full_bar: f64,
+    gauge_conservative: bool,
 }
 
 /// Per-drop plans for the effective strategy, in stage order, aligned 1:1 with the drops the field
@@ -1265,23 +1268,27 @@ fn stage_drop_plans(
         .iter()
         .filter(|c| matches!(c.role, CylRole::Stage))
         .collect();
-    let plan_for = |c: &Cylinder, safe_in_litres: f64, default_bar: f64| {
-        let basis = cyl_basis(c, conservative);
-        StageDropPlan {
-            safe_in_litres,
-            phys_cap_litres: deliverable_gas(
-                basis,
-                c.water_volume_l,
-                c.rated_pressure_bar,
-                conservative,
-            ),
-            default_bar,
-            water_volume_l: c.water_volume_l,
-            rated_pressure_bar: c.rated_pressure_bar,
-            basis,
-        }
+    let plan_for = |c: &Cylinder,
+                    safe_in_litres: f64,
+                    default_bar: f64,
+                    gauge_full_bar: f64,
+                    gauge_conservative: bool| StageDropPlan {
+        safe_in_litres,
+        phys_cap_litres: deliverable_gas(
+            cyl_basis(c, conservative),
+            c.water_volume_l,
+            c.rated_pressure_bar,
+            conservative,
+        ),
+        default_bar,
+        water_volume_l: c.water_volume_l,
+        rated_pressure_bar: c.rated_pressure_bar,
+        gauge_full_bar,
+        gauge_conservative,
     };
     match effective {
+        // The real gauge, like `free_in_gas` and the `fill - usable` default: a drag to the same
+        // litres the default credits reads the default bar back.
         ReservePreset::Free => stages
             .iter()
             .filter_map(|&c| {
@@ -1293,6 +1300,8 @@ fn stage_drop_plans(
                     c,
                     free_in_gas(c, conservative),
                     (c.fill_bar - u).max(0.0),
+                    c.fill_bar,
+                    false,
                 ))
             })
             .collect(),
@@ -1309,6 +1318,8 @@ fn stage_drop_plans(
                         c,
                         stage_in_gas(c, reserve_bar, conservative),
                         (0.5 * (basis + reserve_bar)).clamp(0.0, basis),
+                        basis,
+                        conservative,
                     )
                 })
                 .collect()
@@ -1361,7 +1372,6 @@ fn apply_stage_drop_overrides(
     base: &BudgetView,
     walk: &WaypointWalk,
     default_drop_nodes: &[usize],
-    conservative: bool,
 ) -> (Vec<f64>, Vec<f64>, Vec<bool>, f64) {
     // Gas burned on arrival at `si`, in the two cases where "along the route" is meaningful:
     //
@@ -1408,7 +1418,7 @@ fn apply_stage_drop_overrides(
                     let contribution = (gas - eff_cum).clamp(0.0, p.phys_cap_litres);
                     (
                         contribution,
-                        drop_pressure_for_contribution(p, contribution, conservative),
+                        drop_pressure_for_contribution(p, contribution),
                         contribution > p.safe_in_litres + OVER_RESERVE_EPS_LITRES,
                     )
                 }
@@ -1426,18 +1436,28 @@ fn apply_stage_drop_overrides(
 }
 
 /// Invert the Z-derated deliverable curve to the tank pressure (bar) left after breathing
-/// `contribution` litres off a stage from full (its conservative-capped `basis`). `deliverable_gas`
-/// is monotone non-decreasing over `[0, basis]` for every realistic fill (the `p / Z(p)` curve only
-/// turns over above ~714 bar - ~2× any real cylinder - where a non-conservative fill could pick a
-/// wrong root; that mis-reports only this DISPLAY gauge, never the litres-exact reach). ~50 bisection
-/// halvings converge to sub-microbar, and at `contribution == safe` it inverts back to `default_bar`.
-fn drop_pressure_for_contribution(p: &StageDropPlan, contribution: f64, conservative: bool) -> f64 {
-    let target_held = (p.phys_cap_litres - contribution).max(0.0);
-    let (mut lo, mut hi) = (0.0_f64, p.basis.max(0.0));
+/// `contribution` litres off a stage from full (`gauge_full_bar` on the plan's gauge curve - see
+/// [`StageDropPlan`]). `deliverable_gas` is monotone non-decreasing over `[0, gauge_full_bar]` for
+/// every realistic fill (the `p / Z(p)` curve only turns over above ~714 bar, ~2× any real
+/// cylinder, where a precise-curve fill could pick a wrong root; that mis-reports only this DISPLAY
+/// gauge, never the litres-exact reach). ~50 bisection halvings converge to sub-microbar, and at
+/// `contribution == safe` it inverts back to `default_bar`. Under the conservative cap a Free
+/// overfill's contribution clamps at the rated capacity (`phys_cap_litres`), so even its empty
+/// point reads the overfill still in the tank rather than 0.
+fn drop_pressure_for_contribution(p: &StageDropPlan, contribution: f64) -> f64 {
+    let held = |bar: f64| {
+        deliverable_gas(
+            bar,
+            p.water_volume_l,
+            p.rated_pressure_bar,
+            p.gauge_conservative,
+        )
+    };
+    let target_held = (held(p.gauge_full_bar) - contribution).max(0.0);
+    let (mut lo, mut hi) = (0.0_f64, p.gauge_full_bar.max(0.0));
     for _ in 0..50 {
         let mid = 0.5 * (lo + hi);
-        if deliverable_gas(mid, p.water_volume_l, p.rated_pressure_bar, conservative) < target_held
-        {
+        if held(mid) < target_held {
             lo = mid;
         } else {
             hi = mid;
@@ -1608,9 +1628,10 @@ fn required_stages(preset: ReservePreset) -> usize {
     }
 }
 
-/// Conservative-capped fill (bar) - the pressure basis every strategy computes drops/usable from.
-/// The "call-it-an-80" cap (§5.3) treats an overfill as its rated capacity; precise mode uses the
-/// real fill.
+/// Conservative-capped fill (bar) - the pressure basis the All-thirds margin and the Half-Minus
+/// drops/usable compute from, the ceiling on a Free usable bar, and the basis of every stage's
+/// tank-empty clamp. The "call-it-an-80" cap (§5.3) treats an overfill as its rated capacity;
+/// precise mode uses the real fill.
 fn cyl_basis(c: &Cylinder, conservative: bool) -> f64 {
     if conservative {
         c.fill_bar.min(c.rated_pressure_bar)
@@ -1622,8 +1643,9 @@ fn cyl_basis(c: &Cylinder, conservative: bool) -> f64 {
 /// The diver's Free usable allowance (bar), sanitized: a non-finite input (NaN / ±inf - serde_json
 /// can't carry those today, but a future non-JSON deserializer might, and NaN would slip a bare
 /// `u <= 0.0` skip since NaN comparisons are false) becomes 0, then clamps to `[0, basis]` (the
-/// conservative-capped fill the budget credits). One helper so every Free path - budget, turn,
-/// drops, column - treats a stray value identically, and none can propagate NaN into a gauge.
+/// conservative-capped fill, so under the cap no usable bar exceeds the rated pressure). One helper
+/// so every Free path - budget, turn, drops, column - treats a stray value identically, and none
+/// can propagate NaN into a gauge.
 fn free_usable_bar(c: &Cylinder, conservative: bool) -> f64 {
     if !c.usable_gas_bar.is_finite() {
         return 0.0;
@@ -1631,19 +1653,25 @@ fn free_usable_bar(c: &Cylinder, conservative: bool) -> f64 {
     c.usable_gas_bar.clamp(0.0, cyl_basis(c, conservative))
 }
 
-/// Free-strategy IN gas for one cylinder (litres): the Z-derated span from full down to the diver's
-/// chosen turn pressure `fill - usable_gas_bar`. The usable bar is clamped to `[0, basis]` so a
-/// stray/over-large input can never credit more than the tank holds (the unsafe direction, §6).
-/// Mirrors `stage_in_gas`'s basis-scale deliverable arithmetic.
+/// Free-strategy IN gas for one cylinder (litres): the Z-derated gas breathed from the REAL fill
+/// down to the diver's chosen turn pressure `fill - usable_gas_bar` - the same span the Free turn
+/// gauge and drop pressure (`fill - usable`) describe. The usable bar is clamped to `[0, basis]` so
+/// a stray/over-large input can never credit more than the tank holds (the unsafe direction, §6).
+///
+/// The conservative cap bounds the usable BAR at rated; it does not move the window. Sliding an
+/// overfill's window down to `[rated - usable, rated]` over-credited it (#576): Z rises with
+/// pressure, so the top of a tank holds less gas per bar than the bottom, and the same usable bar
+/// at an overfill never holds more than at rated (`p / Z(p)` is concave up to ~1200 bar and peaks
+/// at ~714 for this fit). An overfill therefore never buys extra penetration, and at or below
+/// rated the two windows are the same gas.
 fn free_in_gas(c: &Cylinder, conservative: bool) -> f64 {
-    let basis = cyl_basis(c, conservative);
     let u = free_usable_bar(c, conservative);
-    let full = deliverable_gas(basis, c.water_volume_l, c.rated_pressure_bar, conservative);
+    let full = deliverable_gas(c.fill_bar, c.water_volume_l, c.rated_pressure_bar, false);
     let held = deliverable_gas(
-        basis - u,
+        c.fill_bar - u,
         c.water_volume_l,
         c.rated_pressure_bar,
-        conservative,
+        false,
     );
     (full - held).max(0.0)
 }
