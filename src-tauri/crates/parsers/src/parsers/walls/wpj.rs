@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use crate::parsers::encoding::{cp1252_replacement_warning, read_cp1252, Cp1252Text};
 
@@ -65,7 +66,52 @@ pub(crate) struct WpjEntry {
     pub(crate) reference: Option<WallsRef>,
 }
 
-/// Inherited context accumulated down the book tree.
+/// The deepest a `.WPJ` may nest books (#576 B12, decision "share state,
+/// refuse past 256"). Real projects nest a handful of levels; a file nesting
+/// deeper is refused rather than walked, as the `#Units` Save stack is
+/// bounded (`units.rs`).
+pub(crate) const MAX_BOOK_DEPTH: usize = 256;
+
+/// The longest folder a `.PATH` may resolve to. No file system opens a longer
+/// path (Windows' extended-length limit is 32,767 UTF-16 units, Linux's is
+/// 4,096 bytes), so such a survey could only ever be reported missing; the
+/// bound keeps a crafted chain of `.PATH` lines from growing every open
+/// book's copy of its folder (#576 B12).
+const MAX_RESOLVED_DIR_BYTES: usize = 32 * 1024;
+
+/// One link of a chain a book passes down to everything under it (#576 B12):
+/// the value this level set and the chain its parent had. Children share
+/// their ancestors' links instead of copying them, so N nested books hold N
+/// links - not the N(N+1)/2 copies of every ancestor's `.OPTIONS` and
+/// segment name they used to, which let a few hundred kilobytes of nested
+/// books take gigabytes.
+pub(crate) struct Inherited {
+    value: String,
+    parent: Option<Rc<Inherited>>,
+}
+
+/// `chain` with `value` appended.
+fn extend_chain(chain: Option<&Rc<Inherited>>, value: String) -> Rc<Inherited> {
+    Rc::new(Inherited {
+        value,
+        parent: chain.cloned(),
+    })
+}
+
+/// The chain's values, root first.
+fn chain_values(chain: Option<&Rc<Inherited>>) -> Vec<&str> {
+    let mut values = Vec::new();
+    let mut link = chain.map(Rc::as_ref);
+    while let Some(l) = link {
+        values.push(l.value.as_str());
+        link = l.parent.as_deref();
+    }
+    values.reverse();
+    values
+}
+
+/// Inherited context accumulated down the book tree. Cheap to clone: the
+/// option and segment chains and the reference are shared.
 #[derive(Clone)]
 pub(crate) struct WpjContext {
     /// Where this entry's files resolve, or why its `.PATH` (or an
@@ -76,12 +122,20 @@ pub(crate) struct WpjContext {
     /// `.PATH` may not climb above it (traversal guard); an absolute `.PATH`
     /// resets `dir` but leaves `root` unchanged.
     pub(crate) root: PathBuf,
-    /// Concatenated `#units`-option strings from root to here.
-    pub(crate) options: Vec<String>,
-    pub(crate) reference: Option<WallsRef>,
-    pub(crate) segment: String,
+    /// The `#units`-option strings set from the root down to here.
+    pub(crate) options: Option<Rc<Inherited>>,
+    pub(crate) reference: Option<Rc<WallsRef>>,
+    /// The segment names set from the root down to here.
+    pub(crate) segment: Option<Rc<Inherited>>,
     pub(crate) derive_decl: bool,
     pub(crate) grid_relative: bool,
+}
+
+impl WpjContext {
+    /// The segment path, `/`-joined from the root down.
+    pub(crate) fn segment_path(&self) -> String {
+        chain_values(self.segment.as_ref()).join("/")
+    }
 }
 
 pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
@@ -112,9 +166,9 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
     let root_context = WpjContext {
         dir: Ok(root_dir.clone()),
         root: root_dir.clone(),
-        options: Vec::new(),
+        options: None,
         reference: None,
-        segment: String::new(),
+        segment: None,
         derive_decl: false,
         // Root default matches dewalls `WpjEntry::gridRelative()` (false when no
         // ancestor sets a grid STATUS bit) and our own `derive_decl: false`
@@ -129,6 +183,14 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
     macro_rules! flush_pending {
         () => {
             if let Some(entry) = pending.take() {
+                if entry.is_book && stack.len() >= MAX_BOOK_DEPTH {
+                    bail!(
+                        "This .WPJ nests books more than {MAX_BOOK_DEPTH} levels deep (book \
+                         '{}' opens level {}); no real project does, so it was not imported.",
+                        crate::models::sanitize_display_text(&entry.title, 64),
+                        stack.len() + 1
+                    );
+                }
                 let parent_ctx = stack.last().unwrap_or(&root_context);
                 let ctx = derive_context(parent_ctx, &entry);
                 if entry.is_book {
@@ -138,7 +200,7 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                     }
                     if project_ref.is_none() {
                         if let Some(r) = &ctx.reference {
-                            project_ref = Some(r.clone());
+                            project_ref = Some(WallsRef::clone(r));
                         }
                     }
                     stack.push(ctx);
@@ -203,10 +265,10 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                                         &contents,
                                         &entry.title,
                                         &label,
-                                        &ctx.segment,
+                                        &ctx.segment_path(),
                                         &initial,
                                         &initial_macros,
-                                        ctx.reference.clone(),
+                                        ctx.reference.as_deref().cloned(),
                                         ctx.grid_relative,
                                         ctx.derive_decl,
                                         &mut warnings,
@@ -225,12 +287,12 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                                 surveys.push(ParsedSurvey {
                                     title: entry.title.clone(),
                                     name: label,
-                                    segment: ctx.segment.clone(),
+                                    segment: ctx.segment_path(),
                                     date: None,
                                     surveyor: None,
                                     vectors: Vec::new(),
                                     fixes: Vec::new(),
-                                    georef: ctx.reference.clone(),
+                                    georef: ctx.reference.as_deref().cloned(),
                                     resolved: false,
                                     used_feet: false,
                                 });
@@ -335,7 +397,8 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
     })
 }
 
-/// Derive a child entry's inherited context from its parent's.
+/// Derive a child entry's inherited context from its parent's. The parent's
+/// option and segment chains are shared, not copied (#576 B12).
 pub(crate) fn derive_context(parent: &WpjContext, entry: &WpjEntry) -> WpjContext {
     let mut ctx = parent.clone();
     // Resolve `.PATH`. A refused parent folder stays refused for a relative
@@ -350,14 +413,14 @@ pub(crate) fn derive_context(parent: &WpjContext, entry: &WpjEntry) -> WpjContex
     // Accumulate `.OPTIONS`.
     if let Some(opts) = &entry.options {
         if !opts.trim().is_empty() {
-            ctx.options.push(opts.clone());
+            ctx.options = Some(extend_chain(parent.options.as_ref(), opts.clone()));
         }
     }
     // Nearest `.REF` wins. An entry that opts out of a reference (the
     // reference-unspecified status bit 6) and declares none of its own does
     // NOT inherit the ancestor reference.
     if let Some(r) = &entry.reference {
-        ctx.reference = Some(r.clone());
+        ctx.reference = Some(Rc::new(r.clone()));
     } else if entry.status & (1 << 6) != 0 {
         ctx.reference = None;
     }
@@ -366,11 +429,10 @@ pub(crate) fn derive_context(parent: &WpjContext, entry: &WpjEntry) -> WpjContex
     // (dewalls `WpjEntry::segment()` semantics).
     if let Some(name) = &entry.name {
         if !name.trim().is_empty() && entry.status & (1 << 3) != 0 {
-            if ctx.segment.is_empty() {
-                ctx.segment = name.trim().to_string();
-            } else {
-                ctx.segment = format!("{}/{}", ctx.segment, name.trim());
-            }
+            ctx.segment = Some(extend_chain(
+                parent.segment.as_ref(),
+                name.trim().to_string(),
+            ));
         }
     }
     // Tristate derive-declination / grid-relative (off/on/inherit).
@@ -443,7 +505,7 @@ fn replaces_base(path: &str) -> bool {
 /// the user's credentials to that server); a drive letter that is not part
 /// of an absolute path on this system (`D:\Caves` on macOS/Linux, `D:Caves`
 /// anywhere), which would otherwise resolve against the process's working
-/// directory.
+/// directory; and a folder longer than any file system opens.
 pub(crate) fn resolve_path(
     parent: &Path,
     root: &Path,
@@ -455,10 +517,10 @@ pub(crate) fn resolve_path(
         return Err("network (UNC) and device paths are never read");
     }
     let candidate = Path::new(&normalized);
-    if candidate.is_absolute() {
-        Ok(candidate.to_path_buf())
+    let dir = if candidate.is_absolute() {
+        candidate.to_path_buf()
     } else if normalized.contains(':') {
-        Err("its drive letter cannot be resolved on this system")
+        return Err("its drive letter cannot be resolved on this system");
     } else {
         let mut dir = parent.to_path_buf();
         for part in normalized.split('/') {
@@ -477,8 +539,12 @@ pub(crate) fn resolve_path(
                 other => dir.push(other),
             }
         }
-        Ok(dir)
+        dir
+    };
+    if dir.as_os_str().len() > MAX_RESOLVED_DIR_BYTES {
+        return Err("its folder path is longer than any file system allows");
     }
+    Ok(dir)
 }
 
 /// Parse a `.REF` line: `northing easting zone conv elev flags latDMS lonDMS
@@ -545,7 +611,7 @@ pub(crate) fn build_initial_units(
     let mut units = WallsUnits::default();
     let mut macros: HashMap<String, String> = HashMap::new();
     let mut stack: Vec<WallsUnits> = Vec::new();
-    for opts in &ctx.options {
+    for opts in chain_values(ctx.options.as_ref()) {
         apply_units_options(&mut units, opts, &mut stack, &mut macros, warnings);
     }
     (units, macros)

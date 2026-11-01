@@ -1723,6 +1723,12 @@ fn resolve_path_clamps_traversal_and_honors_absolute() {
             "{unc}"
         );
     }
+    // A folder no file system could open is refused before it is stored.
+    let long = "d/".repeat(20_000);
+    assert_eq!(
+        resolve_path(root, root, &long),
+        Err("its folder path is longer than any file system allows")
+    );
 }
 
 #[test]
@@ -3226,5 +3232,80 @@ fn a_refused_path_covers_its_relative_children_only() {
             .any(|w| w.contains("survey 'T' resolves through an absolute .PATH outside")),
         "{:?}",
         parsed.warnings
+    );
+}
+
+// ----- .WPJ book nesting: shared state, refused past 256 (#576 B12) --------
+
+/// A `.wpj` of `depth` nested books, each with `.NAME N<k>` (a segment level)
+/// and the `.OPTIONS` `options(k)`, around one survey `S`.
+fn nested_wpj(dir: &Path, depth: usize, options: impl Fn(usize) -> String) -> PathBuf {
+    use std::fmt::Write as _;
+    let mut wpj = String::from(";WALLS Project File\n");
+    for k in 1..=depth {
+        write!(
+            wpj,
+            ".BOOK B{k}\n.NAME N{k}\n.STATUS 8\n.OPTIONS {}\n",
+            options(k)
+        )
+        .unwrap();
+    }
+    wpj.push_str(".SURVEY S\n.NAME S\n.STATUS 8\n");
+    for _ in 0..depth {
+        wpj.push_str(".ENDBOOK\n");
+    }
+    std::fs::write(dir.join("S.SRV"), "A B 10 0 0\n").unwrap();
+    let path = dir.join("Deep.wpj");
+    std::fs::write(&path, wpj).unwrap();
+    path
+}
+
+/// Decision B12-D1: a `.WPJ` nesting books deeper than 256 levels - deeper
+/// than any real project - fails the import with a message naming the limit.
+/// Each level used to copy every ancestor's options and segment, so a few
+/// hundred kilobytes of nested books could exhaust memory.
+#[test]
+fn a_wpj_nested_deeper_than_256_books_is_refused() {
+    let dir = temp_dir("deep_refused");
+    let outcome = parse_walls(&nested_wpj(&dir, 300, |_| "decl=1".to_string()))
+        .map(|p| (p.book_count, p.surveys.len()))
+        .map_err(|e| e.to_string());
+    println!("300 nested books: {outcome:?}");
+    let err = outcome.expect_err("300 nested books must be refused");
+    assert!(
+        err.contains("more than 256 levels deep") && err.contains("'B257'"),
+        "{err}"
+    );
+
+    let dir = temp_dir("deep_accepted");
+    let parsed = parse_walls(&nested_wpj(&dir, 256, |_| "decl=1".to_string())).unwrap();
+    assert_eq!(parsed.book_count, 256, "exactly 256 levels still import");
+}
+
+/// Sharing the ancestors' state changes nothing about what a survey
+/// inherits: every ancestor's options apply root first (the last `decl` and
+/// the later `meters` win over the root's `feet`), and the segment is every
+/// naming level joined.
+#[test]
+fn a_deep_survey_inherits_every_ancestor_in_order() {
+    let dir = temp_dir("deep_inherit");
+    let parsed = parse_walls(&nested_wpj(&dir, 200, |k| match k {
+        1 => "feet decl=1".to_string(),
+        150 => format!("meters decl={k}"),
+        _ => format!("decl={k}"),
+    }))
+    .unwrap();
+    let survey = &parsed.surveys[0];
+    let expected_segment = (1..=200)
+        .map(|k| format!("N{k}"))
+        .chain(std::iter::once("S".to_string()))
+        .collect::<Vec<_>>()
+        .join("/");
+    assert_eq!(survey.segment, expected_segment);
+    let v = &survey.vectors[0];
+    assert_eq!(v.units_decl, Some(200.0), "the deepest decl wins");
+    assert!(
+        approx(v.length_m, 10.0),
+        "meters (level 150) beats feet (level 1)"
     );
 }
