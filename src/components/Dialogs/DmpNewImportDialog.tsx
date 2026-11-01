@@ -36,6 +36,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { convertToEditableShots, editableShotToShotData, editableShotsToDmpSection } from '../../utils/shotConversion';
 import {
   computeMergeOptions,
+  defaultMergeOffset,
   computeOverlapIds,
   computeActionableIds,
   computeTargetShotIndex,
@@ -1162,12 +1163,11 @@ export default function DmpNewImportDialog({
     return mergeOptions.find((o) => o.offset === selectedMergeOffset) ?? mergeOptions[mergeOptions.length - 1]!;
   }, [mergeOptions, selectedMergeOffset]);
 
-  // Reset merge offset to last option (deepest overlap) when suggestion changes
-  useEffect(() => {
-    if (mergeOptions.length > 0) {
-      setSelectedMergeOffset(mergeOptions[mergeOptions.length - 1]!.offset);
-    }
-  }, [currentSuggestion, mergeOptions]);
+  // No effect resets the offset when the suggestion changes: the two places that
+  // set a suggestion (`pickFromPool`, `handleAlternativeClick`) set its default
+  // offset in the same batch (`computeDefaultMergeOffset`). An effect here used to
+  // run after them and overwrite the backend's preferred offset with the deepest
+  // one (#576 D12).
 
   // Check if the current suggestion targets an existing section that is doubly-anchored
   // (modified overlap shots sit between two positional constraints). When true, only
@@ -1831,11 +1831,7 @@ export default function DmpNewImportDialog({
       ? section.shots.filter((s) => s.shot_type === 'Standard').length
       : 0;
     const options = computeMergeOptions(suggestion, importShotCount);
-    if (suggestion.preferredMergeOffset != null) {
-      const preferred = options.find((option) => option.offset === suggestion.preferredMergeOffset);
-      if (preferred) return preferred.offset;
-    }
-    return options[options.length - 1]?.offset ?? 0;
+    return defaultMergeOffset(options, suggestion.preferredMergeOffset) ?? 0;
   }, [dmpFile.sections]);
 
   const ensureTemporalDistances = useCallback(async (pool: CrossSectionSuggestion[]) => {

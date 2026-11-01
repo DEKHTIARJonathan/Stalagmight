@@ -16,6 +16,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { presentImportReceipt } from '../../utils/saveFeedback';
 import {
   computeMergeOptions,
+  defaultMergeOffset,
   computeActionableIds,
   computeTargetShotIndex,
   needsDirectionReversal,
@@ -183,13 +184,12 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     return mergeOptions.find((o) => o.offset === selectedMergeOffset) ?? mergeOptions[mergeOptions.length - 1]!;
   }, [mergeOptions, selectedMergeOffset]);
 
-  // Reset merge offset to last option (deepest overlap) when suggestion changes
+  // Reset the merge offset to the suggestion's default (preferred, else deepest)
+  // when the suggestion changes - the rule the import wizard shares.
   useEffect(() => {
-    if (mergeOptions.length > 0) {
-      const preferred = currentSuggestion?.preferredMergeOffset != null
-        ? mergeOptions.find((o) => o.offset === currentSuggestion.preferredMergeOffset)
-        : null;
-      setSelectedMergeOffset((preferred ?? mergeOptions[mergeOptions.length - 1]!).offset);
+    const offset = defaultMergeOffset(mergeOptions, currentSuggestion?.preferredMergeOffset);
+    if (offset != null) {
+      setSelectedMergeOffset(offset);
     }
   }, [currentSuggestion, mergeOptions]);
 

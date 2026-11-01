@@ -5,6 +5,7 @@ import {
   computeActionableIds,
   computeTargetShotIndex,
   computeMergeOptions,
+  defaultMergeOffset,
   reverseTargetShot,
   applyTargetData,
   interpolateShots,
@@ -1874,5 +1875,27 @@ describe('handleConfirm target-shot-update: real kb.dmp 018→003 scenario', () 
 
     const filtered = deletedImport.filter(s => !s.isDeleted);
     expect(filtered).toHaveLength(27);
+  });
+});
+
+// #576 D12: the offset a suggestion opens with, shared by both placement dialogs.
+describe('defaultMergeOffset', () => {
+  const options = [0, 1, 2, 3].map((offset) => ({ offset, importStation: offset, existingStation: 2 + offset }));
+
+  it('opens on the preferred offset when it is on offer', () => {
+    expect(defaultMergeOffset(options, 1)).toBe(1);
+  });
+
+  it('falls back to the deepest overlap when nothing is preferred', () => {
+    expect(defaultMergeOffset(options, null)).toBe(3);
+    expect(defaultMergeOffset(options, undefined)).toBe(3);
+  });
+
+  it('falls back to the deepest overlap when the preferred offset is not on offer', () => {
+    expect(defaultMergeOffset(options, 7)).toBe(3);
+  });
+
+  it('has nothing to open with when there is no option', () => {
+    expect(defaultMergeOffset([], 1)).toBeNull();
   });
 });
