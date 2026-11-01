@@ -375,7 +375,6 @@
     "src/utils/shotConversion.ts": 58,
     "src/utils/shotKind.ts": 36,
     "src/utils/shotSplit.ts": 4,
-    "src/utils/shotTable.ts": 17,
     "src/utils/speleoError.ts": 64,
     "src/utils/speleoLocalState.ts": 27,
     "src/utils/speleoPermission.ts": 21,

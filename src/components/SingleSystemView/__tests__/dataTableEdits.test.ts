@@ -42,6 +42,17 @@ describe('buildShotUpdates', () => {
     expect(u.azimuth_out).toBeCloseTo(105, 6);
   });
 
+  it('rotates opposite legs from the backend mean, not the unit-vector one (#576 D14)', () => {
+    // Legs 100/280 are a blunder pair whose backend mean is 10 (the tie goes to
+    // in - 90). The unit-vector mean put it at 198.43, so typing 12 into the Avg
+    // cell moved both legs by -186.43 instead of +2.
+    const u = buildShotUpdates(shot({ azimuth_in: 100, azimuth_out: 280 }), [
+      { colKey: AZIMUTH_AVG_KEY, value: 12 },
+    ]);
+    expect(u.azimuth_in).toBeCloseTo(102, 9);
+    expect(u.azimuth_out).toBeCloseTo(282, 9);
+  });
+
   it('skips a non-finite azimuth average', () => {
     expect(buildShotUpdates(shot(), [{ colKey: AZIMUTH_AVG_KEY, value: NaN }])).toEqual({});
   });
