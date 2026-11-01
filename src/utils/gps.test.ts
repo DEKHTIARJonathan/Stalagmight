@@ -1334,3 +1334,44 @@ describe('text too long to be a coordinate is refused before parsing (R5-5)', ()
     expect(looksTransposedRawDD(`${'0'.repeat(1100)}120, 45`)).toBe(false);
   });
 });
+
+describe('a map link has its own, larger length cap', () => {
+  it('refuses a link over 8192 characters quickly, before any pattern runs', () => {
+    // A place segment of digits is the slow case: the place-name parsers search
+    // it with patterns whose time grows with the square of its length.
+    const link = `https://www.google.com/maps/place/${'1'.repeat(64000)}/@20.5,-87.3,15z`;
+    const started = performance.now();
+    const result = parseGps(link);
+    const elapsedMs = performance.now() - started;
+    expect(isSuccess(result)).toBe(false);
+    if (!isSuccess(result)) expect(result.message).toMatch(/too long.*at most 8192/);
+    expect(elapsedMs).toBeLessThan(250);
+  });
+
+  it('reads a link up to 8192 characters and refuses one character more', () => {
+    const base = 'https://www.google.com/maps/@20.5,-87.3,15z?';
+    const atCap = `${base}${'a'.repeat(8192 - base.length)}`;
+    expect(atCap.length).toBe(8192);
+    expectCoordsClose(parsedOk(atCap), 20.5, -87.3);
+    expectRejected(`${atCap}a`, /too long/);
+  });
+
+  it('still reads a realistic long Google Maps place link with data parameters', () => {
+    const place = "20%C2%B030'15.0%22N+87%C2%B018'27.0%22W";
+    const data =
+      '!3m1!1e3!4m14!1m7!3m6!1s0x8f4c3a1b2c3d4e5f:0x1a2b3c4d5e6f7a8b!2sCaveA!8m2!3d20.5041667!4d-87.3075' +
+      '!16s%2Fg%2F11c0abcd12!3m5!1s0x8f4c3a1b2c3d4e5f:0x1a2b3c4d5e6f7a8b!8m2!3d20.5041667!4d-87.3075' +
+      '!16s%2Fg%2F11c0abcd12'.repeat(80);
+    const link =
+      `https://www.google.com/maps/place/${place}/@20.5041667,-87.3075,17z/data=${data}` +
+      '?entry=ttu&g_ep=EgoyMDI2MTAyOC4wIKXMDSoASAFQAw%3D%3D';
+    expect(link.length).toBeGreaterThan(1500);
+    expect(link.length).toBeLessThan(2500);
+    expectCoordsClose(parsedOk(link), DMS_LAT, -DMS_LON);
+  });
+
+  it('a place segment too long to be coordinates falls back to the pin', () => {
+    const link = `https://www.google.com/maps/place/${'1'.repeat(5000)}/@20.5,-87.3,15z/data=!3d20.51!4d-87.31`;
+    expectCoordsClose(parsedOk(link), 20.51, -87.31);
+  });
+});

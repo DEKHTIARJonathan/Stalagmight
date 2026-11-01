@@ -91,13 +91,30 @@ const OLC_ALPHABET = '23456789CFGHJMPQRVWX';
  */
 const MAX_COORDINATE_TEXT_LENGTH = 1024;
 
-/** Text over `MAX_COORDINATE_TEXT_LENGTH` that is not a map link (checked without a pattern). */
+/**
+ * The longest map link that is read. A map link gets its own cap because a real
+ * one can outgrow coordinate text: a Google Maps place link with its full
+ * `data=` block runs to one or two thousand characters. 8192 is about the
+ * longest URL the web serves at all (Apache's default `LimitRequestLine` is 8190
+ * bytes, nginx's `large_client_header_buffers` defaults to 8k), so no working
+ * link is refused. Longer text is refused before any pattern runs, as for
+ * `MAX_COORDINATE_TEXT_LENGTH`: link parsing also runs the unanchored
+ * coordinate parsers (on a Google Maps place name, see `parseUrl`).
+ */
+const MAX_LINK_TEXT_LENGTH = 8192;
+
+/** The length cap for `text`: `MAX_LINK_TEXT_LENGTH` for a map link, else `MAX_COORDINATE_TEXT_LENGTH` (checked without a pattern). */
+function maxCoordinateTextLength(text: string): number {
+  const link =
+    text.includes('http') || (text.includes('maps') && text.includes('/')) || text.slice(0, 4).toLowerCase() === 'geo:';
+  return link ? MAX_LINK_TEXT_LENGTH : MAX_COORDINATE_TEXT_LENGTH;
+}
+
+/** Text over its cap (`maxCoordinateTextLength`), checked without a pattern. */
 function tooLongForCoordinates(input: string): boolean {
   const text = input.trim();
   if (text.length <= MAX_COORDINATE_TEXT_LENGTH) return false;
-  const link =
-    text.includes('http') || (text.includes('maps') && text.includes('/')) || text.slice(0, 4).toLowerCase() === 'geo:';
-  return !link;
+  return text.length > maxCoordinateTextLength(text);
 }
 
 /**
@@ -1490,13 +1507,18 @@ export function parseUrl(input: string, depthReference = 0): GpsParseResult | Gp
     if (placeMatch && placeMatch[1]) {
       try {
         const decoded = decodeURIComponent(placeMatch[1].replace(/\+/g, ' '));
-        // Try parsing the decoded place name as GPS coordinates
-        const placeResult = parseDMS(decoded, depthReference);
-        if ('coordinates' in placeResult) return { ...placeResult, original: input };
-        const ddmResult = parseDDM(decoded, depthReference);
-        if ('coordinates' in ddmResult) return { ...ddmResult, original: input };
-        const ddResult = parseDD(decoded, depthReference);
-        if ('coordinates' in ddResult) return { ...ddResult, original: input };
+        // Try parsing the decoded place name as GPS coordinates. It is read as
+        // coordinate text, so it gets that text's cap: these parsers search it with
+        // patterns whose time grows with the square of its length. A longer place
+        // name is no coordinate; the data parameters and `@` below still apply.
+        if (decoded.trim().length <= MAX_COORDINATE_TEXT_LENGTH) {
+          const placeResult = parseDMS(decoded, depthReference);
+          if ('coordinates' in placeResult) return { ...placeResult, original: input };
+          const ddmResult = parseDDM(decoded, depthReference);
+          if ('coordinates' in ddmResult) return { ...ddmResult, original: input };
+          const ddResult = parseDD(decoded, depthReference);
+          if ('coordinates' in ddResult) return { ...ddResult, original: input };
+        }
       } catch {
         // decodeURIComponent can throw on malformed input - fall through
       }
@@ -1697,7 +1719,7 @@ export function parseGps(input: string, depthReference = 0): GpsParseResult | Gp
     return {
       message: i18n.t('validation.gps.inputTooLong', {
         length: input.trim().length,
-        max: MAX_COORDINATE_TEXT_LENGTH,
+        max: maxCoordinateTextLength(input.trim()),
       }),
       original: input,
     };
