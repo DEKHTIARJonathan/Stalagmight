@@ -119,7 +119,10 @@ Three workflows gate `master`:
 - **`leak-scan.yml`** - `lint:private-leaks` + `lint:no-em-dash` over the whole
   tracked tree, `lint:third-party` (THIRD-PARTY-LICENSES.md against the
   hashes of the two lockfiles, the generator and its cargo-about config), and
-  `lint:prepush-checklist` (the CLAUDE.md checklist lists every CI gate). It is
+  `lint:prepush-checklist` (the CLAUDE.md checklist lists every CI gate). The
+  two whole-tree guards share one file reader (`scripts/lib/tracked-files.mjs`):
+  a tracked symlink is scanned as its link text, the content git publishes for
+  it, and is never followed. It is
   the one workflow with **no** `paths-ignore`, because `check` and `smoke` both
   skip `**/*.md` and `docs/**` - exactly where a leak, a Unicode dash or a stale
   attribution bundle lands.

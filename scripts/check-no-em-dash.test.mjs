@@ -250,15 +250,44 @@ test('a NUL-bearing non-binary file is skipped AND fails the gate', () => {
   assert.equal(report(r, () => {}, () => {}), 1);
 });
 
-test('a symlink is not followed, and does NOT fail the gate', () => {
+test('a symlink is scanned as its link text, not followed, and a clean one passes', () => {
   // AGENTS.md -> CLAUDE.md is a real tracked symlink. Dereferencing it would let
-  // a fork PR point the scanner outside the repo; failing on it would block a
-  // legitimate link whose target is scanned on its own.
-  const r = scan(['AGENTS.md', 'CLAUDE.md'], (rel) => (rel === 'AGENTS.md' ? null : buf('clean')));
+  // a fork PR point the scanner outside the repo; its published content is the
+  // target string "CLAUDE.md", which is what gets scanned (NF-LINK).
+  const r = scan([{ rel: 'AGENTS.md', symlink: true }, 'CLAUDE.md'], (rel) => (rel === 'AGENTS.md' ? { symlink: 'CLAUDE.md' } : buf('clean')));
   assert.deepEqual(r.symlinks, ['AGENTS.md']);
   assert.equal(r.skipped.length, 0);
-  assert.equal(r.scanned, 1);
+  assert.equal(r.scanned, 2);
   assert.equal(report(r, () => {}, () => {}), 0);
+});
+
+test('a banned dash in a symlink TARGET string fails (it used to be skipped unread)', () => {
+  const r = scan([{ rel: 'docs/link.md', symlink: true }], () => ({ symlink: `plan${ch(0x2014)}draft.md` }));
+  assert.equal(r.violations.length, 1);
+  assert.equal(r.violations[0].link, true);
+  const lines = [];
+  assert.equal(report(r, () => {}, (m) => lines.push(m)), 1);
+  assert.ok(lines.some((l) => l.includes('"docs/link.md" (symlink target):1:5')), lines.join('\n'));
+});
+
+test('a dangling symlink is just its (clean) link text: no read error, no fail', () => {
+  // The leak guard used to fail this as unreadable while this guard passed it;
+  // both now read the link text, so both give the same verdict.
+  const r = scan([{ rel: 'x.md', symlink: true }], () => ({ symlink: 'nowhere.md' }));
+  assert.equal(r.skipped.length, 0);
+  assert.equal(report(r, () => {}, () => {}), 0);
+});
+
+test('a symlink with a binary extension is still scanned (its content is text)', () => {
+  const r = scan([{ rel: 'docs/logo.png', symlink: true }], () => ({ symlink: `a${ch(0x2013)}b.png` }));
+  assert.equal(r.violations.length, 1);
+  assert.ok(isExcluded('docs/logo.png'), 'a regular .png is still excluded');
+});
+
+test('a reader result that is neither bytes nor a symlink fails closed', () => {
+  const r = scan(['odd.md'], () => null);
+  assert.equal(r.skipped.length, 1);
+  assert.equal(report(r, () => {}, () => {}), 1);
 });
 
 // --- CI log safety -------------------------------------------------------------
