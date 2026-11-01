@@ -110,7 +110,13 @@ and `setGridSpacing` write to the saved config only in Survey; that, plus the
 entry snapshot, is what scopes Plan's Display changes to Plan.
 
 Returning to Survey restores all three snapshots, nulls the vars, and clears the
-pending measurement (the ruler readout depends on which geometry is active). The
+pending measurement (the ruler readout depends on which geometry is active).
+
+A move ghost in flight does not survive the switch: leaving Survey makes
+`isEditingBlockedNow()` true, which cancels the carry with a toast before the
+isMutatingTool effect drops the tool back to Select, so no click in Plan or Export can
+drop it (see [move-tools.md, "Integrity while carrying"](move-tools.md#integrity-while-carrying)).
+The same holds for the Closures Computed View and a lost SpeleoDB lock. The
 gas store is *not* reset on a mode switch, so a loaded plan survives a
 Plan -> Export -> Plan round-trip within a session.
 

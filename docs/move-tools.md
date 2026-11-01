@@ -146,6 +146,52 @@ On touch this falls out for free: `touchAction: 'manipulation'`, so one finger
 pans, a tap drops, and a pinch moves both fingers far past the threshold and
 therefore cannot drop anything.
 
+## Integrity while carrying
+
+The ghost and the commit it ends in are computed against the survey as it stood
+at the **pickup**, and station refs are positional (`section_id:station_index`).
+Any other edit landing between the pickup and the drop could therefore make the
+commit move the wrong station or apply a stale offset. So while a carry is in
+flight no other survey mutation runs (GHOST-2, #576).
+
+A carry is **in flight** from the pickup click until the drop click starts its
+commit, or until it is cancelled. For Move Segment that includes the pending
+`getConnectedSectionIds` window, before the ghost is even up. The snap-merge
+dialog phase counts too, and that dialog's confirm is the carry's own commit.
+
+A **survey mutation** is any IPC command whose backend handler calls
+`AppState::guard_mutation`. Read-only queries (`check_merge_connectivity`,
+`get_*`, `can_undo`, ...) and app-config writes are not mutations.
+
+| Rule | What happens | Where it lives |
+|------|--------------|----------------|
+| R1: another mutation is issued | Not sent. The carry is cancelled as Escape cancels it, one `move-cancelled` warning toast says neither change happened, and the caller gets a failed `CommandResult` | `refuseMutationDuringCarry` in `src/store/moveCarry.ts`, called at ISSUE time (before `runSerialized`) by `executeCommand` and `executeUndoRedo` in `projectStore`, and by the routes that bypass them: `resolveWarning`, `unresolveWarning`, `repairProjectIntegrity` and the DMP wizard's four direct `import_sections` calls |
+| R2: the survey changes underneath | `projectTreeGeneration` moves off the one captured at pickup (a refresh after a mutation that was already in flight, a SpeleoDB tree replacement, load/create/close, an import, a config refetch, the save-path heal): cancelled, with a toast. Also when `isEditingBlockedNow()` turns true (Plan/Export, Closures Computed View, lost SpeleoDB lock), with its own toast | Store subscriptions in `src/components/Map/useMoveCarryGuards.ts` |
+| R3: the commit is stale | The carry's own commit is re-checked inside the serialized section, right before `invokeIpc`, because it can queue behind a mutation that was in flight. A generation mismatch refuses it with nothing sent, restores the preview (`endDragPreview`) and toasts. A snap-merge dialog confirmed after its carry was cancelled sends nothing | `commitMoveCarry` marks the one command the commit issues (`takeMoveCarryCommit`); `refuseStaleCarryCommit` runs in `executeCommandInner` |
+| R4: another tool is chosen | Switching to anything but the three move tools cancels the carry silently, so one click can never both drop the ghost and run another tool's action. Switching among the move tools keeps it | `useMoveCarryGuards.ts` |
+| R5: one cancel routine | Escape, R1, R2 and R4 all run `cancelMoveCarryState` (MapCanvas), which also closes a snap-merge dialog this carry opened. R3 restores the preview through the same registration | `MapCanvas.tsx` |
+
+Choices worth knowing:
+
+- **Refused at the chokepoint, not disabled in the UI.** The carry does not feed
+  `useEditingBlocked`, so nothing is greyed out and no tool is reset by a
+  pickup. The user can still reach every panel while carrying; whatever they
+  change there cancels the move instead.
+- **One notice.** A refusal is recognisable with `isMoveCarryRefusal(result)`,
+  so callers that would surface a failure of their own stay quiet: Project
+  Settings skips its error toast, the undo history dropdown its error dialog,
+  the import dialogs (TML/Compass/Walls/GPX) stay open instead of routing to
+  `surfaceImportFailure`, Repair skips its "failed" toast (the refusal is thrown,
+  since `IntegrityRepairResult` has no failure shape), and the Warnings "Ignore"
+  action checks before it calls `resolveWarning` (whose boolean result cannot say
+  why it failed). Dialogs that show `result.error` inline show the refusal text,
+  which is accurate. The failed result is not followed by a refresh: nothing
+  changed, the table and editors read the store, and a refresh would mint a new
+  generation.
+- **Toasts.** A refused mutation and a survey change toast, and so does editing
+  becoming blocked: none of them is something the user did to the move. A tool
+  switch, like Escape, is the user's own gesture and stays silent.
+
 ## Ctrl+Drag Panning
 
 Both modifier gestures work under every tool but Pan (`activeTool !== 'pan'` in
@@ -240,6 +286,10 @@ Move Station and Move Shot use `default` as their base cursor (with `pointer` on
 | `segmentDragTokenRef` | Connected section fetch | Discard stale async results if drag cancelled or restarted |
 | `customPanActiveRef` | Click capture handler | Block DOM click events during Ctrl+drag cooldown |
 | Movement threshold (1mm) | `handleMoveDragEnd` | Distinguish click from drag; skip backend call for sub-millimeter moves |
+| `refuseMutationDuringCarry` | `executeCommand` / `executeUndoRedo` and the direct mutation routes | Refuse any other survey mutation while a carry is in flight, cancelling the carry ([Integrity while carrying](#integrity-while-carrying)) |
+| `refuseStaleCarryCommit` | `executeCommandInner`, right before `invokeIpc` | Refuse the carry's own commit when the survey generation moved since the pickup |
+| `useMoveCarryGuards` | MapCanvas | Cancel the carry when the survey changes, editing becomes blocked, or the tool leaves the move tools |
+| `isMoveCarryLive` | `promptSnapMerge`, after `checkMergeConnectivity` | Open no snap-merge dialog for a carry cancelled while the check was out |
 
 ---
 
@@ -251,3 +301,5 @@ Move Station and Move Shot use `default` as their base cursor (with `pointer` on
 | `src/components/Map/SurveyLayer.tsx` | Hover detection, visual state (feature-state), drag preview layers, cursor management |
 | `src/hooks/useMapTools.ts` | Per-tool click/hover handlers, immovable guards, drag initiation callbacks |
 | `src/components/Map/surveyLayer/ghostFeatures.ts` | Ghost section preview GeoJSON (`buildGhostFeatures`) |
+| `src/store/moveCarry.ts` | The carry registry: in flight or not, the R1 refusal, the commit marker and the R3 stale check |
+| `src/components/Map/useMoveCarryGuards.ts` | The map-side cancels: survey changed, editing blocked, tool switched |

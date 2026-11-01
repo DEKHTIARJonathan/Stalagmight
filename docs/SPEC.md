@@ -845,6 +845,14 @@ from the toolbar, and their P/Z shortcuts inert, unless
 Turning that setting off while one of them is active drops the map back to
 Select.
 
+While geometry is being carried, no other edit runs on the survey. Any other
+change attempted before the drop (an undo, a table edit, a delete, a dialog's
+save) cancels the move instead and is not applied either, so it can be retried
+on the unmoved survey. The move is also cancelled when the survey changes
+underneath it, when the map turns read-only (Plan/Export, the Closures Computed
+View, a lost SpeleoDB lock), and when a tool other than the three move tools is
+chosen. Switching between the move tools keeps what is being carried.
+
 The three move tools are documented in detail in [move-tools.md](move-tools.md).
 
 ### 6.6 Map Features
