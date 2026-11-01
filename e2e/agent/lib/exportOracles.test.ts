@@ -114,16 +114,19 @@ describe('naturalExtension', () => {
 // Mirror 1: ensureExtension
 // ---------------------------------------------------------------------------
 
-describe('ensureExtensionMirror (src/utils/fileDialogs.ts:49-65)', () => {
+describe('ensureExtensionMirror (src/utils/fileDialogs.ts ensureExtension)', () => {
   // Transcribed from the source: the rule is "already ends in the extension ->
-  // unchanged; a dot AFTER the last separator -> REPLACE from that dot;
-  // otherwise append".
+  // unchanged; a file-name extension naming a KNOWN file type (or a bare
+  // trailing dot) -> REPLACE from that dot; otherwise append" (#576 D35).
   const table: [string, string, string][] = [
     ['/x/out.csv', 'csv', '/x/out.csv'],
     ['/x/out.CSV', 'csv', '/x/out.CSV'],
     ['/x/out', 'csv', '/x/out.csv'],
-    ['/x/out.txt', 'csv', '/x/out.csv'],
-    ['/x/out.tml.txt', 'tml', '/x/out.tml.tml'],
+    ['/x/out.svg', 'csv', '/x/out.csv'],
+    ['/x/out.txt', 'csv', '/x/out.txt.csv'],
+    ['/x/out.tml.txt', 'tml', '/x/out.tml.txt.tml'],
+    ['/x/CaveA 1.5', 'csv', '/x/CaveA 1.5.csv'],
+    ['/x/.hidden', 'csv', '/x/.hidden.csv'],
     ['/x/out.', 'csv', '/x/out.csv'],
     // The dot is in a DIRECTORY, not the file name: appended, not replaced.
     ['/a.b/out', 'csv', '/a.b/out.csv'],
@@ -131,7 +134,7 @@ describe('ensureExtensionMirror (src/utils/fileDialogs.ts:49-65)', () => {
     // A leading dot in the extension argument is stripped.
     ['/x/out', '.png', '/x/out.png'],
     // Windows separator.
-    ['C:\\x\\out.txt', 'svg', 'C:\\x\\out.svg'],
+    ['C:\\x\\out.dmp', 'svg', 'C:\\x\\out.svg'],
     // The open project's own path, which is why the modal route never reaches
     // the backend guard.
     ['/x/cave.stalx', 'csv', '/x/cave.csv'],
@@ -141,8 +144,9 @@ describe('ensureExtensionMirror (src/utils/fileDialogs.ts:49-65)', () => {
     expect(ensureExtensionMirror(input, extension)).toBe(expected);
   });
 
-  it('REPLACES rather than appends - the mistake a from-memory mirror makes', () => {
-    expect(ensureExtensionMirror('/x/out.txt', 'csv')).not.toBe('/x/out.txt.csv');
+  it('replaces only a KNOWN extension - the mistake a from-memory mirror makes', () => {
+    expect(ensureExtensionMirror('/x/out.png', 'csv')).toBe('/x/out.csv');
+    expect(ensureExtensionMirror('/x/out.txt', 'csv')).toBe('/x/out.txt.csv');
   });
 });
 
@@ -154,7 +158,8 @@ describe('finalizeExportPath (ExportControls.handleExport)', () => {
   });
 
   it('forces .tml when the typed path has any other extension', () => {
-    expect(finalizeExportPath('/x/out.tml.txt', 'tml')).toBe('/x/out.tml.tml');
+    expect(finalizeExportPath('/x/out.tml.csv', 'tml')).toBe('/x/out.tml.tml');
+    expect(finalizeExportPath('/x/out.tml.txt', 'tml')).toBe('/x/out.tml.txt.tml');
     expect(finalizeExportPath('/x/out', 'tml')).toBe('/x/out.tml');
     expect(finalizeExportPath('/x/out.', 'tml')).toBe('/x/out.tml');
   });
@@ -165,15 +170,17 @@ describe('finalizeExportPath (ExportControls.handleExport)', () => {
     // other shape lands on `.tml`, and predicting `.tmlu` made X1 call every
     // such export a silent failure.
     expect(finalizeExportPath('/x/out', 'tmlu')).toBe('/x/out.tml');
-    expect(finalizeExportPath('/x/out.txt', 'tmlu')).toBe('/x/out.tml');
+    expect(finalizeExportPath('/x/out.json', 'tmlu')).toBe('/x/out.tml');
     expect(finalizeExportPath('/x/OUT.TMLU', 'tmlu')).toBe('/x/OUT.TMLU');
   });
 
   it('forces the data format for csv/json and the image format for png/svg/pdf', () => {
-    expect(finalizeExportPath('/x/out.txt', 'csv')).toBe('/x/out.csv');
-    expect(finalizeExportPath('/x/out.txt', 'json')).toBe('/x/out.json');
-    expect(finalizeExportPath('/x/out.txt', 'png')).toBe('/x/out.png');
-    expect(finalizeExportPath('/x/out.txt', 'pdf')).toBe('/x/out.pdf');
+    expect(finalizeExportPath('/x/out.svg', 'csv')).toBe('/x/out.csv');
+    expect(finalizeExportPath('/x/out.csv', 'json')).toBe('/x/out.json');
+    expect(finalizeExportPath('/x/out.pdf', 'png')).toBe('/x/out.png');
+    expect(finalizeExportPath('/x/out.png', 'pdf')).toBe('/x/out.pdf');
+    // An extension that names no file type the app knows is part of the name.
+    expect(finalizeExportPath('/x/out.txt', 'csv')).toBe('/x/out.txt.csv');
   });
 
   it('REDIRECTS an export aimed at the open project, which is why X2 is per-route', () => {

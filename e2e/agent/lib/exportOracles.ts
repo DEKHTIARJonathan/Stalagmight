@@ -201,14 +201,23 @@ export function naturalExtension(format: ExportFormat): string {
 // Mirror 1: the app's extension forcing
 // ---------------------------------------------------------------------------
 
+/** `KNOWN_FILE_EXTENSIONS` in `src/utils/fileDialogs.ts`, transcribed. */
+const KNOWN_FILE_EXTENSIONS_MIRROR: readonly string[] = [
+  'stalx', 'plnx', 'gpx', 'tml', 'tmlu', 'mak', 'dat', 'wpj', 'srv', 'dmp',
+  'csv', 'json', 'png', 'svg', 'pdf', 'xml',
+];
+
 /**
- * `src/utils/fileDialogs.ts:49-65`, transcribed.
+ * `ensureExtension` in `src/utils/fileDialogs.ts`, transcribed.
  *
- * The behaviour that matters and is easy to misremember: it REPLACES the last
- * extension rather than appending one, and it only looks at the last dot AFTER
- * the last separator - so `/a.b/c` gains `.csv` while `/a/b.txt` becomes
- * `/a/b.csv`. A harness that appended instead would check a path the app never
- * wrote to and call every export a silent failure.
+ * The behaviour that matters and is easy to misremember (#576 D35): a trailing
+ * extension that names a KNOWN file type is REPLACED (`/a/b.txt` stays put, but
+ * `/a/b.svg` becomes `/a/b.csv`), anything else is APPENDED to (`/a/b.txt` ->
+ * `/a/b.txt.csv`, `CaveA 1.5` -> `CaveA 1.5.csv`), and only the last dot of the
+ * FILE NAME counts - not a directory's (`/a.b/c` gains `.csv`) and not a leading
+ * one (`/x/.hidden` -> `/x/.hidden.csv`). A bare trailing dot is dropped. A
+ * harness that guessed wrong would check a path the app never wrote to and call
+ * every export a silent failure.
  */
 export function ensureExtensionMirror(filePath: string, extension: string): string {
   const normalizedExt = extension.startsWith('.') ? extension.slice(1) : extension;
@@ -217,7 +226,12 @@ export function ensureExtensionMirror(filePath: string, extension: string): stri
   if (lowerPath.endsWith(`.${lowerExt}`)) return filePath;
   const lastSeparator = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
   const lastDot = filePath.lastIndexOf('.');
-  if (lastDot > lastSeparator) return `${filePath.slice(0, lastDot + 1)}${normalizedExt}`;
+  if (lastDot > lastSeparator + 1) {
+    const current = filePath.slice(lastDot + 1).toLowerCase();
+    if (current === '' || KNOWN_FILE_EXTENSIONS_MIRROR.includes(current)) {
+      return `${filePath.slice(0, lastDot + 1)}${normalizedExt}`;
+    }
+  }
   return `${filePath}.${normalizedExt}`;
 }
 
