@@ -703,7 +703,8 @@ fn parse_project(body: &[u8], context: &str) -> Result<Project, SpeleoDbError> {
 /// #184: `live_open1_bare_tml_mime_outcome`; see `docs/speleodb-dev-testing.md`).
 fn mime_for(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
-        Some("stalx") => "application/vnd.sqlite3",
+        // Any letter case, as `has_stalx_extension` reads a project path (#576 B33).
+        Some(ext) if ext.eq_ignore_ascii_case("stalx") => "application/vnd.sqlite3",
         // .tml (and anything else co-pushed) → generic binary.
         _ => "application/octet-stream",
     }
@@ -1684,6 +1685,17 @@ mod tests {
         assert_eq!(mime_for(Path::new("a.stalx")), "application/vnd.sqlite3");
         assert_eq!(mime_for(Path::new("a.tml")), "application/octet-stream");
         assert_eq!(mime_for(Path::new("a.bin")), "application/octet-stream");
+    }
+
+    /// A `.stalx` in any letter case is a project, as `has_stalx_extension` reads it
+    /// (#576 B33 review RV1-RUST-9): `CaveB.STALX` must not go out as octet-stream.
+    #[test]
+    fn mime_for_reads_the_stalx_extension_in_any_case() {
+        for name in ["CaveB.STALX", "CaveB.Stalx"] {
+            let mime = mime_for(Path::new(name));
+            println!("mime_for({name}) = {mime}");
+            assert_eq!(mime, "application/vnd.sqlite3", "{name}");
+        }
     }
 
     #[test]
