@@ -1179,3 +1179,19 @@ describe('a labelled signed pair uses the letters next to it (R4 F6/F7 follow-on
     expectRejected(`Entrance: -20°30'15" 87°18'27" N`);
   });
 });
+
+describe('UTM band-edge slack (D37, R4 T1)', () => {
+  // 0.05 degrees either side of a band. Each "inside the slack" row fails if
+  // the slack is 0; each "outside" row fails if it is wider than 0.06.
+  it('accepts a northing just across a band edge, within the slack', () => {
+    expect(parsedOk('33T 500000 4423318').coordinates.latitude).toBeCloseTo(39.96, 4); // band T is 40N-48N
+    expect(parsedOk('33X 500000 9332559').coordinates.latitude).toBeCloseTo(84.04, 4); // band X ends at 84N
+    expect(parsedOk('33C 500000 1113950').coordinates.latitude).toBeCloseTo(-80.04, 4); // band C starts at 80S
+  });
+
+  it('rejects a northing just outside the slack', () => {
+    expectRejected('33T 500000 4421098', /band T/); // 39.94N
+    expectRejected('33X 500000 9334792', /band X/); // 84.06N
+    expectRejected('33C 500000 1111717', /band C/); // 80.06S
+  });
+});
