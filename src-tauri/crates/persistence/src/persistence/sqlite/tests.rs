@@ -5,92 +5,98 @@ use crate::models::StationAnchor;
 use crate::models::StationRef;
 use tempfile::TempDir;
 
-/// A pre-v2 `.stalx` must keep `reverse_parity` through the FK rebuild.
+/// [#576 B1-D1] A file from before the first public release is REFUSED, with a
+/// message that says what to do, and left exactly as it was.
 ///
-/// `migrate_schema` conditionally ADDs columns to `sections`, and for `user_version < 2` the FK
-/// rebuild then recreates that table from a fixed DDL and copies the rows across. A column
-/// missing from either half is silently dropped, and the file is stamped current afterwards, so
-/// no later open re-adds it. The damage does not show up on load - the read path falls back to a
-/// literal for an absent column - it shows up on the next SAVE, which inserts every column by
-/// name. The project opens fine and can then never be written again.
-///
-/// The insert below is the shape `save_project` uses. It is exercised directly rather than
-/// through `save_project` because a real `save_project` on a pre-v2 file currently fails for an
-/// UNRELATED, pre-existing reason: `init_schema` runs before the migration and creates tables
-/// whose foreign keys reference `sections` (`station_comments` among them), the rebuild's rename
-/// rewrites those references to `sections_old`, and the rebuild does not recreate every one of
-/// them - so the dangling reference outlives the drop. That is master's bug, not this branch's,
-/// and it would mask this assertion rather than sharpen it.
+/// The first release (v0.0.3) already shipped schema 2 and stamped
+/// `PRAGMA user_version`, so the only files whose stamp and project row are both
+/// below 2 are pre-release test files (or hand-edited ones). They used to go
+/// through a frozen "rebuild with foreign keys" step that had fallen four
+/// `sections` columns behind, dropped `shots.uuid`, `loop_closures.is_aligned`
+/// and `resolved_warnings.shot_uuid`, left `station_comments` pointing at a
+/// dropped `sections_old`, and then stamped the file current. docs/saving.md
+/// already said such files have no migration path; now the code agrees.
 #[test]
-fn a_pre_v2_rebuild_keeps_the_reverse_parity_column() {
+fn a_pre_release_file_is_refused_with_a_reimport_message_and_left_untouched() {
     let temp = TempDir::new().unwrap();
-    let path = temp.path().join("legacy.stalx");
+    let path = temp.path().join("pre_release.stalx");
 
-    // A v1 file: `sections` without any of the columns later migrations add, plus the row we
-    // expect to survive the rebuild.
     {
-        let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE sections (
-                 id INTEGER PRIMARY KEY,
-                 name TEXT,
-                 surveyor TEXT,
-                 date TEXT,
-                 color TEXT NOT NULL,
-                 created_at TEXT NOT NULL
-             );
-             INSERT INTO sections (id, name, color, created_at)
-             VALUES (1, 'Legacy', '#ff0000', '2020-01-01T00:00:00Z');
-             PRAGMA user_version = 1;",
-        )
-        .unwrap();
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Ancient".to_string(), None))
+            .unwrap();
+        // What a schema-1 build left behind: a project row saying 1 and no stamp
+        // (schema-1 builds never wrote `user_version`).
+        db.conn
+            .execute_batch("UPDATE project SET schema_version = 1; PRAGMA user_version = 0;")
+            .unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+
+    let refused = Database::open_existing(&path);
+    let message = match refused {
+        Ok(_) => String::from("<opened>"),
+        Err(e) => format!("{e:#}"),
+    };
+    println!("open_existing(stamp 0, row 1) -> {message}");
+    assert!(
+        message.contains("PRE_RELEASE_FILE"),
+        "a pre-release file must be refused with its own code, got: {message}"
+    );
+    assert!(
+        message.contains("import it again"),
+        "the refusal must tell the user to re-import from the survey source, got: {message}"
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "a refused file must be left byte-for-byte as it was"
+    );
+}
+
+/// [#576 B1-D1] The same refusal on the other open path: `Database::open` reaches
+/// the migration chain for an existing file too, and must not migrate a
+/// pre-release project either (here stamped 1 as well, a stamp no build wrote).
+#[test]
+fn a_pre_release_file_is_refused_by_database_open_too() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("stamped_one.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Ancient".to_string(), None))
+            .unwrap();
+        db.conn
+            .execute_batch("UPDATE project SET schema_version = 1; PRAGMA user_version = 1;")
+            .unwrap();
     }
 
-    // Opening migrates: the ALTER adds the column, then the FK rebuild recreates the table.
-    let db = Database::open(&path).unwrap();
-    let has_column: i64 = db
-        .conn
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='reverse_parity'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(
-        has_column, 1,
-        "the FK rebuild must carry reverse_parity through, not drop it"
+    let message = match Database::open(&path) {
+        Ok(_) => String::from("<opened>"),
+        Err(e) => format!("{e:#}"),
+    };
+    println!("Database::open(stamp 1, row 1) -> {message}");
+    assert!(
+        message.contains("PRE_RELEASE_FILE"),
+        "a pre-release project must be refused on this path too, got: {message}"
     );
-    let survived: i64 = db
-        .conn
-        .query_row("SELECT COUNT(*) FROM sections", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(
-        survived, 1,
-        "the rebuild must copy the existing rows across"
-    );
+}
 
-    // THE regression: this is the insert `save_project` performs, and it is what fails when the
-    // column is dropped by the rebuild.
-    db.conn
-        .execute(
-            "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, \
-             reverse_parity, created_at) \
-             VALUES (2, 'New', NULL, NULL, '#00ff00', 'in', 1.0, 1, '2026-01-01T00:00:00Z')",
-            [],
-        )
-        .expect("a migrated pre-v2 file must still accept the column save_project writes");
-    let parity: i64 = db
-        .conn
-        .query_row(
-            "SELECT reverse_parity FROM sections WHERE id = 2",
-            [],
-            |r| r.get(0),
-        )
+/// [#576 B1-D1] What the refusal must NOT catch: an existing EMPTY file. Android's
+/// document picker creates a 0-byte placeholder at the chosen path before the app
+/// writes it (`next_available_project_path` treats such a file as free), so
+/// `Database::open` meets a file that exists, carries no stamp and has no project
+/// row - a new project, not an old one.
+#[test]
+fn an_empty_placeholder_file_still_becomes_a_project() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("placeholder.stalx");
+    std::fs::write(&path, b"").unwrap();
+
+    let mut db = Database::open(&path).expect("an empty placeholder must open as a new project");
+    db.save_project(&Project::new("CaveA".to_string(), None))
         .unwrap();
-    assert_eq!(
-        parity, 1,
-        "the value must round-trip, not be silently dropped"
-    );
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(db.load_project().unwrap().name, "CaveA");
 }
 
 /// [#485] `project.schema_version` may not certify that migrations have run.
@@ -465,38 +471,6 @@ fn an_unstamped_file_claiming_a_mid_range_version_is_stamped_and_does_not_re_arm
         !db.is_kind_classification_pending(),
         "the second open must take the fast path, not re-arm the classifier and overwrite the \
          user's Jump/Reference choices"
-    );
-}
-
-/// [#485] A genuine pre-v2 file is row-derived (no stamp, row says 1) but below
-/// `SCHEMA_VERSION`, so it is stamped after its arms run - as master did.
-///
-/// Load-bearing rather than cosmetic: `current < 2` reaches
-/// `rebuild_tables_with_foreign_keys`, whose copy omits `shots.uuid`, so an
-/// unstamped file would rebuild on EVERY open and wipe every shot UUID each time.
-#[test]
-fn a_pre_v2_file_is_stamped_so_the_fk_rebuild_runs_once() {
-    let temp = TempDir::new().unwrap();
-    let path = temp.path().join("pre_v2.stalx");
-
-    {
-        let mut db = Database::open(&path).unwrap();
-        db.save_project(&Project::new("Ancient".to_string(), None))
-            .unwrap();
-        db.conn
-            .execute_batch("UPDATE project SET schema_version = 1; PRAGMA user_version = 0;")
-            .unwrap();
-    }
-
-    let db = Database::open_existing(&path).unwrap();
-    let stamped: i64 = db
-        .conn
-        .query_row("PRAGMA user_version", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(
-        stamped,
-        i64::from(SCHEMA_VERSION),
-        "without the stamp the FK rebuild would run on every single open"
     );
 }
 
@@ -3761,7 +3735,7 @@ fn test_migrate_schema_adds_direction_column() {
         CREATE TABLE zero_datums (id INTEGER PRIMARY KEY, section_id INTEGER, station_index INTEGER, latitude REAL, longitude REAL, depth_reference REAL);
         CREATE TABLE section_offsets (section_id INTEGER PRIMARY KEY, offset_x REAL, offset_y REAL);
         CREATE TABLE loop_closures (id INTEGER PRIMARY KEY, station_a_section INTEGER, station_a_index INTEGER, station_b_section INTEGER, station_b_index INTEGER, path_length REAL, misclosure_distance REAL, error_percentage REAL, horizontal_misclosure REAL, vertical_misclosure REAL);
-        INSERT INTO project VALUES (1, 'Test', NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 1);
+        INSERT INTO project VALUES (1, 'Test', NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 2);
         INSERT INTO sections VALUES (0, 'Sec1', NULL, NULL, '#ff0000', '2024-01-01T00:00:00Z');
         ",
     ).unwrap();
@@ -3790,7 +3764,7 @@ fn test_migrate_schema_adds_quality_column() {
         CREATE TABLE zero_datums (id INTEGER PRIMARY KEY, section_id INTEGER, station_index INTEGER, latitude REAL, longitude REAL, depth_reference REAL);
         CREATE TABLE section_offsets (section_id INTEGER PRIMARY KEY, offset_x REAL, offset_y REAL);
         CREATE TABLE loop_closures (id INTEGER PRIMARY KEY, station_a_section INTEGER, station_a_index INTEGER, station_b_section INTEGER, station_b_index INTEGER, path_length REAL, misclosure_distance REAL, error_percentage REAL, horizontal_misclosure REAL, vertical_misclosure REAL);
-        INSERT INTO project VALUES (1, 'QualityTest', NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 1);
+        INSERT INTO project VALUES (1, 'QualityTest', NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 2);
         INSERT INTO sections VALUES (0, 'Sec1', NULL, NULL, '#00ff00', 'out', '2024-01-01T00:00:00Z');
         ",
     ).unwrap();
@@ -3817,7 +3791,7 @@ fn test_migrate_schema_adds_closure_columns() {
         CREATE TABLE zero_datums (id INTEGER PRIMARY KEY, section_id INTEGER, station_index INTEGER, latitude REAL, longitude REAL, depth_reference REAL);
         CREATE TABLE section_offsets (section_id INTEGER PRIMARY KEY, offset_x REAL, offset_y REAL);
         CREATE TABLE loop_closures (id INTEGER PRIMARY KEY, station_a_section INTEGER, station_a_index INTEGER, station_b_section INTEGER, station_b_index INTEGER, path_length REAL, misclosure_distance REAL, error_percentage REAL, horizontal_misclosure REAL, vertical_misclosure REAL);
-        INSERT INTO project VALUES (1, 'ClosureTest', NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 1);
+        INSERT INTO project VALUES (1, 'ClosureTest', NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 2);
         INSERT INTO sections VALUES (0, 'Sec1', NULL, NULL, '#ff0000', 'in', 1.0, '2024-01-01T00:00:00Z');
         INSERT INTO loop_closures VALUES (1, 0, 0, 0, 1, 100.0, 0.5, 0.5, 0.3, 0.2);
         ",

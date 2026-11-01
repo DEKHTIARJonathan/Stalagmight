@@ -94,6 +94,19 @@ use std::path::Path;
 /// absent in every pre-v18 entry), so the stacks are NOT dropped.
 const SCHEMA_VERSION: i32 = 18;
 
+/// [#576 B1-D1] The oldest schema this build opens: the one the first public
+/// release (v0.0.3) shipped. A file whose `PRAGMA user_version` - or, when it
+/// carries no stamp, whose project row - is below this is a pre-release test file
+/// (no schema-1 build ever wrote the stamp) and is refused with
+/// [`PRE_RELEASE_FILE_CODE`] rather than migrated: see docs/saving.md "Schema
+/// version and pre-release files".
+const OLDEST_SUPPORTED_SCHEMA_VERSION: i32 = 2;
+
+/// [#576 B1-D1] Prefix of the error an open returns for a file older than
+/// [`OLDEST_SUPPORTED_SCHEMA_VERSION`], so the load path can give it its own
+/// error code instead of a generic database failure.
+pub const PRE_RELEASE_FILE_CODE: &str = "PRE_RELEASE_FILE";
+
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///
 /// v7 changed the `ShotUpdates` JSON wire format: nullable fields now use a

@@ -26,6 +26,15 @@ migration path is provided for them.** Migrations exist for the shapes that ship
 a pre-release file that a bump cannot read is expected to be re-imported from its
 source survey, not repaired.
 
+The floor is schema 2 (`OLDEST_SUPPORTED_SCHEMA_VERSION`), the schema the first
+public release (v0.0.3) shipped and stamped. A file whose `PRAGMA user_version` -
+or, when it carries no stamp, whose project row - is below 2 is refused before
+anything is written to it, with the `PRE_RELEASE_FILE` load error and a message
+that says to create a new project and import the survey again (#576 B1-D1). There
+used to be a frozen "rebuild with foreign keys" step for these files; it had fallen
+behind the schema and silently dropped columns and values, so it was removed
+rather than kept in step with every future column.
+
 ### Files saved by a newer version: open read-only
 
 A file whose `PRAGMA user_version` is ABOVE this build's `SCHEMA_VERSION` was saved

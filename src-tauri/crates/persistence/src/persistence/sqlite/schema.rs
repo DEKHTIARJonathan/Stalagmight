@@ -5,7 +5,10 @@ use rusqlite::{params, Connection, DatabaseName};
 
 use crate::models::FEATURE_ID_STRIDE;
 
-use super::{Database, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
+use super::{
+    Database, OLDEST_SUPPORTED_SCHEMA_VERSION, PRE_RELEASE_FILE_CODE, SCHEMA_VERSION,
+    UNDO_FORMAT_SAFE_VERSION,
+};
 
 /// Columns of `speleo_link` that MUST survive every future SCHEMA_VERSION bump
 /// unchanged (name, declared type, null-ness). The carry-forward fence (#190)
@@ -558,14 +561,13 @@ impl Database {
     /// Idempotent: the column rewrite is guarded on the old column still
     /// existing, but the pending flag is set unconditionally.
     ///
-    /// The two halves are guarded separately on purpose. A pre-v2 file is run
-    /// through [`Self::rebuild_tables_with_foreign_keys`] first, and that rebuild
-    /// already creates `shots` with `kind` and maps the legacy `is_reference`
-    /// rows onto it - so by the time this runs there is no `is_reference` column
-    /// left to convert, yet the rows still hold nothing but q2's Jump seed and
-    /// still need the chain classifier. Guarding the flag on the column too
-    /// (which is what the first cut did) silently skipped the backfill for every
-    /// pre-v2 project, leaving its reference ties counted as swum jumps forever.
+    /// The two halves are guarded separately on purpose: a file can reach this
+    /// arm with `kind` already in place and no `is_reference` left to convert
+    /// (an unstamped file whose row claims an older version than its tables
+    /// have), yet its rows still hold nothing but q2's Jump seed and still need
+    /// the chain classifier. Guarding the flag on the column too (which is what
+    /// the first cut did) silently skipped the backfill for exactly those files,
+    /// leaving their reference ties counted as swum jumps forever.
     fn migrate_is_reference_to_kind(conn: &Connection) -> Result<()> {
         let needs_column_rewrite = conn
             .prepare("SELECT is_reference FROM shots LIMIT 0")
@@ -588,8 +590,7 @@ impl Database {
             // new column's `Normal` default and then be dropped along with
             // `is_reference` - permanently turning a reference tie into a
             // swimmable leg, with the backfill unable to help because the shot
-            // no longer looks virtual to it. The pre-v2 rebuild path in
-            // integrity.rs already widens with `!= 0`; this matches it.
+            // no longer looks virtual to it.
             conn.execute_batch(
                 r"
                 UPDATE shots SET kind = 1 WHERE is_reference != 0;
@@ -1170,7 +1171,7 @@ impl Database {
     }
 
     /// Ensure schema migrations are applied and user_version is current.
-    pub(super) fn ensure_schema_version(&mut self) -> Result<()> {
+    pub(super) fn ensure_schema_version(&self) -> Result<()> {
         // Two different claims, and only one of them is evidence that migrations
         // RAN. `PRAGMA user_version` is written by this app in exactly two places:
         // at the end of a completed migration chain (below), and on a file it just
@@ -1181,9 +1182,12 @@ impl Database {
         // hand edit. Keep them apart: the project row may only pick which
         // version-gated arms below apply, never certify that the chain is done.
         let stamped = self.get_user_version().unwrap_or(0);
+        // `Ok(None)` (no table or column) and an error (no row yet) alike mean the
+        // row makes no claim.
+        let row_version = self.get_project_schema_version().ok().flatten();
         let mut current = stamped;
         if current == 0 {
-            if let Ok(Some(project_version)) = self.get_project_schema_version() {
+            if let Some(project_version) = row_version {
                 current = project_version;
             }
         }
@@ -1233,6 +1237,38 @@ impl Database {
             // this build's undo stack (`project_load.rs`), and nothing here may
             // edit the project anyway.
             return Ok(());
+        }
+
+        // [#576 B1-D1] A file from before the first public release is REFUSED,
+        // before anything here writes to it. The first release (v0.0.3) already
+        // shipped schema 2 and stamped `user_version`, and no schema-1 build ever
+        // wrote the stamp, so a project row claiming below 2 with no stamp of 2 or
+        // more to contradict it is a pre-release test file or a hand-edited one.
+        // A file with NO project row is not refused: that is an empty file
+        // `Database::open` is about to make a project of (Android's document
+        // picker leaves a 0-byte placeholder at the chosen path), not an old one.
+        // Such files used to go through a frozen "rebuild with foreign keys"
+        // step that had fallen behind the schema (it dropped the #438 azimuth
+        // columns and the values of `shots.uuid`, `loop_closures.is_aligned` and
+        // `resolved_warnings.shot_uuid`, and left `station_comments` pointing at
+        // a dropped table) and then stamped the file current. docs/saving.md
+        // ("Schema version and pre-release files") states the policy: no
+        // migration path, re-import from the survey source.
+        if stamped < OLDEST_SUPPORTED_SCHEMA_VERSION
+            && row_version.is_some_and(|row| row < OLDEST_SUPPORTED_SCHEMA_VERSION)
+        {
+            tracing::warn!(
+                version = current,
+                oldest_supported = OLDEST_SUPPORTED_SCHEMA_VERSION,
+                purpose = "refuse a pre-release project file",
+                "Database predates the oldest supported schema; refusing to open it"
+            );
+            anyhow::bail!(
+                "{PRE_RELEASE_FILE_CODE}: This project was saved by a pre-release version of \
+                 Stalagmight (file format {current}) and cannot be opened by this version. \
+                 Create a new project and import it again from the original survey files \
+                 (for example the .dmp, .tml, .mak or .wpj it came from)."
+            );
         }
 
         // Everything past this point WRITES. An unstamped file whose row claims
@@ -1298,9 +1334,6 @@ impl Database {
         // or a pragma_table_info-guarded ALTER - so it is safe to reach on every
         // open of a file we decline to stamp below.
         self.migrate_schema()?;
-        if current < 2 {
-            self.rebuild_tables_with_foreign_keys()?;
-        }
         if current < 3 {
             self.migrate_undo_redo_to_blob()?;
         }
@@ -1432,10 +1465,7 @@ impl Database {
         // re-inserts `pending_kind_classification` - which the load path is
         // documented to honour ONCE, because re-running the classifier overwrites
         // the user's own Jump/Reference choices. Ongoing corruption of real user
-        // data beats a hypothetical lying row. The same stamp is what keeps a
-        // genuine pre-v2 file (row says 1) from re-running
-        // `rebuild_tables_with_foreign_keys`, whose copy omits `shots.uuid`, on
-        // every single open.
+        // data beats a hypothetical lying row.
         if !(claimed_only && current >= SCHEMA_VERSION) {
             self.set_user_version(SCHEMA_VERSION)?;
             // Keep project-level schema_version in sync with PRAGMA user_version.

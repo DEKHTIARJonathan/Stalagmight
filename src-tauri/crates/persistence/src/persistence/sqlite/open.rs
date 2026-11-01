@@ -68,7 +68,7 @@ impl Database {
 
         let conn = Connection::open(path).context("Failed to open database")?;
 
-        let mut db = Self { conn };
+        let db = Self { conn };
         db.enable_foreign_keys()?;
 
         let prior_version = db.get_user_version().unwrap_or(0);
@@ -121,7 +121,7 @@ impl Database {
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .context("Failed to open database - file may not be a valid SQLite database")?;
 
-        let mut db = Self { conn };
+        let db = Self { conn };
         db.enable_foreign_keys()?;
 
         // Let SQLite mmap the whole file (up to 256 MB).  Sequential

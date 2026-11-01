@@ -523,6 +523,19 @@ impl AppState {
                 {
                     early_return_err!(LoadError::permission(msg, &path.display().to_string()));
                 }
+                // [#576 B1-D1] A file from before the first public release: its own
+                // code, and the message alone (it says what to do), not a generic
+                // database failure. The file was not touched.
+                if let Some(message) = msg
+                    .strip_prefix(crate::persistence::PRE_RELEASE_FILE_CODE)
+                    .map(|rest| rest.trim_start_matches(':').trim())
+                {
+                    early_return_err!(LoadError::with_details(
+                        crate::persistence::PRE_RELEASE_FILE_CODE,
+                        message,
+                        path.display().to_string()
+                    ));
+                }
                 // Detect corruption-specific errors and return CORRUPT code
                 // so the frontend can offer recovery options
                 if msg.contains("integrity check failed") || msg.contains("corrupted") {
