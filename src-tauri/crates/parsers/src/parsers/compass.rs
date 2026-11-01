@@ -540,8 +540,8 @@ fn invalid_shot_counts(survey: &Survey, file_state: &CompassFileState) -> Invali
     let mut counts = InvalidShotCounts::default();
     for shot in &survey.shots {
         let excluded = parse_flags(shot.flags.as_ref()).exclude_all;
-        let (_, length_corrected, _) = shot_geometry(shot, &ctx_corrected);
-        let (_, length_uncorrected, _) = shot_geometry(shot, &ctx_uncorrected);
+        let length_corrected = shot_length_m(shot, &ctx_corrected);
+        let length_uncorrected = shot_length_m(shot, &ctx_uncorrected);
         if excluded {
             if length_corrected <= 0.0 {
                 counts.excluded_corrected += 1;
@@ -705,26 +705,10 @@ fn lrud_meters(raw: f64) -> Option<f64> {
     }
 }
 
-/// Corrected azimuth (grid, 0..360), slope length (m), inclination (deg, +up),
-/// and elevation gain (m, +up) for a shot.
-fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
-    // A missing or non-finite bearing collapses to 0.0 (due north); the shot
-    // keeps its finite length and still participates in the closure solve as a
-    // due-north leg rather than being dropped. The corruption is surfaced to the
-    // user by the pass-1 per-shot warning (#275).
-    let mut azimuth = if angle_missing(shot.azimuth) {
-        0.0
-    } else {
-        shot.azimuth
-    };
-    // Every inclination is stored in decimal degrees, whatever unit the
-    // FORMAT says the notebook used - depth gauge (`W`) included (#576 B28) -
-    // so the field is sentinel-tested as an angle for every survey.
-    let mut inclination = if angle_missing(shot.inclination) {
-        0.0
-    } else {
-        shot.inclination
-    };
+/// Slope length (m) of a shot with the survey's length correction applied; 0.0
+/// for a missing or non-finite length, which the converter drops as a
+/// zero-length connector.
+fn shot_length_m(shot: &Shot, ctx: &SurveyCtx) -> f64 {
     let mut length = if length_missing(shot.length) {
         0.0
     } else {
@@ -732,27 +716,14 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     };
     if ctx.apply_corrections {
         if let Some(cf) = &ctx.corrections {
-            // CORRECTIONS are degrees and feet, like the readings they adjust.
-            azimuth += cf.azimuth;
-            inclination += cf.inclination;
+            // CORRECTIONS are feet, like the lengths they adjust.
             length += cf.length;
         }
     }
-    // #438: measured, not corrected. The survey's declination and convergence
-    // live on `ctx.azimuth_reference` and are applied when geometry is computed.
-    let azimuth_final = crate::models::normalize_azimuth(azimuth);
     // A `.DAT` stores lengths in decimal feet whatever the FORMAT's length
-    // unit says (#576 B28).
-    let length_m = length * FEET_TO_METERS;
-    // Backstop only: build_ctx sanitizes declination/convergence/corrections,
-    // so with finite raw inputs these are already finite. 0.0 carries the same
-    // missing semantics the raw sentinel guards above produce; the per-shot
-    // corruption warning fires at the pass-1 scan, not here.
-    (
-        finite_or_zero(azimuth_final),
-        finite_or_zero(length_m),
-        finite_or_zero(inclination),
-    )
+    // unit says (#576 B28). Backstop only: build_ctx sanitizes the
+    // corrections, so with a finite raw length this is already finite.
+    finite_or_zero(length * FEET_TO_METERS)
 }
 
 /// See `angle_missing`: the no-non-finite-output contract for file-controlled
@@ -766,63 +737,182 @@ fn finite_or_zero(v: f64) -> f64 {
     }
 }
 
-/// Process a back-sight pair (`back_azimuth`, `back_inclination`) and return
-/// values comparable to the fore-sight after the same pipeline - i.e. in the
-/// forward (FROM → TO) direction, Stalagmight's `+down` pitch convention.
-///
-/// Compass records back-sight as the raw instrument reading from the TO
-/// station looking back at the FROM station, so for a well-calibrated survey
-/// of a shot with fore-azimuth `a` and fore-inclination `i` (Compass +up):
-///
-///   * `back_azimuth`     ≈ a + 180°
-///   * `back_inclination` ≈ -i   (uphill from FROM is downhill from TO)
-///
-/// We need to turn the back-sight around to FROM → TO:
-///   * Azimuth: add 180° after declination/convergence.
-///   * Inclination: flip sign to undo the TO-side reading direction (yielding
-///     fore-direction in Compass's +up convention), and flip again to land
-///     in Stalagmight's +down - the two flips cancel, so the final stored
-///     `pitch_out` equals the back-inclination. Like the fore-sight it is
-///     stored in decimal degrees whatever the FORMAT's inclination unit
-///     (#576 B28), so no unit conversion applies.
-///
-/// Returns `(azimuth_out_grid_deg, pitch_out_deg_positive_down)` if both
-/// back-sight readings are present and non-sentinel, else `None`.
-fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
-    let back_az_raw = shot.back_azimuth?;
-    let back_inc_raw = shot.back_inclination?;
-    if angle_missing(back_az_raw) {
-        return None;
+/// An angle reading, or `None` when it was not taken: a -999 sentinel, or a
+/// non-finite value (see `angle_missing`).
+fn angle_reading(raw: f64) -> Option<f64> {
+    (!angle_missing(raw)).then_some(raw)
+}
+
+/// One sight of a shot, turned to point FROM → TO: the bearing in degrees
+/// [0, 360) and the inclination in Compass's `+up` degrees, each `None` when
+/// that reading was not taken. Measured, not corrected (#438): the survey's
+/// declination rides on `SurveyCtx::azimuth_reference`; only the survey's
+/// instrument CORRECTIONS are applied. Every inclination is stored in decimal
+/// degrees whatever unit the FORMAT says the notebook used - depth gauge
+/// (`W`) included (#576 B28).
+#[derive(Clone, Copy)]
+struct Sight {
+    bearing: Option<f64>,
+    inclination: Option<f64>,
+}
+
+fn foresight(shot: &Shot, ctx: &SurveyCtx) -> Sight {
+    let (bearing_correction, inclination_correction) =
+        match (ctx.apply_corrections, &ctx.corrections) {
+            (true, Some(cf)) => (cf.azimuth, cf.inclination),
+            _ => (0.0, 0.0),
+        };
+    Sight {
+        bearing: angle_reading(shot.azimuth)
+            .map(|a| crate::models::normalize_azimuth(a + bearing_correction))
+            .filter(|a| a.is_finite()),
+        inclination: angle_reading(shot.inclination)
+            .map(|i| i + inclination_correction)
+            .filter(|i| i.is_finite()),
     }
-    let mut back_az = back_az_raw;
-    let mut back_inc = if angle_missing(back_inc_raw) {
-        0.0
-    } else {
-        back_inc_raw
-    };
-    if ctx.apply_corrections {
-        if let Some(bcf) = &ctx.backsight_corrections {
-            back_az += bcf.azimuth;
-            back_inc += bcf.inclination;
+}
+
+/// The redundant backsight, turned around to point FROM → TO.
+///
+/// Compass records it as the instrument reading from the TO station looking
+/// back at the FROM station, so for a shot with fore-azimuth `a` and
+/// fore-inclination `i` (Compass +up) a well-calibrated backsight reads
+/// `a + 180°` and `-i` (uphill from FROM is downhill from TO). Turning it
+/// around adds 180° to the bearing and negates the inclination. Each half is
+/// its own reading: a missing back bearing says nothing about the back
+/// inclination, and vice versa.
+fn backsight(shot: &Shot, ctx: &SurveyCtx) -> Sight {
+    let (bearing_correction, inclination_correction) =
+        match (ctx.apply_corrections, &ctx.backsight_corrections) {
+            (true, Some(bcf)) => (bcf.azimuth, bcf.inclination),
+            _ => (0.0, 0.0),
+        };
+    Sight {
+        bearing: shot
+            .back_azimuth
+            .and_then(angle_reading)
+            .map(|a| {
+                let measured = crate::models::normalize_azimuth(a + bearing_correction);
+                crate::models::normalize_azimuth(measured + 180.0)
+            })
+            .filter(|a| a.is_finite()),
+        inclination: shot
+            .back_inclination
+            .and_then(angle_reading)
+            .map(|i| -(i + inclination_correction))
+            .filter(|i| i.is_finite()),
+    }
+}
+
+/// A shot's readings in Stalagmight's slots, after Compass's missing-data
+/// rule: a shot is processed "as long as there is at least one compass reading
+/// and one inclinometer reading" (Compass Editor help, "Backsights and
+/// Redundant Backsights"), so a foresight reading that was not taken is the
+/// reversed backsight. The slots follow the Walls importer's convention
+/// (`walls/srv.rs` `combine_azimuth` / `combine_inclination`): with one
+/// bearing both azimuth slots carry it; with one inclination it sits in
+/// `pitch_in` and `pitch_out` stays empty.
+struct Readings {
+    azimuth_in: f64,
+    azimuth_out: f64,
+    /// `+down` degrees.
+    pitch_in: Option<f64>,
+    /// `+down` degrees; only a backsight inclination that was taken.
+    pitch_out: Option<f64>,
+    /// The inclination the leg's depth change follows, Compass `+up` degrees.
+    inclination: f64,
+    /// Foresight readings that were not taken and came from the backsight.
+    reconstructed: u32,
+    /// No sight has a bearing: `azimuth_in` / `azimuth_out` are a 0.0
+    /// placeholder (due north).
+    bearing_missing: bool,
+    /// No sight has an inclination: the leg is kept level.
+    inclination_missing: bool,
+}
+
+fn resolve_readings(shot: &Shot, ctx: &SurveyCtx) -> Readings {
+    let fore = foresight(shot, ctx);
+    let back = backsight(shot, ctx);
+    let mut reconstructed = 0;
+    let (azimuth_in, azimuth_out) = match (fore.bearing, back.bearing) {
+        (Some(f), Some(b)) => (f, b),
+        (Some(f), None) => (f, f),
+        (None, Some(b)) => {
+            reconstructed += 1;
+            (b, b)
         }
+        // Compass's editor refuses this and its help does not say what
+        // processing does with it, so the leg keeps its length and points due
+        // north, as it always has; the caller names the shot (#576 B30).
+        (None, None) => (0.0, 0.0),
+    };
+    let (inclination, pitch_in, pitch_out) = match (fore.inclination, back.inclination) {
+        (Some(f), Some(b)) => (f, Some(-f), Some(-b)),
+        (Some(f), None) => (f, Some(-f), None),
+        (None, Some(b)) => {
+            reconstructed += 1;
+            (b, Some(-b), None)
+        }
+        // As for the bearing: kept level, named by the caller.
+        (None, None) => (0.0, Some(0.0), None),
+    };
+    Readings {
+        azimuth_in,
+        azimuth_out,
+        pitch_in,
+        pitch_out,
+        inclination,
+        reconstructed,
+        bearing_missing: fore.bearing.is_none() && back.bearing.is_none(),
+        inclination_missing: fore.inclination.is_none() && back.inclination.is_none(),
     }
-    // Measured, like the fore-sight (#438): no declination or convergence here.
-    let back_az_measured = crate::models::normalize_azimuth(back_az);
-    // Flip 180° so the bearing points FROM → TO, matching azimuth_in.
-    let azimuth_out_fore_direction = crate::models::normalize_azimuth(back_az_measured + 180.0);
-    // back_inc is the TO→FROM slope in Compass +up; the double sign flip
-    // (TO→FROM ⇒ FROM→TO, then +up ⇒ +down) cancels, so the value we store IS
-    // that reading.
-    let pitch_out_down_positive = back_inc;
-    // Backstop: a computed non-finite backsight must become "no backsight"
-    // (the caller mirrors the fore-sight, which is a no-op in the fore/back
-    // circular mean), NEVER a fabricated due-north Some(0.0) that would
-    // silently rotate every affected shot via average_azimuth (#275).
-    // build_ctx sanitizes the header factors, so this should be unreachable.
-    if !azimuth_out_fore_direction.is_finite() || !pitch_out_down_positive.is_finite() {
-        return None;
-    }
-    Some((azimuth_out_fore_direction, pitch_out_down_positive))
+}
+
+/// The receipt line for a shot that has a field in no sight at all, kept
+/// with a placeholder (#576 B30). A plumb leg's bearing does not matter, so
+/// only its inclination can earn one.
+fn missing_reading_warning(
+    shot: &Shot,
+    readings: &Readings,
+    has_backsights: bool,
+) -> Option<String> {
+    let plumb = readings.inclination.abs() >= 89.5;
+    let bearing = readings.bearing_missing && !plumb;
+    let (fields, are, recorded, them) = match (bearing, readings.inclination_missing) {
+        (true, true) => (
+            "bearing and inclination",
+            "are",
+            "0 (due north) and level",
+            "them",
+        ),
+        (true, false) => ("bearing", "is", "0 (due north)", "it"),
+        (false, true) => ("inclination", "is", "level", "it"),
+        (false, false) => return None,
+    };
+    let source = if has_backsights {
+        format!("{are} missing from both the foresight and the backsight")
+    } else {
+        format!("{are} missing and the survey has no backsight to take {them} from")
+    };
+    Some(format!(
+        "Shot {} -> {}: {fields} {source}; recorded as {recorded}.",
+        shot.from, shot.to
+    ))
+}
+
+/// The receipt line counting a survey's foresight readings that came from the
+/// reversed backsight (#576 B30), or `None` when there were none.
+fn reconstructed_readings_note(survey: &Survey, reconstructed: u32) -> Option<String> {
+    let counted = match reconstructed {
+        0 => return None,
+        1 => "1 missing foresight reading was".to_string(),
+        n => format!("{n} missing foresight readings were"),
+    };
+    Some(format!(
+        "Survey '{}': {counted} taken from the backsight (bearing + 180, inclination \
+         negated), as Compass does.",
+        survey.name
+    ))
 }
 
 fn elevation_gain(length_m: f64, inclination_deg: f64) -> f64 {
@@ -838,27 +928,17 @@ fn shot_to_shot_data(
     depth_out: f64,
     is_virtual: bool,
 ) -> ShotData {
-    let (azimuth, length_m, inclination) = shot_geometry(shot, ctx);
-    // If the survey took back-sight readings (separate from the fore-sight),
-    // store them in the `_out` slots as forward-direction equivalents so
-    // Stalagmight has both legs of the measurement available for averaging
-    // and warnings.  When no back-sight is present, mirror the fore-sight
-    // into the `_out` slot - matching the TML importer's convention.
-    let (azimuth_out, pitch_out) = match shot_backsight_geometry(shot, ctx) {
-        Some((back_az, back_pitch)) => (back_az, Some(back_pitch)),
-        None => (azimuth, None),
-    };
+    let readings = resolve_readings(shot, ctx);
     ShotData {
         // Compass files carry no shot identity; every shot gets a fresh mint.
         uuid: None,
-        azimuth_in: azimuth,
-        azimuth_out,
-        length: length_m,
+        azimuth_in: readings.azimuth_in,
+        azimuth_out: readings.azimuth_out,
+        length: shot_length_m(shot, ctx),
         depth_in,
         depth_out,
-        // Stalagmight pitch is positive downward; Compass inclination is positive up.
-        pitch_in: Some(-inclination),
-        pitch_out,
+        pitch_in: readings.pitch_in,
+        pitch_out: readings.pitch_out,
         left: lrud_meters(shot.left),
         right: lrud_meters(shot.right),
         up: lrud_meters(shot.up),
@@ -1279,6 +1359,8 @@ pub fn convert_compass_to_import_configs(
             opts,
             &mut warnings,
         );
+        let has_backsights = survey.parameters.format_parameters.has_backsights();
+        let mut reconstructed = 0;
         let mut shots = Vec::new();
         for shot in &survey.shots {
             let flags = parse_flags(shot.flags.as_ref());
@@ -1286,9 +1368,10 @@ pub fn convert_compass_to_import_configs(
                 continue;
             }
             // One warning per shot naming every corrupt (non-finite) raw
-            // reading. Sentinel-coded missing values (-999/+999) stay
-            // silent: they are the format's intended "no reading" markers,
-            // not corruption. Absent backsights read as finite 0.0 here.
+            // reading. Sentinel-coded missing values (-999/+999) are not
+            // corruption but the format's "no reading" marker; what becomes
+            // of them is reported below, once the readings are resolved
+            // (#576 B30). Absent backsights read as finite 0.0 here.
             let mut corrupt: Vec<&str> = Vec::new();
             for (name, value) in [
                 ("length", shot.length),
@@ -1313,7 +1396,7 @@ pub fn convert_compass_to_import_configs(
                     corrupt.join(", ")
                 ));
             }
-            let (_, length_m, inclination) = shot_geometry(shot, &ctx);
+            let length_m = shot_length_m(shot, &ctx);
             if length_m <= 0.0 {
                 // Zero-length connectors can't be stored as section shots.
                 // Dropping a shot removes its connectivity, so never do it
@@ -1330,13 +1413,17 @@ pub fn convert_compass_to_import_configs(
                 ));
                 continue;
             }
+            let readings = resolve_readings(shot, &ctx);
+            reconstructed += readings.reconstructed;
+            warnings.extend(missing_reading_warning(shot, &readings, has_backsights));
             edges.push((
                 shot.from.clone(),
                 shot.to.clone(),
-                elevation_gain(length_m, inclination),
+                elevation_gain(length_m, readings.inclination),
             ));
             shots.push(shot);
         }
+        warnings.extend(reconstructed_readings_note(survey, reconstructed));
         kept.push(KeptSurvey { survey, ctx, shots });
     }
 
@@ -3296,5 +3383,151 @@ mod tests {
         );
         assert!((shot.pitch_in.unwrap() - 45.0).abs() < 1e-9);
         assert!((shot.pitch_out.unwrap() - 45.0).abs() < 1e-9);
+    }
+
+    /// Print a converted survey's shots, one line each, for test captures.
+    fn print_shots(label: &str, configs: &[ImportSectionConfig], warnings: &[String]) {
+        println!("{label}");
+        for (i, s) in all_shots(configs).iter().enumerate() {
+            println!(
+                "  shot {i}: az_in {:.2} az_out {:.2} pitch_in {:?} pitch_out {:?} depth {:.3} -> {:.3}",
+                s.azimuth_in, s.azimuth_out, s.pitch_in, s.pitch_out, s.depth_in, s.depth_out
+            );
+        }
+        for w in warnings {
+            println!("  warning: {w}");
+        }
+    }
+
+    /// #576 B30: with backsights, -999 marks a reading that was not taken, and
+    /// Compass processes the shot from the reading that WAS taken ("Compass can
+    /// still process the shot as long as there is at least one compass reading
+    /// and one inclinometer reading" - Compass Editor help, "Backsights and
+    /// Redundant Backsights"). A 10 m leg at 90 deg, 30 deg down, whose
+    /// foresight is missing, used to import pointing north and level, with
+    /// nothing said.
+    #[test]
+    fn a_missing_foresight_is_taken_from_the_reversed_backsight() {
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADBF",
+            &["A1 A2 32.81 -999.00 -999.00 1.00 1.00 1.00 1.00 270.00 30.00"],
+        );
+        print_shots("fore -999/-999, back 270/+30", &configs, &warnings);
+        let shot = all_shots(&configs)[0];
+        assert!(
+            (shot.azimuth_in - 90.0).abs() < 1e-9 && (shot.azimuth_out - 90.0).abs() < 1e-9,
+            "bearing = back bearing + 180 in both slots, got {} / {}",
+            shot.azimuth_in,
+            shot.azimuth_out
+        );
+        assert_eq!(
+            shot.pitch_in,
+            Some(30.0),
+            "inclination = the negated backsight (+30 back is 30 down)"
+        );
+        assert_eq!(shot.pitch_out, None, "only one inclination was taken");
+        let drop = shot.depth_out - shot.depth_in;
+        assert!(
+            (drop - 32.81 * FEET_TO_METERS * 0.5).abs() < 1e-6,
+            "the leg descends 5 m, got {drop:+.3} m"
+        );
+        let notes: Vec<&String> = warnings
+            .iter()
+            .filter(|w| w.contains("taken from the backsight"))
+            .collect();
+        assert_eq!(
+            notes,
+            [
+                "Survey 'A': 2 missing foresight readings were taken from the backsight \
+              (bearing + 180, inclination negated), as Compass does."
+            ],
+            "one receipt line per survey counts the reconstructed readings"
+        );
+    }
+
+    /// #576 B30, mirror case: a missing BACK inclination is no reading, not a
+    /// level one. `Some(0.0)` was averaged with the 30 deg foresight into a
+    /// 15 deg "recorded" inclination that disagrees with the shot's own depth.
+    #[test]
+    fn a_missing_back_inclination_is_absent_not_level() {
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADBF",
+            &["A1 A2 32.81 90.00 -30.00 1.00 1.00 1.00 1.00 270.00 -999.00"],
+        );
+        print_shots("fore 90/-30, back 270/-999", &configs, &warnings);
+        let shot = all_shots(&configs)[0];
+        assert_eq!(shot.pitch_in, Some(30.0));
+        assert_eq!(shot.pitch_out, None, "no back inclination was taken");
+        assert!(
+            (shot.azimuth_out - 90.0).abs() < 1e-9,
+            "the back bearing stays"
+        );
+        assert!(
+            warnings.iter().all(|w| !w.contains("backsight")),
+            "nothing was reconstructed: {warnings:?}"
+        );
+    }
+
+    /// #576 B30: the two halves of a backsight are independent readings. A
+    /// missing back BEARING used to throw away a valid back inclination.
+    #[test]
+    fn a_missing_back_bearing_keeps_the_back_inclination() {
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADBF",
+            &["A1 A2 32.81 90.00 -30.00 1.00 1.00 1.00 1.00 -999.00 30.00"],
+        );
+        print_shots("fore 90/-30, back -999/+30", &configs, &warnings);
+        let shot = all_shots(&configs)[0];
+        assert!(
+            (shot.azimuth_out - 90.0).abs() < 1e-9,
+            "mirrors the foresight"
+        );
+        assert_eq!(shot.pitch_out, Some(30.0), "the back inclination was taken");
+    }
+
+    /// #576 B30: a field missing from BOTH sights has nothing to reconstruct
+    /// from. Compass's editor refuses to let it be entered ("The program will
+    /// flag an error if you try enter missing data for both the fore and
+    /// backsight item"), and its help does not say what processing does with
+    /// one, so the leg keeps today's placeholder (north, level) and the
+    /// receipt names it. A plumb leg's bearing does not matter, so it is not
+    /// named for that.
+    #[test]
+    fn a_reading_missing_from_both_sights_keeps_the_leg_and_names_it() {
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADBF",
+            &[
+                "A1 A2 32.81 -999.00 -999.00 1.00 1.00 1.00 1.00 -999.00 -999.00",
+                "A2 A3 10.00 -999.00 -90.00 1.00 1.00 1.00 1.00 -999.00 90.00",
+            ],
+        );
+        print_shots("both sights -999, then a plumb leg", &configs, &warnings);
+        let shots = all_shots(&configs);
+        assert_eq!(shots.len(), 2, "both legs are kept");
+        assert!(shots[0].azimuth_in.abs() < 1e-12, "{}", shots[0].azimuth_in);
+        assert_eq!(shots[0].pitch_in, Some(0.0));
+        assert!(
+            warnings.iter().any(|w| w
+                == "Shot A1 -> A2: bearing and inclination are missing from both the \
+                    foresight and the backsight; recorded as 0 (due north) and level."),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().all(|w| !w.contains("A2 -> A3")),
+            "a plumb leg needs no bearing: {warnings:?}"
+        );
+
+        // Without backsight columns the foresight is the only sight.
+        let (_, _, warnings) = convert_text(
+            "DDDDLRUDLADN",
+            &["A1 A2 10.00 -999.00 0.00 1.00 1.00 1.00 1.00"],
+        );
+        println!("no backsight columns, bearing -999: {warnings:?}");
+        assert!(
+            warnings.iter().any(|w| w
+                == "Shot A1 -> A2: bearing is missing and the survey has no backsight to \
+                    take it from; recorded as 0 (due north)."),
+            "{warnings:?}"
+        );
     }
 }
