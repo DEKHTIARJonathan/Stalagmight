@@ -255,8 +255,12 @@ export function isPersistSuppressed(): boolean {
 /** Increment project sequence and force-flush pending events from previous project. */
 export async function advanceProjectSeq(): Promise<void> {
   flushDwell();
-  await flushToRust();
+  // Bump before awaiting: flushToRust has already taken its snapshot and read the
+  // old sequence by its first await, and anything tracked during the round trip -
+  // even when the dwell interval flushes it - belongs to the new project.
+  const flushed = flushToRust();
   _projectSeq++;
+  await flushed;
 }
 
 /**

@@ -124,3 +124,27 @@ describe('telemetry flush timeout', () => {
     ]);
   });
 });
+
+describe('advanceProjectSeq', () => {
+  // The sequence used to move on only once the project-open flush had come back,
+  // so the 60 s dwell interval could fire inside that round trip and send the new
+  // project's first events under the previous project's sequence.
+  it('tags an event tracked during the project-open flush with the new sequence, even when the interval fires inside it', async () => {
+    const t = await startTelemetry();
+
+    await advanceTo(59_500);
+    t.trackAction('old-project', 'toolbar');
+    trackEventsLatencyMs = 1_000; // the project-open round trip spans the t=60 s interval tick
+    const opening = t.advanceProjectSeq(); // sends old-project under seq 0
+    t.trackAction('new-project', 'toolbar'); // the new project's first event
+    await advanceTo(61_000);
+    await opening;
+
+    trackEventsLatencyMs = 0;
+    await advanceTo(130_000);
+    expect(flushes, 'new-project belongs to the new project (seq 1)').toEqual([
+      't=59.5s seq=0 action.old-project:toolbar',
+      't=60.0s seq=1 action.new-project:toolbar',
+    ]);
+  });
+});
