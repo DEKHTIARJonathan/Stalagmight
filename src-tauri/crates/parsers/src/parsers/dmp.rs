@@ -247,11 +247,11 @@ pub struct DmpShot {
     pub down: f64,
     /// Water temperature (celsius), v3+
     pub temperature: f64,
-    /// Time: hour, v4+
+    /// Time: hour, v3+
     pub hour: u8,
-    /// Time: minute, v4+
+    /// Time: minute, v3+
     pub minute: u8,
-    /// Time: second, v4+
+    /// Time: second, v3+
     pub second: u8,
     /// Physical marker index
     pub marker_index: u8,
@@ -385,8 +385,12 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
         (0.0, 0.0, 0.0, 0.0)
     };
 
-    // Temperature and time (version >= 4 for time, >= 3 for temp in _generate but >= 4 in from_dmp)
-    let (temperature, hour, minute, second) = if version >= 4 {
+    // Temperature and time (version >= 3). They are the 5 bytes a v3 shot
+    // (21) has over a v2 one (16), and the reference writer emits them from
+    // v3 on (pytool_mnemo_lib `Shot._generate_dmp`, `if version >= 3`). Its
+    // reader gates them on `>= 4` and so takes the temperature's high byte as
+    // a v3 marker; the writer layout is the one that accounts for every byte.
+    let (temperature, hour, minute, second) = if version >= 3 {
         (
             f64::from(buffer.read_int16_be()?) / 10.0,
             buffer.read()?,
@@ -485,12 +489,15 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
     // Direction
     let direction = DmpDirection::try_from(buffer.read()?)?;
 
-    // Parse shots
+    // Parse shots. Each one is read from its own `shot_len`-byte record, as
+    // the reference reader does, so the cursor always lands on the next record
+    // boundary whatever `parse_shot` reads out of the current one.
     let shot_len = shot_size(version);
     let mut shots = Vec::new();
 
     while buffer.has_remaining(shot_len) {
-        match parse_shot(&mut buffer, version) {
+        let mut record = IntBuffer::new(buffer.read_n(shot_len)?);
+        match parse_shot(&mut record, version) {
             Ok(shot) => shots.push(shot),
             Err(e) => {
                 tracing::debug!(
@@ -1122,6 +1129,8 @@ mod tests {
 
     /// Helper to build v3 format section data as semicolon-separated string
     /// V3 format: version(1) + magic(3) + date(5) + name(3) + direction(1) + shots(21 bytes each) + EOS marker
+    /// A v3 shot, as the reference writer (pytool_mnemo_lib `Shot._generate_dmp`)
+    /// lays it out: type(1) + 7*int16(14) + int16 temperature(2) + hour/minute/second(3) + marker(1)
     fn build_v3_section_data() -> String {
         let mut values: Vec<i32> = Vec::new();
 
@@ -1140,10 +1149,10 @@ mod tests {
         // Direction: 0 = In
         values.push(0);
 
-        // Shot 1 (v3 = 21 bytes: type + 7*int16 + marker)
+        // Shot 1 (v3 = 21 bytes: type + 7*int16 + int16 temp + hour/minute/second + marker)
         // type=2 (standard), heading_in=450 (45.0°), heading_out=460 (46.0°)
         // length=1000 (10.00m), depth_in=200 (2.00m), depth_out=300 (3.00m)
-        // pitch_in=0, pitch_out=0, marker=1
+        // pitch_in=0, pitch_out=0, temperature=185 (18.5 C), time 10:30:15, marker=1
         // int16 BE format: (val >> 8, val & 0xFF)
         values.push(2); // shot type
         values.extend(&[1, 194]); // heading_in 450: (1 << 8) + 194 = 450
@@ -1153,6 +1162,8 @@ mod tests {
         values.extend(&[1, 44]); // depth_out 300: (1 << 8) + 44 = 300
         values.extend(&[0, 0]); // pitch_in 0
         values.extend(&[0, 0]); // pitch_out 0
+        values.extend(&[0, 185]); // temperature 185 (18.5 C)
+        values.extend(&[10, 30, 15]); // hour, minute, second
         values.push(1); // marker_index
 
         // End-of-section marker for v3 (type=3 followed by zeros, total 21 bytes)
@@ -1273,6 +1284,120 @@ mod tests {
         // But basic shot data should be parsed
         assert!(shot.heading_in > 0.0, "Should have heading_in");
         assert!(shot.length > 0.0, "Should have length");
+    }
+
+    /// A v3 section of three Standard shots plus the EOS record, each shot in
+    /// the 21-byte layout `build_v3_section_data` documents. Every shot
+    /// carries the same `temperature_tenths`; headings, lengths, depths,
+    /// minutes and markers differ per shot so a drifted read shows up.
+    fn build_v3_three_shot_section(temperature_tenths: i16) -> String {
+        fn push_i16(v: &mut Vec<i32>, val: i16) {
+            let bytes = val.to_be_bytes(); // [hi, lo]
+            v.push(i32::from(bytes[0]));
+            v.push(i32::from(bytes[1]));
+        }
+
+        let mut values: Vec<i32> = vec![3, 68, 89, 101]; // version + section magic
+        values.extend(&[24, 6, 15, 10, 30]); // date: 2024-06-15 10:30
+        values.extend(&[65, 65, 65]); // name "AAA"
+        values.push(0); // direction In
+
+        for i in 0..3_i16 {
+            values.push(2); // Standard
+            push_i16(&mut values, 450 + 10 * i); // heading_in
+            push_i16(&mut values, 455 + 10 * i); // heading_out
+            push_i16(&mut values, 1000 + 100 * i); // length
+            push_i16(&mut values, 200 + 10 * i); // depth_in
+            push_i16(&mut values, 210 + 10 * i); // depth_out
+            push_i16(&mut values, 0); // pitch_in
+            push_i16(&mut values, 0); // pitch_out
+            push_i16(&mut values, temperature_tenths);
+            values.extend(&[10, 31 + i32::from(i), 5]); // hour, minute, second
+            values.push(i32::from(i) + 1); // marker_index
+        }
+
+        values.push(3); // EOS
+        values.extend(vec![0; 20]);
+
+        values
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    /// Every v3 shot must consume its whole 21-byte record (#576 B29). The parser
+    /// read only 16 bytes of it (temperature and time were gated on v4), so the
+    /// next shot started on the temperature's low byte: at 24.5 C (raw 245)
+    /// that is not a shot type and the section stopped after one shot, and at
+    /// 25.6 C (raw 256) it decoded as a run of garbage shots.
+    fn assert_v3_three_shot_section_parses(temperature_tenths: i16) {
+        let temperature = f64::from(temperature_tenths) / 10.0;
+        let content = build_v3_three_shot_section(temperature_tenths);
+        let (_file, path) = create_dmp_file(&content);
+        let result = parse_dmp(&path);
+        std::fs::remove_file(&path).ok();
+
+        let dmp = result.expect("synthetic v3 section must parse");
+        assert_eq!(dmp.sections.len(), 1, "one section expected");
+        let shots = &dmp.sections[0].shots;
+
+        println!(
+            "v3 section at {temperature} C: parsed shots: {} (expected 4: 3 Standard + EndOfSurvey)",
+            shots.len()
+        );
+        for (i, s) in shots.iter().enumerate() {
+            println!(
+                "  shot {i}: type={:?} heading_in={} heading_out={} length={} depth_in={} \
+                 depth_out={} temperature={} time={:02}:{:02}:{:02} marker={}",
+                s.shot_type,
+                s.heading_in,
+                s.heading_out,
+                s.length,
+                s.depth_in,
+                s.depth_out,
+                s.temperature,
+                s.hour,
+                s.minute,
+                s.second,
+                s.marker_index
+            );
+        }
+
+        assert_eq!(
+            shots.len(),
+            4,
+            "parsed shots: {} (expected 4: 3 Standard + EndOfSurvey)",
+            shots.len()
+        );
+        // Expected values are decoded exactly as the parser decodes them.
+        for (i, shot) in (0_u8..).zip(shots.iter().take(3)) {
+            let k = i16::from(i);
+            assert_eq!(shot.shot_type, DmpShotType::Standard, "shot {i} type");
+            assert_eq!(shot.heading_in, f64::from(450 + 10 * k) / 10.0, "shot {i}");
+            assert_eq!(shot.heading_out, f64::from(455 + 10 * k) / 10.0, "shot {i}");
+            assert_eq!(shot.length, f64::from(1000 + 100 * k) / 100.0, "shot {i}");
+            assert_eq!(shot.depth_in, f64::from(200 + 10 * k) / 100.0, "shot {i}");
+            assert_eq!(shot.depth_out, f64::from(210 + 10 * k) / 100.0, "shot {i}");
+            assert_eq!(shot.temperature, temperature, "shot {i} temperature");
+            assert_eq!(
+                (shot.hour, shot.minute, shot.second),
+                (10, 31 + i, 5),
+                "shot {i} time"
+            );
+            assert_eq!(shot.marker_index, i + 1, "shot {i} marker_index");
+        }
+        assert_eq!(shots[3].shot_type, DmpShotType::EndOfSurvey, "last record");
+    }
+
+    #[test]
+    fn v3_shots_at_24_5_c_each_consume_the_whole_21_byte_record() {
+        assert_v3_three_shot_section_parses(245);
+    }
+
+    #[test]
+    fn v3_shots_at_25_6_c_each_consume_the_whole_21_byte_record() {
+        assert_v3_three_shot_section_parses(256);
     }
 
     /// A `.dmp` is semicolon-separated integers, and the version is the first
