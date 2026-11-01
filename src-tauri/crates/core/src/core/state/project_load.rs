@@ -615,9 +615,11 @@ impl AppState {
             // process if the user closes without saving - and the next open
             // would then keep the migration's Jump seed for good.
             //
-            // Addressed by (section_id, sequence_order), which is what the rows
-            // are keyed by on disk - `Shot::id` is a synthesised in-memory value
-            // and would hit the wrong rows. Virtual shots only: `Normal` is what
+            // Addressed by (section_id, position in the loaded section), which
+            // `persist_backfilled_shot_kinds` resolves to the row through the
+            // loader's own `ORDER BY sequence_order` - `Shot::id` is a
+            // synthesised in-memory value and would hit the wrong rows. Virtual
+            // shots only: `Normal` is what
             // the migration already wrote for every non-legacy-reference row, so
             // re-stamping them would be one UPDATE per shot in the project on a
             // load that is already paying for the schema migration.
@@ -635,13 +637,12 @@ impl AppState {
             // v12->v13 migration has already rewritten this file's schema
             // without a lock to produce - is the smaller hazard by a wide margin.
             //
-            // `shot.id % FEATURE_ID_STRIDE`, not the enumerate() index: the
-            // loader reads `ORDER BY section_id, sequence_order` and pushes
-            // sequentially, so the index is the shot's RANK, while the id
-            // carries the raw stored `sequence_order` (read.rs synthesises
-            // `section_id * FEATURE_ID_STRIDE + seq` from the column). They
-            // differ the moment a legacy file has a gap in the sequence, and
-            // a miss here is permanent because the flag is cleared with it.
+            // The enumerate() index IS that position: nothing between the load
+            // and here adds, removes or reorders a shot. It used to be
+            // `shot.id % FEATURE_ID_STRIDE`, back when the loader numbered
+            // shots by their stored rank; a rank gap in a legacy file made the
+            // two differ, and a miss here is permanent because the flag is
+            // cleared with it (B35(f), #576).
             let verdicts: Vec<_> = project
                 .sections
                 .iter()
@@ -649,14 +650,9 @@ impl AppState {
                     section
                         .shots
                         .iter()
-                        .filter(|shot| shot.kind.is_virtual())
-                        .map(|shot| {
-                            (
-                                section.id,
-                                shot.id % crate::models::FEATURE_ID_STRIDE,
-                                shot.kind,
-                            )
-                        })
+                        .enumerate()
+                        .filter(|(_, shot)| shot.kind.is_virtual())
+                        .map(|(position, shot)| (section.id, position as u32, shot.kind))
                 })
                 .collect();
             if let Err(e) = db.persist_backfilled_shot_kinds(&verdicts) {

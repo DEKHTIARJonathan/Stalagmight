@@ -805,31 +805,17 @@ impl AppState {
                                     // True append (pos == len) or empty section: a raw insert is
                                     // exact - no station shift or SectionStart re-anchor is needed.
                                     if let Some(section) = project.get_section_mut(*section_id) {
-                                        // SATURATING, because `shot_id` arrives
-                                        // verbatim from a persisted entry and
-                                        // nothing between the `.stalx` and here
-                                        // bounds it: `ShotId::MAX` panics a debug
-                                        // build on the `+ 1` and wraps a release
-                                        // one, after which `Section::take_shot_id`
-                                        // hands the wrapped value straight back
-                                        // out as a colliding id. Total for every
-                                        // value the type admits, exactly as
-                                        // `shot_display_position` is for the same
-                                        // reason (#413 finding 24).
-                                        //
-                                        // Monotonicity is preserved without a
-                                        // `max`: the assignment is guarded by
-                                        // `id >= next_shot_id`, so the saturated
-                                        // `ShotId::MAX` is still >= the counter it
-                                        // replaces.
-                                        let id = forced_id.unwrap_or_else(|| {
-                                            let next = section.next_shot_id;
-                                            section.next_shot_id = next.saturating_add(1);
-                                            next
-                                        });
-                                        if id >= section.next_shot_id {
-                                            section.next_shot_id = id.saturating_add(1);
-                                        }
+                                        // Through the section's mint, like the
+                                        // anchored arms above (A18(d), #576):
+                                        // `shot_id` arrives verbatim from a
+                                        // persisted entry and nothing between the
+                                        // `.stalx` and here bounds it, so it is
+                                        // honoured only inside the section's id
+                                        // window and while free. `ShotId::MAX`
+                                        // used to park the counter on `u32::MAX`,
+                                        // where the user's next append overflowed
+                                        // it (#413 finding 24's class).
+                                        let id = section.take_shot_id(forced_id);
                                         section.shots.insert(
                                             pos,
                                             Shot::with_uuid(

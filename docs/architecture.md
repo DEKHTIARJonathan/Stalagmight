@@ -295,10 +295,13 @@ the recorded map rather than re-deriving a frame.
 
 - Use `Database::open_existing()` for reading (doesn't create files)
 - Use `Database::open()` for writing (creates if needed)
-- Shot IDs are generated on load: `section_id * FEATURE_ID_STRIDE + sequence_order`
-  (`FEATURE_ID_STRIDE` = 100000, `src-tauri/crates/models/src/id_stride.rs`, mirrored in
-  `src/utils/ids.ts`). They are therefore *not* stable identity - use `Shot::uuid` for
-  anything that has to survive a save/load
+- Shot IDs are generated on load: `section_id * FEATURE_ID_STRIDE + position`, the
+  shot's 0-based place in the stored `sequence_order` (the two agree for every file
+  the app writes; a foreign file's gaps are closed). `FEATURE_ID_STRIDE` = 100000,
+  `src-tauri/crates/models/src/id_stride.rs`, mirrored in `src/utils/ids.ts`; a file
+  with a section of more than `FEATURE_ID_STRIDE - 1` shots is refused. They are
+  therefore *not* stable identity - use `Shot::uuid` for anything that has to survive
+  a save/load
 
 ### Coordinate Transformation (Zero Datum)
 

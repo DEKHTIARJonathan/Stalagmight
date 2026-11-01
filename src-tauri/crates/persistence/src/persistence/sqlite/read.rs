@@ -12,6 +12,12 @@ use crate::models::{
 
 use super::Database;
 
+/// The most shots one section can number: its ids are `section_id * STRIDE +
+/// position`, and the app caps a section one short of the stride
+/// (`Project::add_shot`) so a free id always remains. A file holding more is
+/// refused on load (A18(d), #576).
+const MAX_SHOTS_PER_SECTION: usize = (FEATURE_ID_STRIDE - 1) as usize;
+
 impl Database {
     /// Load a project from the database
     /// Load only the metadata needed to populate `ProjectMetadata` - no
@@ -449,20 +455,12 @@ impl Database {
                 )?;
                 let shot_rows = shot_stmt.query_map([], |row| {
                     let section_id: u32 = row.get(0)?;
-                    let seq: i64 = row.get(1)?;
+                    // Column 1 (`sequence_order`) only ORDERS the stream: the
+                    // id is the shot's position in it, assigned below.
                     Ok((
                         section_id,
                         Shot {
-                            // Saturating, like `models::shot_display_position`:
-                            // the section id comes off disk, and a file naming
-                            // a section id >= u32::MAX / FEATURE_ID_STRIDE
-                            // would panic this encode in a debug build rather
-                            // than load. What the import can create is bounded
-                            // upstream (#427's per-run cut cap); this is the
-                            // read side refusing to trust the file.
-                            id: section_id
-                                .saturating_mul(FEATURE_ID_STRIDE)
-                                .saturating_add(seq as u32),
+                            id: 0,
                             azimuth_in: row.get(2)?,
                             azimuth_out: row.get(3)?,
                             length: row.get(4)?,
@@ -525,7 +523,32 @@ impl Database {
                         sanitized_shots += 1;
                     }
                     if let Some(&idx) = section_by_id.get(&section_id) {
-                        sections[idx].shots.push(shot);
+                        let section = &mut sections[idx];
+                        // The id is `section_id * STRIDE + POSITION` in the
+                        // stored order (B35(f), A18(d), #576), not the stored
+                        // rank. The app writes ranks 0..n, so for its own files
+                        // the two agree; a foreign or hand-edited file can leave
+                        // a gap (ranks 0, 2, 3 loaded as ids 0, 2, 3 with the
+                        // counter on 3, so the next shot duplicated id 3), a rank
+                        // past the window (into the next section's ids) or a
+                        // negative one (`as u32` lands near `u32::MAX`). Station
+                        // references are positional too, so numbering by
+                        // position is what the rest of the load already assumes.
+                        let position = section.shots.len();
+                        // A position that does not fit the window would number
+                        // this shot into the NEXT section's ids. The app caps a
+                        // section at `FEATURE_ID_STRIDE - 1` shots, so refuse the
+                        // open rather than load colliding ids, as #557 does for a
+                        // section id past the encode bound.
+                        anyhow::ensure!(
+                            position < MAX_SHOTS_PER_SECTION,
+                            "This file cannot be opened: section {section_id} holds more than \
+                             {MAX_SHOTS_PER_SECTION} shots, the most one section can number."
+                        );
+                        // Cannot overflow: `section.id <= MAX_SECTION_ID`
+                        // (refused above otherwise) and `position < STRIDE`.
+                        shot.id = section.id * FEATURE_ID_STRIDE + position as u32;
+                        section.shots.push(shot);
                     }
                     // (rows for unknown sections are silently dropped -
                     // matches the legacy `WHERE section_id = ?` filter
@@ -1139,7 +1162,10 @@ impl Database {
     /// change a signature every caller shares.
     ///
     /// `shot_id` is the in-memory id the frontend addresses shots by
-    /// (`section_id * FEATURE_ID_STRIDE + sequence_order`), not the rowid.
+    /// (`section_id * FEATURE_ID_STRIDE + position`, exactly as `load_project`
+    /// numbers them), not the rowid, and `shot_number` is that position plus
+    /// one. Position, not the stored `sequence_order`: a rank gap in a foreign
+    /// file would otherwise name a different shot than the loader did.
     pub fn unrecognised_shot_kinds(&self) -> Result<Vec<UnrecognisedShotKind>> {
         // `kind` was added in v13; an older file legitimately has no such column.
         if self.conn.prepare("SELECT kind FROM shots LIMIT 0").is_err() {
@@ -1152,16 +1178,29 @@ impl Database {
         // TEXT)` is no good either: it can yield invalid UTF-8. `quote` is total
         // and renders every class legibly (7, 'abc', X'DEADBEEF'), which is
         // exactly what the dialog wants to show.
+        //
+        // The position is numbered over EVERY shot of the section before the
+        // filter applies (a window function runs after its own query's WHERE,
+        // hence the subquery), the same `ORDER BY sequence_order` the loader
+        // streams in.
         let mut stmt = self.conn.prepare(
-            "SELECT s.section_id, s.sequence_order, quote(s.kind), sec.name
-             FROM shots s
-             LEFT JOIN sections sec ON sec.id = s.section_id
-             WHERE s.kind NOT IN (0, 1, 2)
-             ORDER BY s.section_id, s.sequence_order",
+            "SELECT section_id, position, raw_kind, name FROM (
+                 SELECT s.section_id AS section_id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY s.section_id ORDER BY s.sequence_order
+                        ) - 1 AS position,
+                        quote(s.kind) AS raw_kind,
+                        sec.name AS name,
+                        s.kind NOT IN (0, 1, 2) AS unrecognised
+                 FROM shots s
+                 LEFT JOIN sections sec ON sec.id = s.section_id
+             )
+             WHERE unrecognised
+             ORDER BY section_id, position",
         )?;
         let rows = stmt.query_map([], |row| {
             let section_id: SectionId = row.get(0)?;
-            let sequence_order: u32 = row.get(1)?;
+            let position: u32 = row.get(1)?;
             Ok(UnrecognisedShotKind {
                 section_id,
                 // Saturating like the loader's shot encode: this diagnostic
@@ -1169,8 +1208,8 @@ impl Database {
                 // sections row (and no #557 open-refusal) ever vetted.
                 shot_id: section_id
                     .saturating_mul(FEATURE_ID_STRIDE)
-                    .saturating_add(sequence_order),
-                shot_number: sequence_order.saturating_add(1),
+                    .saturating_add(position),
+                shot_number: position.saturating_add(1),
                 section_name: row.get(3)?,
                 raw_value: row.get(2)?,
             })
@@ -1222,27 +1261,45 @@ impl Database {
     /// by this write, and the frontend keeps `isDirty: false` after load, so no
     /// save is provoked.)
     ///
-    /// Rows are addressed by `(section_id, sequence_order)` - the same tuple the
-    /// INSERT in `write.rs` writes - NOT by `Shot::id`. Those are two different
-    /// ID spaces: `shots.id` is an auto-increment rowid the INSERT never sets,
-    /// while the in-memory `Shot::id` is synthesised on load as
-    /// `section_id * FEATURE_ID_STRIDE + sequence_order`. Keying on `Shot::id`
-    /// silently writes the wrong rows in the first section and matches nothing
-    /// at all in the rest (the v7->v8 migration converts between the same two
-    /// spaces for `resolved_warnings`). Keying on `uuid` would be wrong too:
-    /// pre-v6 rows hold NULL on disk and `ensure_shot_uuids()` mints those in
-    /// memory only, so it would persist against a transient identity.
+    /// Each verdict is `(section_id, position, kind)`, `position` being the
+    /// shot's 0-based place in its section as `load_project` read it - NOT
+    /// `Shot::id`, and not the stored `sequence_order`. `shots.id` is an
+    /// auto-increment rowid the INSERT never sets, while the in-memory
+    /// `Shot::id` is synthesised on load as `section_id * FEATURE_ID_STRIDE +
+    /// position`; keying on `Shot::id` silently writes the wrong rows in the
+    /// first section and matches nothing at all in the rest (the v7->v8
+    /// migration converts between the same two spaces for `resolved_warnings`).
+    /// The stored rank equals the position for every file this app writes, but
+    /// a foreign file can have a gap, so each position is resolved to its row
+    /// through the loader's own `ORDER BY sequence_order` (B35(f), #576).
+    /// Keying on `uuid` would be wrong too: pre-v6 rows hold NULL on disk and
+    /// `ensure_shot_uuids()` mints those in memory only, so it would persist
+    /// against a transient identity.
     pub fn persist_backfilled_shot_kinds(
         &self,
         kinds: &[(SectionId, u32, ShotKind)],
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         {
-            let mut stmt = tx.prepare(
-                "UPDATE shots SET kind = ?1 WHERE section_id = ?2 AND sequence_order = ?3",
-            )?;
-            for (section_id, seq, kind) in kinds {
-                stmt.execute(params![i32::from(kind.as_u8()), *section_id, *seq])?;
+            let mut by_section: HashMap<SectionId, Vec<(u32, ShotKind)>> = HashMap::new();
+            for (section_id, position, kind) in kinds {
+                by_section
+                    .entry(*section_id)
+                    .or_default()
+                    .push((*position, *kind));
+            }
+            let mut rows_in_order = tx
+                .prepare("SELECT rowid FROM shots WHERE section_id = ?1 ORDER BY sequence_order")?;
+            let mut update = tx.prepare("UPDATE shots SET kind = ?1 WHERE rowid = ?2")?;
+            for (section_id, verdicts) in &by_section {
+                let rowids = rows_in_order
+                    .query_map([section_id], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<i64>>>()?;
+                for (position, kind) in verdicts {
+                    if let Some(rowid) = rowids.get(*position as usize) {
+                        update.execute(params![i32::from(kind.as_u8()), rowid])?;
+                    }
+                }
             }
         }
         tx.execute(

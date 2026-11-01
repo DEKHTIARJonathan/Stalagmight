@@ -258,7 +258,14 @@ impl AppState {
         // through `uuid_or_mint`, or the restored shot would come back with no
         // identity at all: unindexed, and unnameable by any `AfterShot` anchor
         // until some later save noticed.
-        let shot = Shot::with_uuid(original_shot_id, data, Some(Shot::uuid_or_mint(uuid)));
+        //
+        // The ID goes through the section's mint (A18(d), #576). It comes
+        // verbatim off a persisted entry, so it is honoured only inside the
+        // section's id window and while no shot holds it; otherwise the shot
+        // comes back under a fresh id. `ShotId::MAX` used to go in as-is and
+        // park the counter where the user's next append overflowed it.
+        let shot_id = section.take_shot_id(Some(original_shot_id));
+        let shot = Shot::with_uuid(shot_id, data, Some(Shot::uuid_or_mint(uuid)));
 
         // The one insert path that takes a payload-borne identity, so it is also
         // the one that could reintroduce a uuid the section acquired in the
@@ -287,14 +294,6 @@ impl AppState {
             );
         }
 
-        // Update next_shot_id if needed to avoid collisions. SATURATING: the id
-        // arrives verbatim from a persisted entry, so ShotId::MAX must park the
-        // counter rather than panic a debug build or wrap a release one into
-        // colliding ids (#413 finding 24's class, same as the redo append arm).
-        if original_shot_id >= section.next_shot_id {
-            section.next_shot_id = original_shot_id.saturating_add(1);
-        }
-
         if position <= section.shots.len() {
             section.shots.insert(position, shot);
         } else {
@@ -305,7 +304,8 @@ impl AppState {
 
         tracing::info!(
             section_id,
-            shot_id = original_shot_id,
+            shot_id,
+            recorded_shot_id = original_shot_id,
             position,
             "Shot restored"
         );

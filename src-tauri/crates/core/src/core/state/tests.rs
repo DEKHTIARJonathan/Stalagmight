@@ -25878,8 +25878,13 @@ fn undo_to_lands_where_the_same_number_of_single_undos_lands_over_a_drifted_step
 /// `next_shot_id` to `id + 1` - a panic in a debug build, a wrap in a release
 /// one, after which `Section::take_shot_id` hands the wrapped value straight
 /// back out as an id another shot already holds.
+///
+/// A18(d) (#576): saturating only moved the overflow to the user's NEXT append
+/// (the counter sat on `u32::MAX`). The id now goes through the section's mint,
+/// which honours a recorded id only inside the section's window, so the shot
+/// comes back under a fresh id there, keeping its uuid.
 #[test]
-fn redo_of_a_created_shot_with_the_maximum_id_saturates_instead_of_overflowing() {
+fn redo_of_a_created_shot_with_the_maximum_id_remints_it_inside_the_window() {
     let state = state_with_project();
     let section = section_with_shots(&state, "A", vec![]);
 
@@ -25916,15 +25921,21 @@ fn redo_of_a_created_shot_with_the_maximum_id_saturates_instead_of_overflowing()
 
     let project = state.get_project_state().unwrap();
     let restored = project.get_section(section).expect("section missing");
+    let base = section * crate::models::FEATURE_ID_STRIDE;
     assert_eq!(
         restored.shots.iter().map(|s| s.id).collect::<Vec<_>>(),
-        vec![ShotId::MAX],
-        "the redo should have appended the recorded shot under its recorded id"
+        vec![base],
+        "the redo should have appended the recorded shot under a fresh id from its window"
+    );
+    assert_eq!(
+        restored.shots[0].uuid.as_deref(),
+        Some("11111111-1111-4111-8111-111111111111"),
+        "the shot keeps the identity the entry recorded"
     );
     assert_eq!(
         restored.next_shot_id,
-        ShotId::MAX,
-        "the counter should saturate rather than wrap past the id it must stay ahead of"
+        base + 1,
+        "the counter stays inside the window, one past the id it minted"
     );
 }
 
@@ -25936,8 +25947,12 @@ fn redo_of_a_created_shot_with_the_maximum_id_saturates_instead_of_overflowing()
 /// restore came off disk, where nothing bounds `shot_id` - a `.stalx` can carry
 /// `4294967295` in that column. `id + 1` panics a debug build there and wraps a
 /// release one to 0, after which the section hands 0 out again as a fresh id.
+///
+/// A18(d) (#576): the restore now goes through the section's mint, so the
+/// out-of-window id is replaced by a fresh one from the window and the counter
+/// never leaves it.
 #[test]
-fn undo_of_a_shot_snapshot_with_the_maximum_id_saturates_instead_of_overflowing() {
+fn undo_of_a_shot_snapshot_with_the_maximum_id_remints_it_inside_the_window() {
     let state = state_with_project();
     let section = section_with_shots(&state, "A", vec![straight_shot(0.0, 5.0)]);
 
@@ -25969,15 +25984,21 @@ fn undo_of_a_shot_snapshot_with_the_maximum_id_saturates_instead_of_overflowing(
         2,
         "the undo should have restored the recorded shot"
     );
+    let base = section * crate::models::FEATURE_ID_STRIDE;
     assert_eq!(
         restored.shots[1].id,
-        ShotId::MAX,
-        "the restored shot should keep the id the entry recorded"
+        base + 1,
+        "the restored shot should come back under a fresh id from its window"
+    );
+    assert_eq!(
+        restored.shots[1].uuid.as_deref(),
+        Some("33333333-3333-4333-8333-333333333333"),
+        "the restored shot keeps the identity the entry recorded"
     );
     assert_eq!(
         restored.next_shot_id,
-        ShotId::MAX,
-        "the counter should saturate rather than wrap back onto ids the section already uses"
+        base + 2,
+        "the counter stays inside the window, one past the id it minted"
     );
 }
 
@@ -25988,8 +26009,11 @@ fn undo_of_a_shot_snapshot_with_the_maximum_id_saturates_instead_of_overflowing(
 /// goes through `insert_shot_before`/`insert_shot_after` instead, and the
 /// counter bump lives in `take_shot_id`. Same unbounded persisted id, same
 /// `id + 1`, so it needs its own saturation and its own regression test.
+///
+/// A18(d) (#576): `take_shot_id` now honours a forced id only inside the
+/// section's window, so the inserted shot gets a fresh id there instead.
 #[test]
-fn an_anchored_redo_forcing_the_maximum_shot_id_saturates_instead_of_overflowing() {
+fn an_anchored_redo_forcing_the_maximum_shot_id_remints_it_inside_the_window() {
     let state = state_with_project();
     let section = section_with_shots(
         &state,
@@ -26045,15 +26069,81 @@ fn an_anchored_redo_forcing_the_maximum_shot_id_saturates_instead_of_overflowing
         3,
         "the redo should have inserted the recorded shot"
     );
+    let base = section * crate::models::FEATURE_ID_STRIDE;
+    assert_eq!(
+        restored.shots[0].uuid.as_deref(),
+        Some("44444444-4444-4444-8444-444444444444"),
+        "the insert should have landed BEFORE the anchor"
+    );
     assert_eq!(
         restored.shots[0].id,
-        ShotId::MAX,
-        "the insert should have landed BEFORE the anchor, under the forced id"
+        base + 2,
+        "under a fresh id from the window, not the out-of-window forced one"
     );
     assert_eq!(
         restored.next_shot_id,
-        ShotId::MAX,
-        "the counter should saturate rather than wrap past the id it must stay ahead of"
+        base + 3,
+        "the counter stays inside the window, one past the id it minted"
+    );
+}
+
+/// A18(d) (#576): the shot the user adds AFTER such a restore must still get a
+/// fresh id inside its section's window.
+///
+/// Saturating the counter (the three tests above) stopped the restore itself
+/// from overflowing, but parked `next_shot_id` on `u32::MAX`: the next append
+/// then overflowed it (`next_shot_id += 1`, a debug panic) or, in release,
+/// wrapped to 0 - an id another section owns - and with the restored shot
+/// already on `u32::MAX` the two could share an id.
+#[test]
+fn a_shot_added_after_an_out_of_window_restore_gets_a_fresh_id_in_its_window() {
+    let state = state_with_project();
+    let section = section_with_shots(&state, "A", vec![straight_shot(0.0, 5.0)]);
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_with_data(
+            Command::DeleteShot {
+                section_id: section,
+                shot_id: ShotId::MAX,
+            },
+            UndoData::ShotSnapshot {
+                section_id: section,
+                shot_id: ShotId::MAX,
+                shot_data: straight_shot(90.0, 3.0),
+                position: 1,
+                uuid: Some("55555555-5555-4555-8555-555555555555".to_string()),
+            },
+        );
+    }
+    let undone = state.undo();
+    assert!(undone.success, "undo failed: {:?}", undone.error);
+
+    let created = state.execute(Command::CreateShot {
+        section_id: section,
+        shot: straight_shot(45.0, 2.0),
+        after_shot_id: None,
+        before_shot_id: None,
+    });
+    assert!(created.success, "create failed: {:?}", created.error);
+
+    let project = state.get_project_state().unwrap();
+    let after = project.get_section(section).expect("section missing");
+    let ids: Vec<ShotId> = after.shots.iter().map(|s| s.id).collect();
+    println!(
+        "section {section} ids={ids:?} next_shot_id={}",
+        after.next_shot_id
+    );
+    let base = section * crate::models::FEATURE_ID_STRIDE;
+    let window = base..base + crate::models::FEATURE_ID_STRIDE;
+    assert_eq!(ids.len(), 3, "the restore and the create both landed");
+    assert_eq!(
+        ids.iter().collect::<HashSet<_>>().len(),
+        ids.len(),
+        "two shots share an id: {ids:?}"
+    );
+    assert!(
+        ids.iter().all(|id| window.contains(id)),
+        "ids outside section {section}'s window {window:?}: {ids:?}"
     );
 }
 

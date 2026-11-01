@@ -489,7 +489,7 @@ impl Section {
                     repaired += 1;
                 }
             }
-            section.add_shot(shot_data);
+            section.push_while_building(shot_data);
         }
         if repaired > 0 {
             // Losing a foreign identity is exactly the kind of thing that is
@@ -556,13 +556,38 @@ impl Section {
         }
     }
 
-    /// Add a shot to the end of this section
+    /// Add a shot to the end of this section, under a fresh id from
+    /// [`Self::take_shot_id`].
     pub fn add_shot(&mut self, data: ShotData) -> &Shot {
-        let shot = Shot::new(self.next_shot_id, data);
-        self.next_shot_id += 1;
-        self.shots.push(shot);
+        let id = self.take_shot_id(None);
+        self.shots.push(Shot::new(id, data));
         let idx = self.shots.len() - 1;
         &self.shots[idx]
+    }
+
+    /// [`Self::new`]'s append. The section is being built from nothing, so
+    /// every id so far was minted in order from the window's base and the
+    /// counter is free by construction; this skips the scan
+    /// [`Self::take_shot_id`] does, which would make building an n-shot section
+    /// O(n^2). A vector longer than the window keeps counting past it, as every
+    /// append always did - `Section::new` has no per-section shot cap.
+    fn push_while_building(&mut self, data: ShotData) {
+        let id = self.next_shot_id;
+        self.next_shot_id = id.saturating_add(1);
+        self.shots.push(Shot::new(id, data));
+    }
+
+    /// The shot ids this section owns, `[id * STRIDE, (id + 1) * STRIDE)`. No
+    /// other section's window overlaps it, which is what keeps shot ids unique
+    /// across the project. Saturating so it stays total for a section id past
+    /// `MAX_SECTION_ID`, which every section-minting path refuses anyway.
+    fn shot_id_window(&self) -> std::ops::Range<ShotId> {
+        let start = self.id.saturating_mul(FEATURE_ID_STRIDE);
+        start..start.saturating_add(FEATURE_ID_STRIDE)
+    }
+
+    fn holds_shot_id(&self, id: ShotId) -> bool {
+        self.shots.iter().any(|s| s.id == id)
     }
 
     /// Insert a shot after a specific shot ID, forcing the new shot's id when
@@ -605,26 +630,63 @@ impl Section {
         Some(&self.shots[pos])
     }
 
-    /// Resolve the id for a newly inserted shot: a forced id (keeping the counter
-    /// ahead of it), or the next sequential id.
-    fn take_shot_id(&mut self, forced_id: Option<ShotId>) -> ShotId {
-        match forced_id {
-            Some(id) => {
-                // SATURATING: a forced id can arrive verbatim from a persisted
-                // undo entry (the redo of a CreateShot), so ShotId::MAX must
-                // park the counter rather than overflow (#413 finding 24's
-                // class). The guard keeps monotonicity without a `max`.
+    /// The id for a shot entering this section: `forced_id` when it lies inside
+    /// the section's id window and no shot here holds it, otherwise a fresh one
+    /// (A18(d), #576). Every single-shot door goes through here - append, both
+    /// inserts, and the undo/redo replays in `core::state`.
+    ///
+    /// A forced id is a REPLAY (the redo of a create, the undo of a delete) and
+    /// arrives verbatim from a persisted entry, so nothing bounds it. Honouring
+    /// one outside the window or already taken gives two shots one id, in this
+    /// section or another, and `ShotId::MAX` used to park the counter where the
+    /// next append overflowed it (a debug panic; in release a wrap to id 0). The
+    /// recorded id is in-session only - the loader renumbers on reopen - and the
+    /// shot keeps its uuid, so a fresh id costs the replay nothing.
+    ///
+    /// A fresh id is the counter while it is inside the window and free, else
+    /// the first free id from the counter on, wrapping to the window's base: a
+    /// section whose top id is spent reuses a hole instead of handing out the
+    /// NEXT section's first id. A fresh mint always leaves `next_shot_id` one
+    /// past the id it returns, which undo capture relies on to find the shot a
+    /// create just made. Only a section holding a shot on every id of its
+    /// window - more than the per-section cap, which only an unbounded
+    /// `Section::new` vector reaches - counts on past the window, as before.
+    pub fn take_shot_id(&mut self, forced_id: Option<ShotId>) -> ShotId {
+        let window = self.shot_id_window();
+        if let Some(id) = forced_id {
+            if window.contains(&id) && !self.holds_shot_id(id) {
+                // `id < window.end <= u32::MAX`, so `+ 1` cannot overflow.
                 if id >= self.next_shot_id {
-                    self.next_shot_id = id.saturating_add(1);
+                    self.next_shot_id = id + 1;
                 }
-                id
+                return id;
             }
-            None => {
-                let id = self.next_shot_id;
-                self.next_shot_id = self.next_shot_id.saturating_add(1);
-                id
-            }
+            tracing::warn!(
+                section_id = self.id,
+                forced_id = id,
+                purpose = "shot id window (A18(d), #576)",
+                "A replayed shot id is outside its section's id window or already \
+                 taken; the shot gets a fresh id instead"
+            );
         }
+        let next = self.next_shot_id;
+        let id = if window.contains(&next) && !self.holds_shot_id(next) {
+            next
+        } else {
+            let taken: HashSet<ShotId> = self
+                .shots
+                .iter()
+                .map(|s| s.id)
+                .filter(|id| window.contains(id))
+                .collect();
+            let from = next.clamp(window.start, window.end);
+            (from..window.end)
+                .chain(window.start..from)
+                .find(|candidate| !taken.contains(candidate))
+                .unwrap_or_else(|| next.max(window.end))
+        };
+        self.next_shot_id = id.saturating_add(1);
+        id
     }
 
     /// Get a shot by ID
@@ -1504,5 +1566,102 @@ mod tests {
         assert_eq!(after.len(), 1);
         assert_eq!(before[0].length, 5.0);
         assert_eq!(after[0].length, 3.0);
+    }
+
+    // === Shot-id window (A18(d), #576) ===
+
+    fn section_with(id: SectionId, shot_count: usize) -> Section {
+        Section::new(
+            id,
+            SectionData {
+                shots: (0..shot_count)
+                    .map(|i| test_shot_data(1.0 + i as f64))
+                    .collect(),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Every shot id is distinct and inside `[id * STRIDE, (id + 1) * STRIDE)`.
+    fn assert_ids_unique_and_in_window(section: &Section) {
+        let ids: Vec<ShotId> = section.shots.iter().map(|s| s.id).collect();
+        let distinct: HashSet<ShotId> = ids.iter().copied().collect();
+        assert_eq!(distinct.len(), ids.len(), "duplicate shot ids: {ids:?}");
+        let base = section.id * FEATURE_ID_STRIDE;
+        assert!(
+            ids.iter()
+                .all(|id| (base..base + FEATURE_ID_STRIDE).contains(id)),
+            "ids outside section {}'s window [{base}, {}): {ids:?}",
+            section.id,
+            base + FEATURE_ID_STRIDE
+        );
+    }
+
+    /// A forced id outside the section's window - `ShotId::MAX` off a crafted
+    /// undo row - used to go in verbatim and park the counter on `u32::MAX`, so
+    /// the next append overflowed it: a debug panic, and in release a wrap to
+    /// id 0, another section's id. It is replaced by a fresh id in the window.
+    #[test]
+    fn a_forced_shot_id_outside_the_window_is_reminted_inside_it() {
+        let mut section = section_with(1, 2);
+        let first = section.shots[0].id;
+
+        let forced = section
+            .insert_shot_after_with_id(first, test_shot_data(7.0), Some(ShotId::MAX), None)
+            .unwrap()
+            .id;
+        let appended = section.add_shot(test_shot_data(8.0)).id;
+
+        assert_ne!(forced, ShotId::MAX, "the out-of-window id was kept");
+        assert_eq!(
+            section.next_shot_id,
+            appended + 1,
+            "the counter stays one past the id it just minted"
+        );
+        assert_ids_unique_and_in_window(&section);
+    }
+
+    /// A forced id another shot of the section already holds used to be
+    /// inserted anyway, so id-keyed edits, deletes and undo hit whichever of the
+    /// two came first.
+    #[test]
+    fn a_forced_shot_id_already_in_the_section_is_reminted() {
+        let mut section = section_with(0, 2);
+        let (first, second) = (section.shots[0].id, section.shots[1].id);
+
+        let inserted = section
+            .insert_shot_before_with_id(second, test_shot_data(7.0), Some(first), None)
+            .unwrap()
+            .id;
+
+        assert_ne!(inserted, first, "the taken id was handed out twice");
+        assert_ids_unique_and_in_window(&section);
+    }
+
+    /// Once the window's top id is spent (a forced id up there, or a section
+    /// filled to the cap and then thinned), the counter sits one past the window,
+    /// on the NEXT section's first id. Minting takes a free id inside the window
+    /// instead, and keeps `next_shot_id - 1` naming the shot it just made (undo
+    /// capture reads it back that way).
+    #[test]
+    fn a_spent_counter_mints_a_free_id_inside_the_window() {
+        let mut section = section_with(2, 2);
+        let base = 2 * FEATURE_ID_STRIDE;
+        let top = base + FEATURE_ID_STRIDE - 1;
+        let last = section.shots[1].id;
+        let kept = section
+            .insert_shot_after_with_id(last, test_shot_data(7.0), Some(top), None)
+            .unwrap()
+            .id;
+        assert_eq!(kept, top, "a free id inside the window is honoured");
+
+        let minted = section.add_shot(test_shot_data(8.0)).id;
+
+        assert_eq!(minted, base + 2, "the lowest free id in the window");
+        assert_eq!(section.next_shot_id, minted + 1);
+        assert_ids_unique_and_in_window(&section);
+        let after = section.add_shot(test_shot_data(9.0)).id;
+        assert_eq!(after, base + 3);
+        assert_ids_unique_and_in_window(&section);
     }
 }
