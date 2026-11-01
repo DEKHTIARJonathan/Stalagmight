@@ -97,6 +97,23 @@ function normalizeGpsWhitespace(input: string): string {
 }
 
 /**
+ * Map the look-alike characters keyboards and word processors produce onto the
+ * ASCII marks the parsers read: masculine ordinal (U+00BA, Spanish and Mexican
+ * keyboards) and ring above (U+02DA, macOS Option+K) for the degree sign;
+ * primes, acute accents and curly quotes for minutes and seconds; two
+ * apostrophes for a seconds mark; and the Unicode minus and hyphen/dash
+ * characters that copy-paste turns a '-' into.
+ */
+function canonicalizeGpsSymbols(text: string): string {
+  return text
+    .replace(/[\u00BA\u02DA]/g, '\u00B0')
+    .replace(/[\u2018\u2019\u2032\u00B4\u02B9]/g, "'")
+    .replace(/[\u201C\u201D\u2033\u02BA]/g, '"')
+    .replace(/''/g, '"')
+    .replace(/[\u2010-\u2013\u2212]/g, '-');
+}
+
+/**
  * Latitude beyond this is treated as "extreme" for the transposition heuristic
  * below. A lower threshold (60) false-positives on real diving/caving
  * latitudes - Iceland (~64.25 N), Norway (~66 N), Sweden (~63 N) all sit past
@@ -139,7 +156,7 @@ export function looksTransposed(lat: number, lon: number): boolean {
  */
 export function looksTransposedRawDD(input: string): boolean {
   const trimmed = normalizeGpsWhitespace(input);
-  const match = trimmed.match(/^(-?\d+\.?\d*)[,\s]+(-?\d+\.?\d*)$/);
+  const match = trimmed.match(/^([+-]?\d+\.?\d*)[,\s]+([+-]?\d+\.?\d*)$/);
   if (!match || match[1] === undefined || match[2] === undefined) return false;
   const lat = parseFloat(match[1]);
   const lon = parseFloat(match[2]);
@@ -237,6 +254,8 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
   let lonMinStr: string | undefined;
   let lonSecStr: string | undefined;
   let lonDir: string | undefined;
+  // Patterns 1 and 2 carry direction letters; pattern 3 is signed degrees only.
+  let lettered = true;
 
   // Pattern 1: With degree/minute/second symbols AND direction letters
   // Matches: 48°51'30"N 2°17'40"E (or with spaces)
@@ -280,6 +299,7 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
       match = trimmed.match(dmsSignedRegex);
       if (match) {
         // Pattern 3: signed degrees - at least one must be negative
+        lettered = false;
         latDegStr = match[1];
         latMinStr = match[2];
         latSecStr = match[3];
@@ -314,12 +334,7 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
     latDir === undefined ||
     lonDir === undefined
   ) {
-    return {
-      message:
-        "Invalid DMS format. Expected: deg°min'sec\"N deg°min'sec\"E or deg min sec N deg min sec E (direction letters or signed degrees required)",
-      original: input,
-      format: 'DMS',
-    };
+    return { message: DMS_FORMAT_MESSAGE, original: input, format: 'DMS' };
   }
 
   const latDeg = parseInt(latDegStr, 10);
@@ -368,8 +383,14 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
     coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
     format: 'DMS',
     original: input,
+    ...(lettered ? { orderExplicit: true } : {}),
   };
 }
+
+const DMS_FORMAT_MESSAGE =
+  "Invalid DMS format. Expected: deg°min'sec\"N deg°min'sec\"E or deg min sec N deg min sec E (direction letters or signed degrees required)";
+const DDM_FORMAT_MESSAGE =
+  "Invalid DDM format. Expected: deg°min.dec'N deg°min.dec'E (e.g., 48°51.5'N 2°17.67'E)";
 
 /**
  * Parse Degrees Decimal Minutes format.
@@ -405,11 +426,7 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
     match[5] === undefined ||
     match[6] === undefined
   ) {
-    return {
-      message: "Invalid DDM format. Expected: deg°min.dec'N deg°min.dec'E (e.g., 48°51.5'N 2°17.67'E)",
-      original: input,
-      format: 'DDM',
-    };
+    return { message: DDM_FORMAT_MESSAGE, original: input, format: 'DDM' };
   }
 
   const latDeg = parseInt(match[1], 10);
@@ -451,6 +468,218 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
     coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
     format: 'DDM',
     original: input,
+    orderExplicit: true,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Degree pairs (DD, DDM, DMS) read strictly: the whole input must be one
+// latitude and one longitude, each up to three numbers (degrees, minutes,
+// seconds) with optional marks (°, ', ") and an optional hemisphere letter
+// before or after it. `parseGps` tries this first; input it cannot read as a
+// pair (for example coordinates inside other text) falls back to the per-format
+// parsers above, which search the string for a match.
+// ---------------------------------------------------------------------------
+
+type DegreeToken =
+  | { kind: 'num'; text: string }
+  | { kind: 'mark'; position: number } // 0 = degrees, 1 = minutes, 2 = seconds
+  | { kind: 'letter'; letter: string } // N, S, E or W
+  | { kind: 'comma' };
+
+/** One half of a pair: degrees[, minutes[, seconds]] as typed, plus its letter. */
+interface DegreeComponent {
+  parts: string[];
+  letter?: string;
+}
+
+// A hemisphere letter is a single letter, never part of a word ("Entrance").
+const DEGREE_TOKEN_RE = /(\s*)(?:([+-]?\d+(?:\.\d*)?)|([°'"])|([NSEW])(?![A-Z])|(,))/iy;
+
+/** Split into tokens, or null when the text holds anything else (words, other marks). */
+function tokenizeDegrees(text: string): DegreeToken[] | null {
+  const tokens: DegreeToken[] = [];
+  let pos = 0;
+  while (pos < text.length) {
+    DEGREE_TOKEN_RE.lastIndex = pos;
+    const m = DEGREE_TOKEN_RE.exec(text);
+    if (!m) return text.slice(pos).trim() === '' ? tokens : null;
+    pos = DEGREE_TOKEN_RE.lastIndex;
+    const [, space, num, mark, letter] = m;
+    if (num !== undefined) {
+      // Two numbers need a separator: "20.5-87.3" is not a pair.
+      if (tokens[tokens.length - 1]?.kind === 'num' && !space) return null;
+      tokens.push({ kind: 'num', text: num });
+    } else if (mark !== undefined) {
+      tokens.push({ kind: 'mark', position: '°\'"'.indexOf(mark) });
+    } else if (letter !== undefined) {
+      tokens.push({ kind: 'letter', letter: letter.toUpperCase() });
+    } else {
+      tokens.push({ kind: 'comma' });
+    }
+  }
+  return tokens;
+}
+
+/** Where the latitude ends and the longitude starts, or null when that is unclear. */
+function splitDegreePair(tokens: DegreeToken[]): [DegreeToken[], DegreeToken[]] | null {
+  const indicesOf = (test: (t: DegreeToken) => boolean) =>
+    tokens.flatMap((t, i) => (test(t) ? [i] : []));
+  // 1. A comma (or a run of them) separates the halves.
+  const commaRuns = indicesOf((t) => t.kind === 'comma').filter((i) => tokens[i - 1]?.kind !== 'comma');
+  if (commaRuns.length > 1) return null;
+  if (commaRuns[0] !== undefined) {
+    let end = commaRuns[0];
+    while (tokens[end]?.kind === 'comma') end++;
+    return [tokens.slice(0, commaRuns[0]), tokens.slice(end)];
+  }
+  // 2. Two hemisphere letters, both leading ("N20 30.1 W87 18.4") or both trailing.
+  const letters = indicesOf((t) => t.kind === 'letter');
+  if (letters.length > 2) return null;
+  if (letters.length === 2) {
+    const [first, second] = letters as [number, number];
+    const leading = first === 0;
+    if (leading === (second === tokens.length - 1)) return null;
+    const cut = leading ? second : first + 1;
+    return [tokens.slice(0, cut), tokens.slice(cut)];
+  }
+  // 3. Otherwise the longitude starts at the number carrying the second degree
+  //    sign or, with no degree signs at all, at the second of exactly two numbers.
+  const degreeMarks = indicesOf((t) => t.kind === 'mark' && t.position === 0);
+  const numbers = indicesOf((t) => t.kind === 'num');
+  let cut: number;
+  if (degreeMarks.length === 2) cut = degreeMarks[1]! - 1;
+  else if (degreeMarks.length === 0 && numbers.length === 2) cut = numbers[1]!;
+  else return null;
+  if (cut <= 0 || tokens[cut]?.kind !== 'num') return null;
+  // A lone letter right before the cut leads the longitude only if it is E or W.
+  const before = tokens[cut - 1];
+  if (before?.kind === 'letter' && (before.letter === 'E' || before.letter === 'W')) cut -= 1;
+  return [tokens.slice(0, cut), tokens.slice(cut)];
+}
+
+/** One half: [letter] number [mark] (up to three numbers) [letter], marks in order. */
+function readDegreeComponent(tokens: DegreeToken[]): DegreeComponent | null {
+  let start = 0;
+  let end = tokens.length;
+  let letter: string | undefined;
+  const first = tokens[0];
+  if (first?.kind === 'letter') {
+    letter = first.letter;
+    start = 1;
+  }
+  const last = tokens[end - 1];
+  if (end - 1 >= start && last?.kind === 'letter') {
+    if (letter !== undefined) return null;
+    letter = last.letter;
+    end -= 1;
+  }
+  const parts: string[] = [];
+  for (let i = start; i < end; i++) {
+    const token = tokens[i]!;
+    if (token.kind !== 'num' || parts.length === 3) return null;
+    parts.push(token.text);
+    const next = tokens[i + 1];
+    if (i + 1 < end && next?.kind === 'mark') {
+      if (next.position !== parts.length - 1) return null;
+      i++;
+    }
+  }
+  if (parts.length === 0) return null;
+  return letter === undefined ? { parts } : { parts, letter };
+}
+
+const isLatitudeLetter = (c: DegreeComponent) => c.letter === 'N' || c.letter === 'S';
+const hasSign = (text: string) => /^[+-]/.test(text);
+
+/**
+ * Read `text` as one latitude/longitude pair in degrees. Returns null when the
+ * text is not shaped like a pair (the caller then tries the lenient parsers),
+ * an error when it is a pair that cannot be read unambiguously, else the result.
+ * A minus sign wins over a contradicting N or E, as in parseDMS, with a note.
+ */
+function parseDegreePair(
+  text: string,
+  depthReference: number,
+  original: string
+): GpsParseResult | GpsParseError | null {
+  const tokens = tokenizeDegrees(text);
+  const halves = tokens && splitDegreePair(tokens);
+  const first = halves && readDegreeComponent(halves[0]);
+  const second = halves && readDegreeComponent(halves[1]);
+  if (!first || !second) return null;
+
+  const depth = Math.max(first.parts.length, second.parts.length);
+  const format: GpsFormat = depth === 1 ? 'DD' : depth === 2 ? 'DDM' : 'DMS';
+  const fail = (message: string): GpsParseError => ({ message, original, format });
+  if (first.parts.length !== second.parts.length) return fail(i18n.t('validation.gps.mixedFormats'));
+
+  // Which half is the latitude: the letters say so when both have one,
+  // otherwise the order does (latitude first).
+  let lat = first;
+  let lon = second;
+  if (first.letter !== undefined && second.letter !== undefined) {
+    if (isLatitudeLetter(first) === isLatitudeLetter(second)) {
+      return fail(i18n.t('validation.gps.hemisphereLetters'));
+    }
+    if (!isLatitudeLetter(first)) [lat, lon] = [second, first];
+  } else if (first.letter !== undefined || second.letter !== undefined) {
+    if ((first.letter !== undefined && !isLatitudeLetter(first)) || isLatitudeLetter(second)) {
+      return fail(i18n.t('validation.gps.hemisphereLetters'));
+    }
+    const bare = first.letter === undefined ? first : second;
+    if (!hasSign(bare.parts[0]!)) return fail(i18n.t('validation.gps.letterMissing'));
+  } else if (format !== 'DD' && !hasSign(first.parts[0]!) && !hasSign(second.parts[0]!)) {
+    // Unsigned minutes/seconds with no letters: N/E would be a guess (as before).
+    return fail(format === 'DMS' ? DMS_FORMAT_MESSAGE : DDM_FORMAT_MESSAGE);
+  }
+
+  for (const c of [lat, lon]) {
+    const [deg, min, sec] = c.parts;
+    if ((min !== undefined && hasSign(min)) || (sec !== undefined && hasSign(sec))) {
+      return fail(i18n.t('validation.gps.signOnMinutes'));
+    }
+    if (min !== undefined && deg!.includes('.')) return fail(i18n.t('validation.gps.degreesNotWhole'));
+    if (sec !== undefined && min!.includes('.')) return fail(i18n.t('validation.gps.minutesNotWhole'));
+  }
+  // Same checks and messages as parseDMS / parseDDM.
+  if ([lat, lon].some((c) => c.parts[1] !== undefined && parseFloat(c.parts[1]) >= 60)) {
+    return fail(format === 'DMS' ? 'Minutes must be between 0 and 59' : 'Minutes must be between 0 and 59.99');
+  }
+  if ([lat, lon].some((c) => c.parts[2] !== undefined && parseFloat(c.parts[2]) >= 60)) {
+    return fail('Seconds must be between 0 and 59.99');
+  }
+
+  const notes: string[] = [];
+  const valueOf = (c: DegreeComponent): number => {
+    const [deg, min, sec] = c.parts;
+    let value = Math.abs(parseFloat(deg!));
+    if (min !== undefined) value += parseFloat(min) / 60;
+    if (sec !== undefined) value += parseFloat(sec) / 3600;
+    // Read the sign off the text: parseFloat('-0') is -0, which fails `< 0`.
+    const minus = deg!.startsWith('-');
+    if (minus && (c.letter === 'N' || c.letter === 'E')) {
+      notes.push(
+        i18n.t('validation.gps.signOverridesLetter', {
+          letter: c.letter,
+          value: formatFixed(-value, undefined, 6),
+        })
+      );
+    }
+    return minus || c.letter === 'S' || c.letter === 'W' ? -value : value;
+  };
+  const latitude = valueOf(lat);
+  const longitude = valueOf(lon);
+
+  const validation = validateCoordinates(latitude, longitude);
+  if (!validation.valid) return fail(validation.errors.join('; '));
+
+  return {
+    coordinates: { latitude, longitude, depth_reference: depthReference },
+    format,
+    original,
+    orderExplicit: first.letter !== undefined || second.letter !== undefined,
+    ...(notes.length > 0 ? { note: notes.join(' ') } : {}),
   };
 }
 
@@ -815,6 +1044,7 @@ export function parsePlusCodes(input: string, depthReference = 0): GpsParseResul
     coordinates: { latitude: result.lat, longitude: result.lon, depth_reference: depthReference },
     format: 'PlusCodes',
     original: input,
+    orderExplicit: true,
   };
 }
 
@@ -975,6 +1205,20 @@ export function parseWhat3words(input: string): GpsParseResult | GpsParseError {
 export function parseUrl(input: string, depthReference = 0): GpsParseResult | GpsParseError {
   const trimmed = input.trim();
 
+  // geo: URI (RFC 5870), as shared by Android apps: geo:lat,lon[,alt][;params]
+  const geoMatch = trimmed.match(/^geo:(-?\d+\.?\d*),(-?\d+\.?\d*)/i);
+  if (geoMatch?.[1] !== undefined && geoMatch[2] !== undefined) {
+    const lat = parseFloat(geoMatch[1]);
+    const lon = parseFloat(geoMatch[2]);
+    const validation = validateCoordinates(lat, lon);
+    if (!validation.valid) return { message: validation.errors.join('; '), original: input, format: 'DD' };
+    return {
+      coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
+      format: 'DD',
+      original: input,
+    };
+  }
+
   // Check if it looks like a URL
   if (!trimmed.includes('http') && !trimmed.includes('maps') && !trimmed.includes('@')) {
     return {
@@ -1050,8 +1294,9 @@ export function parseUrl(input: string, depthReference = 0): GpsParseResult | Gp
     }
   }
 
-  // Pattern 2: ?q=lat,lon or ?ll=lat,lon
-  const queryPattern = /[?&](?:q|ll)=(-?\d+\.?\d*),(-?\d+\.?\d*)/;
+  // Pattern 2: ?q=lat,lon or ?ll=lat,lon, and the Google Maps URLs API's
+  // query= / destination= (whose comma is often encoded as %2C)
+  const queryPattern = /[?&](?:q|ll|query|destination)=(-?\d+\.?\d*)(?:,|%2C)(-?\d+\.?\d*)/i;
   const queryMatch = trimmed.match(queryPattern);
   if (queryMatch && queryMatch[1] !== undefined && queryMatch[2] !== undefined) {
     const lat = parseFloat(queryMatch[1]);
@@ -1072,6 +1317,22 @@ export function parseUrl(input: string, depthReference = 0): GpsParseResult | Gp
     const lon = parseFloat(googleAtMatch[2]);
     const validation = validateCoordinates(lat, lon);
     if (validation.valid) {
+      return {
+        coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
+        format: 'DD',
+        original: input,
+      };
+    }
+  }
+
+  // OpenStreetMap marker: ?mlat=..&mlon=.. is the shared point; #map= is only
+  // the view centre, which differs as soon as the map was panned.
+  const osmMarkerLat = trimmed.match(/[?&]mlat=(-?\d+\.?\d*)/);
+  const osmMarkerLon = trimmed.match(/[?&]mlon=(-?\d+\.?\d*)/);
+  if (osmMarkerLat?.[1] !== undefined && osmMarkerLon?.[1] !== undefined) {
+    const lat = parseFloat(osmMarkerLat[1]);
+    const lon = parseFloat(osmMarkerLon[1]);
+    if (validateCoordinates(lat, lon).valid) {
       return {
         coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
         format: 'DD',
@@ -1149,8 +1410,8 @@ export function detectFormat(input: string): GpsFormat | undefined {
     return 'MGRS';
   }
 
-  // UTM: zone + band + easting + northing with separators
-  if (/^\d{1,2}\s*[A-Za-z][,\s]+\d+[,\s]+\d+$/.test(trimmed)) {
+  // UTM: zone + band + easting + northing with separators (decimals allowed, as parseUTM does)
+  if (/^\d{1,2}\s*[A-Za-z][,\s]+\d+\.?\d*[,\s]+\d+\.?\d*$/.test(trimmed)) {
     return 'UTM';
   }
 
@@ -1194,42 +1455,52 @@ export function parseGps(input: string, depthReference = 0): GpsParseResult | Gp
   }
 
   // Try URL extraction first (check for URL-like patterns)
+  const isGeoUri = /^geo:/i.test(trimmed);
   if (
     trimmed.includes('http') ||
     (trimmed.includes('maps') && trimmed.includes('/')) ||
-    trimmed.includes('@')
+    trimmed.includes('@') ||
+    isGeoUri
   ) {
     const urlResult = parseUrl(trimmed, depthReference);
     if ('coordinates' in urlResult) {
-      return urlResult;
+      // A link states latitude and longitude by name or position; never "swapped".
+      return { ...urlResult, orderExplicit: true };
     }
     // Fall through to try other formats only if @ is not in a URL context
-    if (trimmed.includes('http') || trimmed.includes('maps')) {
+    if (trimmed.includes('http') || trimmed.includes('maps') || isGeoUri) {
       return urlResult; // Return URL error for actual URLs
     }
   }
 
-  // Detect format
-  const format = detectFormat(trimmed);
+  const text = canonicalizeGpsSymbols(trimmed);
+  const format = detectFormat(text);
 
-  if (format) {
-    // Try detected format first
-    switch (format) {
-      case 'DD':
-        return parseDD(trimmed, depthReference);
-      case 'DMS':
-        return parseDMS(trimmed, depthReference);
-      case 'DDM':
-        return parseDDM(trimmed, depthReference);
-      case 'UTM':
-        return parseUTM(trimmed, depthReference);
-      case 'MGRS':
-        return parseMGRS(trimmed);
-      case 'PlusCodes':
-        return parsePlusCodes(trimmed, depthReference);
-      case 'What3words':
-        return parseWhat3words(trimmed);
-    }
+  // Grid references and codes have their own parsers.
+  switch (format) {
+    case 'UTM':
+      return parseUTM(text, depthReference);
+    case 'MGRS':
+      return parseMGRS(text);
+    case 'PlusCodes':
+      return parsePlusCodes(text, depthReference);
+    case 'What3words':
+      return parseWhat3words(text);
+  }
+
+  // Any way of writing a degree pair, read strictly (whole input).
+  const degrees = parseDegreePair(text, depthReference, input);
+  if (degrees) return degrees;
+
+  // Not shaped like a bare pair (e.g. "Entrance: 20°30'15"N 87°18'27"W"): the
+  // per-format parsers, which find the coordinates inside the text.
+  switch (format) {
+    case 'DD':
+      return parseDD(text, depthReference);
+    case 'DMS':
+      return parseDMS(text, depthReference);
+    case 'DDM':
+      return parseDDM(text, depthReference);
   }
 
   // Try all parsers in order (DD first as most common)
@@ -1244,7 +1515,7 @@ export function parseGps(input: string, depthReference = 0): GpsParseResult | Gp
   ];
 
   for (const [, parser] of parsers) {
-    const result = parser(trimmed);
+    const result = parser(text);
     if ('coordinates' in result) {
       return result;
     }
@@ -1255,6 +1526,24 @@ export function parseGps(input: string, depthReference = 0): GpsParseResult | Gp
       'Could not parse GPS coordinates. Supported formats: DD (48.8584, 2.2945), DMS (48°51\'30"N 2°17\'40"E), DDM (48°51.5\'N 2°17.67\'E), UTM (31U 448251 5411932), MGRS (31UDQ4825111932), Plus Codes (8FW4V75V+8Q), URL (Google/OSM/Bing Maps links), What3words (requires API)',
     original: input,
   };
+}
+
+/**
+ * Whether to show the "latitude and longitude may be swapped" hint for what the
+ * user typed. Only an implicit order (two bare numbers, signed degrees) can be
+ * swapped: hemisphere letters, a grid reference, a Plus Code or a map link
+ * already say which value is the latitude, so a far-north UTM point (Svalbard)
+ * or "78.9 N, 15.5 E" does not trip it. For input that failed to parse, the
+ * raw-pair check (`looksTransposedRawDD`) applies as before.
+ */
+export function gpsSwapHint(input: string, result: GpsParseResult | GpsParseError): boolean {
+  if ('coordinates' in result) {
+    return (
+      result.orderExplicit !== true &&
+      looksTransposed(result.coordinates.latitude, result.coordinates.longitude)
+    );
+  }
+  return looksTransposedRawDD(input);
 }
 
 /**

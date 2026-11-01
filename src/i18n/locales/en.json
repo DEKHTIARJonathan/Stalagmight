@@ -3130,6 +3130,13 @@
   },
   "validation": {
     "gps": {
+      "degreesNotWhole": "Degrees must be a whole number when minutes follow.",
+      "hemisphereLetters": "Use N or S for the latitude and E or W for the longitude.",
+      "letterMissing": "One coordinate has a hemisphere letter and the other has neither a letter nor a sign - add the missing N/S or E/W.",
+      "minutesNotWhole": "Minutes must be a whole number when seconds follow.",
+      "mixedFormats": "Latitude and longitude are written in different formats - give both as degrees, degrees and minutes, or degrees, minutes and seconds.",
+      "signOnMinutes": "Only the degrees can carry a sign, not the minutes or seconds.",
+      "signOverridesLetter": "The minus sign and \"{{letter}}\" disagree - read as {{value}} (the minus sign wins).",
       "utmBandMismatch": "UTM northing {{northing}} is at {{latitude}}, outside latitude band {{band}} ({{from}} to {{to}}) - check the band letter and the northing.",
       "utmBandSAmbiguous": "\"S\" read as latitude band S (32°N to 40°N). For the southern hemisphere, enter \"{{suggestion}}\" instead.",
       "utmNeitherNorth": "UTM northing {{northing}} fits neither latitude band N (0° to 8°N) nor the northern hemisphere (0° to 84°N).",

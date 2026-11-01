@@ -19,6 +19,7 @@ import {
   formatGpsCoordinates,
   looksTransposed,
   looksTransposedRawDD,
+  gpsSwapHint,
   type GpsParseResult,
   type GpsParseError,
 } from './gps';
@@ -829,4 +830,141 @@ describe('UTM band letter is checked against the northing (D37)', () => {
       expectRejected(`33${band} 500000 ${BAND_MID_NORTHING[other]![1]}`, new RegExp(`band ${band}`));
     }
   );
+});
+
+const DMS_LAT = 20 + 30 / 60 + 15 / 3600; // 20°30'15"
+const DMS_LON = 87 + 18 / 60 + 27 / 3600; // 87°18'27"
+const DDM_LAT = 20 + 30.5 / 60; // 20°30.5'
+
+describe('parseGps notes a minus sign that overrides N or E (D39e)', () => {
+  it('parseGps agrees, and says the minus sign overrode the letter', () => {
+    const result = parsedOk("-0°30.5'N 87°18.5'W");
+    expect(result.coordinates.latitude).toBeCloseTo(-30.5 / 60, 6);
+    expect(result.note).toMatch(/minus sign/i);
+  });
+
+  it('a -1 degree with N reads the same way and carries the same note', () => {
+    const result = parsedOk("-1°30.5'N 87°18.5'W");
+    expect(result.coordinates.latitude).toBeCloseTo(-(1 + 30.5 / 60), 6);
+    expect(result.note).toMatch(/minus sign/i);
+  });
+
+  it('a redundant minus with S needs no note', () => {
+    const result = parsedOk("-0°30.5'S 87°18.5'W");
+    expect(result.coordinates.latitude).toBeCloseTo(-30.5 / 60, 6);
+    expect(result.note).toBeUndefined();
+  });
+});
+
+describe('degree pairs: silent misreads fixed', () => {
+  it('a leading S on the latitude is not ignored', () => {
+    expectCoordsClose(parsedOk(`S 20°30'15" -87°18'27"`), -DMS_LAT, -DMS_LON);
+  });
+
+  it('rejects decimal degrees followed by minutes instead of reading from mid-number', () => {
+    expectRejected(`48.5°51'30"N 2°17'40"E`, /whole number/);
+    expectRejected(`20.5°30.5'N 87°18.5'W`, /whole number/);
+  });
+});
+
+describe('degree pairs: common typed and pasted forms', () => {
+  const cases: Array<[string, number, number]> = [
+    // decimal degrees with hemisphere letters, prefix or suffix, any case
+    ['20.5 N, 87.3 W', 20.5, -87.3],
+    ['20.5N 87.3W', 20.5, -87.3],
+    ['N 20.5, W 87.3', 20.5, -87.3],
+    ['n20.5 w87.3', 20.5, -87.3],
+    ['20.5°N, 87.3°W', 20.5, -87.3],
+    ['N20.50833° W087.30833°', 20.50833, -87.30833],
+    ['S 33.865 E 151.2099', -33.865, 151.2099],
+    ['20.5N, -87.3', 20.5, -87.3],
+    // signs: explicit plus, Unicode minus and en dash from copy-paste
+    ['+20.5, -87.3', 20.5, -87.3],
+    ['20.5, +87.3', 20.5, 87.3],
+    ['\u221220.5, 87.3', -20.5, 87.3],
+    ['20.5, \u201387.3', 20.5, -87.3],
+    ['20.5°, -87.3°', 20.5, -87.3],
+    // Garmin-style degrees and decimal minutes
+    ["N20°30.500' W087°18.500'", DDM_LAT, -DDM_LON],
+    ['N20 30.123 W087 18.456', 20 + 30.123 / 60, -(87 + 18.456 / 60)],
+    ['20 30.123 N 87 18.456 W', 20 + 30.123 / 60, -(87 + 18.456 / 60)],
+    ["-20°30.5' -87°18.5'", -DDM_LAT, -DDM_LON],
+    // DMS symbol variants: masculine ordinal, ring, curly quotes, doubled apostrophes
+    [`20\u00BA30'15"N 87\u00BA18'27"W`, DMS_LAT, -DMS_LON],
+    [`20\u02DA30'15"N 87\u02DA18'27"W`, DMS_LAT, -DMS_LON],
+    [`20°30\u201915\u201DN 87°18\u201927\u201DW`, DMS_LAT, -DMS_LON],
+    [`20°30'15''N 87°18'27''W`, DMS_LAT, -DMS_LON],
+    [`20\u00BA30.5'N 87\u00BA18.5'W`, DDM_LAT, -DDM_LON],
+    ['N 20 30 15 W 87 18 27', DMS_LAT, -DMS_LON],
+    [`N20°30'15" W87°18'27"`, DMS_LAT, -DMS_LON],
+    [`\u221220°30'15" 87°18'27"`, -DMS_LAT, DMS_LON],
+    // explicit letters make longitude-first input unambiguous
+    ['87.3 W, 20.5 N', 20.5, -87.3],
+    [`87°18'27"W 20°30'15"N`, DMS_LAT, -DMS_LON],
+  ];
+
+  it.each(cases)('%s', (input, lat, lon) => {
+    expectCoordsClose(parseGps(input), lat, lon);
+  });
+
+  it('reports the format actually read', () => {
+    expect(parsedOk('20.5 N, 87.3 W').format).toBe('DD');
+    expect(parsedOk('N20 30.123 W087 18.456').format).toBe('DDM');
+    expect(parsedOk(`20\u00BA30'15"N 87\u00BA18'27"W`).format).toBe('DMS');
+  });
+
+  it('still rejects ambiguous or contradictory pairs', () => {
+    expectRejected('20.5N 87.3', /letter/);
+    expectRejected('20.5 N 87.3 N', /N or S/);
+    expectRejected('20.5 E 87.3 W', /N or S/);
+    expectRejected(`20°30'15"N 87°18.5'W`, /different formats/);
+    expectRejected(`20°30'15" 87°18'27"`);
+    expectRejected("20°30.5' 87°18.5'");
+    expectRejected('20,5 -87,3');
+    expectRejected(`20°-30'15"N 87°18'27"W`);
+  });
+
+  it('keeps plain decimal degrees and labelled pastes working as before', () => {
+    expectCoordsClose(parseGps('20.508333,-87.308333'), 20.508333, -87.308333);
+    expectCoordsClose(parseGps('20 30'), 20, 30);
+    expectCoordsClose(parseGps(`Entrance: 20°30'15"N 87°18'27"W`), DMS_LAT, -DMS_LON);
+  });
+});
+
+describe('map links', () => {
+  it('prefers the OpenStreetMap marker (mlat/mlon) over the view centre', () => {
+    expectCoordsClose(
+      parseGps('https://www.openstreetmap.org/?mlat=20.51&mlon=-87.31#map=15/20.5/-87.3'),
+      20.51,
+      -87.31
+    );
+  });
+
+  it('reads Google Maps URLs API query= links and geo: URIs', () => {
+    expectCoordsClose(parseGps('https://www.google.com/maps/search/?api=1&query=20.5,-87.3'), 20.5, -87.3);
+    expectCoordsClose(parseGps('geo:20.5,-87.3'), 20.5, -87.3);
+  });
+});
+
+describe('gpsSwapHint', () => {
+  it('fires for a bare decimal pair that looks swapped', () => {
+    expect(gpsSwapHint('-87.3, 20.5', parseGps('-87.3, 20.5'))).toBe(true);
+  });
+
+  it('still fires on the raw pair when the swapped input fails to parse', () => {
+    expect(gpsSwapHint('120, 45', parseGps('120, 45'))).toBe(true);
+  });
+
+  it('does not fire when the input itself says which value is the latitude', () => {
+    // Svalbard (78.96N) as UTM, and explicit N/E pairs: neither can be swapped.
+    expect(gpsSwapHint('33X 512345 8765432', parseGps('33X 512345 8765432'))).toBe(false);
+    expect(gpsSwapHint("90°0.0'N 0°0.0'E", parseGps("90°0.0'N 0°0.0'E"))).toBe(false);
+    expect(gpsSwapHint('78.9 N, 15.5 E', parseGps('78.9 N, 15.5 E'))).toBe(false);
+  });
+});
+
+describe('detectFormat (entry review)', () => {
+  it('detects UTM with decimal easting/northing', () => {
+    expect(detectFormat('16Q 451234.5 2266789.25')).toBe('UTM');
+  });
 });
