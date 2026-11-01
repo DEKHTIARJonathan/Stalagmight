@@ -35,11 +35,7 @@ impl AppState {
         // extension-less `output_path` (e.g. `foo`) otherwise slips past an
         // existing `foo.stalx` and leaves `file_path` pointing at a path that
         // doesn't match what's written (#169).
-        let output_path = if output_path.extension().is_none_or(|ext| ext != "stalx") {
-            output_path.with_extension("stalx")
-        } else {
-            output_path
-        };
+        let output_path = crate::persistence::with_stalx_extension(output_path);
 
         // Check that output path doesn't already exist
         if output_path.exists() {

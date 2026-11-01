@@ -469,18 +469,13 @@ impl AppState {
             }
         }
 
-        // Determine save path and ensure .stalx extension
+        // Determine save path and ensure .stalx extension. `CaveA.STALX` already
+        // has it: rewriting that to `CaveA.stalx` names a different file on a
+        // case-sensitive filesystem, one no overwrite prompt was shown for (B33).
         let is_implicit_save = path.is_none();
         let save_path = path.or_else(|| project.file_path.clone());
         let mut save_path = match save_path {
-            Some(p) => {
-                // Ensure .stalx extension
-                if p.extension().is_none_or(|ext| ext != "stalx") {
-                    p.with_extension("stalx")
-                } else {
-                    p
-                }
-            }
+            Some(p) => crate::persistence::with_stalx_extension(p),
             None => return CommandResult::failure("No save path specified".to_string()),
         };
 

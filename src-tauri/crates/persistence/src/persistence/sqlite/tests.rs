@@ -2474,6 +2474,48 @@ fn test_open_readonly_fails_on_non_stalx_extension() {
     assert!(result.is_err(), "Non-.stalx extension should be rejected");
 }
 
+/// [#576 B33] `.STALX` is a project file too. The app opens one (the frontend
+/// routes extensions case-insensitively), so the read-only open GlobalView's
+/// geometry preview uses must not refuse it, or that project shows no geometry.
+#[test]
+fn test_open_readonly_accepts_an_uppercase_stalx_extension() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("CaveA.STALX");
+    {
+        let mut db = Database::open(&db_path).unwrap();
+        db.save_project(&Project::new("Upper Ext".to_string(), None))
+            .unwrap();
+    }
+
+    let result = Database::open_readonly(&db_path);
+    eprintln!(
+        "open_readonly({}): {}",
+        db_path.display(),
+        match &result {
+            Ok(_) => "Ok".to_string(),
+            Err(e) => format!("Err({e})"),
+        }
+    );
+    assert!(result.is_ok(), "a .STALX project must open read-only");
+}
+
+/// [#576 B33] Any spelling of `.stalx` is kept as typed; anything else gets it.
+#[test]
+fn test_with_stalx_extension_keeps_every_spelling_of_stalx() {
+    let dir = Path::new("/projects");
+    for kept in ["CaveA.stalx", "CaveA.STALX", "CaveA.Stalx"] {
+        assert_eq!(
+            with_stalx_extension(dir.join(kept)),
+            dir.join(kept),
+            "{kept} already has the extension"
+        );
+    }
+    for (typed, written) in [("CaveA", "CaveA.stalx"), ("CaveA.tml", "CaveA.stalx")] {
+        assert_eq!(with_stalx_extension(dir.join(typed)), dir.join(written));
+    }
+    assert!(!has_stalx_extension(Path::new("/projects/stalx")));
+}
+
 // === Round-trip with station offsets (individual station moves) ===
 
 #[test]

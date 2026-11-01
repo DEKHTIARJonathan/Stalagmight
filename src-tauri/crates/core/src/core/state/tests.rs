@@ -16803,6 +16803,132 @@ fn test_save_project_adds_stalx_extension() {
     assert!(temp_dir.path().join("myproject.stalx").exists());
 }
 
+/// True when `dir` tells `a.stalx` and `a.STALX` apart. On a case-insensitive
+/// filesystem (the macOS and Windows defaults) the two spellings ARE one file, so
+/// the B33 tests below have nothing to prove there and return early.
+fn dir_is_case_sensitive(dir: &std::path::Path) -> bool {
+    let probe = dir.join("case-probe.stalx");
+    std::fs::write(&probe, b"probe").unwrap();
+    let sensitive = !dir.join("case-probe.STALX").exists();
+    std::fs::remove_file(&probe).unwrap();
+    if !sensitive {
+        eprintln!("skipping: {} is case-insensitive", dir.display());
+    }
+    sensitive
+}
+
+/// The project name stored in the `.stalx` at `path`.
+fn stored_project_name(path: &std::path::Path) -> String {
+    Database::open_existing(path)
+        .unwrap()
+        .load_project()
+        .unwrap()
+        .name
+}
+
+/// [#576 B33] Save As typed as `CaveA.STALX` must write THAT file. The backend used
+/// to re-extension any path whose extension was not exactly `stalx`, so on a
+/// case-sensitive filesystem it wrote `CaveA.stalx` instead - a different file,
+/// which the rename replaced without a prompt (the frontend's `exists()` check and
+/// the native dialog only ever saw `CaveA.STALX`).
+#[test]
+fn save_as_with_an_uppercase_extension_does_not_replace_the_lowercase_project() {
+    let temp_dir = TempDir::new().unwrap();
+    if !dir_is_case_sensitive(temp_dir.path()) {
+        return;
+    }
+    let lower = temp_dir.path().join("CaveA.stalx");
+    let upper = temp_dir.path().join("CaveA.STALX");
+
+    let first = AppState::new().unwrap();
+    first.execute(Command::CreateProject {
+        name: "Project One".to_string(),
+        location: None,
+    });
+    assert!(first.save_project(Some(lower.clone())).success);
+    let lower_before = std::fs::read(&lower).unwrap();
+
+    let second = AppState::new().unwrap();
+    second.execute(Command::CreateProject {
+        name: "Project Two".to_string(),
+        location: None,
+    });
+    let result = second.save_project(Some(upper.clone()));
+    assert!(result.success, "Save As failed: {:?}", result.error);
+
+    let saved_path = result.saved_path.unwrap_or_default();
+    let lower_name = stored_project_name(&lower);
+    eprintln!("Save As target: {}", upper.display());
+    eprintln!("backend saved_path: {saved_path}");
+    eprintln!("CaveA.stalx now holds: {lower_name:?} (expected \"Project One\")");
+    eprintln!("CaveA.STALX exists: {}", upper.exists());
+    assert!(
+        std::fs::read(&lower).unwrap() == lower_before,
+        "Save As to CaveA.STALX replaced CaveA.stalx, which now holds {lower_name:?}"
+    );
+    assert_eq!(saved_path, upper.display().to_string());
+    assert_eq!(stored_project_name(&upper), "Project Two");
+}
+
+/// [#576 B33] A project opened as `CaveB.STALX` (copied from a case-insensitive
+/// filesystem) must save back to `CaveB.STALX`, not to a `CaveB.stalx` next to it.
+#[test]
+fn saving_a_project_opened_with_an_uppercase_extension_writes_that_file() {
+    let temp_dir = TempDir::new().unwrap();
+    if !dir_is_case_sensitive(temp_dir.path()) {
+        return;
+    }
+    let upper = temp_dir.path().join("CaveB.STALX");
+    let lower = temp_dir.path().join("CaveB.stalx");
+    {
+        let mut db = Database::open(&upper).unwrap();
+        db.save_project(&Project::new("CaveB".to_string(), None))
+            .unwrap();
+    }
+    {
+        let mut db = Database::open(&lower).unwrap();
+        db.save_project(&Project::new("Other project".to_string(), None))
+            .unwrap();
+    }
+    let lower_before = std::fs::read(&lower).unwrap();
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(upper.clone()).success);
+    assert!(
+        state
+            .execute(Command::CreateSection {
+                name: Some("Edit".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#ff0000".to_string(),
+                direction: None,
+                shots: vec![test_shot_data(5.0)],
+            })
+            .success
+    );
+    let result = state.save_project(None);
+    assert!(result.success, "save failed: {:?}", result.error);
+
+    let session_path = state.get_project_state().unwrap().file_path;
+    let lower_name = stored_project_name(&lower);
+    let upper_sections = Database::open_existing(&upper)
+        .unwrap()
+        .load_project()
+        .unwrap()
+        .sections
+        .len();
+    eprintln!("opened: {}", upper.display());
+    eprintln!("session file_path after save: {session_path:?}");
+    eprintln!("CaveB.stalx now holds: {lower_name:?} (expected \"Other project\")");
+    eprintln!("sections in CaveB.STALX: {upper_sections} (expected 1)");
+    assert!(
+        std::fs::read(&lower).unwrap() == lower_before,
+        "saving CaveB.STALX replaced CaveB.stalx, which now holds {lower_name:?}"
+    );
+    assert_eq!(session_path.as_ref(), Some(&upper));
+    assert_eq!(upper_sections, 1, "the edit never reached CaveB.STALX");
+}
+
 #[test]
 fn test_save_project_cleans_up_temp_on_reopen_failure() {
     let temp_dir = TempDir::new().unwrap();

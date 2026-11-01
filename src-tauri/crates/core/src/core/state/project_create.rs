@@ -361,11 +361,7 @@ impl AppState {
 
         // Resolve database path from explicit save path or from project name + optional save directory.
         let mut db_path = if let Some(path) = save_path {
-            if path.extension().is_none_or(|ext| ext != "stalx") {
-                path.with_extension("stalx")
-            } else {
-                path
-            }
+            crate::persistence::with_stalx_extension(path)
         } else {
             match self.resolve_project_path(&name, save_directory.as_ref()) {
                 Ok(path) => path,

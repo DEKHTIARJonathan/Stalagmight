@@ -1,8 +1,34 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{Database, SCHEMA_VERSION};
+
+/// Whether `path` names a `.stalx` project file, in any letter case.
+///
+/// Case-insensitive because everything else that decides "is this a project
+/// file" is: the frontend's save dialogs accept `CaveA.STALX` as already having
+/// the extension, the open router lowercases it, and a project copied from a
+/// case-insensitive filesystem can arrive with any spelling. Comparing
+/// case-sensitively made the save pipeline rewrite `CaveA.STALX` to
+/// `CaveA.stalx` - on a case-sensitive filesystem a DIFFERENT file, which the
+/// rename then replaced without the overwrite prompt that only ever saw
+/// `CaveA.STALX` (#576 B33).
+pub fn has_stalx_extension(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("stalx"))
+}
+
+/// `path` with a `.stalx` extension: returned as given when it already has one
+/// in any letter case (see [`has_stalx_extension`]), otherwise with its
+/// extension replaced by `stalx`.
+pub fn with_stalx_extension(path: PathBuf) -> PathBuf {
+    if has_stalx_extension(&path) {
+        path
+    } else {
+        path.with_extension("stalx")
+    }
+}
 
 impl Database {
     /// Open or create a database at the given path
@@ -197,8 +223,7 @@ impl Database {
         }
 
         // Validate it's a Stalagmight project file by extension
-        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-        if extension != "stalx" {
+        if !has_stalx_extension(path) {
             anyhow::bail!("Not a Stalagmight project file: {}", path.display());
         }
 
