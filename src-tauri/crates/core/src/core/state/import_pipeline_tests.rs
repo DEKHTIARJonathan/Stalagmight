@@ -935,3 +935,102 @@ fn per_trip_sections_survive_an_export_and_re_import_unchanged() {
         "and both trips come back with their own surveyor"
     );
 }
+
+/// #576 B24: azimuths are stored in `[0, 360)` (SPEC "Azimuths are stored in
+/// `[0, 360)`"), and the import gate is where that holds for EVERY importer.
+/// The DMP wizard builds its `ShotData` in TypeScript and sends the device's
+/// headings verbatim; a heading is a raw `i16 * 0.1`, so a damaged dump can
+/// carry 400 or -30. Both the new sections' shots and the overlap updates the
+/// wizard sends for existing shots (`existing_shot_updates`) must land wrapped.
+#[test]
+fn import_sections_stores_out_of_range_azimuths_wrapped_into_0_360() {
+    use crate::core::state::{AppState, VirtualShotMode};
+    use crate::core::Command;
+    use crate::models::{ImportPlacement, ImportSectionConfig, ShotData, ShotUpdates};
+
+    let config = |name: &str, shots: Vec<ShotData>| ImportSectionConfig {
+        reverse: false,
+        section_index: 0,
+        name: Some(name.to_string()),
+        surveyor: None,
+        date: None,
+        color: "#222222".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots,
+        station_comments: Vec::new(),
+        placement: ImportPlacement::Origin,
+        azimuth_reference: None,
+    };
+    let shot = |azimuth_in: f64, azimuth_out: f64| ShotData {
+        azimuth_in,
+        azimuth_out,
+        length: 10.0,
+        depth_in: 5.0,
+        depth_out: 5.0,
+        ..Default::default()
+    };
+    let close = |got: f64, want: f64| (got - want).abs() < 1e-9;
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Azimuth Gate".to_string(),
+        location: None,
+    });
+    let first = state.execute_import_sections(
+        vec![config(
+            "SectionA",
+            vec![shot(400.0, -30.0), shot(90.0, 90.0)],
+        )],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(first.success, "import failed: {:?}", first.error);
+
+    let project = state.get_project_state().unwrap();
+    let section = project.sections.first().expect("one section imported");
+    let imported = section.shots.first().expect("first shot imported");
+    let (imported_in, imported_out) = (imported.azimuth_in, imported.azimuth_out);
+    let (section_id, shot_id) = (section.id, imported.id);
+
+    // The overlap path: a second import whose `existing_shot_updates` rewrite
+    // the first section's shot (DMP interpolation / import-data modes).
+    let second = state.execute_import_sections(
+        vec![config("SectionB", vec![shot(10.0, 10.0)])],
+        Vec::new(),
+        None,
+        Vec::new(),
+        vec![crate::models::ExistingShotUpdate {
+            section_id,
+            shot_id,
+            updates: ShotUpdates {
+                azimuth_in: Some(-90.0),
+                azimuth_out: Some(725.0),
+                ..Default::default()
+            },
+        }],
+        VirtualShotMode::Auto,
+    );
+    assert!(second.success, "import failed: {:?}", second.error);
+
+    let project = state.get_project_state().unwrap();
+    let updated = project
+        .sections
+        .iter()
+        .find(|s| s.id == section_id)
+        .and_then(|s| s.shots.iter().find(|sh| sh.id == shot_id))
+        .expect("updated shot still present");
+    let (updated_in, updated_out) = (updated.azimuth_in, updated.azimuth_out);
+    assert!(
+        close(imported_in, 40.0)
+            && close(imported_out, 330.0)
+            && close(updated_in, 270.0)
+            && close(updated_out, 5.0),
+        "azimuths must be stored wrapped into [0, 360): new shot sent (400, -30) stored \
+         ({imported_in}, {imported_out}), want (40, 330); existing-shot update sent (-90, 725) \
+         stored ({updated_in}, {updated_out}), want (270, 5)"
+    );
+}

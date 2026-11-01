@@ -1089,9 +1089,10 @@ apart it left the intermediate difference outside `(-180, 180]` and returned the
 an azimuth is still degrees clockwise from north and the old rendering was simply
 wrong - so, unlike the v11 to v12 pitch flip, the fix must not rewrite readings to
 preserve the old geometry. Instead the ambiguity is taken out of the file:
-schema **v14** normalises every stored reading into `[0, 360)`, and
-`DmpShot::to_shot_data` now does the same at import (Compass and TML already did),
-so no build can reach the truncation case again. Normalising is a no-op for
+schema **v14** normalises every stored reading into `[0, 360)`, and the core
+import gate (`execute_import_sections`) does the same for every importer's shots
+and for the overlap updates the DMP wizard sends for existing shots, so no build
+can reach the truncation case again. Normalising is a no-op for
 geometry - `600` and `240` are the same reading - so the same `.stalx` renders
 identically either side of the fix. Affected data is narrow and already flagged:
 both readings inside `[0, 360)` put their difference in `(-360, 360)`, so a shot

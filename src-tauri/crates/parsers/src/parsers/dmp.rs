@@ -212,9 +212,9 @@ impl TryFrom<u8> for DmpShotType {
 /// positive-UP frame to the model's positive-DOWN one by `parse_section`, so a
 /// `DmpShot` that has left the parser is already in the same frame as
 /// `ShotData` and as the `depth_in` / `depth_out` beside it.  That single
-/// normalisation point is what keeps the TypeScript import dialog, the overlap
-/// merge against existing project shots, and [`DmpShot::to_shot_data`] from
-/// disagreeing about the sign.
+/// normalisation point is what keeps the TypeScript import dialog (which copies
+/// the parsed pitch into `ShotData` verbatim) and the overlap merge against
+/// existing project shots from disagreeing about the sign.
 ///
 /// [`compute_section_hash`] runs *before* the flip, over the device's own
 /// bytes, so re-import deduplication still recognises sections imported before
@@ -529,8 +529,8 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
     // The mNemo records pitch positive-UP; every other frame in the codebase
     // (and the `depth_in` / `depth_out` carried beside it) is positive-DOWN.
     // Normalise here, once, so that every consumer of a `DmpShot` sees the
-    // model frame: the import preview table, the overlap merge against existing
-    // project shots, and `to_shot_data` alike.  This runs *after*
+    // model frame: the import preview table, the `ShotData` the wizard sends,
+    // and the overlap merge against existing project shots alike.  This runs *after*
     // `compute_section_hash` deliberately, so the hash keeps being taken over
     // the device's own bytes and re-import deduplication still recognises
     // sections imported before issue #296.
@@ -658,83 +658,6 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
     );
 
     Ok(DmpFile { version, sections })
-}
-
-// ============================================================================
-// Conversions to internal types
-// ============================================================================
-
-impl DmpShot {
-    /// Convert to our internal `ShotData` format.
-    ///
-    /// Pitch is copied straight across: `parse_section` already normalised it
-    /// to the model's positive-DOWN frame, so there is nothing left to flip
-    /// here.  See `docs/inclination.md`.
-    ///
-    /// Headings ARE normalised into `[0, 360)` here, matching what the Compass and TML
-    /// importers already do. A DMP heading is a raw `i16 * 0.1`, so the file format admits
-    /// `-3276.8..3276.7`, and `Validator::validate_shot` only REPORTS a reading outside the
-    /// range (as `INVALID_AZIMUTH` - error severity, so not even ignorable, but still not a
-    /// gate) - so an out-of-range pair used to reach the model and persist. Two such
-    /// readings more than 540 degrees apart hit the truncated-`%` wrap that
-    /// `average_azimuth_of` fixed (schema v14 normalises the ones already stored); keeping
-    /// the class out of the model at the seam means an import can never recreate it.
-    /// `DmpShot` itself still holds the verbatim value, so the raw-data view is unaffected.
-    ///
-    /// `normalize_azimuth` leaves a non-finite reading alone: it has no canonical form, and
-    /// `ShotData::all_finite` plus the integrity banner are what surface those.
-    pub fn to_shot_data(&self) -> crate::models::ShotData {
-        crate::models::ShotData {
-            // mNemo dumps carry no shot identity; every shot gets a fresh mint.
-            uuid: None,
-            azimuth_in: crate::models::normalize_azimuth(self.heading_in),
-            azimuth_out: crate::models::normalize_azimuth(self.heading_out),
-            length: self.length,
-            depth_in: self.depth_in,
-            depth_out: self.depth_out,
-            pitch_in: Some(self.pitch_in),
-            pitch_out: Some(self.pitch_out),
-            left: Some(self.left),
-            right: Some(self.right),
-            up: Some(self.up),
-            down: Some(self.down),
-            comment: self.comment.clone(),
-            // DMP has no virtual-shot concept: every leg is a real survey shot.
-            kind: crate::models::ShotKind::Normal,
-            marker_index: Some(u32::from(self.marker_index)),
-            temperature: Some(self.temperature),
-        }
-    }
-}
-
-impl DmpDirection {
-    /// Convert to internal SurveyDirection
-    pub fn to_survey_direction(&self) -> crate::models::SurveyDirection {
-        match self {
-            DmpDirection::In => crate::models::SurveyDirection::In,
-            DmpDirection::Out => crate::models::SurveyDirection::Out,
-        }
-    }
-}
-
-impl DmpSection {
-    /// Convert to our internal SectionData format
-    pub fn to_section_data(&self, color: String) -> crate::models::SectionData {
-        crate::models::SectionData {
-            name: Some(self.name.clone()),
-            surveyor: None,
-            date: Some(self.date.date()),
-            color,
-            direction: Some(self.direction.to_survey_direction()),
-            quality: 1.0,
-            shots: self
-                .shots
-                .iter()
-                .filter(|s| s.shot_type == DmpShotType::Standard)
-                .map(DmpShot::to_shot_data)
-                .collect(),
-        }
-    }
 }
 
 // ============================================================================
@@ -1877,214 +1800,6 @@ mod tests {
     }
 
     #[test]
-    fn test_dmp_direction_to_survey_direction() {
-        let d_in = DmpDirection::In;
-        let d_out = DmpDirection::Out;
-        assert_eq!(
-            d_in.to_survey_direction(),
-            crate::models::SurveyDirection::In
-        );
-        assert_eq!(
-            d_out.to_survey_direction(),
-            crate::models::SurveyDirection::Out
-        );
-    }
-
-    /// The mNemo records inclination positive-UP, but `depth_in` / `depth_out`
-    /// are positive-DOWN.  Left unreconciled the two disagree, and every
-    /// downstream consumer has to guess which frame a pitch is in.
-    /// `parse_section` normalises the device frame once, so a `DmpShot` that has
-    /// left the parser is already +down and `to_shot_data` must carry that sign
-    /// through untouched: the pitch that comes out has to agree in sign with the
-    /// depth change that came out beside it.  A stray second flip here would
-    /// fail this test.
-    #[test]
-    fn to_shot_data_pitch_agrees_with_depth_geometry() {
-        // Real shot from 9_20260522-naharon.dmp: a 12.50 m slope descending
-        // 3.64 m, which the depth fields already describe as +16.9° in the
-        // +down frame.  The device wrote -16.9° (+up); this is the shot as
-        // `parse_section` hands it on.
-        let dmp_shot = DmpShot {
-            shot_type: DmpShotType::Standard,
-            heading_in: 0.0,
-            heading_out: 0.0,
-            length: 12.50,
-            depth_in: 14.51,
-            depth_out: 18.15,
-            pitch_in: 16.9,
-            pitch_out: 16.9,
-            left: 0.0,
-            right: 0.0,
-            up: 0.0,
-            down: 0.0,
-            temperature: 0.0,
-            hour: 0,
-            minute: 0,
-            second: 0,
-            marker_index: 0,
-            comment: None,
-        };
-
-        let shot_data = dmp_shot.to_shot_data();
-
-        let dz = shot_data.depth_out - shot_data.depth_in;
-        let horizontal = (shot_data.length * shot_data.length - dz * dz)
-            .max(0.0)
-            .sqrt();
-        let implied = crate::models::pitch_from_components(horizontal, dz);
-        assert!(
-            implied > 0.0,
-            "sanity: a descending shot is positive in the +down frame, got {implied}"
-        );
-
-        for (leg, pitch) in [
-            ("in", shot_data.pitch_in.expect("pitch_in")),
-            ("out", shot_data.pitch_out.expect("pitch_out")),
-        ] {
-            assert!(
-                (pitch - implied).abs() < 1.0,
-                "pitch_{leg} {pitch} disagrees with the {implied} implied by depth \
-                 and length; to_shot_data must not re-flip the parser's +down pitch"
-            );
-        }
-    }
-
-    #[test]
-    fn test_dmp_shot_to_shot_data() {
-        let dmp_shot = DmpShot {
-            shot_type: DmpShotType::Standard,
-            heading_in: 90.0,
-            heading_out: 270.0,
-            length: 10.0,
-            depth_in: 2.0,
-            depth_out: 3.0,
-            pitch_in: 5.0,
-            pitch_out: -5.0,
-            left: 1.5,
-            right: 2.0,
-            up: 3.0,
-            down: 0.5,
-            temperature: 18.0,
-            hour: 14,
-            minute: 30,
-            second: 0,
-            marker_index: 7,
-            comment: Some("test".to_string()),
-        };
-
-        let shot_data = dmp_shot.to_shot_data();
-        assert_eq!(shot_data.azimuth_in, 90.0);
-        assert_eq!(shot_data.azimuth_out, 270.0);
-        assert_eq!(shot_data.length, 10.0);
-        assert_eq!(shot_data.depth_in, 2.0);
-        assert_eq!(shot_data.depth_out, 3.0);
-        // Pitch is copied straight across: `parse_section` already normalised
-        // the device's +up reading, so this boundary must not flip it again.
-        assert_eq!(shot_data.pitch_in, Some(5.0));
-        assert_eq!(shot_data.pitch_out, Some(-5.0));
-        assert_eq!(shot_data.left, Some(1.5));
-        assert_eq!(shot_data.right, Some(2.0));
-        assert_eq!(shot_data.up, Some(3.0));
-        assert_eq!(shot_data.down, Some(0.5));
-        assert_eq!(shot_data.temperature, Some(18.0));
-        assert_eq!(shot_data.marker_index, Some(7));
-        assert_eq!(shot_data.comment.as_deref(), Some("test"));
-        assert_eq!(shot_data.kind, ShotKind::Normal);
-    }
-
-    #[test]
-    fn test_dmp_section_to_section_data_filters_non_standard_shots() {
-        let shots = vec![
-            DmpShot {
-                shot_type: DmpShotType::CsA,
-                heading_in: 0.0,
-                heading_out: 0.0,
-                length: 1.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
-                pitch_in: 0.0,
-                pitch_out: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                temperature: 0.0,
-                hour: 0,
-                minute: 0,
-                second: 0,
-                marker_index: 0,
-                comment: None,
-            },
-            DmpShot {
-                shot_type: DmpShotType::Standard,
-                heading_in: 90.0,
-                heading_out: 270.0,
-                length: 5.0,
-                depth_in: 0.0,
-                depth_out: 1.0,
-                pitch_in: 0.0,
-                pitch_out: 0.0,
-                left: 1.0,
-                right: 1.0,
-                up: 2.0,
-                down: 0.5,
-                temperature: 18.0,
-                hour: 10,
-                minute: 30,
-                second: 0,
-                marker_index: 1,
-                comment: None,
-            },
-            DmpShot {
-                shot_type: DmpShotType::EndOfSurvey,
-                heading_in: 0.0,
-                heading_out: 0.0,
-                length: 0.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
-                pitch_in: 0.0,
-                pitch_out: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                temperature: 0.0,
-                hour: 0,
-                minute: 0,
-                second: 0,
-                marker_index: 0,
-                comment: None,
-            },
-        ];
-        let hash = compute_section_hash("TST", DmpDirection::Out, &shots);
-        let section = DmpSection {
-            version: 4,
-            name: "TST".to_string(),
-            direction: DmpDirection::Out,
-            date: NaiveDate::from_ymd_opt(2024, 6, 15)
-                .unwrap()
-                .and_hms_opt(10, 30, 0)
-                .unwrap(),
-            shots,
-            content_hash: hash,
-        };
-
-        let section_data = section.to_section_data("#ff0000".to_string());
-        // Only Standard shots should be included
-        assert_eq!(
-            section_data.shots.len(),
-            1,
-            "only Standard shots should be included"
-        );
-        assert_eq!(section_data.shots[0].length, 5.0);
-        assert_eq!(section_data.name.as_deref(), Some("TST"));
-        assert_eq!(
-            section_data.direction,
-            Some(crate::models::SurveyDirection::Out)
-        );
-    }
-
-    #[test]
     fn test_end_of_section_patterns_all_versions() {
         // V2 has one pattern of 16 bytes
         let v2 = end_of_section_patterns(2);
@@ -2110,71 +1825,6 @@ mod tests {
         // Invalid version has no patterns
         let invalid = end_of_section_patterns(99);
         assert!(invalid.is_empty());
-    }
-
-    #[test]
-    fn test_section_data_filters_non_standard_shots_via_to_section_data() {
-        // A DmpSection with only EOS/CsA shots should produce empty shot list in SectionData
-        let shots = vec![
-            DmpShot {
-                shot_type: DmpShotType::EndOfSurvey,
-                heading_in: 0.0,
-                heading_out: 0.0,
-                length: 0.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
-                pitch_in: 0.0,
-                pitch_out: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                temperature: 0.0,
-                hour: 0,
-                minute: 0,
-                second: 0,
-                marker_index: 0,
-                comment: None,
-            },
-            DmpShot {
-                shot_type: DmpShotType::CsA,
-                heading_in: 0.0,
-                heading_out: 0.0,
-                length: 1.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
-                pitch_in: 0.0,
-                pitch_out: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                temperature: 0.0,
-                hour: 0,
-                minute: 0,
-                second: 0,
-                marker_index: 0,
-                comment: None,
-            },
-        ];
-        let hash = compute_section_hash("TST", DmpDirection::In, &shots);
-        let section = DmpSection {
-            version: 3,
-            name: "TST".to_string(),
-            direction: DmpDirection::In,
-            date: NaiveDate::from_ymd_opt(2024, 6, 15)
-                .unwrap()
-                .and_hms_opt(10, 30, 0)
-                .unwrap(),
-            shots,
-            content_hash: hash,
-        };
-
-        let section_data = section.to_section_data("#ff0000".to_string());
-        assert!(
-            section_data.shots.is_empty(),
-            "only non-Standard shots → empty shot list"
-        );
     }
 
     // ========================================================================
@@ -2319,6 +1969,31 @@ mod tests {
 
     // ========================================================================
     // kb5.dmp regression tests (skip by default - requires fixture file)
+
+    /// The `ShotData` these regression tests feed the matcher, built exactly as
+    /// the deleted `DmpShot::to_shot_data` did (#576 B24), so their inputs are
+    /// unchanged: headings wrapped into `[0, 360)` (the core import gate does
+    /// that now), pitch as parsed, LRUD/temperature/marker as read.
+    fn kb5_shot_data(shot: &DmpShot) -> crate::models::ShotData {
+        crate::models::ShotData {
+            uuid: None,
+            azimuth_in: crate::models::normalize_azimuth(shot.heading_in),
+            azimuth_out: crate::models::normalize_azimuth(shot.heading_out),
+            length: shot.length,
+            depth_in: shot.depth_in,
+            depth_out: shot.depth_out,
+            pitch_in: Some(shot.pitch_in),
+            pitch_out: Some(shot.pitch_out),
+            left: Some(shot.left),
+            right: Some(shot.right),
+            up: Some(shot.up),
+            down: Some(shot.down),
+            comment: shot.comment.clone(),
+            kind: ShotKind::Normal,
+            marker_index: Some(u32::from(shot.marker_index)),
+            temperature: Some(shot.temperature),
+        }
+    }
     // ========================================================================
 
     /// Parse kb5.dmp and validate section structure, shot counts, and key shot data.
@@ -2516,7 +2191,7 @@ mod tests {
                     .shots
                     .iter()
                     .filter(|sh| sh.shot_type == DmpShotType::Standard)
-                    .map(DmpShot::to_shot_data)
+                    .map(kb5_shot_data)
                     .collect(),
                 // The mNemo measures magnetic and declares no declination.
                 azimuth_reference: Some(stalagmight_models::AzimuthReference::magnetic(
@@ -2738,7 +2413,7 @@ mod tests {
                     .shots
                     .iter()
                     .filter(|sh| sh.shot_type == DmpShotType::Standard)
-                    .map(DmpShot::to_shot_data)
+                    .map(kb5_shot_data)
                     .collect(),
                 // The mNemo measures magnetic and declares no declination.
                 azimuth_reference: Some(stalagmight_models::AzimuthReference::magnetic(
@@ -3178,12 +2853,13 @@ mod tests {
         assert_eq!(shot.heading_out, 359.0);
     }
 
-    /// End-to-end: pitch magnitude survives to ShotData, negated into the
-    /// model's +down frame.  The device's negative (descending) readings come
-    /// out positive, matching the depth increase on the same shot, and the flip
-    /// happens exactly once: `DmpShot` and `ShotData` agree.
+    /// End-to-end through the file reader: pitch magnitude survives, negated
+    /// into the model's +down frame.  The device's negative (descending)
+    /// readings come out positive, matching the depth increase on the same
+    /// shot.  The import wizard copies this parsed pitch into `ShotData`
+    /// verbatim (`editableShotToShotData`), so the flip happens exactly once.
     #[test]
-    fn test_negative_device_pitch_through_to_shot_data() {
+    fn test_negative_device_pitch_leaves_the_parser_positive_down() {
         let content = build_v4_shot_section(
             *b"E2E", 900, 910, 500, 100, 150, -200, // pitch_in -20.0° (device, +up)
             -350, // pitch_out -35.0° (device, +up)
@@ -3192,16 +2868,10 @@ mod tests {
         let dmp = parse_dmp(&path).expect("should parse");
         std::fs::remove_file(&path).ok();
 
-        // The parser is where the device frame is normalised...
+        // The parser is where the device frame is normalised.
         let shot = &dmp.sections[0].shots[0];
         assert_eq!(shot.pitch_in, 20.0, "DmpShot leaves the parser in +down");
         assert_eq!(shot.pitch_out, 35.0, "DmpShot leaves the parser in +down");
-
-        // ...and the conversion boundary passes it through unchanged.
-        let section_data = dmp.sections[0].to_section_data(String::new());
-        let shot_data = &section_data.shots[0];
-        assert_eq!(shot_data.pitch_in, Some(20.0), "ShotData pitch_in");
-        assert_eq!(shot_data.pitch_out, Some(35.0), "ShotData pitch_out");
     }
 
     /// Cross-validate CaveChef's parser against known values from pytool_mnemo_lib's
@@ -3369,58 +3039,5 @@ mod tests {
             -17,
             "should reconstruct -17"
         );
-    }
-    /// #24: a DMP heading is a raw `i16 * 0.1`, so the format admits `-3276.8..3276.7`,
-    /// and validation only WARNS about an out-of-range reading - so an out-of-range pair
-    /// used to reach the model and persist. Two readings more than 540 degrees apart hit
-    /// the truncated-`%` wrap `average_azimuth_of` fixed, so the conversion normalises
-    /// them (as the Compass and TML importers already did). `DmpShot` keeps the verbatim
-    /// value for the raw-data view.
-    #[test]
-    fn to_shot_data_normalises_out_of_range_headings_without_moving_the_bearing() {
-        let mut shot = DmpShot {
-            shot_type: DmpShotType::Standard,
-            heading_in: 600.0,
-            heading_out: 0.0,
-            length: 10.0,
-            depth_in: 0.0,
-            depth_out: 0.0,
-            pitch_in: 0.0,
-            pitch_out: 0.0,
-            left: 1.0,
-            right: 1.0,
-            up: 1.0,
-            down: 1.0,
-            temperature: 18.0,
-            hour: 0,
-            minute: 0,
-            second: 0,
-            marker_index: 0,
-            comment: None,
-        };
-        let data = shot.to_shot_data();
-        assert_eq!(shot.heading_in, 600.0, "the raw record stays verbatim");
-        assert!((data.azimuth_in - 240.0).abs() < 1e-9);
-        assert!((data.azimuth_out - 0.0).abs() < 1e-9);
-        // Normalising is a no-op for geometry: the pair walks the same bearing either way
-        // (600 and 240 are the same reading), which is what makes the rewrite safe.
-        let raw = crate::models::ShotData {
-            azimuth_in: 600.0,
-            azimuth_out: 0.0,
-            ..data.clone()
-        };
-        assert!((data.average_azimuth_measured() - raw.average_azimuth_measured()).abs() < 1e-9);
-
-        // A negative reading wraps the same way.
-        shot.heading_in = -30.0;
-        shot.heading_out = -20.0;
-        let data = shot.to_shot_data();
-        assert!((data.azimuth_in - 330.0).abs() < 1e-9);
-        assert!((data.azimuth_out - 340.0).abs() < 1e-9);
-
-        // A non-finite reading has no canonical form and is left for the finiteness guards.
-        shot.heading_in = f64::INFINITY;
-        shot.heading_out = 0.0;
-        assert!(shot.to_shot_data().azimuth_in.is_infinite());
     }
 }

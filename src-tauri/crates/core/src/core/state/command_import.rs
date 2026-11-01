@@ -307,11 +307,11 @@ impl AppState {
 
     fn execute_import_sections_inner(
         &self,
-        sections: Vec<crate::models::ImportSectionConfig>,
+        mut sections: Vec<crate::models::ImportSectionConfig>,
         closures: Vec<crate::models::ImportClosure>,
         file_hash: Option<String>,
         section_hashes: Vec<String>,
-        existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
+        mut existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
         mode: VirtualShotMode,
         surface_elevation: Option<f64>,
     ) -> CommandResult {
@@ -346,6 +346,29 @@ impl AppState {
             // this early return, not just add a warning here.
             return CommandResult::success()
                 .with_import_receipt(crate::core::command::ImportReceipt::empty());
+        }
+
+        // Azimuths are stored in `[0, 360)` (SPEC "Azimuths are stored in
+        // `[0, 360)`"), and this is the one gate every importer passes, so the
+        // wrap happens HERE (#576 B24). The DMP wizard builds its `ShotData` in
+        // TypeScript and sends the device's headings verbatim, and a DMP heading
+        // is a raw `i16 * 0.1` that a damaged dump can push to 400 or -30; the
+        // overlap updates it sends for EXISTING shots carry the same readings.
+        // Geometry is unchanged (400 and 40 are one bearing); what the wrap
+        // prevents is the truncated-`%` antipode a pair more than 540 degrees
+        // apart used to hit. A non-finite reading has no canonical form and is
+        // left for the finiteness guards below.
+        for shot in sections
+            .iter_mut()
+            .flat_map(|config| config.shots.iter_mut())
+        {
+            shot.azimuth_in = crate::models::normalize_azimuth(shot.azimuth_in);
+            shot.azimuth_out = crate::models::normalize_azimuth(shot.azimuth_out);
+        }
+        for update in &mut existing_shot_updates {
+            let updates = &mut update.updates;
+            updates.azimuth_in = updates.azimuth_in.map(crate::models::normalize_azimuth);
+            updates.azimuth_out = updates.azimuth_out.map(crate::models::normalize_azimuth);
         }
 
         // Reject non-finite geometry in overlap-interpolation updates before

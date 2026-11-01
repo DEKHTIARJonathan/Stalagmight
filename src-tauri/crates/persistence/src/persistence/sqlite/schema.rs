@@ -884,10 +884,11 @@ impl Database {
     /// ## Reachability
     ///
     /// Both readings in `[0, 360)` put their difference in `(-360, 360)`, so an affected
-    /// shot always has at least one out-of-range reading. Compass and TML normalise on
-    /// import and `DmpShot::to_shot_data` now does too, so this is a one-off cleanup of
-    /// what earlier builds admitted: DMP legs (raw `i16 * 0.1`, `-3276.8..3276.7`) and
-    /// hand-entered values, which `Validator::validate_shot` only WARNS about.
+    /// shot always has at least one out-of-range reading. Every importer's shots now pass
+    /// the core import gate (`execute_import_sections`), which normalises them, so this is
+    /// a one-off cleanup of what earlier builds admitted: DMP legs (raw `i16 * 0.1`,
+    /// `-3276.8..3276.7`) and hand-entered values, which `Validator::validate_shot` only
+    /// WARNS about.
     ///
     /// ## What is deliberately NOT invalidated
     ///

@@ -160,7 +160,7 @@ const zeroDatumOnly = (): ZeroDatumConfigResult => ({
     quality: 1,
     reverse: false,
   },
-  shots: convertToEditableShots(dmpFile.sections[0]!.shots),
+  shots: convertToEditableShots(dmpFile.sections[0]!.shots, dmpFile.sections[0]!.version),
 });
 
 describe('DMP wizard receipt carry across manual placement', () => {

@@ -20390,7 +20390,28 @@ fn test_unmerge_undo_restores_merge() {
 #[ignore = "fixture-gated: needs e2e/fixtures/kb5.dmp, which the repo does not carry"]
 fn kb5_import_overlap_interpolation_integration() {
     use crate::models::ExistingShotUpdate;
-    use crate::parsers::dmp::{parse_dmp, DmpShotType};
+    use crate::parsers::dmp::{parse_dmp, DmpShot, DmpShotType};
+
+    // Built exactly as the deleted `DmpShot::to_shot_data` did (#576 B24), so
+    // this test's input is unchanged.
+    let to_shot_data = |s: &DmpShot| ShotData {
+        uuid: None,
+        azimuth_in: crate::models::normalize_azimuth(s.heading_in),
+        azimuth_out: crate::models::normalize_azimuth(s.heading_out),
+        length: s.length,
+        depth_in: s.depth_in,
+        depth_out: s.depth_out,
+        pitch_in: Some(s.pitch_in),
+        pitch_out: Some(s.pitch_out),
+        left: Some(s.left),
+        right: Some(s.right),
+        up: Some(s.up),
+        down: Some(s.down),
+        comment: s.comment.clone(),
+        kind: ShotKind::Normal,
+        marker_index: Some(u32::from(s.marker_index)),
+        temperature: Some(s.temperature),
+    };
 
     let dmp_path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/kb5.dmp");
@@ -20401,13 +20422,13 @@ fn kb5_import_overlap_interpolation_integration() {
         .shots
         .iter()
         .filter(|s| s.shot_type == DmpShotType::Standard)
-        .map(|s| s.to_shot_data())
+        .map(to_shot_data)
         .collect();
     let shots_002: Vec<ShotData> = dmp.sections[1]
         .shots
         .iter()
         .filter(|s| s.shot_type == DmpShotType::Standard)
-        .map(|s| s.to_shot_data())
+        .map(to_shot_data)
         .collect();
     assert_eq!(shots_001.len(), 107);
     assert_eq!(shots_002.len(), 364);

@@ -78,7 +78,7 @@ describe('zero-datum station domains', () => {
     // A plain DMP section: four Standard shots, one of them the length-1 filler
     // the importer skips by default.
     const raw = section([standardShot(5), standardShot(1), standardShot(5), standardShot(5)]);
-    const editable = convertToEditableShots(raw.shots);
+    const editable = convertToEditableShots(raw.shots, raw.version);
 
     expect(editable).toHaveLength(3);
     expect(dialogStationCount(editable)).toBe(4);
@@ -94,7 +94,7 @@ describe('zero-datum station domains', () => {
 
   it('a deletion keeps the dots and the dropdown in step', () => {
     const raw = section([standardShot(5), standardShot(5), standardShot(5)]);
-    const editable = convertToEditableShots(raw.shots);
+    const editable = convertToEditableShots(raw.shots, raw.version);
     const afterDelete = editable.map((s, i) => (i === 0 ? { ...s, isDeleted: true } : s));
 
     expect(dialogStationCount(afterDelete)).toBe(3);
@@ -104,7 +104,7 @@ describe('zero-datum station domains', () => {
 
   it('emits every surviving row as Standard so the preview filter cannot drop one', () => {
     const raw = section([standardShot(5), standardShot(5)]);
-    const editable = convertToEditableShots(raw.shots);
+    const editable = convertToEditableShots(raw.shots, raw.version);
     // A row the user re-typed to length 1 must still be drawn and still be
     // sent: `isImportableDmpShot` is an import-time default, not a live filter.
     const edited = editable.map((s, i) => (i === 0 ? { ...s, length: 1 } : s));
@@ -124,7 +124,7 @@ describe('zero-datum station domains', () => {
    */
   it('drops a blank new row from the preview geometry', () => {
     const raw = section([standardShot(5), standardShot(5)]);
-    const withBlank = [...convertToEditableShots(raw.shots), blankEditableShot(99)];
+    const withBlank = [...convertToEditableShots(raw.shots, raw.version), blankEditableShot(99)];
 
     const preview = editableShotsToDmpSection(raw, withBlank);
     expect(preview.shots).toHaveLength(2);
@@ -140,14 +140,14 @@ describe('zero-datum station domains', () => {
     // which is the one place that can say why.
     const raw = section([standardShot(5)]);
     const partial = { ...blankEditableShot(99), length: 7 };
-    const rows = [...convertToEditableShots(raw.shots), partial];
+    const rows = [...convertToEditableShots(raw.shots, raw.version), partial];
     expect(editableShotsToDmpSection(raw, rows).shots).toHaveLength(2);
     expect(dialogStationCount(rows)).toBe(3);
   });
 
   it('carries the raw section identity through, only rewriting the geometry', () => {
     const raw = section([standardShot(5), standardShot(5)]);
-    const preview = editableShotsToDmpSection(raw, convertToEditableShots(raw.shots));
+    const preview = editableShotsToDmpSection(raw, convertToEditableShots(raw.shots, raw.version));
     expect(preview.name).toBe(raw.name);
     expect(preview.content_hash).toBe(raw.content_hash);
     expect(preview.direction).toBe(raw.direction);

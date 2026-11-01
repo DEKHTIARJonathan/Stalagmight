@@ -147,7 +147,7 @@ const zeroDatumOnly = (): ZeroDatumConfigResult => ({
     quality: 1,
     reverse: false,
   },
-  shots: convertToEditableShots(dmpFile.sections[0]!.shots),
+  shots: convertToEditableShots(dmpFile.sections[0]!.shots, dmpFile.sections[0]!.version),
 });
 
 /** The fake project: what the wizard has actually put in it, right now. */

@@ -17,8 +17,15 @@ export function isImportableDmpShot(shot: DmpShot): boolean {
 
 /**
  * Convert DMP shots to EditableShots.
+ *
+ * `version` is the section's DMP version (`DmpSection.version`). It decides one
+ * thing: whether `temperature` is a reading. A v2 record has no temperature
+ * bytes and the parser fills `0`, which must not reach the project as a
+ * measured 0 degrees, so a v2 row carries none. The marker index is in every
+ * version's record.
  */
-export function convertToEditableShots(shots: DmpShot[]): EditableShot[] {
+export function convertToEditableShots(shots: DmpShot[], version: number): EditableShot[] {
+  const recordsTemperature = version >= 3;
   return shots
     .filter(isImportableDmpShot)
     .map((shot, index) => ({
@@ -36,6 +43,8 @@ export function convertToEditableShots(shots: DmpShot[]): EditableShot[] {
       down: shot.down ?? null,
       comment: shot.comment || null,
       kind: 'Normal' as const,
+      temperature: recordsTemperature ? shot.temperature : null,
+      marker_index: shot.marker_index,
     }));
 }
 
@@ -57,8 +66,8 @@ export function editableShotToShotData(shot: EditableShot): ShotData {
     down: shot.down,
     comment: shot.comment,
     kind: shot.kind ?? 'Normal',
-    marker_index: null,
-    temperature: null,
+    marker_index: shot.marker_index ?? null,
+    temperature: shot.temperature ?? null,
   };
 }
 

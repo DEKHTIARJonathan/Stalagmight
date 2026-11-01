@@ -507,7 +507,7 @@ export function buildBatchImport(
         }
         // Compare edited shots to original DMP data to detect interpolation
         if (import.meta.env.DEV) {
-          const origShots = convertToEditableShots(section.shots);
+          const origShots = convertToEditableShots(section.shots, section.version);
           let modifiedCount = 0;
           const aliveEdited = edits.shots.filter(s => !s.isDeleted);
           for (const edited of aliveEdited) {
@@ -533,7 +533,7 @@ export function buildBatchImport(
           }
         }
       } else {
-        const editableShots = convertToEditableShots(section.shots);
+        const editableShots = convertToEditableShots(section.shots, section.version);
         backendShots = editableShots.map(editableShotToShotData);
         debugLog(`[buildBatchImport] Section ${idx} "${section.name}": no edits, using ${backendShots.length} DMP shots`);
       }
@@ -1479,7 +1479,7 @@ export default function DmpNewImportDialog({
       return;
     }
 
-    const shots = convertToEditableShots(section.shots);
+    const shots = convertToEditableShots(section.shots, section.version);
     nextTempIdRef.current = shots.length + 1;
     debugLog(
       `[init-effect] INITIALIZE section=${idx} "${section.name}"`,
@@ -1569,7 +1569,7 @@ export default function DmpNewImportDialog({
         } else {
           const targetDmpSection = dmpFile.sections[targetImportIndex];
           if (targetDmpSection) {
-            targetShots = convertToEditableShots(targetDmpSection.shots);
+            targetShots = convertToEditableShots(targetDmpSection.shots, targetDmpSection.version);
           }
         }
       }
@@ -2137,7 +2137,7 @@ export default function DmpNewImportDialog({
         const section = dmpFile.sections[idx];
         if (!section) continue;
 
-        const editableShots = convertToEditableShots(section.shots);
+        const editableShots = convertToEditableShots(section.shots, section.version);
         const shotData: ShotData[] = editableShots.map(editableShotToShotData);
         if (shotData.length === 0) continue;
 
@@ -2939,7 +2939,7 @@ export default function DmpNewImportDialog({
       const edits = sectionEditsRef.current.get(anchor.sectionIndex);
       const shots: ShotData[] = edits
         ? edits.shots.filter(isEmittedShot).map(editableShotToShotData)
-        : convertToEditableShots(anchorDmpSection.shots).map(editableShotToShotData);
+        : convertToEditableShots(anchorDmpSection.shots, anchorDmpSection.version).map(editableShotToShotData);
       const emittedStationIndex = emittedAnchorStation(anchor);
 
       const sectionData = buildPlacementSectionData({
@@ -2978,7 +2978,7 @@ export default function DmpNewImportDialog({
             '#95a5a6';
           const secShots = secEdits
             ? secEdits.shots.filter(isEmittedShot).map(editableShotToShotData)
-            : convertToEditableShots(sec.shots).map(editableShotToShotData);
+            : convertToEditableShots(sec.shots, sec.version).map(editableShotToShotData);
           return {
             sectionData: {
               name: secEdits?.name ?? sec.name,

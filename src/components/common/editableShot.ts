@@ -9,6 +9,14 @@
 import type { Shot } from '../../types/project';
 
 export interface EditableShot extends Omit<Shot, 'marker_index' | 'temperature'> {
+  /**
+   * Device readings carried through untouched (#576 B24): no column edits them,
+   * so a row read from an mNemo dump keeps the water temperature and marker
+   * index it recorded, a cell edit (which spreads the row) keeps them, and a
+   * row added in the editor has none. Absent reads as "not recorded".
+   */
+  readonly temperature?: number | null;
+  readonly marker_index?: number | null;
   /** Added in this editing session, not yet persisted. */
   isNew?: boolean;
   /** Soft-deleted: kept in the array so indices stay stable, hidden from view. */

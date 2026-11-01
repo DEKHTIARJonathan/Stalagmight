@@ -165,7 +165,7 @@ function renderDialog(
 
 /** The carried rows, with one value edited so a restore is distinguishable. */
 function editedCarriedShots() {
-  const shots = convertToEditableShots(dmpFile().sections[0]!.shots);
+  const shots = convertToEditableShots(dmpFile().sections[0]!.shots, dmpFile().sections[0]!.version);
   shots[1] = { ...shots[1]!, length: 42 };
   return shots;
 }

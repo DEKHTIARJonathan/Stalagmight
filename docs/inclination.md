@@ -20,13 +20,13 @@ which fixed a DMP import that skipped the conversion.
 | Compass | +up | `compass.rs`, `pitch_in: Some(-inclination)` |
 | Ariane `.tml` / `.tmlu` | +up (inferred, see below) | `parsers::tml::inclination_to_pitch`, inverse `export::tml::pitch_to_inclination` |
 
-DMP normalises inside `parse_section`, not at the `ShotData` conversion, because
-`DmpShot::to_shot_data` is not on the import path. Real DMP import returns the
-parsed `DmpFile` to the frontend (`import_dmp`), and the import dialog builds
-`ShotData` in TypeScript and sends it to `import_sections`. Normalising at the
-parser is what keeps the preview table, the overlap merge against existing
-project shots, and `to_shot_data` in one frame; a conversion that lived only in
-`to_shot_data` would never run.
+DMP normalises inside `parse_section`, not at a `ShotData` conversion, because
+there is no Rust one on the import path. DMP import returns the parsed `DmpFile`
+to the frontend (`import_dmp`), and the import dialog builds `ShotData` in
+TypeScript (`convertToEditableShots` then `editableShotToShotData`, which copy
+the pitch verbatim) and sends it to `import_sections`. Normalising at the parser
+is what keeps the preview table, the overlap merge against existing project
+shots, and the imported shots in one frame.
 
 The flip is applied after `compute_section_hash`, which therefore still hashes
 the device's own bytes, so re-import deduplication keeps recognising sections

@@ -277,7 +277,7 @@ function initialShotEditState({
       dirty: false,
     };
   }
-  const shots = section ? convertToEditableShots(section.shots) : [];
+  const shots = section ? convertToEditableShots(section.shots, section.version) : [];
   return { shots, stationIndex: 0, previewStationIndex: 0, nextTempId: shots.length + 1, dirty: false };
 }
 

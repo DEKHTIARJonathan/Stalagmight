@@ -226,7 +226,7 @@ export function applyAllOverlapTreatments(
           direction: section.direction === 'out' ? 'out' : 'in',
           quality: 1.0,
           reverse: false,
-          shots: convertToEditableShots(section.shots),
+          shots: convertToEditableShots(section.shots, section.version),
         };
         sectionEdits.set(importSectionIndex, importEdits);
       }
@@ -282,7 +282,7 @@ export function applyAllOverlapTreatments(
               } else {
                 const targetDmpSection = dmpFile.sections[targetImportIndex];
                 if (targetDmpSection) {
-                  targetShotArray = convertToEditableShots(targetDmpSection.shots);
+                  targetShotArray = convertToEditableShots(targetDmpSection.shots, targetDmpSection.version);
                   targetMapDiag = `importing section ${targetImportIndex} from DMP (${targetShotArray.length} shots)`;
                 } else {
                   targetMapDiag = `MISS: importing section ${targetImportIndex} not in edits or DMP`;
@@ -464,7 +464,7 @@ export function applyAllOverlapTreatments(
             direction: section.direction === 'out' ? 'out' : 'in',
             quality: 1.0,
             reverse: false,
-            shots: convertToEditableShots(section.shots),
+            shots: convertToEditableShots(section.shots, section.version),
           };
           sectionEdits.set(targetImportIndex, targetEdits);
         }
