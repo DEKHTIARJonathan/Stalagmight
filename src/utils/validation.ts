@@ -399,7 +399,7 @@ export function countIssues(
  * Error types specific to the Import Dialog.
  * These are blocking errors that prevent import.
  */
-export type ImportErrorType = 'invalidData' | 'missingPlacement' | 'mergeConflict';
+export type ImportErrorType = 'invalidData';
 
 /**
  * An error for a section during import.
@@ -484,68 +484,4 @@ export function validateEditableShot(
   }
 
   return errors;
-}
-
-/**
- * Validate placement for a section.
- * Checks if section has been placed.
- *
- * @param isPlaced Whether the section has been placed
- * @param sectionIndex The section index
- * @returns ImportError if not placed, null otherwise
- */
-export function validatePlacement(
-  isPlaced: boolean,
-  sectionIndex: number
-): ImportError | null {
-  if (!isPlaced) {
-    return {
-      type: 'missingPlacement',
-      sectionIndex,
-      message: i18n.t('validation.import.sectionNotPlaced'),
-    };
-  }
-  return null;
-}
-
-/**
- * Validate merge target exists.
- * For "fromExisting" placement, the target section must exist.
- *
- * @param placementType The type of placement
- * @param targetSectionId The target section ID for fromExisting placement
- * @param existingSectionIds Set of existing section IDs in the project
- * @param placedSectionIds Set of section IDs that have been placed in this import
- * @param sectionIndex The current section index
- * @returns ImportError if merge target doesn't exist, null otherwise
- */
-export function validateMergeTarget(
-  placementType: string,
-  targetSectionId: number | undefined,
-  existingSectionIds: Set<number>,
-  placedSectionIds: Set<number>,
-  sectionIndex: number
-): ImportError | null {
-  if (placementType !== 'fromExisting') {
-    return null;
-  }
-
-  if (targetSectionId === undefined) {
-    return {
-      type: 'mergeConflict',
-      sectionIndex,
-      message: i18n.t('validation.import.mergeTargetMissing'),
-    };
-  }
-
-  // Check if target exists in project or in already-placed sections
-  if (!existingSectionIds.has(targetSectionId) && !placedSectionIds.has(targetSectionId)) {
-    return {
-      type: 'mergeConflict',
-      sectionIndex,
-      message: i18n.t('validation.import.mergeTargetNotFound'),
-    };
-  }
-
-  return null;
 }

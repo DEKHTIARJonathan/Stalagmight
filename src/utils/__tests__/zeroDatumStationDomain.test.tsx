@@ -22,8 +22,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('maplibre-gl', () => ({ default: {} }));
 
 import { computeStationsFromDmpShots } from '../../components/Dialogs/SectionPreview';
-import { convertToEditableShots } from '../../hooks/useImportState';
-import { editableShotsToDmpSection } from '../shotConversion';
+import { convertToEditableShots, editableShotsToDmpSection } from '../shotConversion';
 import { blankEditableShot } from '../../components/common/editableShot';
 import { isEmittedShot } from '../../components/common/emittedShots';
 import type { DmpSection, DmpShot } from '../../types/commands';

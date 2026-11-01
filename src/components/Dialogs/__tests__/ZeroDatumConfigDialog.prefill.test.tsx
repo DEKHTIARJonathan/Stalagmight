@@ -80,7 +80,7 @@ import ZeroDatumConfigDialog, {
   type ZeroDatumConfigDraft,
   type ZeroDatumConfigResult,
 } from '../ZeroDatumConfigDialog';
-import { convertToEditableShots } from '../../../hooks/useImportState';
+import { convertToEditableShots } from '../../../utils/shotConversion';
 import type { DmpFile, DmpSection, DmpShot } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
 

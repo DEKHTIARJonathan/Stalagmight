@@ -3,8 +3,8 @@
  *
  * Its own module so the column definitions and the editor component can both
  * import it without a cycle. `ShotTableEditor` re-exports it, because half a
- * dozen call sites (useImportState, batchImportHelpers, shotConversion, several
- * tests) have always imported it from there.
+ * dozen call sites (batchImportHelpers, shotConversion, several tests) have
+ * always imported it from there.
  */
 import type { Shot } from '../../types/project';
 

@@ -7,8 +7,6 @@ import {
   getHighestSeverity,
   countIssues,
   validateEditableShot,
-  validatePlacement,
-  validateMergeTarget,
   DEFAULT_VALIDATION_CONFIG,
   type ValidationIssue,
 } from '../validation';
@@ -366,53 +364,5 @@ describe('validateEditableShot', () => {
     const errors = validateEditableShot({ length: 0, azimuth_in: 45, azimuth_out: 45 }, 3, 7);
     expect(errors[0]!.sectionIndex).toBe(7);
     expect(errors[0]!.shotIndex).toBe(3);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// validatePlacement
-// ---------------------------------------------------------------------------
-
-describe('validatePlacement', () => {
-  it('returns null when placed', () => {
-    expect(validatePlacement(true, 0)).toBeNull();
-  });
-
-  it('returns missingPlacement error when not placed', () => {
-    const error = validatePlacement(false, 2);
-    expect(error).not.toBeNull();
-    expect(error!.type).toBe('missingPlacement');
-    expect(error!.sectionIndex).toBe(2);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// validateMergeTarget
-// ---------------------------------------------------------------------------
-
-describe('validateMergeTarget', () => {
-  it('returns null for non-fromExisting placement', () => {
-    expect(validateMergeTarget('standalone', undefined, new Set(), new Set(), 0)).toBeNull();
-    expect(validateMergeTarget('manual', undefined, new Set(), new Set(), 0)).toBeNull();
-  });
-
-  it('returns mergeConflict when targetSectionId is undefined', () => {
-    const error = validateMergeTarget('fromExisting', undefined, new Set([1, 2]), new Set(), 0);
-    expect(error).not.toBeNull();
-    expect(error!.type).toBe('mergeConflict');
-  });
-
-  it('returns null when target exists in existing sections', () => {
-    expect(validateMergeTarget('fromExisting', 5, new Set([5, 6]), new Set(), 0)).toBeNull();
-  });
-
-  it('returns null when target exists in placed sections', () => {
-    expect(validateMergeTarget('fromExisting', 5, new Set(), new Set([5]), 0)).toBeNull();
-  });
-
-  it('returns mergeConflict when target not in either set', () => {
-    const error = validateMergeTarget('fromExisting', 99, new Set([1, 2]), new Set([3, 4]), 0);
-    expect(error).not.toBeNull();
-    expect(error!.type).toBe('mergeConflict');
   });
 });

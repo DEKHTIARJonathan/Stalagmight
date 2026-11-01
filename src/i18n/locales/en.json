@@ -3184,10 +3184,7 @@
     "import": {
       "azimuthInRange": "Azimuth in {{value}} must be between 0 and 360 degrees.",
       "azimuthOutRange": "Azimuth out {{value}} must be between 0 and 360 degrees.",
-      "lengthPositive": "Length must be positive.",
-      "mergeTargetMissing": "Merge target section is required.",
-      "mergeTargetNotFound": "Merge target section not found.",
-      "sectionNotPlaced": "Section has not been placed."
+      "lengthPositive": "Length must be positive."
     },
     "section": {
       "duplicateMarker": "Duplicate marker {{marker}}."

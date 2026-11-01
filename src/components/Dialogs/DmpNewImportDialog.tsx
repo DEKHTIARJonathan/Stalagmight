@@ -33,8 +33,7 @@ import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore, projectSwitched } from '../../store/projectStore';
 import { refuseMutationDuringCarry } from '../../store/moveCarry';
 import { useSpeleoStore } from '../../store/speleoStore';
-import { convertToEditableShots } from '../../hooks/useImportState';
-import { editableShotToShotData, editableShotsToDmpSection } from '../../utils/shotConversion';
+import { convertToEditableShots, editableShotToShotData, editableShotsToDmpSection } from '../../utils/shotConversion';
 import {
   computeMergeOptions,
   computeOverlapIds,

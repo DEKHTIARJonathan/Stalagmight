@@ -273,7 +273,6 @@
     "src/hooks/useFocusTrap.ts": 76,
     "src/hooks/useFpsMonitor.ts": 105,
     "src/hooks/useGlobalViewShortcuts.ts": 244,
-    "src/hooks/useImportState.ts": 910,
     "src/hooks/useKeyboardShortcuts.ts": 555,
     "src/hooks/useLoadingProgress.ts": 116,
     "src/hooks/useLongPress.ts": 78,

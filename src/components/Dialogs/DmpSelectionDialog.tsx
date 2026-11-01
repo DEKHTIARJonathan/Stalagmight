@@ -8,7 +8,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { extractFilename } from '../../utils/path';
 import { defaultConfig } from '../../types/config';
 import { formatLength, formatDepthRange } from '../../utils/formatStats';
-import { isImportableDmpShot } from '../../hooks/useImportState';
+import { isImportableDmpShot } from '../../utils/shotConversion';
 import type { DmpFile } from '../../types/commands';
 
 /**

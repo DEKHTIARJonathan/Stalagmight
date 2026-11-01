@@ -47,7 +47,7 @@ vi.mock('../../../utils/ipc', () => ({
 
 import DmpNewImportDialog, { type SavedManualPlacingState } from '../DmpNewImportDialog';
 import type { ZeroDatumConfigResult } from '../ZeroDatumConfigDialog';
-import { convertToEditableShots } from '../../../hooks/useImportState';
+import { convertToEditableShots } from '../../../utils/shotConversion';
 import { useUIStore } from '../../../store/uiStore';
 
 const receipt = (overrides: Partial<ImportReceipt> = {}): ImportReceipt => ({

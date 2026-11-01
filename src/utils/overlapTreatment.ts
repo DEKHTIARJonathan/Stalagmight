@@ -11,7 +11,7 @@ import type { CrossSectionSuggestion, DmpFile } from '../types/commands';
 import type { OverlapMode } from '../types/config';
 import type { EditableShot } from '../components/common/ShotTableEditor';
 import { isEmittedShot } from '../components/common/emittedShots';
-import { convertToEditableShots } from '../hooks/useImportState';
+import { convertToEditableShots } from './shotConversion';
 import { useProjectStore } from '../store/projectStore';
 import type { SectionEditState, ConfirmedOverlapInfo } from './batchImportHelpers';
 import {

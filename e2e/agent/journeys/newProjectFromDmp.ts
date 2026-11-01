@@ -50,7 +50,7 @@ interface ParsedDmp {
 
 /**
  * Mirror of the selection dialog's DEFAULT selection and shot conversion
- * (`src/hooks/useImportState.ts` `isImportableDmpShot`, and
+ * (`src/utils/shotConversion.ts` `isImportableDmpShot`, and
  * `DmpSelectionDialog.tsx`'s initial `selectedIndices`): a shot is importable
  * when it is `Standard` and its length is not the 1.0 excluded-shot sentinel
  * (`DEFAULT_EXCLUDED_DMP_SHOT_LENGTH = 1`); a section is selected by default

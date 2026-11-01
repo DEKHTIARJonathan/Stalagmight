@@ -3,6 +3,42 @@ import type { ShotData } from '../types/project';
 import type { EditableShot } from '../components/common/ShotTableEditor';
 import { isEmittedShot } from '../components/common/emittedShots';
 
+const DEFAULT_EXCLUDED_DMP_SHOT_LENGTH = 1;
+
+/**
+ * DMP imports skip length-1 standard shots by default.
+ */
+export function isImportableDmpShot(shot: DmpShot): boolean {
+  if (shot.shot_type !== 'Standard') {
+    return false;
+  }
+  return Math.abs(shot.length - DEFAULT_EXCLUDED_DMP_SHOT_LENGTH) > 1e-9;
+}
+
+/**
+ * Convert DMP shots to EditableShots.
+ */
+export function convertToEditableShots(shots: DmpShot[]): EditableShot[] {
+  return shots
+    .filter(isImportableDmpShot)
+    .map((shot, index) => ({
+      id: index,
+      azimuth_in: shot.heading_in,
+      azimuth_out: shot.heading_out,
+      length: shot.length,
+      depth_in: shot.depth_in,
+      depth_out: shot.depth_out,
+      pitch_in: shot.pitch_in,
+      pitch_out: shot.pitch_out,
+      left: shot.left ?? null,
+      right: shot.right ?? null,
+      up: shot.up ?? null,
+      down: shot.down ?? null,
+      comment: shot.comment || null,
+      kind: 'Normal' as const,
+    }));
+}
+
 /**
  * Convert an EditableShot to a ShotData for the backend.
  */
