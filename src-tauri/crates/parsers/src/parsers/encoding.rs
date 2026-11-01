@@ -108,13 +108,65 @@ pub(crate) fn cp1252_char(byte: u8) -> char {
     }
 }
 
+/// A file decoded by [`read_cp1252`].
+pub(crate) struct Cp1252Text {
+    pub(crate) text: String,
+    /// How many of the file's bytes are among the five that Windows-1252
+    /// leaves undefined, each of which became U+FFFD in `text`.
+    pub(crate) replaced: usize,
+}
+
 /// Read a file written in Windows-1252, the ANSI code page that Compass and
 /// Walls (both Windows programs) write their text in. Each byte becomes one
 /// `char`, so accented surveyor names and comments never fail the read, and
-/// the five bytes the code page leaves undefined become U+FFFD.
-pub(crate) fn read_cp1252(path: &Path) -> Result<String> {
+/// the five bytes the code page leaves undefined become U+FFFD - counted, so
+/// the caller can say so with [`cp1252_replacement_warning`].
+pub(crate) fn read_cp1252(path: &Path) -> Result<Cp1252Text> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(strip_bom(&bytes)?.iter().map(|&b| cp1252_char(b)).collect())
+    let bytes = strip_bom(&bytes)?;
+    let replaced = bytes
+        .iter()
+        .filter(|&&b| cp1252_char(b) == char::REPLACEMENT_CHARACTER)
+        .count();
+    Ok(Cp1252Text {
+        text: bytes.iter().map(|&b| cp1252_char(b)).collect(),
+        replaced,
+    })
+}
+
+/// The tail of an encoding warning that accounts for `replaced` undecodable
+/// characters, or an empty string when nothing was lost. Shared by the TML
+/// reader and [`cp1252_replacement_warning`], so every importer counts its
+/// losses in the same words.
+pub(crate) fn describe_replaced_count(replaced: usize) -> String {
+    match replaced {
+        0 => String::new(),
+        1 => "; 1 character was replaced".to_string(),
+        n => format!("; {n} characters were replaced"),
+    }
+}
+
+/// The warning for a file [`read_cp1252`] decoded with `replaced` undefined
+/// bytes, or `None` when it had none. `file` names the file when the import
+/// reads several (a Walls project); a single-file import passes `None`, since
+/// the file is the one the user just picked. `program` is the one that writes
+/// the format.
+pub(crate) fn cp1252_replacement_warning(
+    file: Option<&Path>,
+    program: &str,
+    replaced: usize,
+) -> Option<String> {
+    if replaced == 0 {
+        return None;
+    }
+    let subject = file.map_or_else(
+        || "The file".to_string(),
+        |path| format!("'{}'", path.display()),
+    );
+    Some(format!(
+        "{subject} was read as windows-1252, the encoding {program} writes{}",
+        describe_replaced_count(replaced)
+    ))
 }
 
 /// Read a UTF-8 text file (GPX, mNemo `.dmp`).
@@ -205,7 +257,9 @@ mod tests {
         bytes.extend(0..=u8::MAX);
         std::fs::write(&path, &bytes).unwrap();
 
-        let text: Vec<char> = read_cp1252(&path).unwrap().chars().collect();
+        let decoded = read_cp1252(&path).unwrap();
+        assert_eq!(decoded.replaced, 5, "the five undefined bytes are counted");
+        let text: Vec<char> = decoded.text.chars().collect();
         assert_eq!(text.len(), 256, "one char per byte, mark dropped");
         for (byte, &c) in (0..=u8::MAX).zip(&text) {
             if (0x80..=0x9f).contains(&byte) {

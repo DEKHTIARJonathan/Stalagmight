@@ -33,7 +33,7 @@ use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource};
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
-use crate::parsers::encoding::{read_cp1252, reject_bom};
+use crate::parsers::encoding::{cp1252_replacement_warning, read_cp1252, reject_bom, Cp1252Text};
 use crate::parsers::geo::{non_empty, FEET_TO_METERS};
 
 /// Distances/LRUD at or above this are Compass "missing data" sentinels.
@@ -401,15 +401,25 @@ fn dat_truncation_warning(
 }
 
 fn parse_dat(path: &Path) -> Result<ParsedCompass> {
-    let contents = read_cp1252(path)?;
+    let Cp1252Text {
+        text: contents,
+        replaced,
+    } = read_cp1252(path)?;
     let (raw_surveys, remainder) = Survey::parse_dat_file_with_remainder(&contents)
         .map_err(|e| anyhow!("Failed to parse Compass .DAT file: {e}"))?;
     // `read_cp1252` maps one file byte to one `char`, so the chars ahead of
     // the remainder count the bytes consumed - the offset into the file, past
     // any byte-order mark (stripped before parsing).
     let offset = contents.chars().count() - remainder.chars().count();
-    let warnings: Vec<String> = dat_truncation_warning(None, remainder, offset, raw_surveys.len())
+    // A bare `.DAT` is the one file the user picked, so neither warning names it.
+    let warnings: Vec<String> = cp1252_replacement_warning(None, "Compass", replaced)
         .into_iter()
+        .chain(dat_truncation_warning(
+            None,
+            remainder,
+            offset,
+            raw_surveys.len(),
+        ))
         .collect();
     let cave_name = raw_surveys
         .first()
@@ -3159,6 +3169,90 @@ mod tests {
             "don\u{2019}t",
             "0x92 is U+2019 in Windows-1252, got {}",
             code_points.join(" ")
+        );
+    }
+
+    /// A one-survey `.DAT` whose shot line carries `comment` as raw bytes,
+    /// written into `dir`.
+    fn dat_with_comment_bytes(dir: &Path, comment: &[u8]) -> PathBuf {
+        let record = synthetic_survey_record("Synthetic Cave", "A", "7 10 1979");
+        let mut bytes = record.trim_end().as_bytes().to_vec();
+        bytes.push(b' ');
+        bytes.extend_from_slice(comment);
+        bytes.extend_from_slice(b"\r\n");
+        let path = dir.join("synthetic.dat");
+        std::fs::write(&path, &bytes).unwrap();
+        path
+    }
+
+    /// The five bytes Windows-1252 leaves undefined (0x81, 0x8D, 0x8F, 0x90,
+    /// 0x9D) decode to U+FFFD, which loses whatever the surveyor typed. The
+    /// TML reader counts that loss on the receipt; a bare `.DAT` must too, on
+    /// the preview and on the receipt, rather than hand back a comment with
+    /// holes in it and no word about them.
+    ///
+    /// Without the fix the decode is silent and neither list carries it.
+    #[test]
+    fn undefined_windows_1252_bytes_in_a_dat_are_counted_in_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        // Two undefined bytes, and one defined one (0x92) that costs nothing.
+        let path = dat_with_comment_bytes(dir.path(), b"C\x81v\x9de don\x92t");
+
+        let parsed = parse_compass(&path).unwrap();
+        let comment = parsed.surveys[0].survey.shots[0]
+            .comment
+            .clone()
+            .unwrap_or_default();
+        assert_eq!(
+            comment, "C\u{fffd}v\u{fffd}e don\u{2019}t",
+            "premise: the bytes reached the comment"
+        );
+        let preview = build_preview(&parsed).warnings;
+        let (_configs, _closures, receipt) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        println!("preview warnings: {preview:?}");
+        println!("receipt warnings: {receipt:?}");
+
+        let expected =
+            "The file was read as windows-1252, the encoding Compass writes; 2 characters were \
+             replaced";
+        assert_eq!(preview, [expected], "one warning, for the one file read");
+        assert_eq!(
+            receipt
+                .iter()
+                .filter(|w| w.contains("windows-1252"))
+                .collect::<Vec<_>>(),
+            [expected],
+            "the warning must reach the import receipt too"
+        );
+    }
+
+    /// The warning must stay rare enough to mean something: a `.DAT` whose
+    /// high bytes are all defined in Windows-1252 lost nothing and gets no
+    /// warning at all.
+    #[test]
+    fn a_dat_with_no_undefined_byte_gets_no_encoding_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dat_with_comment_bytes(dir.path(), b"\x80 don\x92t caf\xe9 \x85");
+
+        let parsed = parse_compass(&path).unwrap();
+        let comment = parsed.surveys[0].survey.shots[0]
+            .comment
+            .clone()
+            .unwrap_or_default();
+        assert_eq!(
+            comment, "\u{20ac} don\u{2019}t caf\u{e9} \u{2026}",
+            "premise: the high bytes reached the comment"
+        );
+        let preview = build_preview(&parsed).warnings;
+        let (_configs, _closures, receipt) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        println!("preview warnings: {preview:?}");
+        println!("receipt warnings: {receipt:?}");
+        assert!(preview.is_empty(), "got {preview:?}");
+        assert!(
+            receipt.iter().all(|w| !w.contains("windows-1252")),
+            "got {receipt:?}"
         );
     }
 }

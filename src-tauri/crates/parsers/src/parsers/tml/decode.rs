@@ -11,7 +11,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::parsers::encoding::{cp1252_char, strip_bom_owned};
+use crate::parsers::encoding::{cp1252_char, describe_replaced_count, strip_bom_owned};
 
 // ============================================================================
 // XML loading
@@ -190,15 +190,11 @@ fn decode_xml_bytes(bytes: Vec<u8>) -> Result<LoadedXml> {
 /// The tail of an encoding warning that accounts for undecodable input, or an
 /// empty string when nothing was lost.
 fn describe_replacements(xml: &str) -> String {
-    let replaced = xml
-        .chars()
-        .filter(|&c| c == char::REPLACEMENT_CHARACTER)
-        .count();
-    match replaced {
-        0 => String::new(),
-        1 => "; 1 character was replaced".to_string(),
-        n => format!("; {n} characters were replaced"),
-    }
+    describe_replaced_count(
+        xml.chars()
+            .filter(|&c| c == char::REPLACEMENT_CHARACTER)
+            .count(),
+    )
 }
 
 /// Read the `encoding=` value out of the XML declaration, lowercased.
@@ -241,7 +237,7 @@ fn decode_single_byte_latin(bytes: &[u8], label: &str) -> Option<(String, &'stat
 // ============================================================================
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod tests {
     use super::super::test_helpers::{
         parse_synthetic_tmlu, tml_shot_xml, wrap_xml, write_tml_archive, write_tml_archive_entries,
@@ -390,6 +386,54 @@ mod tests {
             warning.contains("windows-1252") && warning.contains("1 character was replaced"),
             "the declared-encoding warning must count its own losses, got {warning:?}"
         );
+    }
+
+    /// The whole encoding warning, byte for byte, on both decode branches and
+    /// for no, one and several replaced characters. The count's wording is
+    /// shared with the Compass and Walls readers, so this pins that sharing it
+    /// left the TML receipt exactly as it was.
+    #[test]
+    fn the_encoding_warning_wording_is_pinned() {
+        let declared = |encoding: &str, name: &[u8]| -> String {
+            let mut bytes = latin1_bytes(&document_with_declaration(
+                &format!(r#"<?xml version="1.0" encoding="{encoding}"?>"#),
+                "PLACEHOLDER",
+            ));
+            let at = bytes.windows(11).position(|w| w == b"PLACEHOLDER").unwrap();
+            bytes.splice(at..at + 11, name.iter().copied());
+            decode_xml_bytes(bytes).unwrap().encoding_warning.unwrap()
+        };
+        let cases = [
+            (
+                declared("windows-1252", b"L\x92A\xe9ven"),
+                "The file is not valid UTF-8; it was read as windows-1252, the encoding its XML \
+                 header declares",
+            ),
+            (
+                declared("windows-1252", b"C\x81v\xe9"),
+                "The file is not valid UTF-8; it was read as windows-1252, the encoding its XML \
+                 header declares; 1 character was replaced",
+            ),
+            (
+                declared("windows-1252", b"C\x81v\x8d\x9d"),
+                "The file is not valid UTF-8; it was read as windows-1252, the encoding its XML \
+                 header declares; 3 characters were replaced",
+            ),
+            (
+                declared("ISO-8859-1", b"Rivi\xe8re"),
+                "The file is not valid UTF-8; it was read as ISO-8859-1, the encoding its XML \
+                 header declares",
+            ),
+            (
+                declared("UTF-8", b"C\xffv\xfe"),
+                "The file was not valid UTF-8 and its declared encoding (if any) could not be \
+                 used; 2 characters were replaced",
+            ),
+        ];
+        for (warning, expected) in &cases {
+            println!("{warning}");
+            assert_eq!(warning, expected);
+        }
     }
 
     /// A single-quoted declaration is as legal as a double-quoted one.

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::parsers::encoding::read_cp1252;
+use crate::parsers::encoding::{cp1252_replacement_warning, read_cp1252, Cp1252Text};
 
 use super::{
     apply_units_options, parse_srv_contents, split_first_token, ParsedSurvey, ParsedWalls,
@@ -13,13 +13,19 @@ use super::{
 
 /// Parse a bare `.SRV` file as a one-survey project (no `.WPJ` tree).
 pub(crate) fn parse_single_srv(path: &Path) -> Result<ParsedWalls> {
-    let contents = read_cp1252(path)?;
+    let Cp1252Text {
+        text: contents,
+        replaced,
+    } = read_cp1252(path)?;
     let name = path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("survey")
         .to_string();
-    let mut warnings = Vec::new();
+    // A bare `.SRV` is the one file the user picked, so the warning needs no name.
+    let mut warnings: Vec<String> = cp1252_replacement_warning(None, "Walls", replaced)
+        .into_iter()
+        .collect();
     let survey = parse_srv_contents(
         &contents,
         &name,
@@ -76,10 +82,16 @@ pub(crate) struct WpjContext {
 }
 
 pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
-    let contents = read_cp1252(path)?;
+    let Cp1252Text {
+        text: contents,
+        replaced,
+    } = read_cp1252(path)?;
     let root_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
 
-    let mut warnings: Vec<String> = Vec::new();
+    // A project reads many files, so each warning about one names it.
+    let mut warnings: Vec<String> = cp1252_replacement_warning(Some(path), "Walls", replaced)
+        .into_iter()
+        .collect();
     let mut surveys: Vec<ParsedSurvey> = Vec::new();
     let mut missing_files: Vec<String> = Vec::new();
     let mut skipped_attachments: u32 = 0;
@@ -154,7 +166,15 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                         match resolve_survey(&entry, &ctx) {
                             Some(file_path) if file_path.exists() => {
                                 match read_cp1252(&file_path) {
-                                    Ok(contents) => {
+                                    Ok(Cp1252Text {
+                                        text: contents,
+                                        replaced,
+                                    }) => {
+                                        warnings.extend(cp1252_replacement_warning(
+                                            Some(&file_path),
+                                            "Walls",
+                                            replaced,
+                                        ));
                                         let (initial, initial_macros) =
                                             build_initial_units(&ctx, &mut warnings);
                                         let name = entry

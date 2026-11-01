@@ -701,7 +701,7 @@ fn latin1_decoding() {
     let p = dir.join("name.srv");
     // 0xE4 == 'ä' in Latin-1.
     std::fs::write(&p, [b';', b' ', 0xE4, b'\n']).unwrap();
-    let s = read_cp1252(&p).unwrap();
+    let s = read_cp1252(&p).unwrap().text;
     assert!(s.contains('\u{00E4}'));
 }
 
@@ -731,6 +731,121 @@ fn a_windows_1252_byte_in_a_station_name_does_not_split_the_name() {
         [("A1\u{2026}B2".to_string(), "C1".to_string(), 10.0)],
         "0x85 is U+2026 in Windows-1252 and part of the station name"
     );
+}
+
+/// The preview's and the receipt's warnings that speak about the encoding.
+fn encoding_warnings(parsed: &ParsedWalls) -> (Vec<String>, Vec<String>) {
+    let preview = build_preview(parsed).warnings;
+    let (_configs, _closures, receipt) =
+        convert_walls_to_import_configs(parsed, &WallsImportOptions::default()).unwrap();
+    println!("preview warnings: {preview:?}");
+    println!("receipt warnings: {receipt:?}");
+    let about_encoding = |ws: Vec<String>| -> Vec<String> {
+        ws.into_iter()
+            .filter(|w| w.contains("windows-1252"))
+            .collect()
+    };
+    (about_encoding(preview), about_encoding(receipt))
+}
+
+/// The five bytes Windows-1252 leaves undefined decode to U+FFFD, which loses
+/// whatever the surveyor typed. The TML reader counts that loss on the
+/// receipt; a bare `.SRV` must too, on the preview and on the receipt.
+///
+/// Without the fix the decode is silent and neither list carries it.
+#[test]
+fn an_undefined_windows_1252_byte_in_an_srv_is_counted_in_a_warning() {
+    let dir = temp_dir("cp1252undefined");
+    let p = dir.join("undefined.srv");
+    std::fs::write(&p, b"#UNITS meters order=DAV\nA1 A2 10 90 0 ;C\x81ve\n").unwrap();
+
+    let parsed = parse_walls(&p).unwrap();
+    assert_eq!(parsed.surveys[0].vectors.len(), 1, "premise: the shot read");
+    let (preview, receipt) = encoding_warnings(&parsed);
+
+    let expected =
+        "The file was read as windows-1252, the encoding Walls writes; 1 character was replaced";
+    assert_eq!(preview, [expected], "one warning, for the one file read");
+    assert_eq!(
+        receipt,
+        [expected],
+        "the warning must reach the receipt too"
+    );
+}
+
+/// A `.WPJ` project reads many files, so each one that lost characters gets
+/// its own warning naming it, with its own count - the project file itself
+/// included - and a clean survey beside them gets none.
+#[test]
+fn each_walls_project_file_with_undefined_bytes_is_named_with_its_count() {
+    let dir = temp_dir("cp1252project");
+    std::fs::write(
+        dir.join("DIRTY.SRV"),
+        b"#UNITS meters order=DAV\nA1 A2 10 90 0 ;\x81 and \x90\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("CLEAN.SRV"),
+        b"#UNITS meters order=DAV\nA2 A3 10 90 0 ;caf\xe9 don\x92t\n",
+    )
+    .unwrap();
+    let wpj_path = dir.join("Test.wpj");
+    std::fs::write(
+        &wpj_path,
+        b";WALLS Project File\n\
+          .BOOK Cave\x8dA\n.NAME CAVEA\n.STATUS 8\n\
+          .SURVEY Dirty Survey\n.NAME DIRTY\n.STATUS 8\n\
+          .SURVEY Clean Survey\n.NAME CLEAN\n.STATUS 8\n\
+          .ENDBOOK\n",
+    )
+    .unwrap();
+
+    let parsed = parse_walls(&wpj_path).unwrap();
+    assert_eq!(
+        parsed.surveys.iter().filter(|s| s.resolved).count(),
+        2,
+        "premise: both surveys were read"
+    );
+    let (preview, receipt) = encoding_warnings(&parsed);
+
+    let expected = [
+        format!(
+            "'{}' was read as windows-1252, the encoding Walls writes; 1 character was replaced",
+            wpj_path.display()
+        ),
+        format!(
+            "'{}' was read as windows-1252, the encoding Walls writes; 2 characters were replaced",
+            dir.join("DIRTY.SRV").display()
+        ),
+    ];
+    assert_eq!(
+        preview, expected,
+        "one named warning per file that lost characters"
+    );
+    assert_eq!(receipt, expected, "the warnings must reach the receipt too");
+}
+
+/// The warning must stay rare enough to mean something: a `.SRV` whose high
+/// bytes are all defined in Windows-1252 lost nothing and gets no warning.
+#[test]
+fn an_srv_with_no_undefined_byte_gets_no_encoding_warning() {
+    let dir = temp_dir("cp1252clean");
+    let p = dir.join("clean.srv");
+    std::fs::write(
+        &p,
+        b"#UNITS meters order=DAV\nA1 A2 10 90 0 ;\x80 caf\xe9 don\x92t \x85\n",
+    )
+    .unwrap();
+
+    let parsed = parse_walls(&p).unwrap();
+    assert_eq!(parsed.surveys[0].vectors.len(), 1, "premise: the shot read");
+    assert!(
+        parsed.warnings.is_empty(),
+        "no parser warning at all, got {:?}",
+        parsed.warnings
+    );
+    let (preview, receipt) = encoding_warnings(&parsed);
+    assert!(preview.is_empty() && receipt.is_empty());
 }
 
 #[test]
