@@ -682,3 +682,37 @@ describe('SurveyCustomController plan-idle tint dim buffer (#395 revision)', () 
     for (let i = 0; i < dim.length; i++) expect(dim[i]).toBe(0);
   });
 });
+
+describe('SurveyCustomController publishes its buffer bytes to the memory probe (#576 D19-D2)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  /** The probe's survey-geometry entry, or undefined on a probe without one. */
+  async function surveyGeometryStat(): Promise<{ bytes: number; builds: number } | undefined> {
+    const probe = (await import('../../../../../utils/memoryProbe')) as Record<string, unknown>;
+    const get = probe.getRendererBuffers as
+      | (() => Record<string, { bytes: number; builds: number }>)
+      | undefined;
+    return get?.()['survey-geometry'];
+  }
+
+  it('records the bytes of every build and clears them on dispose', async () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    const before = (await surveyGeometryStat())?.builds ?? 0;
+    c.sync(makeParams());
+    const data = h.layerState.last!.data as CustomRenderData;
+    const stat = await surveyGeometryStat();
+    expect(stat, 'survey geometry entry in the probe').toBeDefined();
+    expect(stat!.bytes).toBe(data.line.byteLength + data.circle.byteLength);
+    expect(stat!.bytes).toBeGreaterThan(0);
+    expect(stat!.builds).toBe(before + 1);
+
+    c.dispose();
+    expect((await surveyGeometryStat())?.bytes).toBe(0);
+  });
+});

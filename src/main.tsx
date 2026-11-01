@@ -64,7 +64,7 @@ startWorkspaceModeSync();
 // The frame-gap freeze detector is no longer started automatically - it
 // was producing a stream of `freeze #N` entries in the memory probe for
 // every minor stall, drowning out the signal. Open the probe panel
-// (Display ▸ Dev stats) - it starts the detector on demand from its own effect.
+// (Debug ▸ Memory Stats) - it runs the detector only while it is visible.
 
 // Expose stores for E2E testing
 declare global {

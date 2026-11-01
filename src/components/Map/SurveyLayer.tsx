@@ -73,7 +73,6 @@ import { FEATURE_ID_STRIDE, sectionIdFromKey } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
 import { watchDevicePixelRatio } from '../../utils/dprWatcher';
 import { attachLongPressTouch } from '../../utils/longPressTouch';
-import { clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
 import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/mapErrors';
 import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
 import { InteractOverlayHideController, overlayPaintDigest, overlayTouchesRemovedSections } from './surveyLayer/interactOverlayHide';
@@ -3639,7 +3638,6 @@ export default class SurveyLayer {
     this.customLabels?.dispose();
     this.dprWatcherDispose?.();
     this.dprWatcherDispose = undefined;
-    clearFeatureCountsForPrefix('survey-');
     this.hoverFrame?.cancel();
     this.cancelDragRender();
     this.dragGhost.dispose();

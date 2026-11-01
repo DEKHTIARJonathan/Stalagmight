@@ -26,6 +26,7 @@ import type { GpsOrigin } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { debugLog } from '../../../../utils/debugLog';
+import { clearRendererBuffers, recordRendererBuild } from '../../../../utils/memoryProbe';
 import { FEATURE_ID_STRIDE } from '../../../../utils/ids';
 import { gasBeyondReachFeatureIds, type GasReachFeatureState } from '../../../../utils/gasReach';
 import type { DisplayColorContext } from '../displayColor';
@@ -541,6 +542,7 @@ export class SurveyCustomController {
     const data: CustomRenderData = { anchorX, anchorY, line, circle, ...this.sizeFields(params) };
 
     const totalBytes = line.byteLength + circle.byteLength;
+    recordRendererBuild('survey-geometry', totalBytes);
     debugLog('[customRender] build', {
       ms: +(performance.now() - t0).toFixed(1),
       shotSegments: line.segmentCount,
@@ -970,6 +972,7 @@ export class SurveyCustomController {
     this.lastSurveyData = null;
     this.lastStationRel = null;
     this.lastAllReference = null;
+    clearRendererBuffers('survey-geometry');
   }
 
   destroy(): void {

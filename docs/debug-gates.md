@@ -168,10 +168,15 @@ in `uiStore.ts`):
   zoom-choppiness investigation); it's now folded into this toggle instead
   of always being on screen.
 - **Memory Stats** - shows the in-window `MemoryProbe` panel, which polls
-  backend RSS and frontend feature counts on a 2 s interval; the
-  **Snapshot** button copies a JSON dump to clipboard for pasting into bug
-  reports. Also force-visible via the `debug.memory_probe` config flag (see
-  [`configuration.md`](configuration.md)), independent of the menu toggle.
+  backend RSS on a 2 s interval next to the custom renderer's buffer bytes
+  (each controller publishes the size of its last build) and the store
+  counts; the **Snapshot** button copies a JSON dump to clipboard for pasting
+  into bug reports. Also force-visible via the `debug.memory_probe` config flag
+  (see [`configuration.md`](configuration.md)), independent of the menu
+  toggle. Its freeze detector (a `longtask` observer plus a
+  requestAnimationFrame frame-gap chain) runs only while the panel is visible
+  and stops when it is hidden, so freezes before you open it are not listed:
+  open it, then reproduce.
 
 Dev/Map/Zoom Stats are three panels sharing one `useMapDevStats` hook
 (`src/components/Map/useMapDevStats.ts`) so the WebGL draw-call

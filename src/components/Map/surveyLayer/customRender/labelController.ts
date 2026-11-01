@@ -50,6 +50,7 @@ import type { GpsOrigin, DecimalPrecision } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
 import type { MapThemeColors } from '../../../../utils/themeColors';
 import { debugLog } from '../../../../utils/debugLog';
+import { clearRendererBuffers, recordRendererBuild } from '../../../../utils/memoryProbe';
 import { FEATURE_ID_STRIDE } from '../../../../utils/ids';
 import { commentColorForKey } from '../displayColor';
 import { lngLatToMercator } from '../mercatorCoords';
@@ -569,6 +570,7 @@ export class SurveyLabelController {
       (i) => this.labelFlagByte(descriptors[i]!),
       (i) => reveal[i]!,
     );
+    recordRendererBuild('survey-labels', buffers.byteLength);
     debugLog('[customRender] label build', {
       ms: +(performance.now() - t0).toFixed(1),
       descMs: +(tShape0 - tDesc0).toFixed(1),
@@ -1093,6 +1095,7 @@ export class SurveyLabelController {
     this.pendingParams = null;
     this.lastData = null;
     this.atlas = null;
+    clearRendererBuffers('survey-labels');
   }
 
   destroy(): void {

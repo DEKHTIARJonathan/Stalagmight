@@ -32,6 +32,7 @@ import {
   type Rgba01,
 } from './globalCustomLayer';
 import { GlobalHitIndex, type GlobalHit, type ProjectFn } from './globalHitIndex';
+import { clearRendererBuffers, recordRendererBuild } from '../../../utils/memoryProbe';
 
 /** Base visual weights (CSS px) for the custom global survey geometry. */
 const BASE_SHOT_WIDTH = 2;
@@ -145,6 +146,7 @@ export class GlobalCustomController {
       selectedIds: this.selectedIds,
     });
     this.build = build;
+    recordRendererBuild('global-geometry', build.line.byteLength + build.circle.byteLength);
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     const data: GlobalCustomRenderData = {
       anchorX: build.anchorX,
@@ -337,5 +339,6 @@ export class GlobalCustomController {
     this.hitIndex = null;
     this.build = null;
     this.data = null;
+    clearRendererBuffers('global-geometry');
   }
 }
