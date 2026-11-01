@@ -82,6 +82,11 @@ import { watchGlContextLoss } from './surveyLayer/glContextRecovery';
 import type { SemanticMapTarget } from './surveyLayer/semanticTarget';
 import { SemanticTargetPreference } from './surveyLayer/semanticTargetPreference';
 
+/** Whether replacing dim set `prev` with `next` changes nothing. */
+function sameOrBothEmpty(next: ReadonlySet<number>, prev: ReadonlySet<number>): boolean {
+  return next === prev || (next.size === 0 && prev.size === 0);
+}
+
 /** flushUpdate's arguments, in order. */
 type FlushArgs = [
   sections: Section[],
@@ -225,12 +230,12 @@ export default class SurveyLayer {
   private baseCursorForced = false;
 
   // Anchored section IDs (for fading when Move Segment tool is active)
-  private anchoredSectionIds: Set<number> = new Set();
+  private anchoredSectionIds: ReadonlySet<number> = new Set();
 
   // Immovable feature IDs for Move Station / Move Shot tools
   // (per-feature granularity, unlike anchoredSectionIds which is per-section)
-  private immovableStationFeatureIds: Set<number> = new Set();
-  private immovableShotFeatureIds: Set<number> = new Set();
+  private immovableStationFeatureIds: ReadonlySet<number> = new Set();
+  private immovableShotFeatureIds: ReadonlySet<number> = new Set();
 
   // Drag preview state - uses temporary layers with *-translate paint properties
   // instead of rebuilding GeoJSON on every frame
@@ -2428,7 +2433,11 @@ export default class SurveyLayer {
    * Set anchored section IDs for fading when Move Segment tool is active.
    * Sections in this set get reduced opacity via feature-state.
    */
-  setAnchoredSections(sectionIds: Set<number>): void {
+  setAnchoredSections(sectionIds: ReadonlySet<number>): void {
+    // The same set, or empty again: nothing to re-dim. A dim pass is two O(shots)
+    // recomputes plus buffer uploads, and every edit outside the move tools used
+    // to land here with a fresh empty set (#576 D8).
+    if (sameOrBothEmpty(sectionIds, this.anchoredSectionIds)) return;
     const before = this.lastOverlayDigest;
     this.anchoredSectionIds = sectionIds;
     // Update loop closure line opacity - gray out closures where both endpoints are anchored.
@@ -2456,7 +2465,7 @@ export default class SurveyLayer {
   }
 
   // Set line-opacity on loop closures layer: 0.25 when both endpoints are in anchored sections
-  private updateClosureAnchoredOpacity(anchoredIds: Set<number>): void {
+  private updateClosureAnchoredOpacity(anchoredIds: ReadonlySet<number>): void {
     // No style during a lost WebGL context; replayAfterContextRestore re-applies.
     if (!hasLiveStyle(this.map)) return;
     const idsArray = [...anchoredIds];
@@ -2482,7 +2491,12 @@ export default class SurveyLayer {
    * Unlike setAnchoredSections (which re-tessellates dim flags), this approach is reliable
    * on initial tool activation because it doesn't depend on feature tiling state.
    */
-  setImmovableFeatures(stationIds: Set<number>, shotIds: Set<number>): void {
+  setImmovableFeatures(stationIds: ReadonlySet<number>, shotIds: ReadonlySet<number>): void {
+    // Same no-op skip as setAnchoredSections (#576 D8).
+    if (
+      sameOrBothEmpty(stationIds, this.immovableStationFeatureIds) &&
+      sameOrBothEmpty(shotIds, this.immovableShotFeatureIds)
+    ) return;
     const before = this.lastOverlayDigest;
     this.immovableStationFeatureIds = stationIds;
     this.immovableShotFeatureIds = shotIds;
@@ -2510,7 +2524,7 @@ export default class SurveyLayer {
     if (this.lastOverlayDigest !== before) this.interactHide.hideUntilRetile();
   }
 
-  private updateImmovableClosureOpacity(immovableStationIds: Set<number>): void {
+  private updateImmovableClosureOpacity(immovableStationIds: ReadonlySet<number>): void {
     if (!hasLiveStyle(this.map)) return; // as updateClosureAnchoredOpacity
     if (immovableStationIds.size > 0) {
       // Build station key strings matching closure feature "sectionId:stationIndex" format

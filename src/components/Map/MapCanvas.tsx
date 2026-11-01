@@ -69,6 +69,13 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
 // across renders - a per-render [] would defeat the rebuild-gating memo below.
 const EMPTY_WARNINGS: ProjectWarning[] = [];
 
+// The same idiom for the move-tool dim inputs: outside the move tools every edit
+// re-ran their memos / the anchored effect, and fresh empty sets re-fired the
+// SurveyLayer dim sync each time (#576 D8). Shared, so never mutated.
+const NO_STATION_KEYS = new Set<string>();
+const NO_SECTION_IDS = new Set<number>();
+const NO_IMMOVABLE_FEATURES = { stationIds: new Set<number>(), shotIds: new Set<number>() };
+
 /**
  * How far a WATCHED Ctrl+left press has to travel before the custom pan takes
  * it over. Equal to MapLibre's default `clickTolerance` (map init does not
@@ -357,7 +364,7 @@ function MapCanvas() {
   // Pending center-on-shot request (stored when map not loaded, processed when it loads)
   const pendingCenterOnShotRef = useRef<{ sectionId: number; shotId: number } | null>(null);
   // Anchored section IDs (cached when Move Segment tool is active)
-  const [anchoredSectionIds, setAnchoredSectionIds] = useState<Set<number>>(new Set());
+  const [anchoredSectionIds, setAnchoredSectionIds] = useState<Set<number>>(NO_SECTION_IDS);
   // Whether anchored section IDs have been loaded for the current move_segment activation
   // Blocks segment drag until the set is populated to prevent moving anchored segments
   const [anchoredIdsLoaded, setAnchoredIdsLoaded] = useState(false);
@@ -660,8 +667,8 @@ function MapCanvas() {
   // SoA directly (computeImmovableStationKeys) rather than the lazy Station[]
   // proxy, which would rebuild + RETAIN the whole ~89k-object graph here (#mem).
   const immovableStationKeys = useMemo(() => {
-    if (activeTool !== 'move_station' && activeTool !== 'move_shot') return new Set<string>();
-    if (!surveyData) return new Set<string>();
+    if (activeTool !== 'move_station' && activeTool !== 'move_shot') return NO_STATION_KEYS;
+    if (!surveyData) return NO_STATION_KEYS;
     return computeImmovableStationKeys(surveyData, alignedClosureIds);
   }, [activeTool, surveyData, alignedClosureIds]);
 
@@ -677,7 +684,7 @@ function MapCanvas() {
   // For move_shot: a shot is immovable if either endpoint is immovable.
   const immovableFeatureIds = useMemo(() => {
     if (immovableStationKeys.size === 0) {
-      return { stationIds: new Set<number>(), shotIds: new Set<number>() };
+      return NO_IMMOVABLE_FEATURES;
     }
     const stationIds = new Set<number>();
     for (const key of immovableStationKeys) {
@@ -2809,11 +2816,11 @@ function MapCanvas() {
         if (cancelled) return;
         // Fail closed: keep anchoredIdsLoaded=false so segment drag remains blocked.
         // This prevents moving anchored segments when the IPC fails.
-        setAnchoredSectionIds(new Set());
+        setAnchoredSectionIds(NO_SECTION_IDS);
         showToast(t('map.toasts.anchoredSegmentsError'), TOAST_KEYS.ANCHORED_IDS_ERROR, 'error');
       });
     } else {
-      setAnchoredSectionIds(new Set());
+      setAnchoredSectionIds(NO_SECTION_IDS);
       setAnchoredIdsLoaded(false);
     }
     return () => { cancelled = true; };
