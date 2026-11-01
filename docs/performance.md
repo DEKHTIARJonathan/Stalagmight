@@ -285,6 +285,24 @@ re-emits only the dirty sections' vertex ranges, and a pure global recolor
 re-resolves and re-uploads only the four color buffers, skipping reprojection and
 tessellation entirely.
 
+**Reprojection with a GPS origin** goes through `metersToMapCoords`
+(`src/utils/coordinates.ts`), once per station in every full rebuild, label
+build and hit-index rebuild. Since #576 D36 it inverts the backend's WGS84
+projection exactly - two Bowring ECEF-to-geodetic inversions and one forward
+projection per point (6 `atan2`, 8 `sin`/`cos`, 3 `sqrt`) - instead of the old
+6371 km sphere. Measured under Node 26 / V8 (vitest, one worker, origin
+(20.5, -87.3), 400 000 calls, medians of 5 runs over 3 rounds): 0.16-0.19 us per
+call, against 0.05-0.06 us for the pre-D36 code - about +10 ms per full pass on
+an 89 000-station project, likely more on WebKit. A scalar rewrite with the
+per-origin products hoisted, no intermediate objects and only the `up` component
+computed in the middle step returned bit-identical results on 200 000 random
+inputs but measured the same (0.17 us): V8 already removes the allocations and
+hoists the memoised origin frame, and the transcendental calls an exact inverse
+needs are the cost. It was not applied. If a large GPS-referenced project shows
+this pass in a profile, measure it in the app first; the remaining levers change
+results (an approximate inverse) or the call shape (one batch inverse per data
+build).
+
 **Label builds** (`customRender/labelController.ts`) do glyph shaping plus a
 zoom-ladder greedy declutter, which is the heaviest CPU pass in the renderer.
 They are scoped to a padded viewport and emit a slack zoom window, and they
