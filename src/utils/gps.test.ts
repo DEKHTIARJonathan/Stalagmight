@@ -1115,3 +1115,27 @@ describe('a minus sign that overrides N or E in a labelled paste (R4 F7)', () =>
     expect(parsedOk(`Entrance: -20°30'15"S 87°18'27"W`).note).toBeUndefined();
   });
 });
+
+describe('a labelled signed pair uses the letters next to it (R4 F6/F7 follow-on)', () => {
+  // The signed-degrees fallback used to ignore a hemisphere letter just
+  // outside its match, so a dash read as a minus (F6) could still land a
+  // longitude in the wrong hemisphere: these must use the letter or refuse.
+  it('applies a letter on an unsigned degree', () => {
+    expectCoordsClose(parsedOk(`Entrance: -20°30'15" 87°18'27"W`), -DMS_LAT, -DMS_LON);
+    expectCoordsClose(parsedOk(`Entrance S 20°30'15" -87°18'27"`), -DMS_LAT, -DMS_LON);
+  });
+
+  it('notes a sign that disagrees with the letter next to it', () => {
+    const minus = parsedOk(`Entrance: -20°30'15" -87°18'27"E`);
+    expect(minus.coordinates.longitude).toBeCloseTo(-DMS_LON, 9);
+    expect(minus.note).toMatch(/minus sign and "E"/);
+    const plus = parsedOk(`Entrance: S +13°15'55" -50°52'35" W`);
+    expect(plus.coordinates.latitude).toBeCloseTo(-(13 + 15 / 60 + 55 / 3600), 9);
+    expect(plus.note).toMatch(/plus sign and "S"/);
+  });
+
+  it('refuses a letter on the wrong axis', () => {
+    expectRejected(`East -5°29'15", 16°35'18"`);
+    expectRejected(`Entrance: -20°30'15" 87°18'27" N`);
+  });
+});

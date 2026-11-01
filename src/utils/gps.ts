@@ -326,12 +326,30 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
         const latNegative = latDegStr?.startsWith('-') === true;
         const lonNegative = lonDegStr?.startsWith('-') === true;
 
+        // A hemisphere letter right before the latitude or right after the
+        // longitude is theirs and is used, never ignored: in
+        // `Entrance: -20°30'15" 87°18'27"W` the W makes the longitude west.
+        // One on the wrong axis is not a reading, so the input is refused.
+        // A '+' between that letter and the latitude is the latitude's sign.
+        const end = (match.index ?? 0) + match[0].length;
+        const before = trimmed
+          .slice(0, match.index)
+          .match(/(?:^|[^A-Za-z])(North|South|East|Este|Est|West|[NSEW])\s*(\+?)$/i);
+        const lonLetter = trimmed
+          .slice(end)
+          .match(/^\s*(North|South|East|Este|Est|West|[NSEW])(?![A-Za-z])/i)?.[1];
+        const latLetterUpper = before?.[1]?.charAt(0).toUpperCase();
+        const lonLetterUpper = lonLetter?.charAt(0).toUpperCase();
+        const wrongAxis = latLetterUpper === 'E' || latLetterUpper === 'W' || lonLetterUpper === 'N' || lonLetterUpper === 'S';
+        if (before?.[2] === '+') latDegStr = `+${latDegStr}`;
+
         // Require at least one negative value for signed format to avoid ambiguity
-        if (!latNegative && !lonNegative) {
+        if ((!latNegative && !lonNegative) || wrongAxis) {
           match = null; // Both positive = ambiguous, reject
         } else {
-          latDir = latNegative ? 'S' : 'N';
-          lonDir = lonNegative ? 'W' : 'E';
+          latDir = latLetterUpper ?? (latNegative ? 'S' : 'N');
+          lonDir = lonLetterUpper ?? (lonNegative ? 'W' : 'E');
+          lettered = latLetterUpper !== undefined || lonLetterUpper !== undefined;
         }
       }
     }
