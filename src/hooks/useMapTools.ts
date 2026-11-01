@@ -563,6 +563,14 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             }
             setSelection({ type: 'station', stationRef: ref });
             setMoveCommentSource({ type: 'station', stationRef: ref, comment: mcStation.comment, screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY } });
+          } else if (
+            moveCommentSource.type === 'station' &&
+            moveCommentSource.stationRef?.section_id === ref.section_id &&
+            moveCommentSource.stationRef?.station_index === ref.station_index
+          ) {
+            // Second click on the picked-up station: cancel, exactly like an
+            // empty-map click (handleEmptyClick) - no swap dialog, no IPC.
+            clearMoveCommentSource();
           } else {
             // Second click: target - use atomic move_comment IPC
             const targetComment = mcStation?.comment ?? '';
@@ -747,6 +755,14 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             }
             setSelection({ type: 'shot', sectionId, shotId });
             setMoveCommentSource({ type: 'shot', sectionId, shotId, comment: mcShot.comment, screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY } });
+          } else if (
+            moveCommentSource.type === 'shot' &&
+            moveCommentSource.sectionId === sectionId &&
+            moveCommentSource.shotId === shotId
+          ) {
+            // Second click on the picked-up shot: cancel, exactly like an
+            // empty-map click (handleEmptyClick) - no swap dialog, no IPC.
+            clearMoveCommentSource();
           } else {
             // Second click: target - use atomic move_comment IPC
             const targetComment = mcShot?.comment ?? '';

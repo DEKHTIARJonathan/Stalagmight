@@ -825,7 +825,7 @@ defaults from `src-tauri/crates/core/src/config/defaults.rs` and are all rebinda
 | **Move Shot** | G | - | Pick up one shot: both endpoints plus any co-located stations | Drop what is being carried | Pan map |
 | **Move Segment** | V | Pick up the whole connected branch (sections joined by merges and aligned closures) | Same, grabbed on a shot | Drop what is being carried, else deselect | Pan map |
 | **Comment** | C | Open the comment editor on the station | Open the comment editor on the shot | Close the editor | - |
-| **Move Comment** | Shift+C | Pick up the comment; second click moves it (swap dialog if the target already has one) | Same, for shot comments | Cancel | - |
+| **Move Comment** | Shift+C | Pick up the comment; second click moves it (swap dialog if the target already has one); a second click on the same station cancels | Same, for shot comments | Cancel | - |
 
 There is no Draw or Delete tool. Shots are added from the map context menu:
 **Add Shot Before/After** at the ends of a section, or **Insert Station...** on
