@@ -717,10 +717,13 @@ export function ShotTableEditor({
 
   // The host tracks selection in FULL-array indices; the grid works in visible
   // ones, so translate in both directions.
-  const selectedVisibleRow = useMemo(() => {
+  // The grid moves its cursor once per request nonce. This host's selection is
+  // only ever the grid's own cursor echoed back, so it needs a request only when
+  // that row MOVES (rows inserted or removed above it): the row is its own nonce.
+  const selectRequest = useMemo(() => {
     if (selectedRowIndex === null || selectedRowIndex === undefined) return null;
     const found = actualIndexes.indexOf(selectedRowIndex);
-    return found === -1 ? null : found;
+    return found === -1 ? null : { row: found, nonce: found };
   }, [selectedRowIndex, actualIndexes]);
 
   // With an explicit `maxHeight` the host is dictating the size. Without one
@@ -811,7 +814,7 @@ export function ShotTableEditor({
           rowClassName={rowClassName}
           cellClassName={cellClassName}
           labels={gridLabels}
-          selectedRow={selectedVisibleRow}
+          selectRequest={selectRequest}
           onActiveCellChange={onActiveCellChange}
           hiddenColumns={hiddenColumnList}
           columnOrder={columnOrder}

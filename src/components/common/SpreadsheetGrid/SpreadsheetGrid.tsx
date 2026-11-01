@@ -18,6 +18,7 @@ import {
   type GridSelection,
   type CellCoord,
   type CellEdit,
+  type GridSelectRequest,
   ROW_HEIGHT,
 } from './types';
 import { parseLocaleNumber, parseTSV, serializeRangeToTSV } from './gridClipboard';
@@ -148,11 +149,13 @@ export interface SpreadsheetGridProps<Row> {
   /** Fired with the row index under the pointer (null on leave) - for host-level
    *  hover effects (e.g. highlighting the corresponding map feature). */
   onRowHover?: (rowIndex: number | null) => void;
-  /** External row selection: when this CHANGES to an in-range row index, the
-   *  grid moves its selection/active cell to that row (keeping the active
-   *  column). Internal navigation never writes back through this prop, so it
+  /** External row selection: the grid moves its selection/active cell to the
+   *  request's row (keeping the active column) ONCE per `nonce` - so asking
+   *  again for a row the user has since moved off works, and a later shift of
+   *  `row` does not pull the cursor back. An out-of-range row waits until it is
+   *  in range. Internal navigation never writes back through this prop, so it
    *  can't loop with {@link onActiveCellChange}. */
-  selectedRow?: number | null;
+  selectRequest?: GridSelectRequest | null;
   /** Row index to tint with `sg-row-hover` (e.g. hovering the matching map
    *  feature). Purely visual; never affects selection. */
   hoveredRow?: number | null;
@@ -236,7 +239,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     onDeleteRows,
     onPasteReport,
     onRowHover,
-    selectedRow,
+    selectRequest,
     hoveredRow,
     rowClassName,
     cellClassName,
@@ -1939,29 +1942,30 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [colKeys, orderedKeys, onColumnOrderChange, rowCount],
   );
 
-  // External row selection: react only when the prop CHANGES (prev ref), so the
-  // grid's own navigation isn't fought; deliberately does NOT fire
-  // onActiveCellChange, which would loop the selection back to the host.
-  const prevSelectedRow = useRef<number | null | undefined>(undefined);
+  // External row selection: act once per request nonce (D21, #576), so the
+  // grid's own navigation isn't fought and a repeated request is not lost;
+  // deliberately does NOT fire onActiveCellChange, which would loop the
+  // selection back to the host.
+  const handledSelectNonce = useRef<number | null>(null);
   useEffect(() => {
-    const prev = prevSelectedRow.current;
-    prevSelectedRow.current = selectedRow;
-    if (selectedRow == null || selectedRow === prev) return;
-    if (selectedRow < 0 || selectedRow >= rowCount) return;
+    if (!selectRequest || selectRequest.nonce === handledSelectNonce.current) return;
+    const { row } = selectRequest;
+    if (row < 0 || row >= rowCount) return;
+    handledSelectNonce.current = selectRequest.nonce;
     setSelection((prevSel) => {
-      if (prevSel.active.row === selectedRow) return prevSel;
+      if (prevSel.active.row === row) return prevSel;
       const colKey = colKeys.includes(prevSel.active.colKey) ? prevSel.active.colKey : colKeys[0];
       if (colKey === undefined) return prevSel;
       rowSelectIntent.current = false;
-      const cell = { row: selectedRow, colKey };
+      const cell = { row, colKey };
       return { anchor: cell, focus: cell, active: cell };
     });
-    virtualizer.scrollToIndex(selectedRow, { align: 'auto' });
+    virtualizer.scrollToIndex(row, { align: 'auto' });
     // Follow horizontally too, on the column the updater above lands on (the
     // active column, or the first one when it no longer exists).
     const activeKey = colKeys.includes(selection.active.colKey) ? selection.active.colKey : colKeys[0];
     if (activeKey !== undefined) scrollColIntoView(colIndexOf(activeKey));
-  }, [selectedRow, rowCount, colKeys, virtualizer, selection.active.colKey, colIndexOf, scrollColIntoView]);
+  }, [selectRequest, rowCount, colKeys, virtualizer, selection.active.colKey, colIndexOf, scrollColIntoView]);
 
   // --- Render ---------------------------------------------------------------
   const virtualRows = virtualizer.getVirtualItems();

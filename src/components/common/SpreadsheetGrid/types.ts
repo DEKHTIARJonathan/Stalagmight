@@ -107,6 +107,13 @@ export interface GridSelection {
   active: CellCoord;
 }
 
+/** A host's request to move the grid's cursor to `row`. The grid honours each
+ *  `nonce` once (see `SpreadsheetGridProps.selectRequest`). */
+export interface GridSelectRequest {
+  row: number;
+  nonce: number;
+}
+
 /** A single resolved edit emitted to the host. `value` is already coerced. */
 export interface CellEdit {
   row: number;

@@ -284,6 +284,14 @@ function RawTablePill({ name, trailing }: { name: string; trailing?: ReactNode }
   );
 }
 
+/** An external selection's row, as the key the host knows it by (shot id, or
+ *  station index) in its section; `nonce` makes every ask a new request. */
+interface RowSelectRequest {
+  sectionId: number;
+  key: number;
+  nonce: number;
+}
+
 export default function DataTable({ sections }: DataTableProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
@@ -291,9 +299,13 @@ export default function DataTable({ sections }: DataTableProps) {
     sections[0]?.id ?? null
   );
   const [tableView, setTableView] = useState<'shots' | 'stations'>('shots');
-  // Track key for scrolling to a row (set when external selection changes)
-  const [scrollToKey, setScrollToKey] = useState<number | null>(null);
-  const [stationScrollToKey, setStationScrollToKey] = useState<number | null>(null);
+  // An external selection (map, sections panel) asks the grid to put its
+  // cursor on that row: a section-scoped key plus a fresh nonce, which the grid
+  // honours once. Asking again for the row the user has since moved off is
+  // then a NEW request, never a same-value state update React drops (D21, #576).
+  const [shotSelectRequest, setShotSelectRequest] = useState<RowSelectRequest | null>(null);
+  const [stationSelectRequest, setStationSelectRequest] = useState<RowSelectRequest | null>(null);
+  const selectNonceRef = useRef(0);
   // Track previous selection to only react to actual selection changes
   const prevSelectionRef = useRef<Selection | null>(null);
   // Flag to skip scroll when selection originated from within the table
@@ -424,8 +436,9 @@ export default function DataTable({ sections }: DataTableProps) {
     }
 
     if (!selection) {
-      // No selection - clear scroll target but keep current dropdown
-      setScrollToKey(null);
+      // No selection - drop any pending row request but keep current dropdown
+      setShotSelectRequest(null);
+      setStationSelectRequest(null);
       return;
     }
 
@@ -435,7 +448,7 @@ export default function DataTable({ sections }: DataTableProps) {
         setSelectedSectionId(selection.sectionId);
       }
       if (tableView !== 'shots') setTableView('shots');
-      setScrollToKey(selection.shotId);
+      setShotSelectRequest({ sectionId: selection.sectionId, key: selection.shotId, nonce: ++selectNonceRef.current });
     } else if (selection.type === 'station' && selection.stationRef) {
       const { section_id, station_index } = selection.stationRef;
       const section = sections.find((s) => s.id === section_id);
@@ -446,29 +459,17 @@ export default function DataTable({ sections }: DataTableProps) {
         }
         // Switch to stations view and scroll to station
         if (tableView !== 'stations') setTableView('stations');
-        setStationScrollToKey(station_index);
+        setStationSelectRequest({ sectionId: section_id, key: station_index, nonce: ++selectNonceRef.current });
       }
     } else if (selection.type === 'section' && selection.sectionId !== undefined) {
       // Section selected externally - switch dropdown, clear row highlight
       if (selection.sectionId !== selectedSectionId) {
         setSelectedSectionId(selection.sectionId);
       }
-      setScrollToKey(null);
+      setShotSelectRequest(null);
+      setStationSelectRequest(null);
     }
   }, [selection, selectedSectionId, sections, tableView]);
-
-  // Clear scrollToKey after it's been consumed (to allow re-scrolling to same row)
-  useEffect(() => {
-    if (scrollToKey === null) return;
-    const timer = setTimeout(() => setScrollToKey(null), 100);
-    return () => clearTimeout(timer);
-  }, [scrollToKey]);
-
-  useEffect(() => {
-    if (stationScrollToKey === null) return;
-    const timer = setTimeout(() => setStationScrollToKey(null), 100);
-    return () => clearTimeout(timer);
-  }, [stationScrollToKey]);
 
   const selectedSection = sections.find((s) => s.id === selectedSectionId);
 
@@ -570,6 +571,10 @@ export default function DataTable({ sections }: DataTableProps) {
   }, [activeStations, selectedSectionId, tableView]);
 
   const handleViewChange = useCallback((value: 'shots' | 'stations') => {
+    // The grid of the view being entered mounts fresh and would honour a request
+    // left over from an earlier visit, moving the cursor to a stale row.
+    setShotSelectRequest(null);
+    setStationSelectRequest(null);
     setTableView(value);
   }, []);
 
@@ -1192,11 +1197,12 @@ export default function DataTable({ sections }: DataTableProps) {
     [rowEntries]
   );
 
-  const shotScrollToRow = useMemo(() => {
-    if (scrollToKey === null) return null;
-    const idx = rowEntries.findIndex((e) => e.kind === 'shot' && e.shot.id === scrollToKey);
-    return idx >= 0 ? idx : null;
-  }, [scrollToKey, rowEntries]);
+  const shotSelectRow = useMemo(() => {
+    const req = shotSelectRequest;
+    if (req === null || req.sectionId !== selectedSectionId) return null;
+    const idx = rowEntries.findIndex((e) => e.kind === 'shot' && e.shot.id === req.key);
+    return idx >= 0 ? { row: idx, nonce: req.nonce } : null;
+  }, [shotSelectRequest, selectedSectionId, rowEntries]);
 
   // The grid's name-box content, lifted into the condensed panel header:
   // "<column> <row>" for a single cell, "3R × 2C" for a range.
@@ -1278,13 +1284,12 @@ export default function DataTable({ sections }: DataTableProps) {
     return idx >= 0 ? idx : null;
   }, [hoveredStation, sectionStations, selectedSectionId]);
 
-  const stationScrollToRow = useMemo(() => {
-    if (stationScrollToKey === null) return null;
-    const idx = sectionStations.findIndex(
-      (s) => s.station_ref.station_index === stationScrollToKey
-    );
-    return idx >= 0 ? idx : null;
-  }, [stationScrollToKey, sectionStations]);
+  const stationSelectRow = useMemo(() => {
+    const req = stationSelectRequest;
+    if (req === null || req.sectionId !== selectedSectionId) return null;
+    const idx = sectionStations.findIndex((s) => s.station_ref.station_index === req.key);
+    return idx >= 0 ? { row: idx, nonce: req.nonce } : null;
+  }, [stationSelectRequest, selectedSectionId, sectionStations]);
 
   // GPS (zero-datum) cell click: a station that already is - or is merged
   // with - a zero datum opens the dialog in plain edit mode; the rest open in
@@ -1782,7 +1787,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 onActiveCellChange={onShotActiveCellChange}
                 onRowHover={onShotRowHover}
                 onPasteReport={onShotPasteReport}
-                selectedRow={shotScrollToRow}
+                selectRequest={shotSelectRow}
                 hoveredRow={shotHoveredRow}
                 rowClassName={shotRowClassName}
                 cellClassName={shotCellClassName}
@@ -1819,7 +1824,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 onEdit={onStationEdit}
                 onActiveCellChange={onStationActiveCellChange}
                 onRowHover={onStationRowHover}
-                selectedRow={stationScrollToRow}
+                selectRequest={stationSelectRow}
                 hoveredRow={stationHoveredRow}
                 rowLabel={stationRowLabel}
                 labels={stationGridLabels}
