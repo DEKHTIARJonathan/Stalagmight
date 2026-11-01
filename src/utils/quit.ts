@@ -7,6 +7,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
+import { holdAutosave, withAutosaveHeld } from './autosaveHold';
 
 /**
  * Set by {@link performQuit} for exactly one `tauri://close-requested` round
@@ -83,8 +84,16 @@ function requestWindowClose(onRejected?: () => void): void {
  */
 export function performQuit(): void {
   quitConfirmedUntil = Date.now() + QUIT_CONFIRMATION_TTL_MS;
+  // [#576 D34] The quit is confirmed - which may mean "discard" - so autosave must
+  // not write the project while the window goes away. Held for the same window the
+  // confirmation is valid for, and dropped at once if the close is refused, so a
+  // quit that does not happen leaves autosave running.
+  const release = holdAutosave();
+  const expiry = setTimeout(release, QUIT_CONFIRMATION_TTL_MS);
   requestWindowClose(() => {
     quitConfirmedUntil = 0;
+    clearTimeout(expiry);
+    release();
   });
 }
 
@@ -208,7 +217,10 @@ export async function handBackProject(
   opts?: { releaseLock?: boolean },
 ): Promise<void> {
   const { closeProject, loadProject } = useProjectStore.getState();
-  const result = await closeProject(opts);
+  // [#576 D34] The project is being handed back, possibly with local edits the user
+  // chose not to save: autosave must not write them while the close runs. A close
+  // that fails leaves the project open, and the release re-arms autosave.
+  const result = await withAutosaveHeld(() => closeProject(opts));
   if (!result.success) return;
   // loadProject switches the view and surfaces its own failures.
   if (exit.pendingOpenPath) await loadProject(exit.pendingOpenPath);

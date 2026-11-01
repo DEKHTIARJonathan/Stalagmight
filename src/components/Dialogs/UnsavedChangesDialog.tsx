@@ -2,6 +2,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useProject } from '../../hooks/useProject';
 import { performQuit } from '../../utils/quit';
+import { holdAutosave } from '../../utils/autosaveHold';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
@@ -39,25 +40,37 @@ export default function UnsavedChangesDialog() {
     // Concurrency guard is handled at store level (store.isClosing)
     // This prevents double-click and race conditions with Back button
     trackDialogComplete('unsaved-changes');
-    closeDialog();
-    if (pendingQuit) {
-      // Discard the unsaved edits and quit the app.
-      performQuit();
-      return;
-    }
-    if (pendingNewProject) {
-      // Discard by opening the new-project dialog over the current (dirty) one.
-      openDialog('new-project');
-      return;
-    }
-    if (pendingOpenPath) {
-      // Discard by loading the chosen project over the current (dirty) one.
-      await loadProject(pendingOpenPath);
-      return;
-    }
-    const result = await closeProject();
-    if (result.success) {
-      setView('global');
+    // [#576 D34] This prompt holds autosave while it is open (utils/autosaveHold);
+    // this hold carries that across the switch the discard starts, so the edits
+    // just discarded are not written to the old file while it runs. The discard
+    // takes effect only when the switch lands: a load that fails leaves the
+    // project open with its edits, and the release re-arms autosave for them.
+    const release = holdAutosave();
+    try {
+      closeDialog();
+      if (pendingQuit) {
+        // Discard the unsaved edits and quit the app.
+        performQuit();
+        return;
+      }
+      if (pendingNewProject) {
+        // Discard by opening the new-project dialog over the current (dirty) one.
+        // That dialog is itself a leave prompt, so the hold continues until it
+        // creates the project or is cancelled.
+        openDialog('new-project');
+        return;
+      }
+      if (pendingOpenPath) {
+        // Discard by loading the chosen project over the current (dirty) one.
+        await loadProject(pendingOpenPath);
+        return;
+      }
+      const result = await closeProject();
+      if (result.success) {
+        setView('global');
+      }
+    } finally {
+      release();
     }
   };
 
