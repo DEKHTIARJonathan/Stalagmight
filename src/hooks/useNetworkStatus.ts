@@ -41,10 +41,25 @@ export function useNetworkStatus() {
 
   // Listen for Tauri tile transport events + browser online/offline
   useEffect(() => {
-    const unlisteners: Promise<UnlistenFn>[] = [];
+    // Registered the way useBeforeUnload / useLaunchWithFile do it: await listen()
+    // inside try/catch, so a rejected registration is handled where it fails instead
+    // of escaping as an unhandled rejection, and release a listener that resolves
+    // after cleanup as soon as it arrives.
+    let disposed = false;
+    const unlisteners: UnlistenFn[] = [];
+    const register = async (event: string, handler: () => void) => {
+      try {
+        const unlisten = await listen(event, handler);
+        if (disposed) unlisten();
+        else unlisteners.push(unlisten);
+      } catch (e) {
+        // Tauri event API not available - the browser online/offline events below still apply
+        console.warn(`[useNetworkStatus] ${event} listener not available:`, e);
+      }
+    };
 
-    unlisteners.push(listen('tile-transport-error', () => goOffline()));
-    unlisteners.push(listen('tile-transport-success', () => goOnline()));
+    void register('tile-transport-error', () => goOffline());
+    void register('tile-transport-success', () => goOnline());
 
     const handleBrowserOnline = () => {
       // Browser reports online - verify with backend
@@ -58,7 +73,8 @@ export function useNetworkStatus() {
     window.addEventListener('offline', handleBrowserOffline);
 
     return () => {
-      unlisteners.forEach((p) => p.then((fn) => fn()));
+      disposed = true;
+      unlisteners.forEach((fn) => fn());
       window.removeEventListener('online', handleBrowserOnline);
       window.removeEventListener('offline', handleBrowserOffline);
     };
