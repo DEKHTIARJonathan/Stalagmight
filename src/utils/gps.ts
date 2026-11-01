@@ -1195,6 +1195,43 @@ export function parseWhat3words(input: string): GpsParseResult | GpsParseError {
 }
 
 /**
+ * A geo: URI (RFC 5870) as Android apps share it: `geo:lat,lon[,alt][;u=..][?z=..]`.
+ * A `q=lat,lon(label)` query is the shared pin and wins over the path, which
+ * is then only where the map opens: Android's "pin at" form is
+ * `geo:0,0?q=lat,lon(label)`. A `q=` that is a search (an address) carries no
+ * coordinates, so with the 0,0 path it is rejected rather than read as 0,0.
+ * Null when the input is not a geo: URI with coordinates.
+ */
+function parseGeoUri(
+  trimmed: string,
+  input: string,
+  depthReference: number
+): GpsParseResult | GpsParseError | null {
+  const path = trimmed.match(/^geo:(-?\d+\.?\d*),(-?\d+\.?\d*)/i);
+  if (path?.[1] === undefined || path[2] === undefined) return null;
+  const query = trimmed.match(/[?&]q=([^&#]*)/i)?.[1];
+  // "lat,lon" (comma possibly encoded, spaces as %20 or +), then the end or a "(label)".
+  const pin = query?.match(
+    /^(?:\s|%20|\+)*(-?\d+\.?\d*)(?:,|%2C)(?:\s|%20|\+)*(-?\d+\.?\d*)(?:\s|%20|\+)*(?:\(|%28|$)/i
+  );
+  let [latText, lonText] = [path[1], path[2]];
+  if (pin?.[1] !== undefined && pin[2] !== undefined) {
+    [latText, lonText] = [pin[1], pin[2]];
+  } else if (query !== undefined && parseFloat(latText) === 0 && parseFloat(lonText) === 0) {
+    return { message: i18n.t('validation.gps.geoQueryNotCoordinates'), original: input };
+  }
+  const lat = parseFloat(latText);
+  const lon = parseFloat(lonText);
+  const validation = validateCoordinates(lat, lon);
+  if (!validation.valid) return { message: validation.errors.join('; '), original: input, format: 'DD' };
+  return {
+    coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
+    format: 'DD',
+    original: input,
+  };
+}
+
+/**
  * Extract GPS coordinates from a URL.
  * Supports: Google Maps, OpenStreetMap, Bing Maps.
  *
@@ -1205,19 +1242,8 @@ export function parseWhat3words(input: string): GpsParseResult | GpsParseError {
 export function parseUrl(input: string, depthReference = 0): GpsParseResult | GpsParseError {
   const trimmed = input.trim();
 
-  // geo: URI (RFC 5870), as shared by Android apps: geo:lat,lon[,alt][;params]
-  const geoMatch = trimmed.match(/^geo:(-?\d+\.?\d*),(-?\d+\.?\d*)/i);
-  if (geoMatch?.[1] !== undefined && geoMatch[2] !== undefined) {
-    const lat = parseFloat(geoMatch[1]);
-    const lon = parseFloat(geoMatch[2]);
-    const validation = validateCoordinates(lat, lon);
-    if (!validation.valid) return { message: validation.errors.join('; '), original: input, format: 'DD' };
-    return {
-      coordinates: { latitude: lat, longitude: lon, depth_reference: depthReference },
-      format: 'DD',
-      original: input,
-    };
-  }
+  const geo = parseGeoUri(trimmed, input, depthReference);
+  if (geo) return geo;
 
   // Check if it looks like a URL
   if (!trimmed.includes('http') && !trimmed.includes('maps') && !trimmed.includes('@')) {

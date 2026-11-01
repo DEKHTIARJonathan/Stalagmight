@@ -968,3 +968,48 @@ describe('detectFormat (entry review)', () => {
     expect(detectFormat('16Q 451234.5 2266789.25')).toBe('UTM');
   });
 });
+
+// ---------------------------------------------------------------------------
+// #576 review follow-up (R4). Expected values are plain deg + min/60 + sec/3600
+// arithmetic; the band-edge northings are cs2cs FORWARD projections of the
+// latitude named in each row (`+proj=utm +zone=33 [+south] +datum=WGS84`, at
+// 15E, the zone's central meridian), so the expected latitude is that input.
+// ---------------------------------------------------------------------------
+
+describe('geo: links with a q= pin (R4 F1, F2)', () => {
+  it("reads Android's geo:0,0?q=lat,lon(label) as the pin, not as 0,0", () => {
+    for (const input of [
+      'geo:0,0?q=20.5,-87.3(Cenote)',
+      'geo:0,0?q=20.5,-87.3',
+      'geo:0,0?q=20.5%2C-87.3(CaveA%20Entrance)',
+      'geo:0,0?q=20.5,-87.3%28CaveA%29',
+      'GEO:0,0?z=15&q=20.5,-87.3(CaveA)',
+    ]) {
+      const result = parsedOk(input);
+      expect(result.coordinates.latitude, input).toBe(20.5);
+      expect(result.coordinates.longitude, input).toBe(-87.3);
+    }
+  });
+
+  it('rejects geo:0,0 with a q= that is a search, not coordinates', () => {
+    expectRejected('geo:0,0?q=Cenote+Dos+Ojos', /geo:/);
+    expectRejected('geo:0,0?q=1600+Main+Street', /geo:/);
+    expectRejected('geo:0,0?q=', /geo:/);
+  });
+
+  it('uses the q= pin over the map centre in the path', () => {
+    expectCoordsClose(parsedOk('geo:20.5,-87.3?q=20.51,-87.31'), 20.51, -87.31);
+    expectCoordsClose(parsedOk('geo:20.5,-87.3?q=20.51,-87.31(Pin)'), 20.51, -87.31);
+  });
+
+  it('still reads a plain geo: URI, with or without parameters', () => {
+    expectCoordsClose(parsedOk('geo:20.5,-87.3'), 20.5, -87.3);
+    expectCoordsClose(parsedOk('geo:20.5,-87.3?z=15'), 20.5, -87.3);
+    expectCoordsClose(parsedOk('geo:20.5,-87.3;u=35'), 20.5, -87.3);
+    expectCoordsClose(parsedOk('geo:0,0'), 0, 0);
+  });
+
+  it('checks the range of the q= pin', () => {
+    expectRejected('geo:0,0?q=120.5,-87.3', /Latitude/);
+  });
+});
