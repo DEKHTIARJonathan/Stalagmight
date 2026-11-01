@@ -245,3 +245,42 @@ describe('a deferred self-disable restore is scoped to the drag that scheduled i
     ctrl.end();
   });
 });
+
+// #576 D16: the lightweight unmount releases the ghost without map work - the
+// map is about to be removed with every layer on it.
+describe('dispose (map-free teardown for the lightweight unmount)', () => {
+  it('drops the stock bake timer and land listener without touching layers', () => {
+    vi.useFakeTimers();
+    try {
+      h.layerState.disabledAfterAdd = true; // custom cannot init -> stock path
+      const fake = makeFakeMap();
+      const ctrl = new DragGhostController(fake.map, makeOptions());
+      expect(ctrl.begin(SET)).toBe('stock');
+      expect(vi.getTimerCount()).toBe(1); // the bake-landed fallback
+      expect(fake.sourcedataListeners).toHaveLength(1);
+      const layersBefore = new Set(fake.layers);
+      const translates = fake.translateCount;
+
+      ctrl.dispose();
+
+      expect(vi.getTimerCount()).toBe(0);
+      expect(fake.sourcedataListeners).toHaveLength(0);
+      expect(fake.layers).toEqual(layersBefore);
+      expect(fake.translateCount).toBe(translates);
+      expect(ctrl.isCustom()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('invalidates a pending self-disable restore', () => {
+    const holder: { fn: (() => void) | null } = { fn: null };
+    const fake = makeFakeMap();
+    const ctrl = new DragGhostController(fake.map, makeOptions({ scheduleRestore: (fn) => { holder.fn = fn; } }));
+    expect(ctrl.begin(SET)).toBe('custom');
+    h.layerState.last!.onSelfDisable!('gl-error-1');
+    ctrl.dispose();
+    holder.fn!();
+    expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(false);
+  });
+});

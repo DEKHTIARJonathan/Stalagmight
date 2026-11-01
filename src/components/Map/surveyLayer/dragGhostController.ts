@@ -143,6 +143,24 @@ export class DragGhostController {
     this.mode = 'idle';
   }
 
+  /**
+   * Map-free teardown for the lightweight unmount (SurveyLayer.release): drop the
+   * stock bake timer and land listener, and invalidate a pending self-disable
+   * restore, WITHOUT removing layers or resetting the translate - the map is about
+   * to be removed with everything on it. Otherwise the timer fires after the map
+   * is gone and pins the whole SurveyLayer until it does. Idempotent; a later
+   * {@link end} still removes whatever is left on a live map.
+   */
+  dispose(): void {
+    this.dragGeneration++;
+    this.selfDisableScheduled = false;
+    this.dropStockListeners();
+    this.ghostFollow = null;
+    this.layer = null;
+    this.set = null;
+    this.mode = 'idle';
+  }
+
   /** Create + add the custom ghost layer. Returns false (so begin falls back to
    *  stock) if WebGL2 is unavailable / shaders fail / addLayer throws. */
   private startCustom(set: DragPreviewSet): boolean {
@@ -240,6 +258,13 @@ export class DragGhostController {
   }
 
   private disarmStock(): void {
+    this.dropStockListeners();
+    if (this.ghostFollow) setDragPreviewTranslate(this.map, [0, 0]);
+    this.ghostFollow = null;
+  }
+
+  /** The stock path's JS-only resources: the land listener and the bake timer. */
+  private dropStockListeners(): void {
     if (this.landListener) {
       this.map.off('sourcedata', this.landListener);
       this.landListener = null;
@@ -248,7 +273,5 @@ export class DragGhostController {
       clearTimeout(this.bakeTimeout);
       this.bakeTimeout = null;
     }
-    if (this.ghostFollow) setDragPreviewTranslate(this.map, [0, 0]);
-    this.ghostFollow = null;
   }
 }

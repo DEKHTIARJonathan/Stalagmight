@@ -1058,7 +1058,7 @@ export class SurveyLabelController {
 
   /**
    * Lightweight release WITHOUT touching the map (no removeLayer, no stock
-   * republish). Called on MapCanvas unmount via SurveyLayer.releaseVtRegistry(),
+   * republish). Called on MapCanvas unmount via SurveyLayer.release(),
    * which deliberately skips the full {@link destroy} for unmount speed. Without
    * this the window sync hook would pin this controller (and its cached
    * SurveyData + glyph atlas + GL buffers) alive until the next SurveyLayer

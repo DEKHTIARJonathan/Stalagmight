@@ -187,6 +187,36 @@ describe('InteractOverlayHideController', () => {
     expect(f.vis['survey-interact-shots']).toBe('visible');
     expect(f.listenerCount()).toBe(0);
   });
+
+  // #576 D16: the map is going away (lightweight unmount) - forget the restore
+  // without touching the map, and leave nothing behind to fire later.
+  it('drop forgets the pending restore without touching the map', () => {
+    const f = makeFakeMap({ 'survey-interact-shots': 'visible' });
+    const c = new InteractOverlayHideController(f.map, SOURCE, ['survey-interact-shots']);
+    c.hideUntilRetile();
+    const setLayout = vi.spyOn(f.map, 'setLayoutProperty');
+    c.drop();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(f.listenerCount()).toBe(0);
+    vi.advanceTimersByTime(INTERACT_HIDE_FALLBACK_MS + 1);
+    expect(setLayout).not.toHaveBeenCalled();
+  });
+
+  // Backstop: a restore that lands once the map has no style (removed, or a lost
+  // WebGL context) must not read it - MapLibre's getLayer throws there.
+  it('a restore with no live style does not touch the map', () => {
+    const f = makeFakeMap({ 'survey-interact-shots': 'visible' });
+    let live = true;
+    const c = new InteractOverlayHideController(f.map, SOURCE, ['survey-interact-shots'], () => live);
+    c.hideUntilRetile();
+    live = false;
+    const getLayer = vi.spyOn(f.map, 'getLayer').mockImplementation(() => {
+      throw new TypeError("Cannot read properties of undefined (reading 'getLayer')");
+    });
+    expect(() => vi.advanceTimersByTime(INTERACT_HIDE_FALLBACK_MS)).not.toThrow();
+    expect(getLayer).not.toHaveBeenCalled();
+    expect(f.listenerCount()).toBe(0);
+  });
 });
 
 // #301: a dim-set change must hide the overlay across its ~250ms re-tile ONLY

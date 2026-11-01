@@ -1953,12 +1953,11 @@ function MapCanvas() {
       // the pending-update microtask in SurveyLayer.flushUpdate guarding
       // against `hasLiveStyle === false` so it bails harmlessly after
       // map.remove() runs.
-      // Still release the module-level VT registry (the flat geometry arrays
-      // MapLibre doesn't own) - that piece survives map.remove() and is keyed
-      // by a fixed source id shared across projects, so skipping it leaks this
-      // project's arrays until the next project publishes (#mem). Cheap: JS-map
-      // clears only, no map/worker work, so it doesn't reintroduce the freeze.
-      surveyLayerRef.current?.releaseVtRegistry();
+      // Still release what survives map.remove() - window hooks, timers, frames
+      // and listeners that would fire later against the dead map and pin the
+      // layer until they did (#mem, #576 D16). Cheap: JS-only, no map/worker
+      // work, so it doesn't reintroduce the freeze.
+      surveyLayerRef.current?.release();
       surveyLayerRef.current = null;
       const tA = performance.now();
       map.current?.remove();

@@ -102,10 +102,16 @@ export class InteractOverlayHideController {
   /** Per-layer visibility captured at hide time, restored on settle. */
   private saved = new Map<string, string | undefined>();
 
+  /**
+   * `isLive` reports whether the map still has a style to restore into: false
+   * once the map is removed, and while a lost WebGL context has it torn down.
+   * There, `getLayer` would throw, and there is nothing to restore anyway.
+   */
   constructor(
     private readonly map: InteractHideMap,
     private readonly sourceId: string,
     private readonly layerIds: readonly string[],
+    private readonly isLive: () => boolean = () => true,
   ) {}
 
   /**
@@ -136,6 +142,26 @@ export class InteractOverlayHideController {
    *  when inactive (no-op). */
   restore(): void {
     if (!this.active) return;
+    const saved = [...this.saved];
+    this.drop();
+    if (!this.isLive()) return;
+    for (const [id, vis] of saved) {
+      if (this.map.getLayer(id)) this.map.setLayoutProperty(id, 'visibility', vis ?? 'visible');
+    }
+  }
+
+  /** Teardown: restore any hidden layers and drop the timer/listener. */
+  dispose(): void {
+    this.restore();
+  }
+
+  /**
+   * Map-free teardown for when the map itself is going away: forget the pending
+   * restore (timer + listener) WITHOUT restoring visibility. The fallback timer
+   * would otherwise fire after the map is removed and pin this controller - and
+   * the SurveyLayer behind it - until it does. Idempotent.
+   */
+  drop(): void {
     this.active = false;
     if (this.timeout) {
       clearTimeout(this.timeout);
@@ -145,15 +171,7 @@ export class InteractOverlayHideController {
       this.map.off('sourcedata', this.onSourceData);
       this.onSourceData = null;
     }
-    for (const [id, vis] of this.saved) {
-      if (this.map.getLayer(id)) this.map.setLayoutProperty(id, 'visibility', vis ?? 'visible');
-    }
     this.saved.clear();
-  }
-
-  /** Teardown: restore any hidden layers and drop the timer/listener. */
-  dispose(): void {
-    this.restore();
   }
 
   private capture(): void {

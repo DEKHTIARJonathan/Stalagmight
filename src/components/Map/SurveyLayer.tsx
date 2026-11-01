@@ -416,7 +416,7 @@ export default class SurveyLayer {
       this.interactShotsMeasuredLayerId,
       this.interactStationsLayerId,
       this.stationsHighlightLayerId,
-    ]);
+    ], () => hasLiveStyle(map));
     this.initializeSources();
     this.initializeLayers();
     this.initializeEventHandlers();
@@ -3515,13 +3515,6 @@ export default class SurveyLayer {
     }
   }
 
-  /** Dispose the custom-render controllers WITHOUT touching the map (no
-   *  removeLayer). Called on MapCanvas unmount, which deliberately skips the full
-   *  {@link destroy} for unmount speed. Releases the controllers' window sync
-   *  hooks so they no longer pin this layer's cached SurveyData + glyph atlas + GL
-   *  buffers alive until the next SurveyLayer overwrites the globals (#mem).
-   *  dispose() is the map-free counterpart of destroy(); it is idempotent, so the
-   *  destroy() path (which nulls both refs before calling this) is unaffected. */
   /**
    * Every drawn station center + shot segment in map coords, honoring the live
    * reference-shots toggle. Exposed for E2E: the custom renderer draws survey
@@ -3556,17 +3549,39 @@ export default class SurveyLayer {
     return { mode: this.dragGhost.isCustom() ? 'custom' : 'stock', dx: off.dx, dy: off.dy };
   }
 
-  releaseVtRegistry(): void {
+  /**
+   * The JS-only teardown both routes off the map share: MapCanvas's lightweight
+   * unmount (which calls this and then `map.remove()`, deliberately skipping
+   * {@link destroy} for unmount speed) and destroy() itself. Map-free on purpose -
+   * no layer or source removal, which `map.remove()` does wholesale.
+   *
+   * Everything here is something that outlives `map.remove()` and would otherwise
+   * fire later against the dead map and pin this whole layer (cached SurveyData,
+   * geometry index, glyph atlas) until it does: the controllers' window sync hooks
+   * (#mem), the DPR watcher, the hover and drag-follow animation frames, the drag
+   * ghost's bake timer + land listener, the interact-overlay hide's fallback timer
+   * + listener (whose late restore called `map.getLayer` on the removed map and
+   * threw, #576 D16), and the touch long-press timer + canvas listeners.
+   * Idempotent.
+   */
+  release(): void {
     this.customRender?.dispose();
     this.customLabels?.dispose();
-    // The DPR watcher's matchMedia listener is a JS resource that survives
-    // map.remove() and would otherwise retain this whole SurveyLayer (cached
-    // survey data + geometry index). MapCanvas's lightweight unmount calls this
-    // method but NOT destroy(), so the disposal must live here to run on both
-    // paths - else repeated project opens accumulate stale layers (#customRender).
     this.dprWatcherDispose?.();
     this.dprWatcherDispose = undefined;
     clearFeatureCountsForPrefix('survey-');
+    if (this.hoverRafId !== null) {
+      cancelAnimationFrame(this.hoverRafId);
+      this.hoverRafId = null;
+    }
+    this.pendingHoverEvent = null;
+    this.cancelDragRender();
+    this.dragGhost.dispose();
+    this.interactHide.drop();
+    // The helper holds the canvas element itself, so it detaches cleanly even
+    // once the map is gone.
+    this.detachLongPressTouch?.();
+    this.detachLongPressTouch = null;
   }
 
   destroy() {
@@ -3588,28 +3603,11 @@ export default class SurveyLayer {
     // Remove the dedicated custom measure-path layer (#26, stage 2a).
     this.measurePath?.destroy();
     this.measurePath = null;
-
-    // Drop the module-level VT registry entries + zero the memory-probe counts.
-    // (releaseVtRegistry also disposes the DPR watcher, covering both this path
-    // and MapCanvas's lightweight unmount.)
-    this.releaseVtRegistry();
-
-    // Cancel any pending hover RAF
-    if (this.hoverRafId !== null) {
-      cancelAnimationFrame(this.hoverRafId);
-      this.hoverRafId = null;
-    }
-    this.pendingHoverEvent = null;
-    this.cancelDragRender();
-    // Tear down the ghost (custom layer / stock follow listener + timer) so
-    // nothing fires on a torn-down map.
+    // Remove the ghost (custom layer / stock preview layers) while the map is live.
     this.dragGhost.end();
 
-    // Drop the touch long-press listeners and any pending hold. Done before the
-    // live-style guard below, not inside it: the helper holds the canvas element
-    // itself, so it detaches cleanly even once the map is gone.
-    this.detachLongPressTouch?.();
-    this.detachLongPressTouch = null;
+    // Then everything map-free, shared with MapCanvas's lightweight unmount.
+    this.release();
 
     // Guard against map being destroyed (race condition on unmount)
     if (!hasLiveStyle(this.map)) {
