@@ -741,3 +741,92 @@ describe('parseDDM keeps the sign of a -0 degree (D39e)', () => {
     expectCoordsClose(parseDDM("10°00.000'N -0°30.000'E"), 10, -0.5);
   });
 });
+
+/** parseGps that must succeed; returns the result for further checks. */
+function parsedOk(input: string): GpsParseResult {
+  const result = parseGps(input);
+  if (!isSuccess(result)) {
+    throw new Error(`expected ${JSON.stringify(input)} to parse, got: ${result.message}`);
+  }
+  return result;
+}
+
+function expectRejected(input: string, message?: RegExp) {
+  const result = parseGps(input);
+  expect(isSuccess(result), `${JSON.stringify(input)} should be rejected`).toBe(false);
+  if (!isSuccess(result) && message) expect(result.message).toMatch(message);
+}
+
+describe('UTM band letter is checked against the northing (D37)', () => {
+  it('"33S" with a southern-hemisphere northing is read as the southern hemisphere, with a note', () => {
+    for (const input of ['33S 512345 8765432', '33 S 512345 8765432', '33s 512345 8765432']) {
+      const result = parsedOk(input);
+      expect(result.coordinates.latitude).toBeCloseTo(-11.1680928, 5);
+      expect(result.coordinates.longitude).toBeCloseTo(15.1130686, 5);
+      expect(result.note).toMatch(/southern hemisphere/);
+    }
+  });
+
+  it('"33S" with a northing that fits band S keeps the band reading and names the southern alternative', () => {
+    const result = parsedOk('33S 512345 4000000');
+    expect(result.coordinates.latitude).toBeCloseTo(36.1446395, 5);
+    expect(result.coordinates.longitude).toBeCloseTo(15.1372234, 5);
+    // The southern reading (-54.15) is band F, so that is the unambiguous input to suggest.
+    expect(result.note).toContain('33F 512345 4000000');
+  });
+
+  it('band S cave regions (Kentucky, Spain) keep their northern value', () => {
+    expectCoordsClose(parsedOk('16S 612345 4123456'), 37.2508825, -85.7332107);
+    expectCoordsClose(parsedOk('30S 300000 4200000'), 37.9255817, -5.2755282);
+  });
+
+  it('"33N" north of band N is read as the northern hemisphere, with a note', () => {
+    const result = parsedOk('33N 512345 8765432');
+    expect(result.coordinates.latitude).toBeCloseTo(78.9587568, 5);
+    expect(result.note).toMatch(/northern hemisphere/);
+  });
+
+  it('"33N" inside band N needs no note (both readings are the same point)', () => {
+    expect(parsedOk('33N 512345 500000').note).toBeUndefined();
+  });
+
+  it('rejects a band letter the northing cannot have', () => {
+    expectRejected('33U 512345 8765432', /band U/);
+    expectRejected('16R 451234 2266789', /band R/);
+    expectRejected('33K 512345 8765432', /band K/);
+  });
+
+  it('rejects "S" when neither band S nor the southern hemisphere fits', () => {
+    expectRejected('33S 512345 100000', /neither/);
+  });
+
+  it('rejects northings beyond the UTM limits (84N, 80S)', () => {
+    expectRejected('33X 512345 9400000', /band X/);
+    expectRejected('33C 512345 1000000', /band C/);
+  });
+
+  // Northing of each band's middle latitude at zone 33's central meridian (cs2cs).
+  const BAND_MID_NORTHING: Array<[string, number, number]> = [
+    ['C', 1564815, -76], ['D', 2457136, -68], ['E', 3348589, -60], ['F', 4238962, -52],
+    ['G', 5128127, -44], ['H', 6016052, -36], ['J', 6902798, -28], ['K', 7788519, -20],
+    ['L', 8673446, -12], ['M', 9557873, -4], ['N', 442127, 4], ['P', 1326554, 12],
+    ['Q', 2211481, 20], ['R', 3097202, 28], ['S', 3983948, 36], ['T', 4871873, 44],
+    ['U', 5761038, 52], ['V', 6651411, 60], ['W', 7542864, 68], ['X', 8658370, 78],
+  ];
+
+  it.each(BAND_MID_NORTHING)('band %s accepts a northing inside the band', (band, northing, lat) => {
+    const result = parsedOk(`33${band} 500000 ${northing}`);
+    expect(result.coordinates.latitude).toBeCloseTo(lat, 4);
+    expect(result.coordinates.longitude).toBeCloseTo(15, 6);
+  });
+
+  it.each(BAND_MID_NORTHING.filter(([band]) => band !== 'N' && band !== 'S'))(
+    'band %s rejects a northing four bands away',
+    (band) => {
+      const index = BAND_MID_NORTHING.findIndex(([b]) => b === band);
+      const south = index < 10;
+      const other = south ? (index + 4 <= 9 ? index + 4 : index - 4) : index + 4 <= 19 ? index + 4 : index - 4;
+      expectRejected(`33${band} 500000 ${BAND_MID_NORTHING[other]![1]}`, new RegExp(`band ${band}`));
+    }
+  );
+});

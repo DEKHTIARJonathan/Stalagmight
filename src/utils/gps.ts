@@ -12,6 +12,7 @@
  */
 
 import type { GpsCoordinates } from '../types/project';
+import i18n from '../i18n';
 import { formatFixed } from '../i18n/format';
 
 /**
@@ -36,6 +37,13 @@ export interface GpsParseResult {
   format: GpsFormat;
   /** Original input string */
   original: string;
+  /** How an ambiguous part of the input was read (localized). Shown next to the
+   *  parsed preview so the reading is never silent. */
+  note?: string;
+  /** The input itself says which value is the latitude (hemisphere letters, a
+   *  grid reference, a Plus Code or a map link), so the "may be swapped" hint
+   *  does not apply. See `gpsSwapHint`. */
+  orderExplicit?: boolean;
 }
 
 /**
@@ -525,21 +533,86 @@ export function parseUTM(input: string, depthReference = 0): GpsParseResult | Gp
     };
   }
 
-  // UTM to lat/lon conversion
-  const result = utmToLatLon(zone, band, easting, northing);
-  if ('message' in result) {
-    return {
-      message: result.message,
-      original: input,
-      format: 'UTM',
-    };
-  }
-
-  return {
-    coordinates: { latitude: result.lat, longitude: result.lon, depth_reference: depthReference },
+  const fail = (message: string): GpsParseError => ({ message, original: input, format: 'UTM' });
+  const ok = (r: { lat: number; lon: number }, note?: string): GpsParseResult => ({
+    coordinates: { latitude: r.lat, longitude: r.lon, depth_reference: depthReference },
     format: 'UTM',
     original: input,
-  };
+    orderExplicit: true,
+    ...(note !== undefined ? { note } : {}),
+  });
+  const fits = (r: { lat: number } | null, [from, to]: [number, number]) =>
+    r !== null && r.lat >= from - UTM_BAND_TOLERANCE_DEG && r.lat <= to + UTM_BAND_TOLERANCE_DEG;
+
+  // The band letter both picks the hemisphere and bounds the latitude, so the
+  // northing must land inside the band: a reading impossible for the letter is
+  // never accepted silently.
+  const bandReading = utmToLatLon(zone, band >= 'N', easting, northing);
+  const northingText = match[4];
+
+  // "S" and "N" are also how GIS software writes the hemisphere ("zone 33S").
+  if (band === 'S') {
+    const asBand = 'message' in bandReading ? null : bandReading;
+    const bandFits = fits(asBand, utmBandRange(band));
+    const southReading = utmToLatLon(zone, false, easting, northing);
+    const asSouth = 'message' in southReading ? null : southReading;
+    const southFits = fits(asSouth, [-80, 0]);
+    if (asBand && bandFits && asSouth && southFits) {
+      // Band S covers real cave regions (Kentucky, Spain, Turkey): keep it, name the alternative.
+      const suggestion = `${zone}${utmBandFor(asSouth.lat)} ${match[3]} ${northingText}`;
+      return ok(asBand, i18n.t('validation.gps.utmBandSAmbiguous', { suggestion }));
+    }
+    if (asBand && bandFits) return ok(asBand);
+    if (asSouth && southFits) return ok(asSouth, i18n.t('validation.gps.utmReadAsSouthernHemisphere'));
+    return fail(i18n.t('validation.gps.utmNeitherSouth', { northing: northingText }));
+  }
+  if ('message' in bandReading) return fail(bandReading.message);
+  const asBand = bandReading;
+  const bandFits = fits(asBand, utmBandRange(band));
+  if (band === 'N') {
+    // Band N and the northern hemisphere convert identically; only the bounds differ.
+    if (bandFits) return ok(asBand);
+    if (fits(asBand, [0, 84])) return ok(asBand, i18n.t('validation.gps.utmReadAsNorthernHemisphere'));
+    return fail(i18n.t('validation.gps.utmNeitherNorth', { northing: northingText }));
+  }
+  if (!bandFits) {
+    const [from, to] = utmBandRange(band);
+    return fail(
+      i18n.t('validation.gps.utmBandMismatch', {
+        northing: northingText,
+        latitude: formatLatitude(asBand.lat, 2),
+        band,
+        from: formatLatitude(from, 0),
+        to: formatLatitude(to, 0),
+      })
+    );
+  }
+  return ok(asBand);
+}
+
+/**
+ * Slack on the band edges. A band letter is derived from the latitude, so a
+ * correct input lies inside its band up to conversion and datum differences
+ * (well under a kilometre); 0.05 degrees (about 5.5 km) absorbs those while a
+ * wrong letter is at least a whole band (8 degrees) off.
+ */
+const UTM_BAND_TOLERANCE_DEG = 0.05;
+
+/** Latitude range [south, north] of a UTM band letter. X is 12 degrees tall. */
+function utmBandRange(band: string): [number, number] {
+  const south = -80 + 8 * UTM_ZONE_LETTERS.indexOf(band);
+  return [south, band === 'X' ? 84 : south + 8];
+}
+
+/** The band letter for a latitude inside the UTM range (80S to 84N). */
+function utmBandFor(lat: number): string {
+  return UTM_ZONE_LETTERS[Math.min(19, Math.max(0, Math.floor((lat + 80) / 8)))] ?? 'X';
+}
+
+/** "78.96°N", "8°S", "0°" - for messages. */
+function formatLatitude(lat: number, precision: number): string {
+  if (lat === 0) return '0°';
+  return `${formatFixed(Math.abs(lat), undefined, precision)}°${lat < 0 ? 'S' : 'N'}`;
 }
 
 /**
@@ -548,7 +621,7 @@ export function parseUTM(input: string, depthReference = 0): GpsParseResult | Gp
  */
 function utmToLatLon(
   zone: number,
-  band: string,
+  northern: boolean,
   easting: number,
   northing: number
 ): { lat: number; lon: number } | { message: string } {
@@ -558,9 +631,6 @@ function utmToLatLon(
   const k0 = 0.9996; // Scale factor
   const e = Math.sqrt(2 * f - f * f); // First eccentricity
   const e1sq = (e * e) / (1 - e * e); // Second eccentricity squared
-
-  // Determine hemisphere from band letter
-  const northern = band >= 'N';
 
   // Remove false easting and northing
   const x = easting - 500000;

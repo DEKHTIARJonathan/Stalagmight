@@ -3129,6 +3129,14 @@
     "cancel": "Cancel"
   },
   "validation": {
+    "gps": {
+      "utmBandMismatch": "UTM northing {{northing}} is at {{latitude}}, outside latitude band {{band}} ({{from}} to {{to}}) - check the band letter and the northing.",
+      "utmBandSAmbiguous": "\"S\" read as latitude band S (32°N to 40°N). For the southern hemisphere, enter \"{{suggestion}}\" instead.",
+      "utmNeitherNorth": "UTM northing {{northing}} fits neither latitude band N (0° to 8°N) nor the northern hemisphere (0° to 84°N).",
+      "utmNeitherSouth": "UTM northing {{northing}} fits neither latitude band S (32°N to 40°N) nor the southern hemisphere (80°S to 0°).",
+      "utmReadAsNorthernHemisphere": "\"N\" read as the northern hemisphere - latitude band N (0° to 8°N) does not fit this northing.",
+      "utmReadAsSouthernHemisphere": "\"S\" read as the southern hemisphere - latitude band S (32°N to 40°N) does not fit this northing."
+    },
     "import": {
       "azimuthInRange": "Azimuth in {{value}} must be between 0 and 360 degrees.",
       "azimuthOutRange": "Azimuth out {{value}} must be between 0 and 360 degrees.",
