@@ -5,9 +5,17 @@
 // ones on nearly every PR. PR #293 swept them all to ASCII hyphens; this guard
 // keeps them from creeping back.
 //
-// WHAT IT FLAGS - seven Unicode dashes, all replaced by a plain ASCII hyphen:
+// WHAT IT FLAGS - thirteen dash-like code points, all replaced by a plain
+// ASCII hyphen:
 //   U+2010 hyphen, U+2011 non-breaking hyphen, U+2012 figure dash,
-//   U+2013 en dash, U+2014 em dash, U+2015 horizontal bar, U+2212 minus sign.
+//   U+2013 en dash, U+2014 em dash, U+2015 horizontal bar, U+2212 minus sign,
+//   U+00AD soft hyphen, U+FE58 small em dash, U+FE63 small hyphen-minus,
+//   U+FF0D fullwidth hyphen-minus, U+2E3A two-em dash, U+2E3B three-em dash.
+// The last six were added in #576 (E18(d)). U+00AD is the sharpest of them:
+// inside a word it renders as nothing at all, so `pro<U+00AD>ject` and
+// `project` look identical in review while comparing unequal (a test ID, a
+// store key). The other five are the compatibility/small-form lookalikes of
+// the hyphen and em dash. All had zero hits in the tree when they were added.
 // The en dash is included deliberately (issue #293 q6-B): it IS the correct
 // glyph for a numeric range, but a strictly-ASCII tree is the house rule and a
 // context-sensitive "ranges are fine" exception would be hard to test and to
@@ -68,6 +76,12 @@ export const BANNED = [
   { code: 0x2014, name: 'U+2014 em dash' },
   { code: 0x2015, name: 'U+2015 horizontal bar' },
   { code: 0x2212, name: 'U+2212 minus sign' },
+  { code: 0x00ad, name: 'U+00AD soft hyphen' },
+  { code: 0xfe58, name: 'U+FE58 small em dash' },
+  { code: 0xfe63, name: 'U+FE63 small hyphen-minus' },
+  { code: 0xff0d, name: 'U+FF0D fullwidth hyphen-minus' },
+  { code: 0x2e3a, name: 'U+2E3A two-em dash' },
+  { code: 0x2e3b, name: 'U+2E3B three-em dash' },
 ].map((b) => ({ ...b, char: String.fromCharCode(b.code) }));
 const BANNED_NAME = new Map(BANNED.map((b) => [b.char, b.name]));
 const BANNED_RE = new RegExp(`[${BANNED.map((b) => b.char).join('')}]`, 'g');
@@ -282,7 +296,8 @@ export function report(result, log = console.log, err = console.error) {
     err(`  ... and ${skipped.length - SHOWN} more unscanned (${skipped.length} total)`);
   }
   err(
-    '\nReplace each one with an ASCII hyphen ("-"). CLAUDE.md: "No em-dashes".\n' +
+    '\nReplace each one with an ASCII hyphen ("-"); delete a U+00AD soft hyphen outright.\n' +
+      'CLAUDE.md: "No em-dashes".\n' +
       'See the header of scripts/check-no-em-dash.mjs for what is banned and why\n' +
       '(box-drawing characters in ASCII diagrams are NOT banned).\n',
   );
