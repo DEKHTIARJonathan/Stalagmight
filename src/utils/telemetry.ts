@@ -163,7 +163,13 @@ async function checkAvailable(): Promise<boolean> {
 
 /** Flush batched counts to the Rust backend. */
 async function flushToRust(): Promise<void> {
-  flushTimer = null;
+  // Cancel the pending flush timeout, not just forget it: when this flush comes from
+  // advanceProjectSeq or the dwell interval, a timeout left running would fire at its
+  // stale deadline and flush later events early - and orphan the next one in turn.
+  if (flushTimer !== null) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
 
   const snapshot = { ...counts };
   // Clear immediately so new events during flush aren't lost
