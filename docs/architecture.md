@@ -166,7 +166,6 @@ in `src-tauri/src/commands/telemetry_coverage_tests.rs`.
 | `src/hooks/useProject.ts` | Project file operations hook |
 | `src/hooks/useMapTools.ts` | Map tool handlers |
 | `src/hooks/useKeyboardShortcuts.ts` | Global keyboard shortcut handler |
-| `src/hooks/useFpsMonitor.ts` | FPS monitoring (no consumer today - see below) |
 | `src/theme/tokens.ts` | Color theme token definitions (10 themes) |
 | `src/components/Map/GridOverlay.tsx` | Theme-aware coordinate grid overlay |
 | `src/components/Dialogs/KeyboardShortcutsDialog.tsx` | Keyboard shortcuts overlay (`?` key) |
@@ -415,10 +414,6 @@ Switching to markers mode cancels pending geometry loads to save resources.
 
 ### FPS Monitoring
 
-`src/hooks/useFpsMonitor.ts` tracks frame rate with `requestAnimationFrame` and fires
-`onThrottleNeeded` / `onThrottleRestore` around a threshold pair (default 30 / 45 fps).
-
-It currently has **no consumer**. The auto-throttle it was written for increased
-whole-source GeoJSON simplification in Global View; that source no longer exists, so there
-is nothing left to coarsen. Wire it to something real or delete it - do not assume Global
-View is still throttling itself.
+There is no FPS-driven throttle. The `useFpsMonitor` hook written for Global View's
+whole-source GeoJSON simplification lost its purpose with that source and was deleted
+(#576 D27-32(e)); the live FPS readout is `useMapDevStats`' own loop.

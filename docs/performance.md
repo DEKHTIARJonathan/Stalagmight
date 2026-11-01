@@ -402,7 +402,5 @@ so a production build stays diagnosable.
 `VITE_DEBUG_MACOS_LOCKUP`. Both are documented in
 [`debug-gates.md`](debug-gates.md).
 
-**`src/hooks/useFpsMonitor.ts` is not running.** It implements a rolling
-`requestAnimationFrame` average with hysteresis thresholds, but it has no
-consumer; the live FPS readout is `useMapDevStats`' own loop. Do not wire
-adaptive work to it without wiring the hook up first.
+**There is no FPS monitor hook.** The unused `useFpsMonitor` was deleted
+(#576 D27-32(e)); the live FPS readout is `useMapDevStats`' own loop.

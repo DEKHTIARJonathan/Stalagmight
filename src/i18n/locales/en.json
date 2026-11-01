@@ -3203,20 +3203,6 @@
       "azimuthInRange": "Azimuth in {{value}} must be between 0 and 360 degrees.",
       "azimuthOutRange": "Azimuth out {{value}} must be between 0 and 360 degrees.",
       "lengthPositive": "Length must be positive."
-    },
-    "section": {
-      "duplicateMarker": "Duplicate marker {{marker}}."
-    },
-    "shot": {
-      "azimuthDiff": "Azimuth in/out differ by {{diff}} (threshold {{threshold}}).",
-      "azimuthInRange": "Azimuth in {{value}} must be between 0 and 360 degrees.",
-      "azimuthOutRange": "Azimuth out {{value}} must be between 0 and 360 degrees.",
-      "depthChange": "Depth change {{change}} exceeds {{max}}.",
-      "lengthRequired": "Length is required.",
-      "lengthTooLong": "Length {{length}} exceeds {{max}}.",
-      "lengthTooShort": "Length {{length}} is below {{min}}.",
-      "lrudNegative": "{{name}} value {{value}} must be 0 or greater.",
-      "lrudTooLarge": "{{name}} value {{value}} exceeds {{max}}."
     }
   },
   "telemetry": {

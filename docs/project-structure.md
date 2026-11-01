@@ -75,7 +75,6 @@ stalagmight/
 │   │   └── globalViewStore.ts        # Global View state
 │   ├── hooks/                    # Custom React hooks
 │   │   ├── useFocusTrap.ts           # Focus trap for modal dialogs
-│   │   ├── useFpsMonitor.ts          # FPS monitoring for throttle
 │   │   └── ...
 │   ├── utils/                    # Coordinate/color utilities
 │   │   ├── dialogStack.ts            # Nested dialog stack manager
