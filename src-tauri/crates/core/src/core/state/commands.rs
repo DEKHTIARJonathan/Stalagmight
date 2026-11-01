@@ -454,7 +454,12 @@ impl AppState {
     /// numbers match what the user sees. `remaining > 0` means some issues are
     /// detect-only and need manual attention (a drifted aligned loop closure to
     /// recompute/remove; non-finite shot geometry to correct).
-    pub fn repair_open_project_integrity(&self) -> IntegrityRepairResult {
+    ///
+    /// `Err` carries the coded refusal when editing is blocked (`guard_mutation`:
+    /// a newer-version file, a read-only SpeleoDB project, a read-only Plan/Export
+    /// workspace), so the frontend shows its read-only notice instead of reporting
+    /// a repair that never ran (#576 D39(a)).
+    pub fn repair_open_project_integrity(&self) -> Result<IntegrityRepairResult, String> {
         // Serialize against execute()/undo()/redo() for the WHOLE operation. Repair
         // captures before_snapshot, mutates, and pushes a snapshot-pair undo across
         // several independent project locks; without command_lock a concurrent
@@ -464,30 +469,23 @@ impl AppState {
         // helpers repair calls take command_lock (execute holds it while calling the
         // same capture/snapshot/undo helpers).
         let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return IntegrityRepairResult {
-                fixed: 0,
-                remaining: 0,
-                changed: false,
-            };
+            return Err("Failed to acquire command lock".to_string());
         };
         // Read-only edit gate (#191, D-B5): Repair mutates the project, so it is
-        // gated on a read-only remote project. It returns IntegrityRepairResult
-        // (not CommandResult), so it can't carry the EDIT_DISABLED code; instead
-        // return `changed: false` and log - the FE treats changed:false as
-        // "nothing happened" (it dirties only on changed). The coded-failure
-        // surface for repair is #204's; #191 just refuses to mutate. (The
-        // integrity banner stays dismissable for non-blocking corruption - see
-        // OPEN-3/D-B5.)
-        if self.guard_mutation("Repair integrity").is_err() {
+        // gated like every other edit. The refusal is returned as the coded error
+        // itself (`EDIT_DISABLED...`), not as a zero result: `{ fixed: 0,
+        // remaining: 0 }` read as a clean repair, and the frontend showed
+        // "Repaired 0 issues. Save to keep the fix." for a repair that never ran
+        // (#576 D39(a)). (The integrity banner stays dismissable for non-blocking
+        // corruption - see OPEN-3/D-B5.)
+        if let Err(refused) = self.guard_mutation("Repair integrity") {
             tracing::info!(
-                purpose = "read-only remote project",
-                "repair_open_project_integrity rejected: edit disabled (no-op)"
+                purpose = "read-only project or workspace",
+                "repair_open_project_integrity rejected: edit disabled"
             );
-            return IntegrityRepairResult {
-                fixed: 0,
-                remaining: 0,
-                changed: false,
-            };
+            return Err(refused
+                .error
+                .unwrap_or_else(|| crate::core::command::EDIT_DISABLED_CODE.to_string()));
         }
         // Count over the full violation set before repairing. Locks the project
         // internally, so it must run with no project guard held.
@@ -504,11 +502,11 @@ impl AppState {
                 Err(poisoned) => poisoned.into_inner(),
             };
             let Some(project) = guard.as_mut() else {
-                return IntegrityRepairResult {
+                return Ok(IntegrityRepairResult {
                     fixed: 0,
                     remaining: 0,
                     changed: false,
-                };
+                });
             };
             // The frame-defining datum station before the repair. Repair never runs
             // through `execute()`, so it carries its own frame check (#469, item 1).
@@ -576,7 +574,7 @@ impl AppState {
                 }
             }
         }
-        IntegrityRepairResult {
+        Ok(IntegrityRepairResult {
             // Demotions are already inside the before→after delta: each demoted
             // merge was, by construction, a counted `merge_misaligned` violation
             // that the demotion clears. The floor only guarantees that an explicit
@@ -585,7 +583,7 @@ impl AppState {
             fixed: before.saturating_sub(after).max(demoted) as u32,
             remaining: after as u32,
             changed,
-        }
+        })
     }
 
     /// Execute a command and return the result

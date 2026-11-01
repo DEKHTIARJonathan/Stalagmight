@@ -4664,6 +4664,21 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return mockHistoryDiscarded;
 
           case 'repair_project_integrity': {
+            // #576 D39(a): a read-only project refuses Repair with the coded error the
+            // backend's guard_mutation returns, never a zero result. `projectIsRemote`
+            // is the mock's read-only-remote proxy, as in set_surface_elevation.
+            if (openProjectNewerSchema !== null) {
+              return Promise.reject(
+                `EDIT_DISABLED: NEWER_FILE_READ_ONLY: Repair integrity is disabled: this project was ` +
+                  `saved by a newer version of Stalagmight (file format ${openProjectNewerSchema}) and ` +
+                  `is open read-only. Update Stalagmight to edit it.`,
+              );
+            }
+            if (projectIsRemote) {
+              return Promise.reject(
+                'EDIT_DISABLED: Repair integrity is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.',
+              );
+            }
             const total = mockIntegrityIssues.length;
             const remaining = Math.min(mockIntegrityRemaining, total);
             const fixed = total - remaining;

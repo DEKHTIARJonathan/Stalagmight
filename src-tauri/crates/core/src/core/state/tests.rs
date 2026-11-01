@@ -1752,7 +1752,7 @@ fn repair_open_project_integrity_is_undoable_and_redoable() {
     state.set_project_for_tests(project);
 
     // Repair fixes it AND records exactly one undo entry.
-    let result = state.repair_open_project_integrity();
+    let result = state.repair_open_project_integrity().unwrap();
     assert!(result.fixed >= 1, "repair should report at least one fix");
     assert!(
         !state
@@ -2094,7 +2094,7 @@ fn repair_noop_on_clean_project_reports_unchanged() {
     project.resolve_offsets();
     state.set_project_for_tests(project);
 
-    let result = state.repair_open_project_integrity();
+    let result = state.repair_open_project_integrity().unwrap();
     assert_eq!(result.fixed, 0);
     assert!(!result.changed, "a no-op repair must not report changed");
     assert_eq!(
@@ -2223,7 +2223,7 @@ fn repair_serializes_under_command_lock() {
     let state2 = Arc::clone(&state);
     let (tx, rx) = mpsc::channel();
     let handle = std::thread::spawn(move || {
-        let _ = tx.send(state2.repair_open_project_integrity());
+        let _ = tx.send(state2.repair_open_project_integrity().unwrap());
     });
     // While we hold command_lock, repair must block (no result arrives).
     assert!(
@@ -2527,7 +2527,7 @@ fn undo_of_duplicate_uuid_repair_restores_the_duplicates() {
     state.set_project_for_tests(project);
 
     // Repair re-mints the duplicate (now unique) and records the dup state as undo `before`.
-    let r = state.repair_open_project_integrity();
+    let r = state.repair_open_project_integrity().unwrap();
     assert!(r.changed, "repair changed the project");
     assert!(
         !state
@@ -23934,7 +23934,7 @@ fn repair_open_project_integrity_reports_fixed_and_remaining() {
     let before = state.integrity_violation_messages().len();
     assert!(before >= 1, "seeded at least one violation");
 
-    let result = state.repair_open_project_integrity();
+    let result = state.repair_open_project_integrity().unwrap();
     assert_eq!(
         (result.fixed + result.remaining) as usize,
         before,
@@ -24010,7 +24010,7 @@ fn repair_command_demotes_a_double_anchoring_bridge_merge() {
         "seeded a torn merge AND an over-anchored merge component, got {before}"
     );
 
-    let result = state.repair_open_project_integrity();
+    let result = state.repair_open_project_integrity().unwrap();
     assert!(
         result.fixed >= 1,
         "the demotion is reported as a fix, got {result:?}"
@@ -24257,7 +24257,7 @@ fn done_without_edit_session_is_noop_not_a_release() {
 
 /// The chokepoint enumeration tripwire (D-B6): every SURVEY-CONTENT mutation entry
 /// listed in MUTATION_ENTRYPOINTS must reject on a read-only remote project with the
-/// EDIT_DISABLED code (or, for repair, changed == false).
+/// EDIT_DISABLED code (repair included, since #576 D39(a)).
 ///
 /// CAVEAT - this list is hand-maintained and only checks its own length, so it
 /// catches a forgotten guard on a KNOWN entry, NOT a brand-new `execute_*`/
@@ -24427,10 +24427,15 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             "set_surface_elevation",
             &state.set_surface_elevation(Some(12.0)),
         );
-        // repair returns IntegrityRepairResult (no coded failure surface) →
-        // changed == false (D-B5).
-        let repair = state.repair_open_project_integrity();
-        assert!(!repair.changed, "repair on read-only remote is a no-op");
+        // repair refuses with the coded error itself, not a zero result that read as
+        // a clean repair (#576 D39(a)).
+        let repair = state
+            .repair_open_project_integrity()
+            .expect_err("repair must be rejected when edit disabled");
+        assert!(
+            repair.starts_with(EDIT_DISABLED_CODE),
+            "repair_open_project_integrity must carry the EDIT_DISABLED code, got: {repair:?}"
+        );
         assert_disabled(
             "execute_delete_shot_and_split",
             &state.execute_delete_shot_and_split(sid, shid, "A".to_string(), "B".to_string()),
@@ -24987,10 +24992,29 @@ fn edit_disabled_code_prefix_is_distinct() {
 #[test]
 fn repair_and_settings_gated_on_locked_remote() {
     let (state, _sid, _shid, _temp) = remote_fixture();
-    // Repair: returns changed == false (no coded-failure surface; D-B5).
+    // Repair: refused with the EDIT_DISABLED coded error (#576 D39(a)). It used to
+    // return `{ fixed: 0, remaining: 0, changed: false }`, which the frontend
+    // reported as "Repaired 0 issues. Save to keep the fix." for a repair that
+    // never ran. The refusal fires before any mutation: no undo entry, no change.
+    let modified_before = state.get_project_state().unwrap().modified_at;
+    let undo_before = state.get_undo_stack().len();
     let repair = state.repair_open_project_integrity();
-    assert!(!repair.changed);
-    assert_eq!(repair.fixed, 0);
+    println!("read-only remote project: repair_open_project_integrity() -> {repair:?}");
+    let refusal = repair.expect_err("a refused repair must be an error, not a clean result");
+    assert!(
+        refusal.starts_with(EDIT_DISABLED_CODE),
+        "the refusal carries the EDIT_DISABLED code, got: {refusal:?}"
+    );
+    assert_eq!(
+        state.get_project_state().unwrap().modified_at,
+        modified_before,
+        "a refused repair leaves the project untouched"
+    );
+    assert_eq!(
+        state.get_undo_stack().len(),
+        undo_before,
+        "and records no undo entry"
+    );
     // Settings: returns the EDIT_DISABLED coded failure.
     let settings =
         state.update_project_settings("New Name".to_string(), state.get_config().validation);

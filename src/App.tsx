@@ -9,6 +9,7 @@ import { useSpeleoStore } from './store/speleoStore';
 import { useGasPlanStore, selectIsPlanDirty } from './store/gasPlanStore';
 import { useShallow } from 'zustand/react/shallow';
 import { invokeIpc, getErrorMessage } from './utils/ipc';
+import { isEditDisabledError } from './utils/editErrors';
 import {
   surfaceSaveFailure,
   shouldShowAutosaveBanner,
@@ -566,8 +567,10 @@ function App() {
         closeIntegrityDialog();
       }
     } catch (e) {
-      // A move-carry refusal (GHOST-2) is not a failed repair and is its own notice.
-      if (isMoveCarryRefusal(e)) return;
+      // A move-carry refusal (GHOST-2) is not a failed repair and is its own notice;
+      // nor is a read-only refusal (#576 D39(a)), which the store already showed as
+      // the read-only notice.
+      if (isMoveCarryRefusal(e) || isEditDisabledError(getErrorMessage(e))) return;
       // repairProjectIntegrity re-throws on a real failure (e.g. the IPC rejected
       // during teardown) rather than reporting a fake no-op success. Surface it and
       // keep the dialog open - integrityIssues is untouched, so the banner/save-block

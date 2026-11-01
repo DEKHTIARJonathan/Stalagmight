@@ -1,6 +1,9 @@
 import type { StoreApi } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
+import { isEditDisabledError, READ_ONLY_EDIT_NOTICE } from '../utils/editErrors';
+import { TOAST_KEYS } from '../utils/toastKeys';
 import { useSpeleoStore } from './speleoStore';
+import { useUIStore } from './uiStore';
 import { refuseMutationDuringCarry } from './moveCarry';
 import type { ProjectWarning, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { ProjectStore } from './projectStore';
@@ -198,13 +201,24 @@ export function createProjectIntegrityActions(
         }
         return result;
       } catch (e) {
+        // #576 D39(a): the backend refuses Repair when editing is blocked (a read-only
+        // SpeleoDB project, a file a newer version saved, the read-only Plan/Export
+        // workspace) with the same coded EDIT_DISABLED error every other edit gets.
+        // That is a read-only notice, not a failure: show the same toast, under the
+        // same key, as executeCommand does, and re-throw it so the caller neither
+        // reports a repair nor shows its own "failed" toast (`isEditDisabledError`).
+        // Tauri rejects a `Result<_, String>` command with the bare string.
+        const message = typeof e === 'string' ? e : e instanceof Error ? e.message : null;
+        if (isEditDisabledError(message)) {
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(message), TOAST_KEYS.EDIT_DISABLED, 'warning');
+          throw e;
+        }
         // Do NOT fabricate a successful no-op { fixed: 0, remaining: 0 }: a thrown
         // repair (an IPC rejection during window/app teardown, a serialization
-        // failure, or a backend panic - note the command itself is infallible, so a
-        // normal backend Err is not a trigger) must be distinguishable from a genuine
-        // clean repair. Otherwise the caller shows a fake "Repaired 0 issues" success
-        // toast and swallows the error. Re-throw so the caller surfaces the failure
-        // and keeps the Repair entry point open. (integrityIssues / integritySaveBlocked
+        // failure, or a backend panic) must be distinguishable from a genuine clean
+        // repair. Otherwise the caller shows a fake "Repaired 0 issues" success toast
+        // and swallows the error. Re-throw so the caller surfaces the failure and
+        // keeps the Repair entry point open. (integrityIssues / integritySaveBlocked
         // are untouched here, so the banner and save-block stay correct.)
         console.error('Failed to repair project integrity:', e);
         throw e;

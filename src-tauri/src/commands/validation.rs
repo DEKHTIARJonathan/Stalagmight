@@ -25,9 +25,11 @@ pub fn check_project_integrity(state: State<AppState>) -> IntegrityCheckResult {
 /// Repair the open project's structural integrity, returning `{ fixed,
 /// remaining }`. The project is left dirty so the user can save the repair.
 /// `remaining > 0` means some issues are detect-only (drifted aligned loop
-/// closures, non-finite geometry) and need manual attention.
+/// closures, non-finite geometry) and need manual attention. Rejects with the
+/// coded read-only refusal (`EDIT_DISABLED...`) when editing is blocked, rather
+/// than resolving with a zero result that reads as a clean repair (#576 D39(a)).
 #[tauri::command]
-pub fn repair_project_integrity(state: State<AppState>) -> IntegrityRepairResult {
+pub fn repair_project_integrity(state: State<AppState>) -> Result<IntegrityRepairResult, String> {
     state.repair_open_project_integrity()
 }
 
