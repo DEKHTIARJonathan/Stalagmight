@@ -231,7 +231,9 @@ export function CacheSettings({
           <Button
             variant="danger"
             onClick={handleClearCache}
-            disabled={isClearing || (cacheStats?.total_tiles ?? 0n) === 0n}
+            // ts-rs types the u64 as bigint, but the JSON invoke() delivers a
+            // plain number, so `=== 0n` never matched: compare as a Number.
+            disabled={isClearing || Number(cacheStats?.total_tiles ?? 0) === 0}
             data-testid="clear-cache-button"
           >
             {isClearing ? t('settings.cache.clear.clearing') : t('settings.cache.clear.button')}
