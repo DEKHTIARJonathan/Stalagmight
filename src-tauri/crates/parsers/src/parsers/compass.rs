@@ -819,7 +819,8 @@ struct Readings {
     pitch_in: Option<f64>,
     /// `+down` degrees; only a backsight inclination that was taken.
     pitch_out: Option<f64>,
-    /// The inclination the leg's depth change follows, Compass `+up` degrees.
+    /// The inclination the leg's depth change follows, Compass `+up` degrees:
+    /// the mean of the two sights when both were taken.
     inclination: f64,
     /// Foresight readings that were not taken and came from the backsight.
     reconstructed: u32,
@@ -847,7 +848,11 @@ fn resolve_readings(shot: &Shot, ctx: &SurveyCtx) -> Readings {
         (None, None) => (0.0, 0.0),
     };
     let (inclination, pitch_in, pitch_out) = match (fore.inclination, back.inclination) {
-        (Some(f), Some(b)) => (f, Some(-f), Some(-b)),
+        // Both taken: the depth follows their mean, as Compass and Survex
+        // compute it and as the bearings already are (`average_azimuth_of` on
+        // the two azimuth slots); the slots keep what each sight read
+        // (#576 NF-AN4-1).
+        (Some(f), Some(b)) => (f64::midpoint(f, b), Some(-f), Some(-b)),
         (Some(f), None) => (f, Some(-f), None),
         (None, Some(b)) => {
             reconstructed += 1;
@@ -3528,6 +3533,30 @@ mod tests {
                 == "Shot A1 -> A2: bearing is missing and the survey has no backsight to \
                     take it from; recorded as 0 (due north)."),
             "{warnings:?}"
+        );
+    }
+
+    /// #576 NF-AN4-1: with both inclinations taken, Compass averages them ("When
+    /// you process the data, the two numbers are averaged" - Compass Editor
+    /// help, "Backsights and Redundant Backsights"; Survex does the same), and
+    /// the bearings already were. Depth used the foresight alone, so a 28 deg
+    /// foresight with a 32 deg backsight dropped 4.70 m instead of the 5.00 m
+    /// of the 30 deg mean - and disagreed with the shot's own pitch pair.
+    #[test]
+    fn depth_follows_the_mean_of_fore_and_back_inclination() {
+        let (configs, _, warnings) = convert_text(
+            "DDDDLRUDLADBF",
+            &["A1 A2 32.81 90.00 -28.00 1.00 1.00 1.00 1.00 270.00 32.00"],
+        );
+        print_shots("fore 90/-28, back 270/+32", &configs, &warnings);
+        let shot = all_shots(&configs)[0];
+        assert_eq!(shot.pitch_in, Some(28.0), "the foresight is kept as read");
+        assert_eq!(shot.pitch_out, Some(32.0), "the backsight is kept as read");
+        let drop = shot.depth_out - shot.depth_in;
+        let mean = 32.81 * FEET_TO_METERS * 30.0_f64.to_radians().sin();
+        assert!(
+            (drop - mean).abs() < 1e-6,
+            "the leg descends by the 30 deg mean, {mean:.3} m, got {drop:+.3} m"
         );
     }
 }
