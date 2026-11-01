@@ -77,6 +77,7 @@ import { clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
 import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/mapErrors';
 import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
 import { InteractOverlayHideController, overlayPaintDigest, overlayTouchesRemovedSections } from './surveyLayer/interactOverlayHide';
+import { HoverFrame } from './surveyLayer/hoverFrame';
 import type { SemanticMapTarget } from './surveyLayer/semanticTarget';
 import { SemanticTargetPreference } from './surveyLayer/semanticTargetPreference';
 
@@ -369,9 +370,8 @@ export default class SurveyLayer {
   // src/utils/longPressTouch.ts.
   private detachLongPressTouch: (() => void) | null = null;
 
-  // Hover update batching - only process latest mouse position per frame
-  private pendingHoverEvent: maplibregl.MapMouseEvent | null = null;
-  private hoverRafId: number | null = null;
+  // Hover hit-testing, coalesced to the latest mouse position per frame.
+  private hoverFrame: HoverFrame<maplibregl.MapMouseEvent> | null = null;
 
   // Interact-overlay dedupe key: per-frame hover updates only touch the
   // overlay source when its content actually changes. Reset to '' whenever
@@ -951,31 +951,22 @@ export default class SurveyLayer {
       }
     };
 
-    // Mousemove handler with RAF batching
-    // Only processes the latest mouse position per animation frame,
-    // preventing event queue buildup when queryRenderedFeatures is slow
+    // Mousemove only queues the event: the latest one is hit-tested once per
+    // animation frame (see HoverFrame), so slow hit-tests never build a backlog.
+    const hoverFrame = new HoverFrame(processHoverUpdate);
+    this.hoverFrame = hoverFrame;
     this.boundMouseMove = (e: maplibregl.MapMouseEvent) => {
       if (isNonInteractiveTool(this.activeTool)) return;
       if (this.dragPreviewActive) return; // Suppress hover during active drag
-
-      // Store latest event (overwrites any pending)
-      this.pendingHoverEvent = e;
-
-      // Schedule processing if not already scheduled
-      if (this.hoverRafId === null) {
-        this.hoverRafId = requestAnimationFrame(() => {
-          this.hoverRafId = null;
-          if (this.pendingHoverEvent) {
-            const event = this.pendingHoverEvent;
-            this.pendingHoverEvent = null;
-            processHoverUpdate(event);
-          }
-        });
-      }
+      hoverFrame.push(e);
     };
 
     // Clear all hover when cursor leaves the map canvas
     this.boundMapLeave = () => {
+      // First take back a move queued before the leave, which would otherwise
+      // hit-test next frame and re-apply the hover with the pointer gone (#576
+      // D39(h)). Unconditional: the queued move may be the FIRST hover.
+      hoverFrame.cancel();
       if (this.hoveredStationId || this.hoveredShotId) {
         if (this.shouldLogInteraction()) {
           console.debug('[HitDetection] Hover cleared on map leave', {
@@ -3570,11 +3561,7 @@ export default class SurveyLayer {
     this.dprWatcherDispose?.();
     this.dprWatcherDispose = undefined;
     clearFeatureCountsForPrefix('survey-');
-    if (this.hoverRafId !== null) {
-      cancelAnimationFrame(this.hoverRafId);
-      this.hoverRafId = null;
-    }
-    this.pendingHoverEvent = null;
+    this.hoverFrame?.cancel();
     this.cancelDragRender();
     this.dragGhost.dispose();
     this.interactHide.drop();
