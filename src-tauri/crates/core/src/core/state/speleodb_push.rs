@@ -243,10 +243,21 @@ impl AppState {
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
+        let holder =
+            self.speleodb_push_lock_holder(&endpoint, &token, insecure_http, &link.project_id)?;
 
         // Dirty-bit gate: only push when there are un-pushed edits.
         let outcome = if link.has_unpushed_edits {
-            self.speleodb_push(&endpoint, &token, insecure_http, &link, message)?
+            let we_hold_the_lock =
+                self.speleodb_authorship_licence(&link.project_id, holder.as_deref());
+            self.speleodb_push(
+                &endpoint,
+                &token,
+                insecure_http,
+                &link,
+                message,
+                we_hold_the_lock,
+            )?
         } else {
             PushOutcome::Confirmed
         };
@@ -348,8 +359,19 @@ impl AppState {
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
+        let holder =
+            self.speleodb_push_lock_holder(&endpoint, &token, insecure_http, &link.project_id)?;
+        let we_hold_the_lock =
+            self.speleodb_authorship_licence(&link.project_id, holder.as_deref());
 
-        match self.speleodb_push(&endpoint, &token, insecure_http, &link, message)? {
+        match self.speleodb_push(
+            &endpoint,
+            &token,
+            insecure_http,
+            &link,
+            message,
+            we_hold_the_lock,
+        )? {
             PushOutcome::Confirmed => {
                 // A late edit after push_start leaves the dirty bit set (not yet on
                 // the server); report PushUnconfirmed so a retry re-pushes it. The
@@ -617,9 +639,34 @@ impl AppState {
         Ok((tip, history.commits))
     }
 
+    /// Who holds the open project's write lock, read once for a Done or Push (#576
+    /// B32): `Ok(None)` is a mutex the server says is unheld, `Ok(Some(user))` names
+    /// the holder.
+    ///
+    /// The holder is half of the authorship licence the push hands `plan_push`
+    /// ([`Self::speleodb_authorship_licence`]), the same licence the status poll
+    /// reads off its own `get_project`. Routed through the auth handler like every
+    /// other call of these verbs, and failing the verb when it cannot be read:
+    /// "could not say who holds the lock" must neither license the shortcut nor,
+    /// for Done, a release.
+    fn speleodb_push_lock_holder(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        project_id: &str,
+    ) -> Result<Option<String>, SpeleoErrorDto> {
+        self.speleodb_handle_auth(
+            Endpoint::GetProject,
+            self.speleodb_lock_holder_checked(endpoint, token, insecure_http, project_id),
+        )
+        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))
+    }
+
     /// The push half of [`Self::speleodb_done`]: fence BASE vs the server tip,
-    /// recover via ancestry (#193) if the tip moved under our lock, then upload the
-    /// snapshot + render.
+    /// recover via ancestry (#193) if the tip moved under a lock THIS session took
+    /// (`we_hold_the_lock`, see [`Self::speleodb_authorship_licence`]), then upload
+    /// the snapshot + render.
     fn speleodb_push(
         &self,
         endpoint: &str,
@@ -627,6 +674,7 @@ impl AppState {
         insecure_http: bool,
         link: &crate::models::SpeleoLink,
         message: Option<String>,
+        we_hold_the_lock: bool,
     ) -> Result<PushOutcome, SpeleoErrorDto> {
         // [#576 B6-D1] Never upload a project a newer build saved. Unreachable
         // through the verbs today - `speleodb_start_editing` refuses it, so the
@@ -664,6 +712,10 @@ impl AppState {
         // push-start is not persisted, so the ancestry timing stays conservative
         // (clear_dirty == false → AdoptThenUpload, never AdoptConfirmed) and we
         // re-push on top of any landed commit - a no-op 304 if nothing changed.
+        //
+        // [#576 B32] Only under the licence: without it a gap commit carrying our
+        // email may be another session's on the same account, and adopting it would
+        // upload our older copy over it. The poll already calls that gap a conflict.
         match sync::plan_push(
             link.base_commit_sha.as_deref(),
             tip.as_deref(),
@@ -671,6 +723,7 @@ impl AppState {
             &my_email,
             link.last_edit_at.as_deref(),
             None,
+            we_hold_the_lock,
         ) {
             // base == tip: push our edits directly.
             PushPlan::Upload => {}
@@ -704,9 +757,10 @@ impl AppState {
                 .map_err(local_dto)?;
                 return Ok(landed);
             }
-            // A stranger's commit, OR a server inconsistency (non-linear / multi-root
-            // / a recorded BASE with no tip): never overwrite or guess - surface the
-            // divergence prompt (#193 b2 + b5). Stays locked + dirty in speleodb_done.
+            // A stranger's commit, a gap this session cannot prove it pushed (#576
+            // B32), OR a server inconsistency (non-linear / multi-root / a recorded
+            // BASE with no tip): never overwrite or guess - surface the divergence
+            // prompt (#193 b2 + b5). Stays locked + dirty in speleodb_done.
             PushPlan::Diverged => return Ok(PushOutcome::Diverged),
         }
 

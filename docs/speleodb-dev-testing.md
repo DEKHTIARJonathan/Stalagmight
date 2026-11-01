@@ -167,6 +167,18 @@ self-heal could mistake it for our own landed push and wrongly clear the dirty b
 nothing stops a determined user from running two app instances logged in as the
 same account.
 
+**Guard (the licence, #576 B32):** the self-heal only runs for a session that
+provably took the lock itself - an acquisition recorded by this process's own
+Start editing, the gate open, not force-editing, and the server naming our
+account as the holder (`speleodb_authorship_licence`). The status poll
+(`sync::poll_verdict`) and Done / Push (`sync::plan_push`) take that same
+licence, so without it a same-account commit in the gap reads as a divergence on
+the button AND on the click: the conflict dialog opens instead of the copy being
+uploaded over the other session's revision. The cost: after a restart in the
+middle of a push whose reply was lost, your own landed upload also reads as a
+conflict (the claim is in memory only); resolve it with "Take the SpeleoDB
+version" or "Save my version as a local copy".
+
 **Mitigation (the notice):** `speleodb_open_project` checks the project's
 `active_mutex` at open time; if the lock is already held by **our own** account, a
 concurrent same-account session is live, and the open result carries

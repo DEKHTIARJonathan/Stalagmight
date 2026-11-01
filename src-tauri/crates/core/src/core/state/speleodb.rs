@@ -884,10 +884,7 @@ impl AppState {
         // catch-all clear may not have run yet), and a session that may no longer
         // edit must not still be handed a licence to explain a gap commit away as
         // its own. Gate AND record AND holder, or no shortcut.
-        let we_hold_the_lock = self.speleodb_lock_acquired_here(&link.project_id)
-            && self.edit_enabled()
-            && !self.force_editing()
-            && lock_holder.is_some_and(|holder| holder.eq_ignore_ascii_case(&my_email));
+        let we_hold_the_lock = self.speleodb_authorship_licence(&link.project_id, lock_holder);
         match head_with_empty_retry(link.base_commit_sha.as_deref(), || {
             self.speleodb_server_head(endpoint, token, insecure_http, &link.project_id)
         }) {
@@ -901,6 +898,27 @@ impl AppState {
             ),
             Err(_) => RemoteState::Unknown,
         }
+    }
+
+    /// The authorship licence: whether a commit in the BASE..tip gap carrying our
+    /// email may be explained away as THIS session's own unrecorded push. Record AND
+    /// gate AND not force-editing AND the server naming our account as the holder -
+    /// see [`Self::speleodb_remote_state`] for why each half is needed.
+    ///
+    /// One helper for the poll and the push (#576 B32): `sync::poll_verdict` and
+    /// `sync::plan_push` take this same bool, so the passive mark and the Done/Push
+    /// click behind it decide a same-account gap the same way. The push used to pass
+    /// nothing at all, and adopted a second session's commit the mark called a
+    /// conflict.
+    pub(super) fn speleodb_authorship_licence(
+        &self,
+        project_id: &str,
+        lock_holder: Option<&str>,
+    ) -> bool {
+        self.speleodb_lock_acquired_here(project_id)
+            && self.edit_enabled()
+            && !self.force_editing()
+            && lock_held_by_me(lock_holder, self.speleodb_my_email().as_deref())
     }
 
     /// Record - or, with `None`, forget - the project whose write lock THIS process
@@ -4369,6 +4387,89 @@ mod tests {
             third.remote_state,
             RemoteState::UpToDate,
             "an acquire made by THIS process still licenses the authorship recovery"
+        );
+    }
+
+    #[test]
+    fn done_does_not_adopt_a_same_account_commit_this_session_did_not_make() {
+        // [#576 B32] The click half of the test above. A second session on the SAME
+        // account holds the lock and has pushed `def456` on top of our BASE; this
+        // process opened the project read-only and had its gate reopened by the
+        // inherited-lock poll, so it never took the lock and holds no claim. The
+        // poll calls that gap a Conflict. Done used to call it our own landed push:
+        // `plan_push` matched the commit by email alone, adopted `def456` as BASE
+        // and uploaded our older copy on top, so the other session's revision
+        // silently dropped out of the tip. Without the licence it must open the
+        // conflict dialog instead, exactly as the button already says.
+        let (base, _listener, seen) = recording_stub(SAME_ACCOUNT_HOLDER_BODY);
+        let (_temp, state) = remote_fixture_with_dirty_bit(true);
+        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state.set_edit_enabled(true);
+        assert!(
+            !state.speleodb_lock_acquired_here(REMOTE_ID),
+            "precondition: this process took no lock - its gate came from the \
+             inherited-lock reopen, as in a second window on the same account"
+        );
+
+        let result = state.speleodb_done(None);
+
+        let link = state.speleodb_open_link().expect("link");
+        assert_eq!(
+            link.base_commit_sha.as_deref(),
+            Some("abc123"),
+            "BASE adopted the other session's commit {:?} (expected abc123): Done \
+             treated a commit this session did not make as its own; result {result:?}",
+            link.base_commit_sha
+        );
+        assert!(
+            matches!(result, Ok(DoneResult::DivergenceNeeded)),
+            "an unlicensed same-account gap is a divergence, got {result:?}"
+        );
+        assert!(
+            link.has_unpushed_edits,
+            "the local edits stay marked un-pushed for the conflict dialog"
+        );
+        let seen = seen.lock().expect("request log").clone();
+        assert!(
+            !seen
+                .iter()
+                .any(|r| r.contains("/upload/") || r.contains("/release/")),
+            "nothing may be uploaded over the other session's revision, and its lock \
+             must not be released; saw {seen:?}"
+        );
+    }
+
+    #[test]
+    fn done_still_adopts_our_own_landed_push_under_the_lock_we_took() {
+        // [#576 B32] DO-NOT-REGRESS: the recovery the licence gates. Same world as the
+        // test above, but THIS process took the lock (the claim Start editing
+        // records), so a commit in the gap carrying our email can only be our own
+        // upload whose reply was lost. Done must keep adopting it rather than raise
+        // a divergence against the user's own work.
+        //
+        // The upload that follows the adoption cannot run here (it needs the app
+        // cache dir only the live tests initialise), so the adoption is observed on
+        // BASE, which the adopt arm writes before it uploads.
+        let (base, _listener) = always_answering_stub(SAME_ACCOUNT_HOLDER_BODY);
+        let (_temp, state) = remote_fixture_with_dirty_bit(true);
+        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state.set_edit_enabled(true);
+        state.speleodb_note_lock_acquired(Some(REMOTE_ID));
+
+        let result = state.speleodb_done(None);
+
+        assert!(
+            !matches!(result, Ok(DoneResult::DivergenceNeeded)),
+            "our own landed push is not a divergence, got {result:?}"
+        );
+        assert_eq!(
+            state
+                .speleodb_open_link()
+                .expect("link")
+                .base_commit_sha
+                .as_deref(),
+            Some("def456"),
+            "the licensed recovery adopts our own landed commit as BASE"
         );
     }
 
