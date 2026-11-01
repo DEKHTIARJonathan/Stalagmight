@@ -257,20 +257,34 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
   // Patterns 1 and 2 carry direction letters; pattern 3 is signed degrees only.
   let lettered = true;
 
+  // Patterns 1 and 2 end in the longitude letter: E or W, or the direction
+  // word it starts (East, West; Este/Est), never the first letter of another
+  // word ("2°17'40" WGS84" has no letter). The latitude letter is already
+  // followed by a separator.
+
   // Pattern 1: With degree/minute/second symbols AND direction letters
   // Matches: 48°51'30"N 2°17'40"E (or with spaces)
   const dmsSymbolWithDirRegex =
-    /([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([EWew])/i;
+    /([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*(East|Este|Est|West|[EW])(?![A-Za-z])/i;
 
   // Pattern 2: Space-separated with direction letters (required for disambiguation)
   // Matches: 48 51 30 N 2 17 40 E
   const dmsSpaceRegex =
-    /([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([NSns])\s+([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([EWew])/i;
+    /([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([NSns])\s+([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*(East|Este|Est|West|[EW])(?![A-Za-z])/i;
 
   // Pattern 3: Signed degrees with symbols (no direction letters)
   // Matches: -33°51'54" 151°12'33" or 33°51'54" -151°12'33"
   const dmsSignedRegex =
     /(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"][,\s]+(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]/i;
+
+  // Patterns 1 and 2 without the longitude letter, tried last: the longitude's
+  // hemisphere then comes from the signs (`lonDirFromSigns`), as in the strict
+  // pair reader - `87°53'15"S, -106°46'0" WGS84` is W by its minus sign. No
+  // number may follow, so a longitude is never cut short.
+  const dmsSymbolNoLonLetterRegex =
+    /([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"](?!\s*\d)/i;
+  const dmsSpaceNoLonLetterRegex =
+    /([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([NSns])\s+([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)(?![\d.])(?!\s*\d)/i;
 
   let match = trimmed.match(dmsSymbolWithDirRegex);
   if (match) {
@@ -282,7 +296,7 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
     lonDegStr = match[5];
     lonMinStr = match[6];
     lonSecStr = match[7];
-    lonDir = match[8]?.toUpperCase();
+    lonDir = match[8]?.[0]?.toUpperCase();
   } else {
     match = trimmed.match(dmsSpaceRegex);
     if (match) {
@@ -294,7 +308,7 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
       lonDegStr = match[5];
       lonMinStr = match[6];
       lonSecStr = match[7];
-      lonDir = match[8]?.toUpperCase();
+      lonDir = match[8]?.[0]?.toUpperCase();
     } else {
       match = trimmed.match(dmsSignedRegex);
       if (match) {
@@ -320,6 +334,15 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
           lonDir = lonNegative ? 'W' : 'E';
         }
       }
+    }
+  }
+  if (!match) {
+    match = trimmed.match(dmsSymbolNoLonLetterRegex) ?? trimmed.match(dmsSpaceNoLonLetterRegex);
+    if (match) {
+      lettered = true;
+      [, latDegStr, latMinStr, latSecStr, latDir, lonDegStr, lonMinStr, lonSecStr] = match;
+      latDir = latDir?.toUpperCase();
+      lonDir = lonDirFromSigns(latDegStr, latDir, lonDegStr);
     }
   }
 
@@ -406,6 +429,22 @@ function signLetterNotes(...coordinates: Array<[string, string | undefined, numb
   return notes.length > 0 ? notes.join(' ') : undefined;
 }
 
+/**
+ * The hemisphere of a longitude written with no letter after a lettered
+ * latitude, from the signs as the strict pair reader takes them: W for its own
+ * minus; E for its own plus, or for no sign once the latitude carries a minus
+ * that agrees with S (signed degrees). Undefined when the signs do not say.
+ */
+function lonDirFromSigns(
+  latDeg: string | undefined,
+  latDir: string | undefined,
+  lonDeg: string | undefined
+): string | undefined {
+  if (lonDeg?.startsWith('-')) return 'W';
+  if (lonDeg?.startsWith('+') || (latDeg?.startsWith('-') && latDir === 'S')) return 'E';
+  return undefined;
+}
+
 const DMS_FORMAT_MESSAGE =
   "Invalid DMS format. Expected: deg°min'sec\"N deg°min'sec\"E or deg min sec N deg min sec E (direction letters or signed degrees required)";
 const DDM_FORMAT_MESSAGE =
@@ -424,16 +463,28 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
 
   // Stricter DDM regex - requires degree symbol and direction letters
   // The minutes must contain a decimal point to distinguish from DMS
+  // The longitude letter is bounded as in parseDMS ("87°18.5' elev" has no E).
   const ddmRegex =
-    /([+-]?\d+)[°]\s*(\d+\.\d+)[′']?\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.\d+)[′']?\s*([EWew])/i;
+    /([+-]?\d+)[°]\s*(\d+\.\d+)[′']?\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.\d+)[′']?\s*(East|Este|Est|West|[EW])(?![A-Za-z])/i;
 
   // Also allow format without decimal if it has the prime symbol
   const ddmRegex2 =
-    /([+-]?\d+)[°]\s*(\d+\.?\d*)[′']\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.?\d*)[′']\s*([EWew])/i;
+    /([+-]?\d+)[°]\s*(\d+\.?\d*)[′']\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.?\d*)[′']\s*(East|Este|Est|West|[EW])(?![A-Za-z])/i;
+
+  // Both without the longitude letter, tried last (see parseDMS).
+  const ddmNoLonLetterRegex =
+    /([+-]?\d+)[°]\s*(\d+\.\d+)[′']?\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.\d+)(?![\d.])(?![′']?\s*\d)/i;
+  const ddmNoLonLetterRegex2 =
+    /([+-]?\d+)[°]\s*(\d+\.?\d*)[′']\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.?\d*)[′'](?!\s*\d)/i;
 
   let match = trimmed.match(ddmRegex);
   if (!match) {
     match = trimmed.match(ddmRegex2);
+  }
+  let lonDir = match?.[6]?.charAt(0).toUpperCase();
+  if (!match) {
+    match = trimmed.match(ddmNoLonLetterRegex) ?? trimmed.match(ddmNoLonLetterRegex2);
+    lonDir = lonDirFromSigns(match?.[1], match?.[3]?.toUpperCase(), match?.[4]);
   }
 
   if (
@@ -443,7 +494,7 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
     match[3] === undefined ||
     match[4] === undefined ||
     match[5] === undefined ||
-    match[6] === undefined
+    lonDir === undefined
   ) {
     return { message: DDM_FORMAT_MESSAGE, original: input, format: 'DDM' };
   }
@@ -454,7 +505,6 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
 
   const lonDeg = parseInt(match[4], 10);
   const lonMin = parseFloat(match[5]);
-  const lonDir = match[6].toUpperCase();
 
   // Validate minutes
   if (latMin < 0 || latMin >= 60 || lonMin < 0 || lonMin >= 60) {
@@ -1470,8 +1520,8 @@ export function detectFormat(input: string): GpsFormat | undefined {
     return 'DMS';
   }
 
-  // DDM: degree symbol + decimal minutes + direction
-  if (/\d+[°]\s*\d+\.\d+[′']?\s*[NSEWnsew]/i.test(trimmed)) {
+  // DDM: degree symbol + decimal minutes + direction (a letter, not the start of a word)
+  if (/\d+[°]\s*\d+\.\d+[′']?\s*[NSEW](?![A-Za-z])/i.test(trimmed)) {
     return 'DDM';
   }
 

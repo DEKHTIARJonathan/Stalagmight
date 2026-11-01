@@ -1063,6 +1063,39 @@ describe('a plus sign that contradicts S or W (R4 F4)', () => {
   });
 });
 
+describe('a hemisphere letter is never taken from inside a word (R4 F5)', () => {
+  it('does not read W from "WGS84" or E from "elev"', () => {
+    expectRejected(`48°51'30"N 2°17'40" WGS84`);
+    expectRejected(`48°51.5'N 2°17.67' WGS84`);
+    expectRejected(`20°30.5'N 87°18.5' elev 5`);
+    expectRejected(`48 51 30 N 2 17 40 WGS84`);
+  });
+
+  it('still reads a letter followed by other text, and the direction words', () => {
+    // East/West (and Spanish/French Este/Est) after the longitude parsed to
+    // the right value before and must keep it.
+    expectCoordsClose(parsedOk(`48°51'30"N 2°17'40"E WGS84`), 48 + 51 / 60 + 30 / 3600, 2 + 17 / 60 + 40 / 3600);
+    expectCoordsClose(parsedOk(`48°51'30"N 2°17'40"East`), 48 + 51 / 60 + 30 / 3600, 2 + 17 / 60 + 40 / 3600);
+    expectCoordsClose(parsedOk(`20°30'15"N 87°18'27" West`), DMS_LAT, -DMS_LON);
+    expectCoordsClose(parsedOk(`20°30.5'N 87°18.5'West`), DDM_LAT, -DDM_LON);
+    expectCoordsClose(parsedOk(`20°30'15"N 87°18'27" Este`), DMS_LAT, DMS_LON);
+    expectCoordsClose(parsedOk(`20 30 15 N 87 18 27 W`), DMS_LAT, -DMS_LON);
+  });
+
+  it('still reads a longitude whose signs give its hemisphere, with a word after it', () => {
+    // These took W or E from "WGS84"/"elev" before, which agreed with the signs.
+    expectCoordsClose(parsedOk(`87°53'15"S, -106°46'0" WGS84`), -(87 + 53 / 60 + 15 / 3600), -(106 + 46 / 60));
+    expectCoordsClose(parsedOk(`35°29' S, -50°14' elev 5`), -(35 + 29 / 60), -(50 + 14 / 60));
+    expectCoordsClose(parsedOk(`-66°41.7'S , 30°21.8643 elev 5`), -(66 + 41.7 / 60), 30 + 21.8643 / 60);
+    expectCoordsClose(parsedOk(`20 30 15 N -87 18 27 WGS84`), DMS_LAT, -DMS_LON);
+  });
+
+  it('rejects such a longitude when no sign says its hemisphere', () => {
+    expectRejected(`23°6.4' N, 15°33.37' elev 5`);
+    expectRejected(`20°30'15"N 87°18'27" WGS84`);
+  });
+});
+
 describe('a minus sign that overrides N or E in a labelled paste (R4 F7)', () => {
   it('carries the same note as the strict reader', () => {
     const ddm = parsedOk(`Entrance: -0°30.5'N 87°18.5'W`);
