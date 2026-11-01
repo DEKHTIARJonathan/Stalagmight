@@ -28,6 +28,7 @@ import {
   PROJECT_EXTENSION,
 } from './fileDialogs';
 import { extractFilename } from './path';
+import { resolveSavePath } from './overwriteGuard';
 import type { CommandResult } from '../types/commands';
 
 /**
@@ -155,7 +156,13 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
   try {
     const selected = await saveDialog({ filters: projectSaveFilters() });
     if (!selected) return false;
-    finalPath = ensureExtension(selected, PROJECT_EXTENSION);
+    // [#576 D35] The copy lands on the NORMALISED name, which the OS overwrite
+    // prompt never saw when it differs from the answer - and the backend's
+    // copy-only branch renames over whatever is there. Ask first; declining
+    // changes nothing, like a cancelled picker.
+    const resolved = await resolveSavePath(selected, PROJECT_EXTENSION);
+    if (!resolved) return false;
+    finalPath = resolved;
     const result = await useProjectStore.getState().saveProject(finalPath);
     if (!result || !result.success) {
       surfaceSaveFailure(result?.error ?? null, openDialog);

@@ -2511,6 +2511,28 @@ fn test_with_stalx_extension_keeps_every_spelling_of_stalx() {
     assert!(!has_stalx_extension(Path::new("/projects/stalx")));
 }
 
+/// [#576 D35-D1] "Replace known, else append": only an extension naming a file
+/// type the app reads or writes is replaced. A dotted name keeps its tail -
+/// `CaveA 1.5` used to be written as `CaveA 1.stalx`, a different file.
+#[test]
+fn test_with_stalx_extension_replaces_known_types_and_appends_otherwise() {
+    let dir = Path::new("/projects");
+    for (typed, written) in [
+        ("CaveA 1.5", "CaveA 1.5.stalx"),
+        ("Survey v2.final", "Survey v2.final.stalx"),
+        ("notes.txt", "notes.txt.stalx"),
+        (".hidden", ".hidden.stalx"),
+        ("CaveA.TMLU", "CaveA.stalx"),
+        ("CaveA.dmp", "CaveA.stalx"),
+        ("plan.plnx", "plan.stalx"),
+        ("CaveA.", "CaveA.stalx"),
+    ] {
+        let got = with_stalx_extension(dir.join(typed));
+        println!("{typed:?} -> {:?}", got.file_name().unwrap_or_default());
+        assert_eq!(got, dir.join(written), "{typed}");
+    }
+}
+
 // === Round-trip with station offsets (individual station moves) ===
 
 #[test]

@@ -5,11 +5,8 @@ import { useSpeleoStore } from '../store/speleoStore';
 import { useShallow } from 'zustand/react/shallow';
 import { getErrorMessage } from '../utils/ipc';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
-import {
-  ensureExtension,
-  exportSaveFilters,
-  saveDialog,
-} from '../utils/fileDialogs';
+import { exportSaveFilters, saveDialog } from '../utils/fileDialogs';
+import { resolveSavePath } from '../utils/overwriteGuard';
 import { openOrImport } from '../utils/openOrImport';
 import { newProjectGuarded, saveProjectAs } from '../utils/projectActions';
 import { debugLog } from '../utils/debugLog';
@@ -159,9 +156,11 @@ export function useProject() {
       filters: exportSaveFilters('CSV', 'csv'),
     });
 
-    if (selected) {
+    // [#576 D35] `null` = the rewritten name exists and the user declined.
+    const finalPath = selected ? await resolveSavePath(selected, 'csv') : null;
+    if (finalPath) {
       try {
-        await exportCsv(ensureExtension(selected, 'csv'));
+        await exportCsv(finalPath);
       } catch (e) {
         console.error('Failed to export CSV:', e);
       }
@@ -173,9 +172,10 @@ export function useProject() {
       filters: exportSaveFilters('JSON', 'json'),
     });
 
-    if (selected) {
+    const finalPath = selected ? await resolveSavePath(selected, 'json') : null;
+    if (finalPath) {
       try {
-        await exportJson(ensureExtension(selected, 'json'));
+        await exportJson(finalPath);
       } catch (e) {
         console.error('Failed to export JSON:', e);
       }

@@ -1697,6 +1697,12 @@
       "listHeading": "Sections without a zero datum connection",
       "sectionFallbackName": "Section {{id}}"
     },
+    "overwriteRewritten": {
+      "title": "Replace File?",
+      "message": "This file is saved as {{fileName}}, because this format needs the {{extension}} extension. A file with that name already exists. Replacing it cannot be undone.",
+      "messageUnknown": "This file is saved as {{fileName}}, because this format needs the {{extension}} extension. Stalagmight could not check whether a file with that name already exists; if one does, it will be replaced. This cannot be undone.",
+      "replace": "Replace"
+    },
     "about": {
       "title": "About Stalagmight",
       "version": "Version {{version}}",

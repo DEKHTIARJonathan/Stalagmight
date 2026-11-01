@@ -10,6 +10,7 @@ import {
   IMPORTABLE_EXTENSIONS,
   DROPPABLE_EXTENSIONS,
   isDroppableFilePath,
+  KNOWN_FILE_EXTENSIONS,
   openDialog,
   saveDialog,
   takeTestFileDialogAnswer,
@@ -38,19 +39,19 @@ describe('ensureExtension', () => {
     expect(ensureExtension('myfile.Stalx', 'stalx')).toBe('myfile.Stalx');
   });
 
-  it('replaces existing different extension', () => {
-    expect(ensureExtension('myfile.txt', 'stalx')).toBe('myfile.stalx');
+  it('replaces an extension that names another known file type', () => {
     expect(ensureExtension('myfile.csv', 'json')).toBe('myfile.json');
+    expect(ensureExtension('myfile.tml', 'stalx')).toBe('myfile.stalx');
   });
 
   it('handles path with directory separators', () => {
     expect(ensureExtension('/home/user/myfile', 'stalx')).toBe('/home/user/myfile.stalx');
-    expect(ensureExtension('/home/user/myfile.txt', 'stalx')).toBe('/home/user/myfile.stalx');
+    expect(ensureExtension('/home/user/myfile.gpx', 'stalx')).toBe('/home/user/myfile.stalx');
   });
 
   it('handles Windows-style path separators', () => {
     expect(ensureExtension('C:\\Users\\test\\file', 'stalx')).toBe('C:\\Users\\test\\file.stalx');
-    expect(ensureExtension('C:\\Users\\test\\file.txt', 'stalx')).toBe('C:\\Users\\test\\file.stalx');
+    expect(ensureExtension('C:\\Users\\test\\file.dmp', 'stalx')).toBe('C:\\Users\\test\\file.stalx');
   });
 
   it('handles dot in directory name but no file extension', () => {
@@ -59,7 +60,35 @@ describe('ensureExtension', () => {
   });
 
   it('handles file with multiple dots', () => {
-    expect(ensureExtension('my.cave.project.txt', 'stalx')).toBe('my.cave.project.stalx');
+    expect(ensureExtension('my.cave.project.csv', 'stalx')).toBe('my.cave.project.stalx');
+  });
+
+  // [#576 D35-D1] "Replace known, else append": only a trailing extension that
+  // names a file type Stalagmight reads or writes is a mistyped format; anything
+  // else is part of the name. `CaveA 1.5` used to lose its tail (`CaveA 1.csv`)
+  // and could land on a different existing file.
+  it.each([
+    ['map.svg', 'png', 'map.png'],
+    ['map.PNG', 'svg', 'map.svg'],
+    ['/mock/CaveA 1.5', 'csv', '/mock/CaveA 1.5.csv'],
+    ['/mock/CaveA 1.5', 'stalx', '/mock/CaveA 1.5.stalx'],
+    ['CaveA.STALX', 'stalx', 'CaveA.STALX'],
+    ['cave', 'tml', 'cave.tml'],
+    ['cave.tmlu', 'tml', 'cave.tml'],
+    ['plan.plnx', 'xml', 'plan.xml'],
+    ['notes.txt', 'stalx', 'notes.txt.stalx'],
+    ['Survey v2.final', 'json', 'Survey v2.final.json'],
+    ['/home/diver/.hidden', 'csv', '/home/diver/.hidden.csv'],
+    ['/home/diver/.svg', 'png', '/home/diver/.svg.png'],
+    ['CaveA.', 'csv', 'CaveA.csv'],
+  ])('%s as .%s -> %s', (typed, ext, written) => {
+    expect(ensureExtension(typed, ext)).toBe(written);
+  });
+
+  it('knows every format the app opens, imports or exports', () => {
+    for (const ext of [PROJECT_EXTENSION, ...IMPORTABLE_EXTENSIONS, 'csv', 'json', 'tml', 'tmlu', 'png', 'svg', 'pdf', 'xml', 'plnx']) {
+      expect(KNOWN_FILE_EXTENSIONS).toContain(ext);
+    }
   });
 });
 

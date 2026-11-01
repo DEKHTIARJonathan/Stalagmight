@@ -19,14 +19,36 @@ pub fn has_stalx_extension(path: &Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("stalx"))
 }
 
+/// Every file type Stalagmight reads or writes. A trailing extension naming one
+/// of them is a mistyped format and is REPLACED; any other is part of the name.
+/// Mirrors `KNOWN_FILE_EXTENSIONS` in `src/utils/fileDialogs.ts` (#576 D35).
+const KNOWN_FILE_EXTENSIONS: &[&str] = &[
+    "stalx", "plnx", "gpx", "tml", "tmlu", "mak", "dat", "wpj", "srv", "dmp", "csv", "json", "png",
+    "svg", "pdf", "xml",
+];
+
 /// `path` with a `.stalx` extension: returned as given when it already has one
-/// in any letter case (see [`has_stalx_extension`]), otherwise with its
-/// extension replaced by `stalx`.
+/// in any letter case (see [`has_stalx_extension`]). Otherwise an extension that
+/// names a known file type (`CaveA.tml`) - or a bare trailing dot - is replaced,
+/// and anything else is appended to: `CaveA 1.5` becomes `CaveA 1.5.stalx`, not
+/// `CaveA 1.stalx`, a different file no overwrite prompt was shown for
+/// (#576 D35-D1, the frontend's `ensureExtension` rule).
 pub fn with_stalx_extension(path: PathBuf) -> PathBuf {
     if has_stalx_extension(&path) {
-        path
-    } else {
+        return path;
+    }
+    let replace = path.extension().is_some_and(|ext| {
+        ext.is_empty()
+            || KNOWN_FILE_EXTENSIONS
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+    });
+    if replace {
         path.with_extension("stalx")
+    } else {
+        let mut appended = path.into_os_string();
+        appended.push(".stalx");
+        PathBuf::from(appended)
     }
 }
 

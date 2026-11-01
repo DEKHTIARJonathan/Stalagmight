@@ -14,7 +14,8 @@ import ExportPreview from './ExportPreview';
 import type { ExportImageOptions, ImageFormat, ColorMode } from '../../types/commands';
 import type { LoadingProgressPayload } from '../../types/loading';
 import type { ExportType, DataFormat } from '../../store/exportStore';
-import { ensureExtension, exportSaveFilters } from '../../utils/fileDialogs';
+import { exportSaveFilters } from '../../utils/fileDialogs';
+import { resolveSavePath } from '../../utils/overwriteGuard';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { ChevronRightIcon } from '../common/icons';
 
@@ -176,24 +177,17 @@ export default function ExportControls({
           options?.skipTmlAnchorCheck ? 'tml-unanchored-warning-continue' : 'export-button',
         );
 
-        if (selected) {
+        // For TML, preserve the extension the OS dialog appended: a path that
+        // already ends in .tmlu (the XML variant) stays .tmlu; anything else
+        // gets .tml.
+        const extension =
+          isTml && selected?.toLowerCase().endsWith('.tmlu') ? 'tmlu' : dataFormat;
+        // [#576 D35] `null`: the extension fix-up renamed the answer onto an
+        // existing file and the user declined to replace it. Nothing is written
+        // and the dialog stays open, exactly like a cancelled picker.
+        const finalPath = selected ? await resolveSavePath(selected, extension) : null;
+        if (finalPath) {
           pathWasChosen = true;
-          // For TML, preserve the extension the OS dialog appended.
-          // If the path already has .tmlu or .tml, keep it as-is;
-          // otherwise default to .tml.
-          let finalPath: string;
-          if (isTml) {
-            const lower = selected.toLowerCase();
-            if (lower.endsWith('.tmlu')) {
-              finalPath = selected;
-            } else if (lower.endsWith('.tml')) {
-              finalPath = selected;
-            } else {
-              finalPath = ensureExtension(selected, 'tml');
-            }
-          } else {
-            finalPath = ensureExtension(selected, dataFormat);
-          }
           // Disable button during data export (no progress events for CSV/JSON/TML)
           setExporting(true);
           try {
@@ -217,9 +211,10 @@ export default function ExportControls({
           'export-button',
         );
 
-        if (selected) {
+        // [#576 D35] see the data branch: `null` = declined to replace.
+        const finalPath = selected ? await resolveSavePath(selected, extension) : null;
+        if (finalPath) {
           pathWasChosen = true;
-          const finalPath = ensureExtension(selected, extension);
           // Register listener BEFORE starting export to avoid race condition with early events
           // Uses shared loading-progress events for consistency with LoadingProgress infrastructure
           const unlisten = await listen<LoadingProgressPayload>('loading-progress', (event) => {
