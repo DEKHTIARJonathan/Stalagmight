@@ -733,6 +733,63 @@ fn a_windows_1252_byte_in_a_station_name_does_not_split_the_name() {
     );
 }
 
+/// `0xA0` is a no-break space in Windows-1252 (U+00A0). Walls separates fields
+/// with ASCII whitespace only, so the byte belongs to the name it sits in, but
+/// `char::is_whitespace` counts U+00A0, which tore `A1<0xA0>B2` into two
+/// stations and shifted every field after it one column to the right.
+#[test]
+fn a_no_break_space_in_a_walls_station_name_does_not_split_the_name() {
+    let dir = temp_dir("cp1252nbspname");
+    let p = dir.join("names.srv");
+    std::fs::write(&p, b"#UNITS meters order=DAV\nA1\xa0B2 C1 10 90 0\n").unwrap();
+
+    let parsed = parse_walls(&p).unwrap();
+    let vectors: Vec<(String, String, f64)> = parsed.surveys[0]
+        .vectors
+        .iter()
+        .map(|v| (v.from.clone(), v.to.clone(), v.length_m))
+        .collect();
+    println!("vectors (from, to, length_m): {vectors:?}");
+    println!("warnings: {:?}", parsed.warnings);
+    assert_eq!(
+        vectors,
+        [("A1\u{a0}B2".to_string(), "C1".to_string(), 10.0)],
+        "0xA0 is U+00A0 in Windows-1252 and part of the station name"
+    );
+}
+
+/// The same byte inside a `#Units Prefix=` value is part of the prefix that
+/// every station name carries, not a break between two options.
+#[test]
+fn a_no_break_space_in_a_walls_units_prefix_does_not_split_the_prefix() {
+    let dir = temp_dir("cp1252nbspprefix");
+    let p = dir.join("prefix.srv");
+    std::fs::write(
+        &p,
+        b"#UNITS meters order=DAV Prefix=X\xa0Y\nA1 A2 10 90 0\n",
+    )
+    .unwrap();
+
+    let parsed = parse_walls(&p).unwrap();
+    let vectors: Vec<(String, String)> = parsed.surveys[0]
+        .vectors
+        .iter()
+        .map(|v| (v.from.clone(), v.to.clone()))
+        .collect();
+    println!("vectors (from, to): {vectors:?}");
+    println!("warnings: {:?}", parsed.warnings);
+    assert_eq!(
+        vectors,
+        [("X\u{a0}Y:A1".to_string(), "X\u{a0}Y:A2".to_string())],
+        "the prefix keeps its U+00A0"
+    );
+    assert!(
+        parsed.warnings.is_empty(),
+        "no option was split off the prefix: {:?}",
+        parsed.warnings
+    );
+}
+
 /// The preview's and the receipt's warnings that speak about the encoding.
 fn encoding_warnings(parsed: &ParsedWalls) -> (Vec<String>, Vec<String>) {
     let preview = build_preview(parsed).warnings;

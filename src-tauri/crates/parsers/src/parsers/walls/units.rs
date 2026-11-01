@@ -6,6 +6,17 @@ use super::{
     dms, AngleUnit, Case, LengthUnit, LrudType, OrderElem, TapeEnd, VectorType, WallsUnits,
 };
 
+/// Whether `c` separates two fields of a Walls line. Walls is a Windows C
+/// program whose field separators are the ASCII whitespace characters (space,
+/// tab, LF, VT, FF, CR) - exactly the ASCII characters `char::is_whitespace`
+/// accepts. Of the non-ASCII characters it also accepts, a Windows-1252 file
+/// can hold only the no-break space (byte `0xA0`, U+00A0), and that belongs to
+/// the station name or value it sits in. (`char::is_ascii_whitespace` is not
+/// the same test: it leaves out VT.)
+pub(crate) fn is_walls_separator(c: char) -> bool {
+    c.is_ascii() && c.is_whitespace()
+}
+
 /// Split a `#Units` argument string into tokens on whitespace, treating a
 /// double-quoted span as a single token (the quotes are retained so `unquote`
 /// can strip them later). Walls permits quoted values with embedded spaces -
@@ -22,7 +33,7 @@ pub(crate) fn split_units_args(args: &str) -> Vec<String> {
                 in_quotes = !in_quotes;
                 current.push(ch);
             }
-            c if c.is_whitespace() && !in_quotes => {
+            c if is_walls_separator(c) && !in_quotes => {
                 if !current.is_empty() {
                     tokens.push(std::mem::take(&mut current));
                 }

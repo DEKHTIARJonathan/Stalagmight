@@ -5,10 +5,10 @@ use chrono::{Datelike, NaiveDate};
 use crate::parsers::geo::non_empty;
 
 use super::{
-    apply_segment, apply_units_options, datum_recognized, is_anonymous, is_omitted, parse_angle,
-    parse_depth, parse_dms, parse_length, set_prefix, split_first_token, strip_inline_comment,
-    utm_to_wgs84, AngleUnit, Case, LengthUnit, LrudType, OrderElem, ParsedSurvey, VectorType,
-    WallsFix, WallsRef, WallsUnits, WallsVector,
+    apply_segment, apply_units_options, datum_recognized, is_anonymous, is_omitted,
+    is_walls_separator, parse_angle, parse_depth, parse_dms, parse_length, set_prefix,
+    split_first_token, strip_inline_comment, utm_to_wgs84, AngleUnit, Case, LengthUnit, LrudType,
+    OrderElem, ParsedSurvey, VectorType, WallsFix, WallsRef, WallsUnits, WallsVector,
 };
 
 // ---------------------------------------------------------------------------
@@ -483,7 +483,7 @@ pub(crate) fn extract_spans(body: &str) -> ExtractedSpans {
     while i < chars.len() {
         let c = chars[i];
         match c {
-            c if c.is_whitespace() => flush(&mut current, &mut tokens),
+            c if is_walls_separator(c) => flush(&mut current, &mut tokens),
             '#' => {
                 // Inline directive (segment) - stop collecting measurement
                 // tokens; the rest of the line doesn't carry geometry.
