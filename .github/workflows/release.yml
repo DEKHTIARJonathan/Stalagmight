@@ -42,19 +42,21 @@ jobs:
         run: |
           node scripts/check-third-party-licenses.test.mjs
           node scripts/check-third-party-licenses.mjs
-      - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
-        env:
-          XDG_CONFIG_HOME: ${{ runner.temp }}/config
-          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
-      # Release-profile compile check (#541): the debug-profile test run above
+      # Release-profile compile check (#541): the debug-profile test run below
       # cannot see a call whose only target is cfg(debug_assertions)-gated
       # (debug_assert! arguments still type-check in release), and this job is
       # the last thing standing between a tag/dispatch and the paid
       # three-platform matrix. Type resolution only - codegen, LTO and link
-      # failures still surface in `build`.
+      # failures still surface in `build`. It runs BEFORE the tests (#576
+      # E18(h)): a check-mode build shares nothing with the test build, so a
+      # release-only type error fails in minutes instead of after the suite.
       - name: Release-profile compile check
         run: cargo check --release --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
+          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
+        env:
+          XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
 
   build:

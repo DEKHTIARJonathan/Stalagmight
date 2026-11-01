@@ -96,6 +96,47 @@ jobs:
             src-tauri
             src-tauri/vendor/compass_data
 
+      # Zero sccache counters so the post-step reports THIS run's hit-rate, not
+      # lifetime totals. Self-hosted only - no sccache on hosted. `|| true`: an
+      # observability step must never be able to fail the merge gate. (Likely
+      # redundant - each ephemeral --rm container starts a fresh per-container
+      # sccache server, so stats are already isolated + zero - but this
+      # guarantees per-run numbers, and a single runner = one job at a time so
+      # there's no cross-job zero-stats race.)
+      - name: sccache zero-stats (self-hosted only)
+        if: runner.environment == 'self-hosted'
+        run: sccache --zero-stats || true
+      # Lints first, tests still run (#576 E18(h)). Clippy and the release-profile
+      # check are check-mode builds (metadata, no codegen) and share no artifacts
+      # with the full `cargo test` build, so running them before it costs nothing
+      # extra and reports a deny-level lint or a release-only type error in
+      # minutes instead of after the whole test run. The Rust test steps further
+      # down carry `if: !cancelled()`, so a lint failure still gets its test
+      # results in the same run (the pnpm gates in between keep the default
+      # skip-on-failure).
+      # Clippy deny-level lint gate (issue #147). The crate has a strict
+      # [lints.clippy] policy (deny unwrap/expect/panic/print/dbg/...) authored in
+      # 17dc4feb; this enforces it so it can't silently rot again. Pedantic lints
+      # stay warn-level (advisory) - only the deny-level policy fails the build.
+      - name: Clippy (deny-level lint gate)
+        run: cargo clippy --workspace --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets
+        env:
+          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      # Release-profile compile check (#541): nothing else in this job
+      # compiles with debug_assertions off, so a call whose only target is
+      # #[cfg(any(debug_assertions, test))]-gated type-checks everywhere here
+      # (debug_assert! expands to `if cfg!(debug_assertions) { assert!(..) }`)
+      # while `pnpm tauri build` cannot compile it - the class that cost rc4
+      # prep nine hours (#530). The hard stop before the paid matrix is the
+      # same step in release.yml's verify job (master is unprotected, so this
+      # job is advisory); this copy just fails on the PR/push, days earlier.
+      # Scope is deliberately narrow, matching the sibling clippy/test steps:
+      # type resolution only (no codegen, LTO or linking), Linux host only,
+      # telemetry feature on - the no-secret fork build path is not covered.
+      - name: Release-profile compile check
+        run: cargo check --release --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
+        env:
+          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -146,17 +187,8 @@ jobs:
       # vitest unit + component tests (issue #107). `vitest` auto-detects CI
       # (CI=true) and runs once instead of watching.
       - run: pnpm test
-      # Zero sccache counters so the post-step reports THIS run's hit-rate, not
-      # lifetime totals. Self-hosted only - no sccache on hosted. `|| true`: an
-      # observability step must never be able to fail the merge gate. (Likely
-      # redundant - each ephemeral --rm container starts a fresh per-container
-      # sccache server, so stats are already isolated + zero - but this
-      # guarantees per-run numbers, and a single runner = one job at a time so
-      # there's no cross-job zero-stats race.)
-      - name: sccache zero-stats (self-hosted only)
-        if: runner.environment == 'self-hosted'
-        run: sccache --zero-stats || true
       - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
+        if: ${{ !cancelled() }}
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
@@ -170,6 +202,7 @@ jobs:
       # is exactly why it is easy to hand-edit (or forget) when a type is renamed
       # or removed. Keep this step immediately after `cargo test`.
       - name: ts-rs bindings tree matches the checkout
+        if: ${{ !cancelled() }}
         run: |
           # Untracked matters as much as modified: a NEW `#[ts(export)]` type
           # writes a file `git diff` cannot see, so check for both.
@@ -191,30 +224,8 @@ jobs:
       # not cover a workspace-excluded package), so assert it instead of letting
       # a semver-compatible crates.io release change what CI tests.
       - name: Vendored compass_data tests
+        if: ${{ !cancelled() }}
         run: cargo test --locked --manifest-path src-tauri/vendor/compass_data/Cargo.toml
-      # Clippy deny-level lint gate (issue #147). The crate has a strict
-      # [lints.clippy] policy (deny unwrap/expect/panic/print/dbg/...) authored in
-      # 17dc4feb; this enforces it so it can't silently rot again. Pedantic lints
-      # stay warn-level (advisory) - only the deny-level policy fails the build.
-      - name: Clippy (deny-level lint gate)
-        run: cargo clippy --workspace --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets
-        env:
-          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
-      # Release-profile compile check (#541): nothing else in this job
-      # compiles with debug_assertions off, so a call whose only target is
-      # #[cfg(any(debug_assertions, test))]-gated type-checks everywhere here
-      # (debug_assert! expands to `if cfg!(debug_assertions) { assert!(..) }`)
-      # while `pnpm tauri build` cannot compile it - the class that cost rc4
-      # prep nine hours (#530). The hard stop before the paid matrix is the
-      # same step in release.yml's verify job (master is unprotected, so this
-      # job is advisory); this copy just fails on the PR/push, days earlier.
-      # Scope is deliberately narrow, matching the sibling clippy/test steps:
-      # type resolution only (no codegen, LTO or linking), Linux host only,
-      # telemetry feature on - the no-secret fork build path is not covered.
-      - name: Release-profile compile check
-        run: cargo check --release --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
-        env:
-          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
       # sccache health on the self-hosted path (the cache that replaces rust-cache
       # on the ephemeral runner). Skipped on hosted. !cancelled() (not always()):
       # still report on cargo FAILURE, but skip on a superseded/cancelled run.

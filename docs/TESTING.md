@@ -103,7 +103,9 @@ Three workflows gate `master`:
   `cargo test --workspace --features telemetry`, the ts-rs bindings drift check
   (`src-tauri/bindings/` must match what the tests just wrote) and the vendored
   `compass_data` tests. Each tripwire runs its own `:test` fixture first, so the
-  rule itself is pinned.
+  rule itself is pinned. The order is lints first (fmt, clippy, the release
+  check), then the pnpm gates, then the Rust tests; the Rust test steps run
+  even after a lint failure (`if: !cancelled()`), so one run reports both.
 - **`e2e-smoke.yml` (`smoke`)** - in order: `pnpm lint:e2e-parallel` (the
   Playwright parallel-safety scanner), `pnpm typecheck:playwright`,
   `pnpm test:mock-contract`, `pnpm test:pw-timing` (the per-test timing
