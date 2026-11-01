@@ -3585,6 +3585,8 @@
       "pushFailed": "Your changes were NOT uploaded and are still only on this computer. {{message}}",
       "retryPush": "Retry upload",
       "startEditingToRetry": "Start editing to upload",
+      "lockLostTo": "{{email}} now holds the SpeleoDB write lock on this project, so editing has been switched off. Changes you have not uploaded stay on this computer.",
+      "lockLost": "You no longer hold the SpeleoDB write lock on this project (it was released or expired), so editing has been switched off. Your changes are still only on this computer - start editing to take the lock again and upload them.",
       "noAnchor": "This survey has no georeferenced zero datum, so SpeleoDB generated no new map geometry. Your data is still stored and shared; any existing online map may be stale."
     },
     "heldLocks": {

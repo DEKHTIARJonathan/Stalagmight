@@ -97,13 +97,47 @@ export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push' | 'reverify'
     (server `exclude_geojson`) and `no_anchor` (no georeferenced zero datum on
     push/unlock) are the #200 non-blocking notices; `push_failed` (#260) is the
     durable surface for a push/unlock that threw (the toast alone auto-clears
-    after 3 s, leaving a failed upload with no trace). */
+    after 3 s, leaving a failed upload with no trace). `lock_lost` (#576 B35(e))
+    is the backend switching editing off because SpeleoDB says the write lock this
+    session was editing under is gone or held by `holder`. */
 export type SpeleoBanner =
   | { kind: 'push_unconfirmed' }
   | { kind: 'concurrent_session' }
   | { kind: 'rendering_disabled' }
   | { kind: 'no_anchor' }
+  | { kind: 'lock_lost'; holder: string | null }
   | PushFailedBanner;
+
+/**
+ * [#576 B35(e)] Did this status reply end an edit session because the lock is not
+ * ours any more? The backend closes the edit gate when a SUCCESSFUL read names
+ * another holder or none (the status poll, or Done refusing to release); this is
+ * the frontend half that says so instead of silently turning the toolbar
+ * read-only.
+ *
+ * Read from the transition (we were editing under a lock, the backend now reports
+ * the gate shut) plus what the server answered (`permission` is only set when the
+ * read succeeded - a signed-out or offline reply carries none). Two shapes qualify:
+ * another account named as holder, which no release of OURS produces; and no
+ * holder over un-pushed edits, which is worth saying however it came about, since
+ * those edits now need Start editing to reach the server. A clean copy whose lock
+ * simply went away is left to the read-only toolbar - that is also exactly what a
+ * deliberate release looks like.
+ */
+export function lockLostHolder(
+  prior: Pick<SpeleoLinkState, 'editState' | 'forceEditing'> | null,
+  s: SpeleoLinkStatus,
+  myEmail: string | null,
+): { lost: boolean; holder: string | null } {
+  const wasHoldingLock = prior?.editState === 'editing' && !prior.forceEditing;
+  if (!wasHoldingLock || !s.is_remote || s.edit_enabled || s.force_editing || s.permission === null) {
+    return { lost: false, holder: null };
+  }
+  const holder = s.lock_holder;
+  const holderIsOther = !!holder && !emailsMatch(holder, myEmail);
+  const lost = holderIsOther || (holder === null && s.has_unpushed_edits);
+  return { lost, holder: lost ? holder : null };
+}
 
 /** [#260] The last push/unlock failed. Carries the already-humanized error plus
     enough context for the banner's Retry to re-issue the SAME verb with the SAME
@@ -1437,6 +1471,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       } else if (prior?.kind === 'rendering_disabled') {
         banner = null;
       }
+      // [#576 B35(e)] The edit session just ended because the lock is not ours any
+      // more. Outranks every other notice: whatever they said was about an edit
+      // session that is over (a Done refused for exactly this reason raises a
+      // push_failed first, and this explains it).
+      const lockLost = lockLostHolder(state.link, s, state.session?.userEmail ?? null);
+      if (lockLost.lost) banner = { kind: 'lock_lost', holder: lockLost.holder };
       const seeded: SpeleoLinkState = {
         editState,
         // The network fields degrade to null/unknown offline - keep the

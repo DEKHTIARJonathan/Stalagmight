@@ -276,6 +276,9 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         // its network window) and nothing was committed. Retryable by definition -
         // a retry runs in the successor world and does the right thing there.
         SpeleoDbError::SessionMoved => (SpeleoDbAction::Retry, None, err.to_string()),
+        // [#576 B35(e)] Done found the write lock is not ours: the lock fence, decided
+        // locally from the holder read rather than earned as a server 403.
+        SpeleoDbError::LockNotHeld { .. } => (SpeleoDbAction::Fence, None, err.to_string()),
         // Everything below fails closed; each Display is already user-facing.
         //
         // ENUMERATED, not a `_` catch-all. Two of the arms above (`AdoptAriane`,

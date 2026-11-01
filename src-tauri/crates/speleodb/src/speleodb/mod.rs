@@ -151,6 +151,14 @@ pub enum SpeleoDbError {
         "the project changed while Start Editing was in flight; nothing was changed - try again"
     )]
     SessionMoved,
+    /// [#576 B35(e)] Done asked the server who holds the open project's write lock
+    /// and it is not this account: someone else took it (`holder` names them) or
+    /// it is gone (`None` - released by an admin, or expired). Nothing was uploaded
+    /// (the upload needs the lock) and nothing was released (a release by a project
+    /// ADMIN would free somebody else's mutex); the edit gate was switched off and
+    /// any un-pushed edits stay marked for the next Start editing.
+    #[error("{}", lock_not_held_message(.holder.as_deref()))]
+    LockNotHeld { holder: Option<String> },
     /// A re-pull would have overwritten a local copy that still holds edits the
     /// server has never seen. REFUSED rather than performed: un-pushed local work
     /// exists in no git anywhere, so replacing it is unrecoverable, and the user
@@ -171,9 +179,40 @@ pub enum SpeleoDbError {
     },
 }
 
+/// The user-facing line for [`SpeleoDbError::LockNotHeld`]: who holds the lock now
+/// (when the server named someone), what did NOT happen, and that editing stopped.
+fn lock_not_held_message(holder: Option<&str>) -> String {
+    match holder {
+        Some(holder) => format!(
+            "{holder} now holds the SpeleoDB write lock on this project, so nothing was \
+             uploaded and no lock was released. Editing has been switched off; changes you \
+             have not uploaded stay on this computer"
+        ),
+        None => "you no longer hold the SpeleoDB write lock on this project (it was \
+                 released or expired), so nothing was uploaded. Editing has been switched \
+                 off; start editing again to upload changes that are still only on this \
+                 computer"
+            .to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SpeleoDbError, SpeleoDumpCandidate, TransportCause};
+
+    #[test]
+    fn lock_not_held_names_the_holder_and_what_did_not_happen() {
+        // [#576 B35(e)] The Done refusal is shown verbatim in the push-failure banner.
+        let taken = SpeleoDbError::LockNotHeld {
+            holder: Some("colleague@example.com".to_owned()),
+        }
+        .to_string();
+        assert!(taken.starts_with("colleague@example.com now holds the SpeleoDB write lock"));
+        assert!(taken.contains("nothing was uploaded and no lock was released"));
+        let gone = SpeleoDbError::LockNotHeld { holder: None }.to_string();
+        assert!(gone.starts_with("you no longer hold the SpeleoDB write lock"));
+        assert!(gone.contains("start editing again"));
+    }
 
     #[test]
     fn error_display_strings_are_stable() {

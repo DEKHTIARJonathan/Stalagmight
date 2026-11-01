@@ -307,3 +307,36 @@ describe('SpeleoBanner retry needs an open edit gate (#270)', () => {
     await waitFor(() => expect(useSpeleoStore.getState().banner).toBeNull());
   });
 });
+
+/**
+ * #576 B35(e) - the backend switched editing off because SpeleoDB says the write lock
+ * this session was editing under is gone or someone else's. Say so, and who holds it.
+ */
+describe('SpeleoBanner lock lost (#576 B35(e))', () => {
+  it('names the account that holds the lock now, with nothing to start', () => {
+    seedLink({ forceEditing: false, editState: 'read-only' });
+    useSpeleoStore.setState({ banner: { kind: 'lock_lost', holder: 'colleague@example.com' } });
+    render(<SpeleoBanner />);
+    const banner = screen.getByTestId('speleo-banner');
+    expect(banner).toHaveAttribute('data-kind', 'lock_lost');
+    expect(banner.textContent).toContain('colleague@example.com');
+    expect(banner.textContent).toContain('editing has been switched off');
+    expect(screen.queryByTestId('speleo-banner-lock-lost-start-editing')).not.toBeInTheDocument();
+    expect(screen.getByTestId('speleo-banner-dismiss')).toBeInTheDocument();
+  });
+
+  it('offers Start editing when nobody holds the lock any more', async () => {
+    seedLink({ forceEditing: false, editState: 'read-only' });
+    useSpeleoStore.setState({ banner: { kind: 'lock_lost', holder: null } });
+    render(<SpeleoBanner />);
+    expect(screen.getByTestId('speleo-banner').textContent).toContain(
+      'You no longer hold the SpeleoDB write lock',
+    );
+
+    await userEvent.click(screen.getByTestId('speleo-banner-lock-lost-start-editing'));
+
+    await waitFor(() =>
+      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(true),
+    );
+  });
+});

@@ -476,6 +476,83 @@ impl AppState {
             .is_ok()
     }
 
+    /// [#576 B35(e)-D2] The other half of the poll's gate rule: CLOSE the edit gate
+    /// when the server says the lock this session is editing under is gone or held
+    /// by another account. The poll used to only ever open the gate, so a session
+    /// whose lock had been freed and taken by a colleague kept editing - for up to
+    /// the 20-minute re-verify window - edits that could not be uploaded without
+    /// taking the lock again.
+    ///
+    /// Decided exactly like [`Self::speleodb_reopen_gate_for_inherited_lock`]: the
+    /// poll's own `get_project` is one read among several and only decides whether
+    /// to ASK, so the holder is read again inside the lock-ops span and the gate
+    /// closes in that same span. A read that fails, or finds the lock ours again,
+    /// leaves the session alone - "cannot say" must not end an edit session either.
+    ///
+    /// Un-pushed edits are untouched (the dirty bit is the work); the user re-enters
+    /// through Start editing, which takes the lock properly and fences the copy.
+    pub(super) fn speleodb_close_gate_for_lost_lock(&self, link: &crate::models::SpeleoLink) {
+        // Guard first, for the reason the reopen above gives: a login or logout
+        // must not land between the account read and the gate.
+        let _lock_ops = self.speleodb_lock_ops_guard();
+        let Ok((endpoint, token, me)) = self.speleodb_active_account() else {
+            return;
+        };
+        let insecure_http = self.speleodb_insecure_http();
+        match self.speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &link.project_id)
+        {
+            Ok(holder) if !super::speleodb::lock_held_by_me(holder.as_deref(), Some(&me)) => {
+                if self.speleodb_shut_gate_over_lost_lock(&link.project_id) {
+                    tracing::info!(
+                        project_id = %link.project_id,
+                        holder = ?holder,
+                        purpose = "stop editing under a lock this session no longer holds",
+                        "speleodb: the write lock is gone or held by another account; \
+                         editing switched off"
+                    );
+                }
+            }
+            Ok(_) => {}
+            Err(e) => tracing::debug!(
+                error = %e,
+                project_id = %link.project_id,
+                purpose = "confirm the lock is lost before switching editing off",
+                "speleodb: could not re-read the lock holder; leaving the edit session open"
+            ),
+        }
+    }
+
+    /// [#576 B35(e)] Shut the edit gate of a lock-holding session on `project_id`
+    /// because the server says the lock is not ours, and drop this account's claim
+    /// on it. Returns whether it closed anything.
+    ///
+    /// Under the `project` mutex, so the gate, the force-edit flag and the open
+    /// project's identity describe one world: a force-editor holds no lock by
+    /// design and is left alone, and a project that changed underneath the caller
+    /// is not the one whose lock was read. The claim goes with the gate: it records
+    /// a lock this process took and no longer holds, and leaving it would license
+    /// the authorship shortcut over somebody else's commit.
+    pub(super) fn speleodb_shut_gate_over_lost_lock(&self, project_id: &str) -> bool {
+        {
+            let _proj_guard = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !self.edit_enabled() || self.force_editing() {
+                return false;
+            }
+            if !self
+                .speleodb_open_link()
+                .is_ok_and(|open| open.project_id == project_id)
+            {
+                return false;
+            }
+            self.set_edit_enabled(false);
+        }
+        self.speleodb_forget_lock_acquired_for(project_id);
+        true
+    }
+
     /// Whether a LIVE edit session currently accounts for `project_id`'s server
     /// mutex: the open project is linked to it and the edit gate is open without
     /// force-edit (a force-editor holds no lock by definition). Link and gate

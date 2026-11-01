@@ -716,6 +716,11 @@ impl AppState {
         // validation as the edit verbs; on any miss (invalid id, no token,
         // transport/HTTP error) the fields degrade to None / Unknown - the local
         // truth still returns.
+        //
+        // `holder_read` separates "the server says nobody holds the lock" from "we
+        // could not ask", which `lock_holder == None` alone conflates: only the
+        // first may switch editing off (#576 B35(e), below).
+        let mut holder_read = false;
         let (permission, lock_holder, remote_state, access_denied, server_error, exclude_geojson) =
             if validate_project_id(&link.project_id).is_ok() {
                 match self.speleodb_active_token() {
@@ -734,6 +739,7 @@ impl AppState {
                                 // (get_revisions would fail the same way get_project
                                 // just did), so skip the doomed extra GET (N5).
                                 let lock_holder = p.active_mutex.map(|m| m.user);
+                                holder_read = true;
                                 // The lock holder is what licenses the poll's
                                 // authorship recovery, so it has to be read from the
                                 // SAME get_project response the verdict is folded
@@ -800,10 +806,22 @@ impl AppState {
         // above let a captured release for this same project land in between and
         // free the mutex - leaving a session editing a remote project with no
         // server lock and no record of one.
-        let edit_enabled = if !edit_enabled
-            && lock_held_by_me(lock_holder.as_deref(), self.speleodb_my_email().as_deref())
-        {
+        //
+        // [#576 B35(e)-D2] And the converse: a lock-holding session whose lock the
+        // server says is gone or someone else's stops editing. Same shape - the read
+        // above only decides whether to ask; `speleodb_close_gate_for_lost_lock`
+        // re-reads and closes inside the lock-ops span - and only on a SUCCESSFUL
+        // read: offline, nothing is known about the lock and editing stays
+        // first-class. A force-editor holds no lock on purpose and is left alone.
+        let holds_lock =
+            lock_held_by_me(lock_holder.as_deref(), self.speleodb_my_email().as_deref());
+        let edit_enabled = if !edit_enabled && holds_lock {
             self.speleodb_reopen_gate_for_inherited_lock(&link)
+        } else if edit_enabled && holder_read && !holds_lock && !self.force_editing() {
+            self.speleodb_close_gate_for_lost_lock(&link);
+            // Re-read rather than assume: the close declines when the re-read finds
+            // the lock ours again, and something else may have shut the gate.
+            self.edit_enabled()
         } else {
             edit_enabled
         };
@@ -5588,19 +5606,30 @@ mod tests {
         project_id: &str,
         later_holder: Option<&str>,
     ) -> (String, std::net::TcpListener) {
+        holder_changes_between_reads(project_id, Some("u@x"), later_holder)
+    }
+
+    /// [`holder_changes_after_the_first_read`] with the FIRST holder chosen too, for
+    /// the opposite race: the poll's own read names somebody else, and the re-read
+    /// that would close the gate finds the lock back with us.
+    fn holder_changes_between_reads(
+        project_id: &str,
+        first_holder: Option<&str>,
+        later_holder: Option<&str>,
+    ) -> (String, std::net::TcpListener) {
         use std::io::{Read as _, Write as _};
         use std::sync::atomic::{AtomicUsize, Ordering};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
         let port = listener.local_addr().expect("addr").port();
         let accept_on = listener.try_clone().expect("clone listener");
-        let first =
-            format!(r#"{{"id":"{project_id}","name":"Remote","active_mutex":{{"user":"u@x"}}}}"#);
-        let later = match later_holder {
+        let body_for = |holder: Option<&str>| match holder {
             Some(user) => format!(
                 r#"{{"id":"{project_id}","name":"Remote","active_mutex":{{"user":"{user}"}}}}"#
             ),
             None => format!(r#"{{"id":"{project_id}","name":"Remote"}}"#),
         };
+        let first = body_for(first_holder);
+        let later = body_for(later_holder);
         std::thread::spawn(move || {
             let project_reads = AtomicUsize::new(0);
             while let Ok((mut stream, _)) = accept_on.accept() {
@@ -5675,6 +5704,216 @@ mod tests {
         assert!(
             !state.edit_enabled(),
             "and the report is not hiding a gate that was opened anyway"
+        );
+    }
+
+    // --- #576 B35(e): Done and the poll ask who holds the lock -----------------------
+
+    /// A mutex at our BASE with nobody on it: the lock this session was editing
+    /// under is gone (admin-released, or expired on the server).
+    const FREE_MUTEX_AT_BASE_BODY: &str = r#"{
+        "id":"11111111-1111-1111-1111-111111111111","name":"Remote",
+        "commits":[{"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
+
+    #[test]
+    fn done_never_releases_a_lock_another_account_now_holds() {
+        // [#576 B35(e)-D1] Our lock was freed elsewhere and a colleague took it. A
+        // clean Done used to go straight to `release_lock`; for a project ADMIN that
+        // release frees the colleague's mutex (speleodb_admin.rs), so their next push
+        // fails or a third party takes the lock. Done must ask who holds it first,
+        // release only its own, and otherwise switch editing off and say who does.
+        let (base, _listener, seen) = recording_stub(HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY);
+        let (_temp, state) = editing_fixture(&base);
+
+        let result = state.speleodb_done(None);
+
+        let seen = seen.lock().expect("request log").clone();
+        let releases = seen.iter().filter(|r| r.contains("/release/")).count();
+        assert_eq!(
+            releases, 0,
+            "Done sent {releases} release request(s) for a lock someone.else@x holds; \
+             saw {seen:?}"
+        );
+        let err = result.expect_err("a lock that is not ours cannot be handed back");
+        assert_eq!(err.action, crate::speleodb::SpeleoDbAction::Fence);
+        assert!(
+            err.message.contains("someone.else@x"),
+            "the error names who holds the lock now: {}",
+            err.message
+        );
+        assert!(
+            !state.edit_enabled(),
+            "editing is switched off - there is no lock behind it any more"
+        );
+        assert!(
+            !state.speleodb_lock_acquired_here(REMOTE_ID),
+            "and the claim on a lock we no longer hold is dropped"
+        );
+    }
+
+    #[test]
+    fn done_never_uploads_or_releases_when_the_lock_is_gone() {
+        // [#576 B35(e)-D1] The same over un-pushed work, with the mutex free: the
+        // upload needs the lock (the server 403s it) and the release would free
+        // nothing of ours, so Done does neither, keeps the edits marked un-pushed and
+        // drops the gate so Start editing can take the lock properly.
+        let (base, _listener, seen) = recording_stub(FREE_MUTEX_AT_BASE_BODY);
+        let (_temp, state) = editing_fixture(&base);
+        state.mark_remote_dirty();
+
+        let result = state.speleodb_done(None);
+
+        let seen = seen.lock().expect("request log").clone();
+        assert!(
+            !seen
+                .iter()
+                .any(|r| r.contains("/upload/") || r.contains("/release/")),
+            "no upload or release without the lock; saw {seen:?}"
+        );
+        let err = result.expect_err("there is no lock to finish under");
+        assert_eq!(err.action, crate::speleodb::SpeleoDbAction::Fence);
+        assert!(
+            !state.edit_enabled(),
+            "editing is switched off over a lock that is gone"
+        );
+        assert!(
+            state.speleodb_open_link().expect("link").has_unpushed_edits,
+            "the un-pushed edits stay marked for the next Start editing"
+        );
+    }
+
+    #[test]
+    fn done_does_not_release_when_the_holder_cannot_be_read() {
+        // [#576 B35(e)-D1] "Could not say who holds it" is not "ours": nothing is
+        // released and nothing changes, so a retry asks again.
+        let (base, _listener, seen) =
+            stub_failing_the_lock_probe(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+        let (_temp, state) = editing_fixture(&base);
+
+        let result = state.speleodb_done(None);
+
+        let seen = seen.lock().expect("request log").clone();
+        assert!(
+            !seen.iter().any(|r| r.contains("/release/")),
+            "an unreadable holder must not license a release; saw {seen:?}"
+        );
+        assert!(
+            result.is_err(),
+            "Done reports the failed read, got {result:?}"
+        );
+        assert!(
+            state.edit_enabled(),
+            "nothing is decided on a read that failed - the session stays as it was"
+        );
+    }
+
+    #[test]
+    fn done_still_releases_the_lock_we_hold() {
+        // [#576 B35(e)] DO-NOT-REGRESS: our own lock is still handed back.
+        let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+        let (_temp, state) = editing_fixture(&base);
+
+        let result = state.speleodb_done(None).expect("done");
+
+        assert!(matches!(result, DoneResult::Released), "got {result:?}");
+        let seen = seen.lock().expect("request log").clone();
+        assert!(
+            seen.iter()
+                .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/release/"))),
+            "our own lock is released; saw {seen:?}"
+        );
+        assert!(!state.edit_enabled(), "read-only after Done");
+    }
+
+    #[test]
+    fn the_poll_switches_editing_off_when_another_account_holds_the_lock() {
+        // [#576 B35(e)-D2] The poll used to only ever OPEN the gate. A session whose
+        // lock was freed and taken by a colleague kept editing for up to 20 minutes
+        // (until the lazy re-verify) over a lock it no longer held, and none of those
+        // edits could be uploaded.
+        let (base, _listener) = always_answering_stub(HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY);
+        let (_temp, state) = editing_fixture(&base);
+        state.mark_remote_dirty();
+
+        let status = state.speleodb_link_status().expect("poll");
+
+        assert!(
+            !status.edit_enabled,
+            "poll reported edit_enabled={} while someone.else@x holds the lock",
+            status.edit_enabled
+        );
+        assert!(!state.edit_enabled(), "and the gate really is shut");
+        assert_eq!(status.lock_holder.as_deref(), Some("someone.else@x"));
+        assert!(
+            status.has_unpushed_edits,
+            "the edits stay on this computer, marked un-pushed"
+        );
+        assert!(
+            !state.speleodb_lock_acquired_here(REMOTE_ID),
+            "the claim on the lost lock is dropped"
+        );
+    }
+
+    #[test]
+    fn the_poll_switches_editing_off_when_the_lock_is_gone() {
+        // [#576 B35(e)-D2] Nobody holds it: still not ours to edit under.
+        let (base, _listener) = always_answering_stub(FREE_MUTEX_AT_BASE_BODY);
+        let (_temp, state) = editing_fixture(&base);
+
+        let status = state.speleodb_link_status().expect("poll");
+
+        assert!(
+            !status.edit_enabled && !state.edit_enabled(),
+            "a session whose lock is gone must not keep editing"
+        );
+        assert_eq!(status.lock_holder, None);
+    }
+
+    #[test]
+    fn the_poll_keeps_editing_when_the_lock_holder_cannot_be_read() {
+        // [#576 B35(e)-D2] Only a SUCCESSFUL read closes the gate: offline editing
+        // stays first-class.
+        let (base, _listener, _hits) = counting_stub();
+        let (_temp, state) = editing_fixture(&base);
+
+        let status = state.speleodb_link_status().expect("poll");
+
+        assert!(
+            status.edit_enabled && state.edit_enabled(),
+            "an unreachable server says nothing about the lock"
+        );
+        assert!(state.speleodb_lock_acquired_here(REMOTE_ID));
+    }
+
+    #[test]
+    fn the_poll_leaves_a_force_edit_session_alone() {
+        // [#576 B35(e)-D2] A #213 force-editor edits WITHOUT the lock on purpose;
+        // another holder is the reason it exists, not a reason to end it.
+        let (base, _listener) = always_answering_stub(HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY);
+        let (_temp, state) = editing_fixture(&base);
+        state.set_force_editing(true);
+
+        let status = state.speleodb_link_status().expect("poll");
+
+        assert!(status.edit_enabled && state.edit_enabled());
+        assert!(status.force_editing && state.force_editing());
+    }
+
+    #[test]
+    fn the_poll_rereads_the_holder_before_switching_editing_off() {
+        // [#576 B35(e)-D2] The close is decided like the inherited-lock reopen: the
+        // holder is re-read inside the lock-ops span, so a stale first read (the
+        // lock was ours again by the time the gate would close) cannot end a
+        // session that still holds it.
+        let (base, _listener) =
+            holder_changes_between_reads(REMOTE_ID, Some("someone.else@x"), Some("u@x"));
+        let (_temp, state) = editing_fixture(&base);
+
+        let status = state.speleodb_link_status().expect("poll");
+
+        assert!(
+            status.edit_enabled && state.edit_enabled(),
+            "the re-read found the lock ours, so editing continues"
         );
     }
 

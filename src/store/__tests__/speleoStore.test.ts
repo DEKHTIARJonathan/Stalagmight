@@ -433,6 +433,66 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().link?.serverError).toBeNull();
     });
 
+    describe('lock lost under an edit session (#576 B35(e))', () => {
+      // The backend now switches editing off when SpeleoDB says the lock this session
+      // was editing under is gone or someone else's. The toolbar going read-only on
+      // its own said nothing about why, or that un-uploaded edits are stranded.
+      const editingThenPoll = (o: Partial<SpeleoLinkStatus>) => {
+        loggedInAs('me@x');
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, lock_holder: 'me@x' }));
+        expect(useSpeleoStore.getState().banner).toBeNull();
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, ...o }));
+        return useSpeleoStore.getState();
+      };
+
+      it('names the account that took the lock', () => {
+        const s = editingThenPoll({ lock_holder: 'colleague@x' });
+        expect(s.banner).toEqual({ kind: 'lock_lost', holder: 'colleague@x' });
+        expect(s.link?.editState).toBe('read-only');
+      });
+
+      it('says so when the lock is gone over un-pushed edits', () => {
+        const s = editingThenPoll({ lock_holder: null, has_unpushed_edits: true });
+        expect(s.banner).toEqual({ kind: 'lock_lost', holder: null });
+      });
+
+      it('outranks a push-failure banner left by a Done that was refused for it', () => {
+        loggedInAs('me@x');
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, lock_holder: 'me@x' }));
+        useSpeleoStore.getState().raisePushFailedBanner({ message: 'm', origin: 'done', pushMessage: null });
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, lock_holder: 'colleague@x' }));
+        expect(useSpeleoStore.getState().banner?.kind).toBe('lock_lost');
+      });
+
+      it('stays quiet for a clean copy whose lock simply went away (a release looks the same)', () => {
+        expect(editingThenPoll({ lock_holder: null }).banner).toBeNull();
+      });
+
+      it('stays quiet when the server did not answer (offline / signed out)', () => {
+        expect(editingThenPoll({ lock_holder: null, permission: null, has_unpushed_edits: true }).banner).toBeNull();
+        reset();
+        expect(editingThenPoll({ lock_holder: 'colleague@x', permission: null }).banner).toBeNull();
+      });
+
+      it('stays quiet when the holder is our own account in another case', () => {
+        expect(editingThenPoll({ lock_holder: 'ME@X' }).banner).toBeNull();
+      });
+
+      it('stays quiet when this session never held the lock', () => {
+        loggedInAs('me@x');
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false }));
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, lock_holder: 'colleague@x' }));
+        expect(useSpeleoStore.getState().banner).toBeNull();
+      });
+
+      it('stays quiet for a force-edit session, which never held the lock', () => {
+        loggedInAs('me@x');
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, force_editing: true }));
+        useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, lock_holder: 'colleague@x' }));
+        expect(useSpeleoStore.getState().banner).toBeNull();
+      });
+    });
+
     it('carries force_editing + allow_force_edit through (#213)', () => {
       useSpeleoStore
         .getState()

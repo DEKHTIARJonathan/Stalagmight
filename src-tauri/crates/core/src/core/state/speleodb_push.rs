@@ -196,8 +196,11 @@ impl AppState {
     /// Push the open project's edits (if any) and release the write lock,
     /// returning to read-only (#197). On a confirmed push (or nothing to push) the
     /// lock is released and the edit gate dropped; on divergence or an ambiguous
-    /// push, the lock + dirty bit are retained so no edits are lost. `message` is
-    /// the commit message (a generic default is used when blank).
+    /// push, the lock + dirty bit are retained so no edits are lost. When the server
+    /// says the lock is no longer ours (#576 B35(e)), nothing is pushed or released:
+    /// the gate drops, the dirty bit stays, and the verb fails with
+    /// [`SpeleoDbError::LockNotHeld`] naming the holder. `message` is the commit
+    /// message (a generic default is used when blank).
     pub(crate) fn speleodb_done(
         &self,
         message: Option<String>,
@@ -245,6 +248,26 @@ impl AppState {
         let insecure_http = self.speleodb_insecure_http();
         let holder =
             self.speleodb_push_lock_holder(&endpoint, &token, insecure_http, &link.project_id)?;
+
+        // [#576 B35(e)-D1] Never push under, or release, a lock that is not ours. The
+        // release used to go out blind; for a project ADMIN it force-releases
+        // whoever holds the mutex now (`speleodb_admin.rs`), so a colleague who took
+        // the lock after ours was freed lost it to our Done. The upload needs the
+        // lock too, so with someone else (or nobody) on the mutex there is nothing
+        // left this verb can finish: switch editing off - the same rule the status
+        // poll applies - keep any un-pushed edits marked for the next Start editing,
+        // and say who holds the lock. Same read as the authorship licence below.
+        if !super::speleodb::lock_held_by_me(holder.as_deref(), self.speleodb_my_email().as_deref())
+        {
+            self.speleodb_shut_gate_over_lost_lock(&link.project_id);
+            tracing::warn!(
+                project_id = %link.project_id,
+                holder = ?holder,
+                purpose = "never release or push under a lock that is not ours (#576 B35(e))",
+                "speleodb done: the write lock is not ours; nothing pushed or released"
+            );
+            return Err(local_dto(SpeleoDbError::LockNotHeld { holder }));
+        }
 
         // Dirty-bit gate: only push when there are un-pushed edits.
         let outcome = if link.has_unpushed_edits {
