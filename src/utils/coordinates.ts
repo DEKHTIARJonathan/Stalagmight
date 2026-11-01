@@ -178,9 +178,28 @@ function enuToGps(
 }
 
 /**
+ * `lon` (degrees, as `atan2` returns it in [-180, 180]) moved by a whole turn
+ * when that brings it within half a turn of `reference`; mirrors
+ * `unwrap_longitude` in geo.rs. Away from the antimeridian it is returned
+ * unchanged, bit for bit.
+ */
+function unwrapLongitude(lon: number, reference: number): number {
+  const delta = lon - reference;
+  if (delta > 180) return lon - 360;
+  if (delta < -180) return lon + 360;
+  return lon;
+}
+
+/**
  * Transform local meter coordinates to MapLibre-compatible lat/lng
  * If gpsOrigin is provided, coordinates are offset from that origin.
  * This allows satellite tiles to align with real-world geography.
+ *
+ * The longitude is continuous with the origin's, as geo.rs `local_to_gps`
+ * returns it for GlobalView, so it can leave [-180, 180] for a survey that
+ * crosses the antimeridian: 1000 m east of 179.999 is drawn at 180.0084, not at
+ * -179.9916, which the map would join to the origin the long way round the
+ * globe (#576 D36 review).
  */
 export function metersToMapCoords(
   x: number,
@@ -196,7 +215,7 @@ export function metersToMapCoords(
   }
 
   const gps = enuToGps(x, y, gpsOrigin);
-  return [gps.longitude, gps.latitude];
+  return [unwrapLongitude(gps.longitude, gpsOrigin.longitude), gps.latitude];
 }
 
 /**

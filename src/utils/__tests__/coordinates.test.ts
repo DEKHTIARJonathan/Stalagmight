@@ -157,6 +157,30 @@ describe('WGS84 parity with the backend (#576 D36)', () => {
   );
 });
 
+// A survey across the antimeridian is drawn in one piece (#576 D36 review
+// RV1-RUST-5): from an origin at 179.999 E, a station 1000 m east is drawn at
+// 180.0084 - continuous with the origin, as the backend's local_to_gps returns
+// it for GlobalView - not at -179.9916, which the map joins to the origin by a
+// line the long way round the globe. The GPS column keeps showing the
+// conventional [-180, 180) longitude.
+describe('across the antimeridian', () => {
+  it.each([
+    [179.999, 1000],
+    [-179.999, -1000],
+  ])('origin lon %d: a station %d m east is drawn next to the origin', (olon, east) => {
+    const origin = { latitude: -16.8, longitude: olon };
+    const [lng, lat] = metersToMapCoords(east, 0, origin);
+    expect(Math.abs(lng - olon), `drawn at lng ${lng}`).toBeLessThan(0.01);
+    const m = mapCoordsToMeters(lng, lat, origin);
+    expect(Math.hypot(m.x - east, m.y)).toBeLessThan(1e-6);
+  });
+
+  it('the GPS column still shows the conventional longitude', () => {
+    const back = xyToGps(coord(1000, 0, 0), gps(-16.8, 179.999, 0));
+    expect(back.longitude).toBeCloseTo(-179.991619, 6);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // gpsToXY / xyToGps round-trip
 // ---------------------------------------------------------------------------

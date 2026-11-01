@@ -151,6 +151,11 @@ fn ecef_to_geodetic(x: f64, y: f64, z: f64) -> (f64, f64) {
 /// and dropping it straight down lands about d^3/(2 R^2) short (1.5 mm at 5 km, 10 cm at 20 km).
 /// One correction re-aims at (east, north, up) with the `up` the surface has under the first
 /// guess, which shrinks the error by ~d/R: about 1 micrometre at 20 km and 0.1 mm at 50 km.
+///
+/// The longitude is continuous with the origin's, so it can leave [-180, 180] for a survey that
+/// crosses the antimeridian: 1000 m east of 179.999 is 180.0084, not -179.9916, which a map joins
+/// to the origin by a line the long way round the globe (#576 D36 review). Normalise it before
+/// storing it as a [`GpsCoordinates`].
 pub fn local_to_gps(east: f64, north: f64, origin: &GpsCoordinates) -> (f64, f64) {
     let (lat0, lon0) = (origin.latitude, origin.longitude);
     let (x, y, z) = enu_to_ecef(east, north, 0.0, lat0, lon0);
@@ -161,7 +166,22 @@ pub fn local_to_gps(east: f64, north: f64, origin: &GpsCoordinates) -> (f64, f64
     let (_, _, up) = ecef_to_enu(gx - x0, gy - y0, gz - z0, lat0, lon0);
 
     let (x, y, z) = enu_to_ecef(east, north, up, lat0, lon0);
-    ecef_to_geodetic(x, y, z)
+    let (lat, lon) = ecef_to_geodetic(x, y, z);
+    (lat, unwrap_longitude(lon, lon0))
+}
+
+/// `lon` (degrees, as `atan2` returns it in [-180, 180]) moved by a whole turn when that brings
+/// it within half a turn of `reference`. Away from the antimeridian it is returned unchanged,
+/// bit for bit.
+fn unwrap_longitude(lon: f64, reference: f64) -> f64 {
+    let delta = lon - reference;
+    if delta > 180.0 {
+        lon - 360.0
+    } else if delta < -180.0 {
+        lon + 360.0
+    } else {
+        lon
+    }
 }
 
 /// Haversine distance between two GPS points in meters.
@@ -443,6 +463,31 @@ mod tests {
         let (lat, lon) = local_to_gps(east, north, &origin);
         assert!((lat - 30.009).abs() < 1e-10, "lat {lat}");
         assert!(lon.abs() < 1e-10, "lon {lon}");
+    }
+
+    /// A survey across the antimeridian stays one piece (#576 D36 review RV1-RUST-5): from an
+    /// origin at 179.999 E, a station 1000 m east is at 180.0084 - continuous with the origin, as
+    /// the flat model GlobalView used before gave it - not at -179.9916, which MapLibre joins to
+    /// the origin by a line the long way round the globe. The mirror case west of -179.999 too.
+    #[test]
+    fn local_to_gps_keeps_a_survey_across_the_antimeridian_continuous() {
+        for (lon0, east) in [(179.999, 1_000.0), (-179.999, -1_000.0)] {
+            let origin = GpsCoordinates::new(-16.8, lon0, 0.0).unwrap();
+            let (lat, lon) = local_to_gps(east, 0.0, &origin);
+            println!("origin lon {lon0}, {east} m east -> lon {lon:.6}");
+            assert!(
+                (lon - lon0).abs() < 0.01,
+                "origin lon {lon0}, {east} m east: lon {lon} jumped across the globe"
+            );
+            // Still the exact inverse: the unwrapped longitude is the same point.
+            let back = GpsCoordinates {
+                latitude: lat,
+                longitude: lon,
+                depth_reference: 0.0,
+            };
+            let (e, n) = gps_to_local(&back, &origin);
+            assert!((e - east).hypot(n) < 1e-5, "came back as ({e}, {n})");
+        }
     }
 
     #[test]
