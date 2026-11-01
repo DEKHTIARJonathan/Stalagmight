@@ -55,6 +55,16 @@ describe('buildShotUpdates', () => {
     expect(u.azimuth_out).toBeCloseTo(15, 6);
   });
 
+  it('stores due north as 0, not 360, when the typed mean is 0', () => {
+    // circularMeanDegrees(1.1, 1.1) is 1.1000000000000005, so the delta leaves
+    // each leg at about -4.4e-16, which `+ 360` rounded to exactly 360: an
+    // out-of-range bearing the backend flags as a non-ignorable INVALID_AZIMUTH.
+    const u = buildShotUpdates(shot({ azimuth_in: 1.1, azimuth_out: 1.1 }), [
+      { colKey: AZIMUTH_AVG_KEY, value: 0 },
+    ]);
+    expect(u).toEqual({ azimuth_in: 0, azimuth_out: 0 });
+  });
+
   it('shifts both pitch legs by the delta when both are present', () => {
     // mean of (10,30) = 20; new mean 25 → +5 to each leg.
     const u = buildShotUpdates(shot({ pitch_in: 10, pitch_out: 30 }), [

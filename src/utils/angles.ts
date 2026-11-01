@@ -18,6 +18,11 @@ export function normalizeAngle(degrees: number): number {
   if (result < 0) {
     result += 360;
   }
+  // The `+= 360` rounds for a tiny negative remainder (e.g. -1e-14 + 360 is
+  // exactly 360), which is out of range: fold it to 0, as normalizeAzimuth does.
+  if (result >= 360) {
+    result = 0;
+  }
   // Handle -0 by adding 0
   return result + 0;
 }

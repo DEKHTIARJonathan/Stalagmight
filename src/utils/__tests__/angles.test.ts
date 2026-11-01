@@ -36,6 +36,15 @@ describe('normalizeAngle', () => {
     expect(normalizeAngle(-3605)).toBe(355);
   });
 
+  it('folds a tiny negative angle to 0, never to exactly 360', () => {
+    // `-1e-14 % 360` is -1e-14, and `-1e-14 + 360` rounds to exactly 360 in
+    // binary floating point - a bearing outside [0, 360) that the backend
+    // flags as a non-ignorable INVALID_AZIMUTH.
+    expect(normalizeAngle(-1e-14)).toBe(0);
+    expect(normalizeAngle(-4.440892098500626e-16)).toBe(0);
+    expect(normalizeAngle(-Number.MIN_VALUE)).toBe(0);
+  });
+
   it('returns 0 for NaN', () => {
     expect(normalizeAngle(NaN)).toBe(0);
   });
