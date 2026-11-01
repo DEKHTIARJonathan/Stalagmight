@@ -35,7 +35,13 @@ import { TOAST_KEYS } from '../utils/toastKeys';
 import type { CommandResult } from '../types/commands';
 
 /** Why a carry was cancelled. Only some reasons tell the user (see `CANCEL_TOAST`). */
-export type MoveCarryCancelReason = 'toolSwitch' | 'otherMutation' | 'surveyChanged' | 'editingBlocked';
+export type MoveCarryCancelReason =
+  | 'toolSwitch'
+  | 'placementMode'
+  | 'projectSwitched'
+  | 'otherMutation'
+  | 'surveyChanged'
+  | 'editingBlocked';
 
 export interface MoveCarryHandlers {
   /** MapCanvas's single cancel routine - exactly what Escape does to the ghost. */
@@ -61,10 +67,12 @@ let live: LiveCarry | null = null;
 // command that `send` issues can claim it (`takeMoveCarryCommit`).
 let issuing: MoveCarryCommit | null = null;
 
-// A tool switch, like Escape (which MapCanvas runs straight through its cancel
-// routine), is the user's own gesture and visibly drops the ghost on the spot, so it
-// stays silent; the others cancel a move the user did not ask to cancel
-// (docs/notifications.md: no silent state changes).
+// A tool switch or entering placement mode, like Escape (which MapCanvas runs
+// straight through its cancel routine), is the user's own gesture and visibly drops
+// the ghost on the spot, so it stays silent. So does closing or switching the
+// project: the ghost goes with the survey it belonged to, and "the survey changed"
+// would only be noise over the project that replaced it. The others cancel a move
+// the user did not ask to cancel (docs/notifications.md: no silent state changes).
 const CANCEL_TOAST: Partial<Record<MoveCarryCancelReason, string>> = {
   otherMutation: 'map.move.cancelledOtherChange',
   surveyChanged: 'map.move.cancelledSurveyChanged',

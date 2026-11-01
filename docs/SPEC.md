@@ -850,8 +850,9 @@ change attempted before the drop (an undo, a table edit, a delete, a dialog's
 save) cancels the move instead and is not applied either, so it can be retried
 on the unmoved survey. The move is also cancelled when the survey changes
 underneath it, when the map turns read-only (Plan/Export, the Closures Computed
-View, a lost SpeleoDB lock), and when a tool other than the three move tools is
-chosen. Switching between the move tools keeps what is being carried.
+View, a lost SpeleoDB lock), when a tool other than the three move tools is
+chosen, when placement mode starts, and when the project is closed or another one
+is opened. Switching between the move tools keeps what is being carried.
 
 The three move tools are documented in detail in [move-tools.md](move-tools.md).
 

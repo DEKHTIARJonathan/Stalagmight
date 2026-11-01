@@ -69,6 +69,8 @@ describe('moveCarry registry (GHOST-2)', () => {
   it('cancels through the registered routine exactly once and toasts only the reasons the user did not choose', () => {
     const toasted: Record<MoveCarryCancelReason, string | null> = {
       toolSwitch: null,
+      placementMode: null,
+      projectSwitched: null,
       otherMutation: i18n.t('map.move.cancelledOtherChange'),
       surveyChanged: i18n.t('map.move.cancelledSurveyChanged'),
       editingBlocked: i18n.t('map.move.cancelledReadOnly'),
