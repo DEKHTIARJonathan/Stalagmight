@@ -103,6 +103,67 @@ pub fn gps_to_local(gps: &GpsCoordinates, origin: &GpsCoordinates) -> (f64, f64)
     (east, north)
 }
 
+/// ENU offset from the origin back to an ECEF position: the transpose of the rotation in
+/// [`ecef_to_enu`], plus the origin.
+fn enu_to_ecef(east: f64, north: f64, up: f64, lat0: f64, lon0: f64) -> (f64, f64, f64) {
+    let lat_rad = lat0.to_radians();
+    let lon_rad = lon0.to_radians();
+
+    let sin_lat = lat_rad.sin();
+    let cos_lat = lat_rad.cos();
+    let sin_lon = lon_rad.sin();
+    let cos_lon = lon_rad.cos();
+
+    let (x0, y0, z0) = geodetic_to_ecef(lat0, lon0, 0.0);
+    let dx = -sin_lon * east - sin_lat * cos_lon * north + cos_lat * cos_lon * up;
+    let dy = cos_lon * east - sin_lat * sin_lon * north + cos_lat * sin_lon * up;
+    let dz = cos_lat * north + sin_lat * up;
+
+    (x0 + dx, y0 + dy, z0 + dz)
+}
+
+/// ECEF to geodetic (latitude, longitude) in degrees on WGS84, by Bowring's formula.
+///
+/// Sub-millimetre for any point within kilometres of the surface, which is every point
+/// [`local_to_gps`] asks about. Altitude is not returned: nothing here has one.
+fn ecef_to_geodetic(x: f64, y: f64, z: f64) -> (f64, f64) {
+    let b = WGS84_A * (1.0 - WGS84_E2).sqrt();
+    let ep2 = WGS84_E2 / (1.0 - WGS84_E2);
+    let p = (x * x + y * y).sqrt();
+    let theta = (z * WGS84_A).atan2(p * b);
+    let sin_theta = theta.sin();
+    let cos_theta = theta.cos();
+    let lat = (z + ep2 * b * sin_theta * sin_theta * sin_theta)
+        .atan2(p - WGS84_E2 * WGS84_A * cos_theta * cos_theta * cos_theta);
+    let lon = y.atan2(x);
+    (lat.to_degrees(), lon.to_degrees())
+}
+
+/// The exact inverse of [`gps_to_local`]: the point ON the ellipsoid whose (east, north) from
+/// `origin` are the given metres. Returns (latitude, longitude) in degrees.
+///
+/// The frontend's map and GPS column run the same algorithm (`enuToGps` in
+/// src/utils/coordinates.ts), so a station is drawn - here for GlobalView, there for the
+/// workspace map - exactly where `gps_to_local` placed it (#576 D36).
+///
+/// `gps_to_local` drops the "up" component, so the answer is not the point at
+/// (east, north, 0) on the origin's tangent plane: that point floats above the curving surface,
+/// and dropping it straight down lands about d^3/(2 R^2) short (1.5 mm at 5 km, 10 cm at 20 km).
+/// One correction re-aims at (east, north, up) with the `up` the surface has under the first
+/// guess, which shrinks the error by ~d/R: about 1 micrometre at 20 km and 0.1 mm at 50 km.
+pub fn local_to_gps(east: f64, north: f64, origin: &GpsCoordinates) -> (f64, f64) {
+    let (lat0, lon0) = (origin.latitude, origin.longitude);
+    let (x, y, z) = enu_to_ecef(east, north, 0.0, lat0, lon0);
+    let (lat, lon) = ecef_to_geodetic(x, y, z);
+
+    let (gx, gy, gz) = geodetic_to_ecef(lat, lon, 0.0);
+    let (x0, y0, z0) = geodetic_to_ecef(lat0, lon0, 0.0);
+    let (_, _, up) = ecef_to_enu(gx - x0, gy - y0, gz - z0, lat0, lon0);
+
+    let (x, y, z) = enu_to_ecef(east, north, up, lat0, lon0);
+    ecef_to_geodetic(x, y, z)
+}
+
 /// Haversine distance between two GPS points in meters.
 ///
 /// Uses WGS84 mean earth radius for the calculation.
@@ -339,6 +400,49 @@ mod tests {
             (b - 180.0).abs() < 0.01,
             "Due south should be ~180 degrees, got {b}"
         );
+    }
+
+    /// `local_to_gps` is the inverse of `gps_to_local` to well under a millimetre, from the
+    /// equator to near the pole and out to 20 km in every direction (#576 D36).
+    #[test]
+    fn local_to_gps_inverts_gps_to_local() {
+        for (lat0, lon0) in [
+            (0.0, 0.0),
+            (30.0, 0.0),
+            (-30.0, 151.0),
+            (70.0, 0.0),
+            (-54.8, -68.3),
+            (89.0, 10.0),
+        ] {
+            let origin = GpsCoordinates::new(lat0, lon0, 0.0).unwrap();
+            for d in [0.0, 1.0, 1_000.0, 5_000.0, 20_000.0] {
+                for k in 0..8 {
+                    let a = f64::from(k) * std::f64::consts::FRAC_PI_4;
+                    let (east, north) = (d * a.sin(), d * a.cos());
+                    let (lat, lon) = local_to_gps(east, north, &origin);
+                    let back = GpsCoordinates::new(lat, lon, 0.0).unwrap();
+                    let (e, n) = gps_to_local(&back, &origin);
+                    assert!(
+                        (e - east).hypot(n - north) < 1e-5,
+                        "origin ({lat0}, {lon0}), ({east}, {north}) came back as ({e}, {n})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The issue's scenario: a datum typed as (30.009, 0) from an origin datum at (30, 0) is
+    /// placed 997.67 m north, and the inverse draws it back on its own fix - not 3.1 m south of
+    /// it, as the sphere the map used did.
+    #[test]
+    fn a_second_datum_converts_back_to_its_own_fix() {
+        let origin = GpsCoordinates::new(30.0, 0.0, 0.0).unwrap();
+        let fix = GpsCoordinates::new(30.009, 0.0, 0.0).unwrap();
+        let (east, north) = gps_to_local(&fix, &origin);
+        assert!((north - 997.673).abs() < 1e-3, "north {north}");
+        let (lat, lon) = local_to_gps(east, north, &origin);
+        assert!((lat - 30.009).abs() < 1e-10, "lat {lat}");
+        assert!(lon.abs() < 1e-10, "lon {lon}");
     }
 
     #[test]

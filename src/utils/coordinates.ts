@@ -3,11 +3,21 @@ import type { GpsOrigin } from '../types/config';
 import { formatFixed } from '../i18n/format';
 import { normalizeAzimuth } from './azimuth';
 
-// Earth radius in meters for coordinate conversions
-const EARTH_RADIUS = 6371000;
+// WGS84, the ellipsoid the backend places every zero datum on
+// (`gps_to_local`, src-tauri/crates/models/src/geo.rs). The map, the data
+// table's GPS column and GlobalView must invert THAT projection: this file used
+// a 6371000 m sphere, which drew a datum ~3 m per km away from its own fix
+// (#576 D36). Constants and operation order mirror geo.rs, so the two sides
+// agree to the last few ulps (pinned by the parity table in
+// __tests__/coordinates.test.ts and survey_geometry.rs).
+const WGS84_A = 6378137.0;
+const WGS84_E2 = 0.00669437999014;
+const WGS84_B = WGS84_A * Math.sqrt(1 - WGS84_E2);
+const WGS84_EP2 = WGS84_E2 / (1 - WGS84_E2);
 
 // Meters per degree (approximately at equator)
 // Used to transform local meter coordinates to pseudo-lat/lng for MapLibre
+// when the project has no GPS origin - a display convention, not geodesy.
 const METERS_PER_DEGREE = 111320;
 
 const DEG_TO_RAD = Math.PI / 180;
@@ -34,20 +44,35 @@ function toDegrees(rad: number): number {
   return rad * RAD_TO_DEG;
 }
 
+/** Geodetic (altitude 0) to ECEF on WGS84; mirrors `geodetic_to_ecef`. */
 function gpsToEcef(latitude: number, longitude: number): Ecef {
   const latRad = toRadians(latitude);
   const lonRad = toRadians(longitude);
+  const sinLat = Math.sin(latRad);
   const cosLat = Math.cos(latRad);
+  // N = radius of curvature in the prime vertical
+  const n = WGS84_A / Math.sqrt(1 - WGS84_E2 * sinLat * sinLat);
   return {
-    x: EARTH_RADIUS * cosLat * Math.cos(lonRad),
-    y: EARTH_RADIUS * cosLat * Math.sin(lonRad),
-    z: EARTH_RADIUS * Math.sin(latRad),
+    x: n * cosLat * Math.cos(lonRad),
+    y: n * cosLat * Math.sin(lonRad),
+    z: n * (1 - WGS84_E2) * sinLat,
   };
 }
 
+/**
+ * ECEF to geodetic latitude/longitude on WGS84 (Bowring's formula; mirrors
+ * `ecef_to_geodetic`). Sub-millimetre for any point within kilometres of the
+ * surface, which is every point this file converts.
+ */
 function ecefToGps(ecef: Ecef): { latitude: number; longitude: number } {
   const p = Math.sqrt(ecef.x * ecef.x + ecef.y * ecef.y);
-  const latRad = Math.atan2(ecef.z, p);
+  const theta = Math.atan2(ecef.z * WGS84_A, p * WGS84_B);
+  const sinTheta = Math.sin(theta);
+  const cosTheta = Math.cos(theta);
+  const latRad = Math.atan2(
+    ecef.z + WGS84_EP2 * WGS84_B * sinTheta * sinTheta * sinTheta,
+    p - WGS84_E2 * WGS84_A * cosTheta * cosTheta * cosTheta,
+  );
   const lonRad = Math.atan2(ecef.y, ecef.x);
   return {
     latitude: toDegrees(latRad),
@@ -55,7 +80,24 @@ function ecefToGps(ecef: Ecef): { latitude: number; longitude: number } {
   };
 }
 
+// One-entry memo: every caller converts many points against the same origin
+// (the renderer once per station), so the frame's trig is paid once per origin.
+let cachedFrame: { latitude: number; longitude: number; frame: OriginFrame } | null = null;
+
 function buildOriginFrame(origin: { latitude: number; longitude: number }): OriginFrame {
+  if (
+    cachedFrame !== null &&
+    cachedFrame.latitude === origin.latitude &&
+    cachedFrame.longitude === origin.longitude
+  ) {
+    return cachedFrame.frame;
+  }
+  const frame = computeOriginFrame(origin);
+  cachedFrame = { latitude: origin.latitude, longitude: origin.longitude, frame };
+  return frame;
+}
+
+function computeOriginFrame(origin: { latitude: number; longitude: number }): OriginFrame {
   const latRad = toRadians(origin.latitude);
   const lonRad = toRadians(origin.longitude);
   return {
@@ -112,13 +154,27 @@ function gpsToEnu(
   return ecefToEnu(ecef, frame);
 }
 
+/**
+ * The exact inverse of the backend's `gps_to_local`: the point ON the ellipsoid
+ * whose east/north from `origin` are (`east`, `north`). Mirrors `local_to_gps`
+ * in geo.rs.
+ *
+ * `gps_to_local` drops the "up" component, so the answer is not the point at
+ * (east, north, 0) on the origin's tangent plane: that point floats above the
+ * curving surface, and dropping it straight down lands about d^3/(2 R^2) short
+ * (1.5 mm at 5 km, 10 cm at 20 km). One correction re-aims at (east, north,
+ * up) with the `up` the surface has under the first guess, which shrinks the
+ * error by ~d/R: about 1 micrometre at 20 km and 0.1 mm at 50 km.
+ */
 function enuToGps(
-  enu: Enu,
+  east: number,
+  north: number,
   origin: { latitude: number; longitude: number }
 ): { latitude: number; longitude: number } {
   const frame = buildOriginFrame(origin);
-  const ecef = enuToEcef(enu, frame);
-  return ecefToGps(ecef);
+  const guess = ecefToGps(enuToEcef({ east, north, up: 0 }, frame));
+  const up = ecefToEnu(gpsToEcef(guess.latitude, guess.longitude), frame).up;
+  return ecefToGps(enuToEcef({ east, north, up }, frame));
 }
 
 /**
@@ -139,7 +195,7 @@ export function metersToMapCoords(
     return [lng, lat];
   }
 
-  const gps = enuToGps({ east: x, north: y, up: 0 }, gpsOrigin);
+  const gps = enuToGps(x, y, gpsOrigin);
   return [gps.longitude, gps.latitude];
 }
 
@@ -181,7 +237,7 @@ export function xyToGps(
   coords: Coordinates,
   origin: GpsCoordinates
 ): GpsCoordinates {
-  const gps = enuToGps({ east: coords.x, north: coords.y, up: 0 }, origin);
+  const gps = enuToGps(coords.x, coords.y, origin);
   return { latitude: gps.latitude, longitude: gps.longitude, depth_reference: coords.z };
 }
 

@@ -12,8 +12,9 @@ use ts_rs::TS;
 use crate::models::{GpsCoordinates, Project, SectionId, ShotKind, StationRef};
 use crate::persistence::Database;
 
-/// Minimum cosine value to avoid division by near-zero at extreme latitudes.
-/// This corresponds to latitudes beyond ±89.4° where the approximation breaks down.
+/// Minimum cosine value below which an origin counts as "at the pole" (beyond ±89.4°).
+/// The flat model this guarded divided by it; the WGS84 inverse has no singularity there, but
+/// the refusal is kept as it was so the set of projects GlobalView draws does not change.
 const MIN_COS_LAT: f64 = 0.01;
 
 /// A self-contained shot with GPS coordinates and metadata.
@@ -46,15 +47,13 @@ pub struct SurveyGeometryError {
     pub message: String,
 }
 
-/// Convert local meters (east, north) to GPS coordinates relative to origin.
+/// Convert local meters (east, north) to GPS coordinates relative to origin, returned in
+/// MapLibre `(lng, lat)` order.
 ///
-/// Uses a simplified linear approximation for small distances (<100km):
-/// - latitude_delta = north_meters / meters_per_degree_lat
-/// - longitude_delta = east_meters / meters_per_degree_lng
-///
-/// where:
-/// - meters_per_degree_lat ≈ 111320 (constant for WGS84)
-/// - meters_per_degree_lng = 111320 * cos(origin_lat_rad)
+/// The exact WGS84 inverse of the projection that placed the stations
+/// ([`crate::models::local_to_gps`] undoes `gps_to_local`). This used a flat
+/// 111 320 m-per-degree model, which put GlobalView's drawing of a project metres away from
+/// the workspace map's (#576 D36); the map runs the same inverse in TypeScript.
 ///
 /// # Errors
 /// Returns an error if the origin latitude is too close to ±90° (beyond ±89.4°).
@@ -63,12 +62,9 @@ pub fn local_to_gps(
     north: f64,
     origin: &GpsCoordinates,
 ) -> Result<(f64, f64), SurveyGeometryError> {
-    const METERS_PER_DEGREE_LAT: f64 = 111_320.0;
+    let cos_lat = origin.latitude.to_radians().cos();
 
-    let origin_lat_rad = origin.latitude.to_radians();
-    let cos_lat = origin_lat_rad.cos();
-
-    // Guard against division by near-zero at extreme latitudes
+    // Refuse a pole-adjacent origin, as before (see MIN_COS_LAT).
     if cos_lat.abs() < MIN_COS_LAT {
         return Err(SurveyGeometryError {
             message: format!(
@@ -78,11 +74,7 @@ pub fn local_to_gps(
         });
     }
 
-    let meters_per_degree_lng = METERS_PER_DEGREE_LAT * cos_lat;
-
-    let lat = origin.latitude + (north / METERS_PER_DEGREE_LAT);
-    let lng = origin.longitude + (east / meters_per_degree_lng);
-
+    let (lat, lng) = crate::models::local_to_gps(east, north, origin);
     Ok((lng, lat)) // MapLibre order
 }
 
@@ -225,17 +217,32 @@ mod tests {
     use crate::persistence::Database;
     use tempfile::TempDir;
 
-    // Test vector data from coordinate_transform_vectors.json
-    // These tests verify the local_to_gps function matches expected values
+    /// Degrees per metre north and east at `lat0` on WGS84: 1 / the meridional radius of
+    /// curvature, and 1 / (the prime-vertical radius * cos lat). The local scale the exact
+    /// inverse must reproduce over a kilometre (to ~1e-8 deg; the asserts allow 1e-6).
+    fn wgs84_deg_per_m(lat0: f64) -> (f64, f64) {
+        const A: f64 = 6_378_137.0;
+        const E2: f64 = 0.006_694_379_990_14;
+        let s = lat0.to_radians().sin();
+        let w = 1.0 - E2 * s * s;
+        let meridional = A * (1.0 - E2) / (w * w.sqrt());
+        let prime_vertical = A / w.sqrt();
+        (
+            (1.0 / meridional).to_degrees(),
+            (1.0 / (prime_vertical * lat0.to_radians().cos())).to_degrees(),
+        )
+    }
 
     #[test]
     fn test_local_to_gps_at_equator() {
-        // At equator, 1 degree ≈ 111320 meters in both directions
+        // On the ellipsoid a degree of latitude is SHORTER at the equator (110 574 m) than a
+        // degree of longitude (111 319 m); the flat model used 111 320 m for both.
         let origin = GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
+        let (lat_per_m, lng_per_m) = wgs84_deg_per_m(0.0);
 
         // 1000m east at equator
         let (lng, lat) = local_to_gps(1000.0, 0.0, &origin).unwrap();
-        let expected_lng_delta = 1000.0 / 111_320.0;
+        let expected_lng_delta = 1000.0 * lng_per_m;
         assert!(
             (lng - expected_lng_delta).abs() < 1e-6,
             "lng: {lng} expected: {expected_lng_delta}"
@@ -244,7 +251,7 @@ mod tests {
 
         // 1000m north at equator
         let (lng, lat) = local_to_gps(0.0, 1000.0, &origin).unwrap();
-        let expected_lat_delta = 1000.0 / 111_320.0;
+        let expected_lat_delta = 1000.0 * lat_per_m;
         assert!(lng.abs() < 1e-9, "lng should be ~0");
         assert!(
             (lat - expected_lat_delta).abs() < 1e-6,
@@ -254,22 +261,30 @@ mod tests {
 
     #[test]
     fn test_local_to_gps_at_45_degrees() {
-        // At 45°N, longitude degrees are shorter by cos(45°) ≈ 0.7071
+        // At 45°N, longitude degrees are shorter by about cos(45°) ≈ 0.7071
         let origin = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
+        let (lat_per_m, lng_per_m) = wgs84_deg_per_m(45.0);
 
         // 1000m east at 45°N
         let (lng, lat) = local_to_gps(1000.0, 0.0, &origin).unwrap();
-        let meters_per_deg_lng = 111_320.0 * (45.0_f64.to_radians().cos());
-        let expected_lng = -90.0 + (1000.0 / meters_per_deg_lng);
+        let expected_lng = -90.0 + 1000.0 * lng_per_m;
         assert!(
             (lng - expected_lng).abs() < 1e-6,
             "lng: {lng} expected: {expected_lng}"
         );
-        assert!((lat - 45.0).abs() < 1e-9, "lat should be ~45.0");
+        // Due east on the origin's tangent plane is a normal section, not the parallel: it bends
+        // toward the equator by d^2 tan(lat) / (2 N M) - 7.04e-7 deg (8 cm) over a kilometre.
+        let w = 1.0 - 0.006_694_379_990_14 * 0.5; // 1 - e^2 sin^2(45)
+        let n_m = 6_378_137.0_f64.powi(2) * (1.0 - 0.006_694_379_990_14) / (w * w);
+        let expected_lat = 45.0 - (1.0e6 / (2.0 * n_m)).to_degrees();
+        assert!(
+            (lat - expected_lat).abs() < 1e-10,
+            "lat: {lat} expected: {expected_lat}"
+        );
 
         // 1000m north at 45°N
         let (lng, lat) = local_to_gps(0.0, 1000.0, &origin).unwrap();
-        let expected_lat = 45.0 + (1000.0 / 111_320.0);
+        let expected_lat = 45.0 + 1000.0 * lat_per_m;
         assert!((lng - (-90.0)).abs() < 1e-9, "lng should be ~-90.0");
         assert!(
             (lat - expected_lat).abs() < 1e-6,
@@ -279,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_local_to_gps_roundtrip() {
-        // Test that gps_to_local and local_to_gps are approximate inverses
+        // local_to_gps is the exact inverse of gps_to_local (#576 D36), not an approximation
         let origin = GpsCoordinates::new(30.0, -80.0, 0.0).unwrap();
         let target = GpsCoordinates::new(30.01, -79.99, 0.0).unwrap();
 
@@ -289,15 +304,14 @@ mod tests {
         // Convert back to GPS
         let (lng, lat) = local_to_gps(east, north, &origin).unwrap();
 
-        // Should be close to original (within ~1m tolerance for small distances)
         assert!(
-            (lat - target.latitude).abs() < 0.0001,
+            (lat - target.latitude).abs() < 1e-9,
             "lat roundtrip error: {} vs {}",
             lat,
             target.latitude
         );
         assert!(
-            (lng - target.longitude).abs() < 0.0001,
+            (lng - target.longitude).abs() < 1e-9,
             "lng roundtrip error: {} vs {}",
             lng,
             target.longitude
@@ -307,14 +321,15 @@ mod tests {
     #[test]
     fn test_local_to_gps_diagonal() {
         let origin = GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
+        let (lat_per_m, lng_per_m) = wgs84_deg_per_m(0.0);
 
         // 1000m NE (45 degrees)
         let east = 1000.0 * (45.0_f64.to_radians().sin());
         let north = 1000.0 * (45.0_f64.to_radians().cos());
         let (lng, lat) = local_to_gps(east, north, &origin).unwrap();
 
-        let expected_lng = east / 111_320.0;
-        let expected_lat = north / 111_320.0;
+        let expected_lng = east * lng_per_m;
+        let expected_lat = north * lat_per_m;
 
         assert!((lng - expected_lng).abs() < 1e-6);
         assert!((lat - expected_lat).abs() < 1e-6);
@@ -323,18 +338,112 @@ mod tests {
     #[test]
     fn test_local_to_gps_negative_coords() {
         let origin = GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
+        let (lat_per_m, lng_per_m) = wgs84_deg_per_m(0.0);
 
         // 1000m west (negative east)
         let (lng, lat) = local_to_gps(-1000.0, 0.0, &origin).unwrap();
-        let expected_lng = -1000.0 / 111_320.0;
+        let expected_lng = -1000.0 * lng_per_m;
         assert!((lng - expected_lng).abs() < 1e-6);
         assert!(lat.abs() < 1e-9);
 
         // 1000m south (negative north)
         let (lng, lat) = local_to_gps(0.0, -1000.0, &origin).unwrap();
-        let expected_lat = -1000.0 / 111_320.0;
+        let expected_lat = -1000.0 * lat_per_m;
         assert!(lng.abs() < 1e-9);
         assert!((lat - expected_lat).abs() < 1e-6);
+    }
+
+    /// `[origin lat, origin lon, target lat, target lon, east m, north m]`: east/north are what
+    /// `gps_to_local` (WGS84) returns for the target, i.e. where the backend PLACES a zero datum
+    /// typed with that fix. The same table is asserted against the map's conversion in
+    /// src/utils/__tests__/coordinates.test.ts (#576 D36).
+    const BACKEND_VECTORS: [[f64; 6]; 10] = [
+        [30.0, 0.0, 30.009, 0.0, 0.0, 997.672_660_953_443_4],
+        [
+            30.0,
+            0.0,
+            30.0,
+            0.009,
+            868.376_518_687_013_1,
+            0.034_101_066_179_573_53,
+        ],
+        [0.0, 0.0, 0.009, 0.0, 0.0, 995.168_478_384_073_8],
+        [0.0, 0.0, 0.0, 0.009, 1_001.875_413_019_414_5, 0.0],
+        [
+            45.0,
+            -90.0,
+            45.05,
+            -90.05,
+            -3_938.910_955_978_453,
+            5_557.827_879_505_819,
+        ],
+        [
+            -30.0,
+            151.0,
+            -30.18,
+            151.18,
+            17_336.073_485_110_51,
+            -19_967.295_913_146_296,
+        ],
+        [
+            60.0,
+            25.0,
+            60.1,
+            24.9,
+            -5_563.148_767_087_514,
+            11_145.512_358_657_026,
+        ],
+        [
+            20.5,
+            -87.3,
+            20.45,
+            -87.2,
+            10_434.644_415_801_886,
+            -5_532.324_088_892_108,
+        ],
+        [
+            70.0,
+            0.0,
+            70.02,
+            0.3,
+            11_444.931_185_911_73,
+            2_259.398_833_161_237_2,
+        ],
+        [
+            -54.8,
+            -68.3,
+            -54.9,
+            -68.1,
+            12_830.611_701_495_578,
+            -11_150.369_721_606_98,
+        ],
+    ];
+
+    /// #576 D36: GlobalView drew a project through a flat 111 320 m/deg model while the backend
+    /// places datums on the WGS84 ellipsoid (and the map inverted through a sphere), so the same
+    /// station sat metres apart in the two views. `local_to_gps` must invert `gps_to_local`.
+    #[test]
+    fn local_to_gps_lands_a_station_on_the_fix_the_backend_placed_it_from() {
+        let mut failures = Vec::new();
+        for [olat, olon, lat, lon, east, north] in BACKEND_VECTORS {
+            let origin = GpsCoordinates::new(olat, olon, 0.0).unwrap();
+            let target = GpsCoordinates::new(lat, lon, 0.0).unwrap();
+            // The table itself is the backend's forward projection.
+            let (e, n) = gps_to_local(&target, &origin);
+            assert!((e - east).abs() < 1e-6 && (n - north).abs() < 1e-6);
+
+            let (lng2, lat2) = local_to_gps(east, north, &origin).unwrap();
+            let off_north = (lat2 - lat) * 111_132.0;
+            let off_east = (lng2 - lon) * 111_320.0 * lat.to_radians().cos();
+            if (lat2 - lat).abs() > 1e-9 || (lng2 - lon).abs() > 1e-9 {
+                failures.push(format!(
+                    "origin ({olat}, {olon}): station at the backend position of ({lat}, {lon}) \
+                     drawn at ({lat2:.7}, {lng2:.7}), {:.3} m off",
+                    off_north.hypot(off_east)
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
     }
 
     #[test]

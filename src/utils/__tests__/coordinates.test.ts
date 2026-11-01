@@ -96,6 +96,68 @@ describe('metersToMapCoords (GPS mode)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// One earth model with the backend (#576 D36)
+// ---------------------------------------------------------------------------
+
+// [origin lat, origin lon, target lat, target lon, east m, north m]. east/north
+// are what the backend's gps_to_local (crates/models/src/geo.rs, WGS84) returns
+// for the target - i.e. where the backend PLACES a zero datum typed with that
+// GPS fix. The same table is asserted against the Rust side in
+// src-tauri/src/commands/survey_geometry.rs, so the map, the GPS column and
+// GlobalView all invert the one model the backend projects with.
+const BACKEND_VECTORS: Array<[number, number, number, number, number, number]> = [
+  [30.0, 0.0, 30.009, 0.0, 0.0, 997.6726609534434],
+  [30.0, 0.0, 30.0, 0.009, 868.3765186870131, 0.03410106617957353],
+  [0.0, 0.0, 0.009, 0.0, 0.0, 995.1684783840738],
+  [0.0, 0.0, 0.0, 0.009, 1001.8754130194145, 0.0],
+  [45.0, -90.0, 45.05, -90.05, -3938.910955978453, 5557.827879505819],
+  [-30.0, 151.0, -30.18, 151.18, 17336.07348511051, -19967.295913146296],
+  [60.0, 25.0, 60.1, 24.9, -5563.148767087514, 11145.512358657026],
+  [20.5, -87.3, 20.45, -87.2, 10434.644415801886, -5532.324088892108],
+  [70.0, 0.0, 70.02, 0.3, 11444.93118591173, 2259.3988331612372],
+  [-54.8, -68.3, -54.9, -68.1, 12830.611701495578, -11150.36972160698],
+];
+
+/** Ground distance between two nearby fixes, in metres (for readable failures). */
+function metresApart(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const north = (lat2 - lat1) * 111_132;
+  const east = (lon2 - lon1) * 111_320 * Math.cos((lat1 * Math.PI) / 180);
+  return Math.hypot(north, east);
+}
+
+describe('WGS84 parity with the backend (#576 D36)', () => {
+  it.each(BACKEND_VECTORS)(
+    'origin (%d, %d): a station at the backend position of (%d, %d) is drawn on that fix',
+    (olat, olon, lat, lon, east, north) => {
+      const origin = { latitude: olat, longitude: olon };
+      const [lng2, lat2] = metersToMapCoords(east, north, origin);
+      const off = metresApart(lat, lon, lat2, lng2);
+      expect(off, `drawn ${off.toFixed(3)} m from its own fix`).toBeLessThan(0.001);
+      expect(Math.abs(lat2 - lat)).toBeLessThan(1e-9);
+      expect(Math.abs(lng2 - lon)).toBeLessThan(1e-9);
+    },
+  );
+
+  it.each(BACKEND_VECTORS)(
+    'origin (%d, %d): the GPS column shows (%d, %d) for that station',
+    (olat, olon, lat, lon, east, north) => {
+      const back = xyToGps(coord(east, north, 0), gps(olat, olon, 0));
+      const off = metresApart(lat, lon, back.latitude, back.longitude);
+      expect(off, `GPS column ${off.toFixed(3)} m off`).toBeLessThan(0.001);
+    },
+  );
+
+  it.each(BACKEND_VECTORS)(
+    'origin (%d, %d): a click on (%d, %d) maps to the local metres the backend uses',
+    (olat, olon, lat, lon, east, north) => {
+      const m = mapCoordsToMeters(lon, lat, { latitude: olat, longitude: olon });
+      const off = Math.hypot(m.x - east, m.y - north);
+      expect(off, `click lands ${off.toFixed(3)} m from the backend's position`).toBeLessThan(1e-6);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
 // gpsToXY / xyToGps round-trip
 // ---------------------------------------------------------------------------
 
