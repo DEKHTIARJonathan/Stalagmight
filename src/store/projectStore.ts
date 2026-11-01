@@ -44,7 +44,7 @@ import type { ReversedSection } from '../types/ipc/ReversedSection';
 import type { SpeleoManagedFile } from '../types/ipc/SpeleoManagedFile';
 import type { Config } from '../types/config';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, TmlRootPlacement, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, TmlRootPlacement, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion } from '../types/commands';
 
 /** Additive import-receipt provenance (#391) - see `import_sections` (Rust) for the fields' meaning. */
 export interface ImportReceiptProvenance {
@@ -58,6 +58,7 @@ import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
+import { createProjectIntegrityActions, type ProjectIntegrityActions } from './projectIntegrityActions';
 import { runProjectSwitch } from '../utils/projectTransition';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
@@ -120,12 +121,6 @@ function nextProjectTreeGeneration(): number {
   projectTreeGenerationCounter += 1;
   return projectTreeGenerationCounter;
 }
-
-// Monotonic sequence so overlapping fire-and-forget integrity checks are
-// last-issued-wins: an earlier check that resolves after a newer one was started
-// must not clobber the newer result (e.g. a manual save's check racing a Repair's
-// check on the same project, where the project-identity guard can't tell them apart).
-let integrityCheckSeq = 0;
 
 
 /**
@@ -209,7 +204,7 @@ export interface LoadProjectOutcome {
   superseded?: boolean;
 }
 
-export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState {
+export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectIntegrityActions {
   // State
   project: Project | null;
   /**
@@ -373,17 +368,10 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   openIntegrityDialog: () => void;
   /** Close the Review & Repair integrity dialog. */
   closeIntegrityDialog: () => void;
-  /** Re-check the open project's structural integrity, updating integrityIssues. */
-  checkProjectIntegrity: () => Promise<string[]>;
-  /** Repair structural integrity; returns {fixed, remaining} and refreshes
-   * integrityIssues from the true post-repair state (remaining>0 = detect-only
-   * issues that need manual attention). */
-  repairProjectIntegrity: () => Promise<IntegrityRepairResult>;
+  // checkProjectIntegrity / repairProjectIntegrity, and refreshWarnings / resolveWarning /
+  // unresolveWarning: see ProjectIntegrityActions
   /** Dismiss the integrity warning without repairing. */
   dismissIntegrityIssues: () => void;
-  refreshWarnings: () => Promise<void>;
-  resolveWarning: (sectionId: number, shotId: number, warningCode: string, comment?: string) => Promise<boolean>;
-  unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
   loadRecentProjects: () => Promise<void>;
   removeFromRecentProjects: (path: string) => Promise<CommandResult>;
   deleteProject: (path: string) => Promise<CommandResult>;
@@ -913,6 +901,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // Config (loadConfig / updateConfig / updateGasConfig / setConfig live in projectConfigActions.ts)
   ...createProjectConfigActions(set, get),
   ...createProjectHistoryBannerActions(set, get),
+  // Warnings and integrity (refreshWarnings / resolveWarning / unresolveWarning /
+  // checkProjectIntegrity / repairProjectIntegrity live in projectIntegrityActions.ts)
+  ...createProjectIntegrityActions(set, get),
 
   // Loading state actions
   startLoading: (projectName: string, projectPath: string) => {
@@ -1615,53 +1606,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  refreshWarnings: async () => {
-    try {
-      const warnings = await invokeIpc<ProjectWarning[]>('get_project_warnings', undefined, {
-        purpose: 'refresh validation warnings',
-      });
-      set({ warnings });
-    } catch (e) {
-      console.error('Failed to refresh warnings:', e);
-      set({ warnings: [] });
-    }
-  },
-
-  resolveWarning: async (sectionId: number, shotId: number, warningCode: string, comment?: string): Promise<boolean> => {
-    // GHOST-2: a survey mutation (resolved warnings are pushed content), see `executeCommand`.
-    if (refuseMutationDuringCarry()) return false;
-    try {
-      await invokeIpc(
-        'resolve_warning',
-        { sectionId, shotId, warningCode, comment },
-        { purpose: 'acknowledge validation warning', fields: { sectionId, shotId, warningCode } }
-      );
-      useSpeleoStore.getState().markForwardEdit();
-      await get().refreshWarnings();
-      return true;
-    } catch (e) {
-      // Surface failure to the caller (e.g. the shot no longer exists) so the
-      // resolve flow doesn't report a suppression that never persisted (#57).
-      console.error('Failed to resolve warning:', e);
-      return false;
-    }
-  },
-
-  unresolveWarning: async (sectionId: number, shotId: number, warningCode: string) => {
-    if (refuseMutationDuringCarry()) return; // GHOST-2, see `resolveWarning`
-    try {
-      await invokeIpc(
-        'unresolve_warning',
-        { sectionId, shotId, warningCode },
-        { purpose: 'reopen validation warning', fields: { sectionId, shotId, warningCode } }
-      );
-      useSpeleoStore.getState().markForwardEdit();
-      await get().refreshWarnings();
-    } catch (e) {
-      console.error('Failed to unresolve warning:', e);
-    }
-  },
-
   loadRecentProjects: async () => {
     try {
       // [perf] Hot path on every navigation to GlobalView. Surfaced in the
@@ -1676,129 +1620,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       set({ recentProjects: recent });
     } catch (e) {
       console.error('Failed to load recent projects:', e);
-    }
-  },
-
-  checkProjectIntegrity: async () => {
-    // The check is fire-and-forget (the post-load App effect, the after-every-
-    // command wrapper, a failed save) and the backend scans whatever project is
-    // currently loaded with no path argument. Correlate the result with the
-    // project that was active when it STARTED: if the user switches or closes
-    // projects while the check is in flight, a late-resolving result must not
-    // overwrite the new project's freshly-reset banner/save-block state.
-    // clientOpId bumps on every load (catches a switch); file_path catches a
-    // close (project → null).
-    const pathAtStart = get().project?.file_path ?? null;
-    const opAtStart = get().loading.clientOpId;
-    const mySeq = ++integrityCheckSeq;
-    try {
-      const result = await invokeIpc<IntegrityCheckResult>('check_project_integrity', undefined, {
-        purpose: 'check project structural integrity after load',
-      });
-      const cur = get();
-      if (
-        mySeq !== integrityCheckSeq ||
-        cur.project === null ||
-        (cur.project.file_path ?? null) !== pathAtStart ||
-        cur.loading.clientOpId !== opAtStart
-      ) {
-        // Drop this result if it has been superseded. Two ways:
-        // 1. A NEWER check was issued after this one started (last-issued-wins) -
-        //    so an earlier check can't clobber a fresher result even on the SAME
-        //    project (e.g. a save's fire-and-forget check racing a Repair's check,
-        //    which the project-identity guard below can't tell apart).
-        // 2. The project switched/closed mid-check. The explicit project===null
-        //    check is needed for the UNSAVED case: file_path stays null and
-        //    closeProject doesn't bump clientOpId, so without it a late result would
-        //    repopulate the banner with no project loaded (leaking onto the global view).
-        return [];
-      }
-      const issues = result.messages;
-      set((state) => {
-        // Keep a dismissal sticky across re-checks (e.g. after every save) as long
-        // as the issue SET is unchanged; reset it when the set genuinely changes so
-        // newly-appeared issues re-show the banner. Compare order-independently:
-        // the backend's message order isn't stable (orphan offset/comment messages
-        // come from HashMap iteration), so a positional compare could spuriously
-        // reset a dismissal - and thus resurface a banner - on a mere reorder.
-        const prev = [...state.integrityIssues].sort();
-        const next = [...issues].sort();
-        const unchanged =
-          prev.length === next.length && prev.every((v, i) => v === next[i]);
-        return {
-          integrityIssues: issues,
-          integritySaveBlocked: result.save_blocked,
-          integrityDismissed: unchanged ? state.integrityDismissed : false,
-          // Keep the Review & Repair dialog flag consistent with what's actually
-          // rendered (the dialog gate is integrityDialogOpen && issues.length > 0).
-          // When the last issue clears - via Repair or a command that resolved it -
-          // close the dialog explicitly, so the flag can't linger true-but-hidden
-          // and pop the dialog back open if a later issue reappears.
-          integrityDialogOpen: issues.length === 0 ? false : state.integrityDialogOpen,
-        };
-      });
-      return issues;
-    } catch (e) {
-      console.error('Failed to check project integrity:', e);
-      return [];
-    }
-  },
-
-  repairProjectIntegrity: async () => {
-    // GHOST-2: Repair mutates the survey. A refusal is thrown (the result type has no
-    // failure shape, and a zero result would read as a clean repair); the caller
-    // recognises it with `isMoveCarryRefusal` and shows nothing more.
-    const refused = refuseMutationDuringCarry();
-    if (refused) throw refused;
-    try {
-      const result = await invokeIpc<IntegrityRepairResult>('repair_project_integrity', undefined, {
-        purpose: 'repair project structural integrity',
-      });
-      // Repair mutates the project; refresh derived state so the UI reflects it.
-      await get().refreshProjectState();
-      // Repair records a snapshot-pair undo entry, so refresh undo/redo
-      // availability - the Undo button must enable so the user can revert it.
-      await get().refreshUndoState();
-      // Re-check rather than assuming clean: some issues are detect-only and not
-      // auto-repairable (a drifted aligned loop closure - recompute/remove it;
-      // non-finite shot geometry - fix the data), so reflect the TRUE post-repair
-      // state instead of clearing the banner on issues that still exist.
-      await get().checkProjectIntegrity();
-      // A repair that actually changed the project leaves unsaved edits: mark the
-      // store dirty so auto-save runs and the close prompt fires. Otherwise a
-      // project that was clean (isDirty false) when the user clicked Repair still
-      // looks "saved", and the fix is silently lost on close/reopen.
-      //
-      // Key on `result.changed`, NOT `result.fixed > 0`: the repair always
-      // re-solves offsets, which heals sub-tolerance drift that never counted as a
-      // violation, so a genuine fix can report fixed === 0. `changed` is the
-      // backend's honest "the snapshot was mutated" signal (the same condition
-      // under which it records the undo entry), so it dirties on those silent
-      // fixes too while still leaving a true no-op repair clean.
-      if (result.changed) {
-        set({ isDirty: true });
-        // #204/fix 8: a repair that actually mutated the project makes a remote
-        // SpeleoDB project un-pushed-dirty too - mirror the backend dirty bit (as
-        // executeCommand/executeUndoRedo do) so the status button offers push &
-        // prompts for a commit message rather than reading "editing clean". No-op
-        // for a local project (no link).
-        // [#303] `repair_integrity` pairs it with speleodb_forget_unwind_position under
-        // the same `changed` guard this branch is under (commands.rs:467-473), so mirror
-        // both halves.
-        useSpeleoStore.getState().markForwardEdit();
-      }
-      return result;
-    } catch (e) {
-      // Do NOT fabricate a successful no-op { fixed: 0, remaining: 0 }: a thrown
-      // repair (an IPC rejection during window/app teardown, a serialization
-      // failure, or a backend panic - note the command itself is infallible, so a
-      // normal backend Err is not a trigger) must be distinguishable from a genuine
-      // clean repair. Otherwise the caller shows a fake "Repaired 0 issues" success
-      // toast and swallows the error. Re-throw so the caller surfaces the failure
-      // and keeps the Repair entry point open. (integrityIssues / integritySaveBlocked
-      // are untouched here, so the banner and save-block stay correct.)
-      console.error('Failed to repair project integrity:', e);
-      throw e;
     }
   },
 
