@@ -425,8 +425,13 @@ export default function DataTable({ sections }: DataTableProps) {
       // a stale flag here would swallow the next genuinely external selection.
       if (referenceChanged && internalSelectionRef.current) {
         internalSelectionRef.current = false;
+        return;
       }
-      return;
+      // Same reference: the effect re-ran for another dependency.
+      if (!referenceChanged) return;
+      // The same selection made AGAIN from outside (the map clicked on the shot
+      // already selected) still asks for its row: the cursor may have moved since
+      // onto a row that selects nothing, such as a draft row (#576 NF-GRID-1).
     }
 
     // Skip scroll/view-switch for selections made from within the table

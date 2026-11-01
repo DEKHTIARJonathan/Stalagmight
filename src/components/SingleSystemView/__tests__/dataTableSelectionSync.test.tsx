@@ -141,6 +141,28 @@ describe('DataTable selection sync with the map (D21)', () => {
     expect(activeRow()).toBe(1);
   });
 
+  // #576 NF-GRID-1: a draft row is not a shot, so moving the cursor onto one
+  // leaves the store selection on the shot the cursor came from. Clicking that
+  // same shot on the map again is then a same-value selection - which the table
+  // ignored, leaving the cursor on the draft row while the map showed the shot.
+  it('moves the cursor back from a draft row when the same shot is selected again', () => {
+    render(<DataTable sections={[section]} />);
+
+    selectExternally({ type: 'shot', sectionId: 1, shotId: 3 });
+    expect(activeRow()).toBe(2);
+
+    // Down onto the end draft row (row 3): the selection stays on shot 3.
+    act(() => {
+      fireEvent.keyDown(scroller(), { key: 'ArrowDown' });
+    });
+    expect(activeRow()).toBe(3);
+    expect(useUIStore.getState().selection).toMatchObject({ type: 'shot', shotId: 3 });
+
+    // The map selects shot 3 again.
+    selectExternally({ type: 'shot', sectionId: 1, shotId: 3 });
+    expect(activeRow()).toBe(2);
+  });
+
   it('does the same in the stations view', () => {
     render(<DataTable sections={[section]} />);
 
