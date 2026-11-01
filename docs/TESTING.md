@@ -106,7 +106,9 @@ Three workflows gate `master`:
   rule itself is pinned.
 - **`e2e-smoke.yml` (`smoke`)** - in order: `pnpm lint:e2e-parallel` (the
   Playwright parallel-safety scanner), `pnpm typecheck:playwright`,
-  `pnpm test:mock-contract`, `pnpm lint:pw-timing:test`, then the `@smoke`
+  `pnpm test:mock-contract`, `pnpm test:pw-timing` (the per-test timing
+  reporter's self-test - the timing report is observability, not a time
+  budget), then the `@smoke`
   subset, Chromium-only against a built bundle served by `vite preview`. All
   four checks run before the browser install, so a cheap failure never pays for
   Chromium. Any of the five can fail the job. The typecheck and mock-contract

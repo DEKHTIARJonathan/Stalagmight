@@ -85,7 +85,7 @@ cargo test --locked --manifest-path src-tauri/vendor/compass_data/Cargo.toml   #
 pnpm lint:e2e-parallel                                    # Playwright parallel-safety
 pnpm typecheck:playwright                                 # e2e-playwright specs + IPC mock
 pnpm test:mock-contract                                   # IPC mock <-> generate_handler! contract
-pnpm lint:pw-timing:test                                  # timing reporter self-test (a report, not a time budget)
+pnpm test:pw-timing                                       # timing reporter self-test (a report, not a time budget)
 pnpm test:ui:smoke                                        # the @smoke merge gate (needs a display, e.g. xvfb-run)
 # plus the specs for the feature you changed: pnpm exec playwright test e2e-playwright/<feature>.spec.ts
 # --- leak-scan job (leak-scan.yml; runs on every change, docs included) ---

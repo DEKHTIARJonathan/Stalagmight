@@ -36,7 +36,7 @@
     "lint:test-ids:test": "node scripts/check-test-ids.test.mjs",
     "lint:prepush-checklist": "node scripts/check-prepush-checklist.mjs",
     "lint:prepush-checklist:test": "node scripts/check-prepush-checklist.test.mjs",
-    "lint:pw-timing:test": "node scripts/pw-timing-reporter.test.mjs && node scripts/pw-timing-summary.test.mjs",
+    "test:pw-timing": "node scripts/pw-timing-reporter.test.mjs && node scripts/pw-timing-summary.test.mjs",
     "coverage:ui": "E2E_COVERAGE=1 VITE_COVERAGE=1 pnpm test:ui",
     "coverage:merge": "node scripts/merge-coverage.mjs",
     "gen:ipc-types": "cargo run --manifest-path src-tauri/Cargo.toml --features ipc-typegen --example gen_ipc_types",

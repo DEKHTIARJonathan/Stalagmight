@@ -131,7 +131,7 @@ same build lock.
 | Always | `pnpm lint:no-em-dash:test && pnpm lint:no-em-dash`; `pnpm lint:private-leaks:test && pnpm lint:private-leaks` |
 | `src-tauri/` | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` and `for m in src-tauri/crates/*/Cargo.toml; do cargo fmt --manifest-path "$m" --check; done`; `pnpm lint:rust-file-size:test && pnpm lint:rust-file-size`; `TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --workspace --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets` |
 | `src/` | `pnpm tsc --noEmit`; `pnpm lint:ts-file-size:test && pnpm lint:ts-file-size`; `pnpm lint:readonly-gates:test && pnpm lint:readonly-gates` |
-| `e2e-playwright/` or `playwright.config.ts` | `pnpm typecheck:playwright`; `pnpm test:mock-contract`; `pnpm lint:e2e-parallel`; `pnpm lint:pw-timing:test` |
+| `e2e-playwright/` or `playwright.config.ts` | `pnpm typecheck:playwright`; `pnpm test:mock-contract`; `pnpm lint:e2e-parallel`; `pnpm test:pw-timing` |
 
 Use the repository-pinned pnpm through Corepack when the shell does not already
 resolve the pinned version.

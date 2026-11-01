@@ -187,9 +187,9 @@ test('a classification row whose step no longer exists is reported stale', () =>
 // --- reverse direction: checklist names a script package.json does not define -------------
 
 test('a checklist `pnpm <script>` that package.json lacks fails (renamed script)', () => {
-  const r = run({ [WF]: workflow('      - run: pnpm lint:foo'), 'CLAUDE.md': checklist(['pnpm lint:foo', 'pnpm lint:pw-timing:test']) });
+  const r = run({ [WF]: workflow('      - run: pnpm lint:foo'), 'CLAUDE.md': checklist(['pnpm lint:foo', 'pnpm lint:renamed-away']) });
   assert.equal(r.problems.length, 1);
-  assert.match(r.problems[0], /"pnpm lint:pw-timing:test"/);
+  assert.match(r.problems[0], /"pnpm lint:renamed-away"/);
 });
 
 // --- fail closed ------------------------------------------------------------------------------

@@ -54,13 +54,14 @@ jobs:
       # deliberate: this is the copy that closes the gap, so do not delete it.
       - name: Mock IPC contract
         run: pnpm test:mock-contract
-      # The timing instrumentation below decides which tests get cut, so its
-      # arithmetic is pinned by fixture tests (hook attribution, Worker Cleanup
-      # exclusion, failed-run flagging, workflow-command sanitizing). Cheap, and
-      # it fails before the slow browser install. TEMPORARY, with the rest of the
-      # instrumentation.
-      - name: Timing reporter - fixture tests
-        run: pnpm lint:pw-timing:test
+      # The per-test timing report below is what the @smoke set's time budget is
+      # managed with, so its arithmetic is pinned by fixture tests (hook
+      # attribution, Worker Cleanup exclusion, failed-run flagging,
+      # workflow-command sanitizing). This is the reporter's self-test, not a
+      # time budget: nothing here fails because a test got slow. Cheap, and it
+      # fails before the slow browser install.
+      - name: Timing reporter - self-test
+        run: pnpm test:pw-timing
       # Cache the Chromium browser (~120 MB) so it isn't re-downloaded each run.
       - name: Resolve Playwright version
         id: pw
@@ -77,7 +78,9 @@ jobs:
       - name: Install Playwright system deps (browser restored from cache)
         if: steps.pw-cache.outputs.cache-hit == 'true'
         run: pnpm exec playwright install-deps chromium
-      # TEMPORARY INSTRUMENTATION (remove once the @smoke pare-down lands).
+      # Per-test timing, kept permanently (#576 E5-D3): the @smoke set is held to
+      # a time budget (docs/plans/2026-07-25_smoke-pare-down.md), and this report
+      # is the only per-test cost data CI has to manage it with.
       # CI gives no per-test timing: the `github` reporter prints a line only for
       # tests that failed or flaked, so a green run tells us the suite took ~6.5
       # min but not which tests spent it. A second reporter adds a
@@ -114,7 +117,8 @@ jobs:
             || echo "⏱️ **Smoke timing** - could not parse results (see job log)." >> "$GITHUB_STEP_SUMMARY"
       # Machine-readable backup so the full per-test report can be scraped across
       # several runs (`gh run download <id> -n smoke-timing`). Short retention:
-      # this is transient pare-down data, not a durable debugging artifact.
+      # each run's numbers are superseded by the next, so a week is enough to
+      # compare a handful of runs.
       - name: Upload smoke timing report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

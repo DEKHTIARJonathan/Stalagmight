@@ -89,8 +89,8 @@ seconds, and use hook % only to locate *where* the cost is charged.
 |---|---|
 | `scripts/pw-timing-reporter.mjs` | Custom Playwright reporter. Uses `onStepEnd` to capture `category: 'hook'` durations, so per-test cost splits into hook vs body. Writes `PW_TIMING_OUTPUT` (default `playwright-report/timing.json`). Collapses retries into one row, charging all attempts. |
 | `scripts/pw-timing-summary.mjs` | Renders that into a ranked markdown table (by file and by test). Accepts either the reporter's output (has hooks) or a built-in json report (reports hooks as `n/a`). Appends to `$GITHUB_STEP_SUMMARY` when set. |
-| `scripts/pw-timing-{reporter,summary}.test.mjs` | Fixture tests, in the repo's pure-Node `lint:*:test` style. `pnpm lint:pw-timing:test`, run in the smoke job before the browser install. Each pins a bug that produced a confident WRONG number rather than an error. |
-| `.github/workflows/e2e-smoke.yml` | Runs the reporter, prints the ranked table on the run summary page, uploads `timing.json` as the `smoke-timing` artifact (7-day retention). Marked **TEMPORARY**; remove when the pare-down lands. |
+| `scripts/pw-timing-{reporter,summary}.test.mjs` | Fixture tests, in the repo's pure-Node `*.test.mjs` style. `pnpm test:pw-timing` (renamed from `lint:pw-timing:test` in #576 - it is the reporter's self-test, not a lint or a time budget), run in the smoke job before the browser install. Each pins a bug that produced a confident WRONG number rather than an error. |
+| `.github/workflows/e2e-smoke.yml` | Runs the reporter, prints the ranked table on the run summary page, uploads `timing.json` as the `smoke-timing` artifact (7-day retention). Originally marked temporary; kept permanently since #576 (E5-D3), because the smoke set's time budget is managed with it. |
 
 ### Reading a CI run's timing
 
