@@ -1782,11 +1782,20 @@ pub fn convert_compass_to_import_configs(
         let parent_section = placement_parent[ci].map(|p| chains[p].section_index);
         for (k, name) in chain.names.iter().enumerate() {
             if let Some(&(canon_sec, canon_st)) = canonical.get(name.as_str()) {
-                if canon_sec == chain.section_index {
-                    continue; // This chain owns the canonical occurrence.
+                // The canonical occurrence itself needs no closure.
+                if canon_sec == chain.section_index && canon_st == k as u32 {
+                    continue;
                 }
-                // Skip the spanning-tree merge edge for THIS chain.
-                if Some(k as u32) == merge_st && parent_section == Some(canon_sec) {
+                // A station revisited later in the SAME chain (a loop closed
+                // inside one survey, A1 -> A2 -> A3 -> A1) is the same physical
+                // station as its canonical occurrence and needs an intra-section
+                // closure, so only a cross-section tie can be the spanning-tree
+                // merge edge this chain was placed by (the Walls rule,
+                // `walls::convert::build_closures`; #576 B3).
+                if canon_sec != chain.section_index
+                    && Some(k as u32) == merge_st
+                    && parent_section == Some(canon_sec)
+                {
                     continue;
                 }
                 let key = (chain.section_index, k as u32, canon_sec, canon_st);
@@ -3840,6 +3849,47 @@ mod tests {
             not_overridden[0],
             [Some(0.3048); 4],
             "without O the survey's own F applies"
+        );
+    }
+
+    /// #576 B3: a survey that closes a loop on itself (A1 -> A2 -> A3 -> A1)
+    /// is one chain whose last station repeats its first. That repeat is the
+    /// same physical station, so it needs a closure; the Compass converter
+    /// skipped every station of the chain owning the canonical occurrence and
+    /// emitted none, so the misclosure was never reported or distributed. The
+    /// Walls converter had the same bug, fixed and pinned by
+    /// `contiguous_self_loop_emits_closure`.
+    #[test]
+    fn a_loop_inside_one_survey_gets_a_closure() {
+        let (configs, closures, warnings) = convert_text(
+            "DDDDLRUDLADN",
+            &[
+                "A1 A2 10.00 90.00 0.00 1.00 1.00 1.00 1.00",
+                "A2 A3 10.00 0.00 0.00 1.00 1.00 1.00 1.00",
+                "A3 A1 14.14 225.00 0.00 1.00 1.00 1.00 1.00",
+            ],
+        );
+        println!(
+            "sections {}, shots {}, closures {closures:?}, warnings {warnings:?}",
+            configs.len(),
+            all_shots(&configs).len()
+        );
+        assert_eq!(configs.len(), 1, "premise: one chain, one section");
+        let ties: Vec<(u32, u32, u32, u32)> = closures
+            .iter()
+            .map(|c| {
+                (
+                    c.from_section_index,
+                    c.from_station_index,
+                    c.to_section_index,
+                    c.to_station_index,
+                )
+            })
+            .collect();
+        assert_eq!(
+            ties,
+            [(0, 3, 0, 0)],
+            "the revisited A1 (station 3) ties to its first occurrence (station 0)"
         );
     }
 }
