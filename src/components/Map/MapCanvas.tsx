@@ -3921,6 +3921,11 @@ function MapCanvas() {
       // exactly like a plain one. Ctrl+click's other meaning is the selection
       // toggle, which `SurveyLayer.handleMapClick` already ignores under the
       // move tools, so there is nothing for the modifier to protect here.
+      //
+      // Only the primary button drops, like placement's confirm and the zoom
+      // box: a still right- or middle-click leaves the ghost in flight, and
+      // Escape stays the way to cancel it.
+      if (e.button !== 0) return;
       if (press === null) return;
       if (Math.hypot(e.clientX - press.x, e.clientY - press.y) >= CUSTOM_PAN_CLAIM_PX) return;
       handleMoveDragEnd();

@@ -430,6 +430,34 @@ test.describe('Map direct manipulation (#409)', () => {
     expect(centerDelta(await getMapCenter(page), centerBeforeDrop)).toBe(0);
   });
 
+  test('Move Station: a still right-click with a ghost in flight is not a drop', async ({ page }) => {
+    await page.keyboard.press('t');
+    await waitForActiveTool(page, 'move_station');
+
+    const station = await mostIsolatedStation(page);
+    const box = await canvasBox(page);
+    await page.mouse.click(box.x + station.x, box.y + station.y);
+    await expect.poll(() => getDragGhostState(page), { timeout: 5000 }).not.toBeNull();
+
+    // Carry the ghost to empty map, then press and release the RIGHT button
+    // without travel: the press stays put exactly like a drop click, so only
+    // the button tells the two apart.
+    const dropAt = await findEmptyPoint(page);
+    await page.mouse.move(box.x + dropAt.x, box.y + dropAt.y, { steps: 10 });
+    await page.mouse.click(box.x + dropAt.x, box.y + dropAt.y, { button: 'right' });
+
+    // A settle rather than a poll: this proves the commit does NOT happen, and
+    // a poll would accept the pre-commit value.
+    await page.waitForTimeout(300);
+    expect(await getCommittedMoves(page), 'a right-click is not a drop').toBe(0);
+    expect(await getDragGhostState(page), 'the ghost is still in flight').not.toBeNull();
+
+    // The left still click on the same spot is still the drop.
+    await page.mouse.click(box.x + dropAt.x, box.y + dropAt.y);
+    await expect.poll(() => getCommittedMoves(page), { timeout: 5000 }).toBe(1);
+    await expect.poll(() => getDragGhostState(page), { timeout: 5000 }).toBeNull();
+  });
+
   test('releasing a drag over floating chrome still ends the drag', async ({ page }) => {
     await waitForActiveTool(page, 'select');
 
