@@ -1142,6 +1142,43 @@ fn a_mid_survey_declination_change_bakes_true_north_bearings_under_a_grid() {
     );
 }
 
+/// #576 (B26): the fold-in fallback above re-wraps `reading + correction`, and a
+/// bare `rem_euclid(360.0)` returns EXACTLY `360.0` for a tiny negative sum.
+/// `360.0` trips `INVALID_AZIMUTH`, an error the user cannot dismiss. Ordinary
+/// data reaches it: `0.7 + IncA 0.1` is `0.7999999999999999` in f64, so the
+/// shot's own `Decl=-0.8` leaves about `-1.1e-16` - true north.
+#[test]
+fn a_folded_declination_that_cancels_the_reading_wraps_to_north_not_360() {
+    let srv = "#UNITS meters order=DAV Decl=2\n\
+               A B 10 100 0\n\
+               #UNITS IncA=0.1 Decl=-0.8\n\
+               B C 10 0.7 0\n";
+    let (configs, _c, warnings) = convert_one(parse_srv(srv));
+    let shots = &configs[0].shots;
+    assert_eq!(shots.len(), 2, "premise: one chain of two shots");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("more than one declination")),
+        "premise: the per-shot fold-in ran: {warnings:?}"
+    );
+    let shot = &shots[1];
+    println!(
+        "B->C imported azimuth_in = {:?}, azimuth_out = {:?}",
+        shot.azimuth_in, shot.azimuth_out
+    );
+    for (name, az) in [
+        ("azimuth_in", shot.azimuth_in),
+        ("azimuth_out", shot.azimuth_out),
+    ] {
+        assert!(
+            (0.0..360.0).contains(&az),
+            "{name} = {az:?} is outside [0, 360) and trips INVALID_AZIMUTH"
+        );
+        assert!(approx(az, 0.0), "{name} = {az:?}, expected north");
+    }
+}
+
 /// A chain whose vectors agree on the NUMBER but disagree on where it came from
 /// must not attribute the whole section to whichever vector happened to be
 /// first: the provenance is what the UI explains and what a policy change may

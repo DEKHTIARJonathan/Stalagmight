@@ -327,7 +327,7 @@ pub fn convert_walls_to_import_configs(
                     v.from, v.to
                 ));
             }
-            let measured = |a: Option<f64>| a.map(|x| x.rem_euclid(360.0)).unwrap_or(0.0);
+            let measured = |a: Option<f64>| a.map(crate::models::normalize_azimuth).unwrap_or(0.0);
             let azimuth_in = measured(v.azimuth_in);
             let azimuth_out = measured(v.azimuth_out);
 
@@ -600,8 +600,10 @@ pub fn convert_walls_to_import_configs(
                     Some(_) => {
                         for (shot, &idx) in shots.iter_mut().zip(chain.iter()) {
                             let correction = survey.vectors[idx].azimuth_correction;
-                            shot.azimuth_in = (shot.azimuth_in + correction).rem_euclid(360.0);
-                            shot.azimuth_out = (shot.azimuth_out + correction).rem_euclid(360.0);
+                            shot.azimuth_in =
+                                crate::models::normalize_azimuth(shot.azimuth_in + correction);
+                            shot.azimuth_out =
+                                crate::models::normalize_azimuth(shot.azimuth_out + correction);
                         }
                         warnings.push(format!(
                             "Section '{}': the shots declare more than one declination, which a \

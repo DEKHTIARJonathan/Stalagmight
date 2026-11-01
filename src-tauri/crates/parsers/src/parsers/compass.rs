@@ -769,7 +769,7 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     }
     // #438: measured, not corrected. The survey's declination and convergence
     // live on `ctx.azimuth_reference` and are applied when geometry is computed.
-    let azimuth_final = azimuth.rem_euclid(360.0);
+    let azimuth_final = crate::models::normalize_azimuth(azimuth);
     let length_m = length * ctx.length_to_m;
     // Single normalisation point: convert whatever Compass unit the
     // survey declared into degrees so the rest of the pipeline
@@ -858,9 +858,9 @@ fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
         }
     }
     // Measured, like the fore-sight (#438): no declination or convergence here.
-    let back_az_measured = back_az.rem_euclid(360.0);
+    let back_az_measured = crate::models::normalize_azimuth(back_az);
     // Flip 180° so the bearing points FROM → TO, matching azimuth_in.
-    let azimuth_out_fore_direction = (back_az_measured + 180.0).rem_euclid(360.0);
+    let azimuth_out_fore_direction = crate::models::normalize_azimuth(back_az_measured + 180.0);
     // Convert the back-inclination into degrees first - Grads / DDD.MM /
     // PercentGrade / DepthGauge are NOT pass-through.  After conversion,
     // back_inc_deg is the TO→FROM slope in Compass +up; the double sign
@@ -2909,6 +2909,39 @@ mod tests {
             (reference.to_true(90.0) - 95.0).abs() < 1e-9,
             "the corrected bearing is what the importer used to store"
         );
+    }
+
+    /// #576 (B26): `shot_geometry` wrapped the bearing with a bare
+    /// `rem_euclid(360.0)`, which returns EXACTLY `360.0` for a tiny negative
+    /// reading. `360.0` trips `INVALID_AZIMUTH`, an error the user cannot
+    /// dismiss.
+    #[test]
+    fn a_tiny_negative_bearing_imports_as_north_not_360() {
+        let dir = tempfile::tempdir().unwrap();
+        let dat = dir.path().join("tiny-negative-bearing.dat");
+        let text = synthetic_dat("Synthetic Cave")
+            .replace("A1 A2 10.00 90.00 ", "A1 A2 10.00 -0.0000000000000001 ");
+        assert!(
+            text.contains("-0.0000000000000001"),
+            "premise: bearing replaced"
+        );
+        std::fs::write(&dat, text).unwrap();
+
+        let parsed = parse_compass(&dat).unwrap();
+        let (configs, _closures, _warnings) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+
+        let shot = &configs[0].shots[0];
+        for (name, az) in [
+            ("azimuth_in", shot.azimuth_in),
+            ("azimuth_out", shot.azimuth_out),
+        ] {
+            assert!(
+                (0.0..360.0).contains(&az) && az.abs() < 1e-9,
+                "{name} = {az:?}: expected north in [0, 360), not a value that trips \
+                 INVALID_AZIMUTH"
+            );
+        }
     }
 
     /// An ENTERED zero is a declaration: the surveyor wrote `DECLINATION: 0.00`

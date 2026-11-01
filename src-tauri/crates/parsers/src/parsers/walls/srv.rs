@@ -300,7 +300,9 @@ pub(crate) fn parse_vector_line(
         let azimuth_deg = if horiz < 1e-9 {
             None
         } else {
-            Some((east.atan2(north).to_degrees() + units.rect).rem_euclid(360.0))
+            Some(crate::models::normalize_azimuth(
+                east.atan2(north).to_degrees() + units.rect,
+            ))
         };
         let inc_up = up_rect.atan2(horiz).to_degrees();
         // RECT vectors carry the same trailing `<L R U D>` passage dimensions as
@@ -527,13 +529,15 @@ pub(crate) fn extract_spans(body: &str) -> ExtractedSpans {
 
 /// Combine an azimuth fs/bs pair into two forward-direction degree readings.
 fn combine_azimuth(az: &FsBs, units: &WallsUnits) -> (Option<f64>, Option<f64>) {
-    let fs = az.fs.map(|v| (v + units.inca).rem_euclid(360.0));
+    let fs = az
+        .fs
+        .map(|v| crate::models::normalize_azimuth(v + units.inca));
     let bs_forward = az.bs.map(|v| {
         let corrected = v + units.incab;
         if units.type_ab_corrected {
-            corrected.rem_euclid(360.0)
+            crate::models::normalize_azimuth(corrected)
         } else {
-            (corrected + 180.0).rem_euclid(360.0)
+            crate::models::normalize_azimuth(corrected + 180.0)
         }
     });
     if units.type_ab_no_avg {

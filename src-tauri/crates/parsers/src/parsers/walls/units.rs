@@ -653,7 +653,7 @@ pub(crate) fn parse_quadrant(t: &str, unit: AngleUnit) -> Option<f64> {
         ('S', 'W') => 180.0 + mag,
         _ => return None,
     };
-    Some(az.rem_euclid(360.0))
+    Some(crate::models::normalize_azimuth(az))
 }
 
 /// Parse an angle token (degrees) with optional `d`/`g`/`m`/`p` suffix, a
