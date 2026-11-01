@@ -130,6 +130,18 @@ pub struct UndoEntry {
     /// to read; the command is still structured, so it has to be measured deliberately.
     #[serde(default, skip_serializing)]
     pub command_bytes: Option<usize>,
+    /// [#576 A18(b)] When a redo last replayed this entry back onto the undo stack, if
+    /// it ever did in this session. Transient: never persisted, and `None` for every
+    /// entry built any other way.
+    ///
+    /// A replay keeps the entry's original `timestamp` on purpose - re-stamping would
+    /// lift an inherited entry above the watermark and re-upload history that is
+    /// already committed. But the post-push cut ([`UndoStack::drop_pushed_entries`])
+    /// reads that timestamp as "pushed before the upload", so a redo made while the
+    /// upload ran was cut although the uploaded snapshot never contained it. This is
+    /// what tells the cut the entry came back afterwards.
+    #[serde(skip)]
+    pub replayed_at: Option<DateTime<Utc>>,
 }
 
 /// Data needed to undo a command
@@ -612,8 +624,8 @@ impl UndoStack {
     /// beneath it, nor at or below the inherited-history watermark.
     ///
     /// Everything that reasons about this stack by time assumes later-in-the-stack means
-    /// later-in-time - `drop_entries_up_to` says so outright and uses `partition_point`,
-    /// which silently returns a meaningless boundary if the order does not hold. Wall time
+    /// later-in-time - `drop_pushed_entries` says so outright and cuts a PREFIX, which
+    /// is a meaningless boundary if the order does not hold. Wall time
     /// alone does not guarantee it: an entry can arrive from a peer whose clock ran ahead
     /// (a chain step loads a past commit's history, stamped on the machine that authored
     /// it), and a local clock can be corrected backwards under us.
@@ -661,6 +673,7 @@ impl UndoStack {
     /// Push a command with its undo data to the undo stack
     pub fn push_with_data(&mut self, command: Command, undo_data: UndoData) {
         let entry = UndoEntry {
+            replayed_at: None,
             // Measured once, HERE, and never again: this runs per edit, while
             // `estimated_size` runs on every trim after every edit. See the field's doc.
             command_bytes: serde_json::to_string(&command).ok().map(|json| json.len()),
@@ -711,9 +724,23 @@ impl UndoStack {
     }
 
     /// Push back to undo stack (for redo operations)
-    pub fn push_undo(&mut self, entry: UndoEntry) {
+    ///
+    /// [#576 A18(b)] Marks the entry as replayed NOW ([`UndoEntry::replayed_at`]) and
+    /// keeps its original timestamp, so the post-push cut can tell a redo made during
+    /// an upload from an entry the upload carried.
+    pub fn push_undo(&mut self, mut entry: UndoEntry) {
+        entry.replayed_at = Some(Utc::now());
         self.push_undo_tracked(entry);
         // Don't clear redo stack when pushing for redo
+        self.enforce_depth_limit();
+    }
+
+    /// Put back an entry whose undo FAILED, exactly as it was popped.
+    ///
+    /// Not [`Self::push_undo`]: nothing was replayed, so the entry keeps whatever
+    /// replay mark it already carried rather than gaining a fresh one.
+    pub fn restore_undo(&mut self, entry: UndoEntry) {
+        self.push_undo_tracked(entry);
         self.enforce_depth_limit();
     }
 
@@ -772,14 +799,53 @@ impl UndoStack {
     ///
     /// Entries with NO timestamp are legacy persisted ones, which necessarily predate
     /// this session's push, so they are dropped.
+    ///
+    /// [#576 A18(b)] An entry a redo replayed AFTER the cutoff survives even though its
+    /// (original) timestamp is older: see [`Self::drop_pushed_entries`], which this is
+    /// with nothing known about what the uploaded snapshot carried.
     pub fn drop_entries_up_to(&mut self, cutoff: DateTime<Utc>) -> usize {
+        self.drop_pushed_entries(cutoff, None)
+    }
+
+    /// [`Self::drop_entries_up_to`] for a caller that also knows `captured_through`:
+    /// the newest undo stamp the uploaded snapshot itself carried (`None` when it
+    /// carried no timestamped history).
+    ///
+    /// An entry is the upload's to drop when the snapshot carried it, and a replay
+    /// is the one case its timestamp cannot answer that alone (#576 A18(b)). A redo
+    /// keeps the entry's original stamp, which sits below the cutoff, so:
+    ///
+    /// - stamped at or before `captured_through`: the snapshot held the entry, so it
+    ///   is in the commit - dropped even if it was undone and redone again during the
+    ///   upload (that round trip leaves the state the commit already has);
+    /// - otherwise, at or before `cutoff` and not replayed after it: dropped as before;
+    /// - replayed after `cutoff` and newer than anything the snapshot held: the entry
+    ///   was on the redo stack when the snapshot was taken (an undone entry sits above
+    ///   every entry left on the undo stack), so the upload does NOT contain it - it
+    ///   stays, with its dirty bit, for the next push.
+    pub fn drop_pushed_entries(
+        &mut self,
+        cutoff: DateTime<Utc>,
+        captured_through: Option<DateTime<Utc>>,
+    ) -> usize {
         let before = self.undo_stack.len();
+        let carried_by_push = |entry: &UndoEntry| {
+            let Some(ts) = entry.timestamp else {
+                return true;
+            };
+            captured_through.is_some_and(|captured| ts <= captured)
+                || (ts <= cutoff && entry.replayed_at.is_none_or(|at| at <= cutoff))
+        };
         // Timestamps are assigned in push order, so the entries to drop are a PREFIX -
-        // a front eviction, exactly like a trim. `partition_point` finds the boundary
-        // without scanning the tail.
+        // a front eviction, exactly like a trim. The longest carried prefix, found by
+        // scanning rather than `partition_point`: a replayed entry is kept by its replay
+        // instant, not its stamp, and whatever order a skewed clock produces, a cut that
+        // stops at the first kept entry can never drop one the upload did not carry.
         let keep_from = self
             .undo_stack
-            .partition_point(|e| e.timestamp.is_none_or(|ts| ts <= cutoff));
+            .iter()
+            .position(|entry| !carried_by_push(entry))
+            .unwrap_or(before);
         let dropped_bytes = self
             .undo_stack
             .drain(..keep_from)
@@ -979,6 +1045,7 @@ mod tests {
         stack.push_with_data(test_create_section_command("First"), UndoData::None);
         stack.push_with_data(test_create_section_command("Second"), UndoData::None);
         stack.push_redo(UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Redo"),
             undo_data: UndoData::None,
@@ -999,6 +1066,7 @@ mod tests {
     fn test_push_redo_enables_redo() {
         let mut stack = UndoStack::new();
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Test"),
             undo_data: UndoData::None,
@@ -1016,12 +1084,14 @@ mod tests {
         let mut stack = UndoStack::new();
 
         stack.push_redo(UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("First"),
             undo_data: UndoData::None,
             timestamp: None,
         });
         stack.push_redo(UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Second"),
             undo_data: UndoData::None,
@@ -1048,6 +1118,7 @@ mod tests {
     fn test_peek_redo_does_not_modify_stack() {
         let mut stack = UndoStack::new();
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Test"),
             undo_data: UndoData::None,
@@ -1067,12 +1138,14 @@ mod tests {
 
         // Add some redo entries
         stack.push_redo(UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Redo1"),
             undo_data: UndoData::None,
             timestamp: None,
         });
         stack.push_redo(UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Redo2"),
             undo_data: UndoData::None,
@@ -1094,6 +1167,7 @@ mod tests {
 
         // Add redo entries
         stack.push_redo(UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Redo"),
             undo_data: UndoData::None,
@@ -1102,6 +1176,7 @@ mod tests {
 
         // push_undo is used for redo operations and should NOT clear redo
         stack.push_undo(UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Restored"),
             undo_data: UndoData::None,
@@ -1181,6 +1256,7 @@ mod tests {
         // Build up a redo stack by pushing then undoing
         for i in 0..10 {
             stack.push_redo(UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: test_create_section_command(&format!("Redo {i}")),
                 undo_data: UndoData::None,
@@ -1370,6 +1446,7 @@ mod tests {
     #[test]
     fn test_serialize_entry_basic() {
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Serialize Test"),
             undo_data: UndoData::None,
@@ -1387,6 +1464,7 @@ mod tests {
     #[test]
     fn test_deserialize_entry_basic() {
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Deserialize Test"),
             undo_data: UndoData::InverseCommand(test_delete_section_command(42)),
@@ -1422,6 +1500,7 @@ mod tests {
     #[test]
     fn test_serialize_entry_with_section_snapshot() {
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_delete_section_command(5),
             undo_data: UndoData::SectionSnapshot {
@@ -1457,6 +1536,7 @@ mod tests {
         let entries: Vec<(String, String)> = (0..3)
             .map(|i| {
                 let entry = UndoEntry {
+                    replayed_at: None,
                     command_bytes: None,
                     command: test_create_section_command(&format!("Section {i}")),
                     undo_data: UndoData::InverseCommand(test_delete_section_command(i as u32)),
@@ -1491,6 +1571,7 @@ mod tests {
         let entries: Vec<(String, String)> = (0..5)
             .map(|i| {
                 let entry = UndoEntry {
+                    replayed_at: None,
                     command_bytes: None,
                     command: test_create_section_command(&format!("Section {i}")),
                     undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
@@ -1520,6 +1601,7 @@ mod tests {
         // Add some entries
         stack.push_with_data(test_create_section_command("Existing"), UndoData::None);
         stack.push_redo(UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Existing Redo"),
             undo_data: UndoData::None,
@@ -1529,6 +1611,7 @@ mod tests {
         // Load persisted data should clear existing. Real undo data, so the load
         // filter keeps the entry and this stays a test of the clear.
         let entries: Vec<(String, String)> = vec![UndoStack::serialize_entry(&UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Loaded"),
             undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
@@ -1549,6 +1632,7 @@ mod tests {
         // Real undo data, so the only thing that can drop this entry is the
         // malformed-JSON skip this test is about.
         let valid_entry = UndoStack::serialize_entry(&UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Valid"),
             undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
@@ -1578,6 +1662,7 @@ mod tests {
 
         let entries: Vec<(String, String)> = vec![
             UndoStack::serialize_entry(&UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: test_create_section_command("Older"),
                 undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
@@ -1585,6 +1670,7 @@ mod tests {
             })
             .unwrap(),
             UndoStack::serialize_entry(&UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: test_create_section_command("Poison"),
                 undo_data: UndoData::None,
@@ -1592,6 +1678,7 @@ mod tests {
             })
             .unwrap(),
             UndoStack::serialize_entry(&UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: test_create_section_command("Newer"),
                 undo_data: UndoData::InverseCommand(test_delete_section_command(3)),
@@ -1624,6 +1711,7 @@ mod tests {
 
         let undo_entries: Vec<(String, String, Option<String>)> = vec![
             UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: test_create_section_command("Older"),
                 undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
@@ -1631,6 +1719,7 @@ mod tests {
             })
             .unwrap(),
             UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: test_create_section_command("Poison"),
                 undo_data: UndoData::None,
@@ -1638,6 +1727,7 @@ mod tests {
             })
             .unwrap(),
             UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: test_create_section_command("Newer"),
                 undo_data: UndoData::InverseCommand(test_delete_section_command(3)),
@@ -1686,6 +1776,7 @@ mod tests {
     /// against in-session id `shot_id`.
     fn created_shot_entry(uuid: Option<&str>, shot_id: ShotId) -> UndoEntry {
         UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::CreateShot {
                 section_id: 0,
@@ -1787,6 +1878,7 @@ mod tests {
     /// target has to still be there.
     fn kind_edit_entry(uuid: Option<&str>, shot_id: ShotId) -> UndoEntry {
         UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::SetShotKind {
                 section_id: 0,
@@ -1903,6 +1995,7 @@ mod tests {
     fn load_rejects_a_malformed_undo_timestamp_instead_of_treating_it_as_legacy() {
         let mut stack = UndoStack::new();
         let entry = UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Malformed"),
             undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
@@ -1922,6 +2015,7 @@ mod tests {
     fn load_rejects_a_missing_timestamp_after_a_stamped_entry() {
         let row = |name: &str, timestamp: Option<&str>| {
             let serialized = UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: test_create_section_command(name),
                 undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
@@ -1953,6 +2047,7 @@ mod tests {
 
         let redo_entries: Vec<(String, String, Option<String>)> =
             vec![UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: test_create_section_command("Redoable"),
                 undo_data: UndoData::None,
@@ -2011,6 +2106,7 @@ mod tests {
 
         // Push command
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("Test"),
             undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
@@ -2094,18 +2190,21 @@ mod tests {
 
         let test_cases: Vec<UndoEntry> = vec![
             UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: test_create_section_command("None"),
                 undo_data: UndoData::None,
                 timestamp: None,
             },
             UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: test_create_section_command("Inverse"),
                 undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
                 timestamp: None,
             },
             UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: test_delete_section_command(2),
                 undo_data: UndoData::SectionSnapshot {
@@ -2115,6 +2214,7 @@ mod tests {
                 timestamp: None,
             },
             UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: test_create_section_command("Created Snapshot"),
                 undo_data: UndoData::CreatedSectionSnapshot {
@@ -2125,6 +2225,7 @@ mod tests {
                 timestamp: None,
             },
             UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: Command::DeleteShot {
                     section_id: 1,
@@ -2143,6 +2244,7 @@ mod tests {
                 timestamp: None,
             },
             UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: Command::CreateShot {
                     section_id: 1,
@@ -2172,6 +2274,7 @@ mod tests {
                 timestamp: None,
             },
             UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: Command::SetZeroDatum {
                     station_ref: StationRef::new(1, 0),
@@ -2186,6 +2289,7 @@ mod tests {
                 timestamp: None,
             },
             UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: Command::MergeStations {
                     station_a: StationRef::new(1, 0),
@@ -2200,12 +2304,14 @@ mod tests {
                 timestamp: None,
             },
             UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: Command::Batch { commands: vec![] },
                 undo_data: UndoData::ProjectSnapshot("{}".to_string()),
                 timestamp: None,
             },
             UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: Command::UpdateShot {
                     section_id: 1,
@@ -2307,6 +2413,7 @@ mod tests {
         assert_cached_byte_totals(&stack);
 
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("persisted"),
             undo_data: UndoData::ProjectSnapshot("x".repeat(256)),
@@ -2423,12 +2530,14 @@ mod tests {
     #[test]
     fn undo_budget_size_estimate_tracks_the_snapshot_payload() {
         let small = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("small"),
             undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
             timestamp: None,
         };
         let big = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("big"),
             undo_data: UndoData::ProjectSnapshotPair {
@@ -2564,6 +2673,7 @@ mod tests {
         let entries: Vec<(String, String, Option<String>)> = (0..3)
             .map(|i| {
                 UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                    replayed_at: None,
                     command_bytes: None,
                     command: test_create_section_command(&format!("S{i}")),
                     undo_data: UndoData::InverseCommand(test_delete_section_command(i)),
@@ -2587,8 +2697,8 @@ mod tests {
     /// [#303] The stack orders itself: a new entry never lands at or below the one under
     /// it, whatever the wall clock says.
     ///
-    /// `drop_entries_up_to` uses `partition_point`, which needs the stamps sorted to mean
-    /// anything, and the push-time cut compares entries against a watermark. Both read a
+    /// `drop_entries_up_to` cuts a time-ordered prefix, which needs the stamps sorted to
+    /// mean anything, and the push-time cut compares entries against a watermark. Both read a
     /// stack whose order can otherwise be broken from outside: a chain step loads entries
     /// stamped by the machine that authored them, and a local clock can be corrected
     /// backwards mid-session.
@@ -2615,7 +2725,7 @@ mod tests {
         }
 
         // `undo_entries` yields most-recent FIRST, so reverse into stack order (oldest
-        // first) - the order the invariant is about and the one `partition_point` walks.
+        // first) - the order the invariant is about and the one the post-push cut walks.
         let mut stamps: Vec<_> = stack
             .undo_entries()
             .map(|e| e.timestamp.expect("stamped"))
@@ -2682,6 +2792,7 @@ mod tests {
     #[test]
     fn restored_entries_use_the_documented_flat_command_estimate() {
         let small = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: test_create_section_command("S0"),
             undo_data: UndoData::None,
@@ -2690,6 +2801,7 @@ mod tests {
         assert_eq!(UndoStack::estimated_size(&small), 512);
 
         let payload = UndoEntry {
+            replayed_at: None,
             undo_data: UndoData::ProjectSnapshot("x".repeat(2_048)),
             ..small
         };
@@ -2711,6 +2823,7 @@ mod tests {
 
         let previous_values =
             |previous_offsets: HashMap<SectionId, Option<(f64, f64)>>| UndoEntry {
+                replayed_at: None,
                 command_bytes: None,
                 command: test_create_section_command("S0"),
                 undo_data: UndoData::PreviousValues {
@@ -2756,9 +2869,9 @@ mod tests {
 
     /// [#303] A load whose stamps are not in time order is refused, not sorted.
     ///
-    /// `drop_entries_up_to` finds the post-push cut with `partition_point`, which needs a
-    /// monotone predicate; over an unsorted stack it returns an arbitrary boundary and the
-    /// drain then deletes a wrong prefix. Sorting would fix the search and break the
+    /// `drop_entries_up_to` cuts a time-ordered prefix, which needs a monotone predicate;
+    /// over an unsorted stack the boundary is arbitrary and the drain then deletes a
+    /// wrong prefix. Sorting would fix the search and break the
     /// meaning - stack order IS undo order - so a stack that cannot be trusted is dropped.
     #[test]
     fn a_load_with_out_of_order_stamps_is_dropped_rather_than_trusted() {
@@ -2768,6 +2881,7 @@ mod tests {
             .enumerate()
             .map(|(i, ts)| {
                 let entry = UndoEntry {
+                    replayed_at: None,
                     command_bytes: None,
                     command: test_create_section_command(&format!("S{i}")),
                     undo_data: UndoData::InverseCommand(test_delete_section_command(
@@ -2797,6 +2911,7 @@ mod tests {
             .enumerate()
             .map(|(i, ts)| {
                 let entry = UndoEntry {
+                    replayed_at: None,
                     command_bytes: None,
                     command: test_create_section_command(&format!("S{i}")),
                     undo_data: UndoData::InverseCommand(test_delete_section_command(
@@ -2980,14 +3095,118 @@ mod tests {
         assert!(!stack.can_undo());
     }
 
+    /// [#576 A18(b)] Undo, Push, then Redo while the upload runs. The snapshot was
+    /// taken with A undone, so A is NOT in the commit - yet a replay keeps A's
+    /// original stamp, which sits below the push's cutoff, so the post-push cut used
+    /// to drop it: A stayed live and dirty with no undo entry, Ctrl+Z could no longer
+    /// revert it, and the next push uploaded it with no history.
+    #[test]
+    fn a_redo_replayed_during_a_push_survives_the_post_push_cut() {
+        let mut stack = UndoStack::new();
+        stack.push_with_data(
+            test_create_section_command("A"),
+            UndoData::InverseCommand(test_delete_section_command(1)),
+        );
+        // Ctrl+Z, then Push: the push starts (its cutoff) with A on the redo stack.
+        let undone = stack.pop_undo().expect("undo A");
+        stack.push_redo(undone);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let cutoff = Utc::now();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        // Ctrl+Y while the upload is in flight - the redo path replays A.
+        let redone = stack.pop_redo().expect("redo A");
+        stack.push_undo(redone);
+        let before = stack.len();
+
+        let dropped = stack.drop_entries_up_to(cutoff);
+
+        assert_eq!(
+            (before, dropped, stack.len()),
+            (1, 0, 1),
+            "(undo entries before the cut, dropped, after): the replayed A was not in \
+             the upload, so its undo entry must survive"
+        );
+    }
+
+    /// [#576 A18(b)] The other three replay shapes keep their old answers.
+    #[test]
+    fn replays_the_upload_carried_are_still_cut() {
+        let fresh = || {
+            let mut stack = UndoStack::new();
+            stack.push_with_data(
+                test_create_section_command("A"),
+                UndoData::InverseCommand(test_delete_section_command(1)),
+            );
+            stack
+        };
+        let pause = || std::thread::sleep(std::time::Duration::from_millis(2));
+        let undo_redo = |stack: &mut UndoStack| {
+            let undone = stack.pop_undo().expect("undo A");
+            stack.push_redo(undone);
+            let redone = stack.pop_redo().expect("redo A");
+            stack.push_undo(redone);
+        };
+
+        // Undo + redo BEFORE the push started: the snapshot holds A.
+        let mut stack = fresh();
+        undo_redo(&mut stack);
+        pause();
+        assert_eq!(
+            stack.drop_entries_up_to(Utc::now()),
+            1,
+            "replayed before the push"
+        );
+
+        // Undo + redo DURING the upload of a snapshot that held A: the round trip left
+        // the state the commit already has, so A is the commit's - cut, not carried
+        // into the next commit a second time.
+        let mut stack = fresh();
+        let a_stamp = stack.newest_stamp().expect("stamped");
+        pause();
+        let cutoff = Utc::now();
+        pause();
+        undo_redo(&mut stack);
+        assert_eq!(
+            stack.drop_pushed_entries(cutoff, Some(a_stamp)),
+            1,
+            "the snapshot carried A"
+        );
+
+        // A replay keeps the original stamp - an inherited entry is never lifted above
+        // the watermark by a redo.
+        let mut stack = fresh();
+        let a_stamp = stack.newest_stamp().expect("stamped");
+        pause();
+        undo_redo(&mut stack);
+        assert_eq!(stack.newest_stamp(), Some(a_stamp));
+    }
+
+    /// [#576 A18(b)] An undo that FAILED puts its entry back unchanged: nothing was
+    /// replayed, so it gains no replay mark and the next push cuts it as before.
+    #[test]
+    fn a_failed_undo_put_back_is_not_a_replay() {
+        let mut stack = UndoStack::new();
+        stack.push_with_data(
+            test_create_section_command("A"),
+            UndoData::InverseCommand(test_delete_section_command(1)),
+        );
+        let popped = stack.pop_undo().expect("pop A");
+        stack.restore_undo(popped);
+        assert!(stack
+            .undo_entries()
+            .all(|entry| entry.replayed_at.is_none()));
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert_eq!(stack.drop_entries_up_to(Utc::now()), 1);
+    }
+
     /// [#303] Un-timestamped entries are always a PREFIX of the undo stack - never a
     /// stamped entry with a `None` behind it.
     ///
-    /// `drop_entries_up_to` finds its boundary with `partition_point`, which is only
-    /// meaningful over a predicate that partitions: `timestamp.is_none_or(|ts| ts <=
+    /// `drop_entries_up_to` cuts a prefix, which is only meaningful over a predicate that
+    /// partitions: `timestamp.is_none_or(|ts| ts <=
     /// cutoff)` must be true for a prefix and false thereafter, and a `None` sitting above
-    /// a stamped entry breaks that - `partition_point` would then return a boundary that
-    /// keeps rows it should cut, or cuts rows it should keep, with no error either way.
+    /// a stamped entry breaks that - the cut would then stop at a boundary that keeps
+    /// rows it should cut, with no error.
     ///
     /// It holds because of how entries get here, and this pins each leg: a legacy file is
     /// uniformly unstamped (the load is the only source of `None`), every new entry is
@@ -3014,6 +3233,7 @@ mod tests {
         let legacy: Vec<_> = (0..3)
             .map(|i| {
                 let entry = UndoEntry {
+                    replayed_at: None,
                     command_bytes: None,
                     command: test_create_section_command(&format!("legacy{i}")),
                     undo_data: UndoData::InverseCommand(test_delete_section_command(i)),
@@ -3097,6 +3317,7 @@ mod tests {
         };
 
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::CreateLoopClosure {
                 station_a: StationRef::new(1, 0),
@@ -3185,6 +3406,7 @@ mod tests {
         );
         // ...and the same holds for the emptiest entry that can be constructed at all.
         let bare = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::CloseProject,
             undo_data: UndoData::None,
@@ -3235,6 +3457,7 @@ mod tests {
             "untouched nullable fields must serialize as absent, got: {values_json}"
         );
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::UpdateShot {
                 section_id,

@@ -1023,7 +1023,7 @@ impl AppState {
                     }
                 })
                 .map_err(local_dto)?;
-                self.speleodb_clear_undo_after_push(&undo_cutoff);
+                self.speleodb_clear_undo_after_push(&undo_cutoff, snapshot_newest);
                 Ok(landed)
             }
             Err(e) => {
@@ -1053,7 +1053,7 @@ impl AppState {
                         }
                     })
                     .map_err(local_dto)?;
-                    self.speleodb_clear_undo_after_push(&undo_cutoff);
+                    self.speleodb_clear_undo_after_push(&undo_cutoff, snapshot_newest);
                     return Ok(landed);
                 }
                 // Ambiguous (retried-then-exhausted 5xx, or a transport drop): we
@@ -1170,7 +1170,15 @@ impl AppState {
     ///
     /// Best-effort because the push has already landed. Poisoned guards are recovered;
     /// a disk failure retains the chain metadata so stale rows still fail closed on reopen.
-    pub(super) fn speleodb_clear_undo_after_push(&self, undo_cutoff: &str) {
+    ///
+    /// `captured_through` is the newest undo stamp the uploaded snapshot carried (#576
+    /// A18(b)): with it the cut can tell an entry the commit holds from one a redo
+    /// put back while the upload ran - see [`crate::core::undo::UndoStack::drop_pushed_entries`].
+    pub(super) fn speleodb_clear_undo_after_push(
+        &self,
+        undo_cutoff: &str,
+        captured_through: Option<chrono::DateTime<chrono::Utc>>,
+    ) {
         let Ok(cutoff) = chrono::DateTime::parse_from_rfc3339(undo_cutoff) else {
             tracing::warn!(
                 undo_cutoff,
@@ -1188,7 +1196,7 @@ impl AppState {
             .undo_stack
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let dropped = stack.drop_entries_up_to(cutoff);
+        let dropped = stack.drop_pushed_entries(cutoff, captured_through);
         let Some(db) = database.as_ref() else {
             tracing::warn!(
                 dropped,
@@ -1277,5 +1285,61 @@ mod snapshot_undo_metadata_tests {
                 Some("2026-08-02T10:00:00+00:00")
             );
         });
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test setup failures should stop the regression test immediately"
+)]
+mod redo_during_push_tests {
+    use super::*;
+    use crate::core::Command;
+    use crate::models::ShotData;
+
+    #[test]
+    fn a_redo_made_while_the_upload_runs_keeps_its_undo_entry() {
+        // [#576 A18(b)] The real redo path, end to end on the stack: undo, the push
+        // starts (its cutoff), Ctrl+Y while the upload runs, the upload confirms. The
+        // snapshot never held the redone section, so its undo entry has to outlive the
+        // post-push cut - before, Ctrl+Z could no longer revert it and the next push
+        // uploaded it with no history.
+        let state = AppState::new().expect("state");
+        assert!(
+            state
+                .execute(Command::CreateProject {
+                    name: "CaveA".to_owned(),
+                    location: None,
+                })
+                .success
+        );
+        assert!(
+            state
+                .execute(Command::CreateSection {
+                    name: Some("A".to_owned()),
+                    surveyor: None,
+                    date: None,
+                    color: "#abcdef".to_owned(),
+                    direction: None,
+                    shots: vec![ShotData {
+                        length: 5.0,
+                        ..Default::default()
+                    }],
+                })
+                .success
+        );
+        assert!(state.undo().success, "Ctrl+Z before the push");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let cutoff = chrono::Utc::now().to_rfc3339();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert!(state.redo().success, "Ctrl+Y while the upload runs");
+
+        state.speleodb_clear_undo_after_push(&cutoff, None);
+
+        assert!(
+            state.can_undo(),
+            "the redone section is not in the upload, so it must stay undoable"
+        );
     }
 }

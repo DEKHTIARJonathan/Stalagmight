@@ -1033,6 +1033,7 @@ mod tests {
     #[test]
     fn test_entry_to_history_item_with_timestamp() {
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::CreateSection {
                 name: Some("Test Section".to_string()),
@@ -1072,6 +1073,7 @@ mod tests {
         let before_json = serde_json::to_string(&project).unwrap();
 
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::DeleteSection { section_id: 5 },
             undo_data: UndoData::ProjectSnapshotPair {
@@ -1097,6 +1099,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_update_shot() {
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::UpdateShot {
                 section_id: 0,
@@ -1134,6 +1137,7 @@ mod tests {
         names.insert(1, Some("Side Tunnel".to_string()));
 
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::MergeStations {
                 station_a: StationRef::new(0, 0),
@@ -1159,6 +1163,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_merge_stations_without_names() {
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::MergeStations {
                 station_a: StationRef::new(0, 0),
@@ -1181,6 +1186,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_set_zero_datum() {
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::SetZeroDatum {
                 station_ref: StationRef::new(0, 0),
@@ -1209,6 +1215,7 @@ mod tests {
         names.insert(2, Some("East Wing".to_string()));
 
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::MoveSection {
                 section_id: 2,
@@ -1228,6 +1235,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_move_station() {
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::MoveStation {
                 station_ref: StationRef::new(1, 3),
@@ -1247,6 +1255,7 @@ mod tests {
         // The inverse command supplies the previous kind, so the preview can
         // show a real Jump -> Reference transition rather than a guessed one.
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::SetShotKind {
                 section_id: 1,
@@ -1272,6 +1281,7 @@ mod tests {
         // No captured inverse (e.g. the shot vanished): the new kind still
         // renders, the old side is simply blank rather than wrong.
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::SetShotKind {
                 section_id: 1,
@@ -1291,6 +1301,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_create_loop_closure() {
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::CreateLoopClosure {
                 station_a: StationRef::new(1, 0),
@@ -1312,6 +1323,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_remove_zero_datum_with_gps() {
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::RemoveZeroDatum {
                 station_ref: StationRef::new(0, 0),
@@ -1363,6 +1375,7 @@ mod tests {
         let project = project_with_a_datum_on_station_one();
         let section_id = project.sections[0].id;
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::RemoveZeroDatum {
                 station_ref: StationRef::new(section_id, 1),
@@ -1398,6 +1411,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_remove_zero_datum_degrades_on_an_unreadable_snapshot() {
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::RemoveZeroDatum {
                 station_ref: StationRef::new(0, 1),
@@ -1428,6 +1442,7 @@ mod tests {
         let project = project_with_a_datum_on_station_one();
         let section_id = project.sections[0].id;
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::DeleteSection { section_id },
             undo_data: UndoData::ProjectSnapshotPair {
@@ -1451,6 +1466,7 @@ mod tests {
     #[test]
     fn test_derive_preview_data_batch_lists_subcommands_with_details() {
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::Batch {
                 commands: vec![
@@ -1493,6 +1509,7 @@ mod tests {
     fn test_derive_preview_data_default_fallback_never_none() {
         // DeleteShot with non-matching undo data should still produce preview via fallback
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::DeleteShot {
                 section_id: 1,
@@ -1512,6 +1529,7 @@ mod tests {
         use crate::models::SectionUpdates;
 
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::UpdateSectionMetadata {
                 section_id: 1,
@@ -1543,6 +1561,7 @@ mod tests {
         use crate::models::{SectionUpdates, SurveyDirection};
 
         let entry = UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: Command::UpdateSectionMetadata {
                 section_id: 1,
@@ -1586,6 +1605,7 @@ mod tests {
         use crate::models::{SectionUpdates, SurveyDirection};
 
         let entry = UndoEntry {
+     replayed_at: None,
      command_bytes: None,
             command: Command::UpdateSectionMetadata {
                 section_id: 1,

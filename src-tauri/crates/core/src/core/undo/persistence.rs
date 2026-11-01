@@ -62,6 +62,7 @@ impl UndoStack {
         let command = Self::deserialize_command(command_json)?;
         let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
         Some(UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command,
             undo_data,
@@ -82,6 +83,7 @@ impl UndoStack {
             None => None,
         };
         Some(UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command,
             undo_data,

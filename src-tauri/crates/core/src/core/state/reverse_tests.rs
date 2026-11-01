@@ -1783,6 +1783,7 @@ fn redo_to_reports_the_reverses_it_already_applied_when_a_later_step_fails() {
         let first = stack.pop_redo().unwrap();
         let second = stack.pop_redo().unwrap();
         stack.push_redo(crate::core::UndoEntry {
+            replayed_at: None,
             command_bytes: None,
             command: second.command,
             // Redo REPLAYS forward state rather than restoring previous values, so a poisoned

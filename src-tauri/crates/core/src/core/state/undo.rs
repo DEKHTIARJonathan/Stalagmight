@@ -562,7 +562,7 @@ impl AppState {
                 "Undo operation failed after popping entry; pushing back to undo stack"
             );
             match self.undo_stack.lock() {
-                Ok(mut stack) => stack.push_undo(entry),
+                Ok(mut stack) => stack.restore_undo(entry),
                 Err(_) => {
                     tracing::error!("Failed to re-acquire undo stack lock to push back entry");
                 }

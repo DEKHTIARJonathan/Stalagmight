@@ -1700,6 +1700,7 @@ fn a_legacy_created_shot_redo_append_mints_an_identity() {
     // A pre-#423 persisted redo entry: no anchors, no uuid anywhere, and a
     // position at/past the tail so the replay is a true append.
     let entry = crate::core::undo::UndoEntry {
+        replayed_at: None,
         command_bytes: None,
         command: Command::CreateShot {
             section_id,

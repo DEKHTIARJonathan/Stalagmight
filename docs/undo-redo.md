@@ -625,7 +625,7 @@ side's value.
 
 | Event | Effect | Why |
 |---|---|---|
-| Confirmed push | entries with `timestamp <= push_start` dropped; redo cleared | they are in the commit now, so keeping them would duplicate them in the next one. Bounded by push-start because an edit recorded after the snapshot keeps its dirty bit, so its history has to survive with it |
+| Confirmed push | entries with `timestamp <= push_start` dropped; redo cleared | they are in the commit now, so keeping them would duplicate them in the next one. Bounded by push-start because an edit recorded after the snapshot keeps its dirty bit, so its history has to survive with it. A redo keeps the entry's original timestamp, so an entry a redo put back while the upload ran (newer than anything the snapshot held) is kept too: it carries a transient `replayed_at`, and the cut (`drop_pushed_entries`) keeps entries replayed after the cutoff unless the snapshot carried them (#576 A18(b)) |
 | Any server `.stalx` becoming the local cache file | undo/redo tables emptied in the downloaded FILE | `InheritedUndo::Drop` at the `replace_cache_stalx*` chokepoint - pull, fast-forward and revision swap all funnel there |
 | Lock acquired over a copy that equals git (`UpToDate` + clean) | in-memory stacks cleared | the history describes already-committed operations. The clean check is what lets lock, edit, unlock-without-pushing, re-lock keep the user's own history |
 | Force-edit | in-memory stacks cleared | no lock and no reconcile, so the equals-git fence cannot be evaluated; that session already carries the unmergeable warning |
