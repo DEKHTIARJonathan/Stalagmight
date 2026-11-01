@@ -13,10 +13,11 @@ workspace = true
 [features]
 # Compiles the `#[cfg(any(test, feature = "test-support"))]` helpers that used
 # to be `#[cfg(test)]` when this code lived in the root crate (the TileCache
-# in-memory/expiry/grant test hooks): the root crate's tests still call them,
-# and a dependency's `cfg(test)` items are invisible to a dependent's test
-# build. Enabled only via the root crate's [dev-dependencies] entry, so
-# production builds compile exactly what they did before the split.
+# in-memory/expiry/grant test hooks), plus the non-transactional per-stack
+# undo/redo writers that seed history fixtures: dependents' tests still call
+# them, and a dependency's `cfg(test)` items are invisible to a dependent's
+# test build. Enabled only via [dev-dependencies] entries (the root crate's and
+# stalagmight-core's), so production builds never compile them.
 test-support = []
 
 [dependencies]

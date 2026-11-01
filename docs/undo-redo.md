@@ -560,8 +560,8 @@ found by the entry-content oracle in `fuzz_undo_tests.rs`, which compares the
 ### Every save is a full rewrite (#303)
 
 `UndoStack::rows_to_persist` serializes every entry in the persisted window and
-`Database::save_undo_stack_with_timestamps` writes the lot, `DELETE`-all then `INSERT`
-with `sequence` renumbered 0..n. There is no incremental path and there cannot be one:
+`Database::replace_history_stacks_with_timestamps` writes the lot for both stacks in one
+transaction, `DELETE`-all then `INSERT` with `sequence` renumbered 0..n. There is no incremental path and there cannot be one:
 `save_project` builds a fresh `.stalx.tmp` and renames it over the target, so every save
 writes into a file that has no undo tables at all. Anything a save skips is gone.
 

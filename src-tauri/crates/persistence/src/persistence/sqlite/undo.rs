@@ -189,22 +189,6 @@ impl Database {
         .transpose()
     }
 
-    /// Save undo entry to database
-    pub fn save_undo_entry(
-        &self,
-        sequence: i64,
-        command_json: &str,
-        undo_data_json: &str,
-    ) -> Result<()> {
-        let cmd_compressed = compress_json(command_json);
-        let undo_compressed = compress_json(undo_data_json);
-        self.conn.execute(
-            "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) VALUES (?1, ?2, ?3, ?4)",
-            params![sequence, cmd_compressed, undo_compressed, Utc::now().to_rfc3339()],
-        )?;
-        Ok(())
-    }
-
     /// [#469] The newest `max_rows` rows of a history table, OLDEST-first.
     ///
     /// The `ORDER BY sequence DESC LIMIT ?1` is the whole point: an ascending `SELECT`
@@ -404,16 +388,14 @@ impl Database {
         decompress_history_rows_within(raw, "undo", budget)
     }
 
-    /// Clear undo stack entries after a given sequence
-    pub fn clear_undo_after(&self, sequence: i64) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM undo_stack WHERE sequence > ?1",
-            params![sequence],
-        )?;
-        Ok(())
-    }
-
-    /// Save undo stack (clear existing and save new entries)
+    /// TEST FIXTURE: replace the undo table with `entries` in the legacy (no-timestamp)
+    /// shape, stamping every row with the current time.
+    ///
+    /// Not transactional - a DELETE, then one autocommit INSERT per row - so a failure
+    /// part-way leaves half a history on disk. Production writes both stacks through
+    /// [`Self::replace_history_stacks_with_timestamps`], in one transaction; this exists
+    /// only to seed fixtures and is compiled for tests alone (B27(e), #576).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn save_undo_stack(&self, entries: Vec<(String, String)>) -> Result<()> {
         // Clear existing
         self.conn.execute("DELETE FROM undo_stack", [])?;
@@ -470,12 +452,14 @@ impl Database {
         Ok(())
     }
 
-    /// Save undo stack with timestamps (clear existing and save new entries)
+    /// TEST FIXTURE: replace the undo table with `entries`, `sequence` renumbered 0..n.
     ///
-    /// [#303] DELETE-all-then-INSERT-all, with `sequence` renumbered 0..n, is the whole
-    /// of it - there is no incremental variant, and an earlier attempt at one silently
-    /// dropped the history. See `UndoStack::rows_to_persist` (core, in the root crate)
-    /// for why the save pipeline leaves nothing to be incremental about.
+    /// Not transactional - a DELETE, then one autocommit INSERT per row - so a failure
+    /// part-way leaves half a history on disk. The save pipeline does not use it: it
+    /// writes both stacks through [`Self::replace_history_stacks_with_timestamps`], in
+    /// one transaction (see `UndoStack::rows_to_persist` in core for why every save is a
+    /// full rewrite). Compiled for tests alone (B27(e), #576).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn save_undo_stack_with_timestamps(
         &self,
         entries: Vec<(String, String, Option<String>)>,
@@ -543,11 +527,11 @@ impl Database {
         decompress_history_rows_within(raw, "redo", budget)
     }
 
-    /// Save redo stack with timestamps (clear existing and save new entries)
-    ///
-    /// [#303] The redo twin of [`Self::save_undo_stack_with_timestamps`], same shape and
-    /// same reasoning. Note that a Full-mode linked project hands this an EMPTY vector
-    /// (`persist_undo_stacks_into`), so for those projects it degenerates to a clear.
+    /// TEST FIXTURE: the redo twin of [`Self::save_undo_stack_with_timestamps`] - same
+    /// shape, same non-transactional caveat. Production writes the redo table through
+    /// [`Self::replace_history_stacks_with_timestamps`]. Compiled for tests alone
+    /// (B27(e), #576).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn save_redo_stack_with_timestamps(
         &self,
         entries: Vec<(String, String, Option<String>)>,
@@ -577,6 +561,52 @@ impl Database {
 )]
 mod tests {
     use super::*;
+
+    /// B27(e) (#576): the per-stack history writers are test fixtures, not production API.
+    ///
+    /// The save pipeline writes history through `replace_history_stacks_with_timestamps`:
+    /// both stacks, one transaction. The per-stack writers DELETE and then INSERT row by
+    /// row on autocommit, so a production caller would leave half a history behind on any
+    /// mid-loop failure. They survive only to seed test fixtures, so they compile only
+    /// under `test` / `test-support`, and the two with no caller at all are gone. The
+    /// compiler is the real guard - a production caller no longer builds - and this pins
+    /// the gate itself so it cannot be dropped quietly.
+    #[test]
+    fn the_non_transactional_history_writers_are_test_only() {
+        const GATE: &str = "#[cfg(any(test, feature = \"test-support\"))]";
+        let source = include_str!("undo.rs");
+        let production = source
+            .split_once("\nmod tests {")
+            .map_or(source, |(before, _)| before);
+        for removed in ["save_undo_entry", "clear_undo_after"] {
+            assert!(
+                !production.contains(&format!("pub fn {removed}(")),
+                "{removed} has no caller and must stay deleted"
+            );
+        }
+        for fixture in [
+            "save_undo_stack",
+            "save_undo_stack_with_timestamps",
+            "save_redo_stack_with_timestamps",
+        ] {
+            let found = production.find(&format!("pub fn {fixture}("));
+            assert!(
+                found.is_some(),
+                "{fixture} is no longer defined in this file"
+            );
+            let Some(at) = found else { continue };
+            let attribute = production[..at]
+                .lines()
+                .rev()
+                .map(str::trim)
+                .find(|line| !line.is_empty());
+            assert_eq!(
+                attribute,
+                Some(GATE),
+                "{fixture} is a non-transactional writer and must be compiled for tests only"
+            );
+        }
+    }
 
     #[test]
     fn decompression_batch_never_exceeds_the_thread_cap() {

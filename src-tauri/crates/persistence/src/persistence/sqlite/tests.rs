@@ -1897,11 +1897,6 @@ fn test_undo_stack_persistence() {
     assert_eq!(loaded[0].2, r#"{"section_id":0}"#);
     assert_eq!(loaded[1].0, 1);
     assert_eq!(loaded[2].0, 2);
-
-    // Clear undo after sequence 1
-    db.clear_undo_after(1).unwrap();
-    let loaded_after_clear = db.load_undo_stack().unwrap();
-    assert_eq!(loaded_after_clear.len(), 2); // Only sequences 0 and 1 remain
 }
 
 #[test]
@@ -2641,24 +2636,6 @@ fn test_redo_stack_timestamps_round_trip() {
     assert_eq!(loaded[0].1, "redo_cmd1");
     assert_eq!(loaded[0].3.as_deref(), Some("2025-02-01T08:00:00+00:00"));
     assert!(loaded[1].3.is_some());
-}
-
-#[test]
-fn test_clear_undo_after_sequence() {
-    let db = Database::in_memory().unwrap();
-
-    // Save 5 entries
-    let entries: Vec<(String, String)> = (0..5)
-        .map(|i| (format!("cmd{i}"), format!("undo{i}")))
-        .collect();
-    db.save_undo_stack(entries).unwrap();
-
-    // Clear everything after sequence 2 (keep 0, 1, 2)
-    db.clear_undo_after(2).unwrap();
-
-    let loaded = db.load_undo_stack().unwrap();
-    assert_eq!(loaded.len(), 3);
-    assert_eq!(loaded[2].0, 2); // sequence = 2
 }
 
 // === Legacy (pre-v7) undo history must be dropped on load ===

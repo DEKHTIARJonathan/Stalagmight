@@ -9,7 +9,7 @@ type ShotTarget<'a> = (SectionId, Option<&'a str>, ShotId);
 
 impl UndoStack {
     /// [#303] Every row a save must write for one stack, in stack order and in the
-    /// tuple shape `Database::save_undo_stack_with_timestamps` takes.
+    /// tuple shape `Database::replace_history_stacks_with_timestamps` takes per stack.
     ///
     /// EVERY save writes the whole (windowed) stack. That is forced by the save
     /// pipeline: `save_project` builds a fresh `.stalx.tmp`, renames it over the
