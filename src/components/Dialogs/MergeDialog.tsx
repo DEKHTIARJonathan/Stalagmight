@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { commitMoveCarry } from '../../store/moveCarry';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
@@ -36,6 +37,8 @@ export default function MergeDialog() {
   const onCancel = dialogData.onCancel as (() => void) | undefined;
   // Move commands to batch with merge for single-undo snap-to-merge
   const preCommands = dialogData.preCommands as BatchCommand[] | undefined;
+  // The carry those moves belong to: confirming here IS that carry's commit (GHOST-2).
+  const moveCarryToken = (dialogData.moveCarryToken as number | null | undefined) ?? null;
 
   const handleClose = () => {
     onCancel?.();
@@ -54,7 +57,7 @@ export default function MergeDialog() {
       // When preCommands exist (snap-to-merge), batch move + merge as single undo operation
       const mergeCmd: BatchCommand = { type: 'merge_stations', station_a: stationA, station_b: stationB };
       const result = preCommands
-        ? await executeBatch([...preCommands, mergeCmd])
+        ? await commitMoveCarry(moveCarryToken, () => executeBatch([...preCommands, mergeCmd]))
         : await mergeStations(stationA, stationB);
       if (result.success) {
         clearMergeStations();

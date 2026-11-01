@@ -40,6 +40,8 @@ import { getTileConfig } from '../../utils/tileConfig';
 import { useMapTools } from '../../hooks/useMapTools';
 import { useGasPlanPointMarkers } from './useGasPlanPointMarkers';
 import { useGasPlanDropMarkers } from './useGasPlanDropMarkers';
+import { useMoveCarryGuards } from './useMoveCarryGuards';
+import { beginMoveCarry, commitMoveCarry, endMoveCarry, isMoveCarryLive } from '../../store/moveCarry';
 import SurveyLayer, { type SurveyLayerCallbacks } from './SurveyLayer';
 import { SATELLITE_BOTTOM_CANDIDATES } from './mapUtils';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
@@ -374,6 +376,10 @@ function MapCanvas() {
   // token. The right-click gate reads it because `moveDrag` is still null while
   // the pickup is pending.
   const segmentPickupTokenRef = useRef<number | null>(null);
+  // The carry registered with src/store/moveCarry.ts (GHOST-2), from the pickup click
+  // until the drop starts its commit or the carry is cancelled.
+  const moveCarryTokenRef = useRef<number | null>(null);
+  useMoveCarryGuards(moveCarryTokenRef);
   // --- Drag hot-path refs (bypass React state to avoid re-render per mousemove) ---
   // Current drag position (updated imperatively on every mousemove)
   const moveDragLngLatRef = useRef<{ lng: number; lat: number } | null>(null);
@@ -925,6 +931,44 @@ function MapCanvas() {
     }
   }, [showShots, showJumps, showReferenceShots, project?.sections, setMeasureSnapShot]);
 
+  // The ONE way a carry is cancelled (GHOST-2 R5): Escape, another mutation (R1), the
+  // survey changing or editing becoming blocked (R2) and a tool switch (R4) all end
+  // here. Also right in the Move Segment pickup window, where `moveDrag` is still
+  // null: the token bump makes the pending connected-section fetch discard itself.
+  const cancelMoveCarryState = useCallback(() => {
+    const token = moveCarryTokenRef.current;
+    moveCarryTokenRef.current = null;
+    endMoveCarry(token);
+    // Clean up drag preview (temp layers, filters, sources)
+    surveyLayerRef.current?.endDragPreview();
+    // A snap-merge dialog this carry opened goes with it (its Cancel would resume a
+    // carry that no longer exists, its confirm would commit one).
+    const ui = useUIStore.getState();
+    if (token !== null && ui.dialogData.moveCarryToken === token) ui.closeDialog();
+    // Clear all drag-related refs
+    snapMergeDialogPendingRef.current = false;
+    dragOriginStationRef.current = null;
+    lastRawDragOffsetRef.current = null;
+    stationDragColocatedRefsRef.current = [];
+    dragConnectedSectionIdsRef.current = new Set();
+    moveDragLngLatRef.current = null;
+    lastCursorClientRef.current = null;
+    dragSnapRef.current = null;
+    segmentDragTokenRef.current++;
+    setSnappedStation(null);
+    setMoveDrag(null);
+  }, [setSnappedStation]);
+
+  // A pickup starts a carry against the survey generation it was picked up on, so the
+  // mutation chokepoints can see it (src/store/moveCarry.ts).
+  const beginCarry = useCallback(() => {
+    endMoveCarry(moveCarryTokenRef.current);
+    moveCarryTokenRef.current = beginMoveCarry(useProjectStore.getState().projectTreeGeneration, {
+      cancel: cancelMoveCarryState,
+      restorePreview: () => surveyLayerRef.current?.endDragPreview(),
+    });
+  }, [cancelMoveCarryState]);
+
   // Handle move drag start from SurveyLayer
   const handleMoveDragStart = useCallback(
     (data: { type: 'station' | 'segment' | 'shot'; sectionId?: number; stationRef?: { section_id: number; station_index: number }; shotIndex?: number; screenX?: number; screenY?: number }) => {
@@ -1006,6 +1050,7 @@ function MapCanvas() {
         const stationKey = `${data.stationRef.section_id}:${data.stationRef.station_index}`;
         if (immovableStationKeys.has(stationKey)) return;
 
+        beginCarry();
         // Store origin station for snap-to-merge during drag
         dragOriginStationRef.current = data.stationRef;
         setMoveDrag({ ...baseDragState, type: 'station', stationRef: data.stationRef });
@@ -1027,6 +1072,8 @@ function MapCanvas() {
         // Check if section is anchored - silent no-op if so
         if (anchoredSectionIds.has(segmentSectionId)) return;
 
+        // In flight from the click, not from when the fetch below puts the ghost up.
+        beginCarry();
         // Set a pending drag token to detect stale async results
         const dragToken = ++segmentDragTokenRef.current;
         segmentPickupTokenRef.current = dragToken;
@@ -1072,6 +1119,7 @@ function MapCanvas() {
         const toKey = `${data.sectionId}:${data.shotIndex + 1}`;
         if (immovableStationKeys.has(fromKey) || immovableStationKeys.has(toKey)) return;
 
+        beginCarry();
         setMoveDrag({
           ...baseDragState,
           type: 'shot',
@@ -1087,7 +1135,7 @@ function MapCanvas() {
         stationDragColocatedRefsRef.current = colocated;
       }
     },
-    [anchoredSectionIds, anchoredIdsLoaded, clearSelectionAndVisuals, getConnectedSectionIds, immovableStationKeys, activeStations, gpsOrigin, config?.map?.shot?.hit_area]
+    [anchoredSectionIds, anchoredIdsLoaded, beginCarry, clearSelectionAndVisuals, getConnectedSectionIds, immovableStationKeys, activeStations, gpsOrigin, config?.map?.shot?.hit_area]
   );
 
   // Get map tool callbacks
@@ -1469,6 +1517,7 @@ function MapCanvas() {
         onBeforeConfirm: () => Promise<void>;
         onCancel: () => void;
         preCommands?: BatchCommand[];
+        moveCarryToken: number | null;
       }
     ) => {
       const { checkMergeConnectivity } = useProjectStore.getState();
@@ -1477,8 +1526,10 @@ function MapCanvas() {
       showToast(t('map.toasts.mergeChecking'), TOAST_KEYS.MERGE_CHECK, 'info');
       try {
         const result = await checkMergeConnectivity(originStation, targetStation);
+        // The carry was cancelled while the check was out (GHOST-2): no dialog for it.
+        if (moveCallbacks && !isMoveCarryLive(moveCallbacks.moveCarryToken)) return;
         const extra = moveCallbacks
-          ? { onBeforeConfirm: moveCallbacks.onBeforeConfirm, onCancel: moveCallbacks.onCancel, preCommands: moveCallbacks.preCommands }
+          ? { onBeforeConfirm: moveCallbacks.onBeforeConfirm, onCancel: moveCallbacks.onCancel, preCommands: moveCallbacks.preCommands, moveCarryToken: moveCallbacks.moveCarryToken }
           : {};
         if (result.can_merge) {
           openDialog('merge', { stationA: originStation, stationB: targetStation, ...extra });
@@ -1532,6 +1583,7 @@ function MapCanvas() {
       moveDragLngLatRef.current = null;
       lastCursorClientRef.current = null;
       if (snapTarget) setSnappedStation(null);
+      endMoveCarry(moveCarryTokenRef.current);
       return;
     }
 
@@ -1566,6 +1618,8 @@ function MapCanvas() {
         // - these keep the drag alive after Cancel.
         promptSnapMerge(originStationRef, snapTarget, {
           preCommands: [segmentMoveCmd],
+          // Still in flight while the dialog is up; its confirm is this carry's commit.
+          moveCarryToken: moveCarryTokenRef.current,
           onBeforeConfirm: async () => {
             // UI cleanup only - backend move is batched with merge/closure by the dialog
             snapMergeDialogPendingRef.current = false;
@@ -1628,6 +1682,7 @@ function MapCanvas() {
         // these keep the drag alive after Cancel.
         promptSnapMerge(originStationRef, snapTarget, {
           preCommands: moveCommands,
+          moveCarryToken: moveCarryTokenRef.current,
           onBeforeConfirm: async () => {
             // UI cleanup only - backend move is batched with merge/closure by the dialog
             snapMergeDialogPendingRef.current = false;
@@ -1657,6 +1712,9 @@ function MapCanvas() {
     }
 
     // --- Normal (non-snap) path: clear everything and commit ---
+    // The drop starts the carry's own commit; from here it is no longer in flight.
+    const carryToken = moveCarryTokenRef.current;
+    moveCarryTokenRef.current = null;
     dragOriginStationRef.current = null;
     lastRawDragOffsetRef.current = null;
     dragConnectedSectionIdsRef.current = new Set();
@@ -1687,11 +1745,12 @@ function MapCanvas() {
         // Move all co-located stations (merged/closured at same coordinates)
         const colocated = stationDragColocatedRefsRef.current;
         stationDragColocatedRefsRef.current = [];
-        const res = colocated.length > 1
-          ? await executeBatch(
-              colocated.map(ref => ({ type: 'move_station' as const, station_ref: ref, offset }))
-            )
-          : await moveStation(moveDrag.stationRef, offset);
+        const stationRef = moveDrag.stationRef;
+        const res = await commitMoveCarry(carryToken, () =>
+          colocated.length > 1
+            ? executeBatch(colocated.map(ref => ({ type: 'move_station' as const, station_ref: ref, offset })))
+            : moveStation(stationRef, offset)
+        );
         // If the move was rejected (e.g. the #191 read-only edit gate), the
         // scheduled endDragPreview only fires on the next layer update after a
         // successful refresh - which never comes - so the committed preview would
@@ -1710,7 +1769,8 @@ function MapCanvas() {
         // stale drag offset. Without this the highlight briefly renders at
         // newPosition + dragOffset (a one-frame double-distance flash).
         surveyLayerRef.current?.commitDragPreview();
-        const res = await moveSegment(moveDrag.sectionId, offset);
+        const sectionId = moveDrag.sectionId;
+        const res = await commitMoveCarry(carryToken, () => moveSegment(sectionId, offset));
         // Rejected move (read-only gate): restore now - see the station branch.
         if (!res.success) surveyLayerRef.current?.endDragPreview();
         setMoveDrag(null);
@@ -1726,8 +1786,8 @@ function MapCanvas() {
         // Move all co-located stations (includes both shot endpoints + merged/closured)
         const colocated = stationDragColocatedRefsRef.current;
         stationDragColocatedRefsRef.current = [];
-        const res = await executeBatch(
-          colocated.map(ref => ({ type: 'move_station' as const, station_ref: ref, offset }))
+        const res = await commitMoveCarry(carryToken, () =>
+          executeBatch(colocated.map(ref => ({ type: 'move_station' as const, station_ref: ref, offset })))
         );
         // Rejected move (read-only gate): restore the hidden features now, since
         // the success-only refresh that would fire endDragPreview never runs.
@@ -1739,6 +1799,7 @@ function MapCanvas() {
 
     // For non-segment drags or no meaningful movement, end preview immediately
     // (no-op if beginDragPreview was never called)
+    endMoveCarry(carryToken);
     stationDragColocatedRefsRef.current = [];
     if (surveyLayerRef.current) surveyLayerRef.current.endDragPreview();
     setMoveDrag(null);
@@ -2867,26 +2928,13 @@ function MapCanvas() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
-        // Clean up drag preview (temp layers, filters, sources)
-        surveyLayerRef.current?.endDragPreview();
-        // Clear all drag-related refs
-        snapMergeDialogPendingRef.current = false;
-        dragOriginStationRef.current = null;
-        lastRawDragOffsetRef.current = null;
-        stationDragColocatedRefsRef.current = [];
-        dragConnectedSectionIdsRef.current = new Set();
-        moveDragLngLatRef.current = null;
-        lastCursorClientRef.current = null;
-        dragSnapRef.current = null;
-        segmentDragTokenRef.current++;
-        setSnappedStation(null);
-        setMoveDrag(null);
+        cancelMoveCarryState();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [moveDrag, setSnappedStation]);
+  }, [moveDrag, cancelMoveCarryState]);
 
   // Custom temporary panning implementation for Ctrl+left-drag and middle-drag.
   // MapLibre cannot do either itself: its mouse-pan handler ignores any press
@@ -4034,8 +4082,9 @@ function MapCanvas() {
   );
 
   // What the move-tool hint banner talks about (#409), or null when there is nothing to
-  // hint at. An in-flight drag wins over the active tool: `moveDrag` outlives a mid-drag
-  // tool switch, and it is what the drop instruction is about.
+  // hint at. An in-flight drag wins over the active tool: `moveDrag` outlives a switch
+  // AMONG the three move tools (a switch to any other tool cancels the carry, GHOST-2
+  // R4), and it is what the drop instruction is about.
   const moveHintKind: 'station' | 'segment' | 'shot' | null =
     moveDrag?.type ??
     (activeTool === 'move_station'

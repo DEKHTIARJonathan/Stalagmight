@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { commitMoveCarry } from '../../store/moveCarry';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
@@ -42,6 +43,8 @@ export default function ClosureDialog() {
   const onCancel = dialogData.onCancel as (() => void) | undefined;
   // Move commands to batch with closure for single-undo snap-to-merge
   const preCommands = dialogData.preCommands as BatchCommand[] | undefined;
+  // The carry those moves belong to: confirming here IS that carry's commit (GHOST-2).
+  const moveCarryToken = (dialogData.moveCarryToken as number | null | undefined) ?? null;
   const isFromMove = !!preCommands;
 
   const handleClose = () => {
@@ -62,7 +65,7 @@ export default function ClosureDialog() {
       const effectiveStrategy = isFromMove ? 'Move' as ClosureStrategy : 'Batch';
       const closureCmd: BatchCommand = { type: 'create_loop_closure', station_a: stationA, station_b: stationB, closure_strategy: effectiveStrategy };
       const result = preCommands
-        ? await executeBatch([...preCommands, closureCmd])
+        ? await commitMoveCarry(moveCarryToken, () => executeBatch([...preCommands, closureCmd]))
         : await createLoopClosure(stationA, stationB, effectiveStrategy);
       if (result.success) {
         clearMergeStations();
