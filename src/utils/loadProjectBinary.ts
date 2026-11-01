@@ -58,6 +58,11 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
    *  JSON `LoadProjectFullResult` omits them). Lets the store seed `frozenShots`
    *  on a binary load instead of inheriting the previous project's set (#57). */
   frozen_shots: FrozenShotRef[];
+  /** [#576 B6-D1] The file's schema version when a NEWER Stalagmight saved it,
+   *  else null. The backend opened such a project read-only (every edit and save
+   *  refused); the store gates the UI on this so the two settle together, like
+   *  `isRemote`. Binary envelope only, like `frozen_shots`. */
+  newerSchemaVersion: number | null;
 }
 
 /**
@@ -96,6 +101,9 @@ export interface BinaryEnvelope {
   /** Is this a SpeleoDB project? Same value the backend set its edit gate
    *  from, so the frontend's read-only gate settles with the load (#270). */
   is_remote: boolean;
+  /** [#576 B6-D1] Schema version of a file a newer build saved, else null. A
+   *  top-level map key: absent from an envelope that predates it. */
+  newer_schema_version?: number | null;
   project_header: ProjectHeaderBinary;
   shot_count: number;
   shots_floats: Uint8Array;
@@ -447,6 +455,8 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     // #270: the SpeleoDB read-only gate is resolved from this, synchronously,
     // before the project view renders - never from the async link-status poll.
     isRemote: env.is_remote,
+    // [#576 B6-D1] Same synchronous settling for the newer-version read-only gate.
+    newerSchemaVersion: env.newer_schema_version ?? null,
     surveyData,
   };
 }

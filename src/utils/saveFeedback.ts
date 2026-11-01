@@ -48,6 +48,16 @@ export function surfaceSaveFailure(
   openDialog: (dialog: string, data?: Record<string, unknown>) => void,
   opts?: { skipIntegrityRouting?: boolean; title?: string },
 ): void {
+  // [#576 B6-D1] A project saved by a newer version refuses every save. That is a
+  // blocked action on a read-only project (the banner already says why), so it is
+  // a warning toast (docs/notifications.md) - not an error dialog, and never
+  // Review & Repair, whose repairs this build may not make either.
+  if (classifySaveError(error) === 'newer-file') {
+    useUIStore
+      .getState()
+      .showToast(i18n.t('banners.newerFile.saveRefused'), TOAST_KEYS.NEWER_FILE_READ_ONLY, 'warning');
+    return;
+  }
   const routesToIntegrity =
     !opts?.skipIntegrityRouting && classifySaveError(error) !== 'ignores-unreadable';
   if (routesToIntegrity && useProjectStore.getState().integritySaveBlocked) {
@@ -124,6 +134,10 @@ export function autosaveFailureMessage(error?: string | null): string {
       return i18n.t('banners.autosave.pathTooLong');
     case 'ignores-unreadable':
       return stripSaveErrorMarker(error ?? '', IGNORES_UNREADABLE);
+    // [#576 B6-D1] Unreachable through autosave, which never runs on such a
+    // project (useAutoSave), but a marker must never reach a surface.
+    case 'newer-file':
+      return i18n.t('banners.newerFile.saveRefused');
     default:
       return error ?? i18n.t('banners.autosave.genericFailure');
   }

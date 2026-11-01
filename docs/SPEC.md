@@ -2219,7 +2219,13 @@ interrupted save never leaves a half-written project - see [saving.md](saving.md
 
 The schema is versioned (`SCHEMA_VERSION` in
 `src-tauri/crates/persistence/src/persistence/sqlite.rs`) and migrated forward when an older file is
-opened. Alongside the survey tables (project, sections, shots, station merges,
+opened. A file stamped with a NEWER schema - saved by a newer Stalagmight - is opened
+read-only instead: nothing is migrated or written, its undo history stays in the file
+untouched, editing is blocked behind a banner ("This project was saved by a newer
+version of Stalagmight. Update to edit it."), and every save and SpeleoDB push of it
+is refused, so an older build can never rewrite it at its own schema and drop what the
+newer one stored. Viewing and export work. See
+[saving.md](saving.md#files-saved-by-a-newer-version-open-read-only). Alongside the survey tables (project, sections, shots, station merges,
 zero datums, loop closures, section and station offsets) it holds per-project and
 display settings, the persisted undo and redo stacks, resolved warnings, import
 hashes, station comments, the SpeleoDB link row, and the Unwind chain position in

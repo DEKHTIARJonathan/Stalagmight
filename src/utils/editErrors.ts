@@ -1,4 +1,5 @@
 import i18n from '../i18n';
+import { NEWER_FILE_READ_ONLY } from './saveErrors';
 
 /**
  * Marker the backend prefixes onto `CommandResult.error` when a mutation is
@@ -34,7 +35,14 @@ export function isReverifyDivergedError(error?: string | null): boolean {
 
 /** User-facing toast shown when a read-only project rejects an edit. Says "write
     lock" like the rest of the SpeleoDB copy: the point is that someone else has
-    exclusive write access, not that the file itself is locked. */
-export function READ_ONLY_EDIT_NOTICE(): string {
+    exclusive write access, not that the file itself is locked.
+
+    [#576 B6-D1] Unless the refusal is the OTHER read-only: a project saved by a
+    newer Stalagmight, which the backend marks with `NEWER_FILE_READ_ONLY` behind
+    `EDIT_DISABLED`. That one has nothing to do with the lock - Start editing is
+    refused too - so it gets its own line. Decided from the error itself, not the
+    store's flag, so it stays right even where the flag has not caught up. */
+export function READ_ONLY_EDIT_NOTICE(error?: string | null): string {
+  if (error?.includes(NEWER_FILE_READ_ONLY)) return i18n.t('editGate.newerFileNotice');
   return i18n.t('editGate.readOnlyNotice');
 }

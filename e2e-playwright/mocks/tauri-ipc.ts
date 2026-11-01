@@ -211,6 +211,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Playwright load to `projectLinkKind: 'local'`. Local by default (what
       // almost every spec means); flip per-spec with __MOCK_SET_PROJECT_IS_REMOTE__.
       let projectIsRemote = false;
+      // `BinaryEnvelope::newer_schema_version` (#576 B6-D1): the schema version of a
+      // loaded `.stalx` a NEWER Stalagmight saved, else null. Like `projectIsRemote`
+      // it describes the NEXT binary load (flip per-spec with
+      // __MOCK_SET_PROJECT_NEWER_SCHEMA__); `openProjectNewerSchema` is what the open
+      // project got, which is what the backend's save refusal keys on - cleared on
+      // close and create, as the backend clears `AppState::newer_file_schema`.
+      let mockNewerSchema: number | null = null;
+      let openProjectNewerSchema: number | null = null;
       // Window teardown calls, so an exit-guard spec can assert the POSITIVE
       // outcome of an unguarded close instead of only "no dialog appeared".
       let windowDestroyCount = 0;
@@ -505,6 +513,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         isRemote: boolean,
       ) => {
         projectIsRemote = isRemote;
+      };
+      // Make the next binary load report the file as saved by a NEWER Stalagmight
+      // (schema `version`), or back to this build's (null) - the #576 B6-D1 read-only
+      // state, exercised from the load path itself.
+      (window as unknown as Record<string, unknown>).__MOCK_SET_PROJECT_NEWER_SCHEMA__ = (
+        version: number | null,
+      ) => {
+        mockNewerSchema = version;
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_WINDOW_TEARDOWN_COUNTS__ = () => ({
         destroy: windowDestroyCount,
@@ -1005,6 +1021,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'create_project_full': {
             // Consolidated create_project_full command for loading progress feature
             const name = (args?.name as string) ?? 'Untitled Project';
+            // A project this build created is this build's to save (#576 B6-D1).
+            openProjectNewerSchema = null;
             const projectLocation = (args?.projectLocation as string | null | undefined) ?? null;
             const savePathArg = (args?.savePath as string | undefined) ?? undefined;
             const saveDirectoryArg = (args?.saveDirectory as string | undefined) ?? undefined;
@@ -1480,6 +1498,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // open the SpeleoDB read-only gate. The version tripwire pins the
               // NUMBER, not the field set, so it stayed green.
               is_remote: projectIsRemote,
+              // #576 B6-D1: the backend's newer-version verdict for this load.
+              newer_schema_version: mockNewerSchema,
               project_header: {
                 name: jsonResult.project.name ?? 'Test Project',
                 location: jsonResult.project.location ?? null,
@@ -1559,6 +1579,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 'load_project_full_binary mock: window.MessagePack missing - setupTauriMocks must inject the msgpack UMD',
               );
             }
+            // The backend commits the same verdict as the open project's state.
+            openProjectNewerSchema = mockNewerSchema;
             const bytes = MessagePack.encode(envelope);
             // Return as plain number[] so the frontend's
             // `Array.isArray` fallback converts to Uint8Array without
@@ -1567,6 +1589,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'save_project': {
+            // #576 B6-D1: a project a newer build saved refuses every save, in place
+            // and Save As alike, with the marker `surfaceSaveFailure` routes on.
+            if (openProjectNewerSchema !== null) {
+              return {
+                success: false,
+                error:
+                  `NEWER_FILE_READ_ONLY: Saving is disabled: this project was saved by a newer ` +
+                  `version of Stalagmight (file format ${openProjectNewerSchema}) and is open ` +
+                  `read-only. Update Stalagmight to edit it.`,
+                warnings: [],
+                section_ids: [],
+              };
+            }
             // Mirror the backend's Save-a-Copy contract: an EXPLICIT destination
             // on a SpeleoDB-managed project writes a detached unlinked copy - the
             // session does NOT move (projectPath/file_path untouched) and the
@@ -1590,6 +1625,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'close_project': {
             currentProject = null;
             projectPath = null;
+            openProjectNewerSchema = null;
             return { success: true, section_ids: [] };
           }
 

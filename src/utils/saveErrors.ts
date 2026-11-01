@@ -36,12 +36,24 @@ export const FS_PATH_TOO_LONG = 'FS_PATH_TOO_LONG';
  */
 export const IGNORES_UNREADABLE = 'IGNORES_UNREADABLE';
 
+/**
+ * Marker for a refusal because the open project was saved by a NEWER Stalagmight
+ * and is open read-only (#576 B6-D1). Mirrors `NEWER_FILE_READ_ONLY_CODE` in
+ * `src-tauri/crates/core/src/core/loading.rs`. It LEADS a refused save, and rides
+ * behind `EDIT_DISABLED` on a refused edit (see `editErrors.ts`).
+ *
+ * Routing again: a refused save is a read-only notice, never an error dialog and
+ * never Review & Repair - nothing there can make this build write the file.
+ */
+export const NEWER_FILE_READ_ONLY = 'NEWER_FILE_READ_ONLY';
+
 /** What a failed save's `CommandResult.error` says went wrong. */
 export type SaveErrorKind =
   | 'permission'
   | 'path-not-found'
   | 'path-too-long'
   | 'ignores-unreadable'
+  | 'newer-file'
   | 'other';
 
 /**
@@ -55,6 +67,7 @@ export function classifySaveError(error?: string | null): SaveErrorKind {
   if (error.startsWith(FS_PATH_NOT_FOUND)) return 'path-not-found';
   if (error.startsWith(FS_PATH_TOO_LONG)) return 'path-too-long';
   if (error.startsWith(IGNORES_UNREADABLE)) return 'ignores-unreadable';
+  if (error.startsWith(NEWER_FILE_READ_ONLY)) return 'newer-file';
   return 'other';
 }
 

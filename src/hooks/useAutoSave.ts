@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { useProjectStore } from '../store/projectStore';
+import { useProjectStore, selectNewerFileReadOnly } from '../store/projectStore';
 
 export type AutoSaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error';
 
@@ -114,6 +114,12 @@ export function useAutoSave(): AutoSaveState {
         // Guard: skip if auto-save disabled, no project, or never saved
         if (!autoSave || !filePath) return;
 
+        // [#576 B6-D1] Never on a project a newer Stalagmight saved: the backend
+        // refuses every save of it, so an attempt could only fail - and fail again
+        // on every debounce. Nothing should dirty such a project (every edit is
+        // refused), but autosave must not be the thing that finds out.
+        if (selectNewerFileReadOnly(state)) return;
+
         // If we're already executing a save, don't restart timers
         if (savingRef.current) return;
 
@@ -157,7 +163,8 @@ export function useAutoSave(): AutoSaveState {
           if (
             !store.isDirty ||
             !store.project?.file_path ||
-            !store.config?.general?.auto_save
+            !store.config?.general?.auto_save ||
+            selectNewerFileReadOnly(store)
           ) {
             setStatus('idle');
             return;

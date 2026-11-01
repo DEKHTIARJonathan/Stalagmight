@@ -222,6 +222,15 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * on `file_path` alone (issue #57 / Codex).
    */
   databaseOpen: boolean;
+  /**
+   * [#576 B6-D1] The open file's schema version when a NEWER Stalagmight saved it,
+   * else null. The backend opened such a project read-only (every edit and save
+   * refused, the file never written); this is its verdict for THIS load, set in the
+   * same `set()` as the project so the UI can never present it as editable. Read
+   * through `selectNewerFileReadOnly` - the canonical gate (`useEditingBlocked`)
+   * composes it.
+   */
+  newerSchemaVersion: number | null;
   stations: Station[];
   /**
    * Struct-of-Arrays representation of the loaded project's bulk
@@ -511,6 +520,15 @@ export function projectSwitched(before: string | null, after: string | null): bo
   return before !== null && after !== null && before !== after;
 }
 
+/**
+ * [#576 B6-D1] Is the open project read-only because a NEWER Stalagmight saved it?
+ * One of the terms `useEditingBlocked` composes; gate edits through that hook, not
+ * on this directly. Backstopped server-side: `AppState::guard_mutation` refuses
+ * every edit of such a project and `save_project` every save.
+ */
+export const selectNewerFileReadOnly = (s: Pick<ProjectStore, 'newerSchemaVersion'>): boolean =>
+  s.newerSchemaVersion !== null;
+
 /** What every seam returns for a request whose project changed out from under it. */
 const PROJECT_CHANGED = 'The project changed before this action could run.';
 
@@ -605,6 +623,7 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
     project: null,
     projectTreeGeneration: nextProjectTreeGeneration(),
     databaseOpen: false,
+    newerSchemaVersion: null,
     stations: [],
     surveyData: null,
     stationsAdjusted: null,
@@ -736,7 +755,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (isReverifyDivergedError(result.error)) {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(result.error), TOAST_KEYS.EDIT_DISABLED, 'warning');
         } else {
           // Catch-all (docs/notifications.md): a failure no specific handler
           // claims must not die silently. Dialogs own their inline errors and
@@ -836,7 +855,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (isReverifyDivergedError(result.error)) {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(), TOAST_KEYS.EDIT_DISABLED, 'warning');
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(result.error), TOAST_KEYS.EDIT_DISABLED, 'warning');
         } else {
           useUIStore.getState().showToast(result.error ?? i18n.t('editGate.commandFailed'), toastId, 'error');
         }
@@ -875,6 +894,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   project: null,
   projectTreeGeneration: 0,
   databaseOpen: false,
+  newerSchemaVersion: null,
   stations: [],
   surveyData: null,
   stationsAdjusted: null,
@@ -1073,6 +1093,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           frozenShots: result.frozen_shots,
           // A loaded project is backed by its on-disk database.
           databaseOpen: true,
+          // [#576 B6-D1] The backend's own read-only verdict for THIS load, in the
+          // same set() as the project: a newer file is read-only from the first frame.
+          newerSchemaVersion: result.newerSchemaVersion,
           isDirty: false,
           // Reset integrity state on project switch so a dismissal from the
           // previous project can never carry over and suppress this one's banner.
@@ -1323,6 +1346,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         projectTreeGeneration: nextProjectTreeGeneration(),
         // A deferred new project has no on-disk database until the first save.
         databaseOpen: !deferred,
+        // This build created it, so it is this build's to edit (#576 B6-D1).
+        newerSchemaVersion: null,
         stations: [],
         stationsAdjusted: null,
         surveyDataAdjusted: null,

@@ -2524,6 +2524,11 @@
       "lead": "Edit history could not be read and was discarded.",
       "detail": "Your survey data is unaffected. The next save replaces the unreadable history.",
       "dismiss": "Dismiss"
+    },
+    "newerFile": {
+      "lead": "This project was saved by a newer version of Stalagmight. Update to edit it.",
+      "detail": "It is open read-only: you can view and export it, but changes and saves are off so this version cannot drop what the newer one stored.",
+      "saveRefused": "Not saved: this project was saved by a newer version of Stalagmight."
     }
   },
   "integrityRepair": {
@@ -2546,6 +2551,7 @@
   },
   "editGate": {
     "readOnlyNotice": "This project is open read-only - click Start editing to take the write lock.",
+    "newerFileNotice": "Read-only: a newer version of Stalagmight saved this project.",
     "commandFailed": "The change could not be applied."
   },
   "importGate": {

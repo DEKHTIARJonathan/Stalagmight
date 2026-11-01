@@ -51,9 +51,12 @@ shipped with exactly that bug.
 **There is no server backstop for this half of the predicate.** The backend's
 `AppState::guard_mutation` rejects a mutation only when `edit_enabled` is false,
 and that flag is false only for a remote SpeleoDB project opened without the
-write lock (`src-tauri/crates/core/src/core/state/app_state.rs`). A local project in Plan or
-Export is `edit_enabled == true` server-side, so read-only there rests entirely
-on UI gating - which is why the gating is linted.
+write lock (`src-tauri/crates/core/src/core/state/app_state.rs`) - or when the open project
+was saved by a newer Stalagmight (`newer_file_schema`, #576 B6-D1; see
+[saving.md](saving.md#files-saved-by-a-newer-version-open-read-only)), which it refuses
+first, whatever the lock says. A local project in Plan or Export is
+`edit_enabled == true` server-side, so read-only there rests entirely on UI gating -
+which is why the gating is linted.
 
 ### The one sanctioned gate
 
@@ -61,8 +64,10 @@ Every mutation entry point goes through `src/hooks/useEditingBlocked.ts`:
 `useEditingBlocked()` inside a component, `isEditingBlockedNow()` outside React
 (raw keydown handlers, plain utilities).
 
-Both compose `isMapReadOnly` with `selectSpeleoReadOnly`. Do not write that
-composition inline. `useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly)`
+Both compose `isMapReadOnly` with `selectSpeleoReadOnly` and, for a project saved
+by a newer Stalagmight, `selectNewerFileReadOnly` (`projectStore.ts`, set from the
+load result in the same `set()` as the project). Do not write that composition
+inline. `useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly)`
 is a Rules-of-Hooks violation: `||` short-circuits, so the second hook is skipped
 on any render where the first term is already true, and React throws "Rendered
 fewer hooks than expected" when it flips back. The hook calls both

@@ -26,6 +26,40 @@ migration path is provided for them.** Migrations exist for the shapes that ship
 a pre-release file that a bump cannot read is expected to be re-imported from its
 source survey, not repaired.
 
+### Files saved by a newer version: open read-only
+
+A file whose `PRAGMA user_version` is ABOVE this build's `SCHEMA_VERSION` was saved
+by a newer Stalagmight. This build cannot know what that version stores, so it
+opens the project **read-only** and never writes the file (#576 B6-D1):
+
+- **The open writes nothing.** `ensure_schema_version` runs no migration and no
+  undo purge on it, the load path skips its load-time backfills, and the session
+  holds the file through a read-only SQLite connection
+  (`Database::into_read_only`), so not even the deliberately ungated display-setting
+  writes reach it. The file's undo history stays in the file for the build that
+  wrote it; none of it is restored into this build's undo stack, whose payloads no
+  migration arm here has vetted.
+- **Editing is blocked.** The load commits `AppState::newer_file_schema`, and
+  `guard_mutation` refuses every edit with `EDIT_DISABLED: NEWER_FILE_READ_ONLY: ...`
+  ahead of any SpeleoDB lock state. The frontend gets the same verdict on the load
+  result (`newerSchemaVersion`) and composes it into the canonical edit gate
+  (`useEditingBlocked`, see [app-modes.md](app-modes.md)), and a banner says why:
+  "This project was saved by a newer version of Stalagmight. Update to edit it."
+- **Every save is refused** - in place, Save As, the pre-push flush - with the
+  `NEWER_FILE_READ_ONLY` marker, which `surfaceSaveFailure` turns into a warning
+  toast. Auto-save never attempts one. Writing the file at this build's older
+  schema is exactly the silent downgrade this exists to prevent, and a Save As is
+  the same downgrade under another name.
+- **No SpeleoDB push either.** Start editing, force edit and Publish are refused
+  before any network call, and the upload itself refuses as a backstop.
+- **Viewing and export work** as for any read-only project, and closing it or
+  opening another project ends the read-only state.
+
+Which file counts as newer is decided by the stamp alone, the same one
+`ensure_schema_version` keys on. An unstamped file whose project row merely claims
+a future version is not one any build writes (#485) and keeps its existing
+handling.
+
 ## Save Pipeline
 
 ### Backend (`save_project` in `project_io.rs`)
@@ -105,13 +139,16 @@ That gate (`src-tauri/crates/core/src/core/state/crash_property_tests.rs`, see [
 Every failing save goes through `save_failure` (`project_io.rs`), which logs the
 whole `anyhow` chain at WARN and prefixes the `CommandResult.error` with the
 marker that tells the frontend which remediation to show. `src/utils/saveErrors.ts`
-mirrors the three markers; `saveFeedback.ts` turns them into copy.
+mirrors the markers; `saveFeedback.ts` turns them into copy. (The newer-version
+refusal is stamped at the top of `save_project` itself, before anything is
+attempted, with the same marker idiom.)
 
 | Marker | Means | Surface |
 |---|---|---|
 | `FS_PERMISSION_DENIED` | The OS refuses a destination that IS there | `SavePermissionDialog` (folder-access guidance) |
 | `FS_PATH_NOT_FOUND` | The folder is gone, or its drive is not connected | Error dialog, "the folder no longer exists or the drive is not connected" |
 | `FS_PATH_TOO_LONG` | The path is past what the OS will open (Windows `MAX_PATH`) | Error dialog, "save to a shorter path" |
+| `NEWER_FILE_READ_ONLY` | The project was saved by a newer Stalagmight and is open read-only (see above) | Warning toast, never Review & Repair |
 | (none) | Everything else - disk full, corruption | Error dialog, backend message verbatim |
 
 SQLite reports ALL of these as the same errno-free "unable to open database
@@ -165,6 +202,8 @@ Auto-save only fires when all of these are true:
 - The project has a `file_path` (has been saved at least once)
 - `isDirty` is true
 - No save is already in progress
+- The project was not saved by a newer version of Stalagmight (`selectNewerFileReadOnly`;
+  every save of such a project is refused, so an attempt could only fail on every debounce)
 
 ### Configuration
 

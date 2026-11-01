@@ -11,6 +11,8 @@ export const TOAST_KEYS = {
   // Integrity / undo-redo
   INTEGRITY_REPAIR: 'integrity-repair',
   EDIT_DISABLED: 'edit-disabled',
+  /** A save refused because a newer Stalagmight saved the project (#576 B6-D1). */
+  NEWER_FILE_READ_ONLY: 'newer-file-read-only',
   /** Catch-all for a command failure no specific handler claims (docs/notifications.md). */
   COMMAND_FAILED: 'command-failed',
   UNDO_FAILED: 'undo-failed',

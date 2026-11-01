@@ -2,7 +2,7 @@ import { useEffect, useCallback, useState, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
-import { useProjectStore } from './store/projectStore';
+import { useProjectStore, selectNewerFileReadOnly } from './store/projectStore';
 import { isMoveCarryRefusal } from './store/moveCarry';
 import { useUIStore } from './store/uiStore';
 import { useSpeleoStore } from './store/speleoStore';
@@ -56,6 +56,7 @@ function App() {
   const historyDiscardedDismissed = useProjectStore((s) => s.historyDiscardedDismissed);
   const checkHistoryDiscarded = useProjectStore((s) => s.checkHistoryDiscarded);
   const dismissHistoryDiscarded = useProjectStore((s) => s.dismissHistoryDiscarded);
+  const newerFileReadOnly = useProjectStore(selectNewerFileReadOnly);
   const autosaveFailure = useProjectStore((s) => s.autosaveFailure);
   const autosaveFailureKind = useProjectStore((s) => s.autosaveFailureKind);
   const clearAutosaveFailure = useProjectStore((s) => s.clearAutosaveFailure);
@@ -616,6 +617,26 @@ function App() {
               Dismiss
             </button>
           )}
+        </div>
+      )}
+
+      {/* [#576 B6-D1] Newer-version banner. A project saved by a newer Stalagmight is
+          open read-only (the backend refuses every edit and save, so this build can
+          never rewrite it at its older schema). An ongoing condition, so a banner
+          (docs/notifications.md), and no Dismiss: it lasts exactly as long as the
+          project is open, and it is the only place the user learns why nothing on
+          screen is editable. No action button either - the remedy is outside the
+          app. */}
+      {newerFileReadOnly && project && !loading.isLoading && (
+        <div
+          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
+          role="status"
+          data-testid="newer-file-banner"
+        >
+          <span className="text-warning font-medium flex-1 min-w-0">
+            {t('banners.newerFile.lead')}{' '}
+            <span className="text-text-secondary font-normal">{t('banners.newerFile.detail')}</span>
+          </span>
         </div>
       )}
 

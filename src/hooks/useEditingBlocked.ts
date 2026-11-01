@@ -28,15 +28,22 @@
  * the `check-readonly-gates.mjs` tripwire. A new destructive control in an
  * adjusted/Plan view must therefore be gated here at every entry point; there
  * is no server backstop to catch a miss.
+ *
+ * [#576 B6-D1] A third term: a project saved by a NEWER Stalagmight
+ * (`selectNewerFileReadOnly`) is read-only in every mode, settled from the load
+ * result like the SpeleoDB one. Server-backed too - `guard_mutation` refuses
+ * every edit of it and `save_project` every save.
  */
 import { useUIStore, isMapReadOnly } from '../store/uiStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
+import { useProjectStore, selectNewerFileReadOnly } from '../store/projectStore';
 
-/** React-hook form: subscribes to both stores and recomposes on change. */
+/** React-hook form: subscribes to all three stores and recomposes on change. */
 export function useEditingBlocked(): boolean {
   const mapReadOnly = useUIStore(isMapReadOnly);
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
-  return mapReadOnly || speleoReadOnly;
+  const newerFileReadOnly = useProjectStore(selectNewerFileReadOnly);
+  return mapReadOnly || speleoReadOnly || newerFileReadOnly;
 }
 
 /**
@@ -45,5 +52,9 @@ export function useEditingBlocked(): boolean {
  * subscription.
  */
 export function isEditingBlockedNow(): boolean {
-  return isMapReadOnly(useUIStore.getState()) || selectSpeleoReadOnly(useSpeleoStore.getState());
+  return (
+    isMapReadOnly(useUIStore.getState()) ||
+    selectSpeleoReadOnly(useSpeleoStore.getState()) ||
+    selectNewerFileReadOnly(useProjectStore.getState())
+  );
 }
