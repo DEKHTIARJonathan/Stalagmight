@@ -172,6 +172,42 @@ describe('parseDMS', () => {
     const result = parseDMS('33°51\'54" 151°12\'33"');
     expect(isSuccess(result)).toBe(false);
   });
+
+  // A `-0` degree token is signed: parseInt('-0') is -0, which fails every
+  // `< 0` test, so the sign has to come from the text (#576 D39e).
+  it('keeps the sign of a -0 latitude degree when the longitude is also negative', () => {
+    const result = parseGps('-0°12\'30" -10°30\'00"');
+    expectCoordsClose(result, -0.208333, -10.5);
+    if (isSuccess(result)) {
+      expect(result.format).toBe('DMS');
+      expect(result.coordinates.latitude).toBeLessThan(0);
+    }
+  });
+
+  it('accepts a -0 latitude degree as the signed component', () => {
+    const result = parseGps('-0°30\'00" 11°00\'00"');
+    expectCoordsClose(result, -0.5, 11.0);
+    if (isSuccess(result)) {
+      expect(result.format).toBe('DMS');
+    }
+  });
+
+  it('accepts a -0 longitude degree as the signed component', () => {
+    const result = parseGps('10°00\'00" -0°30\'00"');
+    expectCoordsClose(result, 10.0, -0.5);
+  });
+
+  it('still rejects an unsigned 0 degree without direction letters', () => {
+    const result = parseGps('0°30\'00" 11°00\'00"');
+    expect(isSuccess(result)).toBe(false);
+  });
+
+  it('applies a -0 degree sign alongside direction letters like any other negative degree', () => {
+    // Existing grammar: a leading '-' forces S/W even next to N/E.
+    expectCoordsClose(parseDMS('-1°30\'00"N 11°00\'00"E'), -1.5, 11.0);
+    expectCoordsClose(parseDMS('-0°30\'00"N 11°00\'00"E'), -0.5, 11.0);
+    expectCoordsClose(parseDMS('-0 30 00 N 11 00 00 E'), -0.5, 11.0);
+  });
 });
 
 describe('parseDDM', () => {

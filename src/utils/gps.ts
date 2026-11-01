@@ -279,16 +279,17 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
         lonMinStr = match[5];
         lonSecStr = match[6];
 
-        // Derive direction from sign
-        const latDegVal = parseInt(latDegStr || '0', 10);
-        const lonDegVal = parseInt(lonDegStr || '0', 10);
+        // Derive direction from the sign as written. Read it off the text,
+        // not the parsed number: parseInt('-0') is -0, which fails `< 0`.
+        const latNegative = latDegStr?.startsWith('-') === true;
+        const lonNegative = lonDegStr?.startsWith('-') === true;
 
         // Require at least one negative value for signed format to avoid ambiguity
-        if (latDegVal >= 0 && lonDegVal >= 0) {
+        if (!latNegative && !lonNegative) {
           match = null; // Both positive = ambiguous, reject
         } else {
-          latDir = latDegVal < 0 ? 'S' : 'N';
-          lonDir = lonDegVal < 0 ? 'W' : 'E';
+          latDir = latNegative ? 'S' : 'N';
+          lonDir = lonNegative ? 'W' : 'E';
         }
       }
     }
@@ -341,9 +342,10 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
   let lat = Math.abs(latDeg) + latMin / 60 + latSec / 3600;
   let lon = Math.abs(lonDeg) + lonMin / 60 + lonSec / 3600;
 
-  // Apply direction (negative for S and W)
-  if (latDir === 'S' || latDeg < 0) lat = -Math.abs(lat);
-  if (lonDir === 'W' || lonDeg < 0) lon = -Math.abs(lon);
+  // Apply direction (negative for S and W). The '-' test is on the text so a
+  // `-0` degree keeps its sign (parseInt gives -0, and -0 < 0 is false).
+  if (latDir === 'S' || latDegStr.startsWith('-')) lat = -Math.abs(lat);
+  if (lonDir === 'W' || lonDegStr.startsWith('-')) lon = -Math.abs(lon);
 
   const validation = validateCoordinates(lat, lon);
   if (!validation.valid) {
