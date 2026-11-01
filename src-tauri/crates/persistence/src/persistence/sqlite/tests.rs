@@ -7912,6 +7912,45 @@ fn migrate_v12_preserves_null_pitch_and_does_not_launder_a_blunder() {
     );
 }
 
+/// The standard legs of a parsed DMP section as `SectionData`, for the v12
+/// migration test below. The parser crate's own `to_section_data` was removed with
+/// #576 B24 (the import path converts in the wizard); this keeps the same mapping
+/// for the one test that builds a project straight from a parsed dump.
+fn flat_dmp_section_data(section: &stalagmight_parsers::parsers::dmp::DmpSection) -> SectionData {
+    use stalagmight_parsers::parsers::dmp::DmpShotType;
+    SectionData {
+        name: Some(section.name.clone()),
+        surveyor: None,
+        date: Some(section.date.date()),
+        color: String::new(),
+        direction: None,
+        quality: 1.0,
+        shots: section
+            .shots
+            .iter()
+            .filter(|s| s.shot_type == DmpShotType::Standard)
+            .map(|s| ShotData {
+                uuid: None,
+                azimuth_in: crate::models::normalize_azimuth(s.heading_in),
+                azimuth_out: crate::models::normalize_azimuth(s.heading_out),
+                length: s.length,
+                depth_in: s.depth_in,
+                depth_out: s.depth_out,
+                pitch_in: Some(s.pitch_in),
+                pitch_out: Some(s.pitch_out),
+                left: Some(s.left),
+                right: Some(s.right),
+                up: Some(s.up),
+                down: Some(s.down),
+                comment: s.comment.clone(),
+                kind: ShotKind::Normal,
+                marker_index: Some(u32::from(s.marker_index)),
+                temperature: Some(s.temperature),
+            })
+            .collect(),
+    }
+}
+
 /// Real device bytes with no vertical signal must be left exactly as they are.
 ///
 /// `test_v5.dmp` records no depth change on any shot, so the geometry cannot say
@@ -7927,7 +7966,7 @@ fn migrate_v12_leaves_a_section_with_no_vertical_signal_untouched() {
     let mut project = Project::new("Flat".to_string(), None);
     let mut stored: Vec<Option<f64>> = Vec::new();
     for section in &dmp.sections {
-        let mut data = section.to_section_data(String::new());
+        let mut data = flat_dmp_section_data(section);
         if data.shots.len() < 4 {
             continue;
         }
