@@ -1195,3 +1195,24 @@ describe('UTM band-edge slack (D37, R4 T1)', () => {
     expectRejected('33C 500000 1111717', /band C/); // 80.06S
   });
 });
+
+// ---------------------------------------------------------------------------
+// #576 review follow-up (R5). Expected values are plain deg + min/60 + sec/3600
+// arithmetic.
+// ---------------------------------------------------------------------------
+
+const PARIS_LAT = 48 + 51 / 60 + 30 / 3600; // 48°51'30"
+const PARIS_LON = 2 + 17 / 60 + 40 / 3600; // 2°17'40"
+
+describe('a fractional degree followed by minutes in a labelled paste (R5-6)', () => {
+  it('is refused, never read from the middle of the number', () => {
+    expectRejected(`Pos 48.5°51'30" -2°17'40"`, /whole number/);
+    expectRejected(`Pos 48.5°51'30"N 2°17'40"E`, /whole number/);
+    expectRejected(`Pos 48.5°51.5'N 2°17.5'W`, /whole number/);
+  });
+
+  it('still reads a labelled pair whose degrees are whole', () => {
+    expectCoordsClose(parsedOk(`Pos 48°51'30" -2°17'40"`), PARIS_LAT, -PARIS_LON);
+    expectCoordsClose(parsedOk(`No.20°30'15"N 87°18'27"W`), DMS_LAT, -DMS_LON);
+  });
+});

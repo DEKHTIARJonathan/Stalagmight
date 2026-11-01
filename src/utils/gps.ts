@@ -274,30 +274,33 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
   // word it starts (East, West; Este/Est), never the first letter of another
   // word ("2°17'40" WGS84" has no letter). The latitude letter is already
   // followed by a separator.
+  //
+  // Every pattern starts at a whole number: `(?<!\d\.?)` keeps a match from
+  // starting inside "48.5" (and reading 5°51'30"); see `wholeDegreesError`.
 
   // Pattern 1: With degree/minute/second symbols AND direction letters
   // Matches: 48°51'30"N 2°17'40"E (or with spaces)
   const dmsSymbolWithDirRegex =
-    /([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*(East|Este|Est|West|[EW])(?![A-Za-z])/i;
+    /(?<!\d\.?)([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*(East|Este|Est|West|[EW])(?![A-Za-z])/i;
 
   // Pattern 2: Space-separated with direction letters (required for disambiguation)
   // Matches: 48 51 30 N 2 17 40 E
   const dmsSpaceRegex =
-    /([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([NSns])\s+([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*(East|Este|Est|West|[EW])(?![A-Za-z])/i;
+    /(?<!\d\.?)([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([NSns])\s+([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*(East|Este|Est|West|[EW])(?![A-Za-z])/i;
 
   // Pattern 3: Signed degrees with symbols (no direction letters)
   // Matches: -33°51'54" 151°12'33" or 33°51'54" -151°12'33"
   const dmsSignedRegex =
-    /(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"][,\s]+(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]/i;
+    /(?<!\d\.?)(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"][,\s]+(-?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]/i;
 
   // Patterns 1 and 2 without the longitude letter, tried last: the longitude's
   // hemisphere then comes from the signs (`lonDirFromSigns`), as in the strict
   // pair reader - `87°53'15"S, -106°46'0" WGS84` is W by its minus sign. No
   // number may follow, so a longitude is never cut short.
   const dmsSymbolNoLonLetterRegex =
-    /([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"](?!\s*\d)/i;
+    /(?<!\d\.?)([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"]\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+)[′']\s*(\d+\.?\d*)[″"](?!\s*\d)/i;
   const dmsSpaceNoLonLetterRegex =
-    /([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([NSns])\s+([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)(?![\d.])(?!\s*\d)/i;
+    /(?<!\d\.?)([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)\s*([NSns])\s+([+-]?\d+)\s+(\d+)\s+(\d+\.?\d*)(?![\d.])(?!\s*\d)/i;
 
   let match = trimmed.match(dmsSymbolWithDirRegex);
   if (match) {
@@ -388,7 +391,7 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
     latDir === undefined ||
     lonDir === undefined
   ) {
-    return { message: DMS_FORMAT_MESSAGE, original: input, format: 'DMS' };
+    return { message: wholeDegreesError(trimmed) ?? DMS_FORMAT_MESSAGE, original: input, format: 'DMS' };
   }
 
   const latDeg = parseInt(latDegStr, 10);
@@ -482,6 +485,16 @@ const DDM_FORMAT_MESSAGE =
   "Invalid DDM format. Expected: deg°min.dec'N deg°min.dec'E (e.g., 48°51.5'N 2°17.67'E)";
 
 /**
+ * Why parseDMS / parseDDM found no pair in text holding a fractional degree
+ * followed by minutes (`48.5°51'30"`): the same refusal as the strict pair
+ * reader's, instead of reading from the middle of the number. Undefined
+ * otherwise.
+ */
+function wholeDegreesError(text: string): string | undefined {
+  return /\d\.\d*\s*°\s*\d+(?:\.\d*)?\s*[′']/.test(text) ? i18n.t('validation.gps.degreesNotWhole') : undefined;
+}
+
+/**
  * Parse Degrees Decimal Minutes format.
  * Examples: "48°51.5'N 2°17.67'E"
  *
@@ -494,19 +507,20 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
 
   // Stricter DDM regex - requires degree symbol and direction letters
   // The minutes must contain a decimal point to distinguish from DMS
-  // The longitude letter is bounded as in parseDMS ("87°18.5' elev" has no E).
+  // The longitude letter is bounded as in parseDMS ("87°18.5' elev" has no E),
+  // and a match starts at a whole number, as in parseDMS.
   const ddmRegex =
-    /([+-]?\d+)[°]\s*(\d+\.\d+)[′']?\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.\d+)[′']?\s*(East|Este|Est|West|[EW])(?![A-Za-z])/i;
+    /(?<!\d\.?)([+-]?\d+)[°]\s*(\d+\.\d+)[′']?\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.\d+)[′']?\s*(East|Este|Est|West|[EW])(?![A-Za-z])/i;
 
   // Also allow format without decimal if it has the prime symbol
   const ddmRegex2 =
-    /([+-]?\d+)[°]\s*(\d+\.?\d*)[′']\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.?\d*)[′']\s*(East|Este|Est|West|[EW])(?![A-Za-z])/i;
+    /(?<!\d\.?)([+-]?\d+)[°]\s*(\d+\.?\d*)[′']\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.?\d*)[′']\s*(East|Este|Est|West|[EW])(?![A-Za-z])/i;
 
   // Both without the longitude letter, tried last (see parseDMS).
   const ddmNoLonLetterRegex =
-    /([+-]?\d+)[°]\s*(\d+\.\d+)[′']?\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.\d+)(?![\d.])(?![′']?\s*\d)/i;
+    /(?<!\d\.?)([+-]?\d+)[°]\s*(\d+\.\d+)[′']?\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.\d+)(?![\d.])(?![′']?\s*\d)/i;
   const ddmNoLonLetterRegex2 =
-    /([+-]?\d+)[°]\s*(\d+\.?\d*)[′']\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.?\d*)[′'](?!\s*\d)/i;
+    /(?<!\d\.?)([+-]?\d+)[°]\s*(\d+\.?\d*)[′']\s*([NSns])[,\s]+([+-]?\d+)[°]\s*(\d+\.?\d*)[′'](?!\s*\d)/i;
 
   let match = trimmed.match(ddmRegex);
   if (!match) {
@@ -527,7 +541,7 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
     match[5] === undefined ||
     lonDir === undefined
   ) {
-    return { message: DDM_FORMAT_MESSAGE, original: input, format: 'DDM' };
+    return { message: wholeDegreesError(trimmed) ?? DDM_FORMAT_MESSAGE, original: input, format: 'DDM' };
   }
 
   const latDeg = parseInt(match[1], 10);
