@@ -308,6 +308,13 @@ impl<W: std::io::Write> TmlWriter<W> {
         Ok(())
     }
 
+    /// `<!--text-->`. The text is ours and fixed, never project data.
+    fn comment(&mut self, text: &'static str) -> Result<()> {
+        self.xml
+            .write_event(Event::Comment(BytesText::from_escaped(text)))?;
+        Ok(())
+    }
+
     /// [`Self::text_element`] for a schema element, in the document's spelling.
     fn field(&mut self, element: ElementName, text: &str) -> Result<()> {
         self.text_element(element.spelled(self.sp), text)
@@ -322,8 +329,17 @@ fn write_shot<W: std::io::Write>(out: &mut TmlWriter<W>, shot: &ExportShot) -> R
     out.field(el::closure_to_id::NAME, &shot.closure_to_id.to_string())?;
     out.field(el::color::NAME, &shot.color)?;
     out.field(el::comment::NAME, shot.comment.as_deref().unwrap_or(""))?;
-    let date_str = shot.date.as_deref().unwrap_or(DEFAULT_EXPORT_DATE);
-    out.field(el::date::NAME, date_str)?;
+    if let Some(date) = shot.date.as_deref() {
+        out.field(el::date::NAME, date)?;
+    } else {
+        // No survey date. The placeholder keeps the file readable everywhere;
+        // the marker tells our own reader it is not a date (#576 B2), so a
+        // re-import neither shows 1 January 2000 nor derives a declination
+        // for it. Only ever reached in the user profile: the sidecar has
+        // already replaced every date by `speleodb_date`.
+        out.field(el::date::NAME, schema::UNDATED_PLACEHOLDER)?;
+        out.comment(schema::UNDATED_MARKER)?;
+    }
     out.field(el::depth::NAME, &format_f64(shot.depth))?;
     out.field(el::depth_in::NAME, &format_f64(emitted_depth_in(shot)))?;
     out.field(el::down::NAME, &format_f64(shot.down))?;
@@ -382,11 +398,6 @@ fn write_shot<W: std::io::Write>(out: &mut TmlWriter<W>, shot: &ExportShot) -> R
 
     out.end(el::survey_data::NAME)
 }
-
-/// Stand-in for a section with no survey date. `<Date>` is not optional to every
-/// consumer - SpeleoDB rejects the whole file when it is missing or empty - so a
-/// dateless section still gets a parseable one.
-const DEFAULT_EXPORT_DATE: &str = "2000-01-01";
 
 /// The `DepthIn` value to write for `shot`.
 ///
@@ -2002,7 +2013,7 @@ fn speleodb_date(raw: Option<&str>) -> String {
         .filter(|s| !s.is_empty())
         .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
     else {
-        return DEFAULT_EXPORT_DATE.to_owned();
+        return schema::UNDATED_PLACEHOLDER.to_owned();
     };
     if parsed.year() < SPELEODB_MIN_YEAR {
         return format!("{SPELEODB_MIN_YEAR}-01-01");
@@ -2112,7 +2123,7 @@ fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
             down: 0.0,
             comment: None,
             explorer: None,
-            date: Some(DEFAULT_EXPORT_DATE.to_owned()),
+            date: Some(schema::UNDATED_PLACEHOLDER.to_owned()),
             color: anchor.color.clone(),
             latitude: 0.0,
             longitude: 0.0,
@@ -2551,6 +2562,95 @@ mod tests {
         // And an ordinary project says nothing.
         let ordinary = dir.path().join("ordinary.tmlu");
         assert!(export_tml(&simple_project(), &ordinary).unwrap().is_empty());
+    }
+
+    /// A georeferenced, magnetic project whose sections carry the given dates.
+    fn dated_project(dates: &[Option<chrono::NaiveDate>]) -> Project {
+        let mut project = Project::new("CaveA".to_string(), None);
+        for (i, date) in dates.iter().enumerate() {
+            project.add_section(SectionData {
+                name: Some(format!("Section{i}")),
+                date: *date,
+                color: "#ff0000".to_string(),
+                shots: vec![ShotData {
+                    azimuth_in: 90.0,
+                    azimuth_out: 90.0,
+                    length: 4.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        }
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef::new(0, 0).into(),
+            gps: GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+        });
+        project
+    }
+
+    /// Export to `.tmlu`, re-import, and return what the import records.
+    fn reimport(project: &Project) -> Vec<crate::models::ImportSectionConfig> {
+        let file = NamedTempFile::with_suffix(".tmlu").unwrap();
+        export_tml(project, file.path()).unwrap();
+        let tml = crate::parsers::tml::parse_tml(file.path()).unwrap();
+        crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true)
+            .unwrap()
+            .0
+    }
+
+    /// #576 B2: an UNDATED section went out with the 2000-01-01 placeholder
+    /// and came back dated 1 January 2000, so a magnetic, georeferenced file
+    /// derived an IGRF declination for the year 2000 and rotated the survey.
+    /// The placeholder stays (SpeleoDB rejects a missing date, and Ariane's
+    /// handling of an empty one is unverified) but carries our own marker, so
+    /// exactly our placeholders read back as "no date".
+    #[test]
+    fn an_undated_section_round_trips_undated_and_unrotated() {
+        let configs = reimport(&dated_project(&[None]));
+        assert_eq!(configs.len(), 1);
+        assert_eq!(
+            configs[0].date, None,
+            "the placeholder is not a survey date"
+        );
+        let reference = configs[0].azimuth_reference.unwrap();
+        assert_eq!(
+            reference,
+            crate::models::AzimuthReference::magnetic(
+                0.0,
+                crate::models::CorrectionSource::Unknown
+            ),
+            "no date means no epoch to evaluate a declination at"
+        );
+    }
+
+    /// The placeholder no longer displaces a REAL earliest date when the file
+    /// mixes dated and undated sections: the epoch is the real date's year.
+    #[test]
+    fn an_undated_section_does_not_move_the_declination_epoch() {
+        let configs = reimport(&dated_project(&[
+            chrono::NaiveDate::from_ymd_opt(2024, 5, 1),
+            None,
+        ]));
+        let reference = configs[0].azimuth_reference.unwrap();
+        assert_eq!(
+            reference.source,
+            crate::models::CorrectionSource::IgrfAuto { epoch_year: 2024 },
+            "{reference:?}"
+        );
+        assert_eq!(configs[1].date, None);
+    }
+
+    /// Exactly OUR placeholders: a section genuinely surveyed on 2000-01-01
+    /// keeps its date.
+    #[test]
+    fn a_genuine_first_of_january_2000_keeps_its_date() {
+        let new_year = chrono::NaiveDate::from_ymd_opt(2000, 1, 1);
+        let configs = reimport(&dated_project(&[new_year]));
+        assert_eq!(configs[0].date, new_year);
+        assert_eq!(
+            configs[0].azimuth_reference.unwrap().source,
+            crate::models::CorrectionSource::IgrfAuto { epoch_year: 2000 }
+        );
     }
 
     #[test]
@@ -5390,10 +5490,13 @@ mod tests {
         // A missing, empty or non-ISO `<Date>` fails validation for the ENTIRE
         // file, and a year outside IGRF's [1900, 2035] silently drops the
         // magnetic declination to 0.0, rotating the map.
-        assert_eq!(speleodb_date(None), DEFAULT_EXPORT_DATE);
-        assert_eq!(speleodb_date(Some("")), DEFAULT_EXPORT_DATE);
-        assert_eq!(speleodb_date(Some("   ")), DEFAULT_EXPORT_DATE);
-        assert_eq!(speleodb_date(Some("15/06/2025")), DEFAULT_EXPORT_DATE);
+        assert_eq!(speleodb_date(None), schema::UNDATED_PLACEHOLDER);
+        assert_eq!(speleodb_date(Some("")), schema::UNDATED_PLACEHOLDER);
+        assert_eq!(speleodb_date(Some("   ")), schema::UNDATED_PLACEHOLDER);
+        assert_eq!(
+            speleodb_date(Some("15/06/2025")),
+            schema::UNDATED_PLACEHOLDER
+        );
         assert_eq!(speleodb_date(Some("2025-06-15")), "2025-06-15");
         assert_eq!(speleodb_date(Some("1850-06-01")), "1900-01-01");
         assert_eq!(speleodb_date(Some("2999-01-01")), "2035-12-31");

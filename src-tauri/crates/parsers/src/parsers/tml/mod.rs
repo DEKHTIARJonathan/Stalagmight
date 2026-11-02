@@ -458,6 +458,13 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                     }
                 }
             }
+            // Our exporter's "this date is a placeholder" marker (#576 B2).
+            // Every other comment is not document content and stays ignored.
+            Ok(Event::Comment(c)) => {
+                if in_shot && c.as_ref().trim_ascii() == schema::UNDATED_MARKER.as_bytes() {
+                    current_fields.insert(UNDATED_MARKER_KEY, String::new());
+                }
+            }
             Ok(Event::Eof) => {
                 if open_elements > 0 {
                     bail!(
@@ -666,6 +673,27 @@ fn parse_explorer_field(raw: &str) -> Option<String> {
     }
 }
 
+/// Field-map key under which the parse loop records our exporter's
+/// [`schema::UNDATED_MARKER`] comment on the current row. Not an element name,
+/// so no file field can collide with it.
+const UNDATED_MARKER_KEY: &str = "#undated-marker";
+
+/// The row's survey date, strictly `%Y-%m-%d`.
+///
+/// [`schema::UNDATED_PLACEHOLDER`] carrying our [`schema::UNDATED_MARKER`] is
+/// "no date" (#576 B2): our exporter wrote it for a section with none, and
+/// reading it as 1 January 2000 fabricated a date AND derived a declination
+/// for it. Only the MARKED placeholder - the same date from Ariane, or from an
+/// export made before the marker existed, is indistinguishable from a real one
+/// and is kept.
+fn shot_date(fields: &HashMap<&str, String>) -> Option<NaiveDate> {
+    let raw = fields.get("date")?;
+    if fields.contains_key(UNDATED_MARKER_KEY) && raw == schema::UNDATED_PLACEHOLDER {
+        return None;
+    }
+    NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok()
+}
+
 /// Build a `RawShot` from parsed field map.
 fn build_raw_shot(
     fields: &HashMap<&str, String>,
@@ -699,9 +727,7 @@ fn build_raw_shot(
 
     let color = schema::color_from_ariane(fields.get("color").map(String::as_str));
 
-    let date = fields
-        .get("date")
-        .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+    let date = shot_date(fields);
 
     let comment = fields
         .get("comment")
@@ -1951,6 +1977,46 @@ mod tests {
     use super::linearize::{MAX_TRIP_CUTS_PER_FILE, MAX_TRIP_CUTS_PER_RUN};
     use super::test_helpers::*;
     use super::*;
+
+    /// #576 B2: only OUR placeholder - 2000-01-01 followed by our marker
+    /// comment - reads as "no date". The same date unmarked (Ariane's, or an
+    /// export from before the marker) is a date; the marker never erases any
+    /// other date; any other comment is ignored.
+    #[test]
+    fn only_the_marked_placeholder_date_reads_as_undated() {
+        let row = |id: i64, section: &str, date_and_comment: &str| {
+            tml_shot_xml(id, id - 1, "REAL", section)
+                .replace("<Date>2024-06-15</Date>", date_and_comment)
+        };
+        let marker = format!("<!--{}-->", schema::UNDATED_MARKER);
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                row(
+                    1,
+                    "Marked",
+                    &format!("<Date>2000-01-01</Date>\n    {marker}"),
+                ),
+                row(2, "Unmarked", "<Date>2000-01-01</Date>"),
+                row(3, "Real", &format!("<Date>2019-02-03</Date>{marker}")),
+                row(4, "Other", "<Date>2000-01-01</Date><!-- hand edited -->"),
+            ]
+            .join("\n"),
+        );
+
+        let tml = parse_synthetic_tmlu(&xml);
+        let date_of = |name: &str| {
+            tml.sections
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("no section {name}"))
+                .date
+        };
+        assert_eq!(date_of("Marked"), None);
+        assert_eq!(date_of("Unmarked"), NaiveDate::from_ymd_opt(2000, 1, 1));
+        assert_eq!(date_of("Real"), NaiveDate::from_ymd_opt(2019, 2, 3));
+        assert_eq!(date_of("Other"), NaiveDate::from_ymd_opt(2000, 1, 1));
+    }
 
     /// The reader keys every per-shot element the exporter writes from the same
     /// `schema::element` table, in BOTH spellings, onto the field it means

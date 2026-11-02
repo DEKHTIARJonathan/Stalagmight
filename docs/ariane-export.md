@@ -84,7 +84,7 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 |----------------|-------------|-------|
 | `section.name` | `Section` / `SC` | Falls back to `"Section {id}"` if unnamed |
 | `section.surveyor` | `Explorer` / `EX` | `"unknown"` if unset. Written VERBATIM, so a compound value the import built from Ariane's two-role field (`"nh / ds"` - see [Ariane import](ariane-import.md#per-section)) goes back out in the plain compound form real files use, and re-imports unchanged. A file that arrived in the entity-escaped `<Explorer>…</Explorer><Surveyor>…</Surveyor>` encoding is normalised to that plain form, not restored to the escaped one. |
-| `section.date` | `Date` / `DT` | `"2000-01-01"` if unset |
+| `section.date` | `Date` / `DT` | `"2000-01-01"` if unset, followed by the XML comment `<!--stalagmight:no-survey-date-->` so our importer reads exactly that placeholder back as "no date" (#576 B2). The placeholder stays because SpeleoDB rejects a missing or empty date; the marker is a comment because no TML element is one Ariane ignores, and a comment is not document content to any XML reader. Without it, a dateless section re-imported dated 1 January 2000 and a magnetic, georeferenced file took its IGRF declination epoch from that year, rotating the survey. A file re-saved by Ariane loses the comment, and the placeholder then reads as a real date again. |
 | `section.color` (`#RRGGBB`) | `Color` / `CL` | Converted to Ariane format `0xRRGGBBff` |
 
 ### Shot-level fields
@@ -322,8 +322,9 @@ one is broken it either fails the whole file or silently skips the map - the
 upload still returns 200, so nothing surfaces to the user.
 
 `export_tml` and `export_tml_for_speleodb` therefore build the same document
-under different profiles. The **user** profile is what it has always been, down
-to the byte. The **sidecar** profile additionally:
+under different profiles. The **user** profile's bytes change only deliberately
+(`tml_golden_tests.rs` pins the whole document). The **sidecar** profile
+additionally:
 
 | Concession | Why |
 |------------|-----|

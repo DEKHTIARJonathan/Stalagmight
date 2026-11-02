@@ -530,6 +530,7 @@ junction note</CM>
             <CL>0x00ff00ff</CL>
             <CM></CM>
             <DT>2000-01-01</DT>
+            <!--stalagmight:no-survey-date-->
             <DP>1.5</DP>
             <DPI>-1.0</DPI>
             <D>0.0</D>
@@ -557,6 +558,7 @@ junction note</CM>
             <CL>0x00ff00ff</CL>
             <CM></CM>
             <DT>2000-01-01</DT>
+            <!--stalagmight:no-survey-date-->
             <DP>2.0</DP>
             <DPI>2.5</DPI>
             <D>0.0</D>
@@ -638,6 +640,7 @@ junction note</CM>
             <CL>0xaa00aaff</CL>
             <CM></CM>
             <DT>2000-01-01</DT>
+            <!--stalagmight:no-survey-date-->
             <DP>1.5</DP>
             <DPI>-1.0</DPI>
             <D>0.0</D>
@@ -718,6 +721,7 @@ junction note</CM>
             <CL>0x00ff00ff</CL>
             <CM></CM>
             <DT>2000-01-01</DT>
+            <!--stalagmight:no-survey-date-->
             <DP>1.0</DP>
             <DPI>1.5</DPI>
             <D>0.0</D>
