@@ -133,13 +133,14 @@ function runProjectReplaced(runKey: string | null): boolean {
   return projectSwitched(runKey, useProjectStore.getState().project?.created_at ?? null);
 }
 
-/** What the backend is told when it gives no reason of its own. */
-const FALLBACK_TEXT: Record<'anchor' | 'early' | 'late' | 'segment', string> = {
-  anchor: 'Failed to import zero datum section',
-  early: 'Import failed',
-  late: 'Late import failed',
-  segment: 'Segment import failed',
-};
+/** What the user is told when the backend gives no reason of its own: the en.json
+ *  key per step, rendered through `t()` (#576 RV5-LS-1). */
+const FALLBACK_TEXT_KEY = {
+  anchor: 'dialogs.dmpNewImport.anchorImportFailed',
+  early: 'dialogs.dmpNewImport.importFailed',
+  late: 'dialogs.dmpNewImport.lateImportFailed',
+  segment: 'dialogs.dmpNewImport.segmentImportFailed',
+} as const satisfies Record<'anchor' | 'early' | 'late' | 'segment', string>;
 
 export function useDmpImportRun({
   dmpFile,
@@ -246,7 +247,7 @@ export function useDmpImportRun({
         updates.length > 0 ? updates : null, true,
       );
       if (!result.success) {
-        fail(kind, importFailureText(result, FALLBACK_TEXT[kind]));
+        fail(kind, importFailureText(result, t(FALLBACK_TEXT_KEY[kind])));
         return null;
       }
       bank(result);
@@ -340,7 +341,7 @@ export function useDmpImportRun({
           const targetDmpIndex = emittedDmpIndices[placement.target_section_index];
           const existingTargetId = targetDmpIndex != null ? earlyImportedRef.current.get(targetDmpIndex) : undefined;
           if (existingTargetId == null) {
-            fail('segment', 'Segment import failed: unresolved relative placement target');
+            fail('segment', t('dialogs.dmpNewImport.segmentTargetUnresolved'));
             return null;
           }
           cfg.placement = {
@@ -359,7 +360,7 @@ export function useDmpImportRun({
         settle(segmentDmpIndices, result.section_ids);
         return true;
       }),
-    [fail, send, settle, step],
+    [fail, send, settle, step, t],
   );
 
   // ─── Withdrawal (Cancel / Back) ─────────────────────────────────────────────

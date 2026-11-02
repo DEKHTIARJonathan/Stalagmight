@@ -23,9 +23,21 @@
 //     (USER_FACING_PROPS below)
 //   - an error/message setter argument:          setError('Name is required')
 //     (a call to set...Error / ...Message / ...Warning / ...Notice)
+//   - a toast's message:                         showToast('Shot deleted', 'key', 'info')
+//     (MESSAGE_ARG_CALLS below: that argument only, never the dedup key or kind)
+//   - the argument a message-named parameter of a function declared in the same
+//     file takes:                                fail('segment', 'Import failed')
+//     (MESSAGE_PARAM below; `useCallback((kind, message) => ...)` counts)
+//   - every string a binding named as text holds: const FALLBACK_TEXT = { a: 'Failed' }
+//     (`..._TEXT`, `...Message`, `...Labels` - isTextName below; i18n keys excepted)
 // Strings are followed through `a ? 'x' : 'y'`, `a && 'x'`, `a ?? 'x'`, `a || 'x'`,
-// `'a' + b`, parentheses and `as` casts - never into a call, so `t('key')` and its
-// key are never flagged. A string counts only if it has a letter once template
+// `'a' + b`, parentheses, `as` casts and `String(...)`, and through the file's own
+// bindings: a `const`/`let` read where text is rendered (`{HEADING}`, a template
+// held in `msg`), and a map or list declared in the file looked up there
+// (`{NAMES[kind]}`, `NAMES.a`). Never into any other call, so `t('key')` and its
+// key are never flagged. Bindings resolve by name within the file, so a name
+// declared twice resolves to both (the gate errs towards reporting). A variable
+// whose value comes from anywhere else stays invisible. A string counts only if it has a letter once template
 // placeholders (`${...}`) and HTML entities (`&rarr;`) are removed, so `{' · '}`,
 // `{`${n}/${m}`}` and `&times;` pass.
 //
@@ -95,39 +107,157 @@ export function hasLetters(text) {
   return /[A-Za-z]/.test(stripped);
 }
 
+// [#576 RV5-LS-2] A call whose argument at a known position is the user-visible
+// message, though the callee is not declared in the file: the toast API
+// (`showToast(message, key, kind, options)` in src/store/uiStore.ts). Only that
+// position: the dedup key and the kind are identifiers, not text.
+export const MESSAGE_ARG_CALLS = new Map([['showToast', [0]]]);
+
+// [#576 RV5-LS-1] A parameter of a function declared in the file whose argument is
+// text: `fail(kind, message)`, `report(reason)`. The other parameters are not.
+export const MESSAGE_PARAM = /^(?:message|msg|text|reason|label|title|description|detail|notice|caption)$|(?:Message|Text|Reason|Label|Title|Notice|Caption)$/;
+
+// [#576 RV5-LS-1] A binding named as text - `FALLBACK_TEXT`, `emptyMessage`,
+// `STEP_LABELS` - holds user-visible strings, wherever it is read: every string in
+// its initializer (the values of an object map, the items of an array) counts.
+const TEXT_NAME_WORDS = new Set([
+  'text', 'texts', 'message', 'messages', 'label', 'labels', 'title', 'titles',
+  'notice', 'notices', 'reason', 'reasons', 'caption', 'captions', 'heading', 'headings',
+  'tooltip', 'tooltips', 'placeholder', 'placeholders', 'hint', 'hints', 'copy',
+]);
+export function isTextName(name) {
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[\s_]+/)
+    .filter(Boolean);
+  const last = words[words.length - 1];
+  return last !== undefined && TEXT_NAME_WORDS.has(last.toLowerCase());
+}
+
+// The local bindings of one file, by name: `const|let NAME = <initializer>` and
+// the parameters of the functions declared there. Syntax only, so a name declared
+// twice in different scopes resolves to both - the gate errs towards reporting.
+function collectBindings(source) {
+  const values = new Map();
+  const functions = new Map();
+  const push = (map, name, value) => map.set(name, [...(map.get(name) ?? []), value]);
+  const fnOf = (init) => {
+    if (!init) return null;
+    if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) return init;
+    // `useCallback((kind, message) => ..., [])` and friends: the function argument.
+    if (ts.isCallExpression(init)) {
+      const first = init.arguments[0];
+      if (first && (ts.isArrowFunction(first) || ts.isFunctionExpression(first))) return first;
+    }
+    return null;
+  };
+  const visit = (node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      push(values, node.name.text, node.initializer);
+      const fn = fnOf(node.initializer);
+      if (fn) push(functions, node.name.text, fn);
+    } else if (ts.isFunctionDeclaration(node) && node.name) {
+      push(functions, node.name.text, node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return { values, functions };
+}
+
 // The string-literal nodes an expression can evaluate to (see the header).
-function stringsIn(e) {
-  if (!e) return [];
+function stringsIn(e, ctx, seen = new Set()) {
+  if (!e || seen.has(e)) return [];
+  seen.add(e);
+  const inner = (x) => stringsIn(x, ctx, seen);
   if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) || ts.isTemplateExpression(e)) return [e];
-  if (ts.isConditionalExpression(e)) return [...stringsIn(e.whenTrue), ...stringsIn(e.whenFalse)];
+  if (ts.isConditionalExpression(e)) return [...inner(e.whenTrue), ...inner(e.whenFalse)];
   if (ts.isBinaryExpression(e)) {
     const k = e.operatorToken.kind;
-    if (k === ts.SyntaxKind.AmpersandAmpersandToken) return stringsIn(e.right);
+    if (k === ts.SyntaxKind.AmpersandAmpersandToken) return inner(e.right);
     if (k === ts.SyntaxKind.BarBarToken || k === ts.SyntaxKind.QuestionQuestionToken || k === ts.SyntaxKind.PlusToken) {
-      return [...stringsIn(e.left), ...stringsIn(e.right)];
+      return [...inner(e.left), ...inner(e.right)];
     }
     return [];
   }
   if (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e) || ts.isSatisfiesExpression?.(e)) {
-    return stringsIn(e.expression);
+    return inner(e.expression);
+  }
+  // [#576 RV5-LS-2] `String('Remove all')` renders its argument.
+  if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === 'String') {
+    return inner(e.arguments[0]);
+  }
+  if (!ctx) return [];
+  // [#576 RV5-LS-2] A binding read where text is rendered: its initializer, if
+  // that is a string expression (`const HEADING = '...'`, a template held in a
+  // variable). An object or array held in it is text only when looked up.
+  if (ts.isIdentifier(e)) {
+    return (ctx.values.get(e.text) ?? []).flatMap((init) =>
+      ts.isObjectLiteralExpression(init) || ts.isArrayLiteralExpression(init) ? [] : inner(init),
+    );
+  }
+  // `NAMES[kind]` / `NAMES.a` / `ITEMS[i]` on a map or list declared in the file.
+  if ((ts.isElementAccessExpression(e) || ts.isPropertyAccessExpression(e)) && ts.isIdentifier(e.expression)) {
+    const key = ts.isPropertyAccessExpression(e) ? e.name.text : null;
+    return (ctx.values.get(e.expression.text) ?? []).flatMap((init) => collectionStrings(init, key, inner));
   }
   return [];
 }
 
+// The strings a map or list literal can yield: one property when the key is
+// named, every value otherwise.
+function collectionStrings(init, key, inner) {
+  let e = init;
+  while (ts.isAsExpression(e) || ts.isParenthesizedExpression(e) || ts.isSatisfiesExpression?.(e)) e = e.expression;
+  if (ts.isArrayLiteralExpression(e)) return key === null ? e.elements.flatMap((x) => inner(x)) : [];
+  if (!ts.isObjectLiteralExpression(e)) return [];
+  return e.properties.flatMap((p) => {
+    if (!ts.isPropertyAssignment(p)) return [];
+    const name = ts.isIdentifier(p.name) || ts.isStringLiteral(p.name) ? p.name.text : null;
+    return key === null || name === key ? inner(p.initializer) : [];
+  });
+}
+
+// A template's text with its placeholders kept as `${expr}` and its escapes
+// cooked, so a `\n` between two placeholders is a newline, not the letter n.
 const literalText = (node, source) =>
-  ts.isTemplateExpression(node) ? node.getText(source).slice(1, -1) : node.text;
+  ts.isTemplateExpression(node)
+    ? node.head.text + node.templateSpans.map((span) => `\${${span.expression.getText(source)}}${span.literal.text}`).join('')
+    : node.text;
+
+// [#576 RV5-LS-1] An i18n key (`dialogs.export.phases.generating`): what a map of
+// keys holds, looked up through `t()` where it is rendered. Not text itself.
+const I18N_KEY = /^[A-Za-z][\w-]*(?:\.[\w-]+)+$/;
 
 const normalize = (text) => text.replace(/\s+/g, ' ').trim();
+
+// The callee's name: `fail(...)`, `store.getState().showToast(...)`.
+const calleeName = (call) =>
+  ts.isIdentifier(call.expression)
+    ? call.expression.text
+    : ts.isPropertyAccessExpression(call.expression)
+      ? call.expression.name.text
+      : null;
 
 // Findings in one file: [{file, line, kind, text}].
 export function analyzeSource(file, sourceText) {
   const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
   const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, kind);
+  const ctx = collectBindings(source);
   const findings = [];
+  // One finding per literal: a constant rendered in two places is one string to
+  // move.
+  const reported = new Set();
   const add = (node, what, text) => {
     if (!hasLetters(text)) return;
+    const id = node.getStart(source);
+    if (reported.has(id)) return;
+    reported.add(id);
     const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
     findings.push({ file, line, kind: what, text: normalize(text) });
+  };
+  const addAll = (expr, what) => {
+    for (const s of stringsIn(expr, ctx)) add(s, what, literalText(s, source));
   };
   const visit = (node) => {
     if (ts.isJsxText(node)) {
@@ -135,14 +265,23 @@ export function analyzeSource(file, sourceText) {
     } else if (ts.isJsxAttribute(node) && node.initializer && USER_FACING_ATTRS.has(node.name.getText(source))) {
       const what = `attr ${node.name.getText(source)}`;
       if (ts.isStringLiteral(node.initializer)) add(node, what, node.initializer.text);
-      else if (ts.isJsxExpression(node.initializer)) {
-        for (const s of stringsIn(node.initializer.expression)) add(s, what, literalText(s, source));
-      }
+      else if (ts.isJsxExpression(node.initializer)) addAll(node.initializer.expression, what);
     } else if (ts.isJsxExpression(node) && (ts.isJsxElement(node.parent) || ts.isJsxFragment(node.parent))) {
-      for (const s of stringsIn(node.expression)) add(s, 'jsx-expr', literalText(s, source));
-    } else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && MESSAGE_SETTER.test(node.expression.text)) {
-      for (const arg of node.arguments) {
-        for (const s of stringsIn(arg)) add(s, `${node.expression.text}()`, literalText(s, source));
+      addAll(node.expression, 'jsx-expr');
+    } else if (ts.isCallExpression(node) && calleeName(node) !== null) {
+      const name = calleeName(node);
+      if (ts.isIdentifier(node.expression) && MESSAGE_SETTER.test(name)) {
+        for (const arg of node.arguments) addAll(arg, `${name}()`);
+      } else if (MESSAGE_ARG_CALLS.has(name)) {
+        for (const i of MESSAGE_ARG_CALLS.get(name)) addAll(node.arguments[i], `${name}()`);
+      } else if (ts.isIdentifier(node.expression) && ctx.functions.has(name)) {
+        // [#576 RV5-LS-1] A local function: the arguments its message-named
+        // parameters take.
+        for (const fn of ctx.functions.get(name)) {
+          fn.parameters.forEach((param, i) => {
+            if (ts.isIdentifier(param.name) && MESSAGE_PARAM.test(param.name.text)) addAll(node.arguments[i], `${name}()`);
+          });
+        }
       }
     } else if (
       ts.isPropertyAssignment(node) &&
@@ -150,7 +289,16 @@ export function analyzeSource(file, sourceText) {
       (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) &&
       USER_FACING_PROPS.has(node.name.text)
     ) {
-      for (const s of stringsIn(node.initializer)) add(s, `prop ${node.name.text}`, literalText(s, source));
+      addAll(node.initializer, `prop ${node.name.text}`);
+    } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && isTextName(node.name.text)) {
+      // [#576 RV5-LS-1] A binding named as text: its strings, a map's values and a
+      // list's items included.
+      const what = `binding ${node.name.text}`;
+      const strings = [...stringsIn(node.initializer, ctx), ...collectionStrings(node.initializer, null, (x) => stringsIn(x, ctx))];
+      for (const s of strings) {
+        const text = literalText(s, source);
+        if (!I18N_KEY.test(text)) add(s, what, text);
+      }
     }
     ts.forEachChild(node, visit);
   };

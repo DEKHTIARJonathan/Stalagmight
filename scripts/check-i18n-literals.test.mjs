@@ -72,6 +72,69 @@ test('error / message setters are reported (the validation-error shape)', () => 
   assert.deepEqual(texts(code), ['Length must be greater than 0', 'Failed to delete shot', 'Failed', 'Saved']);
 });
 
+// [#576 RV5-LS-1] Text handed to a local callback through a message-named parameter,
+// and a map of messages, were invisible: the DMP wizard's failure text shipped in
+// English past the zero gate.
+test('a literal passed to a local callback through a message-named parameter is reported, the other arguments are not', () => {
+  const code = `const fail = useCallback((kind: Step, message: string) => setFailure({ kind, message }), []);
+    function report(reason: string) { console.warn(reason); }
+    const warn = (code: string, text: string) => code + text;
+    fail('segment', 'Segment import failed: unresolved relative placement target');
+    report('Could not read the file');
+    warn('w-1', \`Removed \${n} shots\`);
+    fail('segment', t('dialogs.x.failed'));`;
+  assert.deepEqual(texts(code), [
+    'Segment import failed: unresolved relative placement target',
+    'Could not read the file',
+    'Removed ${n} shots',
+  ]);
+});
+
+test('a map or constant named as text (..._TEXT, ...Message, ...Label) is reported where it is declared', () => {
+  const code = `const FALLBACK_TEXT: Record<'anchor' | 'early', string> = {
+      anchor: 'Failed to import zero datum section',
+      early: 'Import failed',
+    };
+    const emptyMessage = 'Nothing to show';
+    const STEP_LABELS = ['Choose file', 'Review'];
+    const KIND_CLASS = { anchor: 'bg-red-500' };
+    const FALLBACK_KEY = 'dialogs.x.fallback';`;
+  assert.deepEqual(texts(code), ['Failed to import zero datum section', 'Import failed', 'Nothing to show', 'Choose file', 'Review']);
+});
+
+// [#576 RV5-LS-2] Ordinary code shapes that rendered a literal past the gate.
+test('a constant or template held in a variable and rendered in JSX is reported', () => {
+  const code = `const HEADING = 'Delete every section';
+    function Probe({ n }: { n: number }) {
+      const msg = \`Removed \${n} shots\`;
+      let note = 'Read only';
+      return <div><h2>{HEADING}</h2><p>{msg}</p><p title={note}>{busy ? note : HEADING}</p></div>;
+    }`;
+  assert.deepEqual(texts(code), ['Delete every section', 'Removed ${n} shots', 'Read only']);
+});
+
+test('a literal reached through a map lookup in JSX, or wrapped in String(), is reported', () => {
+  const code = `const NAMES = { a: 'First choice', b: 'Second choice' };
+    const v = <div>{NAMES[kind]}{NAMES.a}{String('Remove all')}</div>;`;
+  assert.deepEqual(texts(code), ['First choice', 'Second choice', 'Remove all']);
+});
+
+test('the message of a showToast() is reported, its dedup key and kind are not', () => {
+  const code = `showToast('Shot deleted from the survey', 'shot-deleted', 'success');
+    useUIStore.getState().showToast(\`Saved \${name}\`, 'saved', 'info');
+    showToast(t('toasts.saved'), 'saved', 'info');`;
+  assert.deepEqual(texts(code), ['Shot deleted from the survey', 'Saved ${name}']);
+});
+
+test('a binding that never reaches a sink, or reaches only a non-text one, is not reported', () => {
+  const code = `const cls = 'p-4 text-sm';
+    const key = 'dialog-key';
+    const label = t('dialogs.x.label');
+    const v = <div className={cls} data-testid={key}>{label}</div>;
+    fail(kind, label);`;
+  assert.deepEqual(texts(code), []);
+});
+
 // --- must NOT report --------------------------------------------------------------
 
 test('t() calls and their keys are never reported, in any position', () => {

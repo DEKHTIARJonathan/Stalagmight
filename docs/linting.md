@@ -267,9 +267,15 @@ What it reads as UI text (TypeScript AST, syntax only): JSX text, strings in a
 JSX child expression (followed through `?:`, `&&`, `??`, `||`, `+`), the
 user-facing JSX attributes (`title`, `label`, `placeholder`, `alt`,
 `aria-label`, ...), the same names as object-literal properties (dialog
-payloads, option lists), and the argument of a `set...Error` /
-`...Message` / `...Warning` / `...Notice` setter. It never looks inside a
-call, so `t('key')` is invisible to it, and a string with no letter left once
+payloads, option lists), the argument of a `set...Error` /
+`...Message` / `...Warning` / `...Notice` setter, a `showToast` message, the
+argument a message-named parameter (`message`, `reason`, `...Text`) of a
+function declared in the same file takes (`fail(kind, message)`), and every
+string held by a binding named as text (`FALLBACK_TEXT`, `emptyMessage`,
+`STEP_LABELS`; i18n keys excepted). It follows the file's own `const`/`let`
+bindings into those places (`{HEADING}`, a template held in `msg`,
+`{NAMES[kind]}`) and through `String(...)` (#576 RV5-LS-1, RV5-LS-2). It never
+looks inside any other call, so `t('key')` is invisible to it, and a string with no letter left once
 `${...}` placeholders and HTML entities are removed passes (`{' · '}`,
 `&rarr;`). Render the text with `t('dialogs.<dialog>.<key>')`, or `<Trans>`
 with named tags when it wraps elements (see `OverwriteConfirmDialog.tsx`).
@@ -277,5 +283,6 @@ with named tags when it wraps elements (see `OverwriteConfirmDialog.tsx`).
 A literal that is not language - a file-format name (PNG, PDF), a brand, a
 URL placeholder - goes in `scripts/i18n-literals-allowlist.json` as an exact
 `{file, text, reason}` row. A row that matches nothing fails the gate, so the
-list cannot outlive its reason. The gate is a heuristic: a string kept in a
-variable or a helper map is invisible to it, which is what review is for.
+list cannot outlive its reason. The gate is a heuristic: bindings resolve by
+name within one file, so a string that arrives from another module, a prop or
+a helper's return value is invisible to it, which is what review is for.
