@@ -424,13 +424,37 @@ const MAX_TOTAL_TOASTS = MAX_VISIBLE_TOASTS + 4;
 /**
  * Apply the live-toast cap: mark the oldest overflow `leaving` (so it animates
  * away rather than blinking out), then trim the array to its hard ceiling.
+ *
+ * A {@link ToastOptions.persistent} toast counts toward the cap but is evicted
+ * only when no ordinary toast is left to evict instead: it reports a condition
+ * that is raised once and stays until it is over (the lost-WebGL-context "Reload
+ * map" toast is never raised again for the same loss), so a burst of ordinary
+ * toasts must not push it out (#576 RV4-FE-MF1). The hard trim likewise drops
+ * leaving toasts first, so a persistent one that is still live survives it.
  */
 function capToasts(next: ToastItem[], capacity: number): ToastItem[] {
   const live = next.filter((t) => !t.leaving);
   const overflow = live.length - capacity;
-  const evicted = overflow > 0 ? new Set(live.slice(0, overflow).map((t) => t.id)) : null;
-  const marked = evicted ? next.map((t) => (evicted.has(t.id) ? { ...t, leaving: true } : t)) : next;
-  return marked.slice(-MAX_TOTAL_TOASTS);
+  let marked = next;
+  if (overflow > 0) {
+    const candidates = [...live.filter((t) => !t.persistent), ...live.filter((t) => t.persistent)];
+    const evicted = new Set(candidates.slice(0, overflow).map((t) => t.id));
+    marked = next.map((t) => (evicted.has(t.id) ? { ...t, leaving: true } : t));
+  }
+  let excess = marked.length - MAX_TOTAL_TOASTS;
+  if (excess <= 0) return marked;
+  // Oldest leaving toasts go first; only then (never in practice: live toasts are
+  // capped below the ceiling) the oldest of the rest.
+  const dropped = new Set<number>();
+  for (const t of marked) {
+    if (excess === 0) break;
+    if (t.leaving) {
+      dropped.add(t.id);
+      excess -= 1;
+    }
+  }
+  const kept = marked.filter((t) => !dropped.has(t.id));
+  return kept.slice(-MAX_TOTAL_TOASTS);
 }
 
 /**
