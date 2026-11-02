@@ -4763,7 +4763,7 @@ mod tests {
     ///
     /// Run with:  TML_NAHARON_PATH=/path/to/ariane.tml cargo test --manifest-path src-tauri/Cargo.toml --lib parse_tml_naharon_coordinates -- --ignored
     #[test]
-    #[ignore]
+    #[ignore = "needs a private Ariane .tml; set TML_NAHARON_PATH"]
     fn parse_tml_naharon_coordinates() {
         use crate::models::{ImportPlacement, Project, SectionData, StationRef};
 
@@ -6904,7 +6904,7 @@ mod tests {
     /// Run with:
     ///   TML_MEASURE_PATH=/path/to/file.tml cargo test measure_tml_fragmentation -- --ignored --nocapture
     #[test]
-    #[ignore]
+    #[ignore = "measurement harness for #412, not a check; set TML_MEASURE_PATH"]
     fn measure_tml_fragmentation() {
         let Ok(path_str) = std::env::var("TML_MEASURE_PATH") else {
             eprintln!("Skipping: TML_MEASURE_PATH not set");

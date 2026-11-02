@@ -2059,7 +2059,7 @@ fn per_survey_fixed_station_count_dedups_and_validates() {
 // ----- ignored real-data validation (no project files committed) -------
 
 #[test]
-#[ignore]
+#[ignore = "needs a private Walls project tree; set WALLS_WPJ to its .WPJ"]
 fn real_qr_project_tree() {
     let wpj = match std::env::var_os("WALLS_WPJ") {
         Some(p) => PathBuf::from(p),
@@ -2095,7 +2095,7 @@ fn real_qr_project_tree() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "needs a folder of private .SRV files; set WALLS_SRV_DIR"]
 fn real_qr_srv_dir() {
     let Some(dir) = std::env::var_os("WALLS_SRV_DIR") else {
         eprintln!("skip: set WALLS_SRV_DIR to a folder of real .SRV files");
@@ -2138,7 +2138,7 @@ fn real_qr_srv_dir() {
 /// under `WALLS_CORPUS`, catching panics, and report a summary. Used to
 /// sweep the public test corpus.
 #[test]
-#[ignore]
+#[ignore = "sweeps a Walls corpus kept outside the repo; set WALLS_CORPUS"]
 fn corpus_sweep() {
     let Some(root) = std::env::var_os("WALLS_CORPUS") else {
         eprintln!("skip: set WALLS_CORPUS to a directory tree of Walls files");
