@@ -25,7 +25,7 @@ fn leg(length: f64) -> ShotData {
 }
 
 /// A trunk of 6 x 100 m and a side line of 2 x 205 m, joined at the origin.
-fn two_branch_cave() -> (Project, StationRef, StationRef, StationRef) {
+pub(super) fn two_branch_cave() -> (Project, StationRef, StationRef, StationRef) {
     let mut project = Project::new("Gas".to_string(), None);
     let trunk = project
         .add_section(SectionData {
@@ -50,7 +50,7 @@ fn two_branch_cave() -> (Project, StationRef, StationRef, StationRef) {
     )
 }
 
-fn scooter() -> DpvRig {
+pub(super) fn scooter() -> DpvRig {
     DpvRig {
         primary: DpvUnit {
             speed_m_per_min: 50.0,

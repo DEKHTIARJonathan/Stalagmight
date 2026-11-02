@@ -172,7 +172,14 @@ than the same plan without the moved drops. The pins are re-checked on every
 recompute, so this holds whatever moved under a saved pin since it was set:
 
 - **Shallower** than the strategy point: the stage is dropped part-full, the
-  surplus stranded, the budget shrinks and the reach shortens.
+  surplus stranded, the budget shrinks and the reach shortens. The dive then turns
+  earlier **on the same route** (#576 NF-PGAS3-1, decided "route computed without
+  pins, then pins applied"): at the last station of the pin-free plan's route the
+  lower budget still affords, the way a plan turns short of an endpoint it cannot
+  reach (`budget_view_on_route`). It used to re-pick the deepest station anywhere,
+  which with no endpoint could be on another branch - with the pinned marker
+  re-placed there by its threshold. A moved drop never chooses where the dive goes,
+  and every marker stays on the pin-free route.
 - **Deeper**: the marker stays where the diver put it and turns red,
   `stage_drop_over_reserve[k]` is set, the panel warns, and the drop gauge reads
   what the stage gauge shows there - breathing the stage that far eats into its
@@ -203,7 +210,10 @@ not from the station's gas-to-reach, which with way points is measured from the
 last way point and for a station passed on the way out reports the cost of coming
 *back* to it. The walk runs against the base budget's route, which keeps the
 ordering acyclic - the final route depends on the budget, which depends on these
-contributions - and both coincide when no drop strands gas. A moved drop's
+contributions - and it is also the route the plan flies: the same route, cut
+short where a stranding pin's lower budget runs out. A pin past that earlier
+turnaround is still priced at its station; its marker clamps to the turnaround
+like any threshold past the end of the route. A moved drop's
 displayed pressure is inverted off the Z curve by bisection
 (`drop_pressure_for_contribution`) from the stage's real fill - the same gauge
 every default drop (`fill - usable`) is read on - so a drop moved to exactly the

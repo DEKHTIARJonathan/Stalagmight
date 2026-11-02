@@ -17,6 +17,12 @@ mod scooter;
     clippy::print_stdout,
     reason = "the printed sweep counts are the evidence a run captures"
 )]
+mod pin_route_tests;
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "the printed sweep counts are the evidence a run captures"
+)]
 mod route_sweep_tests;
 #[cfg(test)]
 mod tests;
@@ -378,7 +384,20 @@ impl Project {
         // something is reachable). Per-stage drop points are placed on that route only where a
         // threshold exists (none for All-thirds / a fell-back staged rig / a Free rig with no stage
         // usable).
-        let view = budget_view(&walk, endpoint_idx, budget_litres, scooter_limit);
+        //
+        // [#576 NF-PGAS3-1, decided] The route is the PIN-FREE plan's: moved drops never choose
+        // where the dive goes. Pins that leave the budget alone (a deeper pin, a pin on the default
+        // station, no pin) leave the whole plan as the strategy drew it. A shallower pin strands
+        // gas and lowers the budget, and then the dive turns EARLIER ON THE SAME ROUTE - the last
+        // station of the pin-free route the lower budget still affords - instead of re-picking the
+        // deepest station anywhere, which with no endpoint could be on another branch, with the
+        // pinned marker re-placed there by its threshold. The reach masks are the final budget's,
+        // exactly as before: only the turnaround's choice changed.
+        let view = if budget_litres < base_budget {
+            budget_view_on_route(&walk, &base_view, budget_litres, scooter_limit)
+        } else {
+            base_view
+        };
         let BudgetView {
             reachable,
             can_end_at,
@@ -1175,6 +1194,31 @@ fn budget_view(
     }
 }
 
+/// [#576 NF-PGAS3-1] [`budget_view`] for a pinned plan whose moved drops LOWERED the budget,
+/// with the turnaround kept on the pin-free plan's route (`base`): the walk goes toward
+/// `base.target` and stops at the last station the lower budget affords, exactly as the plan
+/// does toward an endpoint it cannot reach. That route is a prefix of `base.route` (the same
+/// way-point chain, then a prefix of the same predecessor path), so every drop placed on it is
+/// on the pin-free route too. The masks are the plain budget's - only the target's choice is
+/// constrained - so the reach is exactly what the lower budget gives, never more.
+///
+/// The two flags keep their meaning: "on the way to the diver's endpoint" only when the pin-free
+/// target was; "the scooter turned the dive" is the pin-free answer while the turnaround did not
+/// move, and otherwise whichever cap stopped the walk.
+fn budget_view_on_route(
+    walk: &WaypointWalk,
+    base: &BudgetView,
+    budget_litres: f64,
+    scooter_limit: f64,
+) -> BudgetView {
+    let mut view = budget_view(walk, base.target, budget_litres, scooter_limit);
+    view.target_toward_endpoint &= base.target_toward_endpoint;
+    if view.target == base.target {
+        view.scooter_bound = base.scooter_bound;
+    }
+    view
+}
+
 /// Running sums of `values`, i.e. `[v0, v0+v1, …]`.
 fn cumulative(values: impl Iterator<Item = f64>) -> Vec<f64> {
     let mut acc = 0.0_f64;
@@ -1348,9 +1392,11 @@ const OVER_RESERVE_EPS_LITRES: f64 = 1e-6;
 /// smallest figure.
 ///
 /// The route passed in is the BASE-budget one, which keeps the ordering acyclic: the final route
-/// depends on the budget, which depends on these very contributions. With the cap the final budget
-/// never exceeds the base one, so every pin the walk honours is on the final route too unless an
-/// earlier drop stranded gas and shortened it.
+/// depends on the budget, which depends on these very contributions. It is also the route the plan
+/// flies (#576 NF-PGAS3-1): the final route is this one, cut short where a budget lowered by a
+/// stranding pin runs out ([`budget_view_on_route`]), so a pin the walk honours never sends the
+/// dive - or its own marker - onto another branch. A pin past that earlier turnaround is still
+/// priced at its station; its marker clamps to the turnaround like any threshold past the end.
 ///
 /// ⚠ Pin-to-the-default-station is a NO-OP. The default ▼ is rendered at the first route station
 /// whose route gas ≥ the stage's threshold, so that station's gas usually OVERSHOOTS the sub-station
