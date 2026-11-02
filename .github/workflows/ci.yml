@@ -162,16 +162,20 @@ jobs:
       # the real release.sh in throwaway clones.
       - name: Release tooling
         run: ./scripts/test-release.sh
-      # File-size ratchet (#157): keep non-test src-tauri/src/*.rs files from
-      # re-bloating past their committed baseline. Pure-Node, no deps; sub-second.
-      # The fixture test pins the prod-LOC strip heuristic (the under-count class).
+      # File-size ratchet (#157): keep first-party .rs files from re-bloating
+      # past their committed baseline - production files at 1500/2000 prod LOC,
+      # whole test files at their own 3000/5000 (#576 E8). Pure-Node, no deps;
+      # sub-second. The fixture test pins the prod-LOC strip heuristic (the
+      # under-count class) and the test-module classification.
       - name: Rust file-size ratchet
         run: |
           pnpm lint:rust-file-size:test
           pnpm lint:rust-file-size
-      # TS file-size ratchet (#275): same policy, ported to src/**/*.{ts,tsx}.
-      # Pure-Node, no deps; sub-second. The fixture test pins the comment/string/
-      # template strip heuristic.
+      # TS file-size ratchet (#275): same policy, ported to src/**/*.{ts,tsx}
+      # plus e2e-playwright/ and e2e/ (#576 E8; the smoke job runs it too,
+      # since this job path-ignores e2e-playwright/**). Pure-Node, no deps;
+      # sub-second. The fixture test pins the comment/string/template strip
+      # heuristic and the scope.
       - name: TS file-size ratchet
         run: |
           pnpm lint:ts-file-size:test

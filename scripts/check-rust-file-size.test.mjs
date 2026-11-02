@@ -13,7 +13,10 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { prodLoc, classify, markCfgTestItems, maskNonCode, discoverSrcRoots, WARN_LOC, FAIL_LOC } from './check-rust-file-size.mjs';
+import {
+  prodLoc, classify, markCfgTestItems, maskNonCode, discoverSrcRoots, discoverExtraRoots, WARN_LOC, FAIL_LOC,
+  TEST_WARN_LOC, TEST_FAIL_LOC, TEST_LIMITS, TEST_FILE_RE, declaredUnderTestCfg, isTestModule, testLoc,
+} from './check-rust-file-size.mjs';
 
 let passed = 0;
 const failures = [];
@@ -170,6 +173,86 @@ test('discoverSrcRoots adds every crates/*/src after the root src', () => {
     path.join(base, 'crates', 'zeta', 'src'),
   ]);
   fs.rmSync(base, { recursive: true, force: true });
+});
+
+// --- whole test files: measured, with their own thresholds (#576 E8-D1) ---------
+
+test('TEST_FILE_RE: the names a whole-file test module may have', () => {
+  for (const rel of ['a/tests.rs', 'a/foo_tests.rs', 'src/commands/command_tests.rs', 'a/anchor_fuzz.rs', 'a/test_helpers.rs']) {
+    assert.ok(TEST_FILE_RE.test(rel), rel);
+  }
+  for (const rel of ['a/tests_util.rs', 'a/testsuite.rs', 'a/mod.rs', 'a/contests.rs']) assert.ok(!TEST_FILE_RE.test(rel), rel);
+});
+
+test('declaredUnderTestCfg: cfg(test) / all(test,..) / any(test,..) above `mod x;`, through stacked attributes', () => {
+  assert.ok(declaredUnderTestCfg('#[cfg(test)]\nmod tests;', 'tests'));
+  assert.ok(declaredUnderTestCfg('#[cfg(all(test, feature = "telemetry"))]\nmod cov_tests;', 'cov_tests'));
+  assert.ok(declaredUnderTestCfg('#[cfg(any(test, feature = "test-support"))]\npub mod test_helpers;', 'test_helpers'));
+  // A multi-line #[expect] whose reason string holds a `]` must not break the walk.
+  const stacked = ['#[cfg(test)]', '#[expect(', '    clippy::unwrap_used,', '    reason = "panics are assertions [ok]"', ')]', 'pub(crate) mod tests;'].join('\n');
+  assert.ok(declaredUnderTestCfg(stacked, 'tests'));
+});
+
+test('declaredUnderTestCfg: a plain, cfg(not(test)) or cfg_attr declaration is NOT a test module', () => {
+  assert.ok(!declaredUnderTestCfg('mod parser_tests;', 'parser_tests'));
+  assert.ok(!declaredUnderTestCfg('#[cfg(not(test))]\nmod parser_tests;', 'parser_tests'));
+  assert.ok(!declaredUnderTestCfg('#[cfg_attr(test, derive(Debug))]\nmod parser_tests;', 'parser_tests'));
+  assert.ok(!declaredUnderTestCfg('// #[cfg(test)]\nmod parser_tests;', 'parser_tests'), 'a commented-out cfg does not count');
+  assert.ok(!declaredUnderTestCfg('#[cfg(test)]\nmod other;', 'parser_tests'));
+});
+
+test('isTestModule: a production file merely NAMED *_tests.rs is measured as production', () => {
+  const files = {
+    '/r/src/state/mod.rs': '#[cfg(test)]\nmod tests;\nmod sneaky_tests;\n',
+    '/r/src/project.rs': '#[cfg(test)]\nmod tests;\n',
+  };
+  const read = (f) => {
+    if (!(f in files)) throw new Error('ENOENT');
+    return files[f];
+  };
+  const list = (d) => Object.keys(files).filter((f) => path.dirname(f) === d).map((f) => path.basename(f));
+  assert.ok(isTestModule('/r/src/state/tests.rs', read, list), 'declared in the sibling mod.rs');
+  assert.ok(isTestModule('/r/src/project/tests.rs', read, list), 'declared in the <dir>.rs next to the dir');
+  assert.ok(!isTestModule('/r/src/state/sneaky_tests.rs', read, list), 'name matches, declaration is not test-gated');
+  assert.ok(!isTestModule('/r/src/state/helpers.rs', read, list), 'name does not match');
+});
+
+test('testLoc counts every code line of a test file (nothing is stripped as cfg(test))', () => {
+  const src = ['use super::*;', '', '// comment', '#[test]', 'fn t() {', '    let s = "{";', '}'].join('\n');
+  assert.equal(testLoc(src), 5);
+});
+
+test('test-file thresholds: frozen at/above TEST_WARN, hard cap TEST_FAIL', () => {
+  assert.equal(TEST_WARN_LOC, 3000);
+  assert.equal(TEST_FAIL_LOC, 5000);
+  // A frozen monolith may shrink but not grow by one line.
+  assert.equal(classify('state/tests.rs', 21464, 21464, TEST_LIMITS).level, 'warn');
+  assert.equal(classify('state/tests.rs', 21000, 21464, TEST_LIMITS).level, 'warn');
+  assert.equal(classify('state/tests.rs', 21465, 21464, TEST_LIMITS).level, 'error');
+  // A new test file may not be born at/above the test warn line, nor over the cap.
+  assert.equal(classify('new_tests.rs', TEST_WARN_LOC, undefined, TEST_LIMITS).level, 'error');
+  assert.match(classify('new_tests.rs', TEST_FAIL_LOC + 1, undefined, TEST_LIMITS).message, /hard 5000-LOC budget for test files/);
+  // Below the test warn line a test file grows freely - well past the PRODUCTION cap.
+  assert.equal(classify('small_tests.rs', 2900, 2500, TEST_LIMITS).level, 'ok');
+  assert.equal(classify('small_tests.rs', 2900, 2500).level, 'error', 'the same numbers fail under production limits');
+});
+
+test('discoverExtraRoots finds build.rs, examples, tests, the OS helper and slice-rs when present', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rust-file-size-extra-'));
+  try {
+    for (const d of ['src-tauri/crates/telemetry', 'src-tauri/crates/models', 'src-tauri/examples', 'src-tauri/tests', 'e2e/agent/os/helper/src']) {
+      fs.mkdirSync(path.join(base, d), { recursive: true });
+    }
+    fs.writeFileSync(path.join(base, 'src-tauri/build.rs'), 'fn main() {}');
+    fs.writeFileSync(path.join(base, 'src-tauri/crates/telemetry/build.rs'), 'fn main() {}');
+    assert.deepEqual(discoverExtraRoots(base), {
+      files: ['src-tauri/build.rs', 'src-tauri/crates/telemetry/build.rs'],
+      dirs: ['src-tauri/examples', 'e2e/agent/os/helper/src'],
+      testDirs: ['src-tauri/tests'],
+    });
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 });
 
 // --- report ------------------------------------------------------------------

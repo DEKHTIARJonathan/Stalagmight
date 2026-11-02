@@ -8,8 +8,23 @@
 //
 // Metric: PRODUCTION code LOC = source lines minus blank/comment lines, with
 // `#[cfg(test)]`-gated items (both `mod tests { … }` blocks and braceless
-// `#[cfg(test)] use …;` items) stripped. Whole test files (tests.rs, *_tests.rs,
-// command_tests.rs, *_fuzz.rs, test_helpers.rs) are excluded entirely.
+// `#[cfg(test)] use …;` items) stripped.
+//
+// Whole TEST files are measured too, against their own, larger thresholds
+// (#576 E8-D1 - they used to be exempt by name, 34 files / ~100k lines, the
+// largest 26k): TEST_WARN_LOC / TEST_FAIL_LOC below, same freeze policy, code
+// LOC with nothing stripped (the whole file is test code). A file is a test
+// file when it lives under `src-tauri/tests/` (cargo integration tests), or
+// when its name matches TEST_FILE_RE (tests.rs, *_tests.rs, *_fuzz.rs,
+// test_helpers.rs) AND a sibling/parent module declares it under a test cfg
+// (`#[cfg(test)] mod x;`, also `all(test, ..)` / `any(test, ..)`). A
+// production file merely NAMED `foo_tests.rs` is therefore measured as
+// production code - a name alone no longer moves a file to the looser caps.
+//
+// Scan roots: src-tauri/src and every src-tauri/crates/*/src, plus the
+// first-party Rust outside them (#576 E8): src-tauri/build.rs and
+// crates/*/build.rs, src-tauri/examples, src-tauri/tests, the agent harness's
+// OS helper (e2e/agent/os/helper/src) and scripts/lib/slice-rs.
 //
 // Policy (baseline = src-tauri/file-size-baseline.json):
 //   - A file at/above `WARN_LOC` (1500) prod LOC is "large" and FROZEN by the
@@ -62,6 +77,28 @@ export function discoverSrcRoots(base = TAURI_DIR) {
   return roots;
 }
 
+// First-party Rust outside the crate src/ trees (#576 E8): {files, dirs,
+// testDirs}, repo-relative, only those that exist. `testDirs` hold cargo
+// integration tests, which are test code by location.
+export function discoverExtraRoots(repoRoot = REPO_ROOT) {
+  const files = [];
+  const exists = (rel) => fs.existsSync(path.join(repoRoot, rel));
+  if (exists('src-tauri/build.rs')) files.push('src-tauri/build.rs');
+  let crates = [];
+  try {
+    crates = fs.readdirSync(path.join(repoRoot, 'src-tauri', 'crates'), { withFileTypes: true });
+  } catch {
+    // no crates/ yet
+  }
+  for (const e of crates.sort((a, b) => a.name.localeCompare(b.name))) {
+    const rel = `src-tauri/crates/${e.name}/build.rs`;
+    if (e.isDirectory() && exists(rel)) files.push(rel);
+  }
+  const dirs = ['src-tauri/examples', 'e2e/agent/os/helper/src', 'scripts/lib/slice-rs'].filter(exists);
+  const testDirs = ['src-tauri/tests'].filter(exists);
+  return { files, dirs, testDirs };
+}
+
 // Thresholds are owned by the script (the single source of truth). The baseline
 // JSON echoes them for readability, but `main()` asserts the echo matches these
 // and `--update` always writes these - so editing the generated artifact can't
@@ -71,14 +108,79 @@ export function discoverSrcRoots(base = TAURI_DIR) {
 export const WARN_LOC = 1500;
 export const FAIL_LOC = 2000;
 
-// Whole-file test modules - excluded from the metric entirely.
-const TEST_FILE_RE = /(^|\/)(tests\.rs|.*_tests\.rs|command_tests\.rs|.*_fuzz\.rs|test_helpers\.rs)$/;
+// Test-file thresholds (#576 E8-D1), set after measuring the 34 test files in
+// Nov 2026 (code LOC): 21464, 12266, 6864, 4817, 4789, 4667, then 2893 and
+// below. At 3000 the six monoliths are frozen (may shrink, never grow - new
+// tests go into new submodules, E1) and a new test file cannot be born a
+// monolith; 5000 is the hard cap for any new or grown test file.
+export const TEST_WARN_LOC = 3000;
+export const TEST_FAIL_LOC = 5000;
+
+export const PROD_LIMITS = { warn: WARN_LOC, fail: FAIL_LOC, kind: 'production' };
+export const TEST_LIMITS = { warn: TEST_WARN_LOC, fail: TEST_FAIL_LOC, kind: 'test' };
+
+// Names a whole-file test module may have. A name alone is not enough - see
+// isTestModule: the parent must also declare the module under a test cfg.
+export const TEST_FILE_RE = /(^|\/)(tests\.rs|.*_tests\.rs|.*_fuzz\.rs|test_helpers\.rs)$/;
 
 // `#[cfg(test)]`, `#[cfg(all(test, …))]`, `#[cfg(any(test, …))]` - the test-gated
 // forms whose items we strip. NOT `#[cfg_attr(test, …)]` (that conditionally
 // applies an attribute to a *production* item) and NOT `#[cfg(not(test))]` (the
 // production-only form) - both correctly fall through and stay counted.
 const CFG_TEST_RE = /#\[cfg\((?:test\b|all\(test|any\(test)/;
+
+// Does `parentText` declare `mod <stem>;` under a test cfg? Strings/comments
+// are masked first (so a `]` inside an #[expect(reason = "..")] string cannot
+// break the attribute walk), then every attribute stacked on the declaration
+// is checked.
+export function declaredUnderTestCfg(parentText, stem) {
+  const code = maskNonCode(parentText.split('\n')).join('\n');
+  const re = new RegExp(`\\b(?:pub(?:\\s*\\([^)]*\\))?\\s+)?mod\\s+${stem}\\s*;`, 'g');
+  let m;
+  while ((m = re.exec(code)) !== null) {
+    let i = m.index - 1;
+    while (true) {
+      while (i >= 0 && /\s/.test(code[i])) i--;
+      if (i < 0 || code[i] !== ']') break;
+      let depth = 0;
+      let j = i;
+      for (; j >= 0; j--) {
+        if (code[j] === ']') depth++;
+        else if (code[j] === '[' && --depth === 0) break;
+      }
+      if (j < 1 || code[j - 1] !== '#') break;
+      if (CFG_TEST_RE.test(code.slice(j - 1, i + 1))) return true;
+      i = j - 2;
+    }
+  }
+  return false;
+}
+
+// A whole-file test module: TEST_FILE_RE name AND declared under a test cfg by
+// its parent (mod.rs / lib.rs / main.rs / a sibling in the same dir, or the
+// `<dir>.rs` next to the dir). `read` is injectable for the fixture test.
+export function isTestModule(full, read = (f) => fs.readFileSync(f, 'utf8'), list = (d) => fs.readdirSync(d)) {
+  if (!TEST_FILE_RE.test(full.split(path.sep).join('/'))) return false;
+  const stem = path.basename(full, '.rs');
+  const dir = path.dirname(full);
+  let siblings = [];
+  try {
+    siblings = list(dir).filter((n) => n.endsWith('.rs')).map((n) => path.join(dir, n));
+  } catch {
+    // unreadable dir: no sibling parents
+  }
+  const candidates = [...new Set([`${dir}.rs`, ...siblings])].filter((p) => p !== full);
+  for (const p of candidates) {
+    let text;
+    try {
+      text = read(p);
+    } catch {
+      continue;
+    }
+    if (declaredUnderTestCfg(text, stem)) return true;
+  }
+  return false;
+}
 
 // Files allowed to exceed the budget without ratcheting, each with a written
 // reason. The baseline already grandfathers today's large files, so this is only
@@ -223,21 +325,36 @@ function listRustFiles(dir) {
   return out;
 }
 
+// Code LOC for a whole test file: comments/blank lines masked, nothing else
+// stripped (the file is test code throughout).
+export function testLoc(text) {
+  return maskNonCode(text.split('\n')).filter((l) => /\S/.test(l)).length;
+}
+
 function relPosix(full) {
   return path.relative(REPO_ROOT, full).split(path.sep).join('/');
 }
 
-// Map repo-relative path -> production LOC for every non-test .rs file.
+// {prod, tests}: repo-relative path -> LOC, for every first-party .rs file in
+// scope (see the header). Test files go to `tests`, measured by testLoc.
 function measureTree(warnings = []) {
-  const out = {};
-  for (const root of discoverSrcRoots()) {
-    for (const full of listRustFiles(root)) {
-      const rel = relPosix(full);
-      if (TEST_FILE_RE.test(rel)) continue;
-      out[rel] = prodLoc(fs.readFileSync(full, 'utf8'), warnings);
-    }
+  const prod = {};
+  const tests = {};
+  const extra = discoverExtraRoots();
+  const prodFiles = [
+    ...discoverSrcRoots().flatMap((root) => listRustFiles(root)),
+    ...extra.dirs.flatMap((d) => listRustFiles(path.join(REPO_ROOT, d))),
+    ...extra.files.map((f) => path.join(REPO_ROOT, f)),
+  ];
+  for (const full of prodFiles) {
+    const text = fs.readFileSync(full, 'utf8');
+    if (isTestModule(full)) tests[relPosix(full)] = testLoc(text);
+    else prod[relPosix(full)] = prodLoc(text, warnings);
   }
-  return out;
+  for (const d of extra.testDirs) {
+    for (const full of listRustFiles(path.join(REPO_ROOT, d))) tests[relPosix(full)] = testLoc(fs.readFileSync(full, 'utf8'));
+  }
+  return { prod, tests };
 }
 
 function loadBaseline() {
@@ -256,23 +373,27 @@ function loadBaseline() {
   }
 }
 
-function writeBaseline(measured) {
-  const files = {};
-  for (const k of Object.keys(measured).sort()) files[k] = measured[k];
+function writeBaseline({ prod, tests }) {
+  const sorted = (m) => Object.fromEntries(Object.keys(m).sort().map((k) => [k, m[k]]));
   const payload = {
     _README:
-      'Generated by scripts/check-rust-file-size.mjs --update. Production code LOC ' +
-      '(blank/comment lines and #[cfg(test)] items stripped) per non-test .rs file ' +
-      'under src-tauri/src and src-tauri/crates/*/src. warn_loc/fail_loc echo the ' +
-      'script constants (the script ' +
-      'asserts they match). The CI `check` job runs the script in check mode: a file ' +
-      'at/above warn_loc is frozen (may shrink, not grow), no new file may be born ' +
-      'at/above warn_loc, and no new/grown file may cross fail_loc. To move a baseline ' +
+      'Generated by scripts/check-rust-file-size.mjs --update. `files`: production code LOC ' +
+      '(blank/comment lines and #[cfg(test)] items stripped) per non-test .rs file under ' +
+      'src-tauri/src, src-tauri/crates/*/src and the other first-party Rust roots the script ' +
+      'lists. `test_files`: code LOC of each whole test file (src-tauri/tests, or a ' +
+      'cfg(test)-declared tests.rs / *_tests.rs / *_fuzz.rs / test_helpers.rs), held to the ' +
+      'separate test_warn_loc/test_fail_loc. The *_loc keys echo the script constants (the ' +
+      'script asserts they match). The CI `check` job runs the script in check mode: a file ' +
+      'at/above its warn line is frozen (may shrink, not grow), no new file may be born ' +
+      'at/above it, and no new/grown file may cross its fail line. To move a baseline ' +
       'deliberately (a split lowered it, or a real feature grew a file), run --update ' +
       'and commit the diff.',
     warn_loc: WARN_LOC,
     fail_loc: FAIL_LOC,
-    files,
+    test_warn_loc: TEST_WARN_LOC,
+    test_fail_loc: TEST_FAIL_LOC,
+    files: sorted(prod),
+    test_files: sorted(tests),
   };
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(payload, null, 2) + '\n');
 }
@@ -282,7 +403,12 @@ function isAllowed(rel) {
 }
 
 // Pure classification of one file against its baseline. level ∈ 'ok'|'warn'|'error'.
-export function classify(rel, loc, base) {
+// `limits` selects the production (default) or test-file thresholds.
+export function classify(rel, loc, base, limits = PROD_LIMITS) {
+  const { warn, fail, kind } = limits;
+  const split = kind === 'test'
+    ? 'Move new tests into a new submodule (split the monolith, #576 E1/E8)'
+    : 'Split it into logical modules at an API boundary (#157)';
   const isNew = base === undefined;
   const grew = !isNew && loc > base;
   if (isAllowed(rel)) {
@@ -298,33 +424,33 @@ export function classify(rel, loc, base) {
         }
       : { level: 'ok' };
   }
-  if (loc > FAIL_LOC && (isNew || grew)) {
+  if (loc > fail && (isNew || grew)) {
     return {
       level: 'error',
       message:
-        `${rel}: ${loc} LOC exceeds the hard ${FAIL_LOC}-prod-LOC budget - split it into ` +
-        `logical modules at an API boundary (#157), or run --update if the growth is intentional.`,
+        `${rel}: ${loc} LOC exceeds the hard ${fail}-LOC budget for ${kind} files - ${split}, ` +
+        `or run --update if the growth is intentional.`,
     };
   }
-  if (grew && loc >= WARN_LOC) {
+  if (grew && loc >= warn) {
     return {
       level: 'error',
       message:
-        `${rel}: ${loc} LOC > baseline ${base} - a file at/above ${WARN_LOC} prod LOC may ` +
-        `shrink but not grow. Split it (#157), or run --update to rebaseline if the growth ` +
+        `${rel}: ${loc} LOC > baseline ${base} - a ${kind} file at/above ${warn} LOC may ` +
+        `shrink but not grow. ${split}, or run --update to rebaseline if the growth ` +
         `is intentional.`,
     };
   }
-  if (isNew && loc >= WARN_LOC) {
+  if (isNew && loc >= warn) {
     return {
       level: 'error',
       message:
-        `${rel}: new file at ${loc} prod LOC (>= warn ${WARN_LOC}) - new files may not be ` +
-        `introduced at/above the warn line. Split it, or run --update to baseline it ` +
-        `deliberately (#157).`,
+        `${rel}: new ${kind} file at ${loc} LOC (>= warn ${warn}) - new files may not be ` +
+        `introduced at/above the warn line. ${split}, or run --update to baseline it ` +
+        `deliberately.`,
     };
   }
-  if (loc >= WARN_LOC) return { level: 'warn', message: `${rel}: ${loc} LOC (>= warn ${WARN_LOC})` };
+  if (loc >= warn) return { level: 'warn', message: `${rel}: ${loc} LOC (>= ${kind} warn ${warn})` };
   return { level: 'ok' };
 }
 
@@ -337,16 +463,19 @@ function main() {
 
   const warnings = [];
   const measured = measureTree(warnings);
+  const nProd = Object.keys(measured.prod).length;
+  const nTest = Object.keys(measured.tests).length;
 
   // --update rebuilds the baseline from scratch (writing the script's own
   // thresholds), so it neither loads nor validates the old file - it always
   // self-heals a corrupt or drifted baseline.
   if (process.argv.includes('--update')) {
     writeBaseline(measured);
-    const tracked = Object.values(measured).filter((v) => v >= WARN_LOC).length;
+    const frozen = Object.values(measured.prod).filter((v) => v >= WARN_LOC).length;
+    const frozenTests = Object.values(measured.tests).filter((v) => v >= TEST_WARN_LOC).length;
     console.log(
-      `baseline updated: ${Object.keys(measured).length} files recorded ` +
-        `(${tracked} at/above warn=${WARN_LOC}). wrote ${relPosix(BASELINE_PATH)}`,
+      `baseline updated: ${nProd} production files (${frozen} at/above warn=${WARN_LOC}) and ` +
+        `${nTest} test files (${frozenTests} at/above test warn=${TEST_WARN_LOC}). wrote ${relPosix(BASELINE_PATH)}`,
     );
     for (const w of warnings) console.warn(`  ⚠ ${w}`);
     return 0;
@@ -355,7 +484,7 @@ function main() {
   const baseline = loadBaseline();
   // The script owns the thresholds; a drifted echo in the generated baseline is a
   // tampering smell, not a config knob - fail loudly instead of honoring it.
-  for (const [key, want] of [['warn_loc', WARN_LOC], ['fail_loc', FAIL_LOC]]) {
+  for (const [key, want] of [['warn_loc', WARN_LOC], ['fail_loc', FAIL_LOC], ['test_warn_loc', TEST_WARN_LOC], ['test_fail_loc', TEST_FAIL_LOC]]) {
     if (baseline[key] !== undefined && Number(baseline[key]) !== want) {
       console.error(
         `check-rust-file-size: baseline ${key}=${baseline[key]} disagrees with the script ` +
@@ -366,21 +495,24 @@ function main() {
     }
   }
 
-  const recorded = baseline.files ?? {};
   const errors = [];
   const softWarnings = [];
-
-  for (const rel of Object.keys(measured).sort()) {
-    const verdict = classify(rel, measured[rel], recorded[rel]);
-    if (verdict.level === 'error') errors.push(verdict.message);
-    else if (verdict.level === 'warn') softWarnings.push(verdict.message);
+  const stale = [];
+  for (const [section, limits, recorded] of [
+    [measured.prod, PROD_LIMITS, baseline.files ?? {}],
+    [measured.tests, TEST_LIMITS, baseline.test_files ?? {}],
+  ]) {
+    for (const rel of Object.keys(section).sort()) {
+      const verdict = classify(rel, section[rel], recorded[rel], limits);
+      if (verdict.level === 'error') errors.push(verdict.message);
+      else if (verdict.level === 'warn') softWarnings.push(verdict.message);
+    }
+    // Baselined files that no longer exist on disk (split/renamed/deleted) linger as
+    // dead rows and mask whether a split actually shrank the tree. They don't affect
+    // the gate (the loop above iterates `measured`), but flag them so a split PR
+    // runs --update to prune them.
+    stale.push(...Object.keys(recorded).filter((r) => section[r] === undefined));
   }
-
-  // Baselined files that no longer exist on disk (split/renamed/deleted) linger as
-  // dead rows and mask whether a split actually shrank the tree. They don't affect
-  // the gate (the loop above iterates `measured`), but flag them so a split PR
-  // runs --update to prune them.
-  const stale = Object.keys(recorded).filter((r) => measured[r] === undefined);
   if (stale.length > 0) {
     const shown = stale.slice(0, 5).join(', ');
     console.warn(
@@ -396,16 +528,16 @@ function main() {
     console.error(`\n✗ Rust file-size check failed - ${errors.length} issue(s):\n`);
     for (const e of errors) console.error(`  ${e}`);
     console.error(
-      '\nProduction files must stay within the size budget; see #157 for the split plan.\n' +
+      '\nFiles must stay within their size budget; see #157 for the split plan.\n' +
         'To rebaseline an intentional change: pnpm lint:rust-file-size --update\n',
     );
     return 1;
   }
 
   console.log(
-    `✓ Rust file-size: ${Object.keys(measured).length} non-test files checked, ` +
-      `none over the ${FAIL_LOC}-LOC budget or grown past baseline ` +
-      `(${softWarnings.length} at/above the ${WARN_LOC} warn line).`,
+    `✓ Rust file-size: ${nProd} production files (budget ${FAIL_LOC}) and ${nTest} test files ` +
+      `(budget ${TEST_FAIL_LOC}) checked, none over budget or grown past baseline ` +
+      `(${softWarnings.length} at/above a warn line, frozen).`,
   );
   return 0;
 }

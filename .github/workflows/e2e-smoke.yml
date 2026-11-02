@@ -49,6 +49,14 @@ jobs:
       # only generated replay specs under e2e/agent/replays/ are ungoverned, #466.)
       - name: Typecheck Playwright specs + IPC mock
         run: pnpm typecheck:playwright
+      # The TS file-size ratchet measures e2e-playwright/ too (#576 E8-D2), and
+      # `check` - its other home - path-ignores e2e-playwright/**, so an
+      # e2e-playwright-only PR that grows the frozen IPC mock is gated here.
+      # Pure Node, sub-second; the same full-scope run as in `check`.
+      - name: TS file-size ratchet
+        run: |
+          pnpm lint:ts-file-size:test
+          pnpm lint:ts-file-size
       # mockContract pins the mock against lib.rs's generate_handler! list. It lives
       # in the vitest suite, which only `check` runs - and `check` path-ignores
       # `e2e-playwright/**`, so a mock-only edit (the exact change most likely to

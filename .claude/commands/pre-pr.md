@@ -336,9 +336,11 @@ Playwright set; those take minutes and are the **Pre-Push Checklist's** job
 that the test suites were deferred to CI.
 
 ⚠ A **failing gate is a 🔴 in its own right** - report it, and say which gates you ran
-and which the diff made irrelevant. Neither file-size ratchet covers anything outside
-`src-tauri/src` and `src/`, so a large new file elsewhere is ungated; say so rather
-than implying coverage.
+and which the diff made irrelevant. The Rust ratchet covers the crates' `src/`, the
+build scripts, `src-tauri/examples`, `src-tauri/tests`, the agent OS helper and
+`scripts/lib/slice-rs` (test files at their own, looser caps); the TS ratchet covers
+`src/`, `e2e-playwright/` and `e2e/`. A large new file anywhere else is ungated; say
+so rather than implying coverage.
 
 ⚠ **`.github/workflows/**` has no row above and no gate anywhere** - there is no YAML
 linter in this repo, so a workflow edit can only be checked structurally (indentation

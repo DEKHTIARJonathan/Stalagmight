@@ -234,9 +234,21 @@ The baseline is a high-water mark: a legitimate growth bumps it, and a split low
 (shrinks aren't auto-captured). Metric = code LOC minus comments/blanks and `#[cfg(test)]`
 items.
 
+Whole **test files** are measured too, under their own thresholds (warn 3000 / fail
+5000 code LOC, the baseline's `test_files` section): a file under `src-tauri/tests/`, or a
+`tests.rs` / `*_tests.rs` / `*_fuzz.rs` / `test_helpers.rs` that its parent declares
+under `#[cfg(test)]` (a production file merely *named* `*_tests.rs` is measured as
+production). The six test monoliths at/above 3000 (led by `core/state/tests.rs`) are
+frozen: new tests go into a new submodule, not into them. The scan also covers the
+first-party Rust outside the crates' `src/`: the build scripts, `src-tauri/examples`,
+the agent harness's OS helper and `scripts/lib/slice-rs`.
+
 The frontend has an identical twin - `pnpm lint:ts-file-size`
 (`scripts/check-ts-file-size.mjs`, baseline `ts-file-size-baseline.json`), same 1500/2000
-thresholds, also a `check`-job gate. Both must pass before pushing.
+thresholds. It covers `src/` (tests and generated IPC types excluded) and every
+`.ts`/`.tsx` under `e2e-playwright/` and `e2e/` (generated `e2e/agent/replays/`
+excluded) - so the ~4.8k-LOC IPC mock is frozen too. It runs in the `check` job and the
+`smoke` job (which sees `e2e-playwright/` changes). Both must pass before pushing.
 
 ### Mutex Lock Ordering
 
