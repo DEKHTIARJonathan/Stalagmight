@@ -7,7 +7,10 @@
 //! reach the file system; [`outside_root`] then asks the file system where an
 //! accepted link really leads.
 
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
+
+use crate::parsers::encoding::FileFamily;
 
 /// The longest path a link may resolve to. No file system opens a longer
 /// path (Windows' extended-length limit is 32,767 UTF-16 units, Linux's is
@@ -159,6 +162,68 @@ pub(crate) fn outside_root(path: &Path, root: &Path) -> Option<PathBuf> {
     match (std::fs::canonicalize(path), std::fs::canonicalize(root)) {
         (Ok(real), Ok(real_root)) => (!real.starts_with(real_root)).then_some(real),
         _ => (!path.starts_with(lexically_normalized(root))).then(|| path.to_path_buf()),
+    }
+}
+
+/// The most bytes the survey files one project links may add up to: a Compass
+/// `.MAK`'s `.DAT` files (#576 RV2-R-12), a Walls `.WPJ`'s `.SRV` files
+/// (NF-FIX3R-2). Each file has its own ceiling ([`FileFamily::SurveyText`]);
+/// this bounds a project that lists many of them. Four of those ceilings, far
+/// above any real project.
+pub(crate) const MAX_LINKED_BYTES: u64 = 4 * FileFamily::SurveyText.byte_limit();
+
+/// What the survey files one project links have used up so far.
+pub(crate) struct LinkBudget {
+    /// Every file read so far, as resolved on disk, so a further listing of
+    /// one is skipped instead of read, held and imported once more.
+    read: HashSet<PathBuf>,
+    /// Their sizes, added up against `limit`.
+    bytes: u64,
+    limit: u64,
+}
+
+/// Whether a linked file that exists may be read ([`LinkBudget::admit`]).
+pub(crate) enum Admission {
+    /// The project already read this file, under this or another spelling.
+    AlreadyRead,
+    /// With it, the project's files would add up to more than `limit` bytes.
+    OverLimit { limit: u64 },
+    /// Read it, then [`LinkBudget::record`] the ticket.
+    Fits(Ticket),
+}
+
+/// A file [`LinkBudget::admit`] let through: what to record once it is read.
+pub(crate) struct Ticket {
+    identity: PathBuf,
+    size: u64,
+}
+
+impl LinkBudget {
+    pub(crate) fn new(limit: u64) -> Self {
+        Self {
+            read: HashSet::new(),
+            bytes: 0,
+            limit,
+        }
+    }
+
+    /// Whether the file at `resolved` (it exists) may be read.
+    pub(crate) fn admit(&self, resolved: &Path) -> Admission {
+        let identity = std::fs::canonicalize(resolved).unwrap_or_else(|_| resolved.to_path_buf());
+        if self.read.contains(&identity) {
+            return Admission::AlreadyRead;
+        }
+        let size = std::fs::metadata(resolved).map_or(0, |m| m.len());
+        if self.bytes.saturating_add(size) > self.limit {
+            return Admission::OverLimit { limit: self.limit };
+        }
+        Admission::Fits(Ticket { identity, size })
+    }
+
+    /// The admitted file was read: it counts against the budget from now on.
+    pub(crate) fn record(&mut self, ticket: Ticket) {
+        self.read.insert(ticket.identity);
+        self.bytes = self.bytes.saturating_add(ticket.size);
     }
 }
 

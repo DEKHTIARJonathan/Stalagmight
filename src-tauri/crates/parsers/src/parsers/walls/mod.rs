@@ -503,3 +503,8 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod closure_tests;
+
+// #576 NF-FIX3R-2: one read per .SRV, one byte budget per .WPJ.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod wpj_budget_tests;

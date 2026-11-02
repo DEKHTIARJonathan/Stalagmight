@@ -4,8 +4,12 @@ use std::rc::Rc;
 
 use anyhow::{bail, Result};
 
-use crate::parsers::encoding::{cp1252_replacement_warning, read_cp1252, Cp1252Text};
-use crate::parsers::linked_files::{is_dos_device_name, outside_root};
+use crate::parsers::encoding::{
+    cp1252_replacement_warning, describe_byte_limit, read_cp1252, Cp1252Text,
+};
+use crate::parsers::linked_files::{
+    is_dos_device_name, outside_root, Admission, LinkBudget, MAX_LINKED_BYTES,
+};
 
 use super::{
     apply_units_options, is_walls_separator, parse_srv_contents, split_first_token, ParsedSurvey,
@@ -133,6 +137,14 @@ impl WpjContext {
 }
 
 pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
+    parse_wpj_within(path, MAX_LINKED_BYTES)
+}
+
+/// [`parse_wpj`] with the byte budget its `.SRV` files share spelled out. A
+/// `.SRV` is read once however many entries name it, and one that would take
+/// the project past `linked_byte_limit` is skipped, both with a warning - the
+/// rules a Compass `.MAK` follows for its `.DAT` files (#576 NF-FIX3R-2).
+pub(crate) fn parse_wpj_within(path: &Path, linked_byte_limit: u64) -> Result<ParsedWalls> {
     let Cp1252Text {
         text: contents,
         replaced,
@@ -149,6 +161,7 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
     let mut book_count: u32 = 0;
     let mut project_name = String::new();
     let mut project_ref: Option<WallsRef> = None;
+    let mut budget = LinkBudget::new(linked_byte_limit);
 
     // Stack of book contexts. The context on top of the stack is the
     // currently-open book's; its values are what children inherit.
@@ -245,38 +258,53 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                             },
                         };
                         match found {
-                            Ok(file_path) => match read_cp1252(&file_path) {
-                                Ok(Cp1252Text {
-                                    text: contents,
-                                    replaced,
-                                }) => {
-                                    warnings.extend(cp1252_replacement_warning(
-                                        Some(&file_path),
-                                        "Walls",
+                            Ok(file_path) => match budget.admit(&file_path) {
+                                Admission::AlreadyRead => warnings.push(format!(
+                                    "survey '{label}': {} is listed more than once in the .WPJ; \
+                                     the file was read once, and this listing was skipped so its \
+                                     shots are not imported twice.",
+                                    file_path.display()
+                                )),
+                                Admission::OverLimit { limit } => warnings.push(format!(
+                                    "survey '{label}' was skipped: with it, the survey files this \
+                                     .WPJ lists would add up to more than the {} limit for one \
+                                     project; it was not imported.",
+                                    describe_byte_limit(limit)
+                                )),
+                                Admission::Fits(ticket) => match read_cp1252(&file_path) {
+                                    Ok(Cp1252Text {
+                                        text: contents,
                                         replaced,
-                                    ));
-                                    let (initial, initial_macros) =
-                                        build_initial_units(&ctx, &mut warnings);
-                                    let survey = parse_srv_contents(
-                                        &contents,
-                                        &entry.title,
-                                        &label,
-                                        &ctx.segment_path(),
-                                        &initial,
-                                        &initial_macros,
-                                        ctx.reference.as_deref().cloned(),
-                                        ctx.grid_relative,
-                                        ctx.derive_decl,
-                                        &mut warnings,
-                                    );
-                                    surveys.push(survey);
-                                }
-                                Err(e) => {
-                                    warnings.push(format!(
-                                        "Could not read survey '{}': {e}",
-                                        file_path.display()
-                                    ));
-                                }
+                                    }) => {
+                                        budget.record(ticket);
+                                        warnings.extend(cp1252_replacement_warning(
+                                            Some(&file_path),
+                                            "Walls",
+                                            replaced,
+                                        ));
+                                        let (initial, initial_macros) =
+                                            build_initial_units(&ctx, &mut warnings);
+                                        let survey = parse_srv_contents(
+                                            &contents,
+                                            &entry.title,
+                                            &label,
+                                            &ctx.segment_path(),
+                                            &initial,
+                                            &initial_macros,
+                                            ctx.reference.as_deref().cloned(),
+                                            ctx.grid_relative,
+                                            ctx.derive_decl,
+                                            &mut warnings,
+                                        );
+                                        surveys.push(survey);
+                                    }
+                                    Err(e) => {
+                                        warnings.push(format!(
+                                            "Could not read survey '{}': {e}",
+                                            file_path.display()
+                                        ));
+                                    }
+                                },
                             },
                             Err(shown) => {
                                 missing_files.push(shown);

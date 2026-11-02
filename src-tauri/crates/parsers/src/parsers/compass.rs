@@ -19,7 +19,7 @@
 //! - a `.MAK` fixed station becomes a GPS zero datum (UTM → WGS84 via `proj4rs`).
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::Datelike;
@@ -36,10 +36,12 @@ use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
 use crate::parsers::encoding::{
-    cp1252_replacement_warning, describe_byte_limit, read_cp1252, Cp1252Text, FileFamily,
+    cp1252_replacement_warning, describe_byte_limit, read_cp1252, Cp1252Text,
 };
 use crate::parsers::geo::{non_empty, FEET_TO_METERS};
-use crate::parsers::linked_files::{outside_root, resolve_link};
+use crate::parsers::linked_files::{
+    outside_root, resolve_link, Admission, LinkBudget, MAX_LINKED_BYTES,
+};
 use crate::parsers::station_graph::{
     build_closures, place_chains, split_into_chains, topological_sort_configs, Anchor, ConfigOrder,
     PlacementPolicy,
@@ -388,32 +390,6 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
     })
 }
 
-/// The most bytes the `.DAT` files one `.MAK` links may add up to (#576
-/// RV2-R-12). Each file has its own ceiling ([`FileFamily::SurveyText`]);
-/// this bounds a project that lists many of them. Four of those ceilings, far
-/// above any real project.
-const MAX_LINKED_BYTES: u64 = 4 * FileFamily::SurveyText.byte_limit();
-
-/// What the `.DAT` files a `.MAK` links have used up so far (#576 RV2-R-12).
-struct LinkBudget {
-    /// Every file read so far, as resolved on disk, so a further listing of
-    /// one is skipped instead of read, held and imported once more.
-    read: HashSet<PathBuf>,
-    /// Their sizes, added up against `limit`.
-    bytes: u64,
-    limit: u64,
-}
-
-impl LinkBudget {
-    fn new(limit: u64) -> Self {
-        Self {
-            read: HashSet::new(),
-            bytes: 0,
-            limit,
-        }
-    }
-}
-
 /// Read one `.DAT` a `.MAK` links, for `Project::load_survey_files_with`:
 /// its text, or `None` - with the reason in `warnings` - when it is refused,
 /// missing, unreadable, already read, or over the project's `budget`. The
@@ -443,9 +419,8 @@ fn read_linked_dat(
              imported.",
             resolved.display()
         ),
-        Ok(resolved) => {
-            let identity = std::fs::canonicalize(&resolved).unwrap_or_else(|_| resolved.clone());
-            if budget.read.contains(&identity) {
+        Ok(resolved) => match budget.admit(&resolved) {
+            Admission::AlreadyRead => {
                 warnings.push(format!(
                     "'{shown}' is listed more than once in the .MAK; the file was read once, and \
                      this listing (with any fixed stations it declares) was skipped so its \
@@ -453,39 +428,30 @@ fn read_linked_dat(
                 ));
                 return None;
             }
-            let size = std::fs::metadata(&resolved).map_or(0, |m| m.len());
-            if budget.bytes.saturating_add(size) > budget.limit {
-                format!(
-                    "'{shown}' was skipped: with it, the files this .MAK links would add up to \
-                     more than the {} limit for one project. Its surveys were not imported.",
-                    describe_byte_limit(budget.limit)
-                )
-            } else {
-                match read_cp1252(&resolved) {
-                    Ok(Cp1252Text { text, replaced }) => {
-                        if let Some(real) = outside_root(&resolved, folder) {
-                            warnings.push(format!(
-                                "'{shown}' is outside the .MAK's folder (it is {}); it was read \
-                                 from there.",
-                                real.display()
-                            ));
-                        }
-                        warnings.extend(cp1252_replacement_warning(
-                            Some(link),
-                            "Compass",
-                            replaced,
+            Admission::OverLimit { limit } => format!(
+                "'{shown}' was skipped: with it, the files this .MAK links would add up to \
+                 more than the {} limit for one project. Its surveys were not imported.",
+                describe_byte_limit(limit)
+            ),
+            Admission::Fits(ticket) => match read_cp1252(&resolved) {
+                Ok(Cp1252Text { text, replaced }) => {
+                    if let Some(real) = outside_root(&resolved, folder) {
+                        warnings.push(format!(
+                            "'{shown}' is outside the .MAK's folder (it is {}); it was read \
+                             from there.",
+                            real.display()
                         ));
-                        budget.read.insert(identity);
-                        budget.bytes = budget.bytes.saturating_add(size);
-                        return Some(text);
                     }
-                    Err(e) => format!(
-                        "'{shown}' could not be read ({e:#}); it was skipped and its surveys \
-                         were not imported."
-                    ),
+                    warnings.extend(cp1252_replacement_warning(Some(link), "Compass", replaced));
+                    budget.record(ticket);
+                    return Some(text);
                 }
-            }
-        }
+                Err(e) => format!(
+                    "'{shown}' could not be read ({e:#}); it was skipped and its surveys \
+                     were not imported."
+                ),
+            },
+        },
     };
     warnings.push(reason.clone());
     skipped.push(reason);
