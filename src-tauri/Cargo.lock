@@ -4423,7 +4423,6 @@ dependencies = [
  "chrono",
  "directories",
  "http",
- "libc",
  "serde",
  "serde_json",
  "sha2",

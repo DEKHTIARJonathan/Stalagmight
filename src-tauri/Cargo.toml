@@ -304,4 +304,3 @@ tempfile = { workspace = true }
 # saved file themselves; the config I/O itself lives in stalagmight-core now.
 toml = { workspace = true }
 tauri = { version = "2", features = ["test"] }
-libc = "0.2"
