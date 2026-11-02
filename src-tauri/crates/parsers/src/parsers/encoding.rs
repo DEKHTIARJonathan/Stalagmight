@@ -96,6 +96,31 @@ impl FileFamily {
             Self::Dmp => "mNemo .dmp files",
         }
     }
+
+    /// The family of an import file, by its extension, for a reader handed any
+    /// of them (the duplicate-import hash, #576 RV3-R-11). A zipped `.tml` and
+    /// an unknown extension take the XML ceiling, the largest.
+    fn of_path(path: &Path) -> Self {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase);
+        match ext.as_deref() {
+            Some("dmp") => Self::Dmp,
+            Some("dat" | "mak" | "srv" | "wpj") => Self::SurveyText,
+            _ => Self::Xml,
+        }
+    }
+}
+
+/// The refusal for a file over `limit`, in the words every capped reader uses.
+fn too_large(path: &Path, family: FileFamily, limit: u64) -> anyhow::Error {
+    anyhow!(
+        "'{}' is larger than the {} limit for {}; it was not read.",
+        path.display(),
+        describe_byte_limit(limit),
+        family.description()
+    )
 }
 
 /// Render a byte limit the way the person reading the error thinks about it:
@@ -139,17 +164,9 @@ pub(crate) fn read_capped(path: &Path, family: FileFamily) -> Result<Vec<u8>> {
 /// [`read_capped`] with the limit spelled out, so a test can exercise it
 /// without writing the real ceiling's worth of bytes.
 fn read_with_limit(path: &Path, family: FileFamily, limit: u64) -> Result<Vec<u8>> {
-    let too_large = || {
-        anyhow!(
-            "'{}' is larger than the {} limit for {}; it was not read.",
-            path.display(),
-            describe_byte_limit(limit),
-            family.description()
-        )
-    };
     let metadata = regular_file_metadata(path)?;
     if metadata.len() > limit {
-        return Err(too_large());
+        return Err(too_large(path, family, limit));
     }
     // Within the limit, so a safe size to reserve up front.
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
@@ -157,9 +174,53 @@ fn read_with_limit(path: &Path, family: FileFamily, limit: u64) -> Result<Vec<u8
         .and_then(|file| file.take(limit.saturating_add(1)).read_to_end(&mut bytes))
         .with_context(|| format!("reading {}", path.display()))?;
     if bytes.len() as u64 > limit {
-        return Err(too_large());
+        return Err(too_large(path, family, limit));
     }
     Ok(bytes)
+}
+
+/// Hand an import file to `consume` in chunks, for a caller that only needs
+/// to stream it - the duplicate-import hash (#576 RV3-R-11), which used to read
+/// the whole file with no cap and no file-type check, so a FIFO swapped in
+/// after the parse blocked the command, and a file grown past its ceiling was
+/// read whole. The same refusals as [`read_capped`] - not a regular file, or
+/// over the ceiling of its family (picked from the extension) - without ever
+/// holding the file whole. Returns how many bytes it streamed.
+pub fn stream_import_file(path: &Path, consume: impl FnMut(&[u8])) -> Result<u64> {
+    let family = FileFamily::of_path(path);
+    stream_with_limit(path, family, family.byte_limit(), consume)
+}
+
+/// [`stream_import_file`] with the limit spelled out, for the tests.
+fn stream_with_limit(
+    path: &Path,
+    family: FileFamily,
+    limit: u64,
+    mut consume: impl FnMut(&[u8]),
+) -> Result<u64> {
+    let metadata = regular_file_metadata(path)?;
+    if metadata.len() > limit {
+        return Err(too_large(path, family, limit));
+    }
+    let mut reader = std::fs::File::open(path)
+        .with_context(|| format!("reading {}", path.display()))?
+        .take(limit.saturating_add(1));
+    let mut buffer = vec![0u8; 64 * 1024];
+    let mut streamed = 0u64;
+    loop {
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => return Ok(streamed),
+            Ok(read) => read,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        streamed += read as u64;
+        // Grown past the ceiling since the size check.
+        if streamed > limit {
+            return Err(too_large(path, family, limit));
+        }
+        consume(buffer.get(..read).unwrap_or_default());
+    }
 }
 
 /// The Windows-1252 code points for `0x80..=0x9F`, the only range where it
@@ -394,6 +455,78 @@ mod tests {
             .map(|e| e.to_string())
             .unwrap_or_default();
         assert!(err.contains("not a regular file"), "{err}");
+    }
+
+    /// #576 RV3-R-11: the duplicate-import hash streams the file - every byte,
+    /// in order, across many chunks - and refuses what the capped readers
+    /// refuse: one byte over the limit, a folder, a FIFO (without opening it).
+    #[test]
+    fn a_streamed_import_file_is_whole_and_capped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cave.dat");
+        let bytes: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&path, &bytes).unwrap();
+        let mut streamed = Vec::new();
+        let mut chunks = 0;
+        let count = stream_import_file(&path, |chunk| {
+            chunks += 1;
+            streamed.extend_from_slice(chunk);
+        })
+        .unwrap();
+        assert!(count == 200_000 && streamed == bytes && chunks > 1);
+
+        let over = stream_with_limit(&path, FileFamily::SurveyText, 199_999, |_| {})
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(
+            over.contains("larger than the 199999 bytes limit for survey text files"),
+            "{over}"
+        );
+        let folder = stream_import_file(dir.path(), |_| {})
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(folder.contains("not a regular file"), "{folder}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_streamed_import_file_refuses_a_fifo_without_opening_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.tml");
+        fifo_test_support::make_fifo(&fifo);
+        let release = fifo.clone();
+        let outcome = fifo_test_support::within_five_seconds(&release, move || {
+            stream_import_file(&fifo, |_| {})
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default()
+        });
+        assert!(
+            outcome
+                .as_deref()
+                .is_some_and(|err| err.contains("not a regular file")),
+            "{outcome:?}"
+        );
+    }
+
+    /// Each import extension streams under its own family's ceiling.
+    #[test]
+    fn an_import_file_takes_its_familys_ceiling_by_extension() {
+        for (name, family) in [
+            ("a.DMP", FileFamily::Dmp),
+            ("a.dat", FileFamily::SurveyText),
+            ("a.MAK", FileFamily::SurveyText),
+            ("a.srv", FileFamily::SurveyText),
+            ("a.wpj", FileFamily::SurveyText),
+            ("a.tml", FileFamily::Xml),
+            ("a.tmlu", FileFamily::Xml),
+            ("a.gpx", FileFamily::Xml),
+            ("a", FileFamily::Xml),
+        ] {
+            assert_eq!(FileFamily::of_path(Path::new(name)), family, "{name}");
+        }
     }
 }
 

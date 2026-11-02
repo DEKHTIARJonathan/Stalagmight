@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};
@@ -41,7 +40,11 @@ pub fn import_dmp(path: PathBuf) -> Result<DmpFile, String> {
     result.map_err(|e| e.to_string())
 }
 
-/// Calculate SHA256 hash of a file
+/// Calculate SHA256 hash of a file.
+///
+/// Streamed through the importers' capped, regular-files-only reader (#576
+/// RV3-R-11): a whole-file `fs::read` here blocked on a FIFO swapped in after
+/// the parse, and read a file grown past its family's ceiling in full.
 #[tauri::command]
 pub fn calculate_file_hash(path: PathBuf) -> Result<String, String> {
     tracing::debug!(
@@ -49,18 +52,16 @@ pub fn calculate_file_hash(path: PathBuf) -> Result<String, String> {
         purpose = "detect duplicate imports",
         "Calculating file hash for import deduplication"
     );
-    let contents = fs::read(&path).map_err(|e| {
+    let mut hasher = Sha256::new();
+    crate::parsers::stream_import_file(&path, |chunk| hasher.update(chunk)).map_err(|e| {
         tracing::error!(
             path = ?path,
             purpose = "detect duplicate imports",
             reason = %e,
             "Failed to read file while calculating import hash"
         );
-        format!("Failed to read file: {e}")
+        format!("Failed to read file: {e:#}")
     })?;
-
-    let mut hasher = Sha256::new();
-    hasher.update(&contents);
     let result = hasher.finalize();
 
     let hash = format!("{result:x}");
@@ -810,6 +811,7 @@ mod receipt_tests {
     use super::*;
     use crate::core::command::ImportReceipt;
     use crate::core::{ValidationWarning, WarningSeverity};
+    use std::fs;
     use std::path::Path;
 
     fn base_result() -> CommandResult {
