@@ -61,6 +61,28 @@ describe('workspace mode sync', () => {
     expect(sentModes()).toEqual(['survey', 'plan', 'export', 'survey', 'survey']);
   });
 
+  // RV2-FE-G2: the test above resolves every send at once, so it passed with the
+  // ordering removed. Here the first send is still on the wire when the mode changes
+  // twice: neither later send may leave before it lands.
+  it('holds each send until the one before it has landed', async () => {
+    let landFirst: () => void = () => {};
+    invokeIpcMock.mockImplementationOnce(
+      () =>
+        new Promise<null>((resolve) => {
+          landFirst = () => resolve(null);
+        })
+    );
+    stop = startWorkspaceModeSync();
+    useUIStore.getState().setAppMode('plan');
+    useUIStore.getState().setAppMode('export');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sentModes(), 'a later mode overtook the one still on the wire').toEqual(['survey']);
+
+    landFirst();
+    await settle();
+    expect(sentModes()).toEqual(['survey', 'plan', 'export', 'export']);
+  });
+
   it('sends Survey when a project load resets the mode', async () => {
     useUIStore.setState({ appMode: 'plan' });
     stop = startWorkspaceModeSync();

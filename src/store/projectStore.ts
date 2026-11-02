@@ -19,6 +19,7 @@ import { useGlobalViewStore } from './globalViewStore';
 import { useSpeleoStore } from './speleoStore';
 import { useExportStore } from './exportStore';
 import { refuseMutationDuringCarry, refuseStaleCarryCommit, takeMoveCarryCommit, type MoveCarryCommit } from './moveCarry';
+import { runSerialized } from './mutationQueue';
 import type {
   Project,
   ProjectState,
@@ -590,34 +591,6 @@ function noteImportResolvedDeferredSave(
     (w) => w.code === 'SYSTEM' || w.code === 'DATABASE_NOT_REOPENED',
   );
   if (!unusable) set({ databaseOpen: true });
-}
-
-/**
- * Serialises frontend mutations, so their aftermath applies in ISSUE order (#24).
- *
- * `executeCommand` and `executeUndoRedo` are otherwise independent async chains: each awaits
- * its own IPC call and then its own `refreshProjectState`, so two overlapping operations can
- * finish in the opposite order to the one they were issued in. Their reverse aftermaths do NOT
- * commute when the counts differ - reverse at N, a shot-count edit, reverse at N+1 - so applying
- * them out of order walks the gas-plan pins and the distance-gradient origin onto a different
- * station, in range and silent.
- *
- * The backend already serialises on `command_lock`, so this costs no real concurrency: it makes
- * the frontend's completion order match the order the backend applied things in.
- *
- * Each entry runs whether or not its predecessor succeeded - a failed command must not wedge
- * every later one - and the chain deliberately holds no result, so a rejected promise cannot
- * escape into the next link.
- */
-let mutationChain: Promise<void> = Promise.resolve();
-
-function runSerialized<T>(work: () => Promise<T>): Promise<T> {
-  const result = mutationChain.then(work, work);
-  mutationChain = result.then(
-    () => undefined,
-    () => undefined
-  );
-  return result;
 }
 
 /**
