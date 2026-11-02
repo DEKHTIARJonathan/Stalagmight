@@ -559,6 +559,14 @@ pub use workspace_mode::WorkspaceMode;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              refusal is the evidence a run captures"
+)]
+mod adoption_gate_code_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::panic,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, each test panics \

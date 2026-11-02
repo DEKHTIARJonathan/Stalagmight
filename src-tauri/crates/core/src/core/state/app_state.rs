@@ -639,13 +639,16 @@ impl AppState {
             return Err(newer_file_edit_refusal(what, version));
         }
         // [#576 NF-W4C-3-EDIT] An Ariane adoption is handing this project over to
-        // SpeleoDB: no edit until its push has landed. The read-only code, so the
-        // frontend shows its read-only notice.
+        // SpeleoDB: no edit until its push has landed. The read-only code, so every
+        // caller treats it as read-only, then `ADOPTION_IN_PROGRESS` so the
+        // frontend's notice says "being handed over" rather than inviting a Start
+        // editing that would race the adoption's lock operations (RV5-F4-5).
         if self.speleodb_adoption_holds_gate() {
             return Err(CommandResult::failure(format!(
-                "{}: {what} is disabled: this project is being handed over to SpeleoDB. \
-                 Edit it once the upload has finished.",
-                crate::core::command::EDIT_DISABLED_CODE
+                "{}: {}: {what} is disabled: this project is being handed over to \
+                 SpeleoDB. Edit it once the upload has finished.",
+                crate::core::command::EDIT_DISABLED_CODE,
+                crate::core::command::ADOPTION_IN_PROGRESS_CODE
             )));
         }
         if self.edit_enabled() {

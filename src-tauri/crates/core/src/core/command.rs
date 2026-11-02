@@ -262,6 +262,14 @@ pub const EDIT_DISABLED_CODE: &str = "EDIT_DISABLED";
 /// `loading::NEWER_FILE_READ_ONLY_CODE`.
 pub const WORKSPACE_READ_ONLY_CODE: &str = "WORKSPACE_READ_ONLY";
 
+/// Second code behind [`EDIT_DISABLED_CODE`] on a mutation refused because an
+/// Ariane adoption is handing the open project over to SpeleoDB (#576
+/// NF-W4C-3-EDIT, RV5-F4-5). The frontend reads it to say "being handed over",
+/// not "click Start editing": a Start editing in the middle of the hand-over
+/// would race the adoption's own lock operations. Mirrored by
+/// `ADOPTION_IN_PROGRESS` in `src/utils/editErrors.ts`.
+pub const ADOPTION_IN_PROGRESS_CODE: &str = "ADOPTION_IN_PROGRESS";
+
 /// Coded-failure prefix for a mutation blocked by the lazy 20-min lock re-verify
 /// (#202) because a definitive server answer showed the write lock is no longer
 /// held by us. Same string-prefix idiom as [`EDIT_DISABLED_CODE`],
