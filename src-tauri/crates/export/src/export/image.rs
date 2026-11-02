@@ -527,6 +527,57 @@ const PEN_LABEL_CHAR_WIDTH_RATIO: f64 = 0.55;
 /// rasterization.
 const MIN_BOUNDS_EXTENT_M: f64 = 1.0;
 
+/// Refuse to draw geometry that is not finite (#576 B21).
+///
+/// One station at inf or NaN - an absurd tape such as a 1e200 typo overflows
+/// the horizontal length, or a corrupt offset arrives from a file - poisons
+/// every station after it, and the drawing silently degenerates: `f64::min` /
+/// `max` skip NaN and accept inf, so the viewBox became `-inf -inf inf inf`
+/// and the PNG a blank 5x5 pixmap, both reported as a successful export. The
+/// first offending station is named by section and shot (station `k` is where
+/// the section's `k`-th shot ends), in section order, so the user can find
+/// and fix the reading that caused it.
+fn ensure_finite_geometry(
+    project: &Project,
+    station_by_ref: &HashMap<StationRef, &crate::models::Station>,
+) -> Result<()> {
+    for section in &project.sections {
+        for index in 0..=section.shots.len() as u32 {
+            let Some(station) = station_by_ref.get(&StationRef::new(section.id, index)) else {
+                continue;
+            };
+            let c = station.coordinates;
+            if c.x.is_finite() && c.y.is_finite() && c.z.is_finite() {
+                continue;
+            }
+            // The name comes from imported files and reaches the UI and the
+            // log: no control characters, and a bounded length.
+            let name: String = section
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Section {}", section.id))
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(60)
+                .collect();
+            let place = if index == 0 {
+                "starts".to_string()
+            } else {
+                format!("shot {index} ends")
+            };
+            anyhow::bail!(
+                "Cannot draw the map: in section \"{name}\", {place} at a position that is not a \
+                 finite number (x {}, y {}, depth {}). Check the length and depths of that shot \
+                 and the ones before it.",
+                c.x,
+                c.y,
+                c.z
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Generate SVG content as a string from the measured station coordinates.
 /// Pure: never touches the filesystem.
 pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Result<String> {
@@ -548,6 +599,7 @@ pub fn generate_svg_string_with_stations(
     // inflate the viewBox and shrink the visible map.
     let station_by_ref: HashMap<StationRef, &crate::models::Station> =
         stations.iter().map(|s| (s.station_ref, s)).collect();
+    ensure_finite_geometry(project, &station_by_ref)?;
     let mut min_x = f64::MAX;
     let mut max_x = f64::MIN;
     let mut min_y = f64::MAX;
@@ -2008,6 +2060,79 @@ mod tests {
             ..Default::default()
         });
         project
+    }
+
+    // ---- Non-finite geometry (#576 B21) -----------------------------------
+
+    /// One absurd tape (a 1e200 typo, or a corrupt file) overflows every
+    /// station after it to inf/NaN. The image export used to write a blank
+    /// 5x5 PNG or an SVG with an infinite viewBox and report success; it now
+    /// refuses, naming the first section and shot whose station is not
+    /// finite, and writes nothing.
+    #[test]
+    fn non_finite_geometry_is_refused_naming_section_and_shot() {
+        let mut project = Project::new("Absurd".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![
+                make_shot(10.0, 0.0, false),
+                make_shot(1e200, 0.0, false),
+                make_shot(10.0, 0.0, false),
+            ],
+            ..Default::default()
+        });
+
+        let err = generate_svg_string(&project, &ExportImageOptions::default())
+            .expect_err("non-finite geometry must not render");
+        let message = err.to_string();
+        assert!(
+            message.contains("\"Main\"") && message.contains("shot 2"),
+            "the error names the section and the shot: {message}"
+        );
+
+        for format in [ImageFormat::Png, ImageFormat::Svg, ImageFormat::Pdf] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let path = dir.path().join("map.out");
+            let options = ExportImageOptions {
+                format,
+                ..ExportImageOptions::default()
+            };
+            assert!(
+                export_image(&project, &path, &options).is_err(),
+                "{format:?}"
+            );
+            assert!(!path.exists(), "{format:?}: nothing is written");
+        }
+    }
+
+    /// Any route to a non-finite coordinate is refused, not only an
+    /// overflowing tape - here a NaN in the (caller-supplied) station set, on
+    /// the second section's first shot.
+    #[test]
+    fn a_non_finite_station_from_any_source_is_refused() {
+        let mut project = simple_project();
+        project.add_section(SectionData {
+            name: Some("Side".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![make_shot(4.0, 90.0, false), make_shot(4.0, 90.0, false)],
+            ..Default::default()
+        });
+        let side = project.sections[1].id;
+        let mut stations = project.compute_station_coordinates();
+        for station in &mut stations {
+            if station.station_ref == StationRef::new(side, 1) {
+                station.coordinates.y = f64::NAN;
+            }
+        }
+        let message =
+            generate_svg_string_with_stations(&project, &ExportImageOptions::default(), stations)
+                .expect_err("a NaN station must not render")
+                .to_string();
+        assert!(
+            message.contains("\"Side\"") && message.contains("shot 1"),
+            "{message}"
+        );
     }
 
     // ---- Output shape ------------------------------------------------------
