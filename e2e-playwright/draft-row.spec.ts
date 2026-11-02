@@ -306,4 +306,41 @@ test.describe('Draft shot rows', () => {
     await expect(page.getByTestId('grid-row-4')).toHaveClass(/sg-row-draft/);
     await expect(page.getByTestId('grid-cell-4-length')).toHaveText('');
   });
+
+  test('a value typed while the new row is being saved reaches the created shot, once (#576 D39(f))', async ({
+    page,
+  }) => {
+    // A slow create_shot, as on a large survey: the row stays editable while it is in flight.
+    const CREATE_DELAY_MS = 1500;
+    await page.evaluate((delay) => {
+      type Invoke = (cmd: string, args?: unknown, opts?: unknown) => Promise<unknown>;
+      const w = window as unknown as { __TAURI_INTERNALS__: { invoke: Invoke }; __draftCalls__?: string[] };
+      const calls: string[] = [];
+      w.__draftCalls__ = calls;
+      const original = w.__TAURI_INTERNALS__.invoke;
+      w.__TAURI_INTERNALS__.invoke = async (cmd, args, opts) => {
+        if (cmd === 'create_shot' || cmd === 'update_shot') calls.push(cmd);
+        if (cmd === 'create_shot') await new Promise((resolve) => setTimeout(resolve, delay));
+        return original(cmd, args, opts);
+      };
+    }, CREATE_DELAY_MS);
+
+    await fillDraftRow(page, 3, '5'); // the last required field starts create_shot
+    await fillCell(page, 3, 'left', '2.5'); // typed while it is on the wire
+
+    const newShotLeft = () =>
+      page.evaluate(() => {
+        const shots = (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].shots;
+        return shots.length === 4 ? shots[3].left : `shots=${shots.length}`;
+      });
+    await expect.poll(newShotLeft, { timeout: 5000 }).toBe(2.5);
+    await expect(page.getByTestId('grid-cell-3-left')).toHaveText('2.5');
+    // Long enough for a second create of the same row to have landed, had one been sent.
+    await page.waitForTimeout(CREATE_DELAY_MS + 500);
+    expect(await page.evaluate(() => (window as unknown as { __draftCalls__: string[] }).__draftCalls__)).toEqual([
+      'create_shot',
+      'update_shot',
+    ]);
+    expect((await getShots(page)).map((s) => s.length)).toEqual([10, 20, 30, 5]);
+  });
 });

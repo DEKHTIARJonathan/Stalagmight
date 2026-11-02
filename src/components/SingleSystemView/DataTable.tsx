@@ -43,9 +43,8 @@ import {
   overflowDraft,
   respawnsBlank,
   draftMissing,
-  completeDraftData,
-  commitAnchorArgs,
 } from './dataTableDrafts';
+import { useDraftAutoCommit } from './useDraftAutoCommit';
 import type { CellEdit } from '../common/SpreadsheetGrid/types';
 
 interface DataTableProps {
@@ -844,42 +843,11 @@ export default function DataTable({ sections }: DataTableProps) {
     [draftMissingByKey]
   );
 
-  // Commit a draft once its required fields are present - one at a time; the
-  // refresh after create_shot re-runs the effect for the next complete one.
-  // A draft whose create_shot failed keeps what was typed (DRAFT-1, #576) and is
-  // not re-sent as it stands: every refresh re-runs this effect, so it would be
-  // retried - and its failure announced again - on each one. Editing the row
-  // makes a new draft object, which is the retry. The drafts after it wait, so a
-  // retry cannot land out of order behind them.
-  const draftCommitting = useRef(false);
-  const failedDrafts = useRef(new WeakSet<ShotDraft>());
-  useEffect(() => {
-    if (!selectedSection || draftCommitting.current) return;
-    for (const draft of drafts) {
-      if (failedDrafts.current.has(draft)) return;
-      const data = completeDraftData(draft);
-      if (data === null) continue;
-      const { afterShotId, beforeShotId } = commitAnchorArgs(draft, selectedSection.shots);
-      draftCommitting.current = true;
-      setSource('data-table');
-      let committed = false;
-      void createShot(selectedSection.id, data, afterShotId, beforeShotId)
-        .then((result) => {
-          if (!result.success) return;
-          committed = true;
-          setDrafts((prev) =>
-            prev.flatMap((d) =>
-              d.key === draft.key ? (respawnsBlank(d) ? [endDraft(draftKeyRef.current--)] : []) : [d]
-            )
-          );
-        })
-        .finally(() => {
-          if (!committed) failedDrafts.current.add(draft);
-          draftCommitting.current = false;
-        });
-      return;
-    }
-  }, [drafts, selectedSection, createShot]);
+  // Commit each draft once its required fields are present, keeping what it
+  // could not keep alone: a failed create's typed row (DRAFT-1) and the values
+  // typed while the create was in flight (D39(f)) - see useDraftAutoCommit.
+  const nextDraftKey = useCallback(() => draftKeyRef.current--, []);
+  useDraftAutoCommit({ drafts, setDrafts, selectedSection, createShot, updateShot, nextDraftKey });
 
 
   const onShotEdit = useCallback(

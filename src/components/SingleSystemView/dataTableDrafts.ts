@@ -11,7 +11,7 @@
  *
  * Kept free of React/store imports so it is unit-testable in the node vitest env.
  */
-import type { Shot, ShotData } from '../../types/project';
+import type { Shot, ShotData, ShotUpdates } from '../../types/project';
 import { AZIMUTH_AVG_KEY } from './dataTableEdits';
 
 /** Where a draft sits relative to the real shots. `'end'` is the always-present
@@ -291,6 +291,25 @@ export function completeDraftData(draft: ShotDraft): ShotData | null {
     marker_index: null,
     temperature: null,
   };
+}
+
+/**
+ * What changed in `draft` since `sent` - its create_shot payload - was taken from
+ * it: the values typed into the row while the create was in flight (#576 D39(f)),
+ * as an update for the created shot. Read through `completeDraftData` so a missing
+ * azimuth leg compares as the duplicate that was sent. A required field cleared
+ * since is left out - a real shot cannot hold a blank one - and so is anything that
+ * still reads as it was sent.
+ */
+export function lateDraftEdits(sent: ShotData, draft: ShotDraft): Partial<ShotUpdates> {
+  const now = completeDraftData(draft);
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(sent) as (keyof ShotData)[]) {
+    const value = now === null ? draft.data[key] : now[key];
+    if (value === undefined || Object.is(value, sent[key])) continue;
+    out[key] = value;
+  }
+  return out as Partial<ShotUpdates>;
 }
 
 /** create_shot insertion args for a draft: its anchor, with `'end'` resolved
