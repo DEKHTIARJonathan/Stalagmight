@@ -1,4 +1,5 @@
 import type { StoreApi } from 'zustand';
+import i18n from '../i18n';
 import { invokeIpc } from '../utils/ipc';
 import { isEditDisabledError, READ_ONLY_EDIT_NOTICE } from '../utils/editErrors';
 import { TOAST_KEYS } from '../utils/toastKeys';
@@ -29,8 +30,22 @@ export interface ProjectIntegrityActions {
    * issues that need manual attention). */
   repairProjectIntegrity: () => Promise<IntegrityRepairResult>;
   refreshWarnings: () => Promise<void>;
+  /** Resolves false when the resolve did not persist; it has said why in a toast already. */
   resolveWarning: (sectionId: number, shotId: number, warningCode: string, comment?: string) => Promise<boolean>;
   unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
+}
+
+/**
+ * Show the friendly read-only notice, under the key executeCommand uses, when `e` is a
+ * backend EDIT_DISABLED refusal; true when it was one. For the actions here that call the
+ * IPC directly instead of going through executeCommand. Tauri rejects a
+ * `Result<_, String>` command with the bare string.
+ */
+function showReadOnlyRefusal(e: unknown): boolean {
+  const message = typeof e === 'string' ? e : e instanceof Error ? e.message : null;
+  if (!isEditDisabledError(message)) return false;
+  useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(message), TOAST_KEYS.EDIT_DISABLED, 'warning');
+  return true;
 }
 
 // Monotonic sequence so overlapping fire-and-forget integrity checks are
@@ -70,8 +85,14 @@ export function createProjectIntegrityActions(
         return true;
       } catch (e) {
         // Surface failure to the caller (e.g. the shot no longer exists) so the
-        // resolve flow doesn't report a suppression that never persisted (#57).
+        // resolve flow doesn't report a suppression that never persisted (#57) -
+        // and say why here, once, for every caller (#576 NF-W2RO-2): a read-only
+        // refusal gets the same friendly notice as every other edit, anything else
+        // the resolve flow's own message.
         console.error('Failed to resolve warning:', e);
+        if (!showReadOnlyRefusal(e)) {
+          useUIStore.getState().showToast(i18n.t('detailPanel.warnings.resolveFailed'), TOAST_KEYS.WARNING_RESOLVE, 'error');
+        }
         return false;
       }
     },
@@ -88,6 +109,7 @@ export function createProjectIntegrityActions(
         await get().refreshWarnings();
       } catch (e) {
         console.error('Failed to unresolve warning:', e);
+        showReadOnlyRefusal(e); // #576 NF-W2RO-2, see `resolveWarning`
       }
     },
 
@@ -207,12 +229,7 @@ export function createProjectIntegrityActions(
         // That is a read-only notice, not a failure: show the same toast, under the
         // same key, as executeCommand does, and re-throw it so the caller neither
         // reports a repair nor shows its own "failed" toast (`isEditDisabledError`).
-        // Tauri rejects a `Result<_, String>` command with the bare string.
-        const message = typeof e === 'string' ? e : e instanceof Error ? e.message : null;
-        if (isEditDisabledError(message)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(message), TOAST_KEYS.EDIT_DISABLED, 'warning');
-          throw e;
-        }
+        if (showReadOnlyRefusal(e)) throw e;
         // Do NOT fabricate a successful no-op { fixed: 0, remaining: 0 }: a thrown
         // repair (an IPC rejection during window/app teardown, a serialization
         // failure, or a backend panic) must be distinguishable from a genuine clean

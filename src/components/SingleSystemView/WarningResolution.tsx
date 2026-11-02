@@ -613,14 +613,12 @@ export function WarningResolution({
       // The backend can refuse (e.g. the shot no longer exists, or the code is
       // an error): only count it resolved if it actually persisted (#57 #1).
       // With a move carry in flight it is refused (GHOST-2), and that refusal is its
-      // own notice, so it is checked here rather than toasted as a failure below.
+      // own notice. Any failure is explained by `resolveWarning` itself - a
+      // read-only refusal as the read-only notice (#576 NF-W2RO-2) - so nothing more
+      // is toasted here.
       if (refuseMutationDuringCarry()) return 'failed';
       const ok = await resolveWarning(warning.sectionId, warning.shotId, warning.code);
-      if (!ok) {
-        showToast(t('detailPanel.warnings.resolveFailed'), TOAST_KEYS.WARNING_RESOLVE, 'error');
-        return 'failed';
-      }
-      return 'resolved';
+      return ok ? 'resolved' : 'failed';
     }
 
     if (opt.navigate) {
