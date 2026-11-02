@@ -106,7 +106,7 @@ drawn by a custom WebGL layer (`src/components/Map/surveyLayer/customRender/`), 
 the *sole* survey renderer: the stock bulk layers were deleted, so there is no fallback -
 an unrecoverable GL failure removes the dead layer and surfaces an error. Hit-testing does
 not depend on MapLibre either; it runs against the SoA geometry index. What is still stock
-MapLibre in `SurveyLayer.tsx` are the small GeoJSON auxiliaries: loop closures, the
+MapLibre in `SurveyLayer.ts` (`surveyLayer/auxiliaryLayers.ts`) are the small GeoJSON auxiliaries: loop closures, the
 gas-route highlight, merge ghosts, and the interact hover/selection overlay - the last of
 which holds only the few features the user is currently touching, so its size tracks
 interaction state, not survey size. Global View is custom-only too
@@ -155,7 +155,7 @@ in `src-tauri/src/commands/telemetry_coverage_tests.rs`.
 | `src/hooks/useEditingBlocked.ts` | The one sanctioned read-only predicate (map mode + SpeleoDB lock) |
 | `src/components/Map/MapCanvas.tsx` | MapLibre map initialization |
 | `src/components/Map/createSurveyMap.ts` | The one map factory for the survey map, Global View and section preview: shared options, rotation/pitch disabling, the Android tile protocol, satellite reload on reconnect |
-| `src/components/Map/SurveyLayer.tsx` | Survey layer: custom-renderer wiring, GeoJSON auxiliaries, interaction |
+| `src/components/Map/SurveyLayer.ts` | Survey layer: custom-renderer wiring, GeoJSON auxiliaries, interaction (helpers under `surveyLayer/`) |
 | `src/components/Map/surveyLayer/customRender/controller.ts` | Custom WebGL survey renderer (buffers, colors, layer lifecycle) |
 | `src/components/GlobalView/GlobalView.tsx` | Global View container component |
 | `src/components/GlobalView/GlobalViewMap.tsx` | MapLibre map for Global View |

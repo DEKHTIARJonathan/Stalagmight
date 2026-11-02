@@ -309,7 +309,8 @@ cannot change what shows. Six writers used to race here, which shipped #24 and
 | `src/components/Map/MapCanvas.tsx` | Immovable/anchored computation, the carry token and its guards, the pointer handlers and the drop's click gate (`pressClientRef`) |
 | `src/components/Map/useMoveDrag.ts` | Drag state, pickup / per-move preview / drop, snap-to-merge detection and prompt, the one carry cancel routine |
 | `src/components/Map/useModifierPan.ts` | Ctrl+drag / middle-drag panning and the Ctrl-held tracking |
-| `src/components/Map/SurveyLayer.tsx` | Hover detection, visual state (feature-state), drag preview layers, the hover verdict for the cursor |
+| `src/components/Map/SurveyLayer.ts` | Hover detection, visual state (feature-state), the drag-preview entry points, the hover verdict for the cursor |
+| `src/components/Map/surveyLayer/dragPreviewController.ts` | The drag preview session: capture (`beginStationDragPreview` BFS), drag exclusion, overlay follow, commit / end |
 | `src/components/Map/mapCursor.ts` | The one writer of the canvas cursor: precedence of pan, placement, hover, Ctrl and tool |
 | `src/hooks/useMapTools.ts` | Per-tool click/hover handlers, immovable guards, drag initiation callbacks |
 | `src/components/Map/surveyLayer/ghostFeatures.ts` | Ghost section preview GeoJSON (`buildGhostFeatures`) |

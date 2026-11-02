@@ -20,7 +20,7 @@ It is not built, run, or tested in CI.
 | `src/hooks/useTouchContextMenu.ts` | `useTouchContextMenu` | Container-level touch path into a right-click-only context menu: on fire it dispatches a synthetic `contextmenu` on whatever the finger landed on |
 | `src/components/common/SpreadsheetGrid/SpreadsheetGrid.tsx` | the `useTouchContextMenu(scrollRef)` call (`:1911`) | Long-press a grid cell, gutter or header -> the grid's own context menu |
 | `src/utils/longPressTouch.ts` | `attachLongPressTouch` | The raw-element long-press machine (500 ms hold, 10 px cancel, swallowed lift), shared by both map layers and the grid |
-| `src/components/Map/SurveyLayer.tsx` | `initializeEventHandlers` (the `attachLongPressTouch` call), gated by `modalInteractionActive` | Long-press the survey canvas -> survey context menu |
+| `src/components/Map/SurveyLayer.ts` | `initializeEventHandlers` (the `attachLongPressTouch` call), gated by `modalInteractionActive` | Long-press the survey canvas -> survey context menu |
 | `src/components/GlobalView/GlobalSurveyLayer.ts` | `initializeEventHandlers` (the `attachLongPressTouch` call) | Long-press the global canvas -> system context menu |
 | `src/components/GlobalView/GlobalViewMap.tsx` | per-marker `touch*` listeners, inline in the marker builder; the handler block at `:376-381` | Long-press a project marker -> marker context menu (its own copy - see Long press). The handler block disables `dragRotate`, `touchPitch` and, since #338, the rotation half of the pinch (`:381`) |
 | `src/components/Dialogs/SectionPreview.tsx` | the handler block at `:281-286` | The third MapLibre surface: same `dragRotate` / `touchPitch` / `disableRotation` set as the other two |
@@ -224,14 +224,14 @@ treatment minus the box zoom - the global view (`GlobalViewMap.tsx:376-381`, the
 (`SectionPreview.tsx:281-286`, at `:286`). Both were missing that line until
 #338, so a twist on either used to leave the plan sitting at an angle. The survey is a top-down plan,
 so a bearing means nothing here, and a non-zero one would drop the `axisAligned`
-fast path in the hit-test/geometry index (`SurveyLayer.cameraSnapshot`, ~:1315)
+fast path in the hit-test/geometry index (`cameraSnapshot` in `surveyLayer/surveyHitTester.ts`)
 with no way to reset it from the touch UI.
 
 **Custom WebGL renderer.** Touch needs nothing renderer-specific. The survey is
 drawn by the custom WebGL layer, and the stock bulk layers were deleted rather
 than hidden, so hit-testing does not use `queryRenderedFeatures`; it goes through the SoA
 geometry index (`SurveyLayer.hitCandidateSections`, `resolveStationAt` /
-`resolveShotAt`, documented at `SurveyLayer.tsx:1263`). Long-press hit-testing
+`resolveShotAt`, documented in `surveyLayer/surveyHitTester.ts`). Long-press hit-testing
 calls the same `handleContextMenu` as right-click, so it inherits that path for
 free. `GlobalSurveyLayer` likewise resolves via its own `pickSystemAt` index.
 

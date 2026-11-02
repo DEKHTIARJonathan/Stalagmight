@@ -58,7 +58,7 @@ stalagmight/
 │   │   ├── SingleSystemView/     # Main editing view
 │   │   ├── Map/                  # MapLibre integration
 │   │   │   ├── MapCanvas.tsx         # MapLibre map initialization
-│   │   │   ├── SurveyLayer.tsx       # Survey rendering on map
+│   │   │   ├── SurveyLayer.ts        # Survey rendering on map
 │   │   │   └── GridOverlay.tsx       # Theme-aware coordinate grid overlay
 │   │   ├── Dialogs/              # All dialog components
 │   │   │   ├── KeyboardShortcutsDialog.tsx  # Shortcuts overlay (? key)

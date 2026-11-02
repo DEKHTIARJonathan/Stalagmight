@@ -35,7 +35,7 @@ the link-time uniform/attribute location cache, #339). A fix in the
 tessellator, shaders, or hit index of one is not a fix in the other.
 
 Still ordinary MapLibre, on small GeoJSON sources built in
-`SurveyLayer.initializeSources`: loop closures, the gas route highlight, merge
+`surveyLayer/auxiliaryLayers.ts::addAuxiliarySources`: loop closures, the gas route highlight, merge
 ghosts, and the **interact overlay** - a handful of features holding only the
 currently hovered / selected / snapped items, redrawn above the custom geometry
 so per-item highlight survives without feature-state. Z-order is explicit: the
@@ -153,8 +153,8 @@ defers the first build until the font promise resolves.
 ## Hit-testing
 
 MapLibre returns nothing from a custom layer, so `queryRenderedFeatures` is not
-available for survey geometry at all. `SurveyLayer.hitCandidateSections` replaces
-it:
+available for survey geometry at all. `SurveyLayer.hitCandidateSections` (body in
+`surveyLayer/surveyHitTester.ts`) replaces it:
 
 1. pad the probe point or box by the type's hit reach (`surveyLayer/hitProbe.ts`;
    shot and station reaches differ, and the padding preserves the historical
@@ -170,7 +170,7 @@ only the candidate prefilter. The index's multi-hit box resolver went away with
 box select (#409), so there is no "everything inside this rectangle" query left.
 
 The index caches its projected AABBs against a camera snapshot
-(`SurveyLayer.cameraSnapshot`), so a static hover reprojects the sections once per
+(`surveyHitTester.ts::cameraSnapshot`), so a static hover reprojects the sections once per
 camera, not once per probe. That snapshot key keeps the map center at full
 precision on purpose: quantizing it let features near the tolerance boundary drop
 out of hover until the camera moved far enough. Candidate discovery is gated by
