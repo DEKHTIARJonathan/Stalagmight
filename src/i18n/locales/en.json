@@ -2559,7 +2559,8 @@
     },
     "settingsUnreadable": {
       "lead": "Some stored project settings could not be read: {{names}}.",
-      "detail": "Saving is off so the file keeps its stored values - defaults are in use for now. You can still view and export; reopen the project to try again.",
+      "detail": "Saving is off so the file keeps its stored values - defaults are in use for now. To save again, set them in Project Settings and save that dialog; you can still view and export.",
+      "reopenNote": "The default north reference cannot be set there: reopen the project to try again.",
       "saveRefused": "Not saved: stored project settings could not be read.",
       "names": {
         "validation": "validation thresholds",

@@ -192,6 +192,14 @@ apart (`Database::load_project_with_report`):
   file keeps its stored values. `surfaceSaveFailure` shows it as a warning toast, and
   auto-save does not try. Export still works; closing or reopening the project ends
   the state.
+- **Setting a value again ends it for that value** (#576 B15 follow-up). Once the
+  user sets the validation thresholds or the entrance elevation in Project Settings,
+  the value in memory is theirs, not a default standing in, so
+  `update_project_settings` / `set_surface_elevation` take that key off the list
+  (`AppState::lift_unreadable_project_setting`) - also when the value set equals the
+  one shown: while a key is unread, saving the dialog sends it unchanged. When the
+  list is empty, saves (and auto-save) work again; the banner says how. The default
+  north reference has no control in Project Settings, so it only clears on reopen.
 
 ### `section_offsets` rows are never all-zero
 

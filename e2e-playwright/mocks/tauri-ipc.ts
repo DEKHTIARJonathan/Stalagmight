@@ -250,6 +250,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // `BinaryEnvelope::load_repairs` (#576 B35(h)): what the NEXT binary load reset or
       // dropped, per kind. Flip per-spec with __MOCK_SET_LOAD_REPAIRS__; nothing by default.
       let mockLoadRepairs = { shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0 };
+      // `BinaryEnvelope::unreadable_project_settings` (#576 B15): the stored settings the
+      // NEXT binary load could not read. None by default; flip per-spec with
+      // __MOCK_SET_PROJECT_UNREADABLE_SETTINGS__.
+      let mockUnreadableSettings: string[] = [];
       // Window teardown calls, so an exit-guard spec can assert the POSITIVE
       // outcome of an unguarded close instead of only "no dialog appeared".
       let windowDestroyCount = 0;
@@ -559,6 +563,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         unreadable: boolean,
       ) => {
         mockSpeleoLinkUnreadable = unreadable;
+      };
+      // Make the next binary load report stored settings it could not read (#576 B15).
+      (window as unknown as Record<string, unknown>).__MOCK_SET_PROJECT_UNREADABLE_SETTINGS__ = (
+        keys: string[],
+      ) => {
+        mockUnreadableSettings = Array.isArray(keys) ? keys : [];
       };
       // Make the next binary load report values it reset or dropped (#576 B35(h)).
       (window as unknown as Record<string, unknown>).__MOCK_SET_LOAD_REPAIRS__ = (repairs: {
@@ -1570,9 +1580,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               newer_schema_version: mockNewerSchema,
               // #576 B35(b) review: the backend could not read this file's link row.
               speleo_link_unreadable: mockSpeleoLinkUnreadable,
-              // `BinaryEnvelope::unreadable_project_settings` (#576 B15): no spec
-              // mocks an unreadable settings row, so every mocked load reads them all.
-              unreadable_project_settings: [],
+              // `BinaryEnvelope::unreadable_project_settings` (#576 B15): none unless a
+              // spec seeds __MOCK_SET_PROJECT_UNREADABLE_SETTINGS__.
+              unreadable_project_settings: mockUnreadableSettings,
               // `BinaryEnvelope::load_repairs` (#576 B35(h)).
               load_repairs: mockLoadRepairs,
               project_header: {

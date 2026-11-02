@@ -1117,6 +1117,26 @@ impl AppState {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = keys;
     }
 
+    /// [#576 B15 follow-up] The user set `key` again (Project Settings): the value
+    /// in memory is now theirs, not a default standing in for an unread one, so
+    /// writing it over the stored value is what they asked for and `key` no longer
+    /// refuses a save. Saves work again once nothing is left on the list.
+    pub(crate) fn lift_unreadable_project_setting(&self, key: &str) {
+        let mut keys = self
+            .unreadable_project_settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if keys.iter().any(|k| k == key) {
+            keys.retain(|k| k != key);
+            tracing::info!(
+                key,
+                remaining = keys.len(),
+                purpose = "let a save write a setting the user set again",
+                "An unread project setting was set again; it no longer refuses saves"
+            );
+        }
+    }
+
     /// [#576 B15] The stored per-project settings the open project's load could
     /// not read; while any are listed, every save is refused.
     pub fn unreadable_project_settings(&self) -> Vec<String> {

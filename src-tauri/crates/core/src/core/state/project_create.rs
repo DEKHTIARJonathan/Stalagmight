@@ -221,12 +221,19 @@ impl AppState {
             // "Update project settings" undo entry for a save that changed nothing
             // (Codex). Compare before mutating.
             if project.name == name && project.validation == validation {
+                // [#576 B15 follow-up] Unchanged, but SET: the dialog sends the
+                // thresholds while they are unread so the user can keep the shown
+                // ones, and that choice is what lets a save write them.
+                self.lift_unreadable_project_setting("validation");
                 return CommandResult::success();
             }
             project.name = name;
             project.validation = validation;
             project.touch();
         }
+        // [#576 B15 follow-up] The thresholds are now the user's, not a default
+        // standing in for unread ones: they no longer refuse a save.
+        self.lift_unreadable_project_setting("validation");
         // Record an undo entry (before -> after) so the change is on the stack.
         if let Some(before_json) = before_snapshot {
             if let Ok(after_json) = self.capture_project_snapshot() {
@@ -285,11 +292,17 @@ impl AppState {
             // skips that comparison inherits the same spurious-dirty risk this
             // guard alone cannot close.
             if project.surface_elevation == elevation {
+                // [#576 B15 follow-up] Unchanged, but SET: see
+                // `update_project_settings`.
+                self.lift_unreadable_project_setting("surface_elevation");
                 return CommandResult::success();
             }
             project.surface_elevation = elevation;
             project.touch();
         }
+        // [#576 B15 follow-up] The elevation is now the user's: it no longer
+        // refuses a save.
+        self.lift_unreadable_project_setting("surface_elevation");
         if let Some(before_json) = before_snapshot {
             if let Ok(after_json) = self.capture_project_snapshot() {
                 if before_json != after_json {

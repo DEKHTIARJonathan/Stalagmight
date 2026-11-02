@@ -10,6 +10,7 @@ import { getPanelId, getTabId, type SettingsCategory } from './SettingsSidebar';
 import { Button } from '../common/Button';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { isSettingUnreadable, liftUnreadableSetting } from '../../store/unreadableSettings';
 import { isMoveCarryRefusal } from '../../store/moveCarry';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { defaultConfig, type Config } from '../../types/config';
@@ -152,11 +153,16 @@ export function ProjectSettingsDialog() {
     // it routes through executeCommand, which marks every success dirty, so even
     // the backend's no-op early-return would otherwise leave an unsaved-changes
     // prompt and a misleading history item for a Save that changed nothing (Codex).
+    //
+    // [#576 B15 follow-up] ...except while the stored thresholds could not be read:
+    // then saving this dialog IS the user setting them (the ones shown are the
+    // defaults standing in), which is what lets a project save write them again.
     const currentValidation = project.validation ?? defaultConfig.validation;
+    const validationUnread = isSettingUnreadable('validation');
     const settingsChanged =
       trimmedName !== (project.name ?? '') ||
       JSON.stringify(validation) !== JSON.stringify(currentValidation);
-    if (settingsChanged) {
+    if (settingsChanged || validationUnread) {
       const result = await updateProjectSettings(trimmedName, validation);
       if (!result.success) {
         setSaving(false);
@@ -164,6 +170,7 @@ export function ProjectSettingsDialog() {
         if (!isMoveCarryRefusal(result)) showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
         return;
       }
+      liftUnreadableSetting('validation');
     }
     // Compare the DRAFT STRING against what it was seeded with, not the
     // re-parsed/re-converted value against the stored meters: the draft is
@@ -181,7 +188,12 @@ export function ProjectSettingsDialog() {
     // rejects it (EDIT_DISABLED), fall into the same failure path as a
     // rejected name/validation save: dialog stays open, error shown, the
     // user's staged draft is untouched.
-    if (elevationDraftChanged) {
+    //
+    // [#576 B15 follow-up] An unread stored elevation is set by saving the dialog
+    // (as for the thresholds above) - unless editing is blocked, where the field
+    // is disabled and the backend would refuse the write.
+    const elevationUnread = isSettingUnreadable('surface_elevation') && !editingBlocked;
+    if (elevationDraftChanged || elevationUnread) {
       const elevationMeters =
         elevationParsed === null ? null : convertLengthToMeters(elevationParsed, elevationUnit);
       const result = await setSurfaceElevation(elevationMeters);
@@ -191,6 +203,7 @@ export function ProjectSettingsDialog() {
         if (!isMoveCarryRefusal(result)) showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
         return;
       }
+      liftUnreadableSetting('surface_elevation');
     }
     setSaving(false);
     closeDialog();
@@ -209,6 +222,7 @@ export function ProjectSettingsDialog() {
     showToast,
     t,
     project,
+    editingBlocked,
   ]);
 
   return (

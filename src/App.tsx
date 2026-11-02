@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore, selectNewerFileReadOnly } from './store/projectStore';
 import { LoadRepairsBanner } from './components/common/LoadRepairsBanner';
+import { SETTABLE_UNREADABLE_SETTINGS } from './store/unreadableSettings';
 import { isMoveCarryRefusal } from './store/moveCarry';
 import { useUIStore } from './store/uiStore';
 import { useSpeleoStore } from './store/speleoStore';
@@ -670,9 +671,10 @@ function App() {
 
       {/* [#576 B15] Unread-settings banner. Stored per-project settings the backend
           could not read on open are held as defaults, and every save is refused so
-          the file keeps its stored values. An ongoing condition (until the project is
-          reopened), so a banner (docs/notifications.md) that names WHICH settings, and
-          no Dismiss: it is the one place the user learns why saving is off. */}
+          the file keeps its stored values. An ongoing condition (until the user sets
+          them again in Project Settings, or reopens), so a banner
+          (docs/notifications.md) that names WHICH settings, and no Dismiss: it is the
+          one place the user learns why saving is off and how to turn it back on. */}
       {unreadableProjectSettings.length > 0 && project && !loading.isLoading && (
         <div
           className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
@@ -687,6 +689,11 @@ function App() {
             })}{' '}
             <span className="text-text-secondary font-normal">
               {t('banners.settingsUnreadable.detail')}
+              {/* [#576 B15 follow-up] Only the thresholds and the elevation have a
+                  control in Project Settings; anything else clears on reopen. */}
+              {unreadableProjectSettings.some(
+                (key) => !(SETTABLE_UNREADABLE_SETTINGS as readonly string[]).includes(key),
+              ) && <> {t('banners.settingsUnreadable.reopenNote')}</>}
             </span>
           </span>
         </div>
