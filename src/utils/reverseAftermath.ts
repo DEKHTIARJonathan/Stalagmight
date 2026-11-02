@@ -85,17 +85,19 @@ export function isIdentityTransform(transform: ReverseTransform): boolean {
 /**
  * Apply a composed transform to one index, clamping ONCE at the end.
  *
- * Clamped, not a bare affine map: a plan pin outlives the shots it was dropped
- * on (its only reset is a project switch), so `station_index` can already sit
- * past the end of a shortened section - and `shotCount - index` then goes
- * NEGATIVE. `StationRef.station_index` is a `u32`, so serde rejects the whole
- * `compute_gas_reach_field` payload and the reach overlay fails permanently on
- * one poisoned pin rather than degrading. The backend's import-side mirror clamps
- * for the same reason. An already-broken pin lands on an end station instead of a
- * negative index; it was not naming a real station either way, and the clamp
- * keeps every other pin working.
+ * Clamped, not a bare affine map. Its one production ref (via `mirrorRef`, from
+ * `applyReverseAftermath`) is a distance-gradient origin whose anchor could not
+ * be taken: nothing re-resolves that origin, so an earlier delete can have left
+ * its `station_index` past the end of a shortened section - and
+ * `shotCount - index` then goes NEGATIVE. `StationRef.station_index` is a `u32`,
+ * so serde would reject the `get_station_distances_from` payload the origin
+ * feeds, and the gradient would fail on every refetch rather than degrade. (The
+ * gas plan's pins, which this clamp was first written for, no longer pass here:
+ * they are re-resolved from backend anchors, #310.) An out-of-range ref lands on
+ * an end station instead of a negative index; it was not naming a real station
+ * either way.
  *
- * ONCE is load-bearing: clamping per step would send an out-of-range pin
+ * ONCE is load-bearing: clamping per step would send an out-of-range ref
  * `p -> 0 -> shotCount` across two reverses that between them changed nothing.
  * Composing first and clamping at the end keeps a net no-op a no-op.
  */

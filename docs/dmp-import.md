@@ -379,7 +379,7 @@ Sections unreachable after all passes remain in the wizard's manual segment-plac
 | `computeDmpBfsContext` | `src/utils/segmentContext.ts` | BFS collecting DMP neighbor geometry + existing anchors |
 | `stationPositionFromShotLines` | `src/utils/segmentContext.ts` | Extract XY from backend `shot_lines` (station 0 = `[0][0]`, station N = `[N-1][1]`) |
 | `discoverBridgedDmpSections` | `src/utils/segmentContext.ts` | Find DMP sections connected through shared existing sections |
-| `computeStationsFromDmpShots` | `src/components/Dialogs/SectionPreview.tsx` | XY station positions from DMP shot headings + lengths |
+| `computeStationsFromDmpShots` | `src/components/Dialogs/SectionPreview.tsx` | Station positions (x, y, z) of a DMP section's `Standard` shots, station 0 at the origin, walked by the frontend's one copy of the backend's walk (`walkStations`, `src/utils/stationWalk.ts`): the mean of the in/out headings, the tape projected by the depth change, the north-reference correction it is given (none for a DMP section, which records magnetic with no correction) |
 | `computeOverlapIds` | `src/utils/overlapHelpers.ts` | Set of import shot IDs in the overlap region |
 | `computeActionableIds` | `src/utils/overlapHelpers.ts` | Subset of overlap IDs based on merge station choice |
 | `computeTargetShotIndex` | `src/utils/overlapHelpers.ts` | Map import overlap ID → target section shot index |
