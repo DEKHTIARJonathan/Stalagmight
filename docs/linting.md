@@ -187,8 +187,13 @@ debt to pay down file by file, not a reason to keep the gate off those trees.
   (`useProjectStore()`) subscribes its component to the whole store, so every
   `set()` re-renders it: a dirty-flag flip, a loading tick, the undo
   availability after each edit. Also flagged: an identity selector
-  (`(s) => s`, bare or under `useShallow`) and `useStore(store)` with no
-  selector. Select the fields the component reads -
+  (`(s) => s`, bare or under `useShallow`), `useStore(store)` with no
+  selector, a selector that builds a new object or array with no `useShallow`
+  and no equality function (`(s) => ({ a: s.a })`, `(s) => [s.a]`,
+  `(s) => s.list.map(f)`: zustand compares answers with `Object.is`, so a fresh
+  one on every call re-renders on every write), and `useShallow((s) => ({ ...s }))`
+  (#576 RV5-LS-3). A fallback such as `(s) => s.list ?? []` is not flagged: it
+  is the stored list whenever there is one. Select the fields the component reads -
   `useProjectStore((s) => s.project)`, or
   `useShallow((s) => ({ a: s.a, b: s.b }))` for several. Store actions are
   stable, so selecting them costs nothing; a getter action that reads state

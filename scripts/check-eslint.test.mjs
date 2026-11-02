@@ -383,6 +383,55 @@ await test('require-store-selector: real selectors, shallow picks and non-hook s
   assert.deepEqual(hits, []);
 });
 
+// [#576 RV5-LS-3] Two whole-store subscriptions the identity check missed: a
+// selector that builds a fresh object or array (zustand compares with Object.is,
+// so the answer differs on every store write), and useShallow over a copy of the
+// whole state.
+await test('require-store-selector: fresh-object/array selectors without useShallow and a shallow spread of the state are errors', async () => {
+  const hits = await storeHits(SRC, `
+    import { useStore } from 'zustand';
+    import { useShallow } from 'zustand/react/shallow';
+    import { useUIStore, uiStore } from '../../store/uiStore';
+    import { useProjectStore } from '../../store/projectStore';
+    export function useFresh() {
+      const a = useUIStore((s) => ({ a: s.view }));
+      const b = useUIStore((s) => [s.view, s.closeDialog]);
+      const c = useProjectStore((s) => s.project?.sections.map((x) => x.id));
+      const d = useUIStore(useShallow((s) => ({ ...s })));
+      const e = useStore(uiStore, (s) => ({ v: s.view }));
+      const f = useUIStore(function (state) { return { v: state.view }; });
+      const g = useProjectStore((s) => Object.keys(s));
+      return [a, b, c, d, e, f, g];
+    }
+  `);
+  assert.deepEqual(hits.map((h) => h.line), [7, 8, 9, 10, 11, 12, 13], JSON.stringify(hits));
+  assert.ok(hits.every((h) => h.severity === 2));
+  assert.match(hits[3].message, /copies the whole store/);
+  assert.match(hits[0].message, /new object or array/);
+});
+
+await test('require-store-selector: a fresh value under useShallow or with an equality fn, and a spread of a field, are clean', async () => {
+  const hits = await storeHits(SRC, `
+    import { useStore } from 'zustand';
+    import { shallow } from 'zustand/shallow';
+    import { useShallow } from 'zustand/react/shallow';
+    import { useUIStore, uiStore } from '../../store/uiStore';
+    import { useProjectStore } from '../../store/projectStore';
+    export function useClean() {
+      const a = useUIStore(useShallow((s) => ({ a: s.view })));
+      const b = useUIStore(useShallow((s) => [s.view, s.closeDialog]));
+      const c = useUIStore((s) => ({ a: s.view }), shallow);
+      const d = useStore(uiStore, (s) => [s.view], shallow);
+      const e = useUIStore(useShallow((s) => ({ ...s.view })));
+      const f = useProjectStore((s) => s.project?.sections);
+      const g = useProjectStore(useShallow((s) => s.project?.sections.map((x) => x.id) ?? []));
+      const h = useProjectStore((s) => s.project?.sections ?? []);
+      return [a, b, c, d, e, f, g, h];
+    }
+  `);
+  assert.deepEqual(hits, []);
+});
+
 await test('require-store-selector: covers src tests too, not the e2e trees', async () => {
   const code = `
     import { useProjectStore } from '../src/store/projectStore';
