@@ -382,6 +382,35 @@ fn repair_keeps_its_backup_with_the_projects_journal() {
     assert_eq!(project_name(&project), "Original");
 }
 
+/// [#576 RV3-R-NITS, B27(f)] Observed, not read from the source: Repair
+/// rewrites BESIDE the project and renames the rewrite over it, so afterwards
+/// the project is a different file (inode). A plain `VACUUM` - which goes
+/// through SQLite's temp directory, a small tmpfs on many Linux systems -
+/// rewrites it in place and leaves the inode as it was, so this fails on it.
+#[cfg(unix)]
+#[test]
+fn repair_replaces_the_file_rather_than_vacuuming_it_in_place() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("CaveA.stalx");
+    project_file(&project, "Original");
+    let inode_before = std::fs::metadata(&project).unwrap().ino();
+
+    let (_, ok) = Database::attempt_repair(&project).unwrap();
+    let inode_after = std::fs::metadata(&project).unwrap().ino();
+    println!(
+        "repair ok={ok}; project inode {inode_before} -> {inode_after}; project holds: {}",
+        project_name(&project)
+    );
+    assert!(ok);
+    assert_ne!(
+        inode_before, inode_after,
+        "the repaired project must be the rewrite renamed into place"
+    );
+    assert_eq!(project_name(&project), "Original");
+}
+
 /// [#576 B27(f)] A source-level tripwire, like the push snapshot's: Repair must
 /// never fall back to a plain `VACUUM`.
 #[test]
