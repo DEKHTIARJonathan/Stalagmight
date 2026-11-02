@@ -467,8 +467,14 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   parseWalls: (path: string) => Promise<WallsFile>;
   executeWallsImport: (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean, selectedSurveys?: number[] | null) => Promise<CommandResult>;
-  // Per-project settings (#57): name + validation thresholds, stored in the .stalx
-  updateProjectSettings: (name: string, validation: Config['validation']) => Promise<CommandResult>;
+  // Per-project settings (#57): name + validation thresholds, stored in the .stalx, and
+  // the default north reference (#576 NF-W3-2; `null` = nothing recorded). All three go
+  // on every call: the backend sets each to what it is given.
+  updateProjectSettings: (
+    name: string,
+    validation: Config['validation'],
+    defaultAzimuthReference: AzimuthReference | null
+  ) => Promise<CommandResult>;
   /** Set (or, given `null`, clear) the entrance elevation in meters (#465). */
   setSurfaceElevation: (elevation: number | null) => Promise<CommandResult>;
   /** Rename a recent project's display name by path (project need not be open). */
@@ -2238,10 +2244,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  updateProjectSettings: async (name: string, validation: Config['validation']) => {
+  updateProjectSettings: async (
+    name: string,
+    validation: Config['validation'],
+    defaultAzimuthReference: AzimuthReference | null
+  ) => {
     return executeCommand(
       'update_project_settings',
-      { name, validation },
+      { name, validation, defaultAzimuthReference },
       { purpose: 'update per-project settings' }
     );
   },

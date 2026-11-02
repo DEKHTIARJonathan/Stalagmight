@@ -4825,6 +4825,7 @@ fn test_project_validation_drives_warnings_and_persists() {
         state(&app),
         "Renamed Cave".to_string(),
         validation_cfg,
+        None,
     ));
 
     // Now it's flagged - warnings use the PROJECT's thresholds, not the global.
@@ -4858,6 +4859,7 @@ fn test_update_project_settings_is_undoable() {
         state(&app),
         "Renamed Cave".to_string(),
         validation_cfg,
+        None,
     ));
     assert!(
         history::can_undo(state(&app)),

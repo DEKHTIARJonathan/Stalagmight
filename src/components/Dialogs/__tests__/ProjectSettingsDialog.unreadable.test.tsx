@@ -1,9 +1,11 @@
 /**
  * [#576 B15 follow-up] Stored settings the open could not read refuse every save
  * until the user sets them again. Saving Project Settings is that act: while the
- * thresholds or the elevation are unread, Save sends them even when unchanged (the
- * values shown are the defaults standing in), and each one the backend accepts
- * leaves the unread list - so the banner and autosave follow.
+ * thresholds, the default north reference or the elevation are unread, Save sends
+ * them even when unchanged (the values shown are the defaults standing in), and each
+ * one the backend accepts leaves the unread list - so the banner and autosave follow.
+ * The north reference got its control in #576 NF-W3-2; until then it stayed unread
+ * until the project was reopened, and saving stayed off with it.
  *
  * `.tsx` so vitest runs it under jsdom.
  */
@@ -43,15 +45,22 @@ beforeEach(() => {
 });
 
 describe('ProjectSettingsDialog with unread stored settings (#576 B15 follow-up)', () => {
-  it('Save sets the unread thresholds and elevation even unchanged, and lifts them', async () => {
+  it('Save sets the unread thresholds, north reference and elevation even unchanged, and lifts them', async () => {
     render(<Dialog />);
     await userEvent.click(await screen.findByTestId('project-settings-save'));
 
-    expect(updateProjectSettings).toHaveBeenCalledWith('CaveB', defaultConfig.validation);
+    expect(updateProjectSettings).toHaveBeenCalledWith('CaveB', defaultConfig.validation, null);
     expect(setSurfaceElevation).toHaveBeenCalledWith(null);
-    expect(useProjectStore.getState().unreadableProjectSettings).toEqual([
-      'default_azimuth_reference',
-    ]);
+    expect(useProjectStore.getState().unreadableProjectSettings, 'still unread: saving stays off').toEqual([]);
+  });
+
+  it('an unread north reference alone is set by Save too', async () => {
+    useProjectStore.setState({ unreadableProjectSettings: ['default_azimuth_reference'] });
+    render(<Dialog />);
+    await userEvent.click(await screen.findByTestId('project-settings-save'));
+
+    expect(updateProjectSettings).toHaveBeenCalledWith('CaveB', defaultConfig.validation, null);
+    expect(useProjectStore.getState().unreadableProjectSettings).toEqual([]);
   });
 
   it('a refused write leaves the setting unread', async () => {

@@ -104,7 +104,7 @@ describe('projectStore mutation chokepoints during a move carry (GHOST-2)', () =
       () => store.deleteSection(1),
       () => store.deleteShotRangeShift(1, 2, 3),
       () => store.importSections([]),
-      () => store.updateProjectSettings('CaveA', {} as never),
+      () => store.updateProjectSettings('CaveA', {} as never, null),
     ];
     for (const attempt of attempts) {
       const { h } = pickUp();

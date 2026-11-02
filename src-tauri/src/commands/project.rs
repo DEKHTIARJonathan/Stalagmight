@@ -9,15 +9,17 @@ use crate::models::{
     RulerEndpoint, Station, StationRef,
 };
 
-/// Update per-project settings (#57): project name + validation thresholds.
+/// Update per-project settings (#57): project name + validation thresholds, and
+/// (#576 NF-W3-2) the default north reference (`null` = nothing recorded).
 /// Stored in the .stalx so they travel with the file between collaborators.
 #[tauri::command]
 pub fn update_project_settings(
     state: State<AppState>,
     name: String,
     validation: crate::config::ValidationConfig,
+    default_azimuth_reference: Option<crate::models::AzimuthReference>,
 ) -> CommandResult {
-    state.update_project_settings(name, validation)
+    state.update_project_settings(name, validation, default_azimuth_reference)
 }
 
 /// Set (or, given `null`/omitted, clear) the open project's entrance

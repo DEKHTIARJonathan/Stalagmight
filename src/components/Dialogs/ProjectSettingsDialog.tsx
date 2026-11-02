@@ -5,6 +5,7 @@ import { DialogWrapper } from './DialogWrapper';
 import { ValidationSettings } from './settings/ValidationSettings';
 import { SettingsSection } from './settings/SettingsSection';
 import { SettingRow } from './settings/SettingRow';
+import { DefaultNorthReferenceRow, useNorthReferenceDraft } from './settings/DefaultNorthReferenceRow';
 import { ProjectSettingsSpeleoStub } from './settings/ProjectSettingsSpeleoStub';
 import { getPanelId, getTabId, type SettingsCategory } from './SettingsSidebar';
 import { Button } from '../common/Button';
@@ -31,8 +32,9 @@ const EMPTY_CHANGED: ReadonlySet<string> = new Set();
 /**
  * Per-project settings (#57). Mirrors the global Settings dialog's structure
  * (sidebar tabs + sections) but edits the values stored in the .stalx that
- * travel with the project: General = project name, Validation = the same
- * thresholds as the global settings (which are the defaults for new projects).
+ * travel with the project: General = project name, entrance elevation and the
+ * default north reference (#576 NF-W3-2), Validation = the same thresholds as
+ * the global settings (which are the defaults for new projects).
  */
 export function ProjectSettingsDialog() {
   const { t } = useTranslation();
@@ -119,6 +121,11 @@ export function ProjectSettingsDialog() {
   const elevationValid = elevationParsed === null || Number.isFinite(elevationParsed);
   const elevationDraftChanged = elevationDraft !== elevationInitialDraft;
 
+  // Default north reference (#576 NF-W3-2): saved with the name and thresholds, so it
+  // is editable wherever they are - Plan and Export included - but not on a project
+  // whose metadata cannot change at all.
+  const north = useNorthReferenceDraft(project?.default_azimuth_reference);
+
   // ValidationSettings is built against a full Config; wrap the project's
   // validation in a synthetic config and funnel its onChange back into local
   // state. It only ever mutates `.validation`.
@@ -144,6 +151,7 @@ export function ProjectSettingsDialog() {
     validationValid &&
     !hasValidationError &&
     elevationValid &&
+    north.valid &&
     !saving;
 
   // A refused write keeps the dialog open; say why - unless the refusal already said so
@@ -165,6 +173,7 @@ export function ProjectSettingsDialog() {
       !isValidationConfigValid(validation) ||
       hasValidationError ||
       !elevationValid ||
+      !north.valid ||
       saving
     )
       return;
@@ -179,18 +188,23 @@ export function ProjectSettingsDialog() {
     // defaults standing in), which is what lets a project save write them again -
     // not where the backend refuses any metadata change (RV3-FE-14): there an
     // untouched Save would only earn a refusal, so it sends nothing and closes.
+    // The default north reference rides the same command (#576 NF-W3-2), and is set
+    // by it the same way while unread.
     const currentValidation = project.validation ?? defaultConfig.validation;
-    const validationUnread = isSettingUnreadable('validation') && !metadataBlocked;
+    const settingsUnread =
+      (isSettingUnreadable('validation') || isSettingUnreadable('default_azimuth_reference')) && !metadataBlocked;
     const settingsChanged =
       trimmedName !== (project.name ?? '') ||
-      JSON.stringify(validation) !== JSON.stringify(currentValidation);
-    if (settingsChanged || validationUnread) {
-      const result = await updateProjectSettings(trimmedName, validation);
+      JSON.stringify(validation) !== JSON.stringify(currentValidation) ||
+      north.changed;
+    if (settingsChanged || settingsUnread) {
+      const result = await updateProjectSettings(trimmedName, validation, north.reference);
       if (!result.success) {
         reportSaveFailure(result);
         return;
       }
       liftUnreadableSetting('validation');
+      liftUnreadableSetting('default_azimuth_reference');
     }
     // Compare the DRAFT STRING against what it was seeded with, not the
     // re-parsed/re-converted value against the stored meters: the draft is
@@ -241,6 +255,9 @@ export function ProjectSettingsDialog() {
     project,
     editingBlocked,
     metadataBlocked,
+    north.valid,
+    north.changed,
+    north.reference,
   ]);
 
   return (
@@ -327,6 +344,10 @@ export function ProjectSettingsDialog() {
                         </span>
                       </div>
                     </SettingRow>
+                    <DefaultNorthReferenceRow
+                      draft={north}
+                      disabledReason={metadataBlocked ? t('dialogs.projectSettings.northReference.readOnlyReason') : null}
+                    />
                   </SettingsSection>
                 </div>
               )}

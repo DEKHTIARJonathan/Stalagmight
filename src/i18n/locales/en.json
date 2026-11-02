@@ -1209,6 +1209,19 @@
         "aria": "Entrance elevation",
         "notRecorded": "Not recorded",
         "readOnlyReason": "Entrance elevation cannot be edited in this read-only view."
+      },
+      "northReference": {
+        "label": "Default north reference",
+        "help": "What the azimuths of a section that declares no north of its own are measured against. For magnetic or grid north, enter the correction that turns them to true north (degrees, east positive).",
+        "options": {
+          "none": "Not recorded",
+          "magnetic": "Magnetic north",
+          "true": "True north",
+          "grid": "Grid north"
+        },
+        "correctionAria": "Correction to true north, in degrees east",
+        "correctionUnit": "° east",
+        "readOnlyReason": "The project settings of this project cannot be changed: it is open read-only."
       }
     },
     "unsaved": {
@@ -2574,7 +2587,7 @@
     "settingsUnreadable": {
       "lead": "Some stored project settings could not be read: {{names}}.",
       "detail": "Saving is off so the file keeps its stored values - defaults are in use for now. To save again, set them in Project Settings and save that dialog; you can still view and export.",
-      "reopenNote": "The default north reference cannot be set there: reopen the project to try again.",
+      "reopenNote": "Not all of them can be set there: reopen the project to try again.",
       "saveRefused": "Not saved: stored project settings could not be read.",
       "names": {
         "validation": "validation thresholds",

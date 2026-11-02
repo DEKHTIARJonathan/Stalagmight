@@ -104,7 +104,8 @@ describe('ProjectSettingsDialog entrance elevation (#465)', () => {
     fireEvent.change(screen.getByTestId('project-settings-name'), { target: { value: 'Renamed' } });
     await userEvent.click(saveButton);
 
-    expect(updateProjectSettings).toHaveBeenCalledWith('Renamed', defaultConfig.validation);
+    // The default north reference rides the same save, unchanged (not recorded).
+    expect(updateProjectSettings).toHaveBeenCalledWith('Renamed', defaultConfig.validation, null);
     expect(setSurfaceElevation).not.toHaveBeenCalled();
   });
 

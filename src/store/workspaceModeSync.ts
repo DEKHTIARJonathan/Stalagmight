@@ -5,8 +5,9 @@
  * controls there (docs/app-modes.md), but the backend is the backstop: while the
  * mode it was last told is Plan or Export, its mutation chokepoint refuses every
  * survey edit with `EDIT_DISABLED: WORKSPACE_READ_ONLY` (see `editErrors.ts`), so a
- * gap in the UI gating cannot reach the project. Only the project name, the
- * validation thresholds and the rename are allowed there, on purpose.
+ * gap in the UI gating cannot reach the project. Only the project settings (name,
+ * validation thresholds, default north reference) and the rename are allowed there,
+ * on purpose.
  *
  * Every `appMode` change is sent, whoever made it (`setAppMode`, the load reset in
  * `applyDisplaySettings`, `exitGasPlan` on close). The backend also resets to

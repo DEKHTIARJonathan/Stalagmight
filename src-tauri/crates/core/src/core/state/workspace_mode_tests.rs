@@ -208,7 +208,7 @@ fn the_older_gates_still_come_first_for_the_allowlist() {
     state.set_edit_enabled(false);
     state.set_workspace_mode(WorkspaceMode::Plan);
     let settings =
-        state.update_project_settings("Renamed".to_string(), state.get_config().validation);
+        state.update_project_settings("Renamed".to_string(), state.get_config().validation, None);
     let error = settings.error.unwrap_or_default();
     assert!(!settings.success, "refused by the lock gate");
     assert!(error.starts_with(EDIT_DISABLED_CODE), "got {error:?}");
@@ -216,6 +216,28 @@ fn the_older_gates_still_come_first_for_the_allowlist() {
         !error.contains(WORKSPACE_READ_ONLY_CODE),
         "the lock refusal, not the workspace one: {error:?}"
     );
+}
+
+/// [#576 NF-W3-2] The default north reference rides the project-settings save,
+/// which is on the allowlist: it can be set in Plan and Export like the name and
+/// the thresholds.
+#[test]
+fn the_default_north_reference_is_settable_in_plan_and_export() {
+    let (state, _sid, _shot, _dir) = local_fixture();
+    for (mode, degrees) in [(WorkspaceMode::Plan, 3.0), (WorkspaceMode::Export, 4.0)] {
+        state.set_workspace_mode(mode);
+        let live = state.get_project_state().unwrap();
+        let reference = crate::models::AzimuthReference::magnetic(
+            degrees,
+            crate::models::CorrectionSource::Manual,
+        );
+        let set = state.update_project_settings(live.name, live.validation, Some(reference));
+        assert!(set.success, "{mode:?}: {:?}", set.error);
+        assert_eq!(
+            state.get_project_state().unwrap().default_azimuth_reference,
+            Some(reference)
+        );
+    }
 }
 
 #[test]

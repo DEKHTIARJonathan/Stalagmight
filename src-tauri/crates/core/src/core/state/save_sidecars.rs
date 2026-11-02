@@ -623,11 +623,14 @@ pub(super) fn unread_settings_refusal(keys: &[String]) -> Option<CommandResult> 
         [init @ .., last] => format!("{} and {last}", init.join(", ")),
     };
     let pronoun = if names.len() == 1 { "it" } else { "them" };
+    // [#576 NF-W3-2] Every key the open can leave unread has a control in Project
+    // Settings now, and setting it there lifts the refusal (B15-EDIT): say so,
+    // rather than send the user away to close and reopen.
     Some(CommandResult::failure(format!(
         "{PROJECT_SETTINGS_UNREADABLE_CODE}: Can't save: this project's stored {listed} could \
          not be read when it was opened. Saving would replace {pronoun} with defaults, so \
-         nothing was written - the file on disk is unchanged. Export still works; close and \
-         reopen the project to try again."
+         nothing was written - the file on disk is unchanged. Export still works. To save \
+         again, set {pronoun} in Project Settings and save that dialog."
     )))
 }
 

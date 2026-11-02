@@ -24154,9 +24154,11 @@ pub(super) fn probe_mutation_entrypoints(
         // direct-lock bypass methods
         (
             "update_project_settings",
-            outcome(
-                state.update_project_settings("Renamed".to_string(), state.get_config().validation),
-            ),
+            outcome(state.update_project_settings(
+                "Renamed".to_string(),
+                state.get_config().validation,
+                None,
+            )),
         ),
         (
             "set_surface_elevation",
@@ -24747,7 +24749,7 @@ fn repair_and_settings_gated_on_locked_remote() {
     );
     // Settings: returns the EDIT_DISABLED coded failure.
     let settings =
-        state.update_project_settings("New Name".to_string(), state.get_config().validation);
+        state.update_project_settings("New Name".to_string(), state.get_config().validation, None);
     assert!(!settings.success);
     assert!(settings
         .error

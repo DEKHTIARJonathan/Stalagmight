@@ -182,9 +182,17 @@ impl AppState {
         CommandResult::success()
     }
 
-    /// Update per-project settings (#57): the project name and validation
-    /// thresholds. Persisted into the .stalx on the next save; warnings recompute
-    /// from the new thresholds on the next get_project_warnings.
+    /// Update per-project settings (#57): the project name, the validation
+    /// thresholds and (#576 NF-W3-2) the default north reference - the one a
+    /// section declaring none inherits (`Project::default_azimuth_reference`,
+    /// `None` = nothing recorded). Persisted into the .stalx on the next save;
+    /// warnings recompute from the new thresholds on the next
+    /// get_project_warnings, and geometry from the new reference on the next
+    /// read (the cached closure-adjusted coordinates are dropped here).
+    ///
+    /// The Project Settings dialog sends all three on every Save, so `None` is
+    /// "nothing recorded", not "leave it alone". A reference arriving off the
+    /// wire is re-sanitised (`AzimuthReference::sanitised`) like every ingress.
     ///
     /// Undoable via a snapshot pair (mirrors repair_open_project_integrity) so an
     /// unrelated undo can't silently revert a settings change: without its own
@@ -194,7 +202,10 @@ impl AppState {
         &self,
         name: String,
         validation: crate::config::ValidationConfig,
+        default_azimuth_reference: Option<crate::models::AzimuthReference>,
     ) -> CommandResult {
+        let default_azimuth_reference =
+            default_azimuth_reference.map(crate::models::AzimuthReference::sanitised);
         // Serialize against execute()/undo()/redo() so the before/after pair is
         // consistent (same rationale as repair_open_project_integrity).
         let Ok(_cmd_guard) = self.command_lock.lock() else {
@@ -202,13 +213,14 @@ impl AppState {
         };
         // Read-only edit gate (#191, D-B5): a settings change mutates the project,
         // so it is gated on a read-only remote project (returns the EDIT_DISABLED
-        // coded failure). [#576 C5] On the read-only-workspace allowlist: the name
-        // and validation thresholds stay editable in Plan/Export on purpose.
+        // coded failure). [#576 C5] On the read-only-workspace allowlist: the name,
+        // the validation thresholds and the default north reference stay editable
+        // in Plan/Export on purpose (docs/app-modes.md says why).
         if let Err(f) = self.guard_metadata_mutation("Update project settings") {
             return f;
         }
         let before_snapshot = self.capture_project_snapshot().ok();
-        {
+        let reference_changed = {
             let mut guard = match self.project.lock() {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
@@ -220,20 +232,35 @@ impl AppState {
             // modified_at, marking the project dirty and pushing a misleading
             // "Update project settings" undo entry for a save that changed nothing
             // (Codex). Compare before mutating.
-            if project.name == name && project.validation == validation {
+            if project.name == name
+                && project.validation == validation
+                && project.default_azimuth_reference == default_azimuth_reference
+            {
                 // [#576 B15 follow-up] Unchanged, but SET: the dialog sends the
-                // thresholds while they are unread so the user can keep the shown
-                // ones, and that choice is what lets a save write them.
+                // thresholds and the north reference while they are unread so the
+                // user can keep the shown ones, and that choice is what lets a save
+                // write them.
                 self.lift_unreadable_project_setting("validation");
+                self.lift_unreadable_project_setting("default_azimuth_reference");
                 return CommandResult::success();
             }
+            let reference_changed = project.default_azimuth_reference != default_azimuth_reference;
             project.name = name;
             project.validation = validation;
+            project.default_azimuth_reference = default_azimuth_reference;
             project.touch();
+            reference_changed
+        };
+        // Every section that declares no reference of its own turns with the
+        // default: the closure-adjusted coordinates cached for the old one are stale.
+        if reference_changed {
+            self.invalidate_adjusted_cache();
         }
-        // [#576 B15 follow-up] The thresholds are now the user's, not a default
-        // standing in for unread ones: they no longer refuse a save.
+        // [#576 B15 follow-up] The thresholds and the north reference are now the
+        // user's, not defaults standing in for unread ones: they no longer refuse a
+        // save (NF-W3-2 gave the north reference its control).
         self.lift_unreadable_project_setting("validation");
+        self.lift_unreadable_project_setting("default_azimuth_reference");
         // Record an undo entry (before -> after) so the change is on the stack.
         if let Some(before_json) = before_snapshot {
             if let Ok(after_json) = self.capture_project_snapshot() {

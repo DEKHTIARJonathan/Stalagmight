@@ -249,7 +249,7 @@ fn edits_to_a_newer_file_are_refused() {
     );
     assert_refused_as_newer(
         "update_project_settings",
-        &state.update_project_settings("Renamed".to_string(), state.get_config().validation),
+        &state.update_project_settings("Renamed".to_string(), state.get_config().validation, None),
     );
     assert_refused_as_newer(
         "set_project_name_for_path",

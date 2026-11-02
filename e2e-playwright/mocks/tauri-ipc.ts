@@ -848,11 +848,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'update_project_settings': {
-            // Per-project settings (#57): name + validation thresholds.
+            // Per-project settings (#57): name + validation thresholds, and the default
+            // north reference (#576 NF-W3-2), which the dialog sends on every Save
+            // (`null` = nothing recorded).
             if (currentProject) {
               if (typeof args?.name === 'string') currentProject.name = args.name;
               if (args?.validation) {
                 (currentProject as Record<string, unknown>).validation = args.validation;
+              }
+              if (args && 'defaultAzimuthReference' in args) {
+                (currentProject as Record<string, unknown>).default_azimuth_reference =
+                  args.defaultAzimuthReference ?? null;
               }
             }
             return { success: true, section_ids: [], project: currentProject };

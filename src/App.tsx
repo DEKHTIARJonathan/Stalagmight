@@ -702,8 +702,9 @@ function App() {
             })}{' '}
             <span className="text-text-secondary font-normal">
               {t('banners.settingsUnreadable.detail')}
-              {/* [#576 B15 follow-up] Only the thresholds and the elevation have a
-                  control in Project Settings; anything else clears on reopen. */}
+              {/* [#576 B15 follow-up] Every key the open reports today has a control
+                  in Project Settings (NF-W3-2 added the north reference's); one that
+                  has none clears only on reopen. */}
               {unreadableProjectSettings.some(
                 (key) => !(SETTABLE_UNREADABLE_SETTINGS as readonly string[]).includes(key),
               ) && <> {t('banners.settingsUnreadable.reopenNote')}</>}

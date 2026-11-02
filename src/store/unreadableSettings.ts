@@ -8,10 +8,11 @@ import { useProjectStore } from './projectStore';
  * for it is never written over the stored value. Setting it again in Project
  * Settings makes the value in memory the user's own: the backend then takes that
  * key off its list (`AppState::lift_unreadable_project_setting`), and this mirrors
- * it in the store so the banner and autosave follow without a round trip. The
- * default north reference has no control there, so it only clears on reopen.
+ * it in the store so the banner and autosave follow without a round trip. All three
+ * keys the open can leave unread have a control there since the default north
+ * reference got one (#576 NF-W3-2); a key outside this list clears only on reopen.
  */
-export const SETTABLE_UNREADABLE_SETTINGS = ['validation', 'surface_elevation'] as const;
+export const SETTABLE_UNREADABLE_SETTINGS = ['validation', 'surface_elevation', 'default_azimuth_reference'] as const;
 
 /** Whether `key` is still unread (and so still refusing saves). */
 export function isSettingUnreadable(key: string): boolean {

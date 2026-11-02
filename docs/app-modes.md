@@ -58,10 +58,15 @@ with `EDIT_DISABLED: WORKSPACE_READ_ONLY: ...`, which the frontend shows as its 
 notice ("switch to Survey", `editGate.workspaceReadOnlyNotice`), not as the
 SpeleoDB lock notice. It is **deny by default**: a new entry point that calls
 `guard_mutation` is refused in Plan and Export without anyone having to remember.
-The allowlist is two entries, on purpose: the project name + validation-threshold
-save (`update_project_settings`) and the project rename
+The allowlist is two entries, on purpose: the project-settings save
+(`update_project_settings`: the name, the validation thresholds and, since #576
+NF-W3-2, the default north reference) and the project rename
 (`set_project_name_for_path`), which `ProjectSettingsDialog` keeps enabled in every
 mode; they call `guard_metadata_mutation`, which skips only the workspace check.
+The north reference does turn the sections that declare none of their own, but it
+describes how the survey was measured rather than editing it, it saves with the
+other project settings, and an unread one keeps every save off until it is set
+again - which must not wait for a switch back to Survey.
 
 That gate sits after the two older ones, which still refuse first: a project saved
 by a newer Stalagmight (`newer_file_schema`, #576 B6-D1; see
