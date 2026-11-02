@@ -37,8 +37,11 @@ jobs:
       # server/port, fixed-path disk write, foreign host:port, or describe.serial.
       # This is the only CI job that runs the Playwright tier on `e2e-playwright/**`
       # changes (`check` path-ignores them), so the gate lives here. See docs/TESTING.md.
+      # Its fixture test runs first, like every sibling gate's (#576 E7).
       - name: Check e2e-playwright parallel-safety
-        run: pnpm lint:e2e-parallel
+        run: |
+          pnpm lint:e2e-parallel:test
+          pnpm lint:e2e-parallel
       # `check` path-ignores `e2e-playwright/**`, and root `tsconfig.json` includes
       # only `src`, so without this the specs and the IPC mock are type-checked by
       # nothing. This is the job that runs on `e2e-playwright/**` changes, so the

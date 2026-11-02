@@ -834,17 +834,21 @@ So a spec must never introduce state that survives across pages or workers.
 |------|---------|
 | `own-server` | `createServer(` |
 | `port-listen` | `.listen(` |
-| `disk-write` | `writeFileSync`, `writeFile`, `appendFileSync`, `appendFile`, `createWriteStream`, `copyFileSync`, `cpSync`, `renameSync` |
-| `foreign-host-port` | `localhost:<port>` / `127.0.0.1:<port>` for any port but `:1420` |
+| `disk-write` | `writeFileSync`, `writeFile`, `appendFileSync`, `appendFile`, `createWriteStream`, `copyFileSync`, `copyFile`, `cpSync`, `renameSync`, and the create/delete/link calls `mkdirSync`, `mkdir`, `unlinkSync`, `unlink`, `rmSync`, `rmdirSync`, `rmdir`, `symlinkSync`, `symlink`, `truncateSync`; the short async names only as a member call (`fs.rm(`, `fsp.cp(`, `fs.rename(`, `fs.truncate(`) |
+| `foreign-host-port` | `localhost:<port>` / `127.0.0.1:<port>` for any port but `:1420`, including a template port (`localhost:${port}`) |
 | `serial` | `describe.serial` / `test.serial` / `mode: 'serial'` |
+| `symlink` | a symlinked file under `e2e-playwright/` (never followed, so it cannot be scanned) |
+| `premise` | the root `playwright.config.ts` no longer sets `fullyParallel: true` |
 
 It runs in the **smoke** CI job - the only job that runs on
-`e2e-playwright/**` changes, since `check` path-ignores them. Run it locally
-before pushing. `fixtures/coverage.ts` is the one allow-listed write; a genuinely
+`e2e-playwright/**` changes, since `check` path-ignores them - after its own
+fixture test (`pnpm lint:e2e-parallel:test`). Run both locally before pushing.
+`fixtures/coverage.ts` is the one allow-listed write; a genuinely
 necessary exception goes in the `ALLOW` list in that script *with a written
-reason*. The scanner is a line-based tripwire, not a parser: it deliberately
-ignores `page.screenshot({path})` (framework I/O with unique names) and the root
-`playwright.config.ts`.
+reason*. The scanner is a line-based tripwire, not a parser: comments are
+stripped by a string-aware scanner (a quoted `/*` or `//` is not a comment), and
+it deliberately ignores `page.screenshot({path})` (framework I/O with unique
+names) and `mkdtemp` (unique by construction).
 
 On a 2-core runner at multiple workers, bad hygiene here surfaces as flake, not
 as a clean failure.

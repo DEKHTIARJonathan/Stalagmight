@@ -20,6 +20,7 @@
     "test:ui:headed": "playwright test --headed",
     "test:ui:debug": "playwright test --debug",
     "lint:e2e-parallel": "node scripts/check-e2e-parallel-safe.mjs",
+    "lint:e2e-parallel:test": "node scripts/check-e2e-parallel-safe.test.mjs",
     "lint:rust-file-size": "node scripts/check-rust-file-size.mjs",
     "lint:rust-file-size:test": "node scripts/check-rust-file-size.test.mjs",
     "lint:ts-file-size": "node scripts/check-ts-file-size.mjs",

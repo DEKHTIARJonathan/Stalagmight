@@ -82,7 +82,7 @@ TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/C
 git status --porcelain src-tauri/bindings                 # must print nothing after cargo test (generated ts-rs bindings are committed)
 cargo test --locked --manifest-path src-tauri/vendor/compass_data/Cargo.toml   # workspace-excluded vendored crate; no telemetry feature/env
 # --- smoke job (e2e-smoke.yml) ---
-pnpm lint:e2e-parallel                                    # Playwright parallel-safety
+pnpm lint:e2e-parallel:test && pnpm lint:e2e-parallel     # Playwright parallel-safety
 pnpm typecheck:playwright                                 # e2e-playwright specs + IPC mock
 pnpm test:mock-contract                                   # IPC mock <-> generate_handler! contract
 pnpm test:pw-timing                                       # timing reporter self-test (a report, not a time budget)

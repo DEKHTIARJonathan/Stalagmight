@@ -10,30 +10,39 @@
 // Playwright tier on `e2e-playwright/**` changes. `check` (the home of the
 // repo's Rust/vitest grep-gates) path-ignores `e2e-playwright/**`, so a gate
 // there would be a no-op for an e2e-playwright-only PR - exactly the change this
-// must catch. (claude-code-review.yml also lacks that path-ignore, but it's an
-// LLM review that wouldn't run this gate, and is currently disabled anyway.)
+// must catch. Its rules are pinned by scripts/check-e2e-parallel-safe.test.mjs
+// (#576 E7), which runs first in the same job.
+//
+// The premise is checked too: the root `playwright.config.ts` must still say
+// `fullyParallel: true` - a config that quietly turned it off would make every
+// rule below moot while the gate kept passing.
 //
 // This is a line-based heuristic tripwire for the *common, accidental* regression,
-// not a parser/sandbox. Known accepted gaps: it doesn't inspect
-// `page.screenshot({path})` (framework I/O, used with unique filenames), the root
-// `playwright.config.ts` (outside the scan dir, so a `fullyParallel: false` there
-// is invisible), or `process.env`/module-global mutation; and a `//` after
-// whitespace *inside* a string literal still cuts the rest of that line.
+// not a parser/sandbox. Comments are stripped by a small string-aware scanner
+// (a quoted `/*` or `//` neither opens nor cuts a comment; block comments carry
+// across lines), so a pattern named in prose does not fire while one inside a
+// string does. Known accepted gaps: it doesn't inspect `page.screenshot({path})`
+// (framework I/O, used with unique filenames) or `process.env`/module-global
+// mutation, and a regex literal holding a quote can confuse the comment scanner
+// for the rest of that one line (it can only cause a false positive).
 //
 // Usage:  node scripts/check-e2e-parallel-safe.mjs   (or: pnpm lint:e2e-parallel)
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
+import { walkFiles } from './lib/src-files.mjs';
 
-const ROOT = process.cwd();
-const SCAN_DIR = path.join(ROOT, 'e2e-playwright');
+export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export const SCAN_DIR = 'e2e-playwright';
+export const CONFIG_FILE = 'playwright.config.ts';
 const SHARED_VITE_PORT = '1420'; // the one shared webServer every page talks to
 
 // Files allowed to break a specific rule, each with the reason it is safe. The
 // coverage fixture writes a per-(test,worker)-unique file under docs/coverage,
 // gated behind E2E_COVERAGE=1 - parallel-safe by construction. To add a genuine
 // exception, append a row here with a written justification.
-const ALLOW = [
+export const ALLOW = [
   {
     file: 'e2e-playwright/fixtures/coverage.ts',
     rule: 'disk-write',
@@ -41,9 +50,9 @@ const ALLOW = [
   },
 ];
 
-// One rule per parallel-unsafe pattern. `re` is tested per non-comment line; an
-// optional `accept(match)` exempts a benign sub-case (used for the shared port).
-const RULES = [
+// One rule per parallel-unsafe pattern. `re` is tested per comment-stripped line;
+// an optional `accept(match)` exempts a benign sub-case (used for the shared port).
+export const RULES = [
   {
     id: 'own-server',
     re: /\bcreateServer\s*\(/,
@@ -59,12 +68,19 @@ const RULES = [
     // Require the call paren so mock command labels such as 'plugin:fs|writeFile'
     // (string literals, no `(`) do not false-positive. `page.screenshot({path})`
     // is intentionally absent - it's framework I/O, used here with unique names.
-    re: /\b(?:writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream|copyFileSync|cpSync|renameSync)\s*\(/,
-    why: 'writes disk - use a per-(test,worker)-unique path only (see fixtures/coverage.ts), else concurrent workers clobber each other.',
+    // Creating, deleting and linking paths mutate shared disk state exactly as a
+    // write does (#576 E7). The ambiguous short async names (rm, cp, rename,
+    // truncate) only count as a member call (`fs.rm(`, `fsp.rename(`), so a UI
+    // helper called `rename(` does not fire. mkdtemp is not here: its path is
+    // unique by construction.
+    re: /\b(?:writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream|copyFileSync|copyFile|cpSync|renameSync|mkdirSync|mkdir|unlinkSync|unlink|rmSync|rmdirSync|rmdir|symlinkSync|symlink|truncateSync)\s*\(|\.(?:rm|cp|rename|truncate)\s*\(/,
+    why: 'writes, creates or deletes on disk - use a per-(test,worker)-unique path only (see fixtures/coverage.ts), else concurrent workers clobber each other.',
   },
   {
     id: 'foreign-host-port',
-    re: /(?:127\.0\.0\.1|localhost):(\d+)/,
+    // A literal port, or a template-interpolated one (`localhost:${port}`),
+    // which is how a per-test server's address is usually spelled.
+    re: /(?:127\.0\.0\.1|localhost):(\d+|\$\{[^}]*\})/,
     accept: (m) => m[1] === SHARED_VITE_PORT, // allow the shared Vite port
     why: `hardcodes a host:port other than :${SHARED_VITE_PORT} - implies a per-test server/socket, not parallel-safe.`,
   },
@@ -77,88 +93,110 @@ const RULES = [
   },
 ];
 
-function isAllowed(relFile, ruleId) {
+export function isAllowed(relFile, ruleId) {
   return ALLOW.some((a) => a.file === relFile && a.rule === ruleId);
 }
 
-function listTsFiles(dir) {
+// Remove comments from a file's lines, keeping string and template contents
+// (a rule must still see `'localhost:5173'`). `/* */` and template literals
+// carry across lines; '...' and "..." end at the line end. The old per-line
+// version opened a block comment at ANY `/*` - including one inside a string
+// such as 'fixtures/*.dmp' - and then blanked the rest of the file.
+export function stripComments(lines) {
   const out = [];
-  // Sort for a deterministic scan/report order across machines and CI.
-  const entries = fs
-    .readdirSync(dir, { withFileTypes: true })
-    .sort((a, b) => a.name.localeCompare(b.name));
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...listTsFiles(full));
-    else if (entry.isFile() && /\.tsx?$/.test(entry.name)) out.push(full);
+  let inBlock = false;
+  let inTemplate = false;
+  for (const line of lines) {
+    let code = '';
+    let quote = null;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      const n = line[i + 1];
+      if (inBlock) {
+        if (c === '*' && n === '/') { inBlock = false; i++; code += ' '; }
+        continue;
+      }
+      if (inTemplate || quote) {
+        code += c;
+        if (c === '\\') { code += n ?? ''; i++; continue; }
+        if (inTemplate && c === '`') inTemplate = false;
+        else if (quote && c === quote) quote = null;
+        continue;
+      }
+      if (c === '/' && n === '/') break;
+      if (c === '/' && n === '*') { inBlock = true; i++; code += ' '; continue; }
+      if (c === "'" || c === '"') quote = c;
+      else if (c === '`') inTemplate = true;
+      code += c;
+    }
+    out.push(code);
   }
   return out;
 }
 
-// Strip comments from a line so a pattern named in prose doesn't false-positive.
-// Tracks `/* */` across lines via `state.inBlock`. Removes a `//` line-comment at
-// line start or after whitespace, which leaves `://` inside URL strings intact.
-// Not a real parser: a `//` after whitespace *inside* a string literal still cuts
-// the rest of the line (documented accepted gap).
-function stripComments(line, state) {
-  let code = line;
-  if (state.inBlock) {
-    const end = code.indexOf('*/');
-    if (end === -1) return ''; // whole line is still inside a block comment
-    code = code.slice(end + 2);
-    state.inBlock = false;
-  }
-  code = code.replace(/\/\*.*?\*\//g, ''); // inline /* ... */ blocks
-  const open = code.indexOf('/*');
-  if (open !== -1) {
-    state.inBlock = true; // unterminated block - rest of line is comment
-    code = code.slice(0, open);
-  }
-  return code.replace(/(^|\s)\/\/.*$/, '$1');
-}
-
-function main() {
-  if (!fs.existsSync(SCAN_DIR)) {
-    console.error(`check-e2e-parallel-safe: ${SCAN_DIR} not found (run from the repo root).`);
-    return 1;
-  }
-
-  const files = listTsFiles(SCAN_DIR);
+// Scan files (repo-relative paths). `readFile(rel)` returns text; injected so
+// the fixture test drives every rule without a tree on disk.
+export function scan(files, readFile) {
   const violations = [];
-  for (const file of files) {
-    // Normalize to forward slashes so the ALLOW list + report paths match on Windows.
-    const rel = path.relative(ROOT, file).split(path.sep).join('/');
-    const lines = fs.readFileSync(file, 'utf8').split('\n');
-    const state = { inBlock: false };
-    lines.forEach((line, i) => {
-      const code = stripComments(line, state);
-      if (!code.trim()) return;
+  for (const rel of files) {
+    const lines = readFile(rel).split('\n');
+    const code = stripComments(lines);
+    code.forEach((c, i) => {
+      if (!c.trim()) return;
       for (const rule of RULES) {
-        const m = rule.re.exec(code);
+        const m = rule.re.exec(c);
         if (!m) continue;
         if (rule.accept && rule.accept(m)) continue;
         if (isAllowed(rel, rule.id)) continue;
-        violations.push({ rel, lineNo: i + 1, ruleId: rule.id, why: rule.why, snippet: line.trim() });
+        violations.push({ rel, lineNo: i + 1, ruleId: rule.id, why: rule.why, snippet: lines[i].trim() });
       }
     });
   }
+  return violations;
+}
+
+// The premise every rule rests on. Returns a problem string, or null.
+export function checkPremise(configText) {
+  if (configText === null) return `${CONFIG_FILE} not found - cannot confirm the suite runs fullyParallel.`;
+  const code = stripComments(configText.split('\n')).join('\n');
+  if (!/\bfullyParallel\s*:\s*true\b/.test(code)) {
+    return `${CONFIG_FILE} no longer sets \`fullyParallel: true\` - the rules below guard that mode; if it was turned off on purpose, say why here and in docs/testing-recipes.md.`;
+  }
+  return null;
+}
+
+export function main(root = REPO_ROOT, log = console.log, err = console.error) {
+  if (!fs.existsSync(path.join(root, SCAN_DIR))) {
+    err(`check-e2e-parallel-safe: ${path.join(root, SCAN_DIR)} not found (run from the repo root).`);
+    return 1;
+  }
+  const { files, symlinks } = walkFiles(root, SCAN_DIR, { exts: ['.ts', '.tsx'] });
+  const violations = scan(files, (rel) => fs.readFileSync(path.join(root, rel), 'utf8'));
+  for (const link of symlinks) {
+    violations.push({ rel: link.rel, lineNo: 0, ruleId: 'symlink', why: 'a symlink is not followed, so its target is unscanned - replace it with a regular file.', snippet: `-> ${link.target}` });
+  }
+  const configPath = path.join(root, CONFIG_FILE);
+  const premise = checkPremise(fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null);
+  if (premise) violations.push({ rel: CONFIG_FILE, lineNo: 0, ruleId: 'premise', why: premise, snippet: '' });
 
   if (violations.length === 0) {
-    console.log(`✓ e2e-playwright parallel-safe: scanned ${files.length} files, no unsafe patterns.`);
+    log(`✓ e2e-playwright parallel-safe: scanned ${files.length} files, no unsafe patterns (${CONFIG_FILE}: fullyParallel).`);
     return 0;
   }
 
-  console.error(`\n✗ e2e-playwright parallel-safety check failed - ${violations.length} issue(s):\n`);
+  err(`\n✗ e2e-playwright parallel-safety check failed - ${violations.length} issue(s):\n`);
   for (const v of violations) {
-    console.error(`  [${v.ruleId}] ${v.rel}:${v.lineNo}`);
-    console.error(`      ${v.snippet}`);
-    console.error(`      ${v.why}\n`);
+    err(`  [${v.ruleId}] ${v.rel}${v.lineNo ? `:${v.lineNo}` : ''}`);
+    if (v.snippet) err(`      ${v.snippet}`);
+    err(`      ${v.why}\n`);
   }
-  console.error(
+  err(
     'The mocked Playwright tier runs fullyParallel at multiple workers; all state must\n' +
       'stay per-page (window.*). See docs/testing-recipes.md, "Parallel-safety invariant".\n',
   );
   return 1;
 }
 
-process.exit(main());
+const isMainModule =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMainModule) process.exit(main());
