@@ -285,9 +285,11 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     expect(useUIStore.getState().selection).toBeNull();
   });
 
-  it('ignores the field on a failure that mutated nothing', async () => {
-    // Step 1 of N failing means no step landed, so there is nothing to mirror -
-    // and `executeUndoRedo` only reads the field for the partial case.
+  it('ignores the field when the FIRST step failed, so no step landed', async () => {
+    // Step 1 of N failing means no step LANDED, so there is no renumbering to
+    // mirror - and `executeUndoRedo` only reads the field for the partial case.
+    // (The failing step itself may still have changed the project - #576 A18(a),
+    // pinned by the dirty-bit test below - but it reports no renumbering.)
     useUIStore.setState({ distanceGradientOrigin: ref(3) });
 
     serveState(line(REVERSED), [reversed(3)], 'Undo failed at step 1 of 3: boom');

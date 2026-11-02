@@ -523,6 +523,33 @@ function multiStepFailureStep(error: string | null): number | null {
 }
 
 /**
+ * The refusals a SINGLE undo/redo makes before it runs a step: the edit gate
+ * (`EDIT_DISABLED`, incl. the Plan/Export workspace and a newer file), the #202
+ * re-verify divergence, the empty stack and the two locks it takes first. Mirrors
+ * the order in `AppState::undo`/`redo` (`guard_mutation`, then
+ * `history_step_available`).
+ */
+const SINGLE_STEP_REFUSALS: ReadonlySet<string> = new Set([
+  'Nothing to undo',
+  'Nothing to redo',
+  'Failed to acquire command lock',
+  'Failed to lock undo stack',
+]);
+
+/**
+ * [#576 NF-W2S-2] Whether a failed single undo/redo got past the backend's
+ * empty-stack check, i.e. ran a step - which reports its failure only after running
+ * its inverse, so it can have changed the project. The backend marks the SpeleoDB
+ * copy un-pushed for exactly these (#576 A18(a)); the frontend mirrors it here
+ * instead of waiting for the next status poll.
+ */
+function singleStepFailureRanAStep(error: string | null): boolean {
+  if (!error) return false;
+  if (isEditDisabledError(error) || isReverifyDivergedError(error)) return false;
+  return !SINGLE_STEP_REFUSALS.has(error);
+}
+
+/**
  * Tracks in-flight `loadProject(path)` calls so concurrent requests for the
  * same path share one execution. Each entry is removed when the underlying
  * promise settles. See loadProject for rationale.
@@ -844,7 +871,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         useSpeleoStore.getState().markDirty();
       } else {
         const failedStep = checkPartialFailure ? multiStepFailureStep(result.error) : null;
-        if (failedStep !== null) {
+        // #576 NF-W2S-2: the single-step verbs have no step number to read, but the
+        // same rule holds - past the empty-stack check the step ran, and the backend
+        // marked the copy. Without this the frontend caught up only at the next poll.
+        const singleStepRan = !checkPartialFailure && singleStepFailureRanAStep(result.error);
+        if (failedStep !== null || singleStepRan) {
           // #576 A18(a): ANY failed jump changed the project - step 1 included, since
           // the failing step can mutate before it reports - and the backend marks the
           // SpeleoDB copy un-pushed for every one of them. Mirroring only N > 1 left

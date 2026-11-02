@@ -252,22 +252,9 @@ impl AppState {
         // [#576 B35(e)-D1] Never push under, or release, a lock that is not ours. The
         // release used to go out blind; for a project ADMIN it force-releases
         // whoever holds the mutex now (`speleodb_admin.rs`), so a colleague who took
-        // the lock after ours was freed lost it to our Done. The upload needs the
-        // lock too, so with someone else (or nobody) on the mutex there is nothing
-        // left this verb can finish: switch editing off - the same rule the status
-        // poll applies - keep any un-pushed edits marked for the next Start editing,
-        // and say who holds the lock. Same read as the authorship licence below.
-        if !super::speleodb::lock_held_by_me(holder.as_deref(), self.speleodb_my_email().as_deref())
-        {
-            self.speleodb_shut_gate_over_lost_lock(&link.project_id);
-            tracing::warn!(
-                project_id = %link.project_id,
-                holder = ?holder,
-                purpose = "never release or push under a lock that is not ours (#576 B35(e))",
-                "speleodb done: the write lock is not ours; nothing pushed or released"
-            );
-            return Err(local_dto(SpeleoDbError::LockNotHeld { holder }));
-        }
+        // the lock after ours was freed lost it to our Done. Same read as the
+        // authorship licence below.
+        self.speleodb_require_our_lock(&link.project_id, holder.as_deref(), "done")?;
 
         // Dirty-bit gate: only push when there are un-pushed edits.
         let outcome = if link.has_unpushed_edits {
@@ -384,6 +371,10 @@ impl AppState {
         let insecure_http = self.speleodb_insecure_http();
         let holder =
             self.speleodb_push_lock_holder(&endpoint, &token, insecure_http, &link.project_id)?;
+        // [#576 W2S-PUSH] Done's lost-lock rule, for the same reason: the upload needs
+        // the lock, so under another account's lock (or none) Push used to attempt it
+        // anyway and surface whatever the server made of it, with editing still on.
+        self.speleodb_require_our_lock(&link.project_id, holder.as_deref(), "push")?;
         let we_hold_the_lock =
             self.speleodb_authorship_licence(&link.project_id, holder.as_deref());
 
@@ -722,6 +713,34 @@ impl AppState {
             self.speleodb_lock_holder_checked(endpoint, token, insecure_http, project_id),
         )
         .map_err(|e| dto_for_error(Endpoint::GetProject, &e))
+    }
+
+    /// The lost-lock rule Done and Push share (#576 B35(e)-D1, W2S-PUSH): with
+    /// someone else - or nobody - on the mutex there is nothing either verb can
+    /// finish, since the upload needs the lock and a release would free somebody
+    /// else's. So switch editing off - the same rule the status poll applies - keep
+    /// any un-pushed edits marked for the next Start editing, and fail with
+    /// [`SpeleoDbError::LockNotHeld`] naming the holder.
+    fn speleodb_require_our_lock(
+        &self,
+        project_id: &str,
+        holder: Option<&str>,
+        verb: &'static str,
+    ) -> Result<(), SpeleoErrorDto> {
+        if super::speleodb::lock_held_by_me(holder, self.speleodb_my_email().as_deref()) {
+            return Ok(());
+        }
+        self.speleodb_shut_gate_over_lost_lock(project_id);
+        tracing::warn!(
+            project_id,
+            holder = ?holder,
+            verb,
+            purpose = "never release or push under a lock that is not ours (#576 B35(e))",
+            "speleodb: the write lock is not ours; nothing pushed or released"
+        );
+        Err(local_dto(SpeleoDbError::LockNotHeld {
+            holder: holder.map(str::to_owned),
+        }))
     }
 
     /// The push half of [`Self::speleodb_done`]: fence BASE vs the server tip,

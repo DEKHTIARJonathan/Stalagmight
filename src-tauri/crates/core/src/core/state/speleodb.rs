@@ -2641,7 +2641,10 @@ impl AppState {
 // below. Re-exported at the very end of the production code, so a source scan that
 // cuts the file at its first top-level `#[cfg(test)]` still sees all of it.
 #[cfg(test)]
-pub(super) use tests::{editing_fixture, REMOTE_ID};
+pub(super) use tests::{
+    editing_fixture, recording_stub, FREE_MUTEX_AT_BASE_BODY, HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY,
+    HELD_BY_SAME_ACCOUNT_AT_BASE_BODY, REMOTE_ID,
+};
 
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
