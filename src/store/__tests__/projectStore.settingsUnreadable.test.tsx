@@ -191,4 +191,59 @@ describe('autosave while stored settings are unread', () => {
 
     expect(save).not.toHaveBeenCalled();
   });
+
+  // [#576 RV2-FE-1] The two guards, each on its own: the case above passes with
+  // either one deleted.
+  it('arm time: an edit does not even start the countdown (the footer stays idle)', async () => {
+    vi.useFakeTimers();
+    const save = vi.fn().mockResolvedValue({ success: true, warnings: [], section_ids: [] });
+    useProjectStore.setState({
+      project: { file_path: '/mock/CaveB.stalx' } as never,
+      config: { general: { auto_save: true, auto_save_interval_seconds: 1 } } as never,
+      isDirty: false,
+      integritySaveBlocked: false,
+      unreadableProjectSettings: ['surface_elevation'],
+      saveProject: save,
+    } as never);
+    const { result } = renderHook(() => useAutoSave());
+
+    act(() => {
+      useProjectStore.setState({ isDirty: true });
+    });
+
+    // Without the arm-time guard this reads 'pending' ("Auto-save in 1s") on a
+    // project whose every save is refused.
+    expect(result.current.status).toBe('idle');
+    expect(result.current.countdown).toBe(0);
+  });
+
+  it('fire time: a countdown armed before the settings turned unreadable sends nothing', async () => {
+    vi.useFakeTimers();
+    const save = vi.fn().mockResolvedValue({ success: false, error: REFUSAL, warnings: [], section_ids: [] });
+    useProjectStore.setState({
+      project: { file_path: '/mock/CaveB.stalx' } as never,
+      config: { general: { auto_save: true, auto_save_interval_seconds: 1 } } as never,
+      isDirty: false,
+      integritySaveBlocked: false,
+      unreadableProjectSettings: [],
+      saveProject: save,
+    } as never);
+    const { result } = renderHook(() => useAutoSave());
+
+    act(() => {
+      useProjectStore.setState({ isDirty: true });
+    });
+    expect(result.current.status).toBe('pending');
+    // The list fills while the timer runs (the arm-time guard then returns
+    // early and leaves the armed timer alone): only the fire-time re-check stops it.
+    act(() => {
+      useProjectStore.setState({ unreadableProjectSettings: ['surface_elevation'] } as never);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(save).not.toHaveBeenCalled();
+    expect(result.current.status).toBe('idle');
+  });
 });
