@@ -22,6 +22,7 @@
  * the vector-tile publish path are likewise untouched.
  */
 import type { Map as MaplibreMap } from 'maplibre-gl';
+import { hasLiveStyle } from '../../mapUtils';
 import type { GpsOrigin } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
@@ -450,6 +451,9 @@ export class SurveyCustomController {
     );
     this.scheduleRestore(() => {
       this.selfDisableScheduled = false;
+      // Released in between (the map unmounted): nothing left to tear down, and
+      // no one to tell.
+      if (this.disposed) return;
       if (this.active) this.tearDownFatal(reason);
     });
   }
@@ -463,7 +467,10 @@ export class SurveyCustomController {
    */
   private tearDownFatal(reason: string): void {
     this.fatal = true;
-    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    // The style is gone when the map was removed or lost its WebGL context before
+    // this deferred teardown ran: MapLibre took the layer with it, and getLayer
+    // reads the missing style and throws (#576 NF-MAP-3).
+    if (hasLiveStyle(this.map) && this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
     this.layer = null;
     this.active = false; // set directly: onActiveChange must NOT fire (no republish).
     this.map.triggerRepaint();

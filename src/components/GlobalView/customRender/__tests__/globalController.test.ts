@@ -8,6 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
+import { dropStyle } from '../../../Map/surveyLayer/customRender/__tests__/styleGone';
 import type { ProjectMetadata } from '../../../../types/project';
 import type { GeometryShot, SurveyGeometry } from '../../../../types/survey';
 import type { SystemGeometry } from '../../systemColor';
@@ -78,6 +79,7 @@ function makeFakeMap(): { map: MaplibreMap; added: string[]; removed: string[] }
   const added: string[] = [];
   const removed: string[] = [];
   const map = {
+    style: {},
     getStyle: () => ({}),
     getLayer: (id: string) => (existing.has(id) ? { id } : undefined),
     addLayer: (layer: { id: string; onAdd?: (m: unknown, gl: unknown) => void }) => {
@@ -233,5 +235,31 @@ describe('GlobalCustomController', () => {
     expect(h.layerState.last!.hoverSystem).toBe(-1);
     c.setHover('missing.tml');
     expect(h.layerState.last!.hoverSystem).toBe(-1);
+  });
+});
+
+describe('GlobalCustomController deferred fatal teardown without a style (#576 NF-MAP-3)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('a context loss before the deferred teardown: no throw, still latches fatal', () => {
+    const holder: { fn: (() => void) | null } = { fn: null };
+    const fatals: string[] = [];
+    const { map } = makeFakeMap();
+    const c = new GlobalCustomController(map, undefined, {
+      scheduleRestore: (fn) => (holder.fn = fn),
+      onFatal: (r) => fatals.push(r),
+    });
+    c.sync(makeSystems());
+    h.layerState.last!.onSelfDisable?.('gl-error-0x505');
+    dropStyle(map);
+    expect(() => holder.fn?.()).not.toThrow();
+    expect(fatals).toEqual(['gl-error-0x505']);
+    expect(c.isActive()).toBe(false);
   });
 });

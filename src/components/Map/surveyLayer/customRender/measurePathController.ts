@@ -13,6 +13,7 @@
 // via `onFatal` while dropping the dead layer, rather than vanishing silently.
 
 import type maplibregl from 'maplibre-gl';
+import { hasLiveStyle } from '../../mapUtils';
 import { SurveyMeasurePathLayer, type MeasurePathRenderData } from './surveyMeasurePathLayer';
 
 /** The surface the controller uses from its GL layer (real or a test fake). */
@@ -204,7 +205,10 @@ export class MeasurePathController {
     this.scheduleRestore(() => {
       if (gen !== this.generation) return; // superseded by a clear / new path
       this.selfDisableScheduled = false;
-      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      // The style is gone when the map was removed or lost its WebGL context before
+      // this deferred teardown ran: MapLibre took the layer with it, and getLayer
+      // reads the missing style and throws (#576 NF-MAP-3).
+      if (hasLiveStyle(this.map) && this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
       this.layer = null;
       this.emitFatal(reason);
     });

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
+import { dropStyle } from './styleGone';
 import { MeasurePathController, type MeasurePathLayerLike } from '../measurePathController';
 import { buildMeasurePathBuffers } from '../measurePathTessellate';
 import type { MeasurePathRenderData } from '../surveyMeasurePathLayer';
@@ -69,6 +70,7 @@ function makeFakeMap(existing: string[] = []) {
     repaints: 0,
   };
   const map = {
+    style: {},
     getLayer: (id: string) => (present.has(id) ? ({ id } as unknown) : undefined),
     addLayer: (layer: { id: string }, beforeId?: string) => {
       present.add(layer.id);
@@ -274,5 +276,29 @@ describe('MeasurePathController.drawnCounts', () => {
     });
     ctrl.setPath(renderData(2, 2), []);
     expect(ctrl.drawnCounts()).toEqual({ shots: 0, stations: 0 });
+  });
+});
+
+describe('MeasurePathController deferred self-disable without a style (#576 NF-MAP-3)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('a context loss before the deferred removal: no throw, still surfaces the fatal', () => {
+    const { map } = makeFakeMap([]);
+    const scheduled: (() => void)[] = [];
+    const fatals: string[] = [];
+    let layer: FakeLayer | null = null;
+    const ctrl = new MeasurePathController(map, {
+      makeLayer: (id, d, cb) => (layer = new FakeLayer(id, d, cb)),
+      scheduleRestore: (fn) => scheduled.push(fn),
+      onFatal: (r) => fatals.push(r),
+    });
+    ctrl.setPath(renderData(1, 1), []);
+    layer!.onSelfDisable('gl-error-0x502');
+    dropStyle(map);
+    expect(() => scheduled[0]!()).not.toThrow();
+    expect(fatals).toEqual(['measure-path: gl-error-0x502']);
   });
 });

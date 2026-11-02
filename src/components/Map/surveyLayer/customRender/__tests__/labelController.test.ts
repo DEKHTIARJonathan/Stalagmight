@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
+import { dropStyle } from './styleGone';
 import { emptySurveyData, STATION_FLAG_IS_ZERO_DATUM, type SurveyData } from '../../../../../types/survey-data';
 import type { MapThemeColors } from '../../../../../utils/themeColors';
 import { GlyphAtlas, SDF_BUFFER, type GlyphRasterizer, type RasterizedGlyph } from '../glyphAtlas';
@@ -138,6 +139,7 @@ function makeFakeMap(): FakeMap {
   for (const id of Object.values(STOCK_LAYERS)) visibility[id] = 'visible';
   const removed: string[] = [];
   const map = {
+    style: {},
     getStyle: () => ({}),
     getLayer: (id: string) => (existing.has(id) ? { id } : undefined),
     addLayer: (layer: { id: string; onAdd?: (m: unknown, gl: unknown) => void }) => {
@@ -1414,5 +1416,47 @@ describe('SurveyLabelController labelRestore-guard contract (isActive gates the 
     expect(c.isActive()).toBe(true); // active → guard SKIPS stock restore
     c.destroy();
     expect(c.isActive()).toBe(false); // torn down → guard runs stock restore again
+  });
+});
+
+describe('SurveyLabelController deferred fatal teardown without a style (#576 NF-MAP-3)', () => {
+  beforeEach(() => {
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('a context loss before the deferred teardown: no throw, still latches fatal', () => {
+    const holder: { fn: (() => void) | null } = { fn: null };
+    const fatals: string[] = [];
+    const { map } = makeFakeMap();
+    const c = makeController(map, {
+      onFatal: (r: string) => fatals.push(r),
+      scheduleRestore: (fn: () => void) => { holder.fn = fn; },
+    });
+    c.sync(makeParams());
+    expect(c.isActive()).toBe(true);
+    h.layerState.last?.onSelfDisable?.('gl-error-0x502');
+    dropStyle(map);
+    expect(() => holder.fn?.()).not.toThrow();
+    expect(fatals).toEqual(['gl-error-0x502']);
+    expect(c.isActive()).toBe(false);
+  });
+
+  it('released and removed before the deferred teardown: no throw, no fatal for a map that is gone', () => {
+    const holder: { fn: (() => void) | null } = { fn: null };
+    const fatals: string[] = [];
+    const { map } = makeFakeMap();
+    const c = makeController(map, {
+      onFatal: (r: string) => fatals.push(r),
+      scheduleRestore: (fn: () => void) => { holder.fn = fn; },
+    });
+    c.sync(makeParams());
+    h.layerState.last?.onSelfDisable?.('gl-error-0x502');
+    c.dispose();
+    dropStyle(map);
+    expect(() => holder.fn?.()).not.toThrow();
+    expect(fatals).toEqual([]);
   });
 });
