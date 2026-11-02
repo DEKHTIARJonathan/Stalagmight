@@ -203,15 +203,17 @@ export function useDmpImportRun({
   }, []);
 
   /** Record which project section each emitted DMP section became, and drop the
-   *  overlap updates that went with them. */
-  const settle = useCallback((emittedDmpIndices: number[], sectionIds: number[], mapImported: boolean) => {
-    if (mapImported) {
-      // Backend response ordering matches the submitted configs.
-      emittedDmpIndices.forEach((dmpIndex, i) => {
-        const sectionId = sectionIds[i];
-        if (sectionId != null) earlyImportedRef.current.set(dmpIndex, sectionId);
-      });
-    }
+   *  overlap updates that went with them. Every batch records - the late one too
+   *  (#576 NF-DMPS-2): a late import can leave a section unreachable, which sends
+   *  the run back to manual placing and then into ANOTHER late import, whose
+   *  batch is rebuilt from every placement so far and skips only what is
+   *  recorded here - so an unrecorded late section was imported twice. */
+  const settle = useCallback((emittedDmpIndices: number[], sectionIds: number[]) => {
+    // Backend response ordering matches the submitted configs.
+    emittedDmpIndices.forEach((dmpIndex, i) => {
+      const sectionId = sectionIds[i];
+      if (sectionId != null) earlyImportedRef.current.set(dmpIndex, sectionId);
+    });
     existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
       existingShotUpdatesRef.current,
       new Set(emittedDmpIndices),
@@ -297,7 +299,7 @@ export function useDmpImportRun({
         if (p.configs.length === 0) return p;
         const result = await send(kind, p.configs, p.emittedDmpIndices);
         if (!result) return null;
-        settle(p.emittedDmpIndices, result.section_ids, kind === 'early');
+        settle(p.emittedDmpIndices, result.section_ids);
         return p;
       }),
     [send, settle, step],
@@ -354,7 +356,7 @@ export function useDmpImportRun({
         // the store's catch-all toast yields to the open dialog.
         const result = await send('segment', segmentConfigs, segmentDmpIndices);
         if (!result) return null;
-        settle(segmentDmpIndices, result.section_ids, true);
+        settle(segmentDmpIndices, result.section_ids);
         return true;
       }),
     [fail, send, settle, step],
