@@ -1912,11 +1912,14 @@ fn place_near(
     None
 }
 
-/// Nine candidate `(dx, dy)` offsets at distance `offset` from a station:
-/// `primary` first, then ± `step` fallback directions rotating outward (the
-/// mirror is dropped at the step where + and - coincide). 8 distinct candidates
-/// for the callers' pi/4 step. Mirrors the order Pass 3/4 used before
-/// [`place_near`] existed.
+/// Candidate `(dx, dy)` offsets at distance `offset` from a station: `primary`
+/// first, then +/- `step` fallback directions rotating outward, the mirror
+/// dropped at the step where + and - coincide - 8 distinct candidates for the
+/// callers' pi/4 step. That is the order Pass 4 used before [`place_near`]
+/// existed. Pass 3's old inline list tried 9: it also kept primary - pi, the
+/// same direction as primary + pi up to float rounding, so it could only have
+/// placed a label the second one refused if a box edge lay within ~1e-16 of the
+/// offset (#576 RV3-R-NITS, B22: practically unobservable, not restored).
 fn radial_offsets(primary: f64, step: f64, offset: f64) -> Vec<(f64, f64)> {
     let mut out = Vec::with_capacity(8);
     out.push((offset * primary.cos(), offset * primary.sin()));
