@@ -60,6 +60,7 @@ import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
+import { createProjectLoadRepairsActions, LOAD_REPAIRS_CLEARED, loadRepairsStateFor, type ProjectLoadRepairsActions, type ProjectLoadRepairsState } from './projectLoadRepairsBanner';
 import { createProjectIntegrityActions, type ProjectIntegrityActions } from './projectIntegrityActions';
 import { runProjectSwitch } from '../utils/projectTransition';
 import { TOAST_KEYS } from '../utils/toastKeys';
@@ -206,7 +207,7 @@ export interface LoadProjectOutcome {
   superseded?: boolean;
 }
 
-export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectIntegrityActions {
+export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBannerActions, ProjectHistoryBannerState, ProjectLoadRepairsActions, ProjectLoadRepairsState, ProjectIntegrityActions {
   // State
   project: Project | null;
   /**
@@ -658,6 +659,7 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
     integritySaveBlocked: false,
     integrityDialogOpen: false,
     ...HISTORY_BANNER_CLEARED,
+    ...LOAD_REPAIRS_CLEARED,
   });
   // Losing a project bypasses the setView() cleanup funnel, so drop the gas
   // sub-mode (#38) here too - a stale overlay/panel must not outlive the project.
@@ -938,6 +940,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   integritySaveBlocked: false,
   integrityDialogOpen: false,
   ...HISTORY_BANNER_CLEARED,
+  ...LOAD_REPAIRS_CLEARED,
   config: null,
   loading: { ...initialLoadingState },
   autosaveFailure: null,
@@ -950,6 +953,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // Config (loadConfig / updateConfig / updateGasConfig / setConfig live in projectConfigActions.ts)
   ...createProjectConfigActions(set, get),
   ...createProjectHistoryBannerActions(set, get),
+  ...createProjectLoadRepairsActions(set),
   // Warnings and integrity (refreshWarnings / resolveWarning / unresolveWarning /
   // checkProjectIntegrity / repairProjectIntegrity live in projectIntegrityActions.ts)
   ...createProjectIntegrityActions(set, get),
@@ -1127,6 +1131,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           newerSchemaVersion: result.newerSchemaVersion,
           speleoLinkUnreadable: result.speleoLinkUnreadable,
           unreadableProjectSettings: result.unreadableProjectSettings,
+          // [#576 B35(h)] What this load reset or dropped: one notice after the open.
+          ...loadRepairsStateFor(result.loadRepairs),
           isDirty: false,
           // Reset integrity state on project switch so a dismissal from the
           // previous project can never carry over and suppress this one's banner.
@@ -1395,6 +1401,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         integritySaveBlocked: false,
         integrityDialogOpen: false,
         ...HISTORY_BANNER_CLEARED,
+        ...LOAD_REPAIRS_CLEARED,
       });
 
       // #270: a freshly created project is local by construction - it has no

@@ -158,6 +158,27 @@ impl Project {
         }
     }
 
+    /// [#576 B35(h)] Reset every non-finite component of a station offset to 0,
+    /// keeping the finite ones, and return how many offsets had one.
+    ///
+    /// The station-offset twin of the section-offset guard at the load boundary
+    /// and in `save_project`'s heals. A station offset is added straight into
+    /// world coordinates, so one infinite component turns that station - and the
+    /// gap metrics and loop-closure solve that read it - into infinities. NaN
+    /// cannot be stored in a `REAL NOT NULL` column, but +/-Inf can. Takes the map
+    /// so the persistence loader can run it before a `Project` exists.
+    pub fn sanitize_station_offsets(offsets: &mut HashMap<StationKey, (f64, f64, f64)>) -> usize {
+        let finite = |v: f64| if v.is_finite() { v } else { 0.0 };
+        let mut sanitized = 0;
+        for offset in offsets.values_mut() {
+            if !(offset.0.is_finite() && offset.1.is_finite() && offset.2.is_finite()) {
+                *offset = (finite(offset.0), finite(offset.1), finite(offset.2));
+                sanitized += 1;
+            }
+        }
+        sanitized
+    }
+
     /// Drop every `section_offsets` entry that violates the invariant on
     /// [`Self::write_section_offset`], and report how many went.
     ///

@@ -924,6 +924,13 @@ pub struct LoadProjectFullResult {
     #[serde(skip)]
     #[ts(skip)]
     pub unreadable_project_settings: Vec<String>,
+    /// [#576 B35(h)] What this load reset or dropped because it could not use it
+    /// (non-finite shot values, section and station offsets, GPS tie points), per
+    /// kind. The next save makes the reset permanent, so the frontend shows one
+    /// notice after the open. Binary envelope only, like `newer_schema_version`.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub load_repairs: crate::persistence::LoadRepairs,
 }
 
 // ============================================================================
@@ -1321,6 +1328,7 @@ mod tests {
             newer_schema_version: None,
             speleo_link_unreadable: false,
             unreadable_project_settings: Vec::new(),
+            load_repairs: crate::persistence::LoadRepairs::default(),
         };
         assert_wire(
             &serde_json::to_value(&load).expect("serialize load result"),

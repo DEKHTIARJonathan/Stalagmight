@@ -2533,6 +2533,21 @@
       "detail": "Your survey data is unaffected. The next save replaces the unreadable history.",
       "dismiss": "Dismiss"
     },
+    "loadRepairs": {
+      "lead": "Some stored values could not be used and were changed when this project opened: {{items}}.",
+      "detail": "Saving makes the change permanent. Details are in the log.",
+      "dismiss": "Dismiss",
+      "items": {
+        "shots_one": "{{count}} shot with an invalid value reset",
+        "shots_other": "{{count}} shots with invalid values reset",
+        "sectionOffsets_one": "{{count}} section move reset",
+        "sectionOffsets_other": "{{count}} section moves reset",
+        "stationOffsets_one": "{{count}} station move reset",
+        "stationOffsets_other": "{{count}} station moves reset",
+        "gpsPoints_one": "{{count}} GPS tie point dropped",
+        "gpsPoints_other": "{{count}} GPS tie points dropped"
+      }
+    },
     "newerFile": {
       "lead": "This project was saved by a newer version of Stalagmight. Update to edit it.",
       "detail": "It is open read-only: you can view and export it, but changes and saves are off so this version cannot drop what the newer one stored.",

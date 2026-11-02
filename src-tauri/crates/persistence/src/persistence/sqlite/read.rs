@@ -258,6 +258,9 @@ impl Database {
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)?.with_timezone(&Utc);
         let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at)?.with_timezone(&Utc);
 
+        // What this load could not read, or reset because it could not use it.
+        let mut report = ProjectLoadReport::default();
+
         // Load sections
         let mut sections: Vec<Section> = Vec::new();
         let mut next_section_id = 0u32;
@@ -574,6 +577,7 @@ impl Database {
                         "Replaced non-finite (NaN/inf) shot geometry with finite defaults on load"
                     );
                 }
+                report.repairs.shots = sanitized_shots;
 
                 // Advance each section's next_shot_id past its loaded
                 // shots so future appends don't collide with persisted IDs.
@@ -688,10 +692,22 @@ impl Database {
                     "Replaced non-finite (NaN/inf) section offset with 0.0 on load"
                 );
             }
+            report.repairs.section_offsets = sanitized_offsets;
         }
 
-        // Load station offsets
-        let station_offsets = self.load_station_offsets()?;
+        // Load station offsets. [#576 B35(h)] Through the same finiteness guard as
+        // shots and section offsets: they used to be inserted verbatim, and a
+        // station offset is added straight into world coordinates.
+        let mut station_offsets = self.load_station_offsets()?;
+        let sanitized_station_offsets = Project::sanitize_station_offsets(&mut station_offsets);
+        if sanitized_station_offsets > 0 {
+            tracing::warn!(
+                sanitized_station_offsets,
+                purpose = "block corruption at the source",
+                "Replaced non-finite (inf) station offset components with 0.0 on load"
+            );
+        }
+        report.repairs.station_offsets = sanitized_station_offsets;
 
         // Load loop closures
         let loop_closures = self.load_loop_closures()?;
@@ -717,7 +733,6 @@ impl Database {
         // the global config, so legacy projects (no row) fall back to the
         // hardcoded default here; the AppState open paths re-check for absence
         // and seed from the user's global config instead (see project_io.rs).
-        let mut report = ProjectLoadReport::default();
         let validation = report
             .setting("validation", self.load_project_validation())
             .unwrap_or_default();
@@ -1435,6 +1450,32 @@ pub struct ProjectLoadReport {
     /// read. Absent and merely unparseable values are not listed: those are "not
     /// set", as before.
     pub unreadable_settings: Vec<&'static str>,
+    /// [#576 B35(h)] The values this load reset or dropped because it could not
+    /// use them, per kind.
+    pub repairs: LoadRepairs,
+}
+
+/// [#576 B35(h)] How many stored values a load reset or dropped because it could
+/// not use them (non-finite numbers from a damaged or hand-edited file), per
+/// kind. The next save writes the reset values, so the open reports them to the
+/// user once instead of only logging them.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct LoadRepairs {
+    /// Shots with a non-finite measurement, reset to finite defaults.
+    pub shots: usize,
+    /// Section offsets with a non-finite component, reset to 0.
+    pub section_offsets: usize,
+    /// Station offsets with a non-finite component, reset to 0.
+    pub station_offsets: usize,
+    /// GPS tie points (zero datums) with a non-finite coordinate, dropped.
+    pub gps_points: usize,
+}
+
+impl LoadRepairs {
+    /// True when the load reset or dropped nothing.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl ProjectLoadReport {

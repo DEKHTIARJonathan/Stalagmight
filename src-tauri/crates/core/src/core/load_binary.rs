@@ -114,6 +114,12 @@ pub struct LoadProjectFullBinaryResult {
     /// `LoadProjectFullResult::unreadable_project_settings`. A top-level key, like
     /// `newer_schema_version`: absent to a reader that predates it.
     pub unreadable_project_settings: Vec<String>,
+    /// [#576 B35(h)] What the load reset or dropped because it could not use it,
+    /// per kind (`shots`, `section_offsets`, `station_offsets`, `gps_points`).
+    /// Mirrors `LoadProjectFullResult::load_repairs`; the frontend shows one notice
+    /// after the open when any count is non-zero. A top-level key, like
+    /// `newer_schema_version`: absent to a reader that predates it.
+    pub load_repairs: crate::persistence::LoadRepairs,
     pub project_header: ProjectHeaderBinary,
 
     pub shot_count: u32,
@@ -222,6 +228,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         newer_schema_version,
         speleo_link_unreadable,
         unreadable_project_settings,
+        load_repairs,
     } = result;
 
     // Compute the frozen shots while the whole project is still in scope (its
@@ -419,6 +426,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         newer_schema_version,
         speleo_link_unreadable,
         unreadable_project_settings,
+        load_repairs,
         project_header,
         shot_count: shot_count as u32,
         shots_floats: ByteBuf::from(shots_floats),
@@ -591,6 +599,7 @@ mod tests {
             newer_schema_version: None,
             speleo_link_unreadable: false,
             unreadable_project_settings: Vec::new(),
+            load_repairs: crate::persistence::LoadRepairs::default(),
         };
 
         let bytes = encode(result).unwrap();
@@ -666,6 +675,7 @@ mod tests {
             newer_schema_version: None,
             speleo_link_unreadable: false,
             unreadable_project_settings: Vec::new(),
+            load_repairs: crate::persistence::LoadRepairs::default(),
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
@@ -736,6 +746,7 @@ mod tests {
             newer_schema_version: None,
             speleo_link_unreadable: false,
             unreadable_project_settings: Vec::new(),
+            load_repairs: crate::persistence::LoadRepairs::default(),
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
@@ -777,6 +788,7 @@ mod tests {
             newer_schema_version: None,
             speleo_link_unreadable: false,
             unreadable_project_settings: Vec::new(),
+            load_repairs: crate::persistence::LoadRepairs::default(),
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();

@@ -247,6 +247,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // refused, and a Save As elsewhere moves the session to a file without the row.
       let mockSpeleoLinkUnreadable = false;
       let openProjectSpeleoLinkUnreadable = false;
+      // `BinaryEnvelope::load_repairs` (#576 B35(h)): what the NEXT binary load reset or
+      // dropped, per kind. Flip per-spec with __MOCK_SET_LOAD_REPAIRS__; nothing by default.
+      let mockLoadRepairs = { shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0 };
       // Window teardown calls, so an exit-guard spec can assert the POSITIVE
       // outcome of an unguarded close instead of only "no dialog appeared".
       let windowDestroyCount = 0;
@@ -556,6 +559,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         unreadable: boolean,
       ) => {
         mockSpeleoLinkUnreadable = unreadable;
+      };
+      // Make the next binary load report values it reset or dropped (#576 B35(h)).
+      (window as unknown as Record<string, unknown>).__MOCK_SET_LOAD_REPAIRS__ = (repairs: {
+        shots?: number;
+        section_offsets?: number;
+        station_offsets?: number;
+        gps_points?: number;
+      }) => {
+        mockLoadRepairs = { shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0, ...repairs };
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_WINDOW_TEARDOWN_COUNTS__ = () => ({
         destroy: windowDestroyCount,
@@ -1561,6 +1573,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // `BinaryEnvelope::unreadable_project_settings` (#576 B15): no spec
               // mocks an unreadable settings row, so every mocked load reads them all.
               unreadable_project_settings: [],
+              // `BinaryEnvelope::load_repairs` (#576 B35(h)).
+              load_repairs: mockLoadRepairs,
               project_header: {
                 name: jsonResult.project.name ?? 'Test Project',
                 location: jsonResult.project.location ?? null,

@@ -72,6 +72,37 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
    *  The project opened with defaults in their place and every save is refused
    *  while they are unread. Binary envelope only, like `newerSchemaVersion`. */
   unreadableProjectSettings: string[];
+  /** [#576 B35(h)] What this load reset or dropped because it could not use it,
+   *  per kind, or null when nothing. Binary envelope only. */
+  loadRepairs: LoadRepairs | null;
+}
+
+/** [#576 B35(h)] Per-kind counts of the stored values a load reset or dropped
+ *  (`LoadRepairs` in `persistence/sqlite/read.rs`). */
+export interface LoadRepairs {
+  /** Shots with a non-finite measurement, reset to finite defaults. */
+  shots: number;
+  /** Section moves (offsets) with a non-finite component, reset to 0. */
+  sectionOffsets: number;
+  /** Station moves (offsets) with a non-finite component, reset to 0. */
+  stationOffsets: number;
+  /** GPS tie points (zero datums) with a non-finite coordinate, dropped. */
+  gpsPoints: number;
+}
+
+/** The envelope's `load_repairs` as the store's `LoadRepairs`, or null when the
+ *  load reset nothing (or the backend predates the field). */
+export function loadRepairsFromEnvelope(
+  raw: BinaryEnvelope['load_repairs'],
+): LoadRepairs | null {
+  if (!raw) return null;
+  const repairs: LoadRepairs = {
+    shots: Number(raw.shots ?? 0),
+    sectionOffsets: Number(raw.section_offsets ?? 0),
+    stationOffsets: Number(raw.station_offsets ?? 0),
+    gpsPoints: Number(raw.gps_points ?? 0),
+  };
+  return Object.values(repairs).some((n) => n > 0) ? repairs : null;
 }
 
 /**
@@ -119,6 +150,15 @@ export interface BinaryEnvelope {
   /** [#576 B15] Stored project settings the load could not read. A top-level map
    *  key: absent from an envelope that predates it. */
   unreadable_project_settings?: string[];
+  /** [#576 B35(h)] What the load reset or dropped, per kind. A top-level map key:
+   *  absent from an envelope that predates it. Counts are u64 on the wire, so a
+   *  msgpack decoder may hand them over as bigint. */
+  load_repairs?: {
+    shots?: number | bigint;
+    section_offsets?: number | bigint;
+    station_offsets?: number | bigint;
+    gps_points?: number | bigint;
+  };
   project_header: ProjectHeaderBinary;
   shot_count: number;
   shots_floats: Uint8Array;
@@ -474,6 +514,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     newerSchemaVersion: env.newer_schema_version ?? null,
     speleoLinkUnreadable: env.speleo_link_unreadable === true,
     unreadableProjectSettings: env.unreadable_project_settings ?? [],
+    loadRepairs: loadRepairsFromEnvelope(env.load_repairs),
     surveyData,
   };
 }

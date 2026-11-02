@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore, selectNewerFileReadOnly } from './store/projectStore';
+import { LoadRepairsBanner } from './components/common/LoadRepairsBanner';
 import { isMoveCarryRefusal } from './store/moveCarry';
 import { useUIStore } from './store/uiStore';
 import { useSpeleoStore } from './store/speleoStore';
@@ -719,6 +720,9 @@ function App() {
           </button>
         </div>
       )}
+
+      {/* [#576 B35(h)] What opening the project reset or dropped (see the component). */}
+      <LoadRepairsBanner />
 
       {/* Autosave-failure banner (docs/notifications.md: an ongoing "your latest
           changes are not on disk" condition is banner-class, not modal and not a

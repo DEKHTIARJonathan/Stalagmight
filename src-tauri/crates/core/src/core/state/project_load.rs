@@ -1126,6 +1126,8 @@ impl AppState {
             speleo_link_unreadable,
             // [#576 B15] ...and the settings whose unread state refuses saves.
             unreadable_project_settings: unread_settings,
+            // [#576 B35(h)] ...and what the load reset or dropped.
+            load_repairs: load_report.repairs,
         })
     }
 }

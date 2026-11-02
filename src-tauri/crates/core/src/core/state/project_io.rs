@@ -269,6 +269,12 @@ fn apply_save_heals(project: &mut Project) {
             shot.sanitize_non_finite();
         }
     }
+
+    // [#576 B35(h)] ...and station offsets, the one geometry map that had no
+    // finite guard on either side: an infinite component used to be written to
+    // the file as it was, to poison every open after it. Component-wise, as the
+    // load boundary does: the finite components are a real move.
+    Project::sanitize_station_offsets(&mut project.station_offsets);
 }
 
 /// Bring a project restored from an undo/redo snapshot up to the standard a

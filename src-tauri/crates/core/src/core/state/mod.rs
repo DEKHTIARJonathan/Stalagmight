@@ -92,6 +92,16 @@ mod issue_517_tests;
 )]
 mod issue_555_tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod load_repairs_tests;
+#[cfg(test)]
 mod metamorphic_undo_tests;
 #[cfg(test)]
 #[expect(

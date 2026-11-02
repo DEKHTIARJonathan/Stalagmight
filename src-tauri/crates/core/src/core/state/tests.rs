@@ -23789,6 +23789,7 @@ fn profile_stalx_load() {
         newer_schema_version: None,
         speleo_link_unreadable: false,
         unreadable_project_settings: Vec::new(),
+        load_repairs: crate::persistence::LoadRepairs::default(),
     };
     let bin = crate::core::load_binary::encode(result).expect("encode");
     let t8 = Instant::now();
