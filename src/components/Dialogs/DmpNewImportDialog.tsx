@@ -3525,6 +3525,15 @@ export default function DmpNewImportDialog({
               </div>
             )}
 
+            {/* A failed step with no panel of its own - the anchor import in
+                `init` above all, which used to leave this body blank (#576
+                NF-AN4-N1). `placing` shows its failure below, with its Retry. */}
+            {phase !== 'placing' && error && !isImporting && !isCalculating && (
+              <div className="text-center" data-testid="wizard-status-failed">
+                <div className="text-lg mb-2 text-error" data-testid="wizard-error">{error}</div>
+              </div>
+            )}
+
             {/* Calculating suggestions */}
             {(phase === 'init' || phase === 'suggesting') && isCalculating && (
               <div className="text-center" data-testid="wizard-calculating">
