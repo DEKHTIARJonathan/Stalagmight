@@ -1941,15 +1941,18 @@ fn test_execute_gpx_import_decorates_receipt() {
         use std::io::Write;
         file.write_all(gpx_xml.as_bytes()).unwrap();
 
-        let result = import::execute_gpx_import(
-            state(&app),
-            file.path().to_path_buf(),
+        let result = import::execute_gpx_import_impl(
+            state(&app).inner(),
+            std::sync::Arc::new(crate::commands::import_runner::SilentSink),
+            file.path(),
             None,
-            false,
-            true,
-            false,
-            Vec::new(),
-            false,
+            import::GpxSelection {
+                import_waypoints: false,
+                import_tracks: true,
+                import_routes: false,
+                depth_inverted: false,
+            },
+            &[],
         );
         assert_success(&result);
         let receipt = result

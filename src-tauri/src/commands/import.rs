@@ -497,7 +497,13 @@ pub fn parse_gpx(path: PathBuf) -> Result<GpxFile, String> {
 
 /// Parse a GPX file, convert to import configs, and execute the import.
 #[tauri::command]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one parameter per import-dialog control; grouping them into a \
+              struct would put a second, hand-written shape on the IPC wire"
+)]
 pub fn execute_gpx_import(
+    app: AppHandle,
     state: State<'_, AppState>,
     path: PathBuf,
     file_hash: Option<String>,
@@ -507,82 +513,96 @@ pub fn execute_gpx_import(
     section_placements: Vec<GpxSectionPlacement>,
     depth_inverted: bool,
 ) -> CommandResult {
-    tracing::info!(
-        path = ?path,
-        purpose = "import GPX",
-        import_waypoints,
-        import_tracks,
-        import_routes,
-        "Executing GPX import"
-    );
-
-    let gpx = match crate::parsers::gpx::parse_gpx(&path) {
-        Ok(gpx) => gpx,
-        Err(e) => {
-            tracing::error!(
-                path = ?path,
-                purpose = "import GPX",
-                reason = %e,
-                "Failed to parse GPX file for import"
-            );
-            return CommandResult::failure(format!("Failed to parse GPX file: {e}"));
-        }
-    };
-
-    let (sections, converter_warnings) = match crate::parsers::gpx::convert_gpx_to_import_configs(
-        &gpx,
-        import_waypoints,
-        import_tracks,
-        import_routes,
-        &section_placements,
-        depth_inverted,
-    ) {
-        Ok(result) => result,
-        Err(e) => {
-            tracing::error!(
-                path = ?path,
-                purpose = "import GPX",
-                reason = %e,
-                "Failed to convert GPX data to import configs"
-            );
-            return CommandResult::failure(format!("Failed to convert GPX data: {e}"));
-        }
-    };
-
-    tracing::info!(
-        path = ?path,
-        section_count = sections.len(),
-        purpose = "import GPX",
-        "Converted GPX to import configs, executing import"
-    );
-
-    let sections_found = sections.len() as u32;
-
-    // Auto, not a per-file override: the GPX dialog has no mode control, so
-    // there is nothing to pass through - but the chain rule still has to run.
-    // `parsers::gpx` seeds every leg as Reference on the promise that the
-    // classifier can promote it, and skipping the pass here (this path used
-    // to call `finalize_deferred_import` directly) left a GPS surface track
-    // tying two sumps together permanently excluded from the survey graph.
-    let mut result = state.execute_import_sections(
-        sections,
-        Vec::new(),
-        file_hash,
-        Vec::new(),
-        Vec::new(),
-        VirtualShotMode::Auto,
-    );
-
-    decorate_receipt(
-        &mut result,
-        "GPX",
+    execute_gpx_import_impl(
+        state.inner(),
+        tauri_sink(app),
         &path,
-        sections_found,
-        None,
-        converter_warnings,
-    );
+        file_hash,
+        GpxSelection {
+            import_waypoints,
+            import_tracks,
+            import_routes,
+            depth_inverted,
+        },
+        &section_placements,
+    )
+}
 
-    finalize_deferred_import(state.inner(), result)
+/// [`execute_gpx_import`] with its progress going to `sink`, so a test can
+/// run the command's pipeline without a Tauri app handle.
+pub(crate) fn execute_gpx_import_impl(
+    state: &AppState,
+    sink: std::sync::Arc<dyn crate::core::events::EventSink>,
+    path: &std::path::Path,
+    file_hash: Option<String>,
+    selection: GpxSelection,
+    section_placements: &[GpxSectionPlacement],
+) -> CommandResult {
+    tracing::info!(
+        path = ?path,
+        purpose = "import GPX",
+        import_waypoints = selection.import_waypoints,
+        import_tracks = selection.import_tracks,
+        import_routes = selection.import_routes,
+        "GPX import options"
+    );
+    run_file_import(
+        state,
+        sink,
+        &GPX_IMPORT,
+        path,
+        file_hash,
+        // Auto, not a per-file override: the GPX dialog has no mode control,
+        // so there is nothing to pass through - but the chain rule still has
+        // to run. `parsers::gpx` seeds every leg as Reference on the promise
+        // that the classifier can promote it, and skipping the pass (this path
+        // used to call `finalize_deferred_import` directly) left a GPS surface
+        // track tying two sumps together permanently excluded from the survey
+        // graph.
+        VirtualShotMode::Auto,
+        crate::parsers::gpx::parse_gpx,
+        |gpx| convert_gpx(gpx, &selection, section_placements),
+    )
+}
+
+/// The GPX importer as the runner names it.
+const GPX_IMPORT: ImportKind = ImportKind {
+    receipt_label: "GPX",
+    error_label: "GPX",
+    purpose: "import GPX",
+};
+
+/// What of a GPX file the dialog chose to import, and how.
+pub(crate) struct GpxSelection {
+    pub(crate) import_waypoints: bool,
+    pub(crate) import_tracks: bool,
+    pub(crate) import_routes: bool,
+    pub(crate) depth_inverted: bool,
+}
+
+/// GPX's convert step for [`run_file_import`]. "Sections found" is the
+/// number of sections the selection converts to, as it always was for GPX.
+fn convert_gpx(
+    gpx: &GpxFile,
+    selection: &GpxSelection,
+    placements: &[GpxSectionPlacement],
+) -> anyhow::Result<ConvertedImport> {
+    let (sections, warnings) = crate::parsers::gpx::convert_gpx_to_import_configs(
+        gpx,
+        selection.import_waypoints,
+        selection.import_tracks,
+        selection.import_routes,
+        placements,
+        selection.depth_inverted,
+    )?;
+    Ok(ConvertedImport {
+        sections_found: sections.len() as u32,
+        sections,
+        closures: Vec::new(),
+        warnings,
+        unit_conversion: None,
+        apply: ApplyPath::Sections,
+    })
 }
 
 /// Suggest placement positions for an import section by detecting reference shot overlap.
@@ -1461,5 +1481,71 @@ mod receipt_tests {
         };
         assert_eq!(elevation(&state), Some(100_000.0), "328.084 ft is 100 m");
         assert_eq!(elevation(&state), elevation(&legacy_state));
+    }
+
+    /// GPX on the runner produces the result the hand-written command did -
+    /// which already carried the converter's warnings (#576 B34) - and now
+    /// reports its progress like every other importer.
+    #[test]
+    fn a_gpx_import_on_the_runner_keeps_its_receipt_and_reports_progress() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("synthetic.gpx");
+        fs::write(
+            &path,
+            r#"<gpx version="1.1"><trk><name>Surface</name><trkseg>
+                <trkpt lat="0.0" lon="0.0"/>
+                <trkpt lat="0.0" lon="0.0005"><ele>350</ele></trkpt>
+                <trkpt lat="0.0" lon="0.0010"><ele>349</ele></trkpt>
+            </trkseg></trk></gpx>"#,
+        )
+        .expect("write the .gpx");
+        let selection = GpxSelection {
+            import_waypoints: true,
+            import_tracks: true,
+            import_routes: true,
+            depth_inverted: false,
+        };
+
+        let legacy_state = project_state();
+        let gpx = crate::parsers::gpx::parse_gpx(&path).expect("parse");
+        let (sections, warnings) =
+            crate::parsers::gpx::convert_gpx_to_import_configs(&gpx, true, true, true, &[], false)
+                .expect("convert");
+        let sections_found = sections.len() as u32;
+        let mut legacy = legacy_state.execute_import_sections(
+            sections,
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+        );
+        decorate_receipt(&mut legacy, "GPX", &path, sections_found, None, warnings);
+        let legacy = finalize_deferred_import(&legacy_state, legacy);
+
+        let state = project_state();
+        let sink = std::sync::Arc::new(RecordingSink::default());
+        let runner = run_file_import(
+            &state,
+            std::sync::Arc::<RecordingSink>::clone(&sink),
+            &GPX_IMPORT,
+            &path,
+            None,
+            VirtualShotMode::Auto,
+            crate::parsers::gpx::parse_gpx,
+            |gpx| convert_gpx(gpx, &selection, &[]),
+        );
+
+        assert!(runner.success, "{:?}", runner.error);
+        assert_eq!(
+            runner.import_receipt.as_ref().map(|r| r.warnings.clone()),
+            Some(vec![
+                "1 GPS point had no elevation; it was filled in from the nearest points along \
+                 the track that have one."
+                    .to_string()
+            ])
+        );
+        assert_eq!(comparable(&runner), comparable(&legacy));
+        assert_eq!(phases(&sink).len(), 8, "four phases, started and completed");
     }
 }

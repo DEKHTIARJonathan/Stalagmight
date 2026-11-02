@@ -172,6 +172,19 @@ pub(crate) fn run_file_import<P>(
     finalize_deferred_import(state, result)
 }
 
+/// A sink nobody listens to, for tests that run an import without an app.
+#[cfg(test)]
+pub(crate) struct SilentSink;
+
+#[cfg(test)]
+impl EventSink for SilentSink {
+    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
+
+    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+        false
+    }
+}
+
 /// `f`'s result, or an error naming the panic it raised (#576 B8). The
 /// parsers and converters read untrusted files, so a panic in one must fail
 /// that import rather than unwind out of the command. Only steps that touch

@@ -12,6 +12,7 @@ import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile, GpxSectionPlacement } from '../../types/commands';
 import { sectionColorPalette } from '../../utils/colors';
+import { extractFilename } from '../../utils/path';
 import { setSource } from '../../utils/telemetry';
 
 /**
@@ -22,7 +23,7 @@ import { setSource } from '../../utils/telemetry';
  * Waypoints are always auto-placed as zero datums and don't appear here.
  */
 export default function GpxPlacementDialog() {
-  const { executeGpxImport } = useProjectStore();
+  const { executeGpxImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
   const { closeDialog, openDialog, dialogData, setView, triggerFitToBounds, resolvedTheme, showToast } =
     useUIStore();
 
@@ -135,6 +136,11 @@ export default function GpxPlacementDialog() {
     });
 
     const importUi = { closeDialog, setView, triggerFitToBounds, openDialog, showToast };
+    // Show the loading overlay so the user sees Reading -> Converting ->
+    // Applying -> Finalizing phase ticks from the backend ProgressEmitter,
+    // as the other importers do (#576 C10).
+    startLoading(gpxFile.name || extractFilename(filePath), filePath);
+    setLoadingProgress({ phase: 'import_parsing' });
     try {
       const result = await executeGpxImport(
         filePath,
@@ -145,6 +151,7 @@ export default function GpxPlacementDialog() {
         placements,
         depthInverted
       );
+      resetLoading();
 
       if (!result.success) {
         // A move carry refused it (GHOST-2) and said so: keep the dialog for the retry.
@@ -162,6 +169,7 @@ export default function GpxPlacementDialog() {
 
       completeImportToSingleView('gpx-placement', importUi, result.import_receipt);
     } catch (e) {
+      resetLoading();
       setIsImporting(false);
       surfaceImportFailure('gpx-placement', importUi, { phase: 'transport', error: e, format: 'GPX' });
     }
