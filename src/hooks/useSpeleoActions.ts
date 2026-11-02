@@ -14,6 +14,7 @@ import { invokeIpc } from '../utils/ipc';
 import { openExitPrompt, type PendingExit } from '../utils/quit';
 import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
+import { afterQueuedEdits } from '../utils/projectTransition';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import { surfaceSaveWarnings } from '../utils/saveFeedback';
 import type {
@@ -234,9 +235,13 @@ export function useSpeleoActions(): SpeleoActions {
     );
     const busyToken = beginBusy();
     try {
-      const result = options?.resumeHeldLock
-        ? await invokeIpc<StartEditingResult>('speleodb_start_editing', { resumeHeldLock: true })
-        : await invokeIpc<StartEditingResult>('speleodb_start_editing');
+      // [#576 D23-SWAP] A fast-forward swaps the tree, so the edits queued
+      // before this reach the backend first.
+      const result = await afterQueuedEdits(() =>
+        options?.resumeHeldLock
+          ? invokeIpc<StartEditingResult>('speleodb_start_editing', { resumeHeldLock: true })
+          : invokeIpc<StartEditingResult>('speleodb_start_editing'),
+      );
       const routed = await routeStartEditingResult(result, true, issuedFor);
       if (!routed.landed) return false;
       if (routed.treeReplaced && !(await applySpeleoTreeReplacement(issuedFor, true))) {
@@ -261,10 +266,14 @@ export function useSpeleoActions(): SpeleoActions {
       );
       const busyToken = beginBusy();
       try {
-        const result = await invokeIpc<StartEditingResult | null>('speleodb_discard_changes', {
-          keepLock,
-          acknowledged: true,
-        });
+        // [#576 D23-SWAP] Discard always swaps the tree (see below): the edits
+        // queued before this reach the backend first.
+        const result = await afterQueuedEdits(() =>
+          invokeIpc<StartEditingResult | null>('speleodb_discard_changes', {
+            keepLock,
+            acknowledged: true,
+          }),
+        );
         const routed = result
           ? await routeStartEditingResult(result, false, issuedFor)
           : null;
@@ -316,7 +325,8 @@ export function useSpeleoActions(): SpeleoActions {
     );
     const busyToken = beginBusy();
     try {
-      const result = await invokeIpc<UpdateResult>('speleodb_update');
+      // [#576 D23-SWAP] A fast-forward swaps the tree: queued edits land first.
+      const result = await afterQueuedEdits(() => invokeIpc<UpdateResult>('speleodb_update'));
       if (!speleoProjectSessionStillCurrent(issuedFor)) return;
       applyUpdate(result);
       switch (result.kind) {
@@ -569,7 +579,8 @@ export function useSpeleoActions(): SpeleoActions {
     try {
       // Backend re-pulls + resets the tree to the server tip and returns the
       // reloaded path; loadProject re-seeds the link status (→ read-only).
-      const localPath = await invokeIpc<string>('speleodb_take_remote');
+      // [#576 D23-SWAP] The reset swaps the tree: queued edits land first.
+      const localPath = await afterQueuedEdits(() => invokeIpc<string>('speleodb_take_remote'));
       // If the reload was superseded (the user opened another project mid-pull),
       // don't claim success: the backend reset already happened, but the view the
       // caller thinks it reloaded is not showing. Skip the toast + return false so

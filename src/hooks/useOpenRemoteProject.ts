@@ -11,6 +11,7 @@ import {
 import { invokeIpc } from '../utils/ipc';
 import { presentImportReceipt } from '../utils/saveFeedback';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
+import { afterQueuedEdits } from '../utils/projectTransition';
 import {
   speleoErrorAction,
   humanizeSpeleoError,
@@ -494,7 +495,9 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       const issuedAt = speleoSessionIssuedAt();
       let result: SpeleoOpenResult;
       try {
-        result = await invokeIpc<SpeleoOpenResult>('speleodb_open_project', {
+        // [#576 D23-SWAP] Re-opening the project on screen swaps its tree in
+        // place: the edits queued before this reach the backend first.
+        result = await afterQueuedEdits(() => invokeIpc<SpeleoOpenResult>('speleodb_open_project', {
           // [Track B] (#189) pass name + latest SHA so the backend stamps the
           // speleo_link row (is_remote) on the pulled .stalx.
           projectId: summary.id,
@@ -503,7 +506,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           // [#258] Present only on a retry from the picker; absent on a first
           // attempt, which is what makes the backend classify normally.
           entryPath: opts?.entryPath ?? null,
-        });
+        }));
       } catch (e) {
         // #214: an Ariane (.tml-only) project routes here (backend returns the typed
         // Adopt action, not a hard error). Signal the caller to offer adoption.
@@ -675,12 +678,13 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       const issuedAt = speleoSessionIssuedAt();
       let result: SpeleoOpenResult;
       try {
-        result = await invokeIpc<SpeleoOpenResult>('speleodb_open_project_discarding_local', {
+        // [#576 D23-SWAP] As in `openRemote`: queued edits land first.
+        result = await afterQueuedEdits(() => invokeIpc<SpeleoOpenResult>('speleodb_open_project_discarding_local', {
           projectId: summary.id,
           projectName: summary.name,
           latestCommitSha: summary.latest_commit_sha ?? null,
           entryPath: opts?.entryPath ?? null,
-        });
+        }));
       } catch (e) {
         // #214/#270: the same Ariane route `openRemote` has. It is not hypothetical
         // here - an adopt stamps the cache copy un-pushed and the server `type` flip
@@ -771,7 +775,8 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       const issuedAt = speleoSessionIssuedAt();
       let result: SpeleoAdoptResult;
       try {
-        result = await invokeIpc<SpeleoAdoptResult>('speleodb_adopt_ariane', {
+        // [#576 D23-SWAP] As in `openRemote`: queued edits land first.
+        result = await afterQueuedEdits(() => invokeIpc<SpeleoAdoptResult>('speleodb_adopt_ariane', {
           projectId: summary.id,
           projectName: summary.name,
           latestCommitSha: summary.latest_commit_sha ?? null,
@@ -780,7 +785,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           // [#258] Present only on a replay from the picker below; absent on a first
           // attempt, which is what lets the backend classify - and re-ask - normally.
           entryPath: opts.entryPath ?? null,
-        });
+        }));
       } catch (e) {
         // [#258] Adoption can raise the ambiguity itself, not just inherit one: the
         // tree can change while the confirmation sits open, so the backend answers
