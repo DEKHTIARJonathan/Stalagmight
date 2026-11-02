@@ -112,6 +112,7 @@ untagged test still runs nightly. The per-test timing report on every smoke run
 | Import: Ariane TML/TMLU | `tml-import.spec.ts` | `imports a TML from the unified picker` |
 | Import: Walls WPJ/SRV | `walls-import-dialog.spec.ts` | `all surveys selected imports` |
 | Import: GPX | `gpx-import-workflow.spec.ts` | `imports GPX from home screen` |
+| Import: Compass MAK/DAT | `compass-import.spec.ts` | `imports a Compass MAK from the unified picker` |
 | Export: CSV | `export-dialog.spec.ts` | `should execute export and show success` |
 | Export: JSON | `export-dialog.spec.ts` | `sends export_json with a .json path` |
 | Export: Ariane TML | `export-dialog.spec.ts` | `should continue TML export after unanchored warning confirmation` |
@@ -125,11 +126,6 @@ untagged test still runs nightly. The per-test timing report on every smoke run
 | SpeleoDB managed file | `speleodb-managed-file.spec.ts` | `remove link strips the file and opens it as a local project` |
 | Map renders the survey (custom WebGL) | `custom-renderer-health.spec.ts` | `custom WebGL survey layer initializes and draws` |
 <!-- smoke-features:end -->
-
-Known gap, deliberately not in the table: **Compass `.MAK`/`.DAT` import** has no
-browser-tier flow test to name (only the vitest component test
-`CompassImportDialog.test.tsx`), so it reaches CI only through vitest until a
-Playwright spec exists.
 
 Each canary asserts the feature's effect through the mock - the IPC call it
 sends, with its arguments (`e2e-playwright/helpers/ipcRecorder.ts`), and the

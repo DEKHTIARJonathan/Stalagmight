@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import type { TmlFile } from '../../src/types/ipc/TmlFile';
 import type { TmlShot } from '../../src/types/ipc/TmlShot';
 import type { MockCommandFamily, MockIpcContext } from './ipc/types';
+import { compassImportCommands } from './ipc/compassImport';
 import { configCommands } from './ipc/config';
 import { dmpImportCommands } from './ipc/dmpImport';
 import { gasPlanCommands } from './ipc/gasPlan';
@@ -128,6 +129,7 @@ const MOCK_COMMAND_FAMILIES: MockCommandFamily[] = [
   configCommands,
   tileCacheCommands,
   speleodbCommands,
+  compassImportCommands,
 ];
 
 /**

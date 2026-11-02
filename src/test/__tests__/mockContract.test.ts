@@ -289,8 +289,7 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
   // Legacy/alternate import-format two-step parse+execute flows: no mocked
   // spec drives the parse step end to end (only the "execute" commands for
   // the formats that ARE covered, e.g. execute_walls_import, are mocked).
-  parse_compass: 'no mocked spec drives the compass parse+execute two-step import flow',
-  execute_compass_import: 'no mocked spec drives the compass parse+execute two-step import flow',
+  // Compass is covered end to end (compass-import.spec.ts, mocks/ipc/compassImport.ts).
   parse_walls: 'walls-import-dialog.spec.ts uses execute_walls_import directly; parse_walls is not called',
 
   // SpeleoDB collaborative write-workflow: exercised only by the env-gated
