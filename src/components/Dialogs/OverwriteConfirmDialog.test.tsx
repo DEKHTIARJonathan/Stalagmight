@@ -44,6 +44,25 @@ describe('OverwriteConfirmDialog copy', () => {
     expect(message).not.toHaveTextContent(/already exists\. Do you want/);
   });
 
+  // [#576 NF-W6-1] The name is user text. Interpolated unescaped (the global
+  // escapeValue: false), a "<" in it was parsed by Trans as markup: the tail of
+  // the sentence landed inside a phantom tag, or text vanished.
+  it.each([
+    ['CaveA <B>.stalx', false],
+    ['a</name>b.stalx', false],
+    ['Cave & <i>x</i>.stalx', true],
+  ])('a file name with markup characters renders as typed: %s', (fileName, existenceUnknown) => {
+    useUIStore.setState({ dialogData: { path: `/x/${fileName}`, fileName, existenceUnknown } });
+    render(<OverwriteConfirmDialog />);
+    const message = screen.getByTestId(existenceUnknown ? 'overwrite-confirm-unknown' : 'overwrite-confirm-message');
+    const key = existenceUnknown ? 'dialogs.overwriteConfirm.messageUnknown' : 'dialogs.overwriteConfirm.message';
+    console.log(`${JSON.stringify(fileName)} -> emphasis ${JSON.stringify(message.querySelector('span')?.textContent)}; sentence ${JSON.stringify(message.textContent)}`);
+    expect(message.querySelector('span')).toHaveTextContent(fileName, { normalizeWhitespace: false });
+    // The sentence around a placeholder, its tags stripped, the name put back verbatim.
+    expect(message.textContent).toBe(plain(key, '\u0001').replace('\u0001', fileName));
+    expect(message.querySelectorAll('span')).toHaveLength(1);
+  });
+
   it('the four keys exist in the locale (a missing key would render its own path)', () => {
     for (const key of ['message', 'messageUnknown', 'warning', 'warningUnknown']) {
       expect(i18n.exists(`dialogs.overwriteConfirm.${key}`), key).toBe(true);

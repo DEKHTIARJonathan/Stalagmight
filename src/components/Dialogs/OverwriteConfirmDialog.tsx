@@ -82,9 +82,14 @@ export default function OverwriteConfirmDialog() {
           className="text-text-secondary"
           data-testid={existenceUnknown ? 'overwrite-confirm-unknown' : 'overwrite-confirm-message'}
         >
+          {/* [#576 NF-W6-1] The file name is user text: escaped before Trans parses
+              the string for its tags, unescaped after, so "CaveA <B>.stalx" renders
+              as typed instead of as a tag (the DeleteProjectDialog rule). */}
           <Trans
             i18nKey={existenceUnknown ? 'dialogs.overwriteConfirm.messageUnknown' : 'dialogs.overwriteConfirm.message'}
             values={{ fileName }}
+            tOptions={{ interpolation: { escapeValue: true } }}
+            shouldUnescape
             components={{ name: <span className="font-medium text-text-primary" /> }}
           />
         </p>
