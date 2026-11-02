@@ -85,6 +85,20 @@ describe('ensureExtension', () => {
     expect(ensureExtension(typed, ext)).toBe(written);
   });
 
+  // [#576 NF-W2FE-3] On Linux and macOS `\` is an ordinary file-name character
+  // (utils/path.ts isWindowsPath): only a Windows-shaped path splits on it. A
+  // POSIX name whose last dot follows a backslash used to read as a leading-dot
+  // name, so its known extension was appended to instead of replaced.
+  it.each([
+    ['/home/diver/CaveA\\.svg', 'png', '/home/diver/CaveA\\.png'],
+    ['/home/diver/CaveA\\.', 'csv', '/home/diver/CaveA\\.csv'],
+    ['/home/diver/a\\b.tml', 'stalx', '/home/diver/a\\b.stalx'],
+    ['C:\\caves\\.svg', 'png', 'C:\\caves\\.svg.png'],
+    ['\\\\srv\\share\\.hidden', 'csv', '\\\\srv\\share\\.hidden.csv'],
+  ])('splits %s on the platform separator only: as .%s -> %s', (typed, ext, written) => {
+    expect(ensureExtension(typed, ext)).toBe(written);
+  });
+
   it('knows every format the app opens, imports or exports', () => {
     for (const ext of [PROJECT_EXTENSION, ...IMPORTABLE_EXTENSIONS, 'csv', 'json', 'tml', 'tmlu', 'png', 'svg', 'pdf', 'xml', 'plnx']) {
       expect(KNOWN_FILE_EXTENSIONS).toContain(ext);

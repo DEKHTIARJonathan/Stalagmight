@@ -18,7 +18,7 @@ export function isWindowsPath(path: string): boolean {
 }
 
 /** Index of the separator before the file name, or -1 (see {@link isWindowsPath}). */
-function lastSeparatorIndex(path: string): number {
+export function lastSeparatorIndex(path: string): number {
   const slash = path.lastIndexOf('/');
   return isWindowsPath(path) ? Math.max(slash, path.lastIndexOf('\\')) : slash;
 }

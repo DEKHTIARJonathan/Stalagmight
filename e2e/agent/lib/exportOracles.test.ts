@@ -136,6 +136,11 @@ describe('ensureExtensionMirror (src/utils/fileDialogs.ts ensureExtension)', () 
     ['/x/out', '.png', '/x/out.png'],
     // Windows separator.
     ['C:\\x\\out.dmp', 'svg', 'C:\\x\\out.svg'],
+    ['C:\\x\\.svg', 'png', 'C:\\x\\.svg.png'],
+    // On a POSIX path `\` is a file-name character, not a separator
+    // (src/utils/path.ts isWindowsPath), so `CaveA\.svg` has the extension svg.
+    ['/x/CaveA\\.svg', 'png', '/x/CaveA\\.png'],
+    ['/x/CaveA\\.', 'csv', '/x/CaveA\\.csv'],
     // The open project's own path, which is why the modal route never reaches
     // the backend guard.
     ['/x/cave.stalx', 'csv', '/x/cave.csv'],

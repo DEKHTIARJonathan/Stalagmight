@@ -1,5 +1,5 @@
 import type { OpenDialogOptions, SaveDialogOptions } from '@tauri-apps/plugin-dialog';
-import { isWindowsPath } from './path';
+import { isWindowsPath, lastSeparatorIndex } from './path';
 
 export type TestFileDialogAnswer = string | string[] | null;
 export interface TestFileDialogQueueEntry {
@@ -98,7 +98,8 @@ export function ensureExtension(path: string, extension: string): string {
     return path;
   }
 
-  const lastSeparator = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  // `\` separates only in a Windows-shaped path (utils/path.ts isWindowsPath).
+  const lastSeparator = lastSeparatorIndex(path);
   const lastDot = path.lastIndexOf('.');
   // `> lastSeparator + 1`: a dot that starts the file name is not an extension.
   if (lastDot > lastSeparator + 1) {

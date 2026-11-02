@@ -38,6 +38,11 @@ const PATHS = [
   '/x/out-\u202e\u6d1e\u7a74.svg',
   `/x/${'n'.repeat(200)}.png`,
   'C:\\x\\out.txt',
+  'C:\\x\\.svg',
+  '\\\\srv\\share\\out.svg',
+  '/x/CaveA\\.svg',
+  '/x/CaveA\\.',
+  '/x/a\\b.tml',
   'relative/out',
   'bare',
 ];

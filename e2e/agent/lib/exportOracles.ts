@@ -11,7 +11,8 @@
  * ## The two mirrors, and why they are copies rather than imports
  *
  * `ensureExtensionMirror` and `escapeCsvMirror` reimplement app code:
- * `src/utils/fileDialogs.ts:49-65` and `src-tauri/src/export/csv.rs:66-79`. The
+ * `ensureExtension` in `src/utils/fileDialogs.ts` (with `lastSeparatorIndex` in
+ * `src/utils/path.ts`) and `src-tauri/src/export/csv.rs:66-79`. The
  * Rust one has no choice. The TypeScript one does, and is still a copy, for the
  * reason every other cross-tier constant in this harness is copied (see
  * `importDialogFuzz.ts`'s `RECEIPT_TOAST_KEY`): `tsconfig.agent.json` compiles
@@ -209,6 +210,18 @@ const KNOWN_FILE_EXTENSIONS_MIRROR: readonly string[] = [
 ];
 
 /**
+ * `lastSeparatorIndex` (with `isWindowsPath`) in `src/utils/path.ts`,
+ * transcribed: `\` separates only in a Windows-shaped path (a drive letter and
+ * a separator, or a leading `\\`); on Linux and macOS it is an ordinary
+ * file-name character.
+ */
+function lastSeparatorIndexMirror(filePath: string): number {
+  const slash = filePath.lastIndexOf('/');
+  const windows = /^[a-zA-Z]:[/\\]/.test(filePath) || filePath.startsWith('\\\\');
+  return windows ? Math.max(slash, filePath.lastIndexOf('\\')) : slash;
+}
+
+/**
  * `ensureExtension` in `src/utils/fileDialogs.ts`, transcribed.
  *
  * The behaviour that matters and is easy to misremember (#576 D35): a trailing
@@ -225,7 +238,7 @@ export function ensureExtensionMirror(filePath: string, extension: string): stri
   const lowerPath = filePath.toLowerCase();
   const lowerExt = normalizedExt.toLowerCase();
   if (lowerPath.endsWith(`.${lowerExt}`)) return filePath;
-  const lastSeparator = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+  const lastSeparator = lastSeparatorIndexMirror(filePath);
   const lastDot = filePath.lastIndexOf('.');
   if (lastDot > lastSeparator + 1) {
     const current = filePath.slice(lastDot + 1).toLowerCase();
