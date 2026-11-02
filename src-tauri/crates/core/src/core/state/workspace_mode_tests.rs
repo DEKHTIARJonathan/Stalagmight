@@ -218,28 +218,6 @@ fn the_older_gates_still_come_first_for_the_allowlist() {
     );
 }
 
-/// [#576 NF-W3-2] The default north reference rides the project-settings save,
-/// which is on the allowlist: it can be set in Plan and Export like the name and
-/// the thresholds.
-#[test]
-fn the_default_north_reference_is_settable_in_plan_and_export() {
-    let (state, _sid, _shot, _dir) = local_fixture();
-    for (mode, degrees) in [(WorkspaceMode::Plan, 3.0), (WorkspaceMode::Export, 4.0)] {
-        state.set_workspace_mode(mode);
-        let live = state.get_project_state().unwrap();
-        let reference = crate::models::AzimuthReference::magnetic(
-            degrees,
-            crate::models::CorrectionSource::Manual,
-        );
-        let set = state.update_project_settings(live.name, live.validation, Some(reference));
-        assert!(set.success, "{mode:?}: {:?}", set.error);
-        assert_eq!(
-            state.get_project_state().unwrap().default_azimuth_reference,
-            Some(reference)
-        );
-    }
-}
-
 #[test]
 fn the_wire_spells_modes_as_the_frontend_does() {
     for (wire, mode) in [

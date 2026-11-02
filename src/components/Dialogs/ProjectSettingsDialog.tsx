@@ -121,9 +121,10 @@ export function ProjectSettingsDialog() {
   const elevationValid = elevationParsed === null || Number.isFinite(elevationParsed);
   const elevationDraftChanged = elevationDraft !== elevationInitialDraft;
 
-  // Default north reference (#576 NF-W3-2): saved with the name and thresholds, so it
-  // is editable wherever they are - Plan and Export included - but not on a project
-  // whose metadata cannot change at all.
+  // Default north reference (#576 NF-W3-2): saved with the name and thresholds, but a
+  // survey edit (NF-W3-2-PLAN) - it turns every section that declares none - so, like
+  // the elevation, it is disabled in every read-only mode, Plan and Export included,
+  // and says why. The backend refuses a changed one there.
   const north = useNorthReferenceDraft(project?.default_azimuth_reference);
 
   // ValidationSettings is built against a full Config; wrap the project's
@@ -189,10 +190,12 @@ export function ProjectSettingsDialog() {
     // not where the backend refuses any metadata change (RV3-FE-14): there an
     // untouched Save would only earn a refusal, so it sends nothing and closes.
     // The default north reference rides the same command (#576 NF-W3-2), and is set
-    // by it the same way while unread.
+    // by it the same way while unread - but, as a survey edit, only where editing is
+    // not blocked (NF-W3-2-PLAN), like the elevation below.
     const currentValidation = project.validation ?? defaultConfig.validation;
     const settingsUnread =
-      (isSettingUnreadable('validation') || isSettingUnreadable('default_azimuth_reference')) && !metadataBlocked;
+      (isSettingUnreadable('validation') && !metadataBlocked) ||
+      (isSettingUnreadable('default_azimuth_reference') && !editingBlocked);
     const settingsChanged =
       trimmedName !== (project.name ?? '') ||
       JSON.stringify(validation) !== JSON.stringify(currentValidation) ||
@@ -204,7 +207,9 @@ export function ProjectSettingsDialog() {
         return;
       }
       liftUnreadableSetting('validation');
-      liftUnreadableSetting('default_azimuth_reference');
+      // The backend sets an unread reference only outside Plan/Export (its workspace
+      // check, NF-W3-2-PLAN); mirror that so the banner and the backend agree.
+      if (useUIStore.getState().appMode === 'survey') liftUnreadableSetting('default_azimuth_reference');
     }
     // Compare the DRAFT STRING against what it was seeded with, not the
     // re-parsed/re-converted value against the stored meters: the draft is
@@ -346,7 +351,9 @@ export function ProjectSettingsDialog() {
                     </SettingRow>
                     <DefaultNorthReferenceRow
                       draft={north}
-                      disabledReason={metadataBlocked ? t('dialogs.projectSettings.northReference.readOnlyReason') : null}
+                      disabledReason={
+                        blockedReason !== null ? t(`dialogs.projectSettings.northReference.blocked.${blockedReason}`) : null
+                      }
                     />
                   </SettingsSection>
                 </div>

@@ -465,7 +465,9 @@ impl AppState {
     /// [#576 C5] `guard_mutation` WITHOUT the read-only-workspace check: the
     /// newer-file and SpeleoDB gates only. The allowlist of what may be edited in
     /// Plan and Export, and it is exactly two callers - keep it that short:
-    /// - `update_project_settings` (project name + validation thresholds) and
+    /// - `update_project_settings` (project name + validation thresholds; the
+    ///   default north reference that rides the same save is a survey edit and
+    ///   is checked with `guard_workspace` there, #576 NF-W3-2-PLAN) and
     /// - `set_project_name_for_path` (project rename),
     ///
     /// which ProjectSettingsDialog deliberately keeps enabled in every mode

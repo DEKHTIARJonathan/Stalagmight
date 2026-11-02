@@ -59,14 +59,15 @@ notice ("switch to Survey", `editGate.workspaceReadOnlyNotice`), not as the
 SpeleoDB lock notice. It is **deny by default**: a new entry point that calls
 `guard_mutation` is refused in Plan and Export without anyone having to remember.
 The allowlist is two entries, on purpose: the project-settings save
-(`update_project_settings`: the name, the validation thresholds and, since #576
-NF-W3-2, the default north reference) and the project rename
-(`set_project_name_for_path`), which `ProjectSettingsDialog` keeps enabled in every
-mode; they call `guard_metadata_mutation`, which skips only the workspace check.
-The north reference does turn the sections that declare none of their own, but it
-describes how the survey was measured rather than editing it, it saves with the
-other project settings, and an unread one keeps every save off until it is set
-again - which must not wait for a switch back to Survey.
+(`update_project_settings`: the name and the validation thresholds) and the project
+rename (`set_project_name_for_path`), which `ProjectSettingsDialog` keeps enabled in
+every mode; they call `guard_metadata_mutation`, which skips only the workspace check.
+The default north reference (#576 NF-W3-2) rides the same save but is NOT on the
+allowlist (NF-W3-2-PLAN): it turns every section that declares no reference of its
+own, so the map, the closures and every exported bearing move with it - a survey
+edit, like the entrance elevation. In Plan and Export a save that would change it is
+refused whole with the workspace notice, an unread one is not set from there (saves
+stay off until it is set in Survey), and the dialog disables its row with the reason.
 
 The SpeleoDB revision swaps that replace the survey - Restore revision and Unwind
 (`speleodb_restore_revision` with `restore`) - run outside the command chokepoint

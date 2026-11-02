@@ -124,11 +124,4 @@ describe('Project Settings: Default north reference (#576 NF-W3-2)', () => {
 
     expect(screen.getByTestId('project-settings-north-reference')).toBeDisabled();
   });
-
-  it('stays editable in Plan and Export, like the name and the thresholds', () => {
-    useUIStore.setState({ appMode: 'plan' });
-    openWith(null);
-
-    expect(screen.getByTestId('project-settings-north-reference')).toBeEnabled();
-  });
 });

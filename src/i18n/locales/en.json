@@ -1222,7 +1222,12 @@
         },
         "correctionAria": "Correction to true north, in degrees east",
         "correctionUnit": "° east",
-        "readOnlyReason": "The project settings of this project cannot be changed: it is open read-only."
+        "blocked": {
+          "newerFile": "A newer version of Stalagmight saved this project: update Stalagmight to change the north reference.",
+          "lock": "This project is open read-only: acquire the lock to change the north reference.",
+          "workspace": "The north reference turns the survey: switch to Survey to change it.",
+          "closures": "Switch to the Raw Data View to change the north reference."
+        }
       }
     },
     "unsaved": {

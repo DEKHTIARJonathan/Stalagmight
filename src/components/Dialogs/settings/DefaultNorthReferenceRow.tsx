@@ -58,7 +58,10 @@ export function DefaultNorthReferenceRow({
   disabledReason,
 }: {
   draft: NorthReferenceDraft;
-  /** Why the row is disabled (a project whose settings cannot change), or null. */
+  /**
+   * Why the row is disabled - shown under it - or null. It is a survey edit (#576
+   * NF-W3-2-PLAN): disabled wherever editing is blocked, Plan and Export included.
+   */
   disabledReason: string | null;
 }) {
   const { t } = useTranslation();
@@ -73,33 +76,40 @@ export function DefaultNorthReferenceRow({
       helpText={t('dialogs.projectSettings.northReference.help')}
       data-testid="project-settings-north-reference-row"
     >
-      <div className="flex items-center gap-2" title={disabledReason ?? undefined}>
-        <Select
-          value={draft.north}
-          onChange={(value) => draft.setNorth(value as NorthChoice)}
-          options={options}
-          disabled={disabled}
-          size="sm"
-          className="w-40"
-          aria-label={t('dialogs.projectSettings.northReference.label')}
-          data-testid="project-settings-north-reference"
-        />
-        {draft.takesCorrection && (
-          <>
-            <input
-              type="number"
-              step="any"
-              value={draft.correction}
-              disabled={disabled}
-              onChange={(e) => draft.setCorrection(e.target.value)}
-              placeholder="0"
-              className={`w-20 px-2 py-1 bg-background border rounded text-sm disabled:opacity-60 ${draft.valid ? 'border-border' : 'border-error'}`}
-              aria-label={t('dialogs.projectSettings.northReference.correctionAria')}
-              aria-invalid={!draft.valid}
-              data-testid="project-settings-north-correction"
-            />
-            <span className="text-xs text-text-secondary">{t('dialogs.projectSettings.northReference.correctionUnit')}</span>
-          </>
+      <div className="flex flex-col items-end gap-1">
+        <div className="flex items-center gap-2" title={disabledReason ?? undefined}>
+          <Select
+            value={draft.north}
+            onChange={(value) => draft.setNorth(value as NorthChoice)}
+            options={options}
+            disabled={disabled}
+            size="sm"
+            className="w-40"
+            aria-label={t('dialogs.projectSettings.northReference.label')}
+            data-testid="project-settings-north-reference"
+          />
+          {draft.takesCorrection && (
+            <>
+              <input
+                type="number"
+                step="any"
+                value={draft.correction}
+                disabled={disabled}
+                onChange={(e) => draft.setCorrection(e.target.value)}
+                placeholder="0"
+                className={`w-20 px-2 py-1 bg-background border rounded text-sm disabled:opacity-60 ${draft.valid ? 'border-border' : 'border-error'}`}
+                aria-label={t('dialogs.projectSettings.northReference.correctionAria')}
+                aria-invalid={!draft.valid}
+                data-testid="project-settings-north-correction"
+              />
+              <span className="text-xs text-text-secondary">{t('dialogs.projectSettings.northReference.correctionUnit')}</span>
+            </>
+          )}
+        </div>
+        {disabledReason !== null && (
+          <p className="max-w-[14rem] text-right text-xs text-text-secondary" data-testid="project-settings-north-reference-blocked">
+            {disabledReason}
+          </p>
         )}
       </div>
     </SettingRow>

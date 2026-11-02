@@ -203,6 +203,8 @@ apart (`Database::load_project_with_report`):
   (`AppState::lift_unreadable_project_setting`) - also when the value set equals the
   one shown: while a key is unread, saving the dialog sends it unchanged (except on a
   project whose metadata cannot change at all, where the backend would refuse it).
+  The north reference and the elevation are survey edits: in Plan and Export they
+  are not set, so they stay unread until a Survey save (#576 NF-W3-2-PLAN).
   When the list is empty, saves (and auto-save) work again; the banner and the
   refusal both say how.
 

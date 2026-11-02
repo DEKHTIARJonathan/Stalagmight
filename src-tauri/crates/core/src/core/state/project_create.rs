@@ -173,6 +173,13 @@ impl AppState {
     /// "nothing recorded", not "leave it alone". A reference arriving off the
     /// wire is re-sanitised (`AzimuthReference::sanitised`) like every ingress.
     ///
+    /// [#576 NF-W3-2-PLAN] The name and the thresholds are on the read-only
+    /// workspace's allowlist; the north reference is NOT. It turns every section
+    /// that declares none of its own - a survey edit, like the entrance elevation -
+    /// so in Plan and Export a save that would CHANGE it is refused whole
+    /// (`WORKSPACE_READ_ONLY`, nothing applied), and an unread one is not set
+    /// (lifted) from there either: it stays unread until a Survey save sets it.
+    ///
     /// Undoable via a snapshot pair (mirrors repair_open_project_integrity) so an
     /// unrelated undo can't silently revert a settings change: without its own
     /// undo entry, undoing an edit made BEFORE the settings change would restore a
@@ -192,12 +199,14 @@ impl AppState {
         };
         // Read-only edit gate (#191, D-B5): a settings change mutates the project,
         // so it is gated on a read-only remote project (returns the EDIT_DISABLED
-        // coded failure). [#576 C5] On the read-only-workspace allowlist: the name,
-        // the validation thresholds and the default north reference stay editable
-        // in Plan/Export on purpose (docs/app-modes.md says why).
+        // coded failure). [#576 C5] On the read-only-workspace allowlist: the name
+        // and the validation thresholds stay editable in Plan/Export on purpose
+        // (docs/app-modes.md says why). The north reference is not (NF-W3-2-PLAN):
+        // its own workspace check is below, once it is known to change.
         if let Err(f) = self.guard_metadata_mutation("Update project settings") {
             return f;
         }
+        let survey_edits_allowed = !self.workspace_mode().is_read_only();
         let before_snapshot = self.capture_project_snapshot().ok();
         let reference_changed = {
             let mut guard = match self.project.lock() {
@@ -218,12 +227,22 @@ impl AppState {
                 // [#576 B15 follow-up] Unchanged, but SET: the dialog sends the
                 // thresholds and the north reference while they are unread so the
                 // user can keep the shown ones, and that choice is what lets a save
-                // write them.
+                // write them. Setting the north reference is a survey edit, so not
+                // from Plan or Export (NF-W3-2-PLAN).
                 self.lift_unreadable_project_setting("validation");
-                self.lift_unreadable_project_setting("default_azimuth_reference");
+                if survey_edits_allowed {
+                    self.lift_unreadable_project_setting("default_azimuth_reference");
+                }
                 return CommandResult::success();
             }
             let reference_changed = project.default_azimuth_reference != default_azimuth_reference;
+            // [#576 NF-W3-2-PLAN] A changed north reference is a survey edit: in
+            // Plan or Export the whole save is refused, before anything is applied.
+            if reference_changed {
+                if let Err(f) = self.guard_workspace("Change the default north reference") {
+                    return f;
+                }
+            }
             project.name = name;
             project.validation = validation;
             project.default_azimuth_reference = default_azimuth_reference;
@@ -237,9 +256,12 @@ impl AppState {
         }
         // [#576 B15 follow-up] The thresholds and the north reference are now the
         // user's, not defaults standing in for unread ones: they no longer refuse a
-        // save (NF-W3-2 gave the north reference its control).
+        // save (NF-W3-2 gave the north reference its control) - the reference only
+        // where survey edits are allowed (NF-W3-2-PLAN).
         self.lift_unreadable_project_setting("validation");
-        self.lift_unreadable_project_setting("default_azimuth_reference");
+        if survey_edits_allowed {
+            self.lift_unreadable_project_setting("default_azimuth_reference");
+        }
         // Record an undo entry (before -> after) so the change is on the stack, and
         // flip the dirty bit (#191, D-B16) - through the shared forward epilogue
         // (#576 A4). A settings edit needs no derived-state step.
