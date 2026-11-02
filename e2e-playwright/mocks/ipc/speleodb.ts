@@ -68,6 +68,16 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
           ...((window as unknown as Record<string, unknown>)
             .__speleoLinkStatusOverrides as Record<string, unknown> | undefined),
         };
+      case 'speleodb_open_file_flags':
+        // [#576 NF-W2F-1] The open file's flags, re-asked after an in-place tree swap.
+        // The mock never swaps a tree in place, so the open file is whatever the last
+        // open said: an ordinary current-format file unless a spec overrides it.
+        return {
+          newerSchemaVersion: null,
+          speleoLinkUnreadable: false,
+          ...((window as unknown as Record<string, unknown>)
+            .__openFileFlagsOverrides as Record<string, unknown> | undefined),
+        };
       case 'speleodb_list_projects':
         return [];
       // #270: local (un-pushed) state per project id, keyed by id. Nothing is

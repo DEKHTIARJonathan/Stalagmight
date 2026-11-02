@@ -12,9 +12,7 @@
 //! ephemeral, only reversible.
 
 use super::speleodb::{local_dto, validate_project_id, DumpAt};
-use super::speleodb_cache::{
-    preserved_undo_mode, restore_display_settings, InheritedUndo, LocalEditsPolicy,
-};
+use super::speleodb_cache::{stamp_pulled_file, InheritedUndo, LocalEditsPolicy};
 use super::speleodb_pull::{ArianeRoute, StalxAmbiguity};
 use super::AppState;
 use crate::models::UndoMode;
@@ -781,23 +779,23 @@ impl AppState {
 
         match crate::persistence::Database::open_existing(&dest) {
             Ok(db) => {
-                restore_display_settings(&db, &preserved_view);
                 // [#303] The checked-out revision's own undo policy, read before this
                 // stamp overwrites the row. A revision swap answers "what did the project
                 // look like then", and the policy is part of the project file, so the
                 // swapped-in file speaks for itself rather than inheriting today's value.
-                let swapped_undo_mode = preserved_undo_mode(&db);
-                let link = crate::models::SpeleoLink {
-                    endpoint,
-                    project_id: project_id.clone(),
-                    project_name,
-                    base_commit_sha: base_sha,
-                    has_unpushed_edits,
-                    last_edit_at,
-                    last_verify_at: None,
-                    undo_mode: Some(self.effective_undo_mode(swapped_undo_mode)),
-                };
-                if let Err(e) = db.save_speleo_link(Some(&link)) {
+                let stamped = stamp_pulled_file(&db, &preserved_view, |swapped_undo_mode| {
+                    crate::models::SpeleoLink {
+                        endpoint,
+                        project_id: project_id.clone(),
+                        project_name,
+                        base_commit_sha: base_sha,
+                        has_unpushed_edits,
+                        last_edit_at,
+                        last_verify_at: None,
+                        undo_mode: Some(self.effective_undo_mode(swapped_undo_mode)),
+                    }
+                });
+                if let Err(e) = stamped {
                     tracing::warn!(
                         error = %e,
                         project_id = %project_id,

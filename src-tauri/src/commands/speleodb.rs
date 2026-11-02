@@ -527,6 +527,19 @@ pub async fn speleodb_link_status(app: AppHandle) -> Result<SpeleoLinkStatus, Sp
     run_blocking(app, AppState::speleodb_link_status).await
 }
 
+/// [#576 NF-W2F-1] The open file's flags as they stand now (newer-format stamp,
+/// unreadable link row). The frontend re-asks after every SpeleoDB in-place tree
+/// swap - revision View/Restore, fast-forward, take remote - which reload the file
+/// in the backend without going through the frontend's `loadProject`, so the
+/// read-only banner and gate otherwise described the previous bytes until reopen.
+/// A peek, like `history_discarded`: cheap, local, no network.
+#[tauri::command]
+pub fn speleodb_open_file_flags(
+    state: tauri::State<'_, AppState>,
+) -> crate::core::loading::OpenFileFlags {
+    state.open_file_flags()
+}
+
 /// Detach the open project from SpeleoDB, turning it into a plain unmanaged
 /// `.stalx` (T2/#204): drop the `speleo_link` row and open the edit gate. Used to
 /// keep a copy the server refuses us access to, or locally-edited work after a

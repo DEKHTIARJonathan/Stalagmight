@@ -149,6 +149,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_local_project_states",
     "command.speleodb_login",
     "command.speleodb_logout",
+    "command.speleodb_open_file_flags",
     "command.speleodb_open_project",
     "command.speleodb_open_project_discarding_local",
     "command.speleodb_patch_project",
@@ -1112,7 +1113,10 @@ mod tests {
         //   + 1 the frontend reports its workspace mode so the backend can refuse
         //       edits in the read-only Plan/Export workspaces (#576 C5):
         //       command.set_workspace_mode = 738.
-        assert_eq!(EVENT_NAMES.len(), 738);
+        //   + 1 the frontend re-asks the open file's flags (newer-format stamp,
+        //       unreadable link row) after a SpeleoDB in-place tree swap (#576
+        //       NF-W2F-1): command.speleodb_open_file_flags = 739.
+        assert_eq!(EVENT_NAMES.len(), 739);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

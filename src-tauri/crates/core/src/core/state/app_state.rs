@@ -1107,6 +1107,24 @@ impl AppState {
         }
     }
 
+    /// [#576 NF-W2F-1] The open file's flags as they stand NOW: the committed
+    /// newer-file stamp, and whether the open database's `speleo_link` row can be
+    /// read - the same read the load and every save make, so the answer always
+    /// matches what the next save would do. No project (or no database) open reads
+    /// as neither.
+    pub fn open_file_flags(&self) -> crate::core::loading::OpenFileFlags {
+        let speleo_link_unreadable = self
+            .database
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(|db| db.load_speleo_link().is_err()))
+            .unwrap_or(false);
+        crate::core::loading::OpenFileFlags {
+            newer_schema_version: self.newer_file_schema(),
+            speleo_link_unreadable,
+        }
+    }
+
     /// [#576 B15] Record which stored per-project settings the just-committed
     /// project's load could not read. Unconditional assignment on every
     /// project-slot commit, like [`Self::set_newer_file_schema`].

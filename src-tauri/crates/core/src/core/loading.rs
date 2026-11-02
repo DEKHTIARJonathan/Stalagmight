@@ -934,6 +934,28 @@ pub struct LoadProjectFullResult {
 }
 
 // ============================================================================
+// OpenFileFlags
+// ============================================================================
+
+/// [#576 NF-W2F-1] The open-time flags that describe the open project's FILE, as
+/// they stand now. The same two values a load hands the frontend
+/// ([`LoadProjectFullResult::newer_schema_version`] /
+/// [`LoadProjectFullResult::speleo_link_unreadable`]), re-asked after a SpeleoDB
+/// in-place tree swap (revision View/Restore, fast-forward, take remote): the
+/// backend reloads the swapped file, but the frontend does not go through
+/// `loadProject` there, so without this its read-only banner and gate kept
+/// describing the previous bytes until the next open.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct OpenFileFlags {
+    /// The file's schema version when a newer Stalagmight saved it, else `None`.
+    pub newer_schema_version: Option<i32>,
+    /// The file carries a `speleo_link` table whose row cannot be read.
+    pub speleo_link_unreadable: bool,
+}
+
+// ============================================================================
 // CreateProjectFullResult
 // ============================================================================
 

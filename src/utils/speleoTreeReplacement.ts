@@ -6,7 +6,24 @@ import {
   useSpeleoStore,
 } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
+import type { OpenFileFlags } from '../types/ipc.generated';
+import { invokeIpc } from './ipc';
 import { runTreeReplacement } from './projectTransition';
+
+/**
+ * The swapped file's flags, or `null` when they could not be read - which keeps
+ * the previous values rather than clearing a read-only gate on a failed read.
+ */
+async function readOpenFileFlags(): Promise<OpenFileFlags | null> {
+  try {
+    return await invokeIpc<OpenFileFlags>('speleodb_open_file_flags', undefined, {
+      purpose: 're-read the open file flags after an in-place tree swap',
+    });
+  } catch (e) {
+    console.error('Failed to re-read the open file flags after a tree swap:', e);
+    return null;
+  }
+}
 
 /**
  * Reconcile every frontend store after the backend replaces the open survey tree in place.
@@ -44,6 +61,21 @@ export async function applySpeleoTreeReplacement(
 
     await useProjectStore.getState().refreshProjectState();
     if (issuedFor && !speleoProjectSessionStillCurrent(issuedFor)) return false;
+
+    // [#576 NF-W2F-1] Re-ask the open FILE's flags. The backend reopened DIFFERENT
+    // bytes at the same path, and the newer-format stamp and the unreadable-link flag
+    // are file properties the frontend otherwise reads only from `loadProject`, which
+    // this seam deliberately does not call - so the read-only banner and gate kept
+    // describing the previous tree until the next open. Applied only while the swap
+    // is still the current session's, like everything else here.
+    const flags = await readOpenFileFlags();
+    if (issuedFor && !speleoProjectSessionStillCurrent(issuedFor)) return false;
+    if (flags) {
+      useProjectStore.setState({
+        newerSchemaVersion: flags.newerSchemaVersion,
+        speleoLinkUnreadable: flags.speleoLinkUnreadable,
+      });
+    }
 
     useProjectStore.setState({ isDirty: false });
     void useProjectStore.getState().checkProjectIntegrity();

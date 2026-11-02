@@ -18,9 +18,7 @@
 use std::path::Path;
 
 use super::speleodb::{local_dto, lock_held_by_me, type_says_managed, validate_project_id, DumpAt};
-use super::speleodb_cache::{
-    preserved_undo_mode, restore_display_settings, InheritedUndo, LocalEditsPolicy,
-};
+use super::speleodb_cache::{stamp_pulled_file, InheritedUndo, LocalEditsPolicy};
 use super::speleodb_revisions::validate_hexsha;
 use super::{AppState, VirtualShotMode};
 use crate::core::command::{Command, CommandResult, ImportReceipt};
@@ -967,22 +965,24 @@ impl AppState {
         // true and the dirty bit (`has_unpushed_edits`) starts false.
         match crate::persistence::Database::open_existing(&dest) {
             Ok(db) => {
-                restore_display_settings(&db, &preserved_view);
-                // [#303] Read BEFORE the upsert below overwrites the whole row.
-                let pulled_undo_mode = preserved_undo_mode(&db);
-                let link = crate::models::SpeleoLink {
-                    endpoint,
-                    project_id: project_id.clone(),
-                    project_name,
-                    base_commit_sha: base_sha,
-                    has_unpushed_edits: false,
-                    last_edit_at: None,   // freshly pulled: no local edits yet
-                    last_verify_at: None, // no lock held on pull; stamped on acquire (#202)
-                    // [#303] Carried from the file we just extracted. A legacy NULL is
-                    // initialized once from the application default and stamped explicitly.
-                    undo_mode: Some(self.effective_undo_mode(pulled_undo_mode)),
-                };
-                if let Err(e) = db.save_speleo_link(Some(&link)) {
+                // [#303] The file's own undo policy is read BEFORE the upsert
+                // overwrites the whole row (inside `stamp_pulled_file`).
+                let stamped = stamp_pulled_file(&db, &preserved_view, |pulled_undo_mode| {
+                    crate::models::SpeleoLink {
+                        endpoint,
+                        project_id: project_id.clone(),
+                        project_name,
+                        base_commit_sha: base_sha,
+                        has_unpushed_edits: false,
+                        last_edit_at: None,   // freshly pulled: no local edits yet
+                        last_verify_at: None, // no lock held on pull; stamped on acquire (#202)
+                        // [#303] Carried from the file we just extracted. A legacy NULL is
+                        // initialized once from the application default and stamped
+                        // explicitly.
+                        undo_mode: Some(self.effective_undo_mode(pulled_undo_mode)),
+                    }
+                });
+                if let Err(e) = stamped {
                     // Non-fatal: the pull succeeded and the file is openable; the
                     // worst case is the project opens as local-only (editable)
                     // rather than read-only-remote. Surfacing a hard error here
@@ -2163,26 +2163,27 @@ impl AppState {
         // server tip, the dirty bit clears, last_edit_at resets (clean checkout).
         match crate::persistence::Database::open_existing(&dest) {
             Ok(db) => {
-                restore_display_settings(&db, &preserved_view);
                 // [#303] The fast-forwarded file is the server's, so its undo policy is
-                // authoritative; read it before this re-stamp overwrites the row.
-                let pulled_undo_mode = preserved_undo_mode(&db);
-                let new_link = crate::models::SpeleoLink {
-                    endpoint: endpoint.to_owned(),
-                    project_id: project_id.clone(),
-                    project_name: link.project_name.clone(),
-                    // The same sha the dump was fetched at, so BASE cannot name a
-                    // commit these bytes did not come from.
-                    base_commit_sha: pinned.clone(),
-                    has_unpushed_edits: false,
-                    last_edit_at: None,
-                    // A fresh pull confirms BASE == the server tip as of now, so this
-                    // IS a lock re-verify point (#202): stamp it so the 20-min lazy
-                    // re-verify starts its window from the pull, not from acquire-time.
-                    last_verify_at: Some(chrono::Utc::now().to_rfc3339()),
-                    undo_mode: Some(self.effective_undo_mode(pulled_undo_mode)),
-                };
-                if let Err(e) = db.save_speleo_link(Some(&new_link)) {
+                // authoritative; it is read before this re-stamp overwrites the row.
+                let stamped = stamp_pulled_file(&db, &preserved_view, |pulled_undo_mode| {
+                    crate::models::SpeleoLink {
+                        endpoint: endpoint.to_owned(),
+                        project_id: project_id.clone(),
+                        project_name: link.project_name.clone(),
+                        // The same sha the dump was fetched at, so BASE cannot name a
+                        // commit these bytes did not come from.
+                        base_commit_sha: pinned.clone(),
+                        has_unpushed_edits: false,
+                        last_edit_at: None,
+                        // A fresh pull confirms BASE == the server tip as of now, so
+                        // this IS a lock re-verify point (#202): stamp it so the 20-min
+                        // lazy re-verify starts its window from the pull, not from
+                        // acquire-time.
+                        last_verify_at: Some(chrono::Utc::now().to_rfc3339()),
+                        undo_mode: Some(self.effective_undo_mode(pulled_undo_mode)),
+                    }
+                });
+                if let Err(e) = stamped {
                     tracing::warn!(
                         error = %e,
                         project_id = %project_id,

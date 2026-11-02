@@ -123,6 +123,37 @@ pub(super) fn restore_display_settings(
     }
 }
 
+/// Stamp a freshly downloaded cache `.stalx` (opened with `open_existing`): put the
+/// preserved local display settings back and write the hand-off link, which
+/// `link_for` builds from the undo policy the file itself carries (read before the
+/// upsert overwrites the row). The one body the three pull paths share - open,
+/// fast-forward and revision swap - so they cannot stamp differently.
+///
+/// [#576 NF-PNEWER-2] A file a NEWER build saved gets neither: the link upsert
+/// writes this build's columns over the newer build's row (resetting any column it
+/// added), and the newer file is otherwise never written by this build (#576
+/// B6-D1). It opens read-only like any newer file; without the link it is not
+/// treated as a remote copy, which a build that can neither edit nor push it could
+/// not use anyway.
+pub(super) fn stamp_pulled_file(
+    db: &crate::persistence::Database,
+    preserved_view: &HashMap<String, String>,
+    link_for: impl FnOnce(Option<crate::models::UndoMode>) -> crate::models::SpeleoLink,
+) -> anyhow::Result<()> {
+    if let Some(version) = db.newer_schema_version() {
+        tracing::warn!(
+            version,
+            purpose = "never write into a file a newer build saved (#576 NF-PNEWER-2)",
+            "speleodb: the downloaded file was saved by a newer version; not stamping it"
+        );
+        return Ok(());
+    }
+    restore_display_settings(db, preserved_view);
+    let link = link_for(preserved_undo_mode(db));
+    db.save_speleo_link(Some(&link))?;
+    Ok(())
+}
+
 /// Whether a re-pull may destroy un-pushed local edits at its destination.
 ///
 /// For the orchestration paths that serve BOTH kinds of caller with the same

@@ -11,6 +11,7 @@ export * from './ipc/DisplaySettings';
 export * from './ipc/LoadingPhase';
 export * from './ipc/LoadingProgress';
 export * from './ipc/LoadProjectFullResult';
+export * from './ipc/OpenFileFlags';
 export * from './ipc/CreateProjectFullResult';
 export * from './ipc/SpeleoManagedFile';
 export * from './ipc/Project';

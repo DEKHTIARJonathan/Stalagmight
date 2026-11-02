@@ -399,6 +399,8 @@ pub fn run() {
             commands::speleodb::speleodb_retry_keychain,
             // SpeleoDB linked-project status for the action shell (#204)
             commands::speleodb::speleodb_link_status,
+            // [#576 NF-W2F-1] Re-ask the open file's flags after an in-place tree swap.
+            commands::speleodb::speleodb_open_file_flags,
             commands::speleodb::speleodb_unlink,
             commands::speleodb::speleodb_remove_link_at,
             // SpeleoDB single-writer hand-off (#194/#197)
