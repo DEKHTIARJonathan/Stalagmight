@@ -16,6 +16,12 @@ mod persistence;
 #[cfg(test)]
 pub(crate) use persistence::ENTRIES_COMPRESSED;
 #[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "test module: the printed targets are the evidence a run captures"
+)]
+mod inverse_target_tests;
+#[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::panic)]
 mod window_tests;
 
@@ -480,6 +486,72 @@ pub enum UndoData {
     None,
 }
 
+/// [#576 RV5-F4-7] The shot an `InverseCommand`'s undo addresses BY ID, for
+/// [`UndoData::shot_target`]: the undo executes `inverse` against that shot, so the
+/// load-time filter drops the entry when the shot no longer resolves.
+///
+/// Exhaustive over `Command` on purpose: the wildcard it replaces let a new command
+/// that addresses a shot be recorded as an inverse and skip the filter silently. A
+/// new variant does not compile here until it is classified. An inverse never
+/// carries a uuid, so the id is the only address.
+fn inverse_command_shot_target(inverse: &Command) -> Option<(SectionId, Option<&str>, ShotId)> {
+    match inverse {
+        // `SetShotKind` is legacy here (it records `PreviousValues` now, which can
+        // carry a uuid); a persisted one has nothing but the id. `UpdateShot` and
+        // `DeleteShot` are recorded as `PreviousValues` / `ShotSnapshot` by every
+        // build, but an inverse of either still acts on that very shot, so it
+        // needs it (the redo side of `DeleteShot` is inverted - see
+        // `redo_shot_target`).
+        Command::SetShotKind {
+            section_id,
+            shot_id,
+            ..
+        }
+        | Command::UpdateShot {
+            section_id,
+            shot_id,
+            ..
+        }
+        | Command::DeleteShot {
+            section_id,
+            shot_id,
+        } => Some((*section_id, None, *shot_id)),
+        // Re-creates a shot that must be ABSENT (like `ShotSnapshot`); its
+        // `after_shot_id`/`before_shot_id` are a position, not a target.
+        Command::CreateShot { .. }
+        // A comment move names two holders, not one target, and records its own
+        // snapshots (`UndoData::None`); a batch is recorded as a snapshot pair.
+        | Command::MoveComment { .. }
+        | Command::Batch { .. }
+        // Address a project, a file, a section, a station, a closure or a datum -
+        // no shot by id.
+        | Command::CreateProject { .. }
+        | Command::OpenProject { .. }
+        | Command::SaveProject { .. }
+        | Command::CloseProject
+        | Command::CreateSection { .. }
+        | Command::DeleteSection { .. }
+        | Command::UpdateSectionMetadata { .. }
+        | Command::ReverseSection { .. }
+        | Command::MergeStations { .. }
+        | Command::UnmergeStations { .. }
+        | Command::UnmergeStationPair { .. }
+        | Command::CreateLoopClosure { .. }
+        | Command::RemoveLoopClosure { .. }
+        | Command::SetZeroDatum { .. }
+        | Command::RemoveZeroDatum { .. }
+        | Command::SetStationComment { .. }
+        | Command::MoveSection { .. }
+        | Command::MoveSegment { .. }
+        | Command::MoveStation { .. }
+        | Command::UntrackImport { .. }
+        | Command::MergeProjects { .. }
+        | Command::RepairIntegrity
+        | Command::UpdateProjectSettings
+        | Command::SetSurfaceElevation => None,
+    }
+}
+
 impl UndoData {
     /// The shot this entry's restore path addresses, when it addresses one:
     /// `(section, the target's uuid if the entry records it, the in-session id
@@ -504,20 +576,14 @@ impl UndoData {
                 shot_uuid,
                 ..
             } => Some((*section_id, shot_uuid.as_deref(), *shot_id)),
-            // Legacy only - `SetShotKind` now records `PreviousValues`, which
-            // can carry a uuid. A persisted one has nothing but the id.
-            UndoData::InverseCommand(Command::SetShotKind {
-                section_id,
-                shot_id,
-                ..
-            }) => Some((*section_id, None, *shot_id)),
+            // [#576 RV5-F4-7] Decided per command, exhaustively, in
+            // `inverse_command_shot_target`.
+            UndoData::InverseCommand(inverse) => inverse_command_shot_target(inverse),
             // [#576 RV4-R-U3] Named, not a wildcard: a NEW variant that addresses a
             // shot must decide here, at compile time, whether the load-time filter
             // for entries whose shot no longer resolves (`persistence.rs`
-            // `drop_unresolvable_*`) checks it. (`InverseCommand` of any other
-            // command addresses no shot by id that this filter could resolve.)
+            // `drop_unresolvable_*`) checks it.
             UndoData::PreviousValues { shot_id: None, .. }
-            | UndoData::InverseCommand(_)
             | UndoData::SectionSnapshot { .. }
             | UndoData::CreatedSectionSnapshot { .. }
             | UndoData::ShotSnapshot { .. }
@@ -548,8 +614,16 @@ impl UndoData {
     /// refuses precisely when the uuid DOES resolve (that would duplicate a shot
     /// identity, #413 finding 16). Filtering the redo stack by resolvability
     /// would therefore drop every persisted create-a-shot redo there is.
+    ///
+    /// The inverse of a create recorded as `InverseCommand(DeleteShot)` is the same
+    /// case (#576 RV5-F4-7): its undo deletes the shot, so the undo needs it, and
+    /// its redo re-creates it, so on the redo stack it is absent by construction.
     pub fn redo_shot_target(&self) -> Option<(SectionId, Option<&str>, ShotId)> {
-        if matches!(self, UndoData::CreatedShotSnapshot { .. }) {
+        if matches!(
+            self,
+            UndoData::CreatedShotSnapshot { .. }
+                | UndoData::InverseCommand(Command::DeleteShot { .. })
+        ) {
             return None;
         }
         self.shot_target()
