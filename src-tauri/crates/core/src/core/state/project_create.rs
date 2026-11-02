@@ -132,6 +132,12 @@ impl AppState {
         }
     }
 
+    /// Create a project in memory, with no file (#576 NF-AN3-5: test-only).
+    ///
+    /// Reached only through `execute(Command::CreateProject)`, which only the test
+    /// suites issue - the app's File > New is [`Self::do_create_project_full`]. Gated
+    /// out of release builds so nothing there can install a file-less project.
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn create_project(&self, name: String, location: Option<String>) -> CommandResult {
         let mut project = Project::new(name, location);
         // Seed per-project validation thresholds from the global config - the

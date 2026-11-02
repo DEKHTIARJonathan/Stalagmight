@@ -686,9 +686,20 @@ impl AppState {
         let pre_had_critical = integrity_snapshot.is_some() && self.project_has_critical();
 
         let mut result = match &cmd {
+            // [#576 NF-AN3-5] The in-memory create is a TEST fixture. The app creates
+            // through `create_project_full` (`do_create_project_full`), and nothing in a
+            // release build issues this variant - there is no generic execute IPC, so
+            // the webview cannot send it. The variant stays (it is part of the
+            // serialized `Command`); a release build refuses it, so a project with no
+            // file can never be committed through this door.
+            #[cfg(any(test, feature = "test-support"))]
             Command::CreateProject { name, location } => {
                 self.create_project(name.clone(), location.clone())
             }
+            #[cfg(not(any(test, feature = "test-support")))]
+            Command::CreateProject { .. } => CommandResult::failure(
+                "CreateProject is applied via create_project_full, not execute()".to_string(),
+            ),
             Command::OpenProject { path } => self.open_project(path.clone()),
             Command::SaveProject { path } => self.save_project(path.clone()),
             Command::CloseProject => self.close_project(),
