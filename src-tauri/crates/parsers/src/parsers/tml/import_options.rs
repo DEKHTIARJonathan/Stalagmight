@@ -1205,3 +1205,83 @@ mod root_and_coordinate_tests {
         assert_close(datum_of(&configs[0]), (20.5, -87.3));
     }
 }
+
+// ============================================================================
+// #576 RV3-R-8: the carried datum turns with a magnetic north reference
+// ============================================================================
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout
+)]
+mod magnetic_datum_tests {
+    use chrono::NaiveDate;
+
+    use super::super::{convert_tml_with_options, TmlGeoCoding};
+    use super::tests::{file, section, shot};
+    use super::*;
+
+    /// The D39(j) layout - a 10 m leg at a MEASURED bearing of 90, excluded,
+    /// in front of the shots the section is built from, with the file's GPS on
+    /// it - in a dated, georeferenced file whose azimuths are magnetic. The
+    /// carried datum has to follow the leg's TRUE bearing, 90 plus the
+    /// declination, exactly as the import draws the shots after it.
+    #[test]
+    fn a_dropped_first_shot_carries_the_gps_along_its_true_bearing() {
+        let (lat, lon) = (45.0, -70.0);
+        let mut lead = shot(1, 0);
+        lead.excluded = true;
+        lead.latitude = lat;
+        lead.longitude = lon;
+        // The declination is evaluated at the survey date; one trip, so the
+        // shots carry the section's date.
+        let date = NaiveDate::from_ymd_opt(2020, 6, 15);
+        let mut shots = vec![lead, shot(2, 1), shot(3, 2)];
+        for s in &mut shots {
+            s.date = date;
+        }
+        let mut anchored = section("Anchored", 0, shots);
+        anchored.date = date;
+        let mut tml = file(vec![anchored]);
+        tml.use_magnetic_azimuth = true;
+        tml.geo_coding = Some(TmlGeoCoding {
+            latitude: lat,
+            longitude: lon,
+            altitude: 0.0,
+        });
+
+        let (configs, _, warnings) =
+            convert_tml_with_options(&tml, &TmlImportOptions::default()).unwrap();
+        let reference = configs[0].azimuth_reference.expect("a recorded reference");
+        let declination = reference.applied_correction();
+        let measured = GpsCoordinates::new(lat, lon, 0.0).unwrap();
+        let bearing = reference.to_true(90.0).to_radians();
+        let expected =
+            crate::models::local_to_gps(10.0 * bearing.sin(), 10.0 * bearing.cos(), &measured);
+        let unrotated = crate::models::local_to_gps(10.0, 0.0, &measured);
+        let actual = match &configs[0].placement {
+            ImportPlacement::ZeroDatum {
+                coordinates,
+                station_index: 0,
+            } => (coordinates.latitude, coordinates.longitude),
+            other => panic!("expected a station-0 zero datum, got {other:?}"),
+        };
+        println!(
+            "declination {declination:.3} deg; datum {actual:?}, expected {expected:?} \
+             (10 m at {:.3} deg true), not {unrotated:?} (10 m due east)",
+            reference.to_true(90.0)
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(
+            declination.abs() > 5.0,
+            "premise: a declination worth rotating by, got {declination}"
+        );
+        assert!(
+            (actual.0 - expected.0).abs() < 1e-12 && (actual.1 - expected.1).abs() < 1e-12,
+            "anchored at {actual:?}, expected {expected:?}"
+        );
+    }
+}
