@@ -128,6 +128,11 @@ Three workflows gate `master`:
   skip `**/*.md` and `docs/**` - exactly where a leak, a Unicode dash or a stale
   attribution bundle lands.
 
+One more, narrow, workflow: **`os-helper.yml`** runs `cargo fmt --check`, clippy
+(`-D warnings`), the tests and a release build of the agent harness's standalone,
+macOS-only OS helper crate (`e2e/agent/os/helper`) on a macOS runner, and only when
+that crate or the workflow changes.
+
 `check` and `smoke` use blocklist-style `paths-ignore`, so a new or unlisted path
 defaults to *running*. Two edges are load-bearing and must not be widened:
 

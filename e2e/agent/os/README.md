@@ -23,8 +23,10 @@ real input.
 ```
 e2e/agent/os/
   helper/         Rust bin crate "stalagmight-oshelper" (standalone: NOT a
-                  src-tauri workspace member, and outside the app's fmt/clippy
-                  CI scope, like the other out-of-app crates)
+                  src-tauri workspace member, so outside the app's fmt/clippy
+                  CI scope; its own path-filtered macOS workflow,
+                  .github/workflows/os-helper.yml, runs fmt --check, clippy
+                  -D warnings, its tests and a release build)
   helper.ts       ensureHelperBuilt() + runHelper(args) -> parsed JSON
   permissions.ts  per-process grant flag + TCC preflight
   input.ts        osClick / osKeys, the three gates, screen-point resolution

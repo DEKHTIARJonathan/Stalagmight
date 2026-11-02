@@ -35,7 +35,11 @@ vendored, locally-patched `src-tauri/vendor/compass_data` path-dependency are
 **not** gated (vendored code is left as-is on purpose; `compass_data` is also
 explicitly kept out of the workspace via `[workspace] exclude`, so
 `--workspace` commands never touch it) - don't assume `cargo fmt` touched
-them.
+them. The third standalone crate, the agent harness's macOS-only OS helper
+(`e2e/agent/os/helper`), is gated by its own path-filtered workflow
+(`.github/workflows/os-helper.yml`: `cargo fmt --check`, `cargo clippy -- -D
+warnings` with clippy's default set, its tests and a release build, on a macOS
+runner) rather than by this policy.
 
 The crate was adopted into rustfmt in one mechanical commit (recorded in
 `.git-blame-ignore-revs`, so `git blame` skips it - wire it locally once with

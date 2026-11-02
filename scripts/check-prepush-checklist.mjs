@@ -47,7 +47,9 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 // The workflows that gate a PR. release.yml's verify job repeats a subset of
 // `check`, nightly-e2e.yml is the full Playwright suite (deliberately not a
 // pre-push item, see the checklist's Playwright line) and agent-harness.yml is
-// on-demand, so none of those define what a contributor must run.
+// on-demand, so none of those define what a contributor must run. Nor does
+// os-helper.yml: a path-filtered macOS-only job for one standalone crate that
+// most contributors cannot build (its commands live in e2e/agent/os/README.md).
 export const WORKFLOWS = [
   '.github/workflows/ci.yml',
   '.github/workflows/e2e-smoke.yml',
