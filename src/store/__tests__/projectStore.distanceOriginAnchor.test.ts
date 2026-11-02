@@ -214,3 +214,60 @@ describe('the origin a delete displaced comes back on the undo that restores its
     expect(anchorCalls).toEqual([]);
   });
 });
+
+/**
+ * #576 RV3-FE-NITS (D39(g)): a reverse still re-points an origin whose anchor could not be
+ * taken. Before the anchors, `applyReverseAftermath` mirrored the origin; the anchors replaced
+ * that mirror, so a failed capture (IPC error, or no anchor for the ref) left the origin
+ * positional across the reverse - naming the opposite end of the section. The capture now
+ * says it failed, and only then does the reverse aftermath mirror the origin as it used to:
+ * the anchor stays the normal path, and the two never both move it.
+ */
+describe('a reverse mirrors the origin when its anchor could not be taken', () => {
+  /** Serve as `serve` does, except that taking the origin's anchor fails (`how`). */
+  function serveWithFailedCapture(how: 'throws' | 'returns no anchor', reversed?: { section_id: number; shot_count: number }[]) {
+    const anchorCalls = serve(ref(0), reversed);
+    const served = invokeIpcMock.getMockImplementation()!;
+    invokeIpcMock.mockImplementation(async (command: string, args?: { refs?: StationRef[] }) => {
+      if (command !== 'plan_anchors_for_refs') return served(command, args);
+      if (how === 'throws') throw new Error('anchor IPC unavailable');
+      return [null];
+    });
+    return anchorCalls;
+  }
+
+  it.each(['throws', 'returns no anchor'] as const)('mirrors it across a reverse when the capture %s', async (how) => {
+    useUIStore.getState().setDistanceGradientOrigin(ref(5));
+    const anchorCalls = serveWithFailedCapture(how, [{ section_id: SECTION, shot_count: 7 }]);
+    await useProjectStore.getState().reverseSection(SECTION, false);
+    expect(useUIStore.getState().distanceGradientOrigin, 'origin after a reverse of 7 shots').toEqual(ref(2));
+    expect(anchorCalls, 'no re-resolve without an anchor: never both').toEqual([]);
+  });
+
+  it('mirrors it back on the undo of a reverse when the capture fails', async () => {
+    useUIStore.getState().setDistanceGradientOrigin(ref(2));
+    serveWithFailedCapture('throws', [{ section_id: SECTION, shot_count: 7 }]);
+    await useProjectStore.getState().undo();
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(5));
+  });
+
+  it('leaves it positional across an edit that is not a reverse, as before', async () => {
+    useUIStore.getState().setDistanceGradientOrigin(ref(5));
+    serveWithFailedCapture('throws');
+    await useProjectStore.getState().createShot(SECTION, SHOT, undefined, 0);
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(5));
+  });
+
+  it('leaves an origin re-picked during the failed capture alone', async () => {
+    useUIStore.getState().setDistanceGradientOrigin(ref(5));
+    serveWithFailedCapture('throws', [{ section_id: SECTION, shot_count: 7 }]);
+    const served = invokeIpcMock.getMockImplementation()!;
+    invokeIpcMock.mockImplementationOnce(async (command: string, args?: { refs?: StationRef[] }) => {
+      // The capture: the user picks another origin while it is on the wire, then it fails.
+      useUIStore.getState().setDistanceGradientOrigin(ref(1));
+      return served(command, args);
+    });
+    await useProjectStore.getState().reverseSection(SECTION, false);
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(1));
+  });
+});

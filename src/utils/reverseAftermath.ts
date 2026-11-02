@@ -20,7 +20,10 @@
  * all. Both now hold backend ANCHORS - a station named by the shots either side
  * of it - re-resolved around every mutation (`flushPlanAnchors` / `remapPlanPins`
  * below, and `utils/distanceOriginAnchor.ts`), which is reverse-proof by
- * construction and covers the other edits for free.
+ * construction and covers the other edits for free. The one origin still
+ * mirrored here is one whose anchor could not be TAKEN: nothing re-resolves it,
+ * so the reverse keeps the answer it had before the anchors (see
+ * `applyReverseAftermath`).
  *
  * The clears have to run again whenever an undo or redo flips the numbering
  * BACK. The backend answers "which sections, against which shot count"
@@ -36,6 +39,7 @@
  */
 import type { Section, SectionId, StationRef } from '../types/project';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
+import type { OriginCapture } from './distanceOriginAnchor';
 import { selectHasPins, useGasPlanStore } from '../store/gasPlanStore';
 import { useUIStore } from '../store/uiStore';
 
@@ -196,14 +200,32 @@ export function composeReverseTransforms(
  * of reverses that cancelled out renumbered nothing, so the user's selection and
  * half-staged merge are still valid.
  */
-export function applyReverseAftermath(transforms: Map<SectionId, ReverseTransform>): void {
+export function applyReverseAftermath(
+  transforms: Map<SectionId, ReverseTransform>,
+  origin: OriginCapture | null = null
+): void {
   if (Array.from(transforms.values()).every(isIdentityTransform)) return;
 
-  // The gas plan (#310) and the distance-gradient origin (#576 D39(g)) are deliberately absent
-  // here: both are re-resolved from backend anchors (`remapPlanPins`, `remapDistanceOrigin`),
-  // which the same seam already awaited before this ran. Mirroring them as well would apply the
-  // shift twice.
+  // The gas plan (#310) and an anchored distance-gradient origin (#576 D39(g)) are deliberately
+  // absent here: both are re-resolved from backend anchors (`remapPlanPins`,
+  // `remapDistanceOrigin`), which the same seam already awaited before this ran. Mirroring them
+  // as well would apply the shift twice.
   const ui = useUIStore.getState();
+
+  // An origin whose anchor could not be taken (`origin` is the capture from before this edit)
+  // was re-resolved by nothing, so it is mirrored here as it was before the anchors - only while
+  // it is still the station that failed: a pick since was made against the new numbering.
+  const current = ui.distanceGradientOrigin;
+  if (
+    origin !== null &&
+    !origin.anchored &&
+    current !== null &&
+    current.section_id === origin.ref.section_id &&
+    current.station_index === origin.ref.station_index
+  ) {
+    const mirrored = mirrorRef(current, transforms);
+    if (mirrored !== current) ui.setDistanceGradientOrigin(mirrored);
+  }
 
   // Cleared instead - there is no "same place" for a highlight, and a
   // half-staged merge (or a picked-up comment) that silently retargets the far

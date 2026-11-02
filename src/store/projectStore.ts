@@ -727,10 +727,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // A reverse's aftermath (clearing the selection, the merge staging and the comment
         // pickup it renumbered) runs HERE rather than in the caller, so a reverse and an undo
         // can never interleave: both routes apply it in the same place, in completion order,
-        // immediately after the refresh they belong to. (The distance-gradient origin is not
-        // part of it any more: it is re-resolved from its anchor above, #576 D39(g).)
+        // immediately after the refresh they belong to. (The distance-gradient origin is re-resolved
+        // from its anchor above, #576 D39(g); it is mirrored here only when that anchor could not be
+        // taken.)
         if (!lostProject(requestProjectKey)) {
-          applyReverseAftermath(composeReverseTransforms(result.reversed_sections, get().project?.sections ?? []));
+          applyReverseAftermath(composeReverseTransforms(result.reversed_sections, get().project?.sections ?? []), origin);
         }
         set({ isDirty: true });
         noteImportResolvedDeferredSave(command, result, set);
@@ -909,7 +910,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // is NOT the divisor the earlier steps mirrored against - composing the
       // entries is what keeps those steps landing on the right station.
       if (!lostProject(requestProjectKey)) {
-        applyReverseAftermath(composeReverseTransforms(reversedSections, get().project?.sections ?? []));
+        applyReverseAftermath(composeReverseTransforms(reversedSections, get().project?.sections ?? []), origin);
       }
       // Undo/redo can change which cross-references resolve - e.g. undoing a
       // Repair restores the dropped dangling refs, redoing a delete removes a
