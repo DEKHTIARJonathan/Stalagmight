@@ -38,6 +38,9 @@ ts-rs = { workspace = true, features = ["no-serde-warnings"] }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+# `hooks` for the progress handler the tile-cache accounting tests count
+# SQLite VM steps with (#576 B19). Test builds only; no extra crate.
+rusqlite = { workspace = true, features = ["bundled", "hooks"] }
 # Test-only and acyclic: the sqlite round-trip tests import a real `.dmp`
 # through the parser to exercise a realistic project shape.
 stalagmight-parsers = { path = "../parsers" }
