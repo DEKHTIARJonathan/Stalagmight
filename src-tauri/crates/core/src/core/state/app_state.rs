@@ -133,8 +133,9 @@ pub struct AppState {
     /// owned/cloneable access to the cache. This is a deliberate deviation from the spec
     /// for thread-safety requirements.
     ///
-    /// Note: Changes to CacheConfig at runtime (via update_config) do NOT re-initialize
-    /// this cache. Users must restart the app for cache config changes to take effect.
+    /// A CacheConfig change (a settings save or Reload Config) reaches this cache at
+    /// once through `sync_config_side_effects` (#576 A18(g)/(h)): it is opened,
+    /// closed, or reconfigured in place.
     pub(super) tile_cache: Arc<Mutex<Option<TileCache>>>,
     /// In-memory cache for ArcGIS tilemap API responses.
     /// Used to efficiently check tile availability before fetching.

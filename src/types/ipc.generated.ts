@@ -180,6 +180,7 @@ export * from './ipc/ColorTheme';
 export * from './ipc/SpeleoDbConfig';
 export * from './ipc/TokenFallback';
 export * from './ipc/ConfigSaveReport';
+export * from './ipc/ConfigPatch';
 export * from './ipc/Permission';
 export * from './ipc/SpeleoProjectSummary';
 export * from './ipc/TokenStorage';

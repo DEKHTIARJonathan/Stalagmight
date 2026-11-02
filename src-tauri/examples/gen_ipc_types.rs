@@ -17,14 +17,14 @@ use stalagmight_lib::commands::survey_geometry::{
 };
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
-    ConfigSaveReport, DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, DpvRig,
-    DpvUnit, ExportConfig, GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin,
-    ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig,
-    MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig, PlacementSuggestionConfig,
-    ProviderCacheConfig, ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback,
-    ShortcutsConfig, ShotConfig, SpeleoDbConfig, StationConfig, SyntacticHighlightLevel,
-    SyntacticHighlightPreset, SyntacticHighlightingConfig, ThemeMode, TokenFallback, UnitsConfig,
-    ValidationConfig,
+    ConfigPatch, ConfigSaveReport, DebugConfig, DecimalPrecision, DepthGradientConfig,
+    DisplayConfig, DpvRig, DpvUnit, ExportConfig, GasConfig, GasUnits, GeneralConfig,
+    GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
+    MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig,
+    PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset, ReserveProfile,
+    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
+    StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig,
+    ThemeMode, TokenFallback, UnitsConfig, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
@@ -361,6 +361,8 @@ fn main() {
     export::<SpeleoDbConfig>(&out_dir);
     export::<TokenFallback>(&out_dir);
     export::<ConfigSaveReport>(&out_dir);
+    // [#576 D27-32(c)] one changed setting, for patch_config
+    export::<ConfigPatch>(&out_dir);
     // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
@@ -602,6 +604,7 @@ fn main() {
         "SpeleoDbConfig",
         "TokenFallback",
         "ConfigSaveReport",
+        "ConfigPatch",
         "Permission",
         "SpeleoProjectSummary",
         "TokenStorage",

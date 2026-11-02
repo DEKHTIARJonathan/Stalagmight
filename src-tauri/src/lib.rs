@@ -520,6 +520,7 @@ pub fn run() {
             // Config
             commands::config::get_config,
             commands::config::update_config,
+            commands::config::patch_config,
             commands::config::reload_config,
             commands::config::update_panel_sizes,
             commands::config::update_panel_layout,

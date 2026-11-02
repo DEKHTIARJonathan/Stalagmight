@@ -416,13 +416,10 @@ function App() {
       return;
     }
 
-    void useProjectStore.getState().updateConfig({
-      ...currentConfig,
-      general: {
-        ...currentConfig.general,
-        onboarding_completed_flows: normalized,
-      },
-    });
+    // [#576 D27-32(c)] This one setting, not the whole store snapshot.
+    void useProjectStore
+      .getState()
+      .patchConfig([{ path: ['general', 'onboarding_completed_flows'], value: normalized }]);
   }, []);
 
   // The one-shot rule applies to the ORIENTATION tour only (#331). It used to
@@ -524,7 +521,7 @@ function App() {
       general: { ...currentConfig.general, onboarding_first_launch_done: true },
     };
     store.setConfig(nextConfig);
-    void store.updateConfig(nextConfig);
+    void store.patchConfig([{ path: ['general', 'onboarding_first_launch_done'], value: true }]);
   }, [onboarding.activeFlowId]);
 
   const disableOnboardingGuides = useCallback(() => {
@@ -544,7 +541,7 @@ function App() {
       },
     };
     store.setConfig(nextConfig);
-    void store.updateConfig(nextConfig);
+    void store.patchConfig([{ path: ['general', 'onboarding_enabled'], value: false }]);
   }, []);
 
   const handleRepairIntegrity = async () => {

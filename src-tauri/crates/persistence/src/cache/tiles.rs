@@ -513,6 +513,41 @@ impl TileCache {
             .collect();
     }
 
+    /// Apply new size and retention settings to the open cache (#576 A18(g)):
+    /// the settings' size cap, default TTL and per-provider TTL overrides.
+    /// Returns whether anything changed. When something did, tiles past the new
+    /// retention and anything over the new cap are dropped now (`evict_lru`),
+    /// rather than at the next write - a lowered cap or TTL is in force at once.
+    pub fn reconfigure(
+        &mut self,
+        max_mb: u32,
+        ttl_days: u32,
+        ttl_days_by_provider: &HashMap<String, u32>,
+    ) -> Result<bool> {
+        let max_bytes = u64::from(max_mb) * 1024 * 1024;
+        let ttl_seconds = i64::from(ttl_days) * 24 * 60 * 60;
+        let provider_ttl_seconds: HashMap<String, i64> = ttl_days_by_provider
+            .iter()
+            .map(|(provider, days)| (provider.clone(), i64::from(*days) * 24 * 60 * 60))
+            .collect();
+        if max_bytes == self.max_bytes
+            && ttl_seconds == self.ttl_seconds
+            && provider_ttl_seconds == self.provider_ttl_seconds
+        {
+            return Ok(false);
+        }
+        self.max_bytes = max_bytes;
+        self.ttl_seconds = ttl_seconds;
+        self.provider_ttl_seconds = provider_ttl_seconds;
+        self.evict_lru()?;
+        Ok(true)
+    }
+
+    /// The size cap in bytes, for a caller checking which settings are in force.
+    pub fn max_bytes(&self) -> u64 {
+        self.max_bytes
+    }
+
     /// Retention TTL for a provider, in seconds - its override, else the default.
     fn ttl_for(&self, provider: &str) -> i64 {
         self.provider_ttl_seconds

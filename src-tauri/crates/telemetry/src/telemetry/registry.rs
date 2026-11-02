@@ -108,6 +108,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.move_station",
     "command.parse_gpx",
     "command.parse_tml",
+    "command.patch_config",
     "command.plan_anchors_for_refs",
     "command.plan_refs_for_anchors",
     "command.preview_delete_shot",
@@ -1116,7 +1117,9 @@ mod tests {
         //   + 1 the frontend re-asks the open file's flags (newer-format stamp,
         //       unreadable link row) after a SpeleoDB in-place tree swap (#576
         //       NF-W2F-1): command.speleodb_open_file_flags = 739.
-        assert_eq!(EVENT_NAMES.len(), 739);
+        //   + 1 a settings save applies only the settings it changed (#576
+        //       D27-32(c)): command.patch_config = 740.
+        assert_eq!(EVENT_NAMES.len(), 740);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

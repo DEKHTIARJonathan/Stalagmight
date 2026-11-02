@@ -465,6 +465,8 @@ than carried over.
 
 The Settings dialog provides a UI for common configuration changes. Access it by clicking the **Settings** button in the application header. After modifying `config.toml` manually, use the **Reload Config** button in the Settings dialog to apply changes without restarting the application.
 
+Saving the dialog sends only the settings you changed (`patch_config`, #576 D27-32(c)): the backend applies them onto the configuration it holds now and saves that, so anything it recorded while the dialog was open - the panel layout and widths, the recent projects, the table views - is kept. The undo history limit and the tile-cache settings (on/off, size, retention) take effect at once, on a save and on Reload Config alike (#576 A18): a smaller cache size or a shorter retention trims the cache immediately.
+
 ### Configuring Shortcuts via UI
 
 1. Click the **Settings** button in the application header

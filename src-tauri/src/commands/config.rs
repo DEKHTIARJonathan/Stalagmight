@@ -4,7 +4,8 @@ use tauri::State;
 use std::collections::BTreeMap;
 
 use crate::config::{
-    normalize_column_widths, Config, ConfigSaveReport, GasConfig, DATA_TABLE_ANGLE_MODES,
+    normalize_column_widths, Config, ConfigPatch, ConfigSaveReport, GasConfig,
+    DATA_TABLE_ANGLE_MODES,
 };
 use crate::core::AppState;
 
@@ -33,6 +34,26 @@ pub(crate) fn update_config_impl(
     config: Config,
 ) -> Result<ConfigSaveReport, String> {
     state.update_config(config).map_err(|e| e.to_string())
+}
+
+/// [#576 D27-32(c)] Apply only the given settings onto the live config, then
+/// normalize and save it. The Settings dialog sends the settings the user changed
+/// (and the other config writers the one each owns), so a save can no longer revert
+/// what the backend recorded since the dialog's snapshot was taken. Refused whole
+/// when a path names no setting or a value does not fit it.
+#[tauri::command]
+pub fn patch_config(
+    state: State<AppState>,
+    patches: Vec<ConfigPatch>,
+) -> Result<ConfigSaveReport, String> {
+    patch_config_impl(state.inner(), &patches)
+}
+
+pub(crate) fn patch_config_impl(
+    state: &AppState,
+    patches: &[ConfigPatch],
+) -> Result<ConfigSaveReport, String> {
+    state.patch_config(patches).map_err(|e| e.to_string())
 }
 
 /// Reload configuration from disk without persisting any changes

@@ -1,4 +1,4 @@
-import type { MockCommandFamily } from './types';
+import type { MockCommandFamily, MockCommandHandler } from './types';
 
 /**
  * Config commands of the Playwright IPC mock: `get_config` / `reload_config`, and the
@@ -100,7 +100,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
   // run keeps whatever gas config get_config would otherwise return.
   let mockGasConfig: Record<string, unknown> | null = null;
 
-  return (cmd, args) => {
+  const handle: MockCommandHandler = (cmd, args) => {
     switch (cmd) {
       case 'get_config':
         // Return saved config if available (for testing persistence),
@@ -392,6 +392,26 @@ export const configCommands: MockCommandFamily = (ctx) => {
         console.log('[Mock IPC] update_config called with:', args);
         savedConfig = args?.config as Record<string, unknown> | undefined ?? null;
         return { keychain_residue: null };
+
+      case 'patch_config': {
+        // [#576 D27-32(c)] Apply each changed setting onto the CURRENT config (what
+        // get_config answers now, view stores and `[gas]` included) and keep the
+        // rest, as the Rust command applies them onto the live config.
+        console.log('[Mock IPC] patch_config called with:', args);
+        const next = structuredClone(handle('get_config', undefined)) as Record<string, unknown>;
+        const patches = (args?.patches as Array<{ path: string[]; value: unknown }> | undefined) ?? [];
+        for (const { path, value } of patches) {
+          let node = next;
+          for (const key of path.slice(0, -1)) {
+            node[key] = { ...((node[key] as Record<string, unknown> | undefined) ?? {}) };
+            node = node[key] as Record<string, unknown>;
+          }
+          const leaf = path[path.length - 1];
+          if (leaf !== undefined) node[leaf] = value;
+        }
+        savedConfig = next;
+        return { keychain_residue: null };
+      }
 
       case 'update_gas_config': {
         // Partial update of the `[gas]` block only, mirroring the Rust impl.
@@ -800,4 +820,5 @@ export const configCommands: MockCommandFamily = (ctx) => {
         return ctx.unhandled;
     }
   };
+  return handle;
 };
