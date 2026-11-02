@@ -22,12 +22,16 @@
  *
  * Backstop asymmetry: the SpeleoDB term (`selectSpeleoReadOnly`) has a
  * fail-safe server guard (`AppState::guard_mutation` rejects mutations without
- * the write lock). The `isMapReadOnly` term (closure-adjusted view, Plan/Export
- * mode) does NOT: a local project in those views has `edit_enabled == true`
- * server-side, so read-only there rests entirely on exhaustive UI gating plus
+ * the write lock). The `isMapReadOnly` term is backstopped for only one of its
+ * two halves. Plan/Export are, since #576 C5: the frontend reports the
+ * workspace mode (`set_workspace_mode`) and `guard_mutation` refuses survey
+ * edits there with `WORKSPACE_READ_ONLY` - though only once the mode change
+ * has reached the backend. The Closures Computed View is NOT: it is a Survey
+ * sub-view, a local project there has `edit_enabled == true` server-side, so
+ * read-only there rests entirely on exhaustive UI gating plus
  * the `check-readonly-gates.mjs` tripwire. A new destructive control in an
- * adjusted/Plan view must therefore be gated here at every entry point; there
- * is no server backstop to catch a miss.
+ * adjusted or Plan view must therefore be gated here at every entry point; in
+ * the closures view there is no server backstop to catch a miss.
  *
  * [#576 B6-D1] A third term: a project saved by a NEWER Stalagmight
  * (`selectNewerFileReadOnly`) is read-only in every mode, settled from the load
