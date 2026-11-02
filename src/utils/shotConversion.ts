@@ -126,29 +126,3 @@ export function editableShotsToDmpSection(raw: DmpSection, shots: EditableShot[]
 
   return { ...raw, shots: syntheticShots };
 }
-
-/**
- * Calculate station positions for a section based on shots.
- * Returns positions in local coordinates (station 0 at origin).
- */
-export function calculateStationPositions(shots: EditableShot[]): Array<{ x: number; y: number }> {
-  const positions: Array<{ x: number; y: number }> = [{ x: 0, y: 0 }];
-
-  let x = 0;
-  let y = 0;
-
-  for (const shot of shots) {
-    // Calculate heading from azimuth_in and azimuth_out average
-    const heading = (shot.azimuth_in + shot.azimuth_out) / 2;
-    // Convert heading to radians (heading is in degrees, 0 = north)
-    const radians = ((90 - heading) * Math.PI) / 180;
-    // Calculate dx, dy
-    const dx = shot.length * Math.cos(radians);
-    const dy = shot.length * Math.sin(radians);
-    x += dx;
-    y += dy;
-    positions.push({ x, y });
-  }
-
-  return positions;
-}

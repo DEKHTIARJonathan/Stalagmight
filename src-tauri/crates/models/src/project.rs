@@ -51,6 +51,8 @@ mod anchor_fuzz;
 #[cfg(test)]
 #[expect(clippy::print_stdout)]
 mod cache_coherence_tests;
+#[cfg(test)]
+mod station_walk_parity_tests;
 
 pub use classify::ClassifyScope;
 pub use gas::{

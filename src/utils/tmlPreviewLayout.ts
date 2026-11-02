@@ -12,16 +12,26 @@
  *
  * It is a PREVIEW, deliberately reimplemented rather than fetched:
  *   - it re-runs on every checkbox click, which no IPC round-trip should;
- *   - it draws PLAN geometry only (x/y), so it ignores everything the backend
- *     does about depth, azimuth reference, closures and unit conversion. A
- *     preview shot's `depth_in`/`depth_out` are carried verbatim only because
- *     the `DmpShot` shape has the fields.
- * The one thing it must agree with the backend on is TOPOLOGY - which section
- * hangs off which, and which sections lose their anchor when a section is
- * deselected - because that is the question the dialog is asking the user.
+ *   - it draws PLAN geometry only (x/y), so it ignores closures and unit
+ *     conversion (the parser has already converted feet to metres).
+ * What it must agree with the backend on is TOPOLOGY - which section hangs off
+ * which, and which sections lose their anchor when a section is deselected -
+ * because that is the question the dialog is asking the user; and, since the
+ * offsets are station positions, the GEOMETRY of each section, which is the
+ * backend's walk (`walkStations`, #576 D15) over the depths the importer
+ * resolves.
+ *
+ * North reference: an Ariane file declares ONE for every section
+ * (`tml_azimuth_reference`): true north, or magnetic with an IGRF declination
+ * when the file is georeferenced and dated, else magnetic with none. The IGRF
+ * model lives only in the backend, so the layout walks the readings as
+ * measured. Every section shares the one reference, so that is a rotation of
+ * the whole drawing about its origin - the placement of each section relative
+ * to the others, which is what the dialog asks about, is exact.
  */
 import type { DmpSection, DmpShot, TmlFile, TmlSection, TmlShot } from '../types/commands';
-import { importableShots } from './tmlImportStats';
+import { importableShots, survivesImport } from './tmlImportStats';
+import { walkStations, type WalkShot } from './stationWalk';
 
 /** One section as the preview needs it: geometry plus where it sits. */
 export interface TmlPreviewSection {
@@ -63,17 +73,18 @@ export interface TmlPreviewOptions {
 }
 
 /**
- * A `DmpShot` carrying an Ariane shot's plan geometry. Ariane records one
- * azimuth per shot, so both legs get it and `circularMeanDegrees` returns it
- * unchanged.
+ * A `DmpShot` carrying an Ariane shot's geometry as the importer builds it.
+ * Ariane records one azimuth per shot, so both legs get it (as
+ * `normalize_tml_shot` does), and `depthIn` is the RESOLVED start depth, so the
+ * preview draws the plan length the offsets were walked with.
  */
-function toPreviewShot(shot: TmlShot): DmpShot {
+function toPreviewShot(shot: TmlShot, depthIn: number): DmpShot {
   return {
     shot_type: 'Standard',
     heading_in: shot.azimuth,
     heading_out: shot.azimuth,
     length: shot.length,
-    depth_in: shot.depth_in,
+    depth_in: depthIn,
     depth_out: shot.depth,
     pitch_in: 0,
     pitch_out: 0,
@@ -89,33 +100,47 @@ function toPreviewShot(shot: TmlShot): DmpShot {
   };
 }
 
-function toPreviewSection(section: TmlSection, shots: TmlShot[]): DmpSection {
+function toPreviewSection(section: TmlSection, shots: TmlShot[], walk: WalkShot[]): DmpSection {
   return {
     version: 0,
     name: section.name,
     direction: 'in',
     date: section.date ?? '',
-    shots: shots.map(toPreviewShot),
+    shots: shots.map((shot, i) => toPreviewShot(shot, walk[i]!.depth_in)),
     content_hash: '',
   };
 }
 
-/** Station positions of a section in its OWN frame, station 0 at (0, 0).
- *  Same recurrence as `computeStationsFromDmpShots`, kept here so the layout
- *  does not have to build a DmpSection before it can position anything. */
-function localStations(shots: TmlShot[]): Array<{ x: number; y: number }> {
-  const stations = [{ x: 0, y: 0 }];
-  for (const shot of shots) {
-    const prev = stations[stations.length - 1]!;
-    const rad = (shot.azimuth * Math.PI) / 180;
-    const dx = shot.length * Math.sin(rad);
-    const dy = shot.length * Math.cos(rad);
-    stations.push({
-      x: prev.x + (Number.isFinite(dx) ? dx : 0),
-      y: prev.y + (Number.isFinite(dy) ? dy : 0),
-    });
+/** Ariane's "this shot starts where the previous one ended" `DepthIn`
+ *  (`schema::DEPTH_IN_SAME_AS_PREVIOUS`): a spelling, matched exactly. */
+const DEPTH_IN_SAME_AS_PREVIOUS = -1;
+
+/**
+ * The kept shots as the importer hands them to the walk
+ * (`convert_shots_to_shot_data`): one azimuth on both legs, and the "same as
+ * previous" start depth resolved (`resolve_tml_depth_in`) - to the previous
+ * KEPT shot's depth, or for the first kept shot to the end of the dropped lead
+ * shots (closure rows are no leg), else the section's start depth.
+ *
+ * Taken literally the sentinel is a depth change of (depth + 1) m, which folds
+ * a shot to nothing once the passage is deeper than the tape is long.
+ */
+function walkShots(section: TmlSection, kept: TmlShot[], includeExcluded: boolean): WalkShot[] {
+  let droppedLeadEnd: number | undefined;
+  for (const shot of section.shots) {
+    if (survivesImport(shot, includeExcluded)) break;
+    if (shot.shot_type !== 'Closure') droppedLeadEnd = shot.depth;
   }
-  return stations;
+  return kept.map((shot, i) => ({
+    azimuth_in: shot.azimuth,
+    azimuth_out: shot.azimuth,
+    length: shot.length,
+    depth_in:
+      shot.depth_in === DEPTH_IN_SAME_AS_PREVIOUS
+        ? ((i > 0 ? kept[i - 1]!.depth : droppedLeadEnd) ?? section.start_depth)
+        : shot.depth_in,
+    depth_out: shot.depth,
+  }));
 }
 
 /**
@@ -167,6 +192,7 @@ interface WorkingEntry {
   index: number;
   section: TmlSection;
   shots: TmlShot[];
+  walk: WalkShot[];
   stations: Array<{ x: number; y: number }>;
   parent: { section: number; station: number } | undefined;
   offsetX: number;
@@ -230,6 +256,7 @@ export function computeTmlPreviewLayout(
   for (const [index, section] of tml.sections.entries()) {
     if (!isSelected(index) || kept[index]!.length === 0) continue;
     const shots = kept[index]!;
+    const walk = walkShots(section, shots, includeExcluded);
     const isRoot = entries.length === 0;
     // The parent the backend would use: the raw first shot's `from_id`, then
     // the first surviving shot's, for a section whose lead shots were excluded.
@@ -248,7 +275,9 @@ export function computeTmlPreviewLayout(
       index,
       section,
       shots,
-      stations: localStations(shots),
+      walk,
+      // Station positions in the section's OWN frame, station 0 at (0, 0).
+      stations: walkStations(walk),
       parent,
       offsetX: 0,
       offsetY: 0,
@@ -299,7 +328,7 @@ export function computeTmlPreviewLayout(
       index: entry.index,
       name: entry.section.name,
       color: entry.section.color,
-      section: toPreviewSection(entry.section, entry.shots),
+      section: toPreviewSection(entry.section, entry.shots, entry.walk),
       offsetX: entry.offsetX,
       offsetY: entry.offsetY,
       reanchored: entry.reanchored,

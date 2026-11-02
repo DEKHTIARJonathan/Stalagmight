@@ -5,6 +5,7 @@ import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import SectionPreview from './SectionPreview';
 import type { MergePreviewConfig } from './SectionPreview';
+import { azimuthReferenceFor } from '../../utils/stationWalk';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { OrphanPlacementSuggestion } from '../../types/commands';
@@ -287,6 +288,16 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     [orphanSection],
   );
 
+  // Both sections are already in the project, so the backend walks each with
+  // its own north reference, else the project default (#576 D15); the preview
+  // has to as well, or merge partners are drawn off each other by the
+  // difference of the two corrections.
+  const defaultAzimuthReference = project?.default_azimuth_reference;
+  const orphanAzimuthReference = azimuthReferenceFor(
+    orphanSection?.azimuth_reference,
+    defaultAzimuthReference,
+  );
+
   // Build merge preview config using selected merge pair
   const mergePreviewConfig = useMemo((): MergePreviewConfig | null => {
     if (!targetSection || !currentSuggestion) return null;
@@ -294,8 +305,9 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
       targetSection,
       importStationIndex: selectedMergePair?.importStation ?? currentSuggestion.orphanStationIndex,
       targetStationIndex: selectedMergePair?.existingStation ?? currentSuggestion.targetStationIndex,
+      targetAzimuthReference: azimuthReferenceFor(targetSection.azimuth_reference, defaultAzimuthReference),
     };
-  }, [targetSection, currentSuggestion, selectedMergePair]);
+  }, [targetSection, currentSuggestion, selectedMergePair, defaultAzimuthReference]);
 
   const finish = useCallback(async () => {
     await refreshProjectState();
@@ -573,6 +585,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                 color={orphanSection?.color ?? '#4a9eff'}
                 size={340}
                 mergePreview={mergePreviewConfig}
+                azimuthReference={orphanAzimuthReference}
                 focusStationIndex={currentSuggestion?.orphanStationIndex ?? null}
               />
             )}

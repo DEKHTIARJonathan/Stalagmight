@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, useMemo } from 'react';
 import type maplibregl from 'maplibre-gl';
 import type { DmpSection, DmpShot } from '../../types/commands';
 import type { Section, Station, Shot } from '../../types/project';
+import type { AzimuthReference } from '../../types/ipc/AzimuthReference';
 import { metersToMapCoords, getBounds } from '../../utils/coordinates';
-import { circularMeanDegrees } from '../../utils/angles';
+import { walkStations } from '../../utils/stationWalk';
 import { useUIStore } from '../../store/uiStore';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { getTileConfig } from '../../utils/tileConfig';
@@ -23,6 +24,12 @@ export interface MergePreviewConfig {
   importStationIndex: number;
   /** Station index in the target section to merge */
   targetStationIndex: number;
+  /**
+   * The north reference the backend walks the target with: its own, else the
+   * project default (`azimuthReferenceFor`). Omitted, its readings are walked as
+   * measured.
+   */
+  targetAzimuthReference?: AzimuthReference | null;
 }
 
 /**
@@ -49,80 +56,47 @@ export interface ContextSectionGeometry {
 }
 
 /**
- * A step that is not a number contributes nothing.
+ * Station positions of a DMP section, station 0 at the origin - the shots the
+ * import will create (`Standard` only) walked with the backend's walk
+ * (`walkStations`, #576 D15). One station per kept shot plus station 0, so
+ * indices address the rows they came from even where a reading is missing.
  *
- * A single NaN here does not spoil one station, it spoils EVERY station after
- * it: each is computed from the last, so one unmeasured shot emptied the whole
- * preview centerline and handed `fitBounds` NaNs. Unmeasured rows are filtered
- * out before they reach a preview (`isEmittedShot`), so this is the backstop for
- * whatever the next source of a half-filled shot turns out to be - the geometry
- * downstream of the gap is still worth drawing.
+ * `reference` is the north reference the section WILL be recorded with. Every
+ * mNemo section is recorded magnetic with no correction
+ * (`DMP_AZIMUTH_REFERENCE`), which is also what omitting it walks.
  */
-const finiteStep = (value: number): number => (Number.isFinite(value) ? value : 0);
-
-/**
- * Compute station coordinates from DMP shots.
- * Each station is positioned relative to the previous one based on shot heading and length.
- * Depth change uses depth_in/out to stay consistent with placement overlay behavior.
- */
-export function computeStationsFromDmpShots(shots: DmpShot[]): Array<{ x: number; y: number; z: number }> {
-  // Start at origin
-  const stations: Array<{ x: number; y: number; z: number }> = [{ x: 0, y: 0, z: 0 }];
-
-  for (const shot of shots) {
-    if (shot.shot_type !== 'Standard') continue;
-
-    const prev = stations[stations.length - 1];
-    if (!prev) continue;
-
-    // Use circular mean for heading to handle wrap-around correctly
-    const azimuth = circularMeanDegrees(shot.heading_in, shot.heading_out);
-    const azimuthRad = (azimuth * Math.PI) / 180;
-
-    const depthChange = shot.depth_out - shot.depth_in;
-
-    // Compute next station position. A missing length, heading or depth leaves
-    // the station where the previous one is rather than poisoning the rest of
-    // the section - the shot still gets a station, so indices keep matching the
-    // rows they came from.
-    const x = prev.x + finiteStep(shot.length * Math.sin(azimuthRad));
-    const y = prev.y + finiteStep(shot.length * Math.cos(azimuthRad));
-    const z = prev.z + finiteStep(depthChange);
-
-    stations.push({ x, y, z });
-  }
-
-  return stations;
+export function computeStationsFromDmpShots(
+  shots: DmpShot[],
+  reference?: AzimuthReference | null
+): Array<{ x: number; y: number; z: number }> {
+  return walkStations(
+    shots
+      .filter((shot) => shot.shot_type === 'Standard')
+      .map((shot) => ({
+        azimuth_in: shot.heading_in,
+        azimuth_out: shot.heading_out,
+        length: shot.length,
+        depth_in: shot.depth_in,
+        depth_out: shot.depth_out,
+      })),
+    reference
+  );
 }
 
 /**
- * Compute station coordinates from project Section shots.
- * Used for existing sections in merge preview.
- * Depth change uses depth_in/out to stay consistent with placement overlay behavior.
+ * Station positions of a project section, station 0 at the origin, walked
+ * with the backend's walk (`walkStations`, #576 D15). Used for existing
+ * sections in the merge preview.
+ *
+ * `reference` is the section's resolved north reference (`azimuthReferenceFor`
+ * over its own and the project default). Omitted, the readings are walked as
+ * measured.
  */
-export function computeStationsFromShots(shots: Shot[]): Array<{ x: number; y: number; z: number }> {
-  // Start at origin
-  const stations: Array<{ x: number; y: number; z: number }> = [{ x: 0, y: 0, z: 0 }];
-
-  for (const shot of shots) {
-    const prev = stations[stations.length - 1];
-    if (!prev) continue;
-
-    // Use circular mean for heading to handle wrap-around correctly
-    const azimuth = circularMeanDegrees(shot.azimuth_in, shot.azimuth_out);
-    const azimuthRad = (azimuth * Math.PI) / 180;
-
-    const depthChange = shot.depth_out - shot.depth_in;
-
-    // Compute next station position
-    const x = prev.x + shot.length * Math.sin(azimuthRad);
-    const y = prev.y + shot.length * Math.cos(azimuthRad);
-    const z = prev.z + depthChange;
-
-    stations.push({ x, y, z });
-  }
-
-  return stations;
+export function computeStationsFromShots(
+  shots: Shot[],
+  reference?: AzimuthReference | null
+): Array<{ x: number; y: number; z: number }> {
+  return walkStations(shots, reference);
 }
 
 /** Segment section for multi-section display in manual_placing phase. */
@@ -173,6 +147,12 @@ interface SectionPreviewProps {
   segmentSections?: SegmentSectionEntry[] | null;
   /** Section index of the currently selected anchor station (for segment display). */
   selectedSectionIndex?: number | null;
+  /**
+   * The north reference the previewed section (or every segment section) is, or
+   * WILL be, recorded with, so the preview walks it the way the backend will.
+   * Omitted, the readings are walked as measured - what a DMP import records.
+   */
+  azimuthReference?: AzimuthReference | null;
 }
 
 /**
@@ -206,6 +186,7 @@ export default function SectionPreview({
   contextSections,
   segmentSections,
   selectedSectionIndex,
+  azimuthReference,
 }: SectionPreviewProps) {
   // When segmentSections is provided, use the first section as the primary
   const effectiveSection = section ?? (segmentSections?.[0]?.section ?? null);
@@ -226,13 +207,16 @@ export default function SectionPreview({
     const sec = effectiveSection;
     if (!sec) return [];
     const standardShots = sec.shots.filter((s) => s.shot_type === 'Standard');
-    return computeStationsFromDmpShots(standardShots);
-  }, [effectiveSection]);
+    return computeStationsFromDmpShots(standardShots, azimuthReference);
+  }, [effectiveSection, azimuthReference]);
 
   // Compute stations for the target section (for merge preview)
   const targetStations = useMemo(() => {
     if (mergePreview) {
-      return computeStationsFromShots(mergePreview.targetSection.shots);
+      return computeStationsFromShots(
+        mergePreview.targetSection.shots,
+        mergePreview.targetAzimuthReference
+      );
     }
     if (dmpMergePreview) {
       const standardShots = dmpMergePreview.targetDmpSection.shots.filter((s) => s.shot_type === 'Standard');
@@ -576,7 +560,8 @@ export default function SectionPreview({
     if (segmentSections && segmentSections.length > 0) {
       for (const segEntry of segmentSections) {
         const segStations = computeStationsFromDmpShots(
-          segEntry.section.shots.filter((s) => s.shot_type === 'Standard')
+          segEntry.section.shots.filter((s) => s.shot_type === 'Standard'),
+          azimuthReference
         );
         const segStandardShots = segEntry.section.shots.filter((s) => s.shot_type === 'Standard');
         for (let i = 0; i < segStandardShots.length; i++) {
@@ -621,7 +606,8 @@ export default function SectionPreview({
       stationFeatures = [];
       for (const segEntry of segmentSections) {
         const segStations = computeStationsFromDmpShots(
-          segEntry.section.shots.filter((s) => s.shot_type === 'Standard')
+          segEntry.section.shots.filter((s) => s.shot_type === 'Standard'),
+          azimuthReference
         );
         for (let i = 0; i < segStations.length; i++) {
           const stn = segStations[i]!;
@@ -881,7 +867,8 @@ export default function SectionPreview({
         const segEntry = segmentSections.find(s => s.sectionIndex === selectedSectionIndex);
         if (segEntry) {
           const segStations = computeStationsFromDmpShots(
-            segEntry.section.shots.filter((s) => s.shot_type === 'Standard')
+            segEntry.section.shots.filter((s) => s.shot_type === 'Standard'),
+            azimuthReference
           );
           const stn = segStations[selectedStationIndex];
           if (stn) {
@@ -1008,7 +995,8 @@ export default function SectionPreview({
             const allPoints: Array<{ x: number; y: number; z: number }> = [];
             for (const segEntry of segmentSections) {
               const segStations = computeStationsFromDmpShots(
-                segEntry.section.shots.filter((s) => s.shot_type === 'Standard')
+                segEntry.section.shots.filter((s) => s.shot_type === 'Standard'),
+                azimuthReference
               );
               for (const stn of segStations) {
                 allPoints.push({ x: stn.x + segEntry.offsetX, y: stn.y + segEntry.offsetY, z: stn.z });
@@ -1101,7 +1089,7 @@ export default function SectionPreview({
         }
       });
     }
-  }, [effectiveSection, effectiveColor, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, dmpMergePreview, selectedStationIndex, selectedSectionIndex, gpsOrigin, gpsStationOffset, focusStationIndex, referenceIndices, contextSections, segmentSections]);
+  }, [effectiveSection, effectiveColor, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, dmpMergePreview, selectedStationIndex, selectedSectionIndex, gpsOrigin, gpsStationOffset, focusStationIndex, referenceIndices, contextSections, segmentSections, azimuthReference]);
 
   // Re-apply theme colors when resolvedTheme changes
   useEffect(() => {
