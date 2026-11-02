@@ -27,6 +27,12 @@
 // unless the step is classified; plain shell glue (SHELL_GLUE: `if`, `echo`,
 // `exit`, assignments, ...) is not a command to compare. Rows in either table
 // that match no step are themselves a failure (stale allowlist).
+// A `uses:` step (an action) carries its command inside the action, so there is
+// nothing in the YAML to compare (#576 NF-FIX3B-1): it passes only when its
+// action is listed in PLUMBING_ACTIONS (setup, caches, uploads) or the step is
+// classified by name - PLUMBING_STEPS, or ACTION_GATE_STEPS for an action that
+// IS a gate, paired with its checklist stand-in - so a gate added as an action
+// (cargo-deny-action, a linter action) cannot slip past by not running `run:`.
 // The reverse direction is checked for names only: a `pnpm <script>` in the
 // checklist that package.json does not define (a renamed script) fails too.
 //
@@ -39,7 +45,7 @@
 // never run a gate placed there. Pure Node, no dependencies (leak-scan has no
 // `pnpm install`), so the YAML is read with a small line-based step parser
 // that understands exactly the subset the workflows use (list-item steps with
-// `name:` / `run:` keys, `run: |` block scalars).
+// `name:` / `run:` / `uses:` keys, `run: |` block scalars).
 //
 // Usage:  node scripts/check-prepush-checklist.mjs   (or: pnpm lint:prepush-checklist)
 
@@ -92,6 +98,25 @@ export const SHELL_GATE_STEPS = [
   },
 ];
 
+// Actions that gate nothing: runner setup, caches and report uploads. Matched
+// on the action name before `@<ref>`; every `uses:` step outside this list must
+// be classified by step name (PLUMBING_STEPS / ACTION_GATE_STEPS).
+export const PLUMBING_ACTIONS = [
+  { action: 'actions/checkout', why: 'checkout' },
+  { action: 'actions/setup-node', why: 'toolchain setup' },
+  { action: 'pnpm/action-setup', why: 'toolchain setup' },
+  { action: 'dtolnay/rust-toolchain', why: 'toolchain setup' },
+  { action: 'Swatinem/rust-cache', why: 'build cache' },
+  { action: 'actions/cache', why: 'cache restore and save' },
+  { action: 'actions/upload-artifact', why: 'report upload; it cannot fail the job' },
+];
+
+// Action steps that ARE gates, each paired with the checklist command that
+// stands in for it locally. An action's `with:` inputs are its command line,
+// but every action spells them differently (`command:`, `args:`, `arguments:`),
+// so the pairing is written down here rather than guessed. None today.
+export const ACTION_GATE_STEPS = [];
+
 // CI spelling -> checklist spelling, for commands that differ only because CI
 // runs with CI=true.
 export const ALIASES = [
@@ -128,8 +153,9 @@ const PNPM_NON_SCRIPTS = new Set(['exec', 'install', 'run', 'dlx', 'tsc']);
 
 const indentOf = (line) => line.length - line.trimStart().length;
 
-// Returns [{job, name, run, line}] for every list-item step that has `run:`.
-// `name` falls back to the run body's first line for unnamed steps.
+// Returns [{job, name, run, uses, line}] for every list-item step that has
+// `run:` or `uses:` (exactly one of the two is set). `name` falls back to the
+// run body's first line, or the `uses:` value, for unnamed steps.
 export function extractSteps(yamlText) {
   const lines = yamlText.split(/\r?\n/);
   const steps = [];
@@ -138,7 +164,9 @@ export function extractSteps(yamlText) {
   let cur = null;
   const flush = () => {
     if (cur && cur.run !== undefined) {
-      steps.push({ job: cur.job, name: cur.name ?? cur.run.split('\n')[0].trim(), run: cur.run, line: cur.line });
+      steps.push({ job: cur.job, name: cur.name ?? cur.run.split('\n')[0].trim(), run: cur.run, uses: undefined, line: cur.line });
+    } else if (cur && cur.uses !== undefined) {
+      steps.push({ job: cur.job, name: cur.name ?? cur.uses, run: undefined, uses: cur.uses, line: cur.line });
     }
     cur = null;
   };
@@ -175,6 +203,8 @@ export function extractSteps(yamlText) {
     const [, key, rawVal] = kv;
     const val = rawVal.trim();
     if (key === 'name' && cur.name === undefined) cur.name = unquote(val);
+    // A trailing ` # v7.0.1` pin comment is not part of the action reference.
+    if (key === 'uses' && cur.uses === undefined) cur.uses = unquote(val.replace(/\s+#.*$/, ''));
     if (key === 'run') {
       if (/^[|>][-+]?$/.test(val)) {
         const body = [];
@@ -345,6 +375,8 @@ export function checkDrift(read, opts = {}) {
     workflows = WORKFLOWS,
     plumbingSteps = PLUMBING_STEPS,
     shellGateSteps = SHELL_GATE_STEPS,
+    plumbingActions = PLUMBING_ACTIONS,
+    actionGateSteps = ACTION_GATE_STEPS,
     aliases = ALIASES,
   } = opts;
   const problems = [];
@@ -367,6 +399,8 @@ export function checkDrift(read, opts = {}) {
   const aliasOf = new Map(aliases.map((a) => [normalize(a.ci, byCommand), normalize(a.checklist, byCommand)]));
   const usedPlumbing = new Set();
   const usedShell = new Set();
+  const usedActions = new Set();
+  const usedActionGates = new Set();
   let gates = 0;
 
   for (const wf of workflows) {
@@ -384,19 +418,29 @@ export function checkDrift(read, opts = {}) {
     }
     for (const step of steps) {
       const where = `${wf} (${step.job ?? '?'}) step "${step.name}"`;
+      const action = step.uses === undefined ? undefined : plumbingActions.find((a) => a.action === step.uses.split('@')[0]);
+      if (action) usedActions.add(action);
       const shell = shellGateSteps.find((s) => s.workflow === wf && s.step === step.name);
-      if (shell) {
-        usedShell.add(shell);
+      const actionGate = step.uses === undefined ? undefined : actionGateSteps.find((s) => s.workflow === wf && s.step === step.name);
+      const gateRow = shell ?? actionGate;
+      if (gateRow) {
+        (shell ? usedShell : usedActionGates).add(gateRow);
         gates++;
-        if (!have.has(normalize(shell.checklist, byCommand))) {
-          problems.push(`${where} is a shell gate; the checklist must carry: ${shell.checklist}`);
+        if (!have.has(normalize(gateRow.checklist, byCommand))) {
+          problems.push(`${where} is ${shell ? 'a shell' : 'an action'} gate; the checklist must carry: ${gateRow.checklist}`);
+        }
+        continue;
+      }
+      const plumbing = plumbingSteps.find((s) => s.workflow === wf && s.step === step.name);
+      if (plumbing) usedPlumbing.add(plumbing);
+      if (step.run === undefined) {
+        if (!plumbing && !action) {
+          problems.push(`${where} uses the action "${step.uses}", whose command this gate cannot compare with the checklist - list the action in PLUMBING_ACTIONS if it gates nothing, or classify the step in ACTION_GATE_STEPS / PLUMBING_STEPS (scripts/check-prepush-checklist.mjs)`);
         }
         continue;
       }
       const all = splitCommands(step.run).map((raw) => ({ raw, key: normalize(raw, byCommand) }));
       const cmds = all.filter((c) => c.key !== null);
-      const plumbing = plumbingSteps.find((s) => s.workflow === wf && s.step === step.name);
-      if (plumbing) usedPlumbing.add(plumbing);
       if (cmds.length === 0) {
         if (!plumbing) problems.push(`${where} runs no recognised gate command - classify it in PLUMBING_STEPS or SHELL_GATE_STEPS (scripts/check-prepush-checklist.mjs)`);
         continue;
@@ -417,6 +461,8 @@ export function checkDrift(read, opts = {}) {
   }
   for (const s of plumbingSteps) if (!usedPlumbing.has(s)) problems.push(`stale PLUMBING_STEPS row: ${s.workflow} step "${s.step}" no longer exists`);
   for (const s of shellGateSteps) if (!usedShell.has(s)) problems.push(`stale SHELL_GATE_STEPS row: ${s.workflow} step "${s.step}" no longer exists`);
+  for (const s of actionGateSteps) if (!usedActionGates.has(s)) problems.push(`stale ACTION_GATE_STEPS row: ${s.workflow} step "${s.step}" no longer exists`);
+  for (const a of plumbingActions) if (!usedActions.has(a)) problems.push(`stale PLUMBING_ACTIONS row: no step uses ${a.action}`);
 
   const scripts = packageJson.scripts ?? {};
   for (const c of checklist.commands) {

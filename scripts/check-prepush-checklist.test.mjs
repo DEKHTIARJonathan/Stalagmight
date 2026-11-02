@@ -13,7 +13,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   checkDrift, extractSteps, splitCommands, normalize, scriptIndex, parseChecklist, REPO_ROOT,
-  PLUMBING_STEPS, SHELL_GATE_STEPS, isShellGlue,
+  PLUMBING_STEPS, SHELL_GATE_STEPS, PLUMBING_ACTIONS, ACTION_GATE_STEPS, isShellGlue,
 } from './check-prepush-checklist.mjs';
 
 let passed = 0;
@@ -62,14 +62,18 @@ Prose after the block.
 `;
 
 // Run the gate over an in-memory tree with empty plumbing/shell tables unless
-// a case passes its own.
+// a case passes its own; the only plumbing action is the checkout every
+// fixture workflow starts with.
+const CHECKOUT_ONLY = [{ action: 'actions/checkout', why: 'x' }];
 function run(files, opts = {}) {
   const tree = { 'package.json': PKG, ...files };
   const read = (rel) => {
     if (!(rel in tree)) throw Object.assign(new Error(`ENOENT ${rel}`), { code: 'ENOENT' });
     return tree[rel];
   };
-  return checkDrift(read, { workflows: [WF], plumbingSteps: [], shellGateSteps: [], aliases: [], ...opts });
+  return checkDrift(read, {
+    workflows: [WF], plumbingSteps: [], shellGateSteps: [], plumbingActions: CHECKOUT_ONLY, actionGateSteps: [], aliases: [], ...opts,
+  });
 }
 
 // --- the gate fires on a missing command -----------------------------------------
@@ -217,6 +221,50 @@ test('a classification row whose step no longer exists is reported stale', () =>
   assert.match(r.problems[0], /stale PLUMBING_STEPS row/);
 });
 
+// --- `uses:` steps (#576 NF-FIX3B-1): an action carries its command inside it ----------------
+
+const DENY_STEP = '      - name: Deny\n        uses: EmbarkStudios/cargo-deny-action@0123456789abcdef0123456789abcdef01234567 # v2\n'
+  + '        with:\n          command: check bans';
+
+test('an action step nobody classified fails (a gate added as an action cannot hide)', () => {
+  const r = run({ [WF]: workflow(`${DENY_STEP}\n      - run: pnpm lint:foo`), 'CLAUDE.md': checklist(['pnpm lint:foo']) });
+  assert.equal(r.problems.length, 1, JSON.stringify(r.problems));
+  assert.match(r.problems[0], /step "Deny" uses the action "EmbarkStudios\/cargo-deny-action@[0-9a-f]+", whose command this gate cannot compare/);
+});
+
+test('an unnamed action step is named by its action, and a local action is not exempt', () => {
+  const r = run({ [WF]: workflow('      - uses: ./.github/actions/lint\n      - run: pnpm lint:foo'), 'CLAUDE.md': checklist(['pnpm lint:foo']) });
+  assert.equal(r.problems.length, 1, JSON.stringify(r.problems));
+  assert.match(r.problems[0], /step "\.\/\.github\/actions\/lint" uses the action/);
+});
+
+test('a PLUMBING_ACTIONS row (any ref) or a PLUMBING_STEPS row clears an action step', () => {
+  const files = { [WF]: workflow(DENY_STEP), 'CLAUDE.md': checklist(['pnpm lint:foo']) };
+  const byAction = { plumbingActions: [...CHECKOUT_ONLY, { action: 'EmbarkStudios/cargo-deny-action', why: 'x' }] };
+  assert.deepEqual(run(files, byAction).problems, []);
+  assert.equal(run(files, byAction).gates, 0);
+  assert.deepEqual(run(files, { plumbingSteps: [{ workflow: WF, step: 'Deny', why: 'x' }] }).problems, []);
+});
+
+test('an ACTION_GATE_STEPS row makes the action a gate that demands its checklist command', () => {
+  const opts = { actionGateSteps: [{ workflow: WF, step: 'Deny', checklist: 'cargo deny check bans', why: 'x' }] };
+  const missing = run({ [WF]: workflow(DENY_STEP), 'CLAUDE.md': checklist(['pnpm lint:foo']) }, opts);
+  assert.equal(missing.problems.length, 1, JSON.stringify(missing.problems));
+  assert.match(missing.problems[0], /step "Deny" is an action gate; the checklist must carry: cargo deny check bans/);
+  const carried = run({ [WF]: workflow(DENY_STEP), 'CLAUDE.md': checklist(['cargo deny check bans']) }, opts);
+  assert.deepEqual(carried.problems, []);
+  assert.equal(carried.gates, 1);
+});
+
+test('a PLUMBING_ACTIONS or ACTION_GATE_STEPS row that matches no step is reported stale', () => {
+  const opts = {
+    plumbingActions: [...CHECKOUT_ONLY, { action: 'actions/cache', why: 'x' }],
+    actionGateSteps: [{ workflow: WF, step: 'Gone', checklist: 'pnpm lint:foo', why: 'x' }],
+  };
+  const r = run({ [WF]: workflow('      - run: pnpm lint:foo'), 'CLAUDE.md': checklist(['pnpm lint:foo']) }, opts);
+  assert.deepEqual(r.problems.map((p) => p.replace(/:.*/, '')), ['stale ACTION_GATE_STEPS row', 'stale PLUMBING_ACTIONS row']);
+});
+
 // --- reverse direction: checklist names a script package.json does not define -------------
 
 test('a checklist `pnpm <script>` that package.json lacks fails (renamed script)', () => {
@@ -243,7 +291,20 @@ test('a missing workflow file or one the parser reads no steps from fails', () =
 
 test('extractSteps reads named, unnamed and block-scalar run steps with their job', () => {
   const steps = extractSteps(workflow('      - name: A\n        run: |\n          one\n          two\n      - run: three\n        env:\n          X: y'));
-  assert.deepEqual(steps.map((s) => [s.job, s.name, s.run]), [['check', 'A', 'one\ntwo'], ['check', 'three', 'three']]);
+  assert.deepEqual(steps.map((s) => [s.job, s.name, s.run]), [
+    ['check', 'actions/checkout@v7', undefined],
+    ['check', 'A', 'one\ntwo'],
+    ['check', 'three', 'three'],
+  ]);
+});
+
+test('extractSteps reads uses steps, dropping a trailing pin comment, and not a nested `run:`', () => {
+  const steps = extractSteps(workflow(`${DENY_STEP}\n      - name: B\n        uses: "org/act@v1"\n        with:\n          run: pnpm lint:foo`));
+  assert.deepEqual(steps.map((s) => [s.name, s.uses, s.run]), [
+    ['actions/checkout@v7', 'actions/checkout@v7', undefined],
+    ['Deny', 'EmbarkStudios/cargo-deny-action@0123456789abcdef0123456789abcdef01234567', undefined],
+    ['B', 'org/act@v1', undefined],
+  ]);
 });
 
 test('splitCommands keeps quoted separators and $(...) together', () => {
@@ -276,7 +337,9 @@ test('the live tree passes: every CI gate is in the CLAUDE.md checklist', () => 
 });
 
 test('every live classification row carries a written reason', () => {
-  for (const row of [...PLUMBING_STEPS, ...SHELL_GATE_STEPS]) assert.ok(row.why && row.why.trim(), row.step);
+  for (const row of [...PLUMBING_STEPS, ...SHELL_GATE_STEPS, ...PLUMBING_ACTIONS, ...ACTION_GATE_STEPS]) {
+    assert.ok(row.why && row.why.trim(), row.step ?? row.action);
+  }
 });
 
 // --- report -------------------------------------------------------------------------------------

@@ -74,6 +74,22 @@ test('foreign-host-port fires on a literal or template port, not on :1420', () =
   assert.deepEqual(ids("await page.goto('http://localhost:1420/');"), []);
 });
 
+test('own-server fires on a WebSocket server too (#576 NF-FIX3B-1)', () => {
+  assert.deepEqual(ids('const wss = new WebSocketServer({ port: 0 });'), ['own-server']);
+  assert.deepEqual(ids('const wss = new WebSocket.Server({ noServer: true });'), ['own-server']);
+  // A client socket to the shared server binds nothing.
+  assert.deepEqual(ids("const ws = new WebSocket('ws://127.0.0.1:1420/');"), []);
+});
+
+test('foreign-host-port fires on 0.0.0.0 and on a concatenated port (#576 NF-FIX3B-1)', () => {
+  assert.deepEqual(ids("await page.goto('http://0.0.0.0:5173/');"), ['foreign-host-port']);
+  assert.deepEqual(ids('await page.goto(`http://0.0.0.0:${port}/`);'), ['foreign-host-port']);
+  assert.deepEqual(ids("await page.goto('http://localhost:' + port);"), ['foreign-host-port']);
+  assert.deepEqual(ids('await page.goto("http://127.0.0.1:" + server.port + "/");'), ['foreign-host-port']);
+  assert.deepEqual(ids("await page.goto('http://localhost:' + 1420);"), []);
+  assert.deepEqual(ids("await page.goto('http://0.0.0.0:1420/');"), []);
+});
+
 test('serial fires on both spellings', () => {
   assert.deepEqual(ids('test.describe.serial("x", () => {});'), ['serial']);
   assert.deepEqual(ids("test.describe.configure({ mode: 'serial' });"), ['serial']);

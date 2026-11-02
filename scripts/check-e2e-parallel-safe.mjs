@@ -56,7 +56,9 @@ export const ALLOW = [
 export const RULES = [
   {
     id: 'own-server',
-    re: /\bcreateServer\s*\(/,
+    // A WebSocket server binds a port just the same (`ws`: `new WebSocketServer(`,
+    // or the older `new WebSocket.Server(`; #576 NF-FIX3B-1).
+    re: /\bcreateServer\s*\(|\bnew\s+(?:WebSocketServer|WebSocket\.Server)\s*\(/,
     why: 'starts its own server - every page shares the one Vite webServer (:1420).',
   },
   {
@@ -83,10 +85,13 @@ export const RULES = [
   },
   {
     id: 'foreign-host-port',
-    // A literal port, or a template-interpolated one (`localhost:${port}`),
-    // which is how a per-test server's address is usually spelled.
-    re: /(?:127\.0\.0\.1|localhost):(\d+|\$\{[^}]*\})/,
-    accept: (m) => m[1] === SHARED_VITE_PORT, // allow the shared Vite port
+    // A literal port, a template-interpolated one (`localhost:${port}`), or one
+    // concatenated onto the string (`'localhost:' + port`), which is how a
+    // per-test server's address is usually spelled; `0.0.0.0` is the
+    // all-interfaces spelling of the same bind (#576 NF-FIX3B-1).
+    re: /(?:127\.0\.0\.1|localhost|0\.0\.0\.0):(?:(\d+|\$\{[^}]*\})|['"`]\s*\+\s*([^\s;,)]+))/,
+    // Allow the shared Vite port, in any of the three spellings.
+    accept: (m) => (m[1] ?? m[2]).replace(/^['"`]|['"`]$/g, '') === SHARED_VITE_PORT,
     why: `hardcodes a host:port other than :${SHARED_VITE_PORT} - implies a per-test server/socket, not parallel-safe.`,
   },
   {
