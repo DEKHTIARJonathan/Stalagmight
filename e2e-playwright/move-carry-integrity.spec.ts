@@ -171,6 +171,48 @@ async function clickCanvasAndSettle(page: Page, at: ScreenPoint): Promise<void> 
   await nextFrames(page);
 }
 
+/**
+ * Wait until the map has caught up with its container's layout: the container kept one
+ * size across two frames, and the map's own canvas has that size.
+ *
+ * Opening the DataTable runs the Dock's CSS height transition on the map container, and
+ * MapLibre follows it through a 50 ms-throttled resize. Until both have settled,
+ * `map.project` (where the drawn station positions come from) and the click's hit test
+ * disagree with the final layout, so a pickup click lands beside the station and no ghost
+ * goes up - the flake under load, when the transition outlasts the test's own steps.
+ */
+async function waitForMapFitsContainer(page: Page): Promise<void> {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          new Promise<boolean>((resolve) => {
+            const map = (window as unknown as {
+              __stalagmight_map__?: { getContainer: () => HTMLElement; getCanvas: () => HTMLCanvasElement };
+            }).__stalagmight_map__;
+            if (!map) {
+              resolve(false);
+              return;
+            }
+            const container = map.getContainer();
+            const size = () => `${container.clientWidth}x${container.clientHeight}`;
+            const before = size();
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => {
+                const canvas = map.getCanvas();
+                resolve(
+                  size() === before &&
+                    canvas.style.width === `${container.clientWidth}px` &&
+                    canvas.style.height === `${container.clientHeight}px`,
+                );
+              }),
+            );
+          }),
+      ),
+    )
+    .toBe(true);
+}
+
 async function store<T>(page: Page, read: string): Promise<T> {
   return page.evaluate((path) => {
     const e2e = (window as unknown as { __E2E_TEST__: Record<string, { getState: () => Record<string, unknown> }> }).__E2E_TEST__;
@@ -259,9 +301,10 @@ test.describe('Move carry integrity (GHOST-2)', () => {
   test('a DataTable edit while carrying cancels the move and is not applied', async ({ page }) => {
     await page.keyboard.press('Control+3');
     await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 5000 });
-    // The table takes room from the map: re-read the drawn positions once it has settled.
+    // The table takes room from the map: re-read the drawn positions once the map has
+    // followed the container to its final size (see waitForMapFitsContainer).
+    await waitForMapFitsContainer(page);
     await waitForMapIdle(page);
-    await nextFrames(page);
     await waitForDrawnStations(page, 2);
     await recordMutations(page);
     await carryStation(page);

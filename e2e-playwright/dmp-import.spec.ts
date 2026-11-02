@@ -176,6 +176,18 @@ test.describe('DMP Import Dialog', () => {
     await expect(page.getByTestId('toast').filter({ hasText: 'import:' })).toContainText('1 section', {
       timeout: 10000,
     });
+    // #576 NF-FIX3B-2: the backend mints a uuid for every shot it imports, and uuid
+    // anchors (plan pins, the distance origin) resolve through it; the mock's
+    // import_sections used to build its shots without one.
+    const uuids = await page.evaluate(() => {
+      const sections = (window as any).__E2E_TEST__.projectStore.getState().project.sections as Array<{
+        shots: Array<{ uuid?: string | null }>;
+      }>;
+      return sections.map((section) => section.shots.map((shot) => shot.uuid ?? null));
+    });
+    expect(uuids[1].length).toBe(sent[0].shots?.length);
+    expect(uuids[1].every((uuid) => typeof uuid === 'string'), `imported uuids: ${JSON.stringify(uuids[1])}`).toBe(true);
+    expect(new Set(uuids.flat()).size).toBe(uuids.flat().length);
   });
 
   /**

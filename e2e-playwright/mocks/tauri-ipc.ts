@@ -11,6 +11,7 @@ import { dmpImportCommands } from './ipc/dmpImport';
 import { gasPlanCommands } from './ipc/gasPlan';
 import { speleodbCommands } from './ipc/speleodb';
 import { tileCacheCommands } from './ipc/tileCache';
+import { buildMockShot } from './ipc/shots';
 
 /** The wire shape of a ts-rs generated type: serde writes i64 as a JSON
  *  number, so fields the generated interfaces declare as `bigint` arrive as
@@ -171,7 +172,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
   // Exposes `window.MessagePack` synchronously before any app JS runs.
   await page.addInitScript({ content: loadMsgpackUmd() });
 
-  const installTauriIpcMock = (families: MockCommandFamily[]) => {
+  const installTauriIpcMock = (families: MockCommandFamily[], buildShot: typeof buildMockShot) => {
     // Event listener registry for mock Tauri events (plugin:event|listen/emit/unlisten)
     // This is defined early so it can be used by both mockHandler and __tauriEventMock
     interface EventListener {
@@ -1762,27 +1763,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'create_section': {
             sectionCounter++;
             const rawShots = Array.isArray(args?.shots) ? (args?.shots as Array<Record<string, unknown>>) : [];
-            const shots = rawShots.map((shot, index) => ({
-              id: mockShotId(sectionCounter, index),
-              // #310: a deterministic, stable uuid per shot - the neighbour-pair anchors above
-              // key off this, exactly as the real backend keys off `Shot.uuid`.
-              uuid: `mock-shot-uuid-${mockShotId(sectionCounter, index)}`,
-              azimuth_in: (shot.azimuth_in as number) ?? 0,
-              azimuth_out: (shot.azimuth_out as number) ?? 0,
-              length: (shot.length as number) ?? 0,
-              depth_in: (shot.depth_in as number) ?? 0,
-              depth_out: (shot.depth_out as number) ?? 0,
-              pitch_in: (shot.pitch_in as number | null | undefined) ?? null,
-              pitch_out: (shot.pitch_out as number | null | undefined) ?? null,
-              left: (shot.left as number | null | undefined) ?? null,
-              right: (shot.right as number | null | undefined) ?? null,
-              up: (shot.up as number | null | undefined) ?? null,
-              down: (shot.down as number | null | undefined) ?? null,
-              comment: (shot.comment as string | null | undefined) ?? null,
-              kind: (shot.kind as string | undefined) ?? 'Normal',
-              marker_index: (shot.marker_index as number | null | undefined) ?? null,
-              temperature: (shot.temperature as number | null | undefined) ?? null,
-            }));
+            // #310: every shot gets a stable uuid (ipc/shots.ts) - the neighbour-pair anchors
+            // above key off it, exactly as the real backend keys off `Shot.uuid`.
+            const shots = rawShots.map((shot, index) => buildShot(mockShotId(sectionCounter, index), shot));
             const section = {
               id: sectionCounter,
               name: (args?.name as string) ?? `Section ${sectionCounter}`,
@@ -1824,24 +1807,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const importedSections = rawSections.map((sectionData) => {
               sectionCounter++;
               const rawShots = Array.isArray(sectionData.shots) ? (sectionData.shots as Array<Record<string, unknown>>) : [];
-              const shots = rawShots.map((shot, index) => ({
-                id: mockShotId(sectionCounter, index),
-                azimuth_in: (shot.azimuth_in as number) ?? 0,
-                azimuth_out: (shot.azimuth_out as number) ?? 0,
-                length: (shot.length as number) ?? 0,
-                depth_in: (shot.depth_in as number) ?? 0,
-                depth_out: (shot.depth_out as number) ?? 0,
-                pitch_in: (shot.pitch_in as number | null | undefined) ?? null,
-                pitch_out: (shot.pitch_out as number | null | undefined) ?? null,
-                left: (shot.left as number | null | undefined) ?? null,
-                right: (shot.right as number | null | undefined) ?? null,
-                up: (shot.up as number | null | undefined) ?? null,
-                down: (shot.down as number | null | undefined) ?? null,
-                comment: (shot.comment as string | null | undefined) ?? null,
-                kind: (shot.kind as string | undefined) ?? 'Normal',
-                marker_index: (shot.marker_index as number | null | undefined) ?? null,
-                temperature: (shot.temperature as number | null | undefined) ?? null,
-              }));
+              // Through the shared builder, so an imported shot has a uuid too (#576 NF-FIX3B-2).
+              const shots = rawShots.map((shot, index) => buildShot(mockShotId(sectionCounter, index), shot));
               const section = {
                 id: sectionCounter,
                 name: (sectionData.name as string) ?? `Section ${sectionCounter}`,
@@ -3537,27 +3504,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 (max, s) => Math.max(max, s.id),
                 mockShotId(section.id as number, 0) - 1,
               ) + 1;
-            const newShot = {
-              id: nextId,
-              // The real backend mints a uuid for every shot it creates, and uuid
-              // anchors resolve through it (#576 NF-W3UI-1).
-              uuid: `mock-shot-uuid-${nextId}`,
-              azimuth_in: (shotData.azimuth_in as number) ?? 0,
-              azimuth_out: (shotData.azimuth_out as number) ?? 0,
-              length: (shotData.length as number) ?? 0,
-              depth_in: (shotData.depth_in as number) ?? 0,
-              depth_out: (shotData.depth_out as number) ?? 0,
-              pitch_in: (shotData.pitch_in as number | null | undefined) ?? null,
-              pitch_out: (shotData.pitch_out as number | null | undefined) ?? null,
-              left: (shotData.left as number | null | undefined) ?? null,
-              right: (shotData.right as number | null | undefined) ?? null,
-              up: (shotData.up as number | null | undefined) ?? null,
-              down: (shotData.down as number | null | undefined) ?? null,
-              comment: (shotData.comment as string | null | undefined) ?? null,
-              kind: (shotData.kind as string | undefined) ?? 'Normal',
-              marker_index: (shotData.marker_index as number | null | undefined) ?? null,
-              temperature: (shotData.temperature as number | null | undefined) ?? null,
-            };
+            // The real backend mints a uuid for every shot it creates (#576 NF-W3UI-1).
+            const newShot = buildShot(nextId, shotData);
             let insertAt = section.shots.length;
             if (afterShotId !== null) {
               const i = section.shots.findIndex((s) => s.id === afterShotId);
@@ -3968,7 +3916,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
   // The page runs the core above with every command family, each serialized the way
   // addInitScript serializes a function.
   const families = MOCK_COMMAND_FAMILIES.map((family) => family.toString()).join(',\n');
-  await page.addInitScript({ content: `(${installTauriIpcMock.toString()})([${families}]);` });
+  await page.addInitScript({ content: `(${installTauriIpcMock.toString()})([${families}], ${buildMockShot.toString()});` });
 }
 
 /**
