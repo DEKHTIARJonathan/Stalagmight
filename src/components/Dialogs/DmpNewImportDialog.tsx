@@ -1767,8 +1767,8 @@ export default function DmpNewImportDialog({
           { from: origin },
           { purpose: 'temporal DMP placement rerank', fields: { origin: key } },
         );
-        // null only when no project is open, which an open import rules out (#576 C3).
-        const distances = distanceMapFromField(origin, field!);
+        // null only when no project is open (#576 C3): no distances, not a crash.
+        const distances = distanceMapFromField(origin, field);
         for (const [distanceKey, distance] of distances) {
           temporalDistanceCacheRef.current.set(distanceKey, distance);
         }
