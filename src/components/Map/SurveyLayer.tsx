@@ -473,10 +473,7 @@ export default class SurveyLayer {
     this.updateWhileStyleless = null;
     if (args) this.flushUpdateSync(...args);
     // Closure dimming is a paint property the lost window could not write.
-    this.updateClosureAnchoredOpacity(this.anchoredSectionIds);
-    if (this.immovableStationFeatureIds.size > 0) {
-      this.updateImmovableClosureOpacity(this.immovableStationFeatureIds);
-    }
+    this.updateClosureOpacity();
   }
 
   /**
@@ -2396,7 +2393,7 @@ export default class SurveyLayer {
     const before = this.lastOverlayDigest;
     this.anchoredSectionIds = sectionIds;
     // Update loop closure line opacity - gray out closures where both endpoints are anchored.
-    this.updateClosureAnchoredOpacity(sectionIds);
+    this.updateClosureOpacity();
     // The custom renderer + label layer dim the anchored sections' geometry + labels.
     this.syncCustomDimming();
     // The anchored set also gates the interact overlay (hover/selection highlight +
@@ -2419,25 +2416,49 @@ export default class SurveyLayer {
     this.customLabels?.setDimming(dim);
   }
 
-  // Set line-opacity on loop closures layer: 0.25 when both endpoints are in anchored sections
-  private updateClosureAnchoredOpacity(anchoredIds: ReadonlySet<number>): void {
+  /**
+   * Loop-closure line opacity: 0.25 for a closure either move-tool rule dims - both
+   * endpoints in anchored sections (Move Segment), or either endpoint immovable
+   * (Move Station / Move Shot) - and 0.8 otherwise. ONE write from both sets: the
+   * two rules used to write this paint property separately, so whichever ran last
+   * erased the other's dimming - e.g. leaving Move Segment for Move Station cleared
+   * the anchored set a render after the immovable set landed, and its plain 0.8
+   * undimmed the immovable closures (#576 NF-MAP-4).
+   */
+  private updateClosureOpacity(): void {
     // No style during a lost WebGL context; replayAfterContextRestore re-applies.
     if (!hasLiveStyle(this.map)) return;
-    const idsArray = [...anchoredIds];
-
-    if (idsArray.length > 0) {
+    const dimRules: maplibregl.ExpressionSpecification[] = [];
+    if (this.anchoredSectionIds.size > 0) {
+      const idsArray = [...this.anchoredSectionIds];
       // Both endpoints must be anchored to gray out the closure line
-      const bothAnchored: maplibregl.ExpressionSpecification = ['all',
+      dimRules.push(['all',
         ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
         ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
-      ] as maplibregl.ExpressionSpecification;
-
-      this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', [
-        'case', bothAnchored, 0.25, 0.8,
       ] as maplibregl.ExpressionSpecification);
-    } else {
-      this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', 0.8);
     }
+    if (this.immovableStationFeatureIds.size > 0) {
+      // Station key strings matching the closure feature "sectionId:stationIndex" format
+      const immovableKeyStrings: string[] = [];
+      for (const fid of this.immovableStationFeatureIds) {
+        const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
+        const stationIndex = fid % FEATURE_ID_STRIDE;
+        immovableKeyStrings.push(`${sectionId}:${stationIndex}`);
+      }
+      // Dim closure if either endpoint is immovable
+      dimRules.push(['any',
+        ['in', ['get', 'stationA'], ['literal', immovableKeyStrings]],
+        ['in', ['get', 'stationB'], ['literal', immovableKeyStrings]],
+      ] as maplibregl.ExpressionSpecification);
+    }
+    if (dimRules.length === 0) {
+      this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', 0.8);
+      return;
+    }
+    const dimmed = dimRules.length === 1 ? dimRules[0]! : (['any', ...dimRules] as maplibregl.ExpressionSpecification);
+    this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', [
+      'case', dimmed, 0.25, 0.8,
+    ] as maplibregl.ExpressionSpecification);
   }
 
   /**
@@ -2456,7 +2477,7 @@ export default class SurveyLayer {
     this.immovableStationFeatureIds = stationIds;
     this.immovableShotFeatureIds = shotIds;
     // Loop closures dim if either endpoint is immovable (kept GeoJSON overlay).
-    this.updateImmovableClosureOpacity(stationIds);
+    this.updateClosureOpacity();
     // The custom renderer + label layer dim the immovable geometry + labels.
     this.syncCustomDimming();
     // Same overlay-cache hazard as setAnchoredSections: these sets gate the
@@ -2477,31 +2498,6 @@ export default class SurveyLayer {
     this.refreshInteractOverlay();
     this.refreshHoverCursor();
     if (this.lastOverlayDigest !== before) this.interactHide.hideUntilRetile();
-  }
-
-  private updateImmovableClosureOpacity(immovableStationIds: ReadonlySet<number>): void {
-    if (!hasLiveStyle(this.map)) return; // as updateClosureAnchoredOpacity
-    if (immovableStationIds.size > 0) {
-      // Build station key strings matching closure feature "sectionId:stationIndex" format
-      const immovableKeyStrings: string[] = [];
-      for (const fid of immovableStationIds) {
-        const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
-        const stationIndex = fid % FEATURE_ID_STRIDE;
-        immovableKeyStrings.push(`${sectionId}:${stationIndex}`);
-      }
-
-      // Dim closure if either endpoint is immovable
-      const eitherImmovable: maplibregl.ExpressionSpecification = ['any',
-        ['in', ['get', 'stationA'], ['literal', immovableKeyStrings]],
-        ['in', ['get', 'stationB'], ['literal', immovableKeyStrings]],
-      ] as maplibregl.ExpressionSpecification;
-
-      this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', [
-        'case', eitherImmovable, 0.25, 0.8,
-      ] as maplibregl.ExpressionSpecification);
-    } else {
-      this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', 0.8);
-    }
   }
 
   /** The drag preview's shot/station color paint. Plain mode reads the resolved

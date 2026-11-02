@@ -50,6 +50,8 @@ interface FakeStyle {
   layers: string[];
   sources: Set<string>;
   layout: Map<string, string | undefined>;
+  /** `${layerId}|${property}` -> the last value set. */
+  paint: Map<string, unknown>;
 }
 
 export interface FakeSurveyMap {
@@ -69,6 +71,8 @@ export interface FakeSurveyMap {
   restoreStyle(): void;
   /** Ids of the custom layers currently on the map. */
   customLayers(): string[];
+  /** The last value `setPaintProperty` wrote for a layer's paint property. */
+  paint(layerId: string, property: string): unknown;
   /** The errors of `addLayer` calls refused because their `beforeId` was not on the
    *  map - MapLibre fires an ErrorEvent and does NOT add the layer. */
   rejectedAdds(): string[];
@@ -83,7 +87,7 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
   const rejected: string[] = [];
   let serialized: FakeStyle | null = null;
 
-  const newStyle = (): FakeStyle => ({ layers: [], sources: new Set(), layout: new Map() });
+  const newStyle = (): FakeStyle => ({ layers: [], sources: new Set(), layout: new Map(), paint: new Map() });
 
   const styleApi = (s: FakeStyle) => ({
     getLayer: (id: string) => (s.layers.includes(id) ? { id } : undefined),
@@ -136,6 +140,9 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
     },
     setLayoutProperty(id: string, _name: string, value: string) {
       target.style!._s.layout.set(id, value);
+    },
+    setPaintProperty(id: string, name: string, value: unknown) {
+      target.style!._s.paint.set(`${id}|${name}`, value);
     },
     on(type: string, fn: Listener) {
       const set = listeners.get(type) ?? new Set();
@@ -197,6 +204,7 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
         layers: s.layers.filter((id) => !custom.has(id)),
         sources: new Set(s.sources),
         layout: new Map(s.layout),
+        paint: new Map(s.paint),
       };
       custom.clear();
       target.style = null;
@@ -207,6 +215,7 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
       target.style = { ...styleApi(s), _s: s };
     },
     customLayers: () => [...custom],
+    paint: (layerId, property) => target.style?._s.paint.get(`${layerId}|${property}`),
     rejectedAdds: () => [...rejected],
   };
 }
