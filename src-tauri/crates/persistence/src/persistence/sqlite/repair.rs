@@ -13,6 +13,10 @@ const RESTORE_STAGING_SUFFIX: &str = ".restore-staging";
 /// journal beside it (rolling the journal back is a write, so it happens on a
 /// copy). Not a name the backup listing offers.
 const CHECK_STAGING_SUFFIX: &str = ".restore-check";
+/// [#576 B27(f)] Where Repair writes its compacted copy before renaming it over
+/// the project. Not `.tmp`: that is what the listing offers as an interrupted
+/// save.
+const REPAIR_STAGING_SUFFIX: &str = ".repair-staging";
 
 /// `path` with `suffix` appended to its file name (`CaveA.stalx` + `.x` ->
 /// `CaveA.stalx.x`).
@@ -61,6 +65,7 @@ fn classify_candidate(stem: &str, name: &str) -> Option<(BackupKind, Option<u32>
             "-shm",
             RESTORE_STAGING_SUFFIX,
             CHECK_STAGING_SUFFIX,
+            REPAIR_STAGING_SUFFIX,
         ]
         .iter()
         .any(|suffix| rest.ends_with(suffix))
@@ -518,7 +523,8 @@ impl Database {
         Ok(db)
     }
 
-    /// Attempt to repair a corrupt database using REINDEX + VACUUM.
+    /// Attempt to repair a corrupt database using REINDEX + a rewrite of every
+    /// readable page.
     ///
     /// Always creates a backup first (`path.stalx.backup`, with numeric
     /// suffixes to avoid overwriting existing backups).
@@ -539,11 +545,30 @@ impl Database {
             tracing::warn!(error = %e, "REINDEX failed, continuing with VACUUM");
         }
 
-        // 4. VACUUM rebuilds the entire database from readable pages
-        conn.execute_batch("VACUUM;")
-            .context("VACUUM failed - database may be too damaged to repair")?;
+        // 4. Rewrite the database from its readable pages. [#576 B27(f)] `VACUUM
+        // INTO` a sibling + rename, NOT a plain `VACUUM`: that one rewrites
+        // through SQLite's temp directory (`SQLITE_TMPDIR` / `TMPDIR` / `/tmp`),
+        // a small tmpfs on many Linux systems, so a large project could not be
+        // repaired at all. The sibling sits where the project already fits - the
+        // same reasoning as `sanitize_push_snapshot` - and a leftover from a
+        // killed run is removed first (`VACUUM INTO` refuses an existing target).
+        let staging = sibling(path, REPAIR_STAGING_SUFFIX);
+        remove_with_journal(&staging);
+        if let Err(e) = conn.execute("VACUUM INTO ?1", params![staging.to_string_lossy()]) {
+            remove_with_journal(&staging);
+            return Err(anyhow::Error::from(e)
+                .context("VACUUM failed - database may be too damaged to repair"));
+        }
+        // Closed before the rename: Windows cannot replace a file SQLite holds.
+        drop(conn);
+        if let Err(e) = std::fs::rename(&staging, path) {
+            remove_with_journal(&staging);
+            return Err(anyhow::Error::from(e)
+                .context("Could not replace the project with its repaired copy"));
+        }
 
         // 5. Verify result
+        let conn = Connection::open(path).context("Failed to reopen the repaired database")?;
         let check: String = conn
             .query_row("PRAGMA quick_check", [], |row| row.get(0))
             .unwrap_or_else(|_| "error".to_string());

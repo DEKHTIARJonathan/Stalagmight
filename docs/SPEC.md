@@ -2070,7 +2070,10 @@ function useNetworkStatus() {
 
 #### Backup Before Repair
 Always create a backup before attempting repair: a numbered `<name>.stalx.backup`,
-`.backup.1`, ... that never overwrites an earlier one.
+`.backup.1`, ... that never overwrites an earlier one. Repair then rebuilds the
+indexes and rewrites the file with `VACUUM INTO` a sibling plus a rename, never a
+plain `VACUUM`, which would go through the system temp directory (a small tmpfs on
+many Linux systems).
 
 #### Restore from Backup (#576 C15)
 The Restore list offers every file the project can be restored from, each labelled

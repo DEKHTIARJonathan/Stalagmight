@@ -1,5 +1,6 @@
-//! [#576 C15, NF-AN2-7] The recovery dialog's backend: which files it offers,
-//! how it checks them, and how a restore installs one.
+//! [#576 C15, NF-AN2-7, B27(f)] The recovery dialog's backend: which files it
+//! offers, how it checks them, how a restore installs one, and how Repair
+//! rewrites a file.
 //!
 //! All files are synthetic projects this build writes, some frozen mid-write
 //! with raw SQL to produce a hot rollback journal. No fixture is read.
@@ -272,5 +273,44 @@ fn the_restore_list_labels_and_checks_every_candidate() {
     assert!(
         std::fs::read(&interrupted).unwrap() == tmp_before && journal_of(&interrupted).exists(),
         "checking a candidate with a journal leaves both untouched"
+    );
+}
+
+/// [#576 B27(f)] Repair rewrites the file with `VACUUM INTO` a sibling and a
+/// rename, not a plain `VACUUM` (which goes through SQLite's temp directory, a
+/// small tmpfs on many Linux systems), keeps its numbered backup, and leaves no
+/// staging file - also when a killed run left one behind.
+#[test]
+fn repair_rewrites_beside_the_file_and_survives_a_leftover_staging_file() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("CaveA.stalx");
+    project_file(&project, "Original");
+    let staging = temp.path().join("CaveA.stalx.repair-staging");
+    std::fs::write(&staging, b"left by a killed run").unwrap();
+
+    let (backup, ok) = Database::attempt_repair(&project).unwrap();
+    println!(
+        "repair ok={ok} backup={:?} staging left={} project holds: {}",
+        backup.file_name().unwrap(),
+        staging.exists(),
+        project_name(&project)
+    );
+    assert!(ok);
+    assert_eq!(project_name(&backup), "Original");
+    assert_eq!(project_name(&project), "Original");
+    assert!(!staging.exists(), "no staging file left behind");
+}
+
+/// [#576 B27(f)] A source-level tripwire, like the push snapshot's: Repair must
+/// never fall back to a plain `VACUUM`.
+#[test]
+fn repair_never_runs_a_plain_vacuum() {
+    let source = include_str!("repair.rs");
+    let start = source.find("pub fn attempt_repair").unwrap();
+    let body = &source[start..];
+    let body = &body[..body.find("\n    }\n").unwrap()];
+    assert!(
+        !body.contains("\"VACUUM;\"") && body.contains("VACUUM INTO"),
+        "attempt_repair must compact with VACUUM INTO a sibling, not a plain VACUUM"
     );
 }
