@@ -734,11 +734,13 @@ export default function DataTable({ sections }: DataTableProps) {
   // Draft keys come from a monotonic counter and are NEVER reused (incl. the
   // end draft, which gets a fresh key on every reset): the grid keys per-cell
   // state (missing-cell marks) by row identity, and a reused key would leak a
-  // stale mark onto an unrelated later draft.
+  // stale mark onto an unrelated later draft. Not even across a section change
+  // (#576 RV3-FE-4): a create still in flight from the previous section finds
+  // its draft by key, and a restarted counter handed that key to the new
+  // section's end draft - whose values were then sent to the shot just created.
   const draftKeyRef = useRef(-2);
   useEffect(() => {
-    setDrafts([endDraft()]);
-    draftKeyRef.current = -2;
+    setDrafts([endDraft(draftKeyRef.current--)]);
   }, [selectedSectionId]);
   // Drop drafts whose anchor shot was deleted (the end draft always survives).
   useEffect(() => {

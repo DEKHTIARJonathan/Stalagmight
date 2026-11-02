@@ -175,3 +175,37 @@ describe('DataTable draft row edited while its create is in flight (D39(f))', ()
     expect(updateShot).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * #576 RV3-FE-4 / NF-W3UI-5: the late-edit forwarding matched the draft by key alone,
+ * and draft keys restarted on every section change - so the next section's end draft
+ * carried the same key as the one whose create was still on the wire. A value typed
+ * there was sent to the shot just created in the OTHER section, and the new section's
+ * draft was wiped when the create landed.
+ */
+describe('DataTable section switch while a draft create is in flight (RV3-FE-4)', () => {
+  const sectionB: Section = { ...section, id: 2, name: 'CaveB', shots: [shot(1, 11), shot(2, 22)], next_shot_id: 3 };
+  /** Section B's end draft sits below its two shots. */
+  const B_DRAFT_ROW = 2;
+
+  it("keeps the other section's draft out of the shot created in the first", async () => {
+    render(<DataTable sections={[section, sectionB]} />);
+    await completeDraft();
+    expect(createShot).toHaveBeenCalledTimes(1);
+    expect(createShot.mock.calls[0]?.[0]).toBe(1);
+
+    // The user switches to section B while A's create_shot is on the wire, and types a
+    // length into B's end draft.
+    await act(async () => {
+      useUIStore.setState({ selection: { type: 'section', sectionId: 2 } });
+    });
+    await settle();
+    typeCell(B_DRAFT_ROW, 'length', '7');
+    await settle();
+    await act(async () => resolveCreate(created(4)));
+    await settle();
+
+    expect(updateShot, "B's draft values were written into the shot created in A").not.toHaveBeenCalled();
+    expect(screen.getByTestId(`grid-cell-${B_DRAFT_ROW}-length`).textContent, "B's draft was wiped").toContain('7');
+  });
+});

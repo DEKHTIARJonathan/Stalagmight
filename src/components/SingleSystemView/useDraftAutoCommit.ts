@@ -58,7 +58,10 @@ export function useDraftAutoCommit({
   // the follow-up update_shot writes the store, which renders synchronously - ahead of that
   // removal. Without this, that render would find the draft still complete, now with
   // `draftCommitting` already released, and create the shot a second time. A key is
-  // released once its draft is gone, since keys restart when the section changes.
+  // dropped from the set once its draft is gone, so the set stays small. Draft keys
+  // are never reused, not even across a section change (DataTable), which is what
+  // lets a create that resolves after the user switched section find nothing to
+  // forward to: the draft it was taken from is gone, and no other one has its key.
   const committedKeys = useRef(new Set<number>());
   // The drafts as last rendered, read when a create resolves: a cell commit is a
   // discrete event React has rendered long before the create's round trip ends.
