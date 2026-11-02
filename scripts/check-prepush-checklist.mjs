@@ -50,6 +50,9 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 // on-demand, so none of those define what a contributor must run. Nor does
 // os-helper.yml: a path-filtered macOS-only job for one standalone crate that
 // most contributors cannot build (its commands live in e2e/agent/os/README.md).
+// Nor does telemetry-worker.yml: a path-filtered type-check of the standalone
+// Cloudflare worker, outside the root install (its command is in
+// docs/telemetry.md).
 export const WORKFLOWS = [
   '.github/workflows/ci.yml',
   '.github/workflows/e2e-smoke.yml',

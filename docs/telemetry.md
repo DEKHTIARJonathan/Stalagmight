@@ -560,6 +560,15 @@ pnpm install --ignore-workspace
 CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... npx wrangler deploy
 ```
 
+`wrangler deploy` bundles with esbuild, which strips types without checking
+them, so type-check first: `pnpm --ignore-workspace run typecheck` (the flag
+again, or pnpm re-checks the root install before running the script). CI runs
+the same check on every change under `telemetry-worker/`
+(`.github/workflows/telemetry-worker.yml`). The worker keeps
+`@cloudflare/workers-types` and `typescript` as its own devDependencies, in its
+own `pnpm-lock.yaml`; neither ships in the app, so `THIRD-PARTY-LICENSES.md`,
+which covers the root lockfiles only, is unaffected.
+
 ### Schema changes
 
 Apply with `--remote` to target the production database:

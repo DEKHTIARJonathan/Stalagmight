@@ -182,7 +182,10 @@ Three workflows gate `master`:
 One more, narrow, workflow: **`os-helper.yml`** runs `cargo fmt --check`, clippy
 (`-D warnings`), the tests and a release build of the agent harness's standalone,
 macOS-only OS helper crate (`e2e/agent/os/helper`) on a macOS runner, and only when
-that crate or the workflow changes.
+that crate or the workflow changes. **`telemetry-worker.yml`** is the same shape for
+the standalone Cloudflare telemetry worker: it installs `telemetry-worker/` from its
+own lockfile and type-checks it (`pnpm --ignore-workspace run typecheck`), only when
+the worker or the workflow changes.
 
 `check` and `smoke` use blocklist-style `paths-ignore`, so a new or unlisted path
 defaults to *running*. Two edges are load-bearing and must not be widened:
