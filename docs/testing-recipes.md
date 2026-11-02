@@ -1541,6 +1541,13 @@ let conn = rusqlite::Connection::open_in_memory()?;
 Used by the tile cache, the `.plnx` dive-plan store, and the project database
 (`src-tauri/crates/persistence/src/persistence/sqlite/open.rs`).
 
+### Migration tests hand-write the old schema
+
+A migration test builds the file an older build wrote, so it spells out that
+version's tables in literal `CREATE TABLE` SQL on purpose - never derive them
+from today's `schema.rs` (a derived shape describes a file no build ever wrote)
+and never update them when a column is added (#576 E9(a)).
+
 ### Fixture files
 
 Resolve fixtures from the manifest directory - they are shared with the E2E
