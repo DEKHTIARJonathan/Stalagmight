@@ -337,6 +337,9 @@ Auto-save is handled entirely in the frontend via the `useAutoSave` hook (`src/h
 3. Each subsequent change resets the timer
 4. When the timer fires, `saveProject()` is called
 5. On success, `isDirty` is set to false, which cancels the timer and briefly shows "Saved"
+6. While autosave is held (see the last guard below) a pending timer is dropped
+   and nothing arms or fires; when the hold ends, a project that is still dirty
+   waits a full interval again (#576 D34)
 
 ### Guards
 
@@ -349,6 +352,9 @@ Auto-save only fires when all of these are true:
   every save of such a project is refused, so an attempt could only fail on every debounce)
 - None of the project's stored settings went unread on open (`unreadableProjectSettings`;
   every save is refused while one did, for the same reason)
+- Autosave is not held (`src/utils/autosaveHold.ts`): no "leave this project"
+  prompt is open and no discard is switching projects - the user is deciding
+  what happens to these edits, so autosave must not decide first (#576 D34)
 
 ### Configuration
 
