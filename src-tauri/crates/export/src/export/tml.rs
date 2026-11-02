@@ -521,10 +521,11 @@ fn write_shot<W: std::io::Write>(out: &mut TmlWriter<W>, shot: &ExportShot) -> R
         out.field(el::date::NAME, date)?;
     } else {
         // No survey date. The placeholder keeps the file readable everywhere;
-        // the marker tells our own reader it is not a date (#576 B2), so a
-        // re-import neither shows 1 January 2000 nor derives a declination
-        // for it. Only ever reached in the user profile: the sidecar has
-        // already replaced every date by `speleodb_date`.
+        // our reader takes it as "no date" (#576 B2), so a re-import neither
+        // shows 1 January 2000 nor derives a declination for it, and the
+        // marker says the same to a person reading the file. Only ever reached
+        // in the user profile: the sidecar has already replaced every date by
+        // `speleodb_date`.
         out.field(el::date::NAME, schema::UNDATED_PLACEHOLDER)?;
         out.comment(schema::UNDATED_MARKER)?;
     }
@@ -2541,8 +2542,7 @@ mod tests {
     /// and came back dated 1 January 2000, so a magnetic, georeferenced file
     /// derived an IGRF declination for the year 2000 and rotated the survey.
     /// The placeholder stays (SpeleoDB rejects a missing date, and Ariane's
-    /// handling of an empty one is unverified) but carries our own marker, so
-    /// exactly our placeholders read back as "no date".
+    /// handling of an empty one is unverified) and reads back as "no date".
     #[test]
     fn an_undated_section_round_trips_undated_and_unrotated() {
         let configs = reimport(&dated_project(&[None]));
@@ -2576,16 +2576,48 @@ mod tests {
         assert_eq!(configs[1].date, None);
     }
 
-    /// Exactly OUR placeholders: a section genuinely surveyed on 2000-01-01
-    /// keeps its date.
+    /// #576 B2-MARKER fallback: ANY 2000-01-01 reads back as undated, marker
+    /// or not, so a section genuinely surveyed that day imports undated. That
+    /// is the accepted cost of reading every unmarked placeholder (a file
+    /// Ariane re-saved, an export from before the marker) as what it is.
     #[test]
-    fn a_genuine_first_of_january_2000_keeps_its_date() {
+    fn a_first_of_january_2000_reads_back_undated() {
         let new_year = chrono::NaiveDate::from_ymd_opt(2000, 1, 1);
         let configs = reimport(&dated_project(&[new_year]));
-        assert_eq!(configs[0].date, new_year);
+        assert_eq!(configs[0].date, None);
         assert_eq!(
-            configs[0].azimuth_reference.unwrap().source,
-            crate::models::CorrectionSource::IgrfAuto { epoch_year: 2000 }
+            configs[0].azimuth_reference.unwrap(),
+            AzimuthReference::magnetic(0.0, crate::models::CorrectionSource::Unknown),
+            "no date means no epoch to evaluate a declination at"
+        );
+    }
+
+    /// The SpeleoDB sidecar never carries the marker (`speleodb_date` writes
+    /// the bare placeholder) and SpeleoDB adoption re-imports it through the
+    /// same reader, so an undated section must come back undated from it too.
+    #[test]
+    fn an_undated_section_comes_back_undated_from_the_speleodb_sidecar() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sidecar = dir.path().join("sidecar.tmlu");
+        export_tml_for_speleodb(&dated_project(&[None]), &sidecar).unwrap();
+        let content = std::fs::read_to_string(&sidecar).unwrap();
+        assert!(
+            !content.contains(schema::UNDATED_MARKER),
+            "the sidecar is the unmarked shape this test is about"
+        );
+
+        let tml = crate::parsers::tml::parse_tml(&sidecar).unwrap();
+        let configs = crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true)
+            .unwrap()
+            .0;
+        let section = configs
+            .iter()
+            .find(|c| c.name.as_deref() == Some("Section0"))
+            .unwrap();
+        assert_eq!(section.date, None);
+        assert_eq!(
+            section.azimuth_reference.unwrap(),
+            AzimuthReference::magnetic(0.0, crate::models::CorrectionSource::Unknown)
         );
     }
 

@@ -398,13 +398,15 @@ Parsed but dropped:
   them.
 - **Dates parse strictly as `%Y-%m-%d`.** Any other spelling reads as no date at
   all, with nothing said (#427 records this; it is not yet fixed).
-- **Our own export's "no date" placeholder reads back as no date.** A dateless
-  section is exported as `2000-01-01` followed by the XML comment
-  `<!--stalagmight:no-survey-date-->` (see [Ariane export](ariane-export.md)),
-  and exactly that combination imports as no date, so it neither shows a
-  fabricated date nor sets the declination epoch (#576 B2). The same date
-  without the marker - from Ariane, or from an export made before the marker
-  existed - is a real date and is kept.
+- **`2000-01-01` reads back as no date.** A dateless section is exported as
+  `2000-01-01` followed by the XML comment `<!--stalagmight:no-survey-date-->`
+  (see [Ariane export](ariane-export.md)). The importer reads every
+  `2000-01-01` as no date, with or without the comment, so the placeholder
+  neither shows a fabricated date nor sets the declination epoch (#576 B2).
+  The comment alone is not enough: Ariane drops it when it re-saves a file,
+  exports from before it existed never had it, and the SpeleoDB sidecar never
+  writes it. The cost: a survey genuinely dated 1 January 2000 also imports
+  undated.
 
 Structural:
 

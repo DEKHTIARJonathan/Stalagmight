@@ -458,13 +458,6 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                     }
                 }
             }
-            // Our exporter's "this date is a placeholder" marker (#576 B2).
-            // Every other comment is not document content and stays ignored.
-            Ok(Event::Comment(c)) => {
-                if in_shot && c.as_ref().trim_ascii() == schema::UNDATED_MARKER.as_bytes() {
-                    current_fields.insert(UNDATED_MARKER_KEY, String::new());
-                }
-            }
             Ok(Event::Eof) => {
                 if open_elements > 0 {
                     bail!(
@@ -673,22 +666,19 @@ fn parse_explorer_field(raw: &str) -> Option<String> {
     }
 }
 
-/// Field-map key under which the parse loop records our exporter's
-/// [`schema::UNDATED_MARKER`] comment on the current row. Not an element name,
-/// so no file field can collide with it.
-const UNDATED_MARKER_KEY: &str = "#undated-marker";
-
 /// The row's survey date, strictly `%Y-%m-%d`.
 ///
-/// [`schema::UNDATED_PLACEHOLDER`] carrying our [`schema::UNDATED_MARKER`] is
-/// "no date" (#576 B2): our exporter wrote it for a section with none, and
-/// reading it as 1 January 2000 fabricated a date AND derived a declination
-/// for it. Only the MARKED placeholder - the same date from Ariane, or from an
-/// export made before the marker existed, is indistinguishable from a real one
-/// and is kept.
+/// [`schema::UNDATED_PLACEHOLDER`] is "no date" (#576 B2): our exporter writes
+/// it for a section with none, and reading it as 1 January 2000 fabricated a
+/// date AND derived a declination for it. Every 2000-01-01 reads as undated,
+/// whether or not our [`schema::UNDATED_MARKER`] comment follows it: Ariane
+/// drops the comment when it re-saves a file, exports from before the marker
+/// never had it, and the SpeleoDB sidecar never writes it. A survey genuinely
+/// dated 1 January 2000 therefore imports undated, the accepted cost of not
+/// rotating every re-imported placeholder (B2-MARKER).
 fn shot_date(fields: &HashMap<&str, String>) -> Option<NaiveDate> {
     let raw = fields.get("date")?;
-    if fields.contains_key(UNDATED_MARKER_KEY) && raw == schema::UNDATED_PLACEHOLDER {
+    if raw == schema::UNDATED_PLACEHOLDER {
         return None;
     }
     NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok()
@@ -1999,14 +1989,17 @@ mod tests {
     use super::test_helpers::*;
     use super::*;
 
-    /// #576 B2: only OUR placeholder - 2000-01-01 followed by our marker
-    /// comment - reads as "no date". The same date unmarked (Ariane's, or an
-    /// export from before the marker) is a date; the marker never erases any
-    /// other date; any other comment is ignored.
+    /// #576 B2-MARKER: the placeholder 2000-01-01 reads as "no date" whether
+    /// or not our marker comment follows it - a file Ariane re-saved drops the
+    /// comment, an export from before the marker never had it, and the
+    /// SpeleoDB sidecar never writes it. The marker never erases any other
+    /// date, and any other comment changes nothing.
     #[test]
-    fn only_the_marked_placeholder_date_reads_as_undated() {
+    fn the_placeholder_date_reads_as_undated_with_or_without_the_marker() {
+        // Every row hangs off the START, so no two sections chain end to start
+        // (#412 would sew same-trip neighbours into one).
         let row = |id: i64, section: &str, date_and_comment: &str| {
-            tml_shot_xml(id, id - 1, "REAL", section)
+            tml_shot_xml(id, 0, "REAL", section)
                 .replace("<Date>2024-06-15</Date>", date_and_comment)
         };
         let marker = format!("<!--{}-->", schema::UNDATED_MARKER);
@@ -2034,9 +2027,9 @@ mod tests {
                 .date
         };
         assert_eq!(date_of("Marked"), None);
-        assert_eq!(date_of("Unmarked"), NaiveDate::from_ymd_opt(2000, 1, 1));
+        assert_eq!(date_of("Unmarked"), None);
         assert_eq!(date_of("Real"), NaiveDate::from_ymd_opt(2019, 2, 3));
-        assert_eq!(date_of("Other"), NaiveDate::from_ymd_opt(2000, 1, 1));
+        assert_eq!(date_of("Other"), None);
     }
 
     /// The reader keys every per-shot element the exporter writes from the same

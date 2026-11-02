@@ -153,21 +153,22 @@ pub const PROFILE_TYPE_VERTICAL: &str = "VERTICAL";
 ///
 /// A date, not an empty element: SpeleoDB rejects the whole file when `<Date>`
 /// is missing or empty, and whether Ariane opens an empty one is unverified.
-/// On its own it is indistinguishable from a survey genuinely dated 1 January
-/// 2000, which is what [`UNDATED_MARKER`] is for (#576 B2).
+/// Our reader takes EVERY 2000-01-01 as "no date", marked or not (#576 B2,
+/// B2-MARKER), so a survey genuinely dated 1 January 2000 imports undated.
 pub const UNDATED_PLACEHOLDER: &str = "2000-01-01";
 
 /// Text of the XML comment the exporter writes right after a `<Date>` that is
-/// [`UNDATED_PLACEHOLDER`] standing for "no date", so our own reader can tell
-/// exactly its placeholders from a real 2000-01-01 (#576 B2).
+/// [`UNDATED_PLACEHOLDER`] standing for "no date" (#576 B2), so a person
+/// reading the file can tell the placeholder from a date. Our reader does not
+/// need it: it reads every placeholder as undated, because the comment does
+/// not survive everywhere (Ariane drops it on re-save, older exports and the
+/// SpeleoDB sidecar never carry it).
 ///
 /// A comment rather than an element because nothing in the TML schema is a
 /// field Ariane ignores: `Name`, `Locked`, `Profiletype` and `Excluded` all
 /// mean something to it, and `UUID` is a shot's identity. A comment is not
 /// document content at all under the XML specification, so every XML reader -
-/// Ariane's, SpeleoDB's - skips it, and Ariane shows nothing. If Ariane re-saves
-/// the file the comment is gone and the placeholder reads back as a real date,
-/// which is no worse than a file written before the marker existed.
+/// Ariane's, SpeleoDB's - skips it, and Ariane shows nothing.
 pub const UNDATED_MARKER: &str = "stalagmight:no-survey-date";
 
 /// Ariane's spelling of "nobody filled in this person". The exporter writes it
