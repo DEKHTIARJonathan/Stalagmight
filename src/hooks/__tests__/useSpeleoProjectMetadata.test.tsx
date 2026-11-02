@@ -82,6 +82,66 @@ describe('useSpeleoProjectMetadata reloads (#576 D26)', () => {
     expect(result.current.canSave).toBe(true);
   });
 
+  /**
+   * #576 RV4-FE-SP2: the reload keeps only the fields the user TYPED. It used to keep
+   * the whole previous form, so every untouched field held its old value, differed
+   * from the new baseline, and the next Save PATCHed it - silently reverting what
+   * another client had changed on the server.
+   */
+  it('rebases the untouched fields on the new truth, so Save sends only what was typed', async () => {
+    invokeIpcMock.mockResolvedValueOnce({ ...META, latitude: 10, longitude: 20 });
+    const { result } = renderHook(() => useSpeleoProjectMetadata());
+    await waitFor(() => expect(result.current.form?.name).toBe('CaveA'));
+
+    act(() => result.current.update('description', 'typed by the user'));
+    // Another client changed the country and the coordinates meanwhile.
+    invokeIpcMock.mockResolvedValueOnce({ ...META, country: 'FR', latitude: 11, longitude: 21 });
+    await act(async () => {
+      await result.current.reload();
+    });
+
+    const formAfterReload = result.current.form;
+    invokeIpcMock.mockResolvedValueOnce({ ...META, country: 'FR', latitude: 11, longitude: 21, description: 'typed by the user' });
+    await act(async () => {
+      await result.current.handleSave();
+    });
+    const patchCall = invokeIpcMock.mock.calls.find(([command]) => command === 'speleodb_patch_project');
+    console.log('[SP2] form after the reload:', JSON.stringify(formAfterReload));
+    console.log('[SP2] PATCH sent:', JSON.stringify(patchCall?.[1]));
+    expect(formAfterReload).toMatchObject({
+      description: 'typed by the user',
+      country: 'FR',
+      latitude: '11',
+      longitude: '21',
+    });
+    expect(patchCall?.[1]).toEqual({
+      patch: {
+        name: null,
+        description: 'typed by the user',
+        country: null,
+        visibility: null,
+        coordinates_edited: false,
+        latitude: null,
+        longitude: null,
+      },
+    });
+  });
+
+  it('keeps a typed coordinate pair whole across a reload', async () => {
+    invokeIpcMock.mockResolvedValueOnce({ ...META, latitude: 10, longitude: 20 });
+    const { result } = renderHook(() => useSpeleoProjectMetadata());
+    await waitFor(() => expect(result.current.form?.latitude).toBe('10'));
+
+    // Only the latitude was retyped, but the two travel as one pair.
+    act(() => result.current.update('latitude', '12'));
+    invokeIpcMock.mockResolvedValueOnce({ ...META, latitude: 11, longitude: 21 });
+    await act(async () => {
+      await result.current.reload();
+    });
+
+    expect(result.current.form).toMatchObject({ latitude: '12', longitude: '20' });
+  });
+
   it('still refreshes a form the user has not touched', async () => {
     invokeIpcMock.mockResolvedValueOnce(META);
     const { result } = renderHook(() => useSpeleoProjectMetadata());

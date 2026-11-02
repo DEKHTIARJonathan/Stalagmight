@@ -73,14 +73,33 @@ interface MetadataState {
 }
 
 /**
- * [#576 D26] Fold a freshly loaded server truth in: the baseline always moves, the
- * form only when the user has not edited it (it still equals the previous
- * baseline's form). A reload used to replace both, discarding what was being typed.
+ * [#576 D26] Fold a freshly loaded server truth in: the baseline always moves, and
+ * the form takes the new truth for every field except the ones the user has typed
+ * (those that differ from the previous baseline's form), which keep what was typed.
+ * A reload used to replace both, discarding what was being typed.
+ *
+ * Field by field, not the whole form (#576 RV4-FE-SP2): keeping the entire previous
+ * form left every UNTOUCHED field on its old value, which then differed from the new
+ * baseline, so the next Save PATCHed it and silently reverted what another client had
+ * changed. Latitude and longitude travel as one pair, as the PATCH sends them.
  */
 function foldLoaded(prev: MetadataState, loaded: SpeleoProjectMetadata): MetadataState {
-  const edited =
-    prev.form !== null && prev.baseline !== null && !sameForm(prev.form, toForm(prev.baseline));
-  return { baseline: loaded, form: edited ? prev.form : toForm(loaded) };
+  const fresh = toForm(loaded);
+  const typed = prev.form;
+  if (typed === null || prev.baseline === null) return { baseline: loaded, form: fresh };
+  const was = toForm(prev.baseline);
+  const keep = <K extends keyof SpeleoMetadataForm>(key: K): SpeleoMetadataForm[K] =>
+    typed[key] !== was[key] ? typed[key] : fresh[key];
+  const coordinatesTyped = typed.latitude !== was.latitude || typed.longitude !== was.longitude;
+  const form: SpeleoMetadataForm = {
+    name: keep('name'),
+    description: keep('description'),
+    country: keep('country'),
+    visibility: keep('visibility'),
+    latitude: coordinatesTyped ? typed.latitude : fresh.latitude,
+    longitude: coordinatesTyped ? typed.longitude : fresh.longitude,
+  };
+  return { baseline: loaded, form: sameForm(form, fresh) ? fresh : form };
 }
 
 /**
