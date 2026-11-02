@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import i18n from '../i18n';
-import { invokeIpc, type CommandResultCommand, type ForwardedInvoke, type IpcCallArgs } from '../utils/ipc';
+import { invokeIpc, type CommandResultCommand, type ForwardedInvoke, type QueuedCallArgs } from '../utils/ipc';
 import { trackCommand, setSource, peekProjectActionSource, clearProjectActionSource } from '../utils/telemetry';
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
@@ -674,7 +674,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   /** Shared helper: invoke IPC command, refresh state on success, mark dirty. */
   const executeCommand = async <K extends CommandResultCommand>(
     command: K,
-    typedArgs: IpcCallArgs<K> | undefined,
+    typedArgs: QueuedCallArgs<K>,
     meta: { purpose: string; fields?: Record<string, unknown>; readOnlyNoticeInline?: boolean }
   ): Promise<CommandResult> => {
     // Checked against the command's manifest entry at the call site (#576 C3); forwarded as is.
@@ -808,7 +808,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   /** Shared helper for undo/redo operations: invoke, toast on failure, always refresh. */
   const executeUndoRedo = async <K extends CommandResultCommand>(
     command: K,
-    typedArgs: IpcCallArgs<K> | undefined,
+    typedArgs: QueuedCallArgs<K>,
     meta: { purpose: string; fields?: Record<string, unknown> },
     toastId: string,
     checkPartialFailure: boolean,

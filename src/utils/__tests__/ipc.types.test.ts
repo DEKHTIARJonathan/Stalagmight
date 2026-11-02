@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { invokeIpc } from '../ipc';
+import { invokeIpc, type QueuedCallArgs } from '../ipc';
 import { IPC_EVENTS, listenIpc } from '../ipcEvents';
 import type { BatchCommand, CommandResult } from '../../types/commands';
 import type { ProjectState } from '../../types/ipc/ProjectState';
@@ -42,8 +42,30 @@ function typeContract(): void {
   void batch;
 }
 
+/**
+ * [#576 RV5-PI-6] The mutation queue's entry (`executeCommand` / `executeUndoRedo`
+ * in projectStore) types its args with `QueuedCallArgs<K>`. It used to be
+ * `IpcCallArgs<K> | undefined` for every command, so a command with a required
+ * argument could be queued with none and tsc stayed green, while `invokeIpc`
+ * itself refuses that. Never called.
+ */
+function queueContract(): void {
+  // @ts-expect-error delete_section takes a required sectionId: it cannot be queued with no args
+  const none: QueuedCallArgs<'delete_section'> = undefined;
+  // @ts-expect-error a required argument is missing
+  const empty: QueuedCallArgs<'delete_section'> = {};
+  const given: QueuedCallArgs<'delete_section'> = { sectionId: 1 };
+  // A command with no required argument may still be queued with none.
+  const undo: QueuedCallArgs<'undo'> = undefined;
+  void none;
+  void empty;
+  void given;
+  void undo;
+}
+
 describe('IPC typing contract (#576 C3, C13)', () => {
   it('is enforced by tsc, not at runtime', () => {
     expect(typeof typeContract).toBe('function');
+    expect(typeof queueContract).toBe('function');
   });
 });

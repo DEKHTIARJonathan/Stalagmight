@@ -34,6 +34,14 @@ type IpcRest<K extends IpcCommandName> =
 /** The args object `command` takes, as a caller writes it (an omittable key may be `undefined`). */
 export type IpcCallArgs<K extends IpcCommandName> = WireArgs<IpcArgs<K>>;
 
+/**
+ * [#576 RV5-PI-6] The args a caller hands a dispatcher that forwards `command` (the
+ * mutation queue's `executeCommand` / `executeUndoRedo`): omittable only when the
+ * command takes no required argument - the rule {@link IpcRest} gives `invokeIpc`.
+ */
+export type QueuedCallArgs<K extends IpcCommandName> =
+  Record<string, never> extends IpcArgs<K> ? IpcCallArgs<K> | undefined : IpcCallArgs<K>;
+
 /** The commands that answer with a `CommandResult` - the ones projectStore's mutation queue runs. */
 export type CommandResultCommand = {
   [K in IpcCommandName]: IpcResult<K> extends CommandResult ? K : never;
@@ -117,7 +125,7 @@ export const invokeIpc = (IPC_TRACE ? invokeWithTrace : invokeNoTrace) as Invoke
  * queue) calls `invokeIpc`: `(invokeIpc as ForwardedInvoke)(command, args, meta)`.
  * The name is still checked and the result is still the one the command
  * declares; the arguments were checked where the dispatcher itself was called,
- * against `IpcCallArgs<K>`. A type, not a second export, so a test that mocks
+ * against `QueuedCallArgs<K>`. A type, not a second export, so a test that mocks
  * this module with `{ invokeIpc }` alone still mocks every call.
  */
 export type ForwardedInvoke = <K extends IpcCommandName>(
