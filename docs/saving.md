@@ -250,7 +250,11 @@ purpose, because the session stays on the managed file.
 ```
 
 A successful save's `CommandResult.warnings` is what it could not keep:
-`UNDO_HISTORY_DROPPED`, `DISPLAY_SETTINGS_NOT_SAVED` and `DATABASE_NOT_REOPENED`.
+`UNDO_HISTORY_DROPPED`, `DISPLAY_SETTINGS_NOT_SAVED`, `DATABASE_NOT_REOPENED` and
+`SIDE_TABLES_NOT_CARRIED` (#576 RV2-R-7: a Save As to another file away from an open
+file whose database could not be reopened - the way out - goes ahead without the
+ignored warnings, the SpeleoDB link and the undo-history markers only that file
+holds, and says so).
 Each becomes one warning toast (`saveFeedback.ts`, key `save-warning:<code>`): the
 save succeeded with a caveat, nothing needs deciding, and the next save starts
 clean - so not a dialog and not a banner (docs/notifications.md). The SpeleoDB

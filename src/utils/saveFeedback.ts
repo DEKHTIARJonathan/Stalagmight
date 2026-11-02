@@ -173,6 +173,9 @@ const SAVE_WARNING_TEXT: Record<string, string> = {
   DISPLAY_SETTINGS_NOT_SAVED: 'saveWarnings.displaySettingsNotSaved',
   // Written, but the file could not be reopened afterwards.
   DATABASE_NOT_REOPENED: 'saveWarnings.databaseNotReopened',
+  // A Save As away from an open file that could not be read: the new file has no
+  // ignored warnings, SpeleoDB link or undo-history markers (#576 RV2-R-7).
+  SIDE_TABLES_NOT_CARRIED: 'saveWarnings.sideTablesNotCarried',
 };
 
 /**

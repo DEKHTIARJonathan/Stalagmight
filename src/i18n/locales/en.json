@@ -3835,6 +3835,7 @@
     "undoHistoryDropped": "Saved, but the undo history could not be kept and was cleared.",
     "displaySettingsNotSaved": "Saved, but display settings could not be kept - they reset on reopen.",
     "databaseNotReopened": "Saved, but the file could not be reopened - reopen the project.",
+    "sideTablesNotCarried": "Saved, but the original file could not be read: the new file has no ignored warnings, SpeleoDB link or undo-history markers.",
     "other": "Saved, with a warning: {{message}}"
   }
 }

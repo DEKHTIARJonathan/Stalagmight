@@ -51,6 +51,10 @@ pub(super) const UNDO_HISTORY_DROPPED_CODE: &str = "UNDO_HISTORY_DROPPED";
 /// The warning on a save that could not carry the project's display settings.
 pub(super) const DISPLAY_SETTINGS_NOT_SAVED_CODE: &str = "DISPLAY_SETTINGS_NOT_SAVED";
 
+/// [#576 RV2-R-7] The warning on a Save As away from an open file that could not
+/// be reopened: the side tables only that file holds are not in the new one.
+pub(super) const SIDE_TABLES_NOT_CARRIED_CODE: &str = "SIDE_TABLES_NOT_CARRIED";
+
 /// How a save relates to the file the session has open. Resolved once, by
 /// [`SaveRequest::mode`] before anything is written, so no step has to infer it
 /// again.
@@ -372,10 +376,22 @@ impl AppState {
             .database
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // No handle: a first save, or a Save As away from a file that could not be
-        // reopened (`restore_missing_database`). Nothing on disk to carry, and no
-        // link, so the mode above stands.
+        // No handle: a first save (nothing on disk to carry), or a Save As away from
+        // a file that could not be reopened (`restore_missing_database`) - the user's
+        // way out, which goes ahead. The mode above stands (no link could be read).
+        // In the second case the tables only that file holds are UNREADABLE, not
+        // absent, and the new file goes without them: say so (#576 RV2-R-7).
         let Some(db) = db_guard.as_ref() else {
+            if !request.deferred {
+                carried.warnings.push(ValidationWarning {
+                    code: SIDE_TABLES_NOT_CARRIED_CODE.to_owned(),
+                    message: "The project was saved, but the original file could not be read, \
+                              so the new file is without its list of ignored warnings, its \
+                              SpeleoDB link and its undo-history markers."
+                        .to_owned(),
+                    severity: WarningSeverity::Warning,
+                });
+            }
             return Ok(carried);
         };
         let mut mode_known = false;
