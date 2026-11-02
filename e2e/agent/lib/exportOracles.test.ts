@@ -28,6 +28,7 @@ import {
   escapeCsvMirror,
   exportBaseName,
   ExportOracleError,
+  domRouteRewritesPath,
   finalizeExportPath,
   multisetDelta,
   naturalExtension,
@@ -191,6 +192,24 @@ describe('finalizeExportPath (ExportControls.handleExport)', () => {
     // ... except for TML, where `.stalx` is neither .tml nor .tmlu, so it is
     // still rewritten. There is no shape where the modal hands the raw path on.
     expect(finalizeExportPath('/x/cave.stalx', 'tml')).toBe('/x/cave.tml');
+  });
+});
+
+// #576 NF-W2FE-2: the Replace File alert (overwriteGuard.resolveSavePath) can only
+// follow a REWRITTEN answer, and the scenario answers it in clickAndAnswerSave.
+describe('domRouteRewritesPath (when the Replace File alert can appear)', () => {
+  it('is true for every format on the project-owned shapes - the .plnx probe can always meet the alert', () => {
+    for (const format of ['csv', 'json', 'tml', 'png', 'svg', 'pdf'] as const) {
+      expect(domRouteRewritesPath('/x/cave.plnx', format), `plnx ${format}`).toBe(true);
+      expect(domRouteRewritesPath('/x/cave.stalx', format), `stalx ${format}`).toBe(true);
+    }
+  });
+
+  it('is true for an appended extension and false for a name the app keeps', () => {
+    expect(domRouteRewritesPath('/x/out.tml.txt', 'tml')).toBe(true);
+    expect(domRouteRewritesPath('/x/export-1.csv', 'csv')).toBe(false);
+    expect(domRouteRewritesPath('/x/export-1.tmlu', 'tml')).toBe(false);
+    expect(domRouteRewritesPath('/x/NAME.TMLU', 'tmlu')).toBe(false);
   });
 });
 

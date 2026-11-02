@@ -304,6 +304,11 @@ export const EXPORT_TESTIDS: ReadonlySet<string> = new Set([
   // save dialog whenever any section is unanchored
   'tml-unanchored-warning-continue',
   'tml-unanchored-warning-cancel',
+  // the Replace File alert (#576 D35): raised after the save dialog when the
+  // app's extension fix-up renamed the answer onto a file that exists (or whose
+  // existence it could not probe). Answered inside `clickAndAnswerSave`.
+  'overwrite-rewritten-replace',
+  'overwrite-rewritten-cancel',
 ]);
 
 export function isAllowedTestId(testid: string): boolean {
@@ -662,6 +667,13 @@ export interface SaveDialogOutcome {
   consumed: boolean;
   /** Did the TML unanchored-sections notice appear instead? */
   sawUnanchoredNotice: boolean;
+  /**
+   * Did the Replace File alert appear after the picker (#576 D35)? It is
+   * answered Replace, so the move still exports: every path it can name is the
+   * scenario's own scratch file, and leaving it open would block every later
+   * move behind a modal (NF-W2FE-2).
+   */
+  sawOverwritePrompt: boolean;
   /** `activeDialog` right after the move settled. */
   activeDialog: string | null;
   toastKeys: string[];
@@ -686,6 +698,14 @@ export interface SaveDialogOutcome {
  * unanchored, so the answer is simply never consumed, and the caller re-arms it
  * on `tml-unanchored-warning-continue` - which is the same function called with
  * `skipTmlAnchorCheck`.
+ *
+ * THE REPLACE FILE ALERT. A consumed answer whose name the app rewrites (a
+ * known extension replaced, an unknown one appended - `domRouteRewritesPath`)
+ * goes through `resolveSavePath`, which asks before writing over an existing
+ * file at the NEW name and asks anyway when it cannot probe it. The
+ * `plnxSibling` and `openProject` shapes are always rewritten, so their moves
+ * can stop on that alert; it is answered here (Replace) and reported as
+ * `sawOverwritePrompt`.
  */
 export async function clickAndAnswerSave(
   ctx: ScenarioContext,
@@ -708,9 +728,9 @@ export async function clickAndAnswerSave(
     if (queue.length > 0) throw new Error('a save dialog answer is already pending');
 
     const el = q(trigger);
-    if (!el) return { performed: false, reason: 'absent', consumed: false, sawUnanchoredNotice: false, activeDialog: null, toastKeys: [] };
+    if (!el) return { performed: false, reason: 'absent', consumed: false, sawUnanchoredNotice: false, sawOverwritePrompt: false, activeDialog: null, toastKeys: [] };
     if (!isVisible(el) || isOff(el)) {
-      return { performed: false, reason: 'not-actionable', consumed: false, sawUnanchoredNotice: false, activeDialog: null, toastKeys: [] };
+      return { performed: false, reason: 'not-actionable', consumed: false, sawUnanchoredNotice: false, sawOverwritePrompt: false, activeDialog: null, toastKeys: [] };
     }
 
     const id = 'export-fuzz-' + Date.now() + '-' + Math.floor(Math.random() * 1e9);
@@ -744,12 +764,23 @@ export async function clickAndAnswerSave(
     }
     await settle(capMs);
 
+    // The Replace File alert sits between the picker and the write; answer it
+    // so the export runs and no modal outlives the move.
+    let sawPrompt = false;
+    if (consumed && shown('overwrite-rewritten-prompt')) {
+      sawPrompt = true;
+      const replace = q('overwrite-rewritten-replace');
+      if (replace) dispatchClick(replace);
+      await settle(capMs);
+    }
+
     const state = ui();
     return {
       performed: true,
       reason: consumed ? null : 'unconsumed',
       consumed: consumed,
       sawUnanchoredNotice: sawNotice,
+      sawOverwritePrompt: sawPrompt,
       activeDialog: state.activeDialog == null ? null : String(state.activeDialog),
       toastKeys: toastKeys(),
     };

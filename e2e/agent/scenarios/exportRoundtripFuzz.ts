@@ -460,6 +460,7 @@ import {
   csvTextViolations,
   exportBaseName,
   ExportOracleError,
+  domRouteRewritesPath,
   finalizeExportPath,
   multisetDelta,
   newToastKeys,
@@ -1109,6 +1110,13 @@ export const exportRoundtripFuzz: Scenario = {
           ctx.metric('skip:save-picker-unconsumed');
           rmrf(moveDir);
           return;
+        }
+        // The Replace File alert (answered Replace by clickAndAnswerSave). Only
+        // a path the app rewrote can raise it; one on any other move is the
+        // app asking about a name the OS dialog already confirmed.
+        if (answered.sawOverwritePrompt) {
+          ctx.metric(`overwritePrompt:${draw.shape}`);
+          if (!domRouteRewritesPath(requested, draw.format)) ctx.metric('overwritePrompt:unrewrittenPath');
         }
         toastKeys = newToastKeys(toastsBefore, await readToastSnapshot(ctx));
         // A UI route has no promise to inspect. The app's own report is the

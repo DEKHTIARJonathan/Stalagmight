@@ -266,6 +266,19 @@ export function finalizeExportPath(selected: string, format: ExportFormat): stri
   return ensureExtensionMirror(selected, naturalExtension(format));
 }
 
+/**
+ * Does a DOM-route export write somewhere OTHER than the answered path? Only
+ * then can the app's Replace File alert appear (`resolveSavePath` in
+ * src/utils/overwriteGuard.ts checks a rewritten name, never the answer the OS
+ * dialog already confirmed). `plnxSibling` and `openProject` are always
+ * rewritten (`.plnx` / `.stalx` are known extensions, replaced by the
+ * format's), so the scenario must expect, and answer, that alert there
+ * (#576 NF-W2FE-2).
+ */
+export function domRouteRewritesPath(selected: string, format: ExportFormat): boolean {
+  return finalizeExportPath(selected, format) !== selected;
+}
+
 // ---------------------------------------------------------------------------
 // Mirror 2: the CSV escaping rule
 // ---------------------------------------------------------------------------
