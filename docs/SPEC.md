@@ -2410,6 +2410,11 @@ section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out
 }
 ```
 
+`lrud` is `[left, right, up, down]` in metres. A side nobody measured is
+`null` - `[1.2, null, null, null]` is a shot where only the left wall was
+taped - and `0.0` always means a wall measured at zero, matching the empty
+CSV cell. A shot with no LRUD at all has no `lrud` key.
+
 ---
 
 ## 18. Technical Stack
