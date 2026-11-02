@@ -1,0 +1,273 @@
+/**
+ * #576 D10 / NF-AN6-1: the Global View retries a system whose map geometry
+ * failed to load only when the user asks.
+ *
+ * `gpsProjects` was a fresh `.filter()` on every render, and it is a dependency
+ * of the lazy-load effect, which loads the visible systems on every run - and the
+ * store's batch loader re-requested systems in 'error'. A failing system set
+ * 'loading' then 'error', each a store write that re-rendered the map, which
+ * re-ran the effect, which retried it: an unbounded loop that re-read the whole
+ * file from disk in Rust each time, for as long as the system was on screen.
+ *
+ * Decided ("Retry on user action only"): a failed system stays an error marker
+ * until the user clicks it, reloads the recent list, or toggles the view mode.
+ *
+ * Component tier: the real GlobalViewMap and globalViewStore, with maplibre-gl,
+ * the WebGL survey layer and the IPC bridge replaced by fakes.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { useMemo, useState } from 'react';
+
+const h = vi.hoisted(() => {
+  type Handler = (e?: unknown) => void;
+  const state = { map: null as FakeMap | null, markersCreated: 0 };
+  class FakeMap {
+    private handlers = new Map<string, Set<Handler>>();
+    private container: HTMLElement;
+    dragRotate = { disable() {} };
+    touchPitch = { disable() {} };
+    touchZoomRotate = { disableRotation() {} };
+    keyboard = { disable() {} };
+    doubleClickZoom = { disable() {} };
+    constructor(opts: { container: HTMLElement }) {
+      this.container = opts.container;
+      state.map = this;
+    }
+    addControl() {}
+    on(ev: string, fn: Handler) {
+      if (!this.handlers.has(ev)) this.handlers.set(ev, new Set());
+      this.handlers.get(ev)!.add(fn);
+    }
+    off(ev: string, fn: Handler) {
+      this.handlers.get(ev)?.delete(fn);
+    }
+    once() {}
+    fire(ev: string) {
+      for (const fn of [...(this.handlers.get(ev) ?? [])]) fn({});
+    }
+    getBounds() {
+      return { contains: () => true, getCenter: () => ({ lng: 0, lat: 0 }) };
+    }
+    getCenter() {
+      return { lng: 0, lat: 0 };
+    }
+    getZoom() {
+      return 10;
+    }
+    getContainer() {
+      return this.container;
+    }
+    getSource() {
+      return undefined;
+    }
+    fitBounds() {}
+    easeTo() {}
+    flyTo() {}
+    setMaxBounds() {}
+    setMinZoom() {}
+    triggerRepaint() {}
+    remove() {}
+  }
+  class FakeMarker {
+    private el: HTMLElement;
+    constructor(opts: { element: HTMLElement }) {
+      this.el = opts.element;
+      state.markersCreated += 1;
+    }
+    setLngLat() {
+      return this;
+    }
+    addTo() {
+      document.body.appendChild(this.el);
+      return this;
+    }
+    remove() {
+      this.el.remove();
+    }
+    getElement() {
+      return this.el;
+    }
+  }
+  class FakePopup {
+    setLngLat() {
+      return this;
+    }
+    setDOMContent() {
+      return this;
+    }
+    addTo() {
+      return this;
+    }
+    remove() {}
+  }
+  class FakeBounds {
+    constructor(
+      private sw: [number, number],
+      private ne: [number, number]
+    ) {}
+    getSouthWest() {
+      return { lng: this.sw[0], lat: this.sw[1] };
+    }
+    getNorthEast() {
+      return { lng: this.ne[0], lat: this.ne[1] };
+    }
+    getCenter() {
+      return { lng: (this.sw[0] + this.ne[0]) / 2, lat: (this.sw[1] + this.ne[1]) / 2 };
+    }
+  }
+  class Noop {}
+  return { state, FakeMap, FakeMarker, FakePopup, FakeBounds, Noop };
+});
+
+vi.mock('maplibre-gl', () => ({
+  default: {
+    Map: h.FakeMap,
+    Marker: h.FakeMarker,
+    Popup: h.FakePopup,
+    LngLatBounds: h.FakeBounds,
+    NavigationControl: h.Noop,
+    ScaleControl: h.Noop,
+  },
+}));
+vi.mock('../GlobalSurveyLayer', () => ({
+  default: class {
+    update() {}
+    setVisible() {}
+    setSelectedSystems() {}
+    applyThemeColors() {}
+    setPrecision() {}
+    setSearchFilter() {}
+    destroy() {}
+  },
+  generateSystemColor: () => '#336699',
+}));
+const invokeIpcMock = vi.hoisted(() => vi.fn());
+vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+
+import GlobalViewMap from '../GlobalViewMap';
+import { useGlobalViewStore } from '../../../store/globalViewStore';
+import type { ProjectMetadata } from '../../../types/project';
+import { testIdPart } from '../../../utils/testId';
+
+const GOOD = '/caves/CaveA.stalx';
+const BROKEN = '/caves/CaveB.stalx';
+
+const project = (file_path: string, lng: number): ProjectMetadata =>
+  ({
+    file_path,
+    name: file_path.slice(7, -6),
+    gps_center: [lng, 20],
+    total_length: 100,
+    station_count: 10,
+  }) as unknown as ProjectMetadata;
+
+const GEOMETRY = { origin: [0, 20], shots: [] };
+
+/** Geometry IPC calls per file. */
+function geometryCalls(path: string): number {
+  return invokeIpcMock.mock.calls.filter(
+    ([cmd, args]) => cmd === 'get_survey_geometry_for_file' && (args as { path: string }).path === path
+  ).length;
+}
+
+/** Subscribes to the store the way GlobalView does and can reload the recent list. */
+let reloadRecentList: () => void = () => {};
+function Harness() {
+  const { geometryData, geometryStates } = useGlobalViewStore();
+  const [generation, setGeneration] = useState(0);
+  reloadRecentList = () => setGeneration((g) => g + 1);
+  // A reload yields a NEW array with the same entries, as loadRecentProjects does.
+  const projects = useMemo(() => [project(GOOD, 10), project(BROKEN, 11)], [generation]);
+  return (
+    <GlobalViewMap
+      projects={projects}
+      selectedProjectId={null}
+      onProjectSelect={() => {}}
+      onProjectOpen={() => {}}
+      geometryData={geometryData}
+      geometryStates={geometryStates}
+    />
+  );
+}
+
+/**
+ * Let the queued IPC promises and the store writes they cause settle. Plain
+ * wall-clock waiting rather than `act`: on the looping code `act` would keep
+ * flushing the endless re-render chain and never return, where a fixed window
+ * lets the test COUNT the calls the loop made.
+ */
+async function settle(ms = 300) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+beforeEach(() => {
+  h.state.map = null;
+  h.state.markersCreated = 0;
+  invokeIpcMock.mockReset();
+  invokeIpcMock.mockImplementation(async (cmd: string, args?: { path: string }) => {
+    if (cmd !== 'get_survey_geometry_for_file') return undefined;
+    // Resolve on a later task, as a real IPC round trip would.
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    if (args?.path === BROKEN) throw 'No GPS reference for this survey';
+    return GEOMETRY;
+  });
+  useGlobalViewStore.getState().clearGeometryCache();
+  try {
+    localStorage.clear();
+  } catch {
+    // jsdom storage may be unavailable; the view mode then defaults to survey.
+  }
+});
+
+afterEach(() => {
+  document.body.innerHTML = '';
+});
+
+async function mountAndLoad() {
+  render(<Harness />);
+  act(() => h.state.map?.fire('load'));
+  await settle();
+}
+
+describe('Global View geometry retry (D10-D1 / NF-AN6-1)', () => {
+  it('loads a failing system once, not in a loop, and leaves it an error marker', async () => {
+    await mountAndLoad();
+    expect(geometryCalls(GOOD), 'loads of the good system').toBe(1);
+    expect(geometryCalls(BROKEN), 'loads of the failing system within 300 ms').toBe(1);
+    expect(useGlobalViewStore.getState().geometryStates.get(BROKEN)?.state).toBe('error');
+    // A map move does not retry it either.
+    act(() => h.state.map?.fire('moveend'));
+    await settle();
+    expect(geometryCalls(BROKEN)).toBe(1);
+  });
+
+  it('retries once when the user clicks the error marker', async () => {
+    await mountAndLoad();
+    const before = geometryCalls(BROKEN);
+    fireEvent.click(screen.getByTestId(`system-marker-${testIdPart(BROKEN)}`));
+    await settle();
+    expect(geometryCalls(BROKEN) - before).toBe(1);
+    expect(geometryCalls(GOOD)).toBe(1);
+  });
+
+  it('retries once when the recent list reloads', async () => {
+    await mountAndLoad();
+    const before = geometryCalls(BROKEN);
+    act(() => reloadRecentList());
+    await settle();
+    expect(geometryCalls(BROKEN) - before).toBe(1);
+    expect(geometryCalls(GOOD)).toBe(1);
+  });
+
+  it('retries once when the view mode is toggled back to survey', async () => {
+    await mountAndLoad();
+    const before = geometryCalls(BROKEN);
+    fireEvent.click(screen.getByTestId('view-mode-toggle')); // -> markers
+    await settle();
+    fireEvent.click(screen.getByTestId('view-mode-toggle')); // -> survey
+    await settle();
+    expect(geometryCalls(BROKEN) - before).toBe(1);
+    expect(geometryCalls(GOOD)).toBe(1);
+  });
+});

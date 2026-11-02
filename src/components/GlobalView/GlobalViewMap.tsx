@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useMemo, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
@@ -111,6 +111,12 @@ interface GlobalViewMapProps {
   onZoomHandled?: () => void;
 }
 
+/** Stable empty defaults: a `new Map()` default parameter is a new object on every
+ *  render, which every effect depending on these props would see as a change. Left
+ *  untyped like the inline defaults they replace, so the props keep their old type. */
+const NO_GEOMETRY = new Map();
+const NO_GEOMETRY_STATES = new Map();
+
 /**
  * Map component for GlobalView showing all GPS-positioned systems.
  * Uses MapLibre GL JS with satellite tiles.
@@ -121,8 +127,8 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     selectedProjectId,
     onProjectSelect,
     onProjectOpen,
-    geometryData = new Map(),
-    geometryStates = new Map(),
+    geometryData = NO_GEOMETRY,
+    geometryStates = NO_GEOMETRY_STATES,
     searchTerm = '',
     onContextMenu,
     zoomToSystem,
@@ -170,8 +176,11 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   // source simplification) has no vector-tile equivalent, so there is nothing
   // left for an FPS monitor to throttle.
 
-  // Filter to only projects with GPS coordinates (null check only, no sentinel)
-  const gpsProjects = projects.filter((p) => p.gps_center !== null);
+  // Filter to only projects with GPS coordinates (null check only, no sentinel).
+  // Memoized (#576 D10): four effects depend on it, and a fresh array on every
+  // render re-ran the lazy-load effect on every store write - which, with a
+  // failing system, retried it in an endless loop.
+  const gpsProjects = useMemo(() => projects.filter((p) => p.gps_center !== null), [projects]);
 
   // Store gpsProjects and geometryData in refs for imperative handle
   const gpsProjectsRef = useRef(gpsProjects);
@@ -684,12 +693,19 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
   // Lazy load geometry for visible systems when map loads or moveend
   // Only load when in survey mode
+  //
+  // #576 D10-D1, retry on user action only: a system whose load failed stays an
+  // error marker. This effect re-runs on exactly the user's retry actions -
+  // switching (back) to the survey view, or the recent list reloading (a new
+  // `projects` array) - so only its first pass retries failed systems; a map
+  // move loads newly visible ones and leaves failures alone. Clicking an error
+  // marker retries that one system (marker effect below).
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
     // Don't load geometry when in markers-only mode
     if (viewMode !== 'survey') return;
 
-    const loadVisibleSystems = () => {
+    const loadVisibleSystems = (retryErrors: boolean) => {
       if (!map.current) return;
       // Check ref for current mode (avoid stale closure)
       if (viewModeRef.current !== 'survey') return;
@@ -716,14 +732,14 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
       // Load systems sequentially in priority order (loadGeometryBatch handles this)
       // Don't await - let it run in background so map stays responsive
-      loadGeometryBatch(visibleSystems);
+      void loadGeometryBatch(visibleSystems, { retryErrors });
     };
 
     // Load visible systems now
-    loadVisibleSystems();
+    loadVisibleSystems(true);
 
     // Load visible systems on map movement
-    const handleMoveEnd = () => loadVisibleSystems();
+    const handleMoveEnd = () => loadVisibleSystems(false);
     map.current.on('moveend', handleMoveEnd);
 
     return () => {
@@ -961,6 +977,9 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
           const errorState = geometryStates.get(project.file_path);
           const errorMsg = errorState?.error ?? 'Unknown error';
           showErrorPopup(project.file_path, project.name, errorMsg, lng, lat);
+          // The user's retry (#576 D10-D1): a file that was locked or still being
+          // copied may load now. Survey view only - markers mode loads no geometry.
+          if (viewModeRef.current === 'survey') void useGlobalViewStore.getState().loadGeometry(project.file_path);
         } else {
           onProjectSelect(project.file_path);
         }

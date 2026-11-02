@@ -53,8 +53,14 @@ interface GlobalViewStore {
   /**
    * Load geometry for multiple systems sequentially.
    * Stops if generation changes (cache cleared).
+   *
+   * A system whose load FAILED is skipped unless `retryErrors` is set (#576
+   * D10-D1): the known causes (no GPS reference, an anchor that no longer
+   * resolves, an unreadable file) do not heal on their own, so retrying on every
+   * pass only re-reads the file. The Global View sets it for the user's own
+   * actions - reloading the recent list, switching back to the survey view.
    */
-  loadGeometryBatch: (filePaths: string[]) => Promise<void>;
+  loadGeometryBatch: (filePaths: string[], options?: { retryErrors?: boolean }) => Promise<void>;
 
   /**
    * Get the loading state for a system.
@@ -168,14 +174,14 @@ export const useGlobalViewStore = create<GlobalViewStore>((set, get) => ({
     }
   },
 
-  loadGeometryBatch: async (filePaths: string[]) => {
+  loadGeometryBatch: async (filePaths: string[], options?: { retryErrors?: boolean }) => {
     const startGeneration = get().generation;
     const { getLoadingState } = get();
 
-    // Filter out already loading/loaded systems
+    // Filter out already loading/loaded systems, and failed ones unless asked.
     const toLoad = filePaths.filter((fp) => {
       const state = getLoadingState(fp);
-      return state === 'idle' || state === 'error';
+      return state === 'idle' || (state === 'error' && options?.retryErrors === true);
     });
 
     // Load sequentially to prevent overwhelming backend
