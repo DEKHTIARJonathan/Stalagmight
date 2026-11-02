@@ -17,27 +17,31 @@ fn jpeg_bytes() -> Vec<u8> {
 
 /// Mark a tilemap region as "imagery everywhere", so no availability probe
 /// goes to the provider.
-fn warm_tilemap(tilemap_cache: &Arc<Mutex<TilemapCache>>, z: u32, y: u32, x: u32) {
+fn warm_tilemap(tilemap_cache: &Arc<RecoveringMutex<TilemapCache>>, z: u32, y: u32, x: u32) {
     let (base_y, base_x) = TilemapCache::get_region_origin(y, x);
     let cells = (tilemap_cache::TILEMAP_GRID_SIZE * tilemap_cache::TILEMAP_GRID_SIZE) as usize;
     tilemap_cache
         .lock()
-        .unwrap()
         .insert("esri", z, base_y, base_x, vec![true; cells]);
 }
 
 /// A tile cache holding one fresh parent at z9 (250, 125), and a tilemap
 /// that says imagery exists at z9 and z10 there.
-fn cache_with_a_z9_parent() -> (Arc<Mutex<Option<TileCache>>>, Arc<Mutex<TilemapCache>>) {
-    let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+fn cache_with_a_z9_parent() -> (
+    Arc<RecoveringMutex<Option<TileCache>>>,
+    Arc<RecoveringMutex<TilemapCache>>,
+) {
+    let cache = Arc::new(RecoveringMutex::new(
+        "tile_cache",
+        Some(TileCache::in_memory(10, 30).unwrap()),
+    ));
     cache
         .lock()
-        .unwrap()
         .as_mut()
         .unwrap()
         .put_granted("esri", 9, 250, 125, &jpeg_bytes(), "image/jpeg")
         .unwrap();
-    let tilemap_cache = Arc::new(Mutex::new(TilemapCache::new()));
+    let tilemap_cache = Arc::new(RecoveringMutex::new("tilemap_cache", TilemapCache::new()));
     warm_tilemap(&tilemap_cache, 9, 250, 125);
     warm_tilemap(&tilemap_cache, 10, 500, 250);
     (cache, tilemap_cache)
@@ -65,7 +69,7 @@ fn crop_after_status(code: u16) -> (http::StatusCode, bool) {
         answer,
         true,
     );
-    let guard = cache.lock().unwrap();
+    let guard = cache.lock();
     let stored = guard.as_ref().unwrap().has_fresh_tile("esri", 10, 500, 250);
     (response.status(), stored)
 }
