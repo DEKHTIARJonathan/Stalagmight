@@ -3,11 +3,13 @@
 // fixtures are in scripts/check-eslint.test.mjs.
 import noRenderRefWrite from './no-render-ref-write.mjs';
 import requireStoreSelector from './require-store-selector.mjs';
+import requireDisableReason from './require-disable-reason.mjs';
 
 export default {
   meta: { name: 'stalagmight' },
   rules: {
     'no-render-ref-write': noRenderRefWrite,
     'require-store-selector': requireStoreSelector,
+    'require-disable-reason': requireDisableReason,
   },
 };

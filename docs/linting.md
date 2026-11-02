@@ -214,7 +214,11 @@ fixing a warning means running `pnpm lint:eslint --update` and committing the
 smaller baseline. Errors are never baselined. Raising a number is a
 review-visible decision; fix the warning unless there is a reason not to.
 
-**Disabling a rule on one line** needs a reason after ` -- `:
+**Disabling a rule on one line** needs a reason after ` -- `, and
+`stalagmight/require-disable-reason` (error, every linted tree; #576 RV5-LS-4)
+fails an `eslint-disable`, `-line` or `-next-line` directive without one. A
+bare `/* eslint-disable */` turns that rule off with every other, so it is the
+one shape left to review:
 
 ```ts
 // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: hash the file this dialog opened with, once

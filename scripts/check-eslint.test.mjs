@@ -175,7 +175,7 @@ await test('an unused eslint-disable directive is an error', async () => {
 
 await test('a directive naming a rule that is not loaded is an error', async () => {
   const msgs = await lint(SRC, `
-    // eslint-disable-next-line react/no-danger
+    // eslint-disable-next-line react/no-danger -- planted: the rule is not loaded
     export const x = 1;
   `);
   assert.equal(msgs.length, 1, JSON.stringify(msgs));
@@ -439,6 +439,38 @@ await test('require-store-selector: covers src tests too, not the e2e trees', as
   `;
   assert.equal((await storeHits('src/components/__tests__/Fixture.test.tsx', code)).length, 1);
   assert.deepEqual(await storeHits(PW, code), []);
+});
+
+// --- stalagmight/require-disable-reason (#576 RV5-LS-4) ----------------------------
+
+const REASON_RULE = 'stalagmight/require-disable-reason';
+const reasonHits = async (rel, code) => ruleHits(await lint(rel, code), REASON_RULE);
+
+await test('require-disable-reason: an eslint-disable directive with no reason after -- is an error, in src and e2e', async () => {
+  const code = `
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    export const f = (x: any) => x;
+    export const g = (x: any) => x; // eslint-disable-line @typescript-eslint/no-explicit-any
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any -- */
+    export const h = (x: any) => x;
+  `;
+  const src = await reasonHits(SRC, code);
+  assert.deepEqual(src.map((h) => h.line), [2, 4, 5], JSON.stringify(src));
+  assert.ok(src.every((h) => h.severity === 2));
+  assert.match(src[0].message, /needs a reason/);
+  assert.deepEqual((await reasonHits(PW, code)).map((h) => h.line), [2, 4, 5]);
+});
+
+await test('require-disable-reason: a directive with a reason, and eslint-enable, are clean', async () => {
+  const hits = await reasonHits(SRC, `
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the wire value is untyped JSON
+    export const f = (x: any) => x;
+    /* eslint-disable @typescript-eslint/no-explicit-any -- a block of untyped fixtures */
+    export const g = (x: any) => x;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    // A comment that only mentions eslint-disable is not a directive.
+  `);
+  assert.deepEqual(hits, []);
 });
 
 if (failures.length > 0) {

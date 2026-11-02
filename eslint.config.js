@@ -27,8 +27,9 @@
 //     warnings, ratcheted the same way: the recommended set found ~260 there
 //     when it landed (236 `any` across 22 Playwright specs, 25 unused names).
 //     src/ had three findings, fixed, and keeps every recommended rule an error.
-// An `eslint-disable` needs a reason after ` -- `, and an unused or
-// unknown-rule directive is an error (reportUnusedDisableDirectives).
+// An `eslint-disable` needs a reason after ` -- ` (stalagmight/require-disable-reason,
+// error, src and both test-automation trees), and an unused or unknown-rule
+// directive is an error (reportUnusedDisableDirectives).
 import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 import stalagmight from './scripts/eslint/plugin.mjs';
@@ -67,6 +68,14 @@ export default [
       'react-hooks/exhaustive-deps': 'warn',
       'stalagmight/no-render-ref-write': 'error',
       'stalagmight/require-store-selector': 'error',
+    },
+  },
+  {
+    // [#576 RV5-LS-4] Every linted tree: the reason after ` -- ` is enforced.
+    files: TS,
+    plugins: { stalagmight },
+    rules: {
+      'stalagmight/require-disable-reason': 'error',
     },
   },
   {
