@@ -200,3 +200,96 @@ fn a_crash_shaped_v9_link_still_gets_its_last_edit_at_backfill() {
         "a dirty pre-v10 row must get the epoch stamp, whatever the column's presence"
     );
 }
+
+/// [#576 B6-D2-FAIL] When the pre-upgrade copy cannot be written, the upgrade is
+/// REFUSED: the open fails with a message saying so, and the file is left
+/// exactly as it was - not migrated, not stamped, no half-written copy beside
+/// it. The decided behaviour; "warn and upgrade anyway" would destroy the only
+/// way back. The project's folder is made read-only, so the copy (written beside
+/// the file) cannot be created while the file itself stays writable.
+#[cfg(unix)]
+#[test]
+fn an_upgrade_whose_copy_cannot_be_written_is_refused_and_leaves_the_file_as_it_was() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let temp = TempDir::new().unwrap();
+    let folder = temp.path().join("CaveA");
+    std::fs::create_dir(&folder).unwrap();
+    let path = b6_build_file(
+        &folder,
+        "CaveA.stalx",
+        "UPDATE project SET schema_version = 17; PRAGMA user_version = 17;",
+    );
+    let original = std::fs::read(&path).unwrap();
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let premise = std::fs::File::create(folder.join("premise-probe"));
+    let opened = premise
+        .is_err()
+        .then(|| Database::open_existing(&path).map(drop));
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        premise.is_err(),
+        "premise: a read-only folder refuses new files (run the tests as a non-root user)"
+    );
+
+    let message = format!("{:#}", opened.unwrap().unwrap_err());
+    let listing = b6_dir_listing(&folder);
+    let unchanged = std::fs::read(&path).unwrap() == original;
+    let stamp = b6_user_version(&path);
+    println!("open_existing -> {message}");
+    println!("folder: {listing:?}; file unchanged: {unchanged}; user_version: {stamp}");
+    assert!(
+        message.contains("Could not keep a copy of this project before upgrading it"),
+        "the refusal must say why: {message}"
+    );
+    assert_eq!(
+        listing,
+        vec!["CaveA.stalx".to_string()],
+        "no copy, no leftovers"
+    );
+    assert!(
+        unchanged,
+        "a refused upgrade must leave the file byte-identical"
+    );
+    assert_eq!(stamp, 17, "not migrated");
+}
+
+/// [#576 B6-D2-FAIL] The same refusal when only the COPY is blocked - here by a
+/// directory squatting on the name it is written under - while the file and its
+/// folder stay writable, so an upgrade that went ahead anyway would visibly
+/// migrate the file. Every platform.
+#[test]
+fn an_upgrade_is_refused_when_only_its_copy_is_blocked() {
+    let temp = TempDir::new().unwrap();
+    let path = b6_build_file(
+        temp.path(),
+        "CaveA.stalx",
+        "UPDATE project SET schema_version = 17; PRAGMA user_version = 17;",
+    );
+    let original = std::fs::read(&path).unwrap();
+    std::fs::create_dir(temp.path().join("CaveA.stalx.pre-v17.partial")).unwrap();
+
+    let opened = Database::open_existing(&path).map(drop);
+    let unchanged = std::fs::read(&path).unwrap() == original;
+    let stamp = b6_user_version(&path);
+    println!("open_existing -> {opened:?}");
+    println!(
+        "folder: {:?}; file unchanged: {unchanged}; user_version: {stamp}",
+        b6_dir_listing(temp.path())
+    );
+    let message = format!("{:#}", opened.unwrap_err());
+    assert!(
+        message.contains("Could not keep a copy of this project before upgrading it"),
+        "the refusal must say why: {message}"
+    );
+    assert!(
+        unchanged,
+        "a refused upgrade must leave the file byte-identical"
+    );
+    assert_eq!(stamp, 17, "not migrated");
+    assert!(
+        !temp.path().join("CaveA.stalx.pre-v17.backup").exists(),
+        "no copy was kept, so none may be listed"
+    );
+}
