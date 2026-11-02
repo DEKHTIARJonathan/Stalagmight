@@ -1958,13 +1958,24 @@ fn convert_shots_to_shot_data(
         return Vec::new();
     }
 
+    // Dropped leading shots move where the first kept one starts: to the end
+    // of the last of them, where `import_options::dropped_lead_offset` carries
+    // the datum. Its "same as previous" `DepthIn` is THAT depth, not the
+    // parent's start depth (#576 NF-TML-2). A CLOSURE row is no leg.
+    let dropped_lead_end_depth = shots
+        .iter()
+        .take_while(|s| !survives_import(s, include_excluded))
+        .filter(|s| s.shot_type != TmlShotType::Closure)
+        .last()
+        .map(|s| s.depth);
+
     let mut result = Vec::with_capacity(real_shots.len());
 
     for (i, shot) in real_shots.iter().enumerate() {
         let prev_depth = if i > 0 {
             Some(real_shots[i - 1].depth)
         } else {
-            None
+            dropped_lead_end_depth
         };
         let depth_in = resolve_tml_depth_in(shot, prev_depth, start_depth);
         result.push(normalize_tml_shot(shot, depth_in));
@@ -4296,6 +4307,58 @@ mod tests {
         assert!((data[0].azimuth_in - 90.0).abs() < f64::EPSILON);
         assert!((data[1].azimuth_in - 180.0).abs() < f64::EPSILON);
         assert!((data[2].azimuth_in - 270.0).abs() < f64::EPSILON);
+    }
+
+    /// #576 NF-TML-2: when leading excluded shots are dropped, the first
+    /// imported shot starts where they END - the station `dropped_lead_offset`
+    /// carries the datum to - so a "same as previous" `DepthIn` resolves to the
+    /// last dropped shot's depth, not the parent section's start depth. A
+    /// leading CLOSURE row is no leg and does not count.
+    #[test]
+    fn a_first_kept_shot_starts_at_the_depth_the_dropped_lead_ends() {
+        let shot = |id: i64, depth: f64, excluded: bool, shot_type: TmlShotType| TmlShot {
+            uuid: None,
+            id,
+            from_id: id - 1,
+            shot_type,
+            azimuth: 90.0,
+            length: 20.0,
+            depth,
+            depth_in: schema::DEPTH_IN_SAME_AS_PREVIOUS,
+            inclination: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            comment: None,
+            explorer: None,
+            date: None,
+            color: "#000000".to_string(),
+            excluded,
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: -1,
+            section: "Test".to_string(),
+        };
+        let shots = [
+            shot(1, 4.0, true, TmlShotType::Real),
+            shot(2, 9.0, true, TmlShotType::Real),
+            shot(3, 30.0, false, TmlShotType::Closure),
+            shot(4, 12.0, false, TmlShotType::Real),
+            shot(5, 15.0, false, TmlShotType::Real),
+        ];
+        let data = convert_shots_to_shot_data(&shots, 1.5, false);
+        let depths: Vec<(f64, f64)> = data.iter().map(|d| (d.depth_in, d.depth_out)).collect();
+        eprintln!("dropped lead ends at 9.0, parent start 1.5: kept (in, out) = {depths:?}");
+        assert_eq!(depths, [(9.0, 12.0), (12.0, 15.0)]);
+
+        // Nothing dropped: the parent's start depth, as before.
+        let data = convert_shots_to_shot_data(&shots[3..], 1.5, false);
+        assert!((data[0].depth_in - 1.5).abs() < f64::EPSILON);
+        // Kept with include_excluded: every shot chains from the one before.
+        let data = convert_shots_to_shot_data(&shots, 1.5, true);
+        assert!((data[0].depth_in - 1.5).abs() < f64::EPSILON);
+        assert!((data[2].depth_in - 9.0).abs() < f64::EPSILON);
     }
 
     #[test]
