@@ -17,7 +17,9 @@
  * cannot shift a seed's action sequence.
  */
 import type { ScenarioContext } from '../scenarios/framework';
+import { disableAutoSave } from '../scenarios/common';
 import {
+  REPLAYABLE_MUTATIONS,
   bumpEpoch,
   enableIdAgnosticModel,
   fetchMismatch,
@@ -30,7 +32,115 @@ import {
 } from '../scenarios/undoRedoFuzzBridge';
 import type { MoveLog } from './fuzzHarness';
 import { checkSnapshot, type SnapshotCheckLimits } from './fuzzSnapshotCheck';
+import type { FuzzTrace, TraceStep } from './fuzzTrace';
 import { RELOAD_RESOLVED_GEOMETRY, SAVE_HEALING_MUTATIONS } from './projectSnapshot';
+
+// ---------------------------------------------------------------------------
+// Run setup both undo fuzzers do before the model exists.
+// ---------------------------------------------------------------------------
+
+/** Turn auto-save off, or refuse to run: a save the model never saw would desync it. */
+export async function requireAutoSaveOff(ctx: ScenarioContext): Promise<void> {
+  if (!(await disableAutoSave(ctx))) {
+    throw new Error(
+      'could not disable auto-save; a save mutates live state with no undo entry and would ' +
+        'desync the model (see disableAutoSave in scenarios/common.ts)',
+    );
+  }
+}
+
+/**
+ * `config.general.undo_persist_limit`, or 20 when the config does not say.
+ * Only the newest that many entries survive a save, so a deeper history would
+ * come back truncated - both scenarios bound what they let cross the boundary.
+ */
+export async function readUndoPersistLimit(ctx: ScenarioContext): Promise<number> {
+  return ctx.eval<number>(`
+    const config = window.__E2E_TEST__.projectStore.getState().config;
+    return config && config.general && typeof config.general.undo_persist_limit === 'number'
+      ? config.general.undo_persist_limit
+      : 20;
+  `);
+}
+
+// ---------------------------------------------------------------------------
+// Replaying a recorded trace through the store-driven undo model.
+// ---------------------------------------------------------------------------
+
+/** The history-move members of `TraceStep`. */
+export type HistoryTraceStep = Extract<TraceStep, { kind: 'undo' | 'redo' | 'undoTo' | 'redoTo' }>;
+
+/**
+ * Refuse a recorded mutation this harness may not replay.
+ *
+ * A trace supplies both the action NAME and its arguments, so the replay path
+ * is narrower than the dispatch path: only the mutations a generator can
+ * produce, never a scenario-driven control action like `saveProject` (which
+ * takes a path the scenario would then be choosing).
+ */
+export function assertReplayableMutation(action: string): void {
+  if (!REPLAYABLE_MUTATIONS.has(action)) {
+    throw new Error(
+      `trace step names ${action}, which is not a replayable mutation. ` +
+        `A recorded trace may only replay the actions the generators produce.`,
+    );
+  }
+}
+
+/**
+ * Refuse a step kind a store-driven scenario cannot run, so that everything
+ * after this call is a history move.
+ *
+ * Schema v2 added the import/export step vocabulary (`ui`, `export`, ...). The
+ * undo fuzzers drive the store, not the UI, so they cannot run those - and they
+ * must say so rather than let one fall through into the history-move arm and
+ * replay as an undo, which is the exact bug the `kind` allow-list in
+ * `validateStep` was added for.
+ */
+export function assertHistoryStep(step: TraceStep, scenario: string): asserts step is HistoryTraceStep {
+  if (step.kind !== 'undo' && step.kind !== 'redo' && step.kind !== 'undoTo' && step.kind !== 'redoTo') {
+    throw new Error(
+      `trace step kind ${step.kind} is not one ${scenario} replays; ` +
+        `it belongs to a scenario that drives the import/export UI.`,
+    );
+  }
+}
+
+/**
+ * How far a recorded history move can reach from here, or null - counted as
+ * `replaySkipped:<kind>` - when it cannot move at all.
+ *
+ * A move whose precondition no longer holds is SKIPPED rather than failed:
+ * that is what makes an arbitrary subsequence of a trace runnable, which is
+ * what the shrinker needs. Skipping asserts nothing, so it can never turn a
+ * failing candidate green by hiding something.
+ */
+export function historyReach(
+  ctx: ScenarioContext,
+  step: HistoryTraceStep,
+  cursor: number,
+  top: number,
+): { back: boolean; reach: number } | null {
+  const back = step.kind === 'undo' || step.kind === 'undoTo';
+  const reach = back ? cursor : top - cursor;
+  if (reach < 1) {
+    ctx.metric(`replaySkipped:${step.kind}`);
+    return null;
+  }
+  return { back, reach };
+}
+
+/** Apply every recorded step, in order, tagged `T1`, `T2`, ... */
+export async function replayTrace(
+  ctx: ScenarioContext,
+  replay: FuzzTrace,
+  apply: (step: TraceStep, tag: string) => Promise<void>,
+): Promise<void> {
+  ctx.setMetric('replaySteps', replay.steps.length);
+  for (let index = 0; index < replay.steps.length; index++) {
+    await apply(replay.steps[index] as TraceStep, `T${index + 1}`);
+  }
+}
 
 /** A live view of the scenario's own model variables. */
 export interface UndoModelState {

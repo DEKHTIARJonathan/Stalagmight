@@ -3,7 +3,17 @@ import { describe, expect, it } from 'vitest';
 import type { ScenarioContext } from '../scenarios/framework';
 import type { IntegrityVerdict, StepResponse } from '../scenarios/undoRedoFuzzBridge';
 import { MoveLog } from './fuzzHarness';
-import { undoFuzzHarness, type UndoModelState } from './undoFuzzHarness';
+import type { FuzzTrace, TraceStep } from './fuzzTrace';
+import {
+  assertHistoryStep,
+  assertReplayableMutation,
+  historyReach,
+  readUndoPersistLimit,
+  replayTrace,
+  requireAutoSaveOff,
+  undoFuzzHarness,
+  type UndoModelState,
+} from './undoFuzzHarness';
 
 // The undo-model plumbing both undo fuzzers share, driven against a FAKE page:
 // every bridge call is answered from a script and logged, so the tests can pin
@@ -297,5 +307,99 @@ describe('undoFuzzHarness.saveAndReload', () => {
       new Error('reopening the saved project failed\n  error: locked'),
     );
     expect(log.inFlight).toBe('#1 close/reopen');
+  });
+});
+
+describe('run setup', () => {
+  /** A page whose every eval answers `answer`, logging the bodies it was sent. */
+  function evalPage(answer: unknown): { ctx: ScenarioContext; bodies: string[] } {
+    const bodies: string[] = [];
+    const ctx = {
+      eval: async (body: string) => {
+        bodies.push(body);
+        return answer;
+      },
+    } as unknown as ScenarioContext;
+    return { ctx, bodies };
+  }
+
+  it('requireAutoSaveOff passes when the page turned auto-save off, and refuses otherwise', async () => {
+    await expect(requireAutoSaveOff(evalPage(true).ctx)).resolves.toBeUndefined();
+    await expect(requireAutoSaveOff(evalPage(false).ctx)).rejects.toThrow(
+      new Error(
+        'could not disable auto-save; a save mutates live state with no undo entry and would ' +
+          'desync the model (see disableAutoSave in scenarios/common.ts)',
+      ),
+    );
+  });
+
+  it('readUndoPersistLimit returns what the page read from config.general.undo_persist_limit', async () => {
+    const page = evalPage(17);
+
+    expect(await readUndoPersistLimit(page.ctx)).toBe(17);
+    expect(page.bodies[0]).toContain('config.general.undo_persist_limit');
+    expect(page.bodies[0]).toContain(': 20;');
+  });
+});
+
+describe('replay-step rules', () => {
+  it('assertReplayableMutation refuses a control action and accepts a generator mutation', () => {
+    expect(() => assertReplayableMutation('createSection')).not.toThrow();
+    expect(() => assertReplayableMutation('saveProject')).toThrow(
+      new Error(
+        'trace step names saveProject, which is not a replayable mutation. ' +
+          'A recorded trace may only replay the actions the generators produce.',
+      ),
+    );
+  });
+
+  it('assertHistoryStep lets only the four history kinds through, naming the scenario otherwise', () => {
+    const history = [{ kind: 'undo' }, { kind: 'redo' }, { kind: 'undoTo', steps: 2 }, { kind: 'redoTo', steps: 1 }];
+    for (const step of history) {
+      expect(() => assertHistoryStep(step as TraceStep, 'scenario-a')).not.toThrow();
+    }
+    for (const step of [{ kind: 'save' }, { kind: 'repair' }, { kind: 'ui', testid: 't', label: 'l' }]) {
+      expect(() => assertHistoryStep(step as TraceStep, 'scenario-a')).toThrow(
+        new Error(
+          `trace step kind ${step.kind} is not one scenario-a replays; ` +
+            'it belongs to a scenario that drives the import/export UI.',
+        ),
+      );
+    }
+  });
+
+  it('historyReach measures undo reach from the cursor and redo reach to the top', () => {
+    const page = fakePage({});
+
+    expect(historyReach(page.ctx, { kind: 'undoTo', steps: 9 }, 3, 5)).toEqual({ back: true, reach: 3 });
+    expect(historyReach(page.ctx, { kind: 'redo' }, 3, 5)).toEqual({ back: false, reach: 2 });
+    expect(page.metrics).toEqual({});
+  });
+
+  it('historyReach SKIPS a move with nowhere to go, and counts it by kind', () => {
+    const page = fakePage({});
+
+    expect(historyReach(page.ctx, { kind: 'undo' }, 0, 4)).toBeNull();
+    expect(historyReach(page.ctx, { kind: 'redoTo', steps: 1 }, 4, 4)).toBeNull();
+    expect(historyReach(page.ctx, { kind: 'redoTo', steps: 1 }, 4, 4)).toBeNull();
+    expect(page.metrics).toEqual({ 'replaySkipped:undo': 1, 'replaySkipped:redoTo': 2 });
+  });
+
+  it('replayTrace applies every step in order, tagged T1.., and counts them', async () => {
+    const metrics: Record<string, number> = {};
+    const ctx = {
+      setMetric: (key: string, value: number) => {
+        metrics[key] = value;
+      },
+    } as unknown as ScenarioContext;
+    const seen: string[] = [];
+    const steps: TraceStep[] = [{ kind: 'undo' }, { kind: 'save' }, { kind: 'redoTo', steps: 2 }];
+
+    await replayTrace(ctx, { steps } as FuzzTrace, async (step, tag) => {
+      seen.push(`${tag}:${step.kind}`);
+    });
+
+    expect(seen).toEqual(['T1:undo', 'T2:save', 'T3:redoTo']);
+    expect(metrics).toEqual({ replaySteps: 3 });
   });
 });

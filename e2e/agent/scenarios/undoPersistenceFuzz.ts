@@ -289,7 +289,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { Scenario, ScenarioContext } from './framework';
-import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
+import { DEFAULT_FIXTURE, loadFixtureWithoutUndoHistory } from './common';
 import { allowKnownBugs, dumpFullHistory, fuzzFixture } from '../lib/fuzzKnobs';
 import {
   MoveLog,
@@ -299,7 +299,15 @@ import {
   throwFailure,
   writeRunTrace,
 } from '../lib/fuzzHarness';
-import { undoFuzzHarness } from '../lib/undoFuzzHarness';
+import {
+  assertHistoryStep,
+  assertReplayableMutation,
+  historyReach,
+  readUndoPersistLimit,
+  replayTrace,
+  requireAutoSaveOff,
+  undoFuzzHarness,
+} from '../lib/undoFuzzHarness';
 import type { TargetingDigest } from '../lib/fuzzOracleCore';
 import {
   COVERAGE_STEPS,
@@ -314,7 +322,7 @@ import {
   type UndoVariant,
 } from './undoPersistenceCoverage';
 import { TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
-import { REPLAYABLE_MUTATIONS, initModel, injectOracle, type StepResponse } from './undoRedoFuzzBridge';
+import { initModel, injectOracle, type StepResponse } from './undoRedoFuzzBridge';
 
 // The env knobs (`replayTracePath`, `traceOutPath`, `fuzzFixture`,
 // `allowKnownBugs`, `dumpFullHistory`) live in `lib/fuzzKnobs.ts`, read at CALL
@@ -450,19 +458,9 @@ async function runIteration(
     );
 
   const { stripped } = await loadFixtureWithoutUndoHistory(ctx, fixture);
-  if (!(await disableAutoSave(ctx))) {
-    throw new Error(
-      'could not disable auto-save; a save mutates live state with no undo entry and would ' +
-        'desync the model (see disableAutoSave in scenarios/common.ts)',
-    );
-  }
+  await requireAutoSaveOff(ctx);
 
-  const persistLimit = await ctx.eval<number>(`
-    const config = window.__E2E_TEST__.projectStore.getState().config;
-    return config && config.general && typeof config.general.undo_persist_limit === 'number'
-      ? config.general.undo_persist_limit
-      : 20;
-  `);
+  const persistLimit = await readUndoPersistLimit(ctx);
 
   await injectOracle(ctx);
   const init = await initModel(ctx);
@@ -818,16 +816,8 @@ async function runIteration(
    */
   const applyTraceStep = async (traceStep: TraceStep, label: string): Promise<void> => {
     if (traceStep.kind === 'mutate') {
-      // A trace supplies both the action NAME and its arguments, so the replay
-      // path is narrower than the dispatch path: only the mutations a generator
-      // can produce, never a scenario-driven control action like `saveProject`
-      // (which takes a path this file would then be choosing).
-      if (!REPLAYABLE_MUTATIONS.has(traceStep.action)) {
-        throw new Error(
-          `trace step names ${traceStep.action}, which is not a replayable mutation. ` +
-            `A recorded trace may only replay the actions the generators produce.`,
-        );
-      }
+      // Only the mutations a generator can produce (see assertReplayableMutation).
+      assertReplayableMutation(traceStep.action);
       await applyMutation(
         { action: traceStep.action, args: traceStep.args, label: traceStep.label },
         `replay:${traceStep.action}`,
@@ -847,35 +837,17 @@ async function runIteration(
       ctx.metric('replaySkipped:repair');
       return;
     }
-    // Schema v2 added the import/export step vocabulary. This scenario drives
-    // the store, not the UI, so an unrunnable kind must be named rather than
-    // fall through into the history walk below and replay as an undo.
-    if (
-      traceStep.kind !== 'undo' &&
-      traceStep.kind !== 'redo' &&
-      traceStep.kind !== 'undoTo' &&
-      traceStep.kind !== 'redoTo'
-    ) {
-      throw new Error(
-        `trace step kind ${traceStep.kind} is not one undo-persistence-fuzz replays; ` +
-          `it belongs to a scenario that drives the import/export UI.`,
-      );
-    }
-    const back = traceStep.kind === 'undo' || traceStep.kind === 'undoTo';
-    const reach = back ? cursor : top - cursor;
-    if (reach < 1) {
-      ctx.metric(`replaySkipped:${traceStep.kind}`);
-      return;
-    }
-    recorder.record(back ? { kind: 'undo' } : { kind: 'redo' });
-    await walk(back ? 'undo' : 'redo', label);
+    // Anything else is a UI step this store-driven scenario cannot run
+    // (see assertHistoryStep); a history move that cannot move is skipped.
+    assertHistoryStep(traceStep, undoPersistenceFuzz.name);
+    const moved = historyReach(ctx, traceStep, cursor, top);
+    if (moved === null) return;
+    recorder.record(moved.back ? { kind: 'undo' } : { kind: 'redo' });
+    await walk(moved.back ? 'undo' : 'redo', label);
   };
 
   if (replay) {
-    ctx.setMetric('replaySteps', replay.steps.length);
-    for (let index = 0; index < replay.steps.length; index++) {
-      await applyTraceStep(replay.steps[index] as TraceStep, `T${index + 1}`);
-    }
+    await replayTrace(ctx, replay, applyTraceStep);
   } else {
     recorder.record({ kind: 'save' });
     await crossBoundary();

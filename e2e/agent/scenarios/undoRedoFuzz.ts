@@ -602,7 +602,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { mulberry32, type Scenario, type ScenarioContext } from './framework';
-import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
+import { DEFAULT_FIXTURE, loadFixtureWithoutUndoHistory } from './common';
 import { allowKnownBugs, dumpFullHistory, fuzzFixture } from '../lib/fuzzKnobs';
 import {
   MoveLog,
@@ -612,7 +612,15 @@ import {
   throwFailure,
   writeRunTrace,
 } from '../lib/fuzzHarness';
-import { undoFuzzHarness } from '../lib/undoFuzzHarness';
+import {
+  assertHistoryStep,
+  assertReplayableMutation,
+  historyReach,
+  readUndoPersistLimit,
+  replayTrace,
+  requireAutoSaveOff,
+  undoFuzzHarness,
+} from '../lib/undoFuzzHarness';
 import type { TargetingDigest } from '../lib/fuzzOracleCore';
 import {
   streamV2,
@@ -625,12 +633,7 @@ import {
 import { mustBeRejected } from './undoRedoFuzzImportActions';
 import { materializeSurveyFile, type GeneratedFileSpec } from '../lib/surveyFileSpecs';
 import { FILE_ARG_ACTIONS, TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
-import {
-  REPLAYABLE_MUTATIONS,
-  initModel,
-  injectOracle,
-  type StepResponse,
-} from './undoRedoFuzzBridge';
+import { initModel, injectOracle, type StepResponse } from './undoRedoFuzzBridge';
 
 // The shared env knobs (`replayTracePath`, `traceOutPath`, `fuzzFixture`,
 // `allowKnownBugs`, `dumpFullHistory`) live in `lib/fuzzKnobs.ts`, with the
@@ -770,12 +773,7 @@ async function runFuzz(
   ctx.setMetric(`fixture:${fixture}`, 1);
   ctx.setMetric('strippedUndoRows', strippedRows);
 
-  if (!(await disableAutoSave(ctx))) {
-    throw new Error(
-      'could not disable auto-save; a save mutates live state with no undo entry and would ' +
-        'desync the model (see disableAutoSave in scenarios/common.ts)',
-    );
-  }
+  await requireAutoSaveOff(ctx);
 
   // `saveAfterImport` (v3) branches on `uiStore.importContext`: null or
   // 'existing-project' only marks the frontend dirty, but 'new-project' SAVES
@@ -860,12 +858,7 @@ async function runFuzz(
   // Both stacks persist, but only the newest `undo_persist_limit` entries do.
   // Crossing the boundary with a deeper history would silently truncate the
   // restored stack and invalidate the model, so the move is skipped instead.
-  const persistLimit = await ctx.eval<number>(`
-    const config = window.__E2E_TEST__.projectStore.getState().config;
-    return config && config.general && typeof config.general.undo_persist_limit === 'number'
-      ? config.general.undo_persist_limit
-      : 20;
-  `);
+  const persistLimit = await readUndoPersistLimit(ctx);
 
   /**
    * Where the v3 import group's generated input files live.
@@ -1365,16 +1358,8 @@ async function runFuzz(
         ctx.metric('replaySkipped:mutate');
         return;
       }
-      // A trace supplies both the action NAME and its arguments, so the replay
-      // path is narrower than the dispatch path: only the mutations a generator
-      // can produce, never a scenario-driven control action like `saveProject`
-      // (which takes a path this file would then be choosing).
-      if (!REPLAYABLE_MUTATIONS.has(traceStep.action)) {
-        throw new Error(
-          `trace step names ${traceStep.action}, which is not a replayable mutation. ` +
-            `A recorded trace may only replay the actions the generators produce.`,
-        );
-      }
+      // Only the mutations a generator can produce (see assertReplayableMutation).
+      assertReplayableMutation(traceStep.action);
       await applyMutation(
         { action: traceStep.action, args: traceStep.args, label: traceStep.label },
         tag,
@@ -1426,28 +1411,12 @@ async function runFuzz(
       ctx.metric('replayGenFiles');
       return;
     }
-    // Schema v2 added the rest of the import/export step vocabulary (`ui`,
-    // `export`, ...). This scenario drives the store, not the UI, so it cannot
-    // run them - and it must say so rather than let one fall through into the
-    // history-move arm below, which is the exact bug the `kind` allow-list in
-    // `validateStep` was added for.
-    if (
-      traceStep.kind !== 'undo' &&
-      traceStep.kind !== 'redo' &&
-      traceStep.kind !== 'undoTo' &&
-      traceStep.kind !== 'redoTo'
-    ) {
-      throw new Error(
-        `trace step kind ${traceStep.kind} is not one undo-redo-fuzz replays; ` +
-          `it belongs to a scenario that drives the import/export UI.`,
-      );
-    }
-    const back = traceStep.kind === 'undo' || traceStep.kind === 'undoTo';
-    const reach = back ? cursor : top - cursor;
-    if (reach < 1) {
-      ctx.metric(`replaySkipped:${traceStep.kind}`);
-      return;
-    }
+    // Anything else is a UI step this store-driven scenario cannot run
+    // (see assertHistoryStep); a history move that cannot move is skipped.
+    assertHistoryStep(traceStep, undoRedoFuzz.name);
+    const moved = historyReach(ctx, traceStep, cursor, top);
+    if (moved === null) return;
+    const { back, reach } = moved;
     const direction = back ? 'undo' : 'redo';
     if (traceStep.kind === 'undo' || traceStep.kind === 'redo') {
       recordMove(direction, null);
@@ -1460,12 +1429,7 @@ async function runFuzz(
     await walk(direction, tag, steps);
   };
 
-  if (replay) {
-    ctx.setMetric('replaySteps', replay.steps.length);
-    for (let index = 0; index < replay.steps.length; index++) {
-      await applyTraceStep(replay.steps[index] as TraceStep, `T${index + 1}`);
-    }
-  }
+  if (replay) await replayTrace(ctx, replay, applyTraceStep);
 
   // Zero when replaying: the trace supplies every move, and drawing more would
   // make the replay something other than the run it came from.
