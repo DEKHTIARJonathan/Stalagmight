@@ -18,6 +18,13 @@
  * A failed capture or re-resolve leaves the origin where it is (positional, as
  * before #576), the same degradation the plan pins accept. A station that no
  * longer exists falls back to the entrance, with a notice.
+ *
+ * ...and comes back if an undo or redo restores it (#576 D39(g)-UNDO, decided: "Undo
+ * restoring the deleted origin station brings the origin back"). The fallback keeps
+ * the anchor it was following, dormant, for the project it was taken in; the
+ * undo/redo seam re-resolves it while the origin is still on the entrance, and puts
+ * the origin back once it names a station again. Any change of origin in between - a
+ * pick, a reset, a project switch's reset - drops it: the user's choice since wins.
  */
 import type { StationRef } from '../types/project';
 import { useUIStore } from '../store/uiStore';
@@ -25,20 +32,46 @@ import { planAnchorsForRefs, planRefsForAnchors, type PlanAnchor } from './diveP
 import { TOAST_KEYS } from './toastKeys';
 import i18n from '../i18n';
 
-/** An anchor for the origin, with the ref it was taken against. */
+/** An anchor for the origin, with the ref it was taken against; `null` for the dormant
+ *  anchor of an origin a delete displaced, re-resolved while the origin is the entrance. */
 export interface OriginCapture {
-  ref: StationRef;
+  ref: StationRef | null;
   anchor: PlanAnchor;
+}
+
+/** The anchor of the origin the last delete displaced, and the project (`created_at`) it
+ *  belongs to; null when there is none. */
+let dormant: { anchor: PlanAnchor; projectKey: string | null } | null = null;
+let stopWatchingOrigin: (() => void) | null = null;
+
+function setDormant(next: typeof dormant): void {
+  stopWatchingOrigin?.();
+  stopWatchingOrigin = null;
+  dormant = next;
+  if (next === null) return;
+  // Any change of origin after the fallback is the user's (or a project switch's): drop it.
+  stopWatchingOrigin = useUIStore.subscribe((state, prev) => {
+    if (state.distanceGradientOrigin !== prev.distanceGradientOrigin) setDormant(null);
+  });
 }
 
 const sameRef = (a: StationRef | null, b: StationRef | null): boolean =>
   a === b || (a !== null && b !== null && a.section_id === b.section_id && a.station_index === b.station_index);
 
 /** Anchor the picked origin against the survey as it stands BEFORE an edit; null when there is
- *  nothing to anchor (the entrance origin) or the backend cannot anchor it. */
-export async function captureDistanceOrigin(): Promise<OriginCapture | null> {
+ *  nothing to anchor (the entrance origin) or the backend cannot anchor it.
+ *
+ *  `dormantFor`: the undo/redo seam passes the open project's key, and while the origin is
+ *  the entrance the anchor a delete displaced it from (taken in that project) is returned
+ *  for re-resolving instead. A forward edit cannot bring back a deleted station, so it
+ *  passes nothing and costs no round trip. */
+export async function captureDistanceOrigin(dormantFor?: string | null): Promise<OriginCapture | null> {
   const ref = useUIStore.getState().distanceGradientOrigin;
-  if (ref === null) return null;
+  if (ref === null) {
+    return dormant !== null && dormantFor !== undefined && dormant.projectKey === dormantFor
+      ? { ref: null, anchor: dormant.anchor }
+      : null;
+  }
   try {
     const taken = await planAnchorsForRefs([ref]);
     const anchor = Array.isArray(taken) ? taken[0] : null;
@@ -49,8 +82,12 @@ export async function captureDistanceOrigin(): Promise<OriginCapture | null> {
   }
 }
 
-/** Re-resolve a captured origin against the survey as it stands AFTER the edit. */
-export async function remapDistanceOrigin(capture: OriginCapture | null): Promise<void> {
+/** Re-resolve a captured origin against the survey as it stands AFTER the edit; `projectKey`
+ *  names the project the edit ran in, which a displaced origin's dormant anchor belongs to. */
+export async function remapDistanceOrigin(
+  capture: OriginCapture | null,
+  projectKey: string | null = null
+): Promise<void> {
   if (capture === null) return;
   let resolved: StationRef | null | undefined;
   try {
@@ -65,8 +102,11 @@ export async function remapDistanceOrigin(capture: OriginCapture | null): Promis
   // A pick (or a project switch, which clears the origin) during the round trip wins.
   if (!sameRef(ui.distanceGradientOrigin, capture.ref)) return;
   if (resolved === null) {
+    // A dormant anchor that still names nothing: keep waiting, quietly.
+    if (capture.ref === null) return;
     ui.setDistanceGradientOrigin(null);
     ui.showToast(i18n.t('map.distanceLegend.originRemoved'), TOAST_KEYS.DISTANCE_ORIGIN_RESET, 'info');
+    setDormant({ anchor: capture.anchor, projectKey });
     return;
   }
   // Unchanged: leave the cached field alone (the setter clears it).

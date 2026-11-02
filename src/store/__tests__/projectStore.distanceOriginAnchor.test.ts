@@ -162,3 +162,55 @@ describe('the distance-gradient origin follows its station (D39(g))', () => {
     expect(useUIStore.getState().distanceGradientOrigin).toBeNull();
   });
 });
+
+/**
+ * #576 D39(g)-UNDO, decided: "Undo restoring the deleted origin station brings the origin
+ * back". The delete drops the origin to the entrance; the anchor it was following is kept,
+ * and an undo (or redo) that makes it resolve again puts the origin back on its station -
+ * unless the user picked an origin of their own since, or another project is open.
+ */
+describe('the origin a delete displaced comes back on the undo that restores its station', () => {
+  async function deleteTheOriginStation() {
+    useUIStore.getState().setDistanceGradientOrigin(ref(5));
+    serve(null);
+    await useProjectStore.getState().deleteShot(SECTION, 4);
+    expect(useUIStore.getState().distanceGradientOrigin, 'origin after deleting its station').toBeNull();
+  }
+
+  it('brings the origin back when the undo restores the station', async () => {
+    await deleteTheOriginStation();
+    // The undo restores the station; its anchor resolves again.
+    serve(ref(5));
+    await useProjectStore.getState().undo();
+    expect(useUIStore.getState().distanceGradientOrigin, 'origin after undoing the delete').toEqual(ref(5));
+  });
+
+  it('keeps waiting while an undo does not restore it, then restores on the one that does', async () => {
+    await deleteTheOriginStation();
+    serve(null);
+    await useProjectStore.getState().undo();
+    expect(useUIStore.getState().distanceGradientOrigin).toBeNull();
+    serve(ref(5));
+    await useProjectStore.getState().undo();
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(5));
+  });
+
+  it('leaves an origin the user picked since alone', async () => {
+    await deleteTheOriginStation();
+    useUIStore.getState().setDistanceGradientOrigin(ref(1));
+    useUIStore.getState().setDistanceGradientOrigin(null);
+    const anchorCalls = serve(ref(5));
+    await useProjectStore.getState().undo();
+    expect(useUIStore.getState().distanceGradientOrigin).toBeNull();
+    expect(anchorCalls, 'nothing left to re-resolve after a pick').toEqual([]);
+  });
+
+  it('does not re-resolve it in another project', async () => {
+    await deleteTheOriginStation();
+    useProjectStore.setState({ project: { ...project(), created_at: '2026-02-02T00:00:00Z' } as never });
+    const anchorCalls = serve(ref(5));
+    await useProjectStore.getState().undo();
+    expect(useUIStore.getState().distanceGradientOrigin).toBeNull();
+    expect(anchorCalls).toEqual([]);
+  });
+});

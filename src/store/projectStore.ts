@@ -726,7 +726,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (result.success) {
         // Re-resolve those pins BEFORE the refetch: the reach-field effect keys on modified_at,
         // so a stale pin sent here would paint a route through the wrong station for a frame.
-        if (!lostProject(requestProjectKey)) await Promise.all([remapPlanPins(), remapDistanceOrigin(origin)]);
+        if (!lostProject(requestProjectKey)) await Promise.all([remapPlanPins(), remapDistanceOrigin(origin, requestProjectKey)]);
         await get().refreshProjectState();
         // A reverse's aftermath (clearing the selection, the merge staging and the comment
         // pickup it renumbered) runs HERE rather than in the caller, so a reverse and an undo
@@ -840,7 +840,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     let reversedSections: readonly ReversedSection[] | undefined;
     let origin: OriginCapture | null = null; // #576 D39(g), see executeCommandInner
     try {
-      [, origin] = await Promise.all([flushPlanAnchors(), captureDistanceOrigin()]); // #310, see executeCommandInner
+      // #310, see executeCommandInner. An undo/redo can also restore the station a delete took
+      // the origin from: its dormant anchor is re-resolved too (#576 D39(g)-UNDO).
+      [, origin] = await Promise.all([flushPlanAnchors(), captureDistanceOrigin(requestProjectKey)]);
       // Re-checked after the flush for the same reason executeCommandInner does: the flush is a
       // real round trip, and a project can open across it while `args` still name the outgoing
       // one. Returning from inside the `try` still runs the `finally`, which is correct rather
@@ -893,7 +895,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // #310: re-resolve the plan pins before the refetch (see executeCommandInner). In the
       // `finally` because a PARTIAL multi-step undo renumbered too, and its pins need it just
       // as much as a clean one's do. The distance-gradient origin likewise (#576 D39(g)).
-      if (!lostProject(requestProjectKey)) await Promise.all([remapPlanPins(), remapDistanceOrigin(origin)]);
+      if (!lostProject(requestProjectKey)) await Promise.all([remapPlanPins(), remapDistanceOrigin(origin, requestProjectKey)]);
       await get().refreshProjectState();
       // #24: same project-switch guard as executeCommand. Section ids are small per-project
       // integers, so entries from the OUTGOING project would otherwise match sections in
