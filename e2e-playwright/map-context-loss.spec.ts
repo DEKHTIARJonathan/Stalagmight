@@ -22,6 +22,11 @@ import {
  *
  * Chromium exposes WEBGL_lose_context, which forces exactly that loss + restore.
  * The oracle is the painted pixel: the custom layers have no MapLibre features.
+ *
+ * The Global View's survey layer comes back the same way, and a context that is
+ * lost and NOT restored (WebKit may give up on it) is reported after ~5 s with
+ * a toast whose "Reload map" rebuilds the map on a new context; the toast clears
+ * itself if the context comes back after all (decided D38-LOST).
  */
 
 const seeds: SectionSeed[] = [
@@ -89,30 +94,63 @@ async function layerOrder(page: Page): Promise<string[]> {
   );
 }
 
-async function loseContext(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    const w = window as unknown as {
-      __stalagmight_map__: { getCanvas: () => HTMLCanvasElement; once: (e: string, cb: () => void) => void };
-      __e2eLoseContext__?: WEBGL_lose_context;
-    };
-    const map = w.__stalagmight_map__;
+/** The window handle of the map under test: the survey map or the Global View's. */
+type MapHandle = '__stalagmight_map__' | '__stalagmight_global_map__';
+
+async function loseContext(page: Page, handle: MapHandle = '__stalagmight_map__'): Promise<void> {
+  await page.evaluate(async (handle) => {
+    const w = window as unknown as Record<string, unknown> & { __e2eLoseContext__?: WEBGL_lose_context };
+    const map = w[handle] as { getCanvas: () => HTMLCanvasElement; once: (e: string, cb: () => void) => void };
     const ext = map.getCanvas().getContext('webgl2')!.getExtension('WEBGL_lose_context')!;
     w.__e2eLoseContext__ = ext;
     const lost = new Promise((resolve) => map.once('webglcontextlost', () => resolve(null)));
     ext.loseContext();
     await lost;
-  });
+  }, handle);
 }
 
-async function restoreContext(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    const w = window as unknown as {
-      __stalagmight_map__: { once: (e: string, cb: () => void) => void };
-      __e2eLoseContext__: WEBGL_lose_context;
-    };
-    const restored = new Promise((resolve) => w.__stalagmight_map__.once('webglcontextrestored', () => resolve(null)));
+async function restoreContext(page: Page, handle: MapHandle = '__stalagmight_map__'): Promise<void> {
+  await page.evaluate(async (handle) => {
+    const w = window as unknown as Record<string, unknown> & { __e2eLoseContext__: WEBGL_lose_context };
+    const map = w[handle] as { once: (e: string, cb: () => void) => void };
+    const restored = new Promise((resolve) => map.once('webglcontextrestored', () => resolve(null)));
     w.__e2eLoseContext__.restoreContext();
     await restored;
+  }, handle);
+}
+
+/** Tag the current map object, to tell a rebuilt map from the old one. */
+async function tagMap(page: Page, handle: MapHandle): Promise<void> {
+  await page.evaluate((handle) => {
+    ((window as unknown as Record<string, unknown>)[handle] as Record<string, unknown>).__e2eTag__ = true;
+  }, handle);
+}
+
+async function mapIsRebuilt(page: Page, handle: MapHandle): Promise<boolean> {
+  return page.evaluate((handle) => {
+    const map = (window as unknown as Record<string, unknown>)[handle] as Record<string, unknown> | undefined;
+    return Boolean(map) && map!.__e2eTag__ !== true;
+  }, handle);
+}
+
+const LOST_TOAST = '[data-testid="toast"][data-toast-key="render-context-lost"]:not([data-toast-leaving])';
+
+async function openGlobalViewMap(page: Page): Promise<void> {
+  await setupMockedPage(page);
+  await expect(page.getByTestId('global-view')).toBeVisible({ timeout: 10000 });
+  await page.locator('[data-testid="globalview-view-toggle-map"]').click();
+  await expect(page.getByTestId('globalview-map')).toBeVisible({ timeout: 5000 });
+  await expect.poll(() => globalLayerOrder(page)).toContain('global-survey-custom');
+}
+
+async function globalLayerOrder(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const map = (window as unknown as { __stalagmight_global_map__?: { getLayersOrder: () => string[] } }).__stalagmight_global_map__;
+    try {
+      return map?.getLayersOrder() ?? [];
+    } catch {
+      return []; // no style while the context is lost
+    }
   });
 }
 
@@ -158,6 +196,69 @@ test.describe('Map survives a WebGL context loss', () => {
       .toBe(1);
     const farEnd = (await getDrawnGeometry(page)).stations.find((s) => s.stationIndex === 6)!;
     await expect.poll(() => inkAt(page, [farEnd]), { timeout: 10000 }).toBeGreaterThan(0);
+    expect(errors).toEqual([]);
+  });
+});
+
+test.describe('Global View survives a WebGL context loss (#576 D38)', () => {
+  test('the global survey layer comes back, in its old stacking order', async ({ page }) => {
+    const errors = collectErrors(page);
+    await openGlobalViewMap(page);
+    const orderBefore = await globalLayerOrder(page);
+
+    await loseContext(page, '__stalagmight_global_map__');
+    await restoreContext(page, '__stalagmight_global_map__');
+
+    await expect.poll(() => globalLayerOrder(page)).toEqual(orderBefore);
+    expect(errors).toEqual([]);
+  });
+});
+
+test.describe('A WebGL context that does not come back (#576 D38-LOST)', () => {
+  test('survey map: after ~5 s a toast offers Reload map, which rebuilds the map on a new context', async ({ page }) => {
+    const errors = collectErrors(page);
+    await openSeededAndZoom(page, 'Context Lost For Good');
+    await tagMap(page, '__stalagmight_map__');
+
+    await loseContext(page);
+    const toast = page.locator(LOST_TOAST);
+    await expect(toast).toBeVisible({ timeout: 10000 });
+    await expect(toast).toContainText('Survey rendering unavailable (WebGL2/GPU)');
+
+    await toast.getByTestId('map-context-lost-reload').click();
+    await expect.poll(() => mapIsRebuilt(page, '__stalagmight_map__'), { timeout: 10000 }).toBe(true);
+    await expect(page.locator(LOST_TOAST)).toHaveCount(0);
+    await waitForDrawnShots(page, 3);
+    const order = await layerOrder(page);
+    for (const id of CUSTOM_LAYERS) expect(order).toContain(id);
+    await expect.poll(async () => inkAt(page, await shotMidpoints(page)), { timeout: 10000 }).toBeGreaterThan(0);
+    expect(errors).toEqual([]);
+  });
+
+  test('survey map: the toast clears itself when the context comes back after all', async ({ page }) => {
+    const errors = collectErrors(page);
+    await openSeededAndZoom(page, 'Context Back Late');
+
+    await loseContext(page);
+    await expect(page.locator(LOST_TOAST)).toBeVisible({ timeout: 10000 });
+    await restoreContext(page);
+    await expect(page.locator(LOST_TOAST)).toHaveCount(0);
+    await expect.poll(async () => inkAt(page, await shotMidpoints(page)), { timeout: 10000 }).toBeGreaterThan(0);
+    expect(errors).toEqual([]);
+  });
+
+  test('Global View: the same toast rebuilds the Global View map', async ({ page }) => {
+    const errors = collectErrors(page);
+    await openGlobalViewMap(page);
+    await tagMap(page, '__stalagmight_global_map__');
+
+    await loseContext(page, '__stalagmight_global_map__');
+    const toast = page.locator(LOST_TOAST);
+    await expect(toast).toBeVisible({ timeout: 10000 });
+    await toast.getByTestId('map-context-lost-reload').click();
+    await expect.poll(() => mapIsRebuilt(page, '__stalagmight_global_map__'), { timeout: 10000 }).toBe(true);
+    await expect(page.locator(LOST_TOAST)).toHaveCount(0);
+    await expect.poll(() => globalLayerOrder(page)).toContain('global-survey-custom');
     expect(errors).toEqual([]);
   });
 });

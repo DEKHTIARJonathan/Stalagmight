@@ -38,6 +38,7 @@ import SurveyLayer, { type SurveyLayerCallbacks } from './SurveyLayer';
 import { mapCursorFor } from './mapCursor';
 import { createSurveyMap, SATELLITE_SOURCE_ID } from './createSurveyMap';
 import { pixelsPerMeterAt } from './placementScale';
+import { useContextLossToast } from './useContextLossToast';
 import { SATELLITE_BOTTOM_CANDIDATES } from './mapUtils';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
@@ -153,7 +154,12 @@ const MAP_CANVAS_UI_KEYS = [
 
 const selectMapCanvasUI = (s: UIStoreState) => pickUIKeys(s, MAP_CANVAS_UI_KEYS);
 
-function MapCanvas() {
+interface MapCanvasProps {
+  /** Rebuild the map on a new WebGL context (the lost-context toast's action). */
+  onReloadMap: () => void;
+}
+
+function MapCanvas({ onReloadMap }: MapCanvasProps) {
   const precision = useDecimalPrecision();
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
@@ -771,6 +777,10 @@ function MapCanvas() {
       });
     };
   }, []);
+
+  // A WebGL context that is lost and does not come back within a few seconds
+  // leaves the survey blank for good: say so, and offer the rebuild (#576 D38-LOST).
+  useContextLossToast(map, mapLoaded, onReloadMap);
 
   // Expose map instance for E2E testing and keyboard shortcuts
   useEffect(() => {
@@ -1724,8 +1734,23 @@ function MapCanvas() {
   );
 }
 
-// Memoized: MapCanvas takes no props and drives itself from the stores, so it
-// must NOT re-render just because a parent (SingleSystemView) re-renders - e.g.
-// on every tick of a panel resize. Without this the whole (large) map component
-// re-rendered ~60×/s during a drag, which is what made resizing feel heavy.
-export default memo(MapCanvas);
+const MemoMapCanvas = memo(MapCanvas);
+
+/**
+ * Owns the map's generation: "Reload map" on the lost-WebGL-context toast bumps
+ * it, which remounts MapCanvas - map.remove() on the dead context, then a fresh
+ * map (new canvas, new context) built from the stores (#576 D38-LOST). In-flight
+ * transient state (a measurement, a move carry) does not survive the rebuild.
+ */
+function MapCanvasHost() {
+  const [generation, setGeneration] = useState(0);
+  const reloadMap = useCallback(() => setGeneration((g) => g + 1), []);
+  return <MemoMapCanvas key={generation} onReloadMap={reloadMap} />;
+}
+
+// Memoized: MapCanvas takes no props from its parent and drives itself from the
+// stores, so it must NOT re-render just because a parent (SingleSystemView)
+// re-renders - e.g. on every tick of a panel resize. Without this the whole
+// (large) map component re-rendered ~60×/s during a drag, which is what made
+// resizing feel heavy.
+export default memo(MapCanvasHost);

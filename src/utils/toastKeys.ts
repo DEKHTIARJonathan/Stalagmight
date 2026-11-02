@@ -32,6 +32,8 @@ export const TOAST_KEYS = {
   DISTANCE_ORIGIN_RESET: 'distance-origin-reset',
   SHOTS_HIDDEN: 'shots-hidden',
   RENDER_FATAL: 'render-fatal',
+  /** The map's WebGL context was lost and not restored; carries "Reload map" (#576 D38-LOST). */
+  RENDER_CONTEXT_LOST: 'render-context-lost',
   MERGE_CHECK: 'merge-check',
   MERGE_BLOCKED: 'merge-blocked',
   MERGE_ERROR: 'merge-error',

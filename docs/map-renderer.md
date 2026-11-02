@@ -217,7 +217,17 @@ loss and, once the restored style has loaded, has each controller re-add its
 live layer object at its old position (`reattach`); the layer's `onAdd` then
 re-uploads from its own data. SurveyLayer replays the last flush afterwards,
 including one that arrived while the context was lost. The Global View layer
-does not do this yet.
+recovers the same way (`GlobalSurveyLayer` runs the same watch over its one
+controller and applies systems that arrived during the loss after the restore).
+
+A context that is lost and **not** restored - WebKit may give up on it - would
+leave the map blank for good. `useContextLossToast` (both maps) gives the restore
+5 s (`CONTEXT_RESTORE_GRACE_MS`); after that an error toast says "Survey rendering
+unavailable (WebGL2/GPU)" and offers **Reload map**, which remounts the map on a
+new canvas and so a new context (transient state such as a measurement or a
+move carry does not survive it). The toast stays until the context comes back by
+itself (then it clears itself), the map is rebuilt or left, or the user
+dismisses it (#576 D38-LOST).
 
 ## Debug and dev hooks
 

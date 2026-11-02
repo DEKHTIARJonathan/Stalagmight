@@ -7,6 +7,7 @@ import { watchDevicePixelRatio } from '../../utils/dprWatcher';
 import { attachLongPressTouch } from '../../utils/longPressTouch';
 import { useUIStore } from '../../store/uiStore';
 import { hasLiveStyle } from '../Map/mapUtils';
+import { watchGlContextLoss } from '../Map/surveyLayer/glContextRecovery';
 import i18n from '../../i18n';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import type { DecimalPrecision } from '../../types/config';
@@ -113,6 +114,11 @@ export default class GlobalSurveyLayer {
   // src/utils/longPressTouch.ts.
   private detachLongPressTouch: (() => void) | null = null;
 
+  /** Detach for the WebGL context-loss recovery (#576 D38). */
+  private detachGlContextWatch: (() => void) | null = null;
+  /** Systems that arrived while the context was lost, applied after the restore. */
+  private updateWhileStyleless: SystemGeometry[] | null = null;
+
   constructor(map: MaplibreMap, callbacks: GlobalSurveyLayerCallbacks = {}) {
     this.map = map;
     this.callbacks = callbacks;
@@ -124,6 +130,22 @@ export default class GlobalSurveyLayer {
     // Rebuild the custom global layer when the DPR changes (window moved to a
     // different-scale monitor); it bakes dpr into device-pixel sizes.
     this.dprWatcherDispose = watchDevicePixelRatio(() => this.customRender?.resync());
+    // MapLibre drops custom layers on a WebGL context loss and never re-adds them
+    // on restore; the survey map does this itself and so must the Global View, or
+    // every system's survey stays blank until the view is reopened (#576 D38).
+    this.detachGlContextWatch = watchGlContextLoss(map, {
+      layers: () => (this.customRender ? [this.customRender] : []),
+      afterRestore: () => this.replayAfterContextRestore(),
+    });
+  }
+
+  /** After a context restore: apply what the lost window could not, and the
+   *  theme's paint, which bailed on the missing style. */
+  private replayAfterContextRestore(): void {
+    const pending = this.updateWhileStyleless;
+    this.updateWhileStyleless = null;
+    if (pending) this.update(pending);
+    this.applyThemeColors(this.themeColors);
   }
 
   /**
@@ -288,6 +310,12 @@ export default class GlobalSurveyLayer {
    * which draws every system and owns interaction hit-testing.
    */
   update(systems: SystemGeometry[]): void {
+    // No style while the WebGL context is lost: a first build would add its layer
+    // to it and throw. Keep the latest systems for the restore to apply.
+    if (!hasLiveStyle(this.map)) {
+      this.updateWhileStyleless = systems;
+      return;
+    }
     // Rebuild the per-system color map (kept for getSystemColor / hasData); the
     // custom renderer resolves its own colors from generateSystemColor.
     this.systemColors.clear();
@@ -509,6 +537,9 @@ export default class GlobalSurveyLayer {
    * Destroy the layer, removing all sources and event handlers.
    */
   destroy(): void {
+    this.detachGlContextWatch?.();
+    this.detachGlContextWatch = null;
+    this.updateWhileStyleless = null;
     // Tear down the custom layer (removes it) so it never outlives Global View
     // (#customRender).
     this.customRender?.destroy();

@@ -325,6 +325,30 @@ export function selectionsEqual(a: Selection, b: Selection): boolean {
 export type ToastKind = 'info' | 'success' | 'warning' | 'error';
 
 /** One entry in the toast stack. Ordered oldest-first in `UIStore.toasts`. */
+/**
+ * A toast's one action button. Toasts carry none by policy (docs/notifications.md);
+ * the single sanctioned exception is the lost-WebGL-context toast's "Reload map"
+ * (#576 D38-LOST).
+ */
+export interface ToastAction {
+  label: string;
+  /** Runs on click; the toast is dismissed after it. */
+  onAction: () => void;
+  /** `data-testid` of the button. */
+  testId: string;
+}
+
+/** Optional extras for {@link UIState.showToast}. */
+export interface ToastOptions {
+  action?: ToastAction;
+  /**
+   * Stays on screen (no dwell, no fade) until dismissed - by the user, or by the
+   * code that raised it via {@link UIState.dismissToastByKey} once the condition
+   * it reports is over.
+   */
+  persistent?: boolean;
+}
+
 export interface ToastItem {
   /** Process-unique, monotonically increasing. React key and timer identity. */
   id: number;
@@ -356,6 +380,10 @@ export interface ToastItem {
    * visible-count cap, and ToastStack drops them once their exit finishes.
    */
   leaving: boolean;
+  /** See {@link ToastOptions.action}. */
+  action?: ToastAction;
+  /** See {@link ToastOptions.persistent}. */
+  persistent?: boolean;
 }
 
 /**
@@ -666,7 +694,7 @@ interface UIStore {
    * and kind win, its timer restarts, and it moves to the newest slot - instead
    * of stacking a duplicate.
    */
-  showToast: (message: string, key: string, kind: ToastKind) => void;
+  showToast: (message: string, key: string, kind: ToastKind, options?: ToastOptions) => void;
   /**
    * Set the live-toast cap from measured geometry. Clamped into
    * [MIN_VISIBLE_TOASTS, MAX_VISIBLE_TOASTS]; shrinking it evicts the oldest
@@ -675,6 +703,11 @@ interface UIStore {
   setToastCapacity: (capacity: number) => void;
   /** Begin one toast's exit animation (the per-toast dismiss button). */
   dismissToast: (id: number) => void;
+  /**
+   * Begin the exit of the live toast under `key`, if any: for code that raised a
+   * {@link ToastOptions.persistent} toast and now knows its condition is over.
+   */
+  dismissToastByKey: (key: string) => void;
   /** Drop one toast outright. ToastStack calls this when a toast's life ends. */
   removeToast: (id: number) => void;
   /**
@@ -1923,7 +1956,7 @@ export const useUIStore = create<UIStore>((set) => ({
   // ToastStack, which calls removeToast when a toast's life ends.
   toasts: [],
   toastCapacity: MAX_VISIBLE_TOASTS,
-  showToast: (message, key, kind = 'info') => {
+  showToast: (message, key, kind = 'info', options = {}) => {
     const prev = useUIStore.getState().toasts;
 
     // Same key fired again WITHIN THE BURST WINDOW: refresh in place rather than
@@ -1946,12 +1979,16 @@ export const useUIStore = create<UIStore>((set) => ({
       (t) => t.key === key && !t.leaving && now - t.refreshedAt < TOAST_DEDUP_WINDOW_MS,
     );
     if (existing) {
+      // The newest call's options win, like its wording: drop what it leaves out.
+      const { action: _staleAction, persistent: _stalePersistent, ...rest } = existing;
       const refreshed: ToastItem = {
-        ...existing,
+        ...rest,
         message,
         kind,
         refreshedAt: now,
         revision: existing.revision + 1,
+        ...(options.action ? { action: options.action } : {}),
+        ...(options.persistent ? { persistent: true } : {}),
       };
       // Move to the newest slot (end of the array = nearest the bottom edge).
       set({ toasts: [...prev.filter((t) => t.id !== existing.id), refreshed] });
@@ -1966,6 +2003,8 @@ export const useUIStore = create<UIStore>((set) => ({
       refreshedAt: now,
       revision: 0,
       leaving: false,
+      ...(options.action ? { action: options.action } : {}),
+      ...(options.persistent ? { persistent: true } : {}),
     };
     set({ toasts: capToasts([...prev, pushed], useUIStore.getState().toastCapacity) });
   },
@@ -1979,6 +2018,12 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   dismissToast: (id) =>
     set((s) => ({ toasts: s.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) })),
+  dismissToastByKey: (key) =>
+    set((s) =>
+      s.toasts.some((t) => t.key === key && !t.leaving)
+        ? { toasts: s.toasts.map((t) => (t.key === key && !t.leaving ? { ...t, leaving: true } : t)) }
+        : s,
+    ),
   removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   clearToast: () => set({ toasts: [] }),
   toastBottomOffsets: {},

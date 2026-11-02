@@ -77,7 +77,7 @@ function packStroke(css: string): Rgba01 {
 
 export class GlobalCustomController {
   private readonly map: MaplibreMap;
-  private readonly layerId: string;
+  readonly layerId: string;
   private readonly scheduleRestore: (fn: () => void) => void;
   private readonly onActiveChange: ((active: boolean) => void) | undefined;
   private readonly onFatal: ((reason: string) => void) | undefined;
@@ -199,12 +199,33 @@ export class GlobalCustomController {
     this.map.triggerRepaint();
   }
 
+  /**
+   * Re-add the live layer after a WebGL context restore, which MapLibre never
+   * does for a custom layer (see Map/surveyLayer/glContextRecovery.ts). The SAME
+   * layer object goes back, so MapLibre re-runs its onAdd: programs recompile and
+   * buffers re-upload from the layer's data on the new context. A re-add that
+   * cannot draw is the same unrecoverable state as a failed enable. No-op when
+   * nothing was drawing (#576 D38).
+   */
+  reattach(beforeId: string | undefined): void {
+    const layer = this.layer;
+    if (!this.active || !layer || this.fatal) return;
+    this.map.addLayer(layer, beforeId);
+    if (layer.isDisabled()) {
+      this.tearDownFatal(layer.getDisabledReason() ?? 'unknown');
+      return;
+    }
+    this.map.triggerRepaint();
+  }
+
   /** Remove the custom layer (the sole global-survey renderer - no stock to
    *  restore or republish). Safe when already inactive. Non-fatal teardown only
    *  (destroy); the fatal path uses {@link tearDownFatal}. */
   private teardown(): void {
     this.setActive(false);
-    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    // Leaving the Global View (or rebuilding it) while its WebGL context is lost:
+    // the style, and the layer with it, are already gone (#576 NF-MAP-5).
+    if (hasLiveStyle(this.map) && this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
     this.layer = null;
     this.map.triggerRepaint();
   }

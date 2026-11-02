@@ -15,6 +15,7 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { testIdPart } from '../../utils/testId';
 import { MapAttribution } from '../Map/MapAttribution';
 import { createSurveyMap, SATELLITE_SOURCE_ID } from '../Map/createSurveyMap';
+import { useContextLossToast } from '../Map/useContextLossToast';
 
 /** Local storage key for persisting map position/zoom. */
 const MAP_STATE_STORAGE_KEY = 'globalViewMapState';
@@ -139,11 +140,16 @@ function endpointLngLat(point: readonly number[]): [number, number] | null {
   return lng !== undefined && lat !== undefined && Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null;
 }
 
+interface GlobalViewMapInnerProps extends GlobalViewMapProps {
+  /** Rebuild the map on a new WebGL context (the lost-context toast's action). */
+  onReloadMap: () => void;
+}
+
 /**
  * Map component for GlobalView showing all GPS-positioned systems.
  * Uses MapLibre GL JS with satellite tiles.
  */
-const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(function GlobalViewMap(
+const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerProps>(function GlobalViewMap(
   {
     projects,
     selectedProjectId,
@@ -155,6 +161,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     onContextMenu,
     zoomToSystem,
     onZoomHandled,
+    onReloadMap,
   },
   ref
 ) {
@@ -612,6 +619,21 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       map.current = null;
     };
   }, []);
+
+  // A WebGL context that is lost and does not come back within a few seconds
+  // leaves every system's survey blank for good: say so, and offer the rebuild
+  // (#576 D38-LOST).
+  useContextLossToast(map, mapLoaded, onReloadMap);
+
+  // E2E handle on the Global View map (the survey map's is `__stalagmight_map__`).
+  useEffect(() => {
+    if (!(import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VITE_E2E === '1')) return undefined;
+    const w = window as unknown as { __stalagmight_global_map__?: maplibregl.Map };
+    if (map.current) w.__stalagmight_global_map__ = map.current;
+    return () => {
+      delete w.__stalagmight_global_map__;
+    };
+  }, [mapLoaded]);
 
   // Store callbacks in refs to avoid stale closures in map event handlers
   const onProjectSelectRef = useRef(onProjectSelect);
@@ -1235,6 +1257,17 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       </div>
     </div>
   );
+});
+
+/**
+ * Owns the map's generation: "Reload map" on the lost-WebGL-context toast bumps
+ * it, which remounts the map - map.remove() on the dead context, then a fresh map
+ * (new canvas, new context) from the same props (#576 D38-LOST).
+ */
+const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(function GlobalViewMapHost(props, ref) {
+  const [generation, setGeneration] = useState(0);
+  const reloadMap = useCallback(() => setGeneration((g) => g + 1), []);
+  return <GlobalViewMapInner key={generation} ref={ref} {...props} onReloadMap={reloadMap} />;
 });
 
 export default GlobalViewMap;

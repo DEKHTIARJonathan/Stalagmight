@@ -4,7 +4,8 @@
       "wizardMapResize": "Resize map panel"
     },
     "toast": {
-      "dismiss": "Dismiss notification: {{message}}"
+      "dismiss": "Dismiss notification: {{message}}",
+      "action": "{{action}}: {{message}}"
     },
     "actions": {
       "add": "Add",
@@ -2379,6 +2380,9 @@
   },
   "map": {
     "fitToViewTitle": "Fit to view",
+    "contextLost": {
+      "reload": "Reload map"
+    },
     "attribution": {
       "expandAria": "Show map imagery sources",
       "collapsed": "by {{source}}"

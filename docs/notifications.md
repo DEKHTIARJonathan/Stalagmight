@@ -82,7 +82,13 @@ regions). Read the comment blocks in those two files plus
 - **Nothing critical or must-act rides a toast.** Toasts auto-dismiss; a message the
   user cannot afford to miss, or that carries a required action, is a dialog or
   banner (Carbon: actionable notifications must persist). Toasts here have no action
-  buttons by design - do not add them per-callsite.
+  buttons by design - do not add them per-callsite. The one sanctioned exception
+  (#576 D38-LOST): when the map's WebGL context is lost and not restored, the
+  `render-context-lost` toast carries **Reload map** and is `persistent` - it does
+  not fade, and the code that raised it dismisses it by key
+  (`dismissToastByKey`) once the context comes back
+  (`src/components/Map/useContextLossToast.ts`). It persists, as Carbon asks of
+  an actionable notification, rather than auto-dismissing.
 - **Keep it to one line** (~60 characters): what happened, then what to do if
   anything. Details belong in a dialog.
 - Keyboard-shortcut confirmation toasts are additionally gated by the
