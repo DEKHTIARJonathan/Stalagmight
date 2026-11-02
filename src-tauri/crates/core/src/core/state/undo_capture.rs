@@ -509,8 +509,24 @@ impl AppState {
             // which captures before+after snapshots and pushes directly.
             Command::Batch { .. } => UndoData::None,
 
-            // Non-undoable commands
-            _ => UndoData::None,
+            // [#576 A7] Every variant is named, so a new command cannot fall
+            // through to "no undo data" without someone deciding it should.
+            //
+            // Not undoable at all (`is_undoable` is false), so never reached.
+            Command::CreateProject { .. }
+            | Command::OpenProject { .. }
+            | Command::SaveProject { .. }
+            | Command::CloseProject
+            | Command::MergeProjects { .. }
+            | Command::RepairIntegrity => UndoData::None,
+            // Label-only: `execute()` refuses them, and the paths that apply
+            // them record their own snapshot pair (`push_snapshot_undo`).
+            Command::UpdateProjectSettings | Command::SetSurfaceElevation => UndoData::None,
+            // Undoable only as part of a `Batch` (the DMP import sends it inside
+            // one), whose snapshot pair covers it. On its own it records nothing,
+            // so `execute()` pushes no entry - but it still clears redo and marks
+            // a remote copy edited, which is why `is_undoable` keeps it.
+            Command::UntrackImport { .. } => UndoData::None,
         }
     }
 
@@ -693,26 +709,80 @@ impl AppState {
             // failure can trigger rollback.
             Command::Batch { .. } => undo_data,
 
-            _ => undo_data,
+            // [#576 A7] Complete before execution: `generate_undo_data` already
+            // recorded everything the undo needs.
+            Command::UpdateSectionMetadata { .. }
+            | Command::UpdateShot { .. }
+            | Command::SetShotKind { .. }
+            | Command::RemoveLoopClosure { .. }
+            | Command::SetZeroDatum { .. }
+            | Command::SetStationComment { .. }
+            | Command::MoveSection { .. }
+            | Command::MoveSegment { .. } => undo_data,
+
+            // Record nothing here (see the matching arms of
+            // `generate_undo_data`): not undoable, label-only, or batch-only.
+            Command::CreateProject { .. }
+            | Command::OpenProject { .. }
+            | Command::SaveProject { .. }
+            | Command::CloseProject
+            | Command::MergeProjects { .. }
+            | Command::RepairIntegrity
+            | Command::UpdateProjectSettings
+            | Command::SetSurfaceElevation
+            | Command::UntrackImport { .. } => undo_data,
         }
     }
 
     /// Check if a command should be pushed to undo stack
+    ///
+    /// [#576 A7] An exhaustive classification, not a list of exceptions: a new
+    /// `Command` variant does not compile until it is placed in one of the two
+    /// arms, so it cannot become silently un-undoable (and silently clear
+    /// redo) by being forgotten.
     pub(super) fn is_undoable(cmd: &Command) -> bool {
-        // This is also a privacy boundary for Full-mode SpeleoDB history: the
-        // lifecycle variants below carry local filesystem paths, so making one
-        // undoable can publish those paths in `command_json`. Keep this list and
-        // `path_bearing_commands_never_enter_shared_undo_history` in sync.
-        !matches!(
-            cmd,
+        match cmd {
+            // This is also a privacy boundary for Full-mode SpeleoDB history: the
+            // lifecycle variants carry local filesystem paths, so making one
+            // undoable can publish those paths in `command_json`. Keep this arm and
+            // `path_bearing_commands_never_enter_shared_undo_history` in sync.
             Command::OpenProject { .. }
-                | Command::SaveProject { .. }
-                | Command::CloseProject
-                | Command::CreateProject { .. }
-                | Command::MergeProjects { .. }
-                // Records its own snapshot-pair undo inside repair_open_project_integrity;
-                // never routed through execute() anyway.
-                | Command::RepairIntegrity
-        )
+            | Command::SaveProject { .. }
+            | Command::CloseProject
+            | Command::CreateProject { .. }
+            | Command::MergeProjects { .. }
+            // Records its own snapshot-pair undo inside repair_open_project_integrity;
+            // never routed through execute() anyway.
+            | Command::RepairIntegrity => false,
+
+            Command::CreateSection { .. }
+            | Command::DeleteSection { .. }
+            | Command::UpdateSectionMetadata { .. }
+            | Command::ReverseSection { .. }
+            | Command::CreateShot { .. }
+            | Command::UpdateShot { .. }
+            | Command::DeleteShot { .. }
+            | Command::SetShotKind { .. }
+            | Command::MergeStations { .. }
+            | Command::UnmergeStations { .. }
+            | Command::UnmergeStationPair { .. }
+            | Command::CreateLoopClosure { .. }
+            | Command::RemoveLoopClosure { .. }
+            | Command::SetZeroDatum { .. }
+            | Command::RemoveZeroDatum { .. }
+            | Command::SetStationComment { .. }
+            | Command::MoveSection { .. }
+            | Command::MoveSegment { .. }
+            | Command::MoveStation { .. }
+            | Command::MoveComment { .. }
+            | Command::Batch { .. }
+            // Batch-only in practice; see its `generate_undo_data` arm for why
+            // it stays in this arm although it records nothing standalone.
+            | Command::UntrackImport { .. }
+            // Label-only entries pushed by their own paths; `execute()` refuses
+            // them before this classification matters.
+            | Command::UpdateProjectSettings
+            | Command::SetSurfaceElevation => true,
+        }
     }
 }

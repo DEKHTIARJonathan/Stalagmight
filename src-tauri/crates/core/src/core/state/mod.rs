@@ -266,6 +266,9 @@ mod shot_uuid_tests;
 )]
 mod tests;
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod undo_classification_tests;
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::print_stdout,

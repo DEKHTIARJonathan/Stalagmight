@@ -962,7 +962,18 @@ impl AppState {
                     _ => CommandResult::failure("Unsupported closure redo command".to_string()),
                 }
             }
-            _ => {
+            // [#576 A7] Named rather than `_`, so a new `UndoData` variant has to
+            // choose between a restore arm above and re-execution here.
+            UndoData::InverseCommand(_)
+            | UndoData::PreviousValues { .. }
+            | UndoData::SectionSnapshot { .. }
+            | UndoData::ShotSnapshot { .. }
+            | UndoData::MergeInfo { .. }
+            | UndoData::UnmergeInfo { .. }
+            | UndoData::ZeroDatumInfo { .. }
+            | UndoData::StationMoveInfo { .. }
+            | UndoData::ProjectSnapshot(_)
+            | UndoData::None => {
                 // Re-execute the original command for other undo data types.
                 // The command names its shot by an in-session id, which a reload
                 // renumbers, so re-address it through the uuid the entry

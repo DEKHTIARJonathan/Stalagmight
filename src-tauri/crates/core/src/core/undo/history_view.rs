@@ -329,7 +329,25 @@ fn derive_command_details(
             }
             None => Some("(removed)".to_string()),
         },
-        _ => None,
+        // [#576 A7] No one-line detail; named so a new command decides.
+        Command::CreateProject { .. }
+        | Command::OpenProject { .. }
+        | Command::SaveProject { .. }
+        | Command::CloseProject
+        | Command::DeleteSection { .. }
+        | Command::UpdateSectionMetadata { .. }
+        | Command::ReverseSection { .. }
+        | Command::DeleteShot { .. }
+        | Command::UnmergeStations { .. }
+        | Command::UnmergeStationPair { .. }
+        | Command::RemoveZeroDatum { .. }
+        | Command::MoveComment { .. }
+        | Command::UntrackImport { .. }
+        | Command::Batch { .. }
+        | Command::MergeProjects { .. }
+        | Command::RepairIntegrity
+        | Command::UpdateProjectSettings
+        | Command::SetSurfaceElevation => None,
     }
 }
 
@@ -918,8 +936,30 @@ fn derive_preview_data(
             })
         }
 
-        // Default catch-all: show command description so hover is never empty
-        _ => Some(PreviewData {
+        // The default: show the command description so hover is never empty.
+        // [#576 A7] Named rather than `_`, so a new command decides. The first
+        // five have an arm above for ONE shape of their undo data and land here
+        // with any other; every command not listed has an arm above that takes
+        // all of its undo data.
+        (
+            Command::UpdateShot { .. }
+            | Command::UpdateSectionMetadata { .. }
+            | Command::DeleteSection { .. }
+            | Command::DeleteShot { .. }
+            | Command::RemoveLoopClosure { .. }
+            | Command::CreateProject { .. }
+            | Command::OpenProject { .. }
+            | Command::SaveProject { .. }
+            | Command::CloseProject
+            | Command::ReverseSection { .. }
+            | Command::MoveComment { .. }
+            | Command::UntrackImport { .. }
+            | Command::MergeProjects { .. }
+            | Command::RepairIntegrity
+            | Command::UpdateProjectSettings
+            | Command::SetSurfaceElevation,
+            _,
+        ) => Some(PreviewData {
             changes: vec![FieldChange {
                 field: "Action".to_string(),
                 old_value: String::new(),
