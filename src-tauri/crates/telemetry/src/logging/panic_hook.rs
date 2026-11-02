@@ -201,8 +201,9 @@ mod tests {
         let caught =
             catching(|| std::panic::catch_unwind(|| panic!("rv3-r-12 caught synthetic panic")));
         let after = is_caught();
-        // Counted before the next panic: a marker is named by the millisecond,
-        // so a second panic in the same one would overwrite it.
+        // Matched by message, so the next panic's marker is not counted here.
+        // (Since #576 NF-FIX3R-1 a marker name carries a sequence after the
+        // millisecond, so a second panic in the same one no longer overwrites it.)
         let caught_markers = markers_for(dir.path(), "rv3-r-12 caught synthetic panic");
         let uncaught = std::panic::catch_unwind(|| panic!("rv3-r-12 unmarked synthetic panic"));
         // Back to the default hook for the rest of the process.
