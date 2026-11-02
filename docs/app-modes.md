@@ -69,10 +69,12 @@ edit, like the entrance elevation. In Plan and Export a save that would change i
 refused whole with the workspace notice, an unread one is not set from there (saves
 stay off until it is set in Survey), and the dialog disables its row with the reason.
 
-The SpeleoDB revision swaps that replace the survey - Restore revision and Unwind
-(`speleodb_restore_revision` with `restore`) - run outside the command chokepoint
-and call `guard_workspace` themselves, with the same notice (#576 RV2-R-15); a
-View is a read-only peek and stays allowed. Recording an imported file's hash
+The SpeleoDB verbs that replace the survey - Restore revision and Unwind
+(`speleodb_restore_revision` with `restore`), Take remote (`speleodb_take_remote`)
+and Discard changes (`speleodb_discard_changes`) - run outside the command
+chokepoint and call `guard_workspace` themselves (through
+`speleodb_guard_workspace`), with the same notice and before any network call
+(#576 RV2-R-15, RV4-R-NITS S-8); a View is a read-only peek and stays allowed. Recording an imported file's hash
 happens inside the import command itself - there is no separate IPC command for
 it (#576 NF-TRACK-IMPORTED) - so the import's own refusal covers it.
 

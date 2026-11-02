@@ -556,6 +556,9 @@ impl AppState {
         keep_lock: bool,
         acknowledged: bool,
     ) -> Result<Option<StartEditingResult>, SpeleoErrorDto> {
+        // [#576 RV4-R-NITS S-8] Replaces the survey: refused in the read-only
+        // Plan and Export workspaces, before any network call (as Restore, RV2-R-15).
+        self.speleodb_guard_workspace("Discard changes")?;
         if !acknowledged {
             return Err(local_dto(SpeleoDbError::Refused(
                 "discarding the local copy destroys un-pushed work and must be confirmed"

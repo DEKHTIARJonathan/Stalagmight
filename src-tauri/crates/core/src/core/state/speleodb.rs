@@ -2174,6 +2174,16 @@ impl AppState {
         }
     }
 
+    /// [#576 RV2-R-15] The read-only workspace gate for the SpeleoDB verbs that
+    /// replace the survey outside the command chokepoint (Restore revision, Unwind,
+    /// Take remote, Discard changes): the coded refusal of
+    /// [`Self::guard_workspace`], shown as written so the frontend recognises it as
+    /// the edit gate and shows its notice.
+    pub(super) fn speleodb_guard_workspace(&self, what: &str) -> Result<(), SpeleoErrorDto> {
+        self.guard_workspace(what)
+            .map_err(|refusal| local_dto(SpeleoDbError::Refused(refusal.error.unwrap_or_default())))
+    }
+
     /// The open project's hand-off link with its `project_id` validated (the
     /// route-traversal guard). The shared preamble for every SpeleoDB edit verb
     /// (start_editing / done / update) so no entry point can forget the validation.
@@ -2250,6 +2260,9 @@ impl AppState {
     /// the edit gate back to read-only. They resume via Start editing, which
     /// re-acquires the lock and now reconciles cleanly (BASE has advanced to the tip).
     pub fn speleodb_take_remote(&self) -> Result<String, SpeleoErrorDto> {
+        // [#576 RV4-R-NITS S-8] Replaces the survey: refused in the read-only
+        // Plan and Export workspaces, before any network call (as Restore, RV2-R-15).
+        self.speleodb_guard_workspace("Take remote")?;
         let link = self.speleodb_validated_link()?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
