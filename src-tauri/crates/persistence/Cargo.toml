@@ -38,6 +38,9 @@ ts-rs = { workspace = true, features = ["no-serde-warnings"] }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+# The shared test helpers (`stalagmight_models::test_support`): opt-in
+# prerequisites fail the test naming what is missing (#576 E13).
+stalagmight-models = { path = "../models", features = ["test-support"] }
 # `hooks` for the progress handler the tile-cache accounting tests count
 # SQLite VM steps with (#576 B19). Test builds only; no extra crate.
 rusqlite = { workspace = true, features = ["bundled", "hooks"] }

@@ -23392,7 +23392,7 @@ fn profile_tml_import_full() {
 // ============================================================================
 //
 // Run with:
-//   STALAGMIGHT_PROFILE_STALX=/home/user/Documents/stalagmight/92.stalx \
+//   STALAGMIGHT_PROFILE_STALX=/path/to/project.stalx \
 //     cargo test --release --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
 //     state::tests::profile_stalx_load -- --nocapture --ignored
 

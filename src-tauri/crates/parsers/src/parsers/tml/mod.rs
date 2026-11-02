@@ -4758,29 +4758,22 @@ mod tests {
         }
     }
 
-    /// End-to-end coordinate verification: parse a real TML file, import all
-    /// sections into a Project, compute station coordinates, and compare
-    /// against independently calculated expected values.
+    /// End-to-end coordinate verification on a real TML file: parse it, import
+    /// all sections into a Project, then check every station against an
+    /// independent walk of its section's shots, and every merged pair for
+    /// co-location. The file is the caller's survey, never committed; it comes
+    /// from `TML_COORDS_PATH`, and a run without it fails naming the variable
+    /// (#576 NF-PRIVATE-PATHS, NF-W4M-4).
     ///
-    /// Run with:  TML_NAHARON_PATH=/path/to/ariane.tml cargo test --manifest-path src-tauri/Cargo.toml --lib parse_tml_naharon_coordinates -- --ignored
+    /// Run with:  TML_COORDS_PATH=/path/to/ariane.tml cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-parsers --lib a_real_tml_import_matches_an_independent_traversal -- --ignored
     #[test]
-    #[ignore = "needs a private Ariane .tml; set TML_NAHARON_PATH"]
-    fn parse_tml_naharon_coordinates() {
+    #[ignore = "needs a private Ariane .tml; set TML_COORDS_PATH"]
+    fn a_real_tml_import_matches_an_independent_traversal() {
         use crate::models::{ImportPlacement, Project, SectionData, StationRef};
 
-        let path_str = std::env::var("TML_NAHARON_PATH").unwrap_or_else(|_| {
-            "/home/user/tmp/467b76f1-5909-4e00-b96f-c30931ac81db/ariane.tml".into()
-        });
-        let path = Path::new(&path_str);
-        if !path.exists() {
-            eprintln!("Skipping: TML file not found at {path_str}");
-            return;
-        }
-
         // 1. Parse
-        let tml = parse_tml(path).expect("Failed to parse TML");
-        assert_eq!(tml.cave_name, "2025 Naharon Resurvey");
-        assert_eq!(tml.unit, TmlUnit::Metric);
+        let path = require_env_file("TML_COORDS_PATH");
+        let tml = parse_tml(&path).expect("Failed to parse TML");
 
         // 2. Convert to import configs (exclude excluded shots)
         let (configs, closures, _) = convert_tml_to_import_configs(&tml, false, false).unwrap();
@@ -4885,114 +4878,7 @@ mod tests {
             }
         }
 
-        // 5. Verify absolute coordinates for selected stations against
-        //    independently computed values from the raw TML data.
-        //    These were calculated by traversing the shot graph from the START
-        //    station (ID=75) using: h = sqrt(length² - dz²), dx = h·sin(azi),
-        //    dy = h·cos(azi), with cumulative depth propagation.
-        //
-        //    Format: (section_name, station_index, expected_x, expected_y, expected_depth)
-        //    Coordinates are relative to the START station at (0, 0).
-        //    Since the import places the first section at Origin, all coords are
-        //    in that same frame (modulo ZeroDatum GPS offset which only shifts XY).
-
-        // Find the section containing the START station (first section, placed at origin
-        // or ZeroDatum). We compare coordinates RELATIVE to that origin.
-        // Get the offset applied by ZeroDatum so we can subtract it.
-        let first_section_id = *created_ids.get(&configs[0].section_index).unwrap();
-        let origin_offset = project
-            .section_offsets
-            .get(&first_section_id)
-            .copied()
-            .unwrap_or((0.0, 0.0));
-
-        // Helper: get absolute coords relative to START station
-        // Expected coordinates computed independently from raw TML data
-        // (Python traversal of shot graph from START station at origin)
-        struct Expected {
-            section: &'static str,
-            station: u32,
-            x: f64,
-            y: f64,
-            depth: f64,
-        }
-
-        let expectations = [
-            // Reel to Mainline Cx: station 0 = START at origin
-            Expected {
-                section: "Reel to Mainline Cx",
-                station: 0,
-                x: 0.0,
-                y: 0.0,
-                depth: 0.28,
-            },
-            // Reel to Mainline Cx: station 13 = end of shot 88
-            Expected {
-                section: "Reel to Mainline Cx",
-                station: 13,
-                x: -30.7455,
-                y: 69.9489,
-                depth: 11.06,
-            },
-            // Bypass south: station 11 = end of shot 68
-            Expected {
-                section: "Bypass south",
-                station: 11,
-                x: -21.7235,
-                y: 176.5525,
-                depth: 15.80,
-            },
-            // Haloline (branch 2): station 30 = end of shot 264
-            Expected {
-                section: "Haloline (branch 2)",
-                station: 30,
-                x: -58.9147,
-                y: 413.9500,
-                depth: 12.30,
-            },
-        ];
-
-        let tolerance = 0.05; // 5cm tolerance for absolute coordinates
-        for exp in &expectations {
-            // Section names in the import may differ slightly (our parser strips
-            // SectionDescription suffixes and may split at branches). Try to find
-            // the section; skip if the parser organized it differently.
-            let section_opt = project
-                .sections
-                .iter()
-                .find(|s| s.name.as_deref() == Some(exp.section));
-            let Some(section) = section_opt else {
-                eprintln!("  Skipping absolute check: section '{}' not found (parser may have renamed it)", exp.section);
-                continue;
-            };
-            if exp.station as usize > section.shots.len() {
-                eprintln!("  Skipping absolute check: section '{}' station {} out of range (has {} shots)",
-                    exp.section, exp.station, section.shots.len());
-                continue;
-            }
-            let c = project
-                .compute_station_raw_coords(StationRef::new(section.id, exp.station))
-                .unwrap_or_else(|| panic!("Coords for {}:{}", exp.section, exp.station));
-            let (rx, ry) = (c.x - origin_offset.0, c.y - origin_offset.1);
-
-            assert!(
-                (rx - exp.x).abs() < tolerance && (ry - exp.y).abs() < tolerance,
-                "Absolute coords mismatch for '{}' station {}: expected ({:.4}, {:.4}), got ({:.4}, {:.4}), delta=({:.4}, {:.4})",
-                exp.section, exp.station, exp.x, exp.y, rx, ry,
-                rx - exp.x, ry - exp.y,
-            );
-            // Depth check with wider tolerance (averaging can shift depth slightly)
-            assert!(
-                (c.z - exp.depth).abs() < 0.5,
-                "Depth mismatch for '{}' station {}: expected {:.4}, got {:.4}",
-                exp.section,
-                exp.station,
-                exp.depth,
-                c.z,
-            );
-        }
-
-        // 6. Verify all merged stations are co-located (XY within tolerance)
+        // 5. Verify all merged stations are co-located (XY within tolerance)
         //    This validates the full import + merge + offset pipeline.
         let merge_tolerance = 1e-6;
         for merge in &project.station_merges {
@@ -5020,13 +4906,11 @@ mod tests {
             );
         }
 
-        // 7. Verify closures were parsed
-        assert!(!closures.is_empty(), "Should have parsed loop closures");
-
         eprintln!(
-            "Naharon TML coordinate test passed: {} sections, {} merges, {} total stations verified",
+            "TML coordinate check passed: {} sections, {} merges, {} closures, {} total stations verified",
             project.sections.len(),
             project.station_merges.len(),
+            closures.len(),
             project.sections.iter().map(|s| s.shots.len() + 1).sum::<usize>(),
         );
     }
