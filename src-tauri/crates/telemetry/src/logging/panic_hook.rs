@@ -122,8 +122,14 @@ fn write_crash_marker(dir: &Path, message: &str, location: &str, thread: &str, b
         "thread": thread,
         "backtrace": backtrace,
     });
+    // [#576 NF-FIX3R-1] A per-process sequence number after the millisecond:
+    // two panics in the same millisecond (two threads failing together) used to
+    // write the same name, and the second marker replaced the first. Still
+    // `crash-<pid>-<ms>...`, which is all the oracle and the log scan match on.
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = dir.join(format!(
-        "crash-{}-{}.json",
+        "crash-{}-{}-{sequence}.json",
         std::process::id(),
         now.timestamp_millis()
     ));
@@ -218,3 +224,12 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod marker_name_tests;

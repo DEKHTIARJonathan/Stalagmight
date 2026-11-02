@@ -1279,7 +1279,7 @@ Added under a small, always-safe surface:
   `{entries, latest_seq, dropped}` where `dropped` is true when the ring rotated
   past the checkpoint.
 - **Rust panic hook** (`src-tauri/crates/telemetry/src/logging/panic_hook.rs`): writes a
-  synchronous crash-marker JSON `crash-<pid>-<millis>.json` into the log
+  synchronous crash-marker JSON `crash-<pid>-<millis>-<seq>.json` into the log
   directory (message, location, thread, `Backtrace::force_capture()`) and logs
   `PANIC: ...` to the ring. The marker is the durable signal (the file log layer
   can drop tail lines on abort). A thread panic leaves the app alive but the
