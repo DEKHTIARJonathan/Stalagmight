@@ -130,6 +130,14 @@ function nextProjectTreeGeneration(): number {
   return projectTreeGenerationCounter;
 }
 
+// [#576 RV5-8] `refreshProjectState` requests, numbered in issue order, and the
+// newest one whose answer the store has applied. The commands run on the backend's
+// pool, so two refreshes (one inside the mutation queue, one from a caller outside
+// it) can answer in either order; an answer older than one already applied is
+// dropped rather than written over the newer state.
+let refreshRequestCounter = 0;
+let refreshAppliedRequest = 0;
+
 
 /**
  * Parsed error from Tauri backend.
@@ -1644,10 +1652,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // [#576 A9-D2] The load's binary envelope, decoded by the load's decoder: the
       // SoA `surveyData` comes straight from the typed arrays and the sections carry
       // lazy `shots`, exactly as after a load. Null when no project is open.
+      refreshRequestCounter += 1;
+      const request = refreshRequestCounter;
       const { fetchProjectStateBinary } = await import('../utils/loadProjectBinary');
       const state = await fetchProjectStateBinary();
       debugLog('[projectStore] refreshProjectState: got state, sections:', state?.project.sections.length);
-      if (state) {
+      // [#576 RV5-8] A newer refresh already landed: this answer is older than
+      // what the store shows, so applying it would roll the project back.
+      // A newer "no project open" answer counts too: it supersedes an older state.
+      const superseded = request < refreshAppliedRequest;
+      if (!superseded) refreshAppliedRequest = request;
+      if (state && !superseded) {
         set({
           project: state.project,
           projectTreeGeneration: nextProjectTreeGeneration(),
