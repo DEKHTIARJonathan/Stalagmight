@@ -12,8 +12,8 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Context, Result};
 
 use crate::parsers::encoding::{
-    cp1252_char, describe_replaced_count, read_capped, regular_file_metadata, strip_bom_owned,
-    FileFamily,
+    cp1252_char, describe_byte_limit, describe_replaced_count, read_capped, regular_file_metadata,
+    strip_bom_owned, FileFamily,
 };
 
 // ============================================================================
@@ -46,10 +46,11 @@ pub(super) fn load_xml(path: &Path) -> Result<LoadedXml> {
     }
 }
 
-/// Most a `Data.xml` entry may decompress to. The largest real one seen is
-/// 57 MB, so this is a wide margin; it exists because the archive is untrusted
-/// input and a deflate stream can otherwise expand without bound.
-const MAX_DATA_XML_BYTES: u64 = 512 * 1024 * 1024;
+/// Most a `Data.xml` entry may decompress to: the XML family's ceiling, the
+/// same a `.tmlu` is read under (one table, #576 NF-W3P-3). The largest real
+/// one seen is 57 MB, so this is a wide margin; it exists because the archive
+/// is untrusted input and a deflate stream can otherwise expand without bound.
+const MAX_DATA_XML_BYTES: u64 = FileFamily::Xml.byte_limit();
 
 /// Extract `Data.xml` from a ZIP archive.
 fn load_xml_from_zip(path: &Path) -> Result<LoadedXml> {
@@ -86,17 +87,6 @@ fn load_xml_from_zip_capped(path: &Path, cap: u64) -> Result<LoadedXml> {
     }
 
     decode_xml_bytes(bytes)
-}
-
-/// Render a byte limit the way the person reading the error thinks about it.
-/// Whole megabytes above 1 MB, exact bytes below (the test caps live there).
-fn describe_byte_limit(bytes: u64) -> String {
-    const MB: u64 = 1024 * 1024;
-    if bytes >= MB {
-        format!("{} MB", bytes / MB)
-    } else {
-        format!("{bytes} bytes")
-    }
 }
 
 /// Find the `Data.xml` entry, preferring the exact spelling and falling back on
