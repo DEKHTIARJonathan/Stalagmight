@@ -17,7 +17,8 @@ use ts_rs::TS;
 
 use crate::models::config::DEFAULT_INCLINATION_DEPTH_DIFF_THRESHOLD;
 use crate::models::shot::implied_pitch_deg;
-use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig, ShotData, ShotKind};
+use crate::models::{ImportClosure, ImportSectionConfig, ShotData, ShotKind};
+use crate::parsers::station_graph::{topological_sort_configs, ConfigOrder};
 
 use azimuth::tml_azimuth_reference;
 use import_options::{build_selection_index, determine_placement, PlacementInput};
@@ -1499,7 +1500,7 @@ pub fn convert_tml_with_options(
     // FromImporting placement is created before its dependent. This handles
     // forward references that arise when excluded-shot filtering changes
     // which section a given section attaches to.
-    topological_sort_configs(&mut configs);
+    topological_sort_configs(&mut configs, ConfigOrder::KeepValid);
 
     // Ariane IDs that name an ENTRANCE (a START shot): they are some section's
     // parent but are no shot in the file, because START shots carry no
@@ -1694,106 +1695,6 @@ fn simplify_lone_branch_names(configs: &mut [ImportSectionConfig]) {
             c.name = Some(base.to_string());
         }
     }
-}
-
-/// Topologically sort import configs so that FromImporting targets come first.
-///
-/// Uses Kahn's algorithm. Configs with no FromImporting dependency (Origin,
-/// ZeroDatum, etc.) come first, then configs whose targets have already been
-/// placed, and so on. Cycles (which shouldn't happen in valid survey data)
-/// are broken by appending remaining configs in their original order.
-fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
-    if configs.len() <= 1 {
-        return;
-    }
-
-    // Build index mapping: section_index → position in configs vec
-    let pos_of: HashMap<u32, usize> = configs
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (c.section_index, i))
-        .collect();
-
-    // Build dependency: for each config, which config position must come first?
-    // dep[i] = Some(j) means configs[i] depends on configs[j].
-    let dep: Vec<Option<usize>> = configs
-        .iter()
-        .map(|c| {
-            if let ImportPlacement::FromImporting {
-                target_section_index,
-                ..
-            } = &c.placement
-            {
-                pos_of.get(target_section_index).copied()
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    // Check if already in valid order (common case - skip reallocation)
-    let already_sorted = dep.iter().enumerate().all(|(i, d)| match d {
-        Some(j) => *j < i,
-        None => true,
-    });
-    if already_sorted {
-        return;
-    }
-
-    let order = dependency_order(&dep);
-
-    // Reorder configs
-    let mut old_configs: Vec<Option<ImportSectionConfig>> =
-        std::mem::take(configs).into_iter().map(Some).collect();
-    *configs = order
-        .into_iter()
-        .filter_map(|i| old_configs[i].take())
-        .collect();
-}
-
-/// Kahn's algorithm over `dep` (`dep[i] = Some(j)`: `i` must come after `j`),
-/// ties in index order; anything left on a cycle is appended in its original
-/// order. The cycle tail is marked in a bitmap (#576 B27(d)): the previous
-/// `order.contains(&i)` per index was quadratic in the section count, which a
-/// crafted file controls.
-fn dependency_order(dep: &[Option<usize>]) -> Vec<usize> {
-    let n = dep.len();
-    let mut in_degree = vec![0u32; n];
-    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (i, d) in dep.iter().enumerate() {
-        if let Some(j) = d {
-            in_degree[i] += 1;
-            dependents[*j].push(i);
-        }
-    }
-
-    let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
-    for (i, &deg) in in_degree.iter().enumerate() {
-        if deg == 0 {
-            queue.push_back(i);
-        }
-    }
-
-    let mut order: Vec<usize> = Vec::with_capacity(n);
-    while let Some(i) = queue.pop_front() {
-        order.push(i);
-        for &dep_i in &dependents[i] {
-            in_degree[dep_i] -= 1;
-            if in_degree[dep_i] == 0 {
-                queue.push_back(dep_i);
-            }
-        }
-    }
-
-    // Append any remaining (cycle - shouldn't happen, but be safe)
-    if order.len() < n {
-        let mut placed = vec![false; n];
-        for &i in &order {
-            placed[i] = true;
-        }
-        order.extend((0..n).filter(|&i| !placed[i]));
-    }
-    order
 }
 
 /// Resolve a TML shot's entry depth, handling the `-1.0` "same as previous" sentinel.
@@ -1999,6 +1900,8 @@ mod tests {
     use super::linearize::{MAX_TRIP_CUTS_PER_FILE, MAX_TRIP_CUTS_PER_RUN};
     use super::test_helpers::*;
     use super::*;
+    use crate::models::ImportPlacement;
+    use crate::parsers::station_graph::dependency_order;
 
     /// #576 B2-MARKER: the placeholder 2000-01-01 reads as "no date" whether
     /// or not our marker comment follows it - a file Ariane re-saved drops the
