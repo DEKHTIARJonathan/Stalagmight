@@ -29,6 +29,7 @@ import { useMoveCarryGuards } from './useMoveCarryGuards';
 import { MapHoverSync } from './MapHoverSync';
 import { useStationSnap } from './useStationSnap';
 import { useMoveDrag } from './useMoveDrag';
+import { usePlacement } from './usePlacement';
 import { useAnalyticalOverlays } from './useAnalyticalOverlays';
 import { useSurveyLayerSync } from './useSurveyLayerSync';
 import { useMapCamera } from './useMapCamera';
@@ -185,10 +186,6 @@ function MapCanvas() {
   const ctrlPanActiveRef = useRef(false);
   // Timestamp of the last mouse event during a Ctrl+left-drag (for spurious keyup filtering)
   const ctrlPanMouseEventTimeRef = useRef(0);
-  // Placement mode cursor position (screen pixels)
-  const [placementCursor, setPlacementCursor] = useState<{ x: number; y: number } | null>(null);
-  // Current map scale in pixels per meter (for to-scale placement preview)
-  const [pixelsPerMeter, setPixelsPerMeter] = useState(1);
   // RAF batching for snap-to-station checks (prevents event queue buildup on mousemove)
   const snapRafId = useRef<number | null>(null);
   const pendingSnapPosition = useRef<{ x: number; y: number } | null>(null);
@@ -543,61 +540,6 @@ function MapCanvas() {
     setMeasureSnapShot,
   });
 
-  // Check snap for placement mode
-  const checkPlacementSnap = useCallback(
-    (screenX: number, screenY: number) => {
-      if (!map.current || !config || !placementActive || !surveyLayerRef.current) {
-        return null;
-      }
-
-      return surveyLayerRef.current.queryNearestStation(
-        screenX, screenY, config.map.snap.threshold
-      );
-    },
-    [config, placementActive]
-  );
-
-  // Handle placement confirmation
-  const handlePlacementConfirm = useCallback(() => {
-    if (!map.current || !placementActive || !mapContainer.current) return;
-
-    const placement = confirmPlacement();
-    if (!placement || !placement.cursorPosition) return;
-
-    // Suppress the spurious MapLibre click that follows pointerDown on touch devices.
-    // The browser synthesizes click after pointerup, but placementMode is already null
-    // by then, so the click would be treated as an empty-click and clear selection.
-    placementJustConfirmedRef.current = true;
-    requestAnimationFrame(() => { placementJustConfirmedRef.current = false; });
-    // Same pointer-before-touch ordering, other consumer: the long-press gate
-    // reads placementMode at touchstart, after this confirm already cleared it,
-    // so stamp the confirm to keep the hold from also opening a context menu.
-    surveyLayerRef.current?.notePlacementConfirmed();
-
-    // If there's a callback, call it with the result
-    // The caller is responsible for what to do with the placement
-    if (placement.onComplete) {
-      placement.onComplete({
-        position: placement.cursorPosition,
-        snappedToStation: placement.snappedToStation,
-      });
-    }
-
-    setPlacementCursor(null);
-  }, [placementActive, confirmPlacement]);
-
-  // Handle placement cancel
-  const handlePlacementCancel = useCallback(() => {
-    // Get the onCancel callback before canceling
-    const onCancel = useUIStore.getState().placementMode?.onCancel;
-    cancelPlacementMode();
-    setPlacementCursor(null);
-    // Call the cancel callback if provided
-    if (onCancel) {
-      onCancel();
-    }
-  }, [cancelPlacementMode]);
-
   // The move tools' pickup / drag / drop / snap-merge (useMoveDrag.ts). The carry
   // token above and the drop's click gate (`pressClientRef`) stay here.
   const {
@@ -630,6 +572,36 @@ function MapCanvas() {
     t,
   });
 
+  const noteMapInteraction = useCallback(() => {
+    mapInteractionSequenceRef.current += 1;
+  }, []);
+
+  // Placement mode: snap, confirm, cancel, Escape and the placement click /
+  // right-click (usePlacement.ts). The pixelsPerMeter seed effect stays below.
+  const {
+    placementCursor,
+    setPlacementCursor,
+    pixelsPerMeter,
+    setPixelsPerMeter,
+    checkPlacementSnap,
+    handlePlacementCancel,
+    handlePlacementClick,
+    handleContextMenu,
+  } = usePlacement({
+    map,
+    mapContainer,
+    surveyLayerRef,
+    config,
+    gpsOrigin,
+    placementActive,
+    placementJustConfirmedRef,
+    confirmPlacement,
+    cancelPlacementMode,
+    updatePlacementCursor,
+    updatePlacementSnap,
+    noteMapInteraction,
+  });
+
   // Get map tool callbacks
   const baseToolCallbacks = useMapTools({
     onMoveDragStart: handleMoveDragStart,
@@ -637,10 +609,6 @@ function MapCanvas() {
     gpsOrigin,
     querySnapAtPoint,
   });
-
-  const noteMapInteraction = useCallback(() => {
-    mapInteractionSequenceRef.current += 1;
-  }, []);
 
   // Combine with hidden feature callbacks for toast feedback
   const toolCallbacks = useMemo<SurveyLayerCallbacks>(
@@ -1841,21 +1809,6 @@ function MapCanvas() {
     setPixelsPerMeter(pixelsPerMeterAt(map.current, gpsOrigin));
   }, [placementActive, mapLoaded, gpsOrigin]);
 
-  // Handle Escape key for placement mode
-  useEffect(() => {
-    if (!placementActive) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        handlePlacementCancel();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [placementActive, handlePlacementCancel]);
-
   // `touchAction` - block browser gestures only where the tool or mode owns the
   // drag - comes from the single `mapGestureMode` call above.
 
@@ -1970,49 +1923,6 @@ function MapCanvas() {
     if (moveDrag) return;
     handlePointerUp(e);
   }, [moveDrag, handlePointerUp]);
-
-  // Handle placement mode click
-  const handlePlacementClick = useCallback(
-    (e: React.PointerEvent) => {
-      if (!placementActive || !map.current || !mapContainer.current) return;
-
-      // Left click confirms placement
-      if (e.button === 0) {
-        e.preventDefault();
-        e.stopPropagation();
-        noteMapInteraction();
-
-        // On touch devices, pointerDown fires before any pointerMove, so
-        // cursorPosition may be null. Compute it from the event to ensure
-        // placement always has a valid position.
-        const rect = mapContainer.current.getBoundingClientRect();
-        const screenX = e.clientX - rect.left;
-        const screenY = e.clientY - rect.top;
-        const lngLat = map.current.unproject([screenX, screenY]);
-        const meters = mapCoordsToMeters(lngLat.lng, lngLat.lat, gpsOrigin);
-        updatePlacementCursor({ x: meters.x, y: meters.y, z: 0 });
-
-        const snapped = checkPlacementSnap(screenX, screenY);
-        updatePlacementSnap(snapped);
-
-        handlePlacementConfirm();
-      }
-    },
-    [placementActive, handlePlacementConfirm, gpsOrigin, updatePlacementCursor, updatePlacementSnap, checkPlacementSnap, noteMapInteraction]
-  );
-
-  // Handle placement mode right-click (cancel)
-  const handleContextMenu = useCallback(
-    (e: React.MouseEvent) => {
-      if (placementActive) {
-        e.preventDefault();
-        e.stopPropagation();
-        noteMapInteraction();
-        handlePlacementCancel();
-      }
-    },
-    [placementActive, handlePlacementCancel, noteMapInteraction]
-  );
 
   // Determine pointerdown handler based on mode and tool
   // Only process events that originate from the map canvas (not UI controls or overlays)
