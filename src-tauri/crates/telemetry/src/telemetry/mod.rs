@@ -2,7 +2,9 @@
 //!
 //! Always compiled, but the real implementation is behind the `telemetry` Cargo
 //! feature flag. When disabled, all public methods are empty no-ops that the
-//! compiler eliminates entirely - zero runtime cost.
+//! compiler eliminates entirely - zero runtime cost. The event-name
+//! [`registry`] is plain data and compiles either way, so its coverage tests run
+//! in a plain `cargo test` too (#576 B7).
 //!
 //! Design:
 //! - Session-level anonymous counters only - no PII
@@ -17,7 +19,6 @@
 
 use std::collections::HashMap;
 
-#[cfg(feature = "telemetry")]
 pub mod registry;
 
 // ── Feature-gated imports ────────────────────────────────────────────

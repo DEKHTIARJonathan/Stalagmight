@@ -73,7 +73,7 @@ mod import_receipt_tests;
               values are the evidence a run captures"
 )]
 mod recovery_tests;
-#[cfg(all(test, feature = "telemetry"))]
+#[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod telemetry_coverage_tests;
 #[cfg(test)]

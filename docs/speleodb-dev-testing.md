@@ -117,15 +117,14 @@ path and open it.
 DEV_SPELEODB_URL=http://10.10.0.220:8000/ \
 DEV_SPELEODB_EMAIL=dab@dab.com \
 DEV_SPELEODB_PASSWORD=dab \
-TELEMETRY_ENDPOINT=http://localhost/dummy \
-cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-speleodb --features telemetry \
+cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-speleodb \
   speleodb::live_tests -- --ignored
 ```
 
 - `--ignored` is required - the live tests are `#[ignore]`d by default.
-- `TELEMETRY_ENDPOINT` is needed because the telemetry member's `build.rs`
-  (`src-tauri/crates/telemetry/build.rs`) requires it under
-  `--features telemetry` (which the project's test command uses anyway).
+- No `--features telemetry` (the speleodb member has no such feature since
+  #576 B7) and so no `TELEMETRY_ENDPOINT`, which the telemetry member's
+  `build.rs` requires only under that feature.
 - Drop a `DEV_SPELEODB_*` var and every test that needs it fails, naming it. On a
   box without the second account, leave the two-account tier out with
   `--skip live_collaborator_sees_read_only_label --skip live_web_viewer_cannot_download

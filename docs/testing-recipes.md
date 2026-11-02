@@ -614,10 +614,12 @@ cargo test --manifest-path src-tauri/vendor/compass_data/Cargo.toml
 
 **Trap: a plain `cargo test` can pass while CI fails, twice over.** Without
 `--workspace` only the app crate's tests run - the member crates under
-`src-tauri/crates/` are skipped entirely. And the `registry_covers_all_*`
-telemetry-registry coverage tests are gated behind the `telemetry` feature, so
-a featureless run filters them out. The telemetry member's `build.rs` also
-*requires* `TELEMETRY_ENDPOINT` to be set when building with that feature.
+`src-tauri/crates/` are skipped entirely. And the telemetry collector's own
+tests are gated behind the `telemetry` feature, so a featureless run filters
+them out. (The `registry_covers_all_*` registry-coverage tests are not: the
+event-name registry compiles with or without the feature, #576 B7.) The
+telemetry member's `build.rs` also *requires* `TELEMETRY_ENDPOINT` to be set
+when building with that feature.
 
 #### Running one crate
 
@@ -1646,7 +1648,8 @@ A new command, dialog, or tool needs its event names added to the Rust registry
 *and* to the canonical lists in `src/utils/telemetry.ts`. The registry asserts
 an exact `EVENT_NAMES.len()` with a self-documenting ledger comment - keep the
 ledger updated when you change the count. The `registry_covers_all_*` coverage
-tests run **only** under `--features telemetry`. `registry_covers_all_tools`
+tests run in every `cargo test`, with or without `--features telemetry` (#576
+B7). `registry_covers_all_tools`
 parses `src/store/uiStore.ts` to diff `ToolType` against the registry, so a
 retired tool needs a `RETIRED_TOOLS` entry.
 
@@ -1750,7 +1753,7 @@ data for a specific edge case, and record what it is for in the fixtures README.
 
 | Symptom | Check |
 |---------|-------|
-| Passes locally, fails in CI | Run with `--workspace`, `--features telemetry` and `TELEMETRY_ENDPOINT` set - without `--workspace` the member crates are skipped, and a featureless run filters the registry-coverage tests out |
+| Passes locally, fails in CI | Run with `--workspace`, `--features telemetry` and `TELEMETRY_ENDPOINT` set - without `--workspace` the member crates are skipped, and a featureless run filters out the telemetry collector's own tests |
 | Every test binary aborts at startup on Windows (`0xC0000139`) | Use `./scripts/test.ps1` |
 | A permission test fails with "permission precondition failed" | The process ignores mode bits (root, or `CAP_DAC_OVERRIDE`). Run the Rust tests as an unprivileged user - CI does, through `scripts/ci-cargo-test-unprivileged.sh` - or use a root-safe inducer (above) |
 | Flaky or order-dependent | Shared mutable state between tests |

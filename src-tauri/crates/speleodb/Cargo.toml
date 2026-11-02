@@ -19,12 +19,6 @@ workspace = true
 # [dev-dependencies] entry, so production builds compile exactly what they did
 # before the split.
 test-support = []
-# Forwards to the telemetry member: the per-endpoint coverage test in
-# metrics.rs is gated on `#[cfg(all(test, feature = "telemetry"))]` and needs
-# the real registry (`EVENT_NAMES`), which only exists with the feature on.
-# The root crate's own `telemetry` feature forwards here, so a featured
-# workspace build turns every layer on together.
-telemetry = ["stalagmight-telemetry/telemetry"]
 
 [dependencies]
 stalagmight-models = { path = "../models" }

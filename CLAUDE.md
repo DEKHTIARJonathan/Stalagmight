@@ -109,12 +109,13 @@ line here.
 
 Rust tests must run with `--workspace`, `--features telemetry` and
 `TELEMETRY_ENDPOINT` set, exactly as above - without `--workspace` only the
-app crate runs, and a plain `cargo test` skips the registry-coverage tests, so
-either omission can pass locally while CI fails. For fast iteration on one
+app crate runs, and a featureless `cargo test` skips the telemetry collector's
+own tests (the registry-coverage tests run either way), so either omission can
+pass locally while CI fails. For fast iteration on one
 crate use `-p`, e.g.
 `cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib fuzz_undo`
 (`--features telemetry` only applies to the packages that define the feature:
-`stalagmight`, `stalagmight-telemetry`, `stalagmight-speleodb`). On
+`stalagmight`, `stalagmight-telemetry`). On
 **Windows**, use `./scripts/test.ps1` instead (a bare `cargo test` aborts at
 startup with `STATUS_ENTRYPOINT_NOT_FOUND`). All explained in
 [docs/testing-recipes.md](docs/testing-recipes.md).

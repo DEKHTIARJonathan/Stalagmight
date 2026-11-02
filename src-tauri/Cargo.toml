@@ -75,11 +75,11 @@ tempfile = "3.24.0"
 
 [features]
 e2e = ["tauri-plugin-webdriver-automation"]
-# Forwards to the members that own the implementations, and stays a real
-# feature of this crate too: the root's own `#[cfg(feature = "telemetry")]`
-# users (the registry coverage tests in commands/) are gated on it. The
-# speleodb member forwards for the same reason (its metrics.rs coverage test).
-telemetry = ["stalagmight-telemetry/telemetry", "stalagmight-speleodb/telemetry"]
+# Forwards to the member that owns the implementation, and stays a real
+# feature of this crate too: `commands::telemetry` reports through
+# `cfg!(feature = "telemetry")` whether this build carries the collector. The
+# event-name registry and its coverage tests no longer need it (#576 B7).
+telemetry = ["stalagmight-telemetry/telemetry"]
 # Dev-only: gates the gen_ipc_types example so it isn't compiled in normal
 # builds/tests. Enabled by `pnpm gen:ipc-types`.
 ipc-typegen = []
