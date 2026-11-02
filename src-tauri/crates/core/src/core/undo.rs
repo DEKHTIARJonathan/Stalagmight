@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,9 @@ use crate::models::{
 mod budget;
 pub mod history_view;
 mod persistence;
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::panic)]
+mod window_tests;
 
 /// Serialize a section-offset map in KEY order rather than in `HashMap`
 /// iteration order.
@@ -40,7 +44,9 @@ where
 const DEFAULT_UNDO_HISTORY_LIMIT: usize = 100;
 
 pub(crate) use crate::persistence::undo_limits::ENTRY_OVERHEAD_BYTES;
-pub use crate::persistence::undo_limits::{MAX_PERSISTED_HISTORY_ROWS, UNDO_BYTE_BUDGET_BYTES};
+pub use crate::persistence::undo_limits::{
+    COUNT_WINDOW_MEMORY_BYTES, MAX_PERSISTED_HISTORY_ROWS, UNDO_BYTE_BUDGET_BYTES,
+};
 
 /// How a stack's depth is bounded.
 ///
@@ -57,6 +63,50 @@ pub enum DepthLimit {
     Bytes(usize),
 }
 
+/// [#576 B20] One stack position: the entry, and - once a save has computed it -
+/// the gzipped form the save stores, so the next save reuses it instead of
+/// re-serializing and re-compressing an entry that has not changed.
+///
+/// The cache lives here, beside the entry, rather than on [`UndoEntry`], so it can
+/// only ever describe the entry it sits with: it moves with the slot, a popped entry
+/// leaves it behind (an entry is only ever changed off the stack - the snapshot-pair
+/// and created-section refreshes run on the popped entry), and any mutable access
+/// through [`DerefMut`](std::ops::DerefMut) drops it.
+#[derive(Debug)]
+struct StackSlot {
+    entry: UndoEntry,
+    /// `None` inside: the entry did not serialize (it is skipped, as before).
+    stored: OnceLock<Option<(Arc<[u8]>, Arc<[u8]>)>>,
+}
+
+impl StackSlot {
+    fn new(entry: UndoEntry) -> Self {
+        Self {
+            entry,
+            stored: OnceLock::new(),
+        }
+    }
+
+    fn into_entry(self) -> UndoEntry {
+        self.entry
+    }
+}
+
+impl std::ops::Deref for StackSlot {
+    type Target = UndoEntry;
+
+    fn deref(&self) -> &UndoEntry {
+        &self.entry
+    }
+}
+
+impl std::ops::DerefMut for StackSlot {
+    fn deref_mut(&mut self) -> &mut UndoEntry {
+        self.stored.take();
+        &mut self.entry
+    }
+}
+
 /// Which stack [`UndoStack::rows_to_persist`] reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PersistStack {
@@ -69,9 +119,9 @@ pub enum PersistStack {
 #[expect(clippy::struct_field_names)]
 pub struct UndoStack {
     /// Commands that can be undone
-    undo_stack: VecDeque<UndoEntry>,
+    undo_stack: VecDeque<StackSlot>,
     /// Commands that can be redone
-    redo_stack: VecDeque<UndoEntry>,
+    redo_stack: VecDeque<StackSlot>,
     /// Running estimated byte total for `undo_stack`.
     undo_bytes: usize,
     /// Running estimated byte total for `redo_stack`.
@@ -601,7 +651,7 @@ impl UndoStack {
     /// sort as a prefix by construction - a legacy file is uniformly unstamped, since the
     /// build that wrote it had no timestamps at all - and `drop_entries_up_to` reads them
     /// as "before the cutoff" anyway.
-    fn stamps_ascend(stack: &VecDeque<UndoEntry>) -> bool {
+    fn stamps_ascend(stack: &VecDeque<StackSlot>) -> bool {
         let mut previous: Option<DateTime<Utc>> = None;
         for stamp in stack.iter().filter_map(|entry| entry.timestamp) {
             if previous.is_some_and(|prev| stamp < prev) {
@@ -703,7 +753,7 @@ impl UndoStack {
 
     /// Pop from undo stack and return the entry
     pub fn pop_undo(&mut self) -> Option<UndoEntry> {
-        let entry = self.undo_stack.pop_back()?;
+        let entry = self.undo_stack.pop_back()?.into_entry();
         self.undo_bytes = self.undo_bytes.saturating_sub(Self::estimated_size(&entry));
         Some(entry)
     }
@@ -718,7 +768,7 @@ impl UndoStack {
 
     /// Pop from redo stack
     pub fn pop_redo(&mut self) -> Option<UndoEntry> {
-        let entry = self.redo_stack.pop_back()?;
+        let entry = self.redo_stack.pop_back()?.into_entry();
         self.redo_bytes = self.redo_bytes.saturating_sub(Self::estimated_size(&entry));
         Some(entry)
     }
@@ -753,13 +803,13 @@ impl UndoStack {
     /// must not).
     fn push_undo_tracked(&mut self, entry: UndoEntry) {
         self.undo_bytes = self.undo_bytes.saturating_add(Self::estimated_size(&entry));
-        self.undo_stack.push_back(entry);
+        self.undo_stack.push_back(StackSlot::new(entry));
     }
 
     /// Append to the redo stack without applying the active bound.
     fn push_redo_tracked(&mut self, entry: UndoEntry) {
         self.redo_bytes = self.redo_bytes.saturating_add(Self::estimated_size(&entry));
-        self.redo_stack.push_back(entry);
+        self.redo_stack.push_back(StackSlot::new(entry));
     }
 
     /// Check if undo is available
@@ -844,7 +894,7 @@ impl UndoStack {
         let keep_from = self
             .undo_stack
             .iter()
-            .position(|entry| !carried_by_push(entry))
+            .position(|slot| !carried_by_push(&slot.entry))
             .unwrap_or(before);
         let dropped_bytes = self
             .undo_stack
@@ -904,13 +954,13 @@ impl UndoStack {
     /// Get an iterator over the undo stack entries (index 0 = most recent)
     /// Returns entries in LIFO order (most recent first)
     pub fn undo_entries(&self) -> impl Iterator<Item = &UndoEntry> {
-        self.undo_stack.iter().rev()
+        self.undo_stack.iter().rev().map(|slot| &slot.entry)
     }
 
     /// Get an iterator over the redo stack entries (index 0 = most recent)
     /// Returns entries in LIFO order (most recent first)
     pub fn redo_entries(&self) -> impl Iterator<Item = &UndoEntry> {
-        self.redo_stack.iter().rev()
+        self.redo_stack.iter().rev().map(|slot| &slot.entry)
     }
 }
 
@@ -2375,7 +2425,7 @@ mod tests {
             stack
                 .undo_stack
                 .iter()
-                .map(UndoStack::estimated_size)
+                .map(|slot| UndoStack::estimated_size(slot))
                 .sum::<usize>()
         );
         assert_eq!(
@@ -2383,7 +2433,7 @@ mod tests {
             stack
                 .redo_stack
                 .iter()
-                .map(UndoStack::estimated_size)
+                .map(|slot| UndoStack::estimated_size(slot))
                 .sum::<usize>()
         );
     }

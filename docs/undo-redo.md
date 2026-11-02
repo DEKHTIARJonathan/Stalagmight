@@ -21,7 +21,7 @@ Entries are **moved** between stacks, never recreated. The same `UndoData` serve
 
 ### UndoStack
 
-Two `VecDeque<UndoEntry>` stacks (undo + redo) behind a `Mutex`, with a configurable `history_limit` (default 100, FIFO-trimmed on push). A separate `command_lock: Mutex<()>` on `AppState` serializes all execute/undo/redo calls to prevent interleaving.
+Two `VecDeque<UndoEntry>` stacks (undo + redo) behind a `Mutex`, with a configurable `history_limit` (default 100, FIFO-trimmed on push) - and, for that count window, at most `COUNT_WINDOW_MEMORY_BYTES` (256 MiB) of estimated size per stack, oldest evicted first and the newest always kept (#576 B20: 100 whole-project snapshot pairs held several GB on a large survey). A separate `command_lock: Mutex<()>` on `AppState` serializes all execute/undo/redo calls to prevent interleaving.
 
 ## Two-Phase Undo Data Capture
 
@@ -489,14 +489,17 @@ Mechanically, and in the order the checks actually fire:
 that, because there are two and swapping them changes the answer by 5x. What a
 count-window (non-SpeleoDB) project WRITES is bounded by `undo_persist_limit`, **default
 20** (read in `project_io.rs::rows_to_persist`). `undo_history_limit` (100) is the
-in-memory/read window and never reaches disk. So the honest worst case is 20
+in-memory/read window and never reaches disk. Before #576 B20 the honest worst case was 20
 `ProjectSnapshotPair` entries on a 20,000-shot survey at ~17 MB each = ~340 MB per stack,
 ~680 MB for the pair - under the ceiling, which is the point.
 
-The residual: that is a COUNT bound, not a byte one, so a user who raises
-`undo_persist_limit` far past its default can author more history than this will read
-back. Bounding the writer in bytes, so the read ceiling can tighten without ever refusing
-real work, is the outstanding follow-up.
+Since #576 B20 the writer is bounded in bytes as well: of those newest
+`undo_persist_limit` entries, a save keeps only the newest whose estimated sizes fit in
+`UNDO_BYTE_BUDGET_BYTES` (32 MiB) per stack - the newest always kept, even alone over it
+(`UndoStack::persist_window`). So a count-window save now writes at most ~32 MiB of JSON
+per stack, or one larger newest entry. The read ceiling has not been tightened to match;
+that is still open, and only worth doing with the "one oversized newest entry" case in
+mind.
 
 The number bounds RESERVATIONS, not process RSS. Two terms sit on top of it, and the
 second is not small: `read_to_end` doubles its buffer, so one blob transiently costs
@@ -578,10 +581,10 @@ database helper against a database that persisted between calls, which is exactl
 assumption the save path breaks. The whole apparatus (`PersistPlan`, `StackSync`, the
 stable ids) has been removed rather than left standing as scaffolding.
 
-The cost is real and is what `UNDO_BYTE_BUDGET_BYTES` bounds: a save re-gzips the whole
-persisted stack, which is fine for a 20-entry window and would be seconds of compression
-for an unbounded byte-budgeted one, since a delete-heavy session's whole-project snapshots
-are megabytes each.
+The cost is real and is what `UNDO_BYTE_BUDGET_BYTES` bounds - for BOTH kinds of window
+since #576 B20. A 20-entry window was not "fine": a delete-heavy session's whole-project
+snapshots are megabytes each, and a synthetic 20,000-shot project with 20 whole-project
+steps took 8.7 s per save, every autosave included (release build); capped, 1.0 s.
 
 ## Hybrid mode for SpeleoDB projects (#303)
 
@@ -592,8 +595,8 @@ stack holds at push time is what every commit stores forever. Two policies, reso
 
 | | `Full` (default) | `Disabled` | Local project |
 |---|---|---|---|
-| In-memory depth | byte budget | `undo_history_limit` | `undo_history_limit` |
-| Persisted depth | byte budget | `undo_persist_limit` | `undo_persist_limit` |
+| In-memory depth | byte budget | `undo_history_limit`, at most 256 MiB | `undo_history_limit`, at most 256 MiB |
+| Persisted depth | byte budget | `undo_persist_limit`, at most the byte budget | `undo_persist_limit`, at most the byte budget |
 | Rides in the push | yes (undo only) | no | n/a |
 
 **Both stacks get the budget, so a Full-mode save can write up to 2x
@@ -619,7 +622,9 @@ deepens snapshot-heavy history and slows every save in proportion. For scale: th
 window persisted 20 entries with NO size cap, which on a 20,000-shot project is ~336 MB of
 JSON per save - so this is much cheaper in the worst case and vastly deeper in the common
 one, at the price of shallower history for repeated whole-survey operations on very large
-projects.
+projects. (The count window of a local or Disabled-mode project is now capped by the same
+budget when it is saved - #576 B20 - so it has the same trade: on a 20,000-shot project
+about two whole-project steps survive a reopen instead of twenty.)
 
 **Redo is never uploaded**, in any mode. A redo branch replays FORWARD onto a state the
 server has now committed past, so it is the stale-replay hazard with none of the undo

@@ -11,6 +11,27 @@ use crate::persistence::undo_limits::MAX_PERSISTED_HISTORY_ROWS;
 type CompressedHistoryRow = (i64, Vec<u8>, Vec<u8>, Option<String>);
 type HistoryRow = (i64, String, String, Option<String>);
 
+/// [#576 B20] One history row as it is stored: the command and undo-data JSON
+/// already gzipped (exactly as [`compress_history_json`] gzips them), plus the
+/// timestamp column.
+///
+/// Shared (`Arc`) so a caller can keep the compressed form of an entry it has
+/// not changed and hand it to every later save without compressing it again -
+/// a save rewrites the whole persisted stack (see
+/// `UndoStack::rows_to_persist`), and re-gzipping megabyte snapshot pairs on
+/// every autosave is the cost this exists to avoid.
+#[derive(Debug, Clone)]
+pub struct StoredHistoryRow {
+    pub command: std::sync::Arc<[u8]>,
+    pub undo_data: std::sync::Arc<[u8]>,
+    pub timestamp: Option<String>,
+}
+
+/// gzip one history JSON blob exactly as a history save stores it.
+pub fn compress_history_json(json: &str) -> Vec<u8> {
+    compress_json(json)
+}
+
 const MAX_DECOMPRESS_THREADS: usize = 8;
 
 fn rows_per_decompress_batch() -> usize {
@@ -124,6 +145,29 @@ impl Database {
         undo_entries: Vec<(String, String, Option<String>)>,
         redo_entries: Vec<(String, String, Option<String>)>,
     ) -> Result<()> {
+        let compress = |rows: Vec<(String, String, Option<String>)>| -> Vec<StoredHistoryRow> {
+            rows.into_iter()
+                .map(
+                    |(command_json, undo_data_json, timestamp)| StoredHistoryRow {
+                        command: compress_json(&command_json).into(),
+                        undo_data: compress_json(&undo_data_json).into(),
+                        timestamp,
+                    },
+                )
+                .collect()
+        };
+        self.replace_history_stacks_stored(&compress(undo_entries), &compress(redo_entries))
+    }
+
+    /// [`Self::replace_history_stacks_with_timestamps`] for rows that are
+    /// already compressed ([`StoredHistoryRow`]): the same transaction, the
+    /// same `DELETE`-all then `INSERT` with `sequence` renumbered 0..n, the
+    /// same bytes.
+    pub fn replace_history_stacks_stored(
+        &self,
+        undo_entries: &[StoredHistoryRow],
+        redo_entries: &[StoredHistoryRow],
+    ) -> Result<()> {
         let tx = self
             .conn
             .unchecked_transaction()
@@ -131,29 +175,24 @@ impl Database {
         tx.execute("DELETE FROM undo_stack", [])?;
         tx.execute("DELETE FROM redo_stack", [])?;
 
-        for (seq, (command_json, undo_data_json, timestamp)) in undo_entries.iter().enumerate() {
-            tx.execute(
-                "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) \
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    seq as i64,
-                    compress_json(command_json),
-                    compress_json(undo_data_json),
-                    timestamp.clone().unwrap_or_else(|| Utc::now().to_rfc3339()),
-                ],
-            )?;
-        }
-        for (seq, (command_json, undo_data_json, timestamp)) in redo_entries.iter().enumerate() {
-            tx.execute(
-                "INSERT INTO redo_stack (sequence, command_json, undo_data_json, executed_at) \
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    seq as i64,
-                    compress_json(command_json),
-                    compress_json(undo_data_json),
-                    timestamp.clone().unwrap_or_else(|| Utc::now().to_rfc3339()),
-                ],
-            )?;
+        for (table, rows) in [("undo_stack", undo_entries), ("redo_stack", redo_entries)] {
+            let sql = format!(
+                "INSERT INTO {table} (sequence, command_json, undo_data_json, executed_at) \
+                 VALUES (?1, ?2, ?3, ?4)"
+            );
+            for (seq, row) in rows.iter().enumerate() {
+                tx.execute(
+                    &sql,
+                    params![
+                        seq as i64,
+                        &row.command[..],
+                        &row.undo_data[..],
+                        row.timestamp
+                            .clone()
+                            .unwrap_or_else(|| Utc::now().to_rfc3339()),
+                    ],
+                )?;
+            }
         }
         tx.commit().context("commit undo/redo replacement")?;
         Ok(())

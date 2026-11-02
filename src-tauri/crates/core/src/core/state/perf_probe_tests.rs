@@ -62,6 +62,75 @@ pub(super) fn synthetic_state(sections: u32, shots_per_section: usize) -> AppSta
     state
 }
 
+/// The history a save writes: rows and compressed bytes, per stack.
+fn persisted_history(path: &std::path::Path) -> String {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    ["undo_stack", "redo_stack"]
+        .iter()
+        .map(|table| {
+            let (rows, bytes): (i64, i64) = conn
+                .query_row(
+                    &format!(
+                        "SELECT count(*), coalesce(sum(length(command_json) + \
+                         length(undo_data_json)), 0) FROM {table}"
+                    ),
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            format!("{table} {rows} rows / {:.1} MB gzipped", bytes as f64 / 1e6)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// B20 / NF-AN6-2: saves and in-memory history of a 20,000-shot project after
+/// whole-project steps (each `ReverseSection` records two project snapshots).
+#[test]
+#[ignore = "timing probe; run in release with --ignored --nocapture"]
+fn save_after_whole_project_steps_probe() {
+    let state = synthetic_state(200, 100);
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("probe.stalx");
+    assert!(state.save_project(Some(path.clone())).success);
+
+    let reverse = |state: &AppState, steps: std::ops::Range<u32>| {
+        for section_id in steps {
+            let result = state.execute(Command::ReverseSection {
+                section_id: section_id % 200,
+                swap_left_right: false,
+            });
+            assert!(result.success, "{:?}", result.error);
+        }
+    };
+    let memory = |state: &AppState| {
+        let stack = state.undo_stack.lock().unwrap();
+        format!(
+            "{} undo entries, {:.1} MB estimated in memory",
+            stack.len(),
+            stack.estimated_undo_bytes() as f64 / 1e6
+        )
+    };
+    let timed_save = |state: &AppState, label: &str| {
+        let start = Instant::now();
+        assert!(state.save_project(Some(path.clone())).success);
+        println!(
+            "{label}: {:.0} ms; {}",
+            start.elapsed().as_secs_f64() * 1000.0,
+            persisted_history(&path)
+        );
+    };
+
+    reverse(&state, 0..20);
+    println!("after 20 whole-project steps: {}", memory(&state));
+    timed_save(&state, "save after 20 steps");
+    timed_save(&state, "idle autosave (nothing changed)");
+    reverse(&state, 20..21);
+    timed_save(&state, "save after one more step");
+    reverse(&state, 21..60);
+    println!("after 60 whole-project steps: {}", memory(&state));
+}
+
 /// NF-AN6-5: an import whose sections declare no north reference used to
 /// clone the whole project once per section to read the project default.
 #[test]
