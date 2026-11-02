@@ -32,3 +32,14 @@ export function runSerialized<T>(work: () => Promise<T>): Promise<T> {
   );
   return result;
 }
+
+/**
+ * [#576 D23] Settles once every mutation queued SO FAR has finished, whether it
+ * succeeded or not; never rejects. A project switch awaits it before it starts
+ * (`runProjectSwitch`), so an edit the user issued on the old project lands there
+ * instead of on the project the switch opens. Mutations queued after this call are
+ * not waited for - a switch must never wait on work that may itself wait on it.
+ */
+export function mutationsSettled(): Promise<void> {
+  return mutationChain;
+}
