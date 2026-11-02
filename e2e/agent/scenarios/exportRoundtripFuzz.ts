@@ -436,15 +436,9 @@ import type { Scenario, ScenarioContext } from './framework';
 import { disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import { HOSTILE_COMMENTS } from '../lib/surveyFileSpecs';
 import { shotSetDelta, describeShotSetDelta } from '../lib/projectSnapshot';
-import {
-  defaultTracePath,
-  readTrace,
-  TraceRecorder,
-  writeTrace,
-  type FuzzTrace,
-  type TraceStep,
-} from '../lib/fuzzTrace';
-import { fuzzFixture, replayTracePath, traceOutPath } from '../lib/fuzzKnobs';
+import { TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
+import { fuzzFixture } from '../lib/fuzzKnobs';
+import { MoveLog, openReplay, RERUN_WITH, writeRunTrace } from '../lib/fuzzHarness';
 import {
   canonicalizeUuids,
   checkByteIdentity,
@@ -775,25 +769,16 @@ export const exportRoundtripFuzz: Scenario = {
     ctx.setMetric('roundtripEnabled', roundtripEnabled() ? 1 : 0);
 
     // ---- replay wiring ---------------------------------------------------
-    const replayPath = replayTracePath();
-    const traceOut = traceOutPath();
-    const replay: FuzzTrace | null = replayPath ? readTrace(replayPath) : null;
-    if (replay && replay.scenario !== SCENARIO) {
-      throw new Error(`trace ${replayPath} was recorded by ${replay.scenario}; run it with that scenario`);
-    }
-    // The recorded moves resolve their paths against THAT project, so replaying
-    // them on a different fixture drives exports of a different survey: an
-    // invented failure, or a green run, either way not the recorded bug.
-    if (replay && replay.fixture !== fixture) {
-      throw new Error(
-        `trace ${replayPath} was recorded on ${replay.fixture} but this run is on ${fixture}; ` +
-          `re-run with STALAGMIGHT_FUZZ_FIXTURE=${replay.fixture} ` +
-          `(pnpm agent:scenario --trace restores it for you).`,
-      );
-    }
+    // `openReplay` refuses a trace recorded by another scenario or on another
+    // fixture: the recorded moves resolve their paths against THAT project, so
+    // replaying them on a different fixture drives exports of a different
+    // survey - an invented failure, or a green run, either way not the recorded
+    // bug.
+    const { replayPath, traceOut, replay } = openReplay(SCENARIO, fixture, RERUN_WITH);
 
     const recorder = new TraceRecorder();
-    const history: string[] = [];
+    const moveLog = new MoveLog();
+    const { note } = moveLog;
 
     /**
      * The trace a failure should point at.
@@ -805,30 +790,21 @@ export const exportRoundtripFuzz: Scenario = {
      */
     const dumpTrace = (failure: { message: string } | null): string | null => {
       if (replay !== null) return replayPath;
-      const target = traceOut || defaultTracePath(sessionDir, SCENARIO, ctx.seed);
-      try {
-        return writeTrace(
-          target,
-          recorder.build({
-            scenario: SCENARIO,
-            seed: ctx.seed,
-            iterations,
-            fixture,
-            stream: 'export-v1',
-            failure,
-          }),
-        );
-      } catch {
-        return null;
-      }
+      return writeRunTrace(
+        ctx,
+        recorder,
+        { scenario: SCENARIO, iterations, fixture, stream: 'export-v1' },
+        failure,
+        traceOut,
+      );
     };
 
     /**
      * Annotated on the CONST so TypeScript treats a `fail(...)` call as
-     * never-returning - the same form `importDialogFuzz.ts` uses.
+     * never-returning.
      */
     const fail: (message: string) => never = (message: string): never => {
-      const tail = history.slice(-HISTORY_TAIL);
+      const tail = moveLog.history.slice(-HISTORY_TAIL);
       const tracePath = dumpTrace({ message });
       throw new Error(
         `${message}\n\n  last ${tail.length} move(s):\n` +
@@ -847,10 +823,6 @@ export const exportRoundtripFuzz: Scenario = {
         if (err instanceof ExportOracleError) fail(err.message);
         throw err;
       }
-    };
-
-    const note = (line: string): void => {
-      history.push(line);
     };
 
     const integrity = async (): Promise<Integrity> =>

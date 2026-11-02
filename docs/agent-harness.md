@@ -574,6 +574,17 @@ so it can only ever touch a temp copy.
 | `STALAGMIGHT_FUZZ_IMPORT_MALFORMED_P` | v3 only: share of generated input files drawn from the corruption catalog rather than written clean. Default 0.2. The same knob, with the same default, that `import-dialog-fuzz` uses. |
 | `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` | INERT. It used to keep a run going past a mismatch that was entirely a classified known bug; every classifier is deleted now that the findings are fixed, so there is nothing left to allow. Still read, and still named in the failure's `reproduce:` line, so a tolerant-looking invocation cannot be mistaken for one that relaxed something. |
 
+`STALAGMIGHT_FUZZ_FIXTURE`, `_ALLOW_KNOWN_BUGS`, `_DUMP_HISTORY` and the
+`_TRACE` / `_REPLAY` pair (below) have one definition, `e2e/agent/lib/fuzzKnobs.ts`,
+shared by all four fuzz scenarios and read at call time. The per-run plumbing
+those scenarios used to copy from each other - the replay refusals, the move log
+with its in-flight move, the trace writer and the failure shape - is
+`lib/fuzzHarness.ts`; the undo-model half the two undo fuzzers share (the fused
+step, the model/stack/integrity assertions, the epoch-attributed mismatch check
+of `lib/fuzzSnapshotCheck.ts`, the save/reload boundary) is
+`lib/undoFuzzHarness.ts`. None of it draws from a PRNG, which is what lets it be
+shared without moving a seed's action sequence.
+
 Fixture choice is load-bearing, not cosmetic. The fractal fixture has no loop
 closures, no zero datums and a non-null surveyor on all 32 sections; naharon has
 all three plus 13 null-surveyor sections, and half the bugs below are only

@@ -385,17 +385,9 @@ import { mulberry32, type Scenario, type ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import { ORACLE_GLOBAL, oracleInjectionSource } from '../lib/fuzzOracleCore';
 import { mapClick } from '../lib/controls';
-import {
-  defaultTracePath,
-  planReplay,
-  readTrace,
-  traceHasWellFormedFlows,
-  TraceRecorder,
-  writeTrace,
-  type FuzzTrace,
-  type TraceStep,
-} from '../lib/fuzzTrace';
-import { fuzzFixture, replayTracePath, traceOutPath } from '../lib/fuzzKnobs';
+import { planReplay, traceHasWellFormedFlows, TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
+import { fuzzFixture } from '../lib/fuzzKnobs';
+import { failureText, MoveLog, openReplay, RERUN_WITH, throwFailure, writeRunTrace } from '../lib/fuzzHarness';
 import {
   materializeSurveyFile,
   randomSurveyFileSpec,
@@ -757,25 +749,20 @@ export const importDialogFuzz: Scenario = {
       if (!inventory.configured) ctx.log(`corpus: set ${CORPUS_DIR_ENV} to widen this run's inputs`);
     }
 
-    const replayPath = replayTracePath();
-    const traceOut = traceOutPath();
-    const replay: FuzzTrace | null = replayPath ? readTrace(replayPath) : null;
-    if (replay && replay.scenario !== SCENARIO) {
-      throw new Error(`trace ${replayPath} was recorded by ${replay.scenario}; run it with that scenario`);
-    }
-    // The recorded steps carry ids and rels resolved against THAT project, so
-    // replaying them elsewhere drives moves at things that do not exist there:
-    // an invented failure, or a green run, either way not the recorded bug.
-    if (replay && replay.fixture !== fixture) {
-      throw new Error(
-        `trace ${replayPath} was recorded on ${replay.fixture} but this run is on ${fixture}; ` +
-          `re-run with STALAGMIGHT_FUZZ_FIXTURE=${replay.fixture} ` +
-          `(pnpm agent:scenario --trace restores it for you).`,
-      );
-    }
+    // `openReplay` refuses a trace recorded by another scenario or on another
+    // fixture: the recorded steps carry ids and rels resolved against THAT
+    // project, so replaying them elsewhere drives moves at things that do not
+    // exist there - an invented failure, or a green run, either way not the
+    // recorded bug.
+    const { replayPath, traceOut, replay } = openReplay(SCENARIO, fixture, RERUN_WITH);
 
     const recorder = new TraceRecorder();
-    const history: string[] = [];
+    /**
+     * The run's move history and the move RUNNING RIGHT NOW (`lib/fuzzHarness.ts`):
+     * `execute` arms a move before it runs and disarms it after, so a failure
+     * names a move that never returned instead of the one before it.
+     */
+    const moveLog = new MoveLog();
     /**
      * Substrings a failure payload must never contain, and what to say instead.
      *
@@ -818,7 +805,6 @@ export const importDialogFuzz: Scenario = {
       for (const entry of redactions) out = out.split(entry.find).join(entry.say);
       return out;
     };
-    let inFlight: string | null = null;
     let fileSeq = 0;
     let lastUndoDepth = -1;
     /**
@@ -833,57 +819,49 @@ export const importDialogFuzz: Scenario = {
      */
     const headlessEpisodes: number[] = [];
 
-    const dumpTrace = (failure: { message: string } | null): string | null => {
-      const target = traceOut || defaultTracePath(sessionDir, SCENARIO, ctx.seed);
-      try {
-        return writeTrace(
-          target,
-          recorder.build({
-            scenario: SCENARIO,
-            seed: ctx.seed,
-            iterations,
-            fixture,
-            // v3 = the five-format vocabulary: corpus sources, the armed
-            // keyboard picker, and the auxiliary interjection stream.
-            stream: 'import-v3',
-            failure,
-            noProjectEpisodes: headlessEpisodes,
-          }),
-        );
-      } catch {
-        return null;
-      }
-    };
+    const dumpTrace = (failure: { message: string } | null): string | null =>
+      writeRunTrace(
+        ctx,
+        recorder,
+        {
+          scenario: SCENARIO,
+          iterations,
+          fixture,
+          // v3 = the five-format vocabulary: corpus sources, the armed
+          // keyboard picker, and the auxiliary interjection stream.
+          stream: 'import-v3',
+          noProjectEpisodes: headlessEpisodes,
+        },
+        failure,
+        traceOut,
+      );
 
     /**
      * Annotated on the CONST so TypeScript treats a `fail(...)` call as
-     * never-returning - the same form `undoRedoFuzz.ts` uses, for the same
-     * reason (a caller ending in one needs no dead `return` after it).
+     * never-returning (a caller ending in one needs no dead `return` after it).
      */
     const fail: (headline: string, detail?: string) => never = (headline, detail = '') => {
-      const tail = history.slice(-HISTORY_TAIL).map((line) => `    ${line}`);
-      // A move that has not RETURNED has no history line yet, so name it here:
-      // without this the tail ends on the move BEFORE the one that failed, which
-      // reads as an attribution and is one.
-      if (inFlight !== null) tail.push(`    ${inFlight} -> IN FLIGHT (had not returned)`);
+      // The tail ends on the move that had not RETURNED, if any: without that it
+      // would end on the move BEFORE the one that failed, which reads as an
+      // attribution and is one.
+      const tail = moveLog.tail(HISTORY_TAIL);
       // REDACTED, because this text is what goes into an issue: the app quotes
       // the path it was handed, and a corpus copy keeps its original file name.
       const message = redact(
-        [
+        failureText(
           headline,
-          `  reproduce: pnpm agent:scenario ${SCENARIO} --seed ${ctx.seed} --iterations ${iterations}` +
-            `${fixture === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${fixture}`}` +
-            `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
-          `  fixture=${fixture} flowsPerEpisode=${flowsPerEpisode()} maxFlowSteps=${maxFlowSteps()}`,
-          ...(detail ? [detail] : []),
-          `  last ${tail.length} move(s):`,
-          ...tail,
-        ].join('\n'),
+          [
+            `  reproduce: pnpm agent:scenario ${SCENARIO} --seed ${ctx.seed} --iterations ${iterations}` +
+              `${fixture === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${fixture}`}` +
+              `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
+            `  fixture=${fixture} flowsPerEpisode=${flowsPerEpisode()} maxFlowSteps=${maxFlowSteps()}`,
+          ],
+          detail,
+          'move(s)',
+          tail,
+        ),
       );
-      // The trace carries the message VERBATIM, so a shrink compares signatures
-      // taken from the same text a human reads.
-      const written = dumpTrace({ message });
-      throw new Error(written ? `${message}\n  trace: ${written}` : message);
+      throwFailure(message, dumpTrace);
     };
 
     // ---- paths -----------------------------------------------------------
@@ -1120,7 +1098,7 @@ export const importDialogFuzz: Scenario = {
 
     /** Run one move, record it if it happened, and report the screen after. */
     const execute = async (move: FuzzMove, record: boolean): Promise<Executed> => {
-      inFlight = move.label;
+      moveLog.startingMove(move.label);
       let performed = false;
       let skip: string | null = null;
       let offAtDispatch: boolean | null = null;
@@ -1288,8 +1266,8 @@ export const importDialogFuzz: Scenario = {
         digest = await observeScreen(ctx);
       }
 
-      inFlight = null;
-      history.push(`${move.label}${performed ? '' : ` -> SKIPPED (${skip ?? 'unknown'})`} [${digest.screen}]`);
+      moveLog.finishedMove();
+      moveLog.note(`${move.label}${performed ? '' : ` -> SKIPPED (${skip ?? 'unknown'})`} [${digest.screen}]`);
       ctx.metric(performed ? 'movesPerformed' : `skip:${skip ?? 'unknown'}`);
       return {
         digest,

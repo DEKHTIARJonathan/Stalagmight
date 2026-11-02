@@ -603,9 +603,16 @@ import * as os from 'os';
 import * as path from 'path';
 import { mulberry32, type Scenario, type ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
-import { RELOAD_RESOLVED_GEOMETRY, SAVE_HEALING_MUTATIONS } from '../lib/projectSnapshot';
-import { checkSnapshot } from '../lib/fuzzSnapshotCheck';
-import { allowKnownBugs, dumpFullHistory, fuzzFixture, replayTracePath, traceOutPath } from '../lib/fuzzKnobs';
+import { allowKnownBugs, dumpFullHistory, fuzzFixture } from '../lib/fuzzKnobs';
+import {
+  MoveLog,
+  RERUN_WITH_IDS,
+  failureText,
+  openReplay,
+  throwFailure,
+  writeRunTrace,
+} from '../lib/fuzzHarness';
+import { undoFuzzHarness } from '../lib/undoFuzzHarness';
 import type { TargetingDigest } from '../lib/fuzzOracleCore';
 import {
   streamV2,
@@ -617,26 +624,11 @@ import {
 } from './undoRedoFuzzActions';
 import { mustBeRejected } from './undoRedoFuzzImportActions';
 import { materializeSurveyFile, type GeneratedFileSpec } from '../lib/surveyFileSpecs';
-import {
-  FILE_ARG_ACTIONS,
-  TraceRecorder,
-  defaultTracePath,
-  readTrace,
-  writeTrace,
-  type FuzzTrace,
-  type TraceStep,
-} from '../lib/fuzzTrace';
+import { FILE_ARG_ACTIONS, TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
 import {
   REPLAYABLE_MUTATIONS,
-  bumpEpoch,
-  enableIdAgnosticModel,
-  fetchMismatch,
   initModel,
   injectOracle,
-  observeOnly,
-  resyncModel,
-  runStep,
-  type IntegrityVerdict,
   type StepResponse,
 } from './undoRedoFuzzBridge';
 
@@ -839,27 +831,14 @@ async function runFuzz(
   // reads as "headroom from wherever the stack actually starts".
   const maxDepth = Math.max(1, Math.min(iterations, historyLimit - baseUndo - DEPTH_HEADROOM));
 
-  /** Non-null when this run is replaying a recorded trace instead of drawing. */
-  const replayPath = replayTracePath();
-  const traceOut = traceOutPath();
-  const replay: FuzzTrace | null = replayPath ? readTrace(replayPath) : null;
-  if (replay && replay.scenario !== 'undo-redo-fuzz') {
-    throw new Error(
-      `trace ${replayPath} was recorded by ${replay.scenario}; run it with that scenario`,
-    );
-  }
-  // The recorded steps carry RESOLVED section and shot ids, so replaying them
-  // against a different project drives moves at ids that do not exist there:
-  // an invented failure, or a green run, either way not the recorded bug.
-  if (replay && replay.fixture !== fixture) {
-    throw new Error(
-      `trace ${replayPath} was recorded on ${replay.fixture} but this run is on ${fixture}; ` +
-        `its steps carry ids resolved against that project. Re-run with ` +
-        `STALAGMIGHT_FUZZ_FIXTURE=${replay.fixture} (pnpm agent:scenario --trace restores it for you).`,
-    );
-  }
+  // `replay` is non-null when this run is replaying a recorded trace instead of
+  // drawing. `openReplay` refuses a trace recorded by another scenario, or on
+  // another fixture: the recorded steps carry RESOLVED section and shot ids, so
+  // replaying them against a different project drives moves at ids that do not
+  // exist there - an invented failure, or a green run, either way not the
+  // recorded bug.
+  const { replayPath, traceOut, replay } = openReplay(undoRedoFuzz.name, fixture, RERUN_WITH_IDS);
 
-  const history: string[] = [];
   let cursor = 0;
   /** Node's mirror of the page's `snapshots.length - 1`. */
   let top = 0;
@@ -948,31 +927,18 @@ async function runFuzz(
     return [resolveSessionPath(rel), ...args.slice(1)];
   };
 
-  const note = (line: string): void => {
-    history.push(line);
-  };
-
   /**
-   * The move that is RUNNING RIGHT NOW - `null` between moves.
+   * The run's move history and the move RUNNING RIGHT NOW (`lib/fuzzHarness.ts`).
    *
    * A `note` line reports what a move DID to the stacks, so it can only be
-   * written once the move RETURNS. A move that throws instead - the step never
-   * comes back, or an assertion inside it fires - then left the tail ending on
-   * the PREVIOUS move, which reads as an attribution and is one: it names the
-   * wrong move. The same gotcha in the Rust tier mis-read two of issue #464's
-   * defects during triage.
-   *
-   * Armed before each step and disarmed after, and rendered by `fail` only, so
-   * a run that does not fail behaves exactly as before and the trace is
+   * written once the move RETURNS; `startingMove` arms the label before each
+   * step and `finishedMove` disarms it after, so a move that throws is named
+   * in the failure tail instead of the one before it. Rendered by `fail` only,
+   * so a run that does not fail behaves exactly as before and the trace is
    * untouched.
    */
-  let inFlight: string | null = null;
-  const startingMove = (label: string): void => {
-    inFlight = label;
-  };
-  const finishedMove = (): void => {
-    inFlight = null;
-  };
+  const log = new MoveLog();
+  const { note, startingMove, finishedMove } = log;
 
   /**
    * The resolved move list for this run. Observe-only: `record` is called AFTER
@@ -998,40 +964,20 @@ async function runFuzz(
   };
 
   /** Write the trace, best-effort: a failed write must not mask the failure. */
-  const dumpTrace = (failure: { message: string } | null, explicitPath: string): string | null => {
-    const target =
-      explicitPath ||
-      (ctx.artifactsDir ? defaultTracePath(ctx.artifactsDir, 'undo-redo-fuzz', ctx.seed) : '');
-    if (!target) return null;
-    try {
-      return writeTrace(
-        target,
-        recorder.build({
-          scenario: 'undo-redo-fuzz',
-          seed: ctx.seed,
-          iterations,
-          fixture,
-          stream: streamName(),
-          failure,
-        }),
-      );
-    } catch {
-      return null;
-    }
-  };
+  const dumpTrace = (failure: { message: string } | null, explicitPath: string): string | null =>
+    writeRunTrace(
+      ctx,
+      recorder,
+      { scenario: undoRedoFuzz.name, iterations, fixture, stream: streamName() },
+      failure,
+      explicitPath,
+    );
 
   // Annotated on the CONST, not just the arrow: that is what makes TypeScript
   // treat a `fail(...)` call as never-returning, so a caller ending in one does
-  // not need a dead `return` after it. Same form as undoPersistenceFuzz.
+  // not need a dead `return` after it.
   const fail: (headline: string, detail?: string) => never = (headline, detail = '') => {
-    const tail = (dumpFullHistory() ? history : history.slice(-HISTORY_TAIL)).map(
-      (line) => `    ${line}`,
-    );
-    // A move that has not RETURNED has no history line yet, so name it here -
-    // without this the tail ends on the move BEFORE the one that failed.
-    if (inFlight !== null) tail.push(`    ${inFlight} -> IN FLIGHT (had not returned)`);
-    const message = [
-      headline,
+    const context = [
       `  reproduce: run_scenario("undo-redo-fuzz", seed=${ctx.seed}, iterations=${iterations})` +
         `${fixture === DEFAULT_FIXTURE ? '' : ` with STALAGMIGHT_FUZZ_FIXTURE=${fixture}`}` +
         `${streamClause()}` +
@@ -1039,164 +985,13 @@ async function runFuzz(
         `${replayPath ? ` (REPLAY of ${replayPath})` : ''}`,
       `  fixture=${fixture} stream=${streamName()} swarm=${swarm.name} ` +
         `depth=${cursor} modelTop=${top} baseUndo=${baseUndo}`,
-      ...(detail ? [detail] : []),
-      `  last ${tail.length} action(s):`,
-      ...tail,
-    ].join('\n');
-    // The trace carries the message VERBATIM, so a shrink compares signatures
-    // taken from the same text a human reads. The path is appended afterwards,
-    // which is why it is not part of what was recorded.
-    const written = dumpTrace({ message }, traceOut);
-    throw new Error(written ? `${message}\n  trace: ${written}` : message);
-  };
-
-  /** One fused round trip, timed. */
-  const step = async (
-    kind: 'mutate' | 'undo' | 'redo' | 'undoTo' | 'redoTo' | 'save' | 'reload',
-    action: string,
-    actionArgs: unknown[],
-    steps = 1,
-  ): Promise<StepResponse> => {
-    const started = Date.now();
-    const res = await runStep(ctx, {
-      kind,
-      action,
-      args: actionArgs,
-      cursor,
-      undo0: undoLen,
-      steps,
-    });
-    ctx.metric('fusedStepMs', Date.now() - started);
-    // Attribution, so the next round of tuning aims at evidence: the store
-    // action's own work, the three read-only IPC calls, the in-page
-    // canonicalization, and (by subtraction from fusedStepMs) the bridge.
-    ctx.metric('actionMs', res.timing.actionMs);
-    ctx.metric('observeMs', res.timing.observeMs);
-    ctx.metric('canonicalMs', res.timing.canonicalMs);
-    ctx.metric('integrityMs', res.timing.integrityMs);
-    ctx.metric('steps');
-    return res;
-  };
-
-  /** The page applied the same bookkeeping rules; prove it landed in the same place. */
-  const assertModel = (res: StepResponse, headline: string): void => {
-    if (res.cursorAfter !== cursor || res.top !== top) {
-      fail(
-        headline,
-        `  page model says cursor=${res.cursorAfter} top=${res.top}, Node says cursor=${cursor} top=${top}`,
-      );
-    }
-  };
-
-  /**
-   * ABSOLUTE well-formedness, checked on every observed state. Independent of
-   * the roundtrip comparison: a forward command that corrupts the project and
-   * an undo that faithfully restores the corruption match at every depth, so
-   * only this fires.
-   */
-  const assertInvariants = (res: StepResponse, what: string): void => {
-    if (res.invariants.length === 0) return;
-    fail(
-      `project invariant(s) violated after ${what}`,
-      res.invariants.map((violation) => `  INVARIANT: ${violation}`).join('\n'),
+    ];
+    // The tail ends on the move that had not RETURNED, if any - without that it
+    // would end on the move BEFORE the one that failed.
+    const tail = log.tail(HISTORY_TAIL, dumpFullHistory());
+    throwFailure(failureText(headline, context, detail, 'action(s)', tail), (failure) =>
+      dumpTrace(failure, traceOut),
     );
-  };
-
-  const sameIntegrity = (a: IntegrityVerdict, b: IntegrityVerdict): boolean =>
-    a.saveBlocked === b.saveBlocked && a.messages.join('\u0000') === b.messages.join('\u0000');
-
-  /**
-   * The app runs `check_project_integrity` after every undo/redo anyway, so
-   * its verdict is part of the state a history move is supposed to restore. A
-   * state that roundtrips while its integrity verdict does not is either a bug
-   * in the checker or a divergence the snapshot cannot see.
-   */
-  const assertIntegrityDelta = (res: StepResponse, what: string, resynced = false): void => {
-    const expected = res.integrityExpected;
-    if (expected === null) return;
-    // `resolveMismatch` just replaced the model's snapshot at this depth, and
-    // `resyncModel` moves the recorded integrity verdict with it - that is
-    // its documented job. `expected` was computed IN THE PAGE at step time,
-    // against the snapshot that has since been superseded, so comparing it
-    // now would fail on precisely the difference the resync accepted. That is
-    // how a run could log a documented save/reload re-baseline and then
-    // immediately fail naming a different oracle. (The only resync left is
-    // that one: `STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS` is inert and tolerates
-    // nothing.)
-    if (resynced) {
-      ctx.metric('integrityResynced');
-      return;
-    }
-    // Counted so the oracle can be shown to be doing work rather than
-    // passing vacuously on a model that never recorded a verdict.
-    ctx.metric('integrityCompared');
-    if (sameIntegrity(expected, res.integrity)) return;
-    const format = (verdict: IntegrityVerdict): string =>
-      `saveBlocked=${verdict.saveBlocked} messages=${JSON.stringify(verdict.messages)}`;
-    fail(
-      `${what} restored the state but NOT the integrity verdict recorded at depth ${cursor}`,
-      `  expected: ${format(expected)}\n  actual:   ${format(res.integrity)}`,
-    );
-  };
-
-  const assertStacks = (headline: string, res: StepResponse): void => {
-    const wantUndo = baseUndo + cursor;
-    const wantRedo = top - cursor;
-    if (res.undoLen !== wantUndo || res.redoLen !== wantRedo) {
-      fail(
-        headline,
-        `  expected undoLen=${wantUndo} redoLen=${wantRedo}, got undoLen=${res.undoLen} redoLen=${res.redoLen}`,
-      );
-    }
-  };
-
-  /**
-   * Resolve a mismatch the page reported. Fetches both canonical strings (the
-   * only time they cross the bridge) and either RE-BASELINES a documented
-   * save/reload change or fails with the full diff. Those two outcomes are all
-   * there are - no known-bug tolerance survives.
-   *
-   * Returns true when the model was RESYNCED, which the caller has to know:
-   * every expectation the page computed for this step - the integrity verdict
-   * included - was computed against the snapshot the resync replaced.
-   */
-  const resolveMismatch = async (
-    headline: string,
-    resyncIntegrity: IntegrityVerdict | null,
-    res: StepResponse,
-  ): Promise<boolean> => {
-    const pair = await fetchMismatch(ctx);
-    // ONLY a comparison that crosses an epoch boundary may subtract the
-    // documented undo-less changes. Within an epoch the oracle stays strict -
-    // otherwise "a reload re-solves offsets" would permanently hide every
-    // section_offsets bug the fuzzer exists to find (bugs 3 and 7).
-    const attributable = res.crossesEpoch
-      ? [
-          ...(savesDone > 0 ? SAVE_HEALING_MUTATIONS : []),
-          ...(reloadsDone > 0 ? RELOAD_RESOLVED_GEOMETRY : []),
-        ]
-      : [];
-    const check = checkSnapshot(pair.expected ?? '', pair.actual ?? '', attributable, {
-      diffLimit: DIFF_LIMIT,
-      shownDiffs: SHOWN_DIFFS,
-    });
-    if (check.equal) {
-      // Counted, never resynced: keeping the ORIGINAL expectation means the
-      // tolerance can never ratchet, only ever absorb the same dust again.
-      if (check.floatNoise) ctx.metric('floatNoise');
-      return false;
-    }
-    // Every difference was a documented save heal or reload re-solve: record
-    // the new baseline and carry on. Nothing else is tolerated here.
-    if (check.attributed.length > 0 && check.text.startsWith('  ATTRIBUTED')) {
-      ctx.metric('resyncs');
-      for (const entry of check.attributed) ctx.metric(`resync:${entry.id}`);
-      top = await resyncModel(ctx, pair.index, resyncIntegrity);
-      return true;
-    }
-    // No known-bug branch: every issue-413 finding is fixed and every
-    // classifier deleted, so anything the attribution did not explain fails.
-    fail(headline, check.text);
   };
 
   const record = (res: StepResponse): void => {
@@ -1206,6 +1001,59 @@ async function runFuzz(
     maxBytes = Math.max(maxBytes, res.bytes);
     deepest = Math.max(deepest, cursor);
   };
+
+  /**
+   * The fused step, the model / invariant / stack / integrity assertions, the
+   * epoch-attributed mismatch resolution and the save/reload boundary, shared
+   * with undoPersistenceFuzz (`lib/undoFuzzHarness.ts`). They read and write
+   * THIS run's model through the view passed here, so `cursor`, `top` and the
+   * counters stay the variables the rest of this body reads and writes.
+   */
+  const {
+    step,
+    assertModel,
+    assertInvariants,
+    assertStacks,
+    assertIntegrityDelta,
+    resolveMismatch,
+    saveAndReload: crossBoundary,
+  } = undoFuzzHarness(
+    ctx,
+    {
+      get cursor() {
+        return cursor;
+      },
+      get top() {
+        return top;
+      },
+      set top(value) {
+        top = value;
+      },
+      get undoLen() {
+        return undoLen;
+      },
+      get savesDone() {
+        return savesDone;
+      },
+      set savesDone(value) {
+        savesDone = value;
+      },
+      get reloadsDone() {
+        return reloadsDone;
+      },
+      set reloadsDone(value) {
+        reloadsDone = value;
+      },
+    },
+    {
+      fail,
+      log,
+      record,
+      baseUndo,
+      limits: { diffLimit: DIFF_LIMIT, shownDiffs: SHOWN_DIFFS },
+      noteFailedSave: true,
+    },
+  );
 
   /**
    * One history move. `jumpSteps` takes it through `undoTo`/`redoTo` - the
@@ -1257,7 +1105,6 @@ async function runFuzz(
       res.verdict !== 'equal' &&
       (await resolveMismatch(
         `${label} did not restore the state recorded at depth ${cursor}`,
-        res.integrity,
         res,
       ));
     assertIntegrityDelta(res, label, resynced);
@@ -1271,88 +1118,13 @@ async function runFuzz(
   };
 
   /**
-   * Save, close, reopen: the persistence boundary.
-   *
-   * Undo history lives in the .stalx (both stacks, sequence renumbered), so
-   * until a run crosses this boundary nothing below it is exercised at all.
-   * Three separate oracles run here:
-   *
-   *   1. SAVE IS ATTRIBUTABLE. `save_project` heals live state with no undo
-   *      entry - `ensure_shot_uuids`, `ensure_unique_shot_uuids`,
-   *      `capture_missing_gauge_anchors`, the orphan `section_offsets` retain,
-   *      non-finite sanitize. Every path that changes must match
-   *      `SAVE_HEALING_MUTATIONS` by path AND direction; anything else fails.
-   *   2. THE STACKS SURVIVE. Both lengths must come back exactly.
-   *   3. THE RESTORED STACK IS THE SAME HISTORY. From here the model compares
-   *      id-agnostically (the loader renumbers `Shot::id` to
-   *      `section_id * FEATURE_ID_STRIDE + sequence_order`), and the run's
-   *      final unwind/rewind then walks the whole RESTORED stack against the
-   *      snapshots recorded before the save.
+   * Save, close, reopen at this run's one save path: the persistence boundary.
+   * The three oracles it runs (the save is attributable, the stacks survive, the
+   * restored stack is the same history) are documented on
+   * `undoFuzzHarness`'s `saveAndReload`; the run's final unwind/rewind then walks
+   * the whole RESTORED stack against the snapshots recorded before the save.
    */
-  const saveAndReload = async (tag: string): Promise<void> => {
-    // The save is about to make undo-less changes, so everything recorded so
-    // far belongs to the previous epoch.
-    await bumpEpoch(ctx);
-    startingMove(`${tag} save`);
-    const saveRes = await step('save', 'saveProject', [savePath]);
-    finishedMove();
-    if (!saveRes.actionOk || saveRes.commandSuccess === false) {
-      note(`${tag} save -> FAILED`);
-      fail('saveProject failed', `  error: ${saveRes.commandError ?? saveRes.actionError ?? 'unknown'}`);
-    }
-    note(`${tag} save -> ok (depth ${cursor}, undo ${saveRes.undoLen}, redo ${saveRes.redoLen})`);
-    assertInvariants(saveRes, 'save');
-    assertStacks('save changed the history stacks', saveRes);
-    savesDone += 1;
-    if (saveRes.verdict !== 'equal') {
-      await resolveMismatch(
-        'save mutated the project in a way SAVE_HEALING_MUTATIONS does not account for',
-        saveRes.integrity,
-        saveRes,
-      );
-    }
-    record(saveRes);
-    ctx.metric('saves');
-
-    startingMove(`${tag} close/reopen`);
-    const closed = (await ctx.callAction('project', 'closeProject', [])) as {
-      ok: boolean;
-      error?: string;
-      result?: { success?: boolean; error?: string };
-    };
-    if (!closed.ok || closed.result?.success === false) {
-      fail('closeProject failed before reopen', `  error: ${closed.result?.error ?? closed.error ?? 'unknown'}`);
-    }
-    const opened = (await ctx.callAction('project', 'loadProject', [savePath])) as {
-      ok: boolean;
-      error?: string;
-      result?: { success?: boolean; error?: string };
-    };
-    if (!opened.ok || opened.result?.success === false) {
-      fail('reopening the saved project failed', `  error: ${opened.result?.error ?? opened.error ?? 'unknown'}`);
-    }
-    finishedMove();
-
-    // Switch BEFORE re-observing so both sides of the comparison are in the
-    // same form. Idempotent, so later reloads are a no-op.
-    await enableIdAgnosticModel(ctx);
-    await bumpEpoch(ctx);
-    reloadsDone += 1;
-    const res = await observeOnly(ctx, cursor);
-    note(`${tag} reload -> depth ${cursor} (undo ${res.undoLen}, redo ${res.redoLen})`);
-    assertInvariants(res, 'reload');
-    assertStacks('the persisted history did not come back intact', res);
-    const resynced =
-      res.verdict !== 'equal' &&
-      (await resolveMismatch(
-        'reopening the saved project did not restore the state it was saved at',
-        res.integrity,
-        res,
-      ));
-    assertIntegrityDelta(res, 'reload', resynced);
-    record(res);
-    ctx.metric('reloads');
-  };
+  const saveAndReload = (tag: string): Promise<void> => crossBoundary(tag, savePath);
 
   /**
    * Run Repair as an additive move. It is a normal mutation as far as the
@@ -1392,7 +1164,7 @@ async function runFuzz(
     ctx.metric('repairNoops');
     if (res.redoLen === 0) top = cursor;
     if (res.verdict !== 'equal') {
-      await resolveMismatch('a no-op Repair changed the project state', res.integrity, res);
+      await resolveMismatch('a no-op Repair changed the project state', res);
     }
     record(res);
   };
@@ -1513,7 +1285,6 @@ async function runFuzz(
         (await resolveMismatch(
           `a REJECTED command (${action.action}) mutated the project: ` +
             `${res.commandError ?? res.actionError ?? 'unknown'}`,
-          res.integrity,
           res,
         ));
       assertIntegrityDelta(res, `a rejected ${action.action}`, resynced);
@@ -1571,7 +1342,6 @@ async function runFuzz(
       res.verdict !== 'equal' &&
       (await resolveMismatch(
         `a no-op command (${action.action}) changed the project state`,
-        res.integrity,
         res,
       ));
     assertIntegrityDelta(res, `a no-op ${action.action}`, resynced);
