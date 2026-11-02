@@ -259,6 +259,14 @@ mod recents_config_lock_tests;
     clippy::unwrap_used,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, and the printed \
+              positions are the evidence a run captures"
+)]
+mod reference_change_datum_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
               values are the evidence a run captures"
 )]
 mod reference_change_geometry_tests;

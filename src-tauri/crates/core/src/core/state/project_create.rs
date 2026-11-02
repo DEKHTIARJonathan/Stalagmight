@@ -240,9 +240,25 @@ impl AppState {
                     return f;
                 }
             }
+            // [#576 RV5-F4-2] Where each anchoring datum is, measured BEFORE the
+            // reference turns the sections that inherit it.
+            let datum_holds = if reference_changed {
+                datum_holds(project)
+            } else {
+                Vec::new()
+            };
             project.name = name;
             project.validation = validation;
             project.default_azimuth_reference = default_azimuth_reference;
+            // Each inheriting section turned about its own station 0, so a datum on
+            // a later station moved: the frame datum off local (0, 0), and every
+            // other datum off its GPS-implied place. Hold each merge group's datum
+            // where it was and re-place the group's partners around it, exactly as
+            // a shot edit does (`realign_after_shot_edit`); the epilogue's reconcile
+            // then settles the groups that hold no datum.
+            for (section_id, held_at) in datum_holds {
+                project.realign_after_shot_edit(section_id, Some(held_at));
+            }
             project.touch();
             reference_changed
         };
@@ -850,4 +866,25 @@ mod tests {
         let available = AppState::next_available_project_path(&base_path);
         assert_eq!(available, temp_dir.path().join("Collision_2.stalx"));
     }
+}
+
+/// [#576 RV5-F4-2] Each merge group's anchoring datum, as `(a section of the
+/// group, where the datum is now)`: the first datum of the group that resolves,
+/// which is the one [`Project::realign_after_shot_edit`] holds. One entry per
+/// group; a group with no resolvable datum has nothing absolute to hold.
+fn datum_holds(project: &Project) -> Vec<(crate::models::SectionId, (f64, f64))> {
+    let mut covered = std::collections::HashSet::new();
+    let mut holds = Vec::new();
+    for datum in &project.zero_datums {
+        let section_id = datum.station_ref.section_id;
+        if covered.contains(&section_id) {
+            continue;
+        }
+        covered.extend(project.get_merged_section_ids(section_id));
+        covered.insert(section_id);
+        if let Some(at) = project.datum_anchor_position(section_id) {
+            holds.push((section_id, at));
+        }
+    }
+    holds
 }
