@@ -187,6 +187,28 @@ impl AppState {
         self.speleodb_session_generation.load(Ordering::SeqCst)
     }
 
+    /// [#576 RV4-R-S1] Record that a Done finished editing the open project HERE
+    /// and left the account's lock held elsewhere, for this session generation
+    /// only (see `AppState::speleodb_finished_here`).
+    pub(super) fn speleodb_mark_finished_here(&self) {
+        let generation = self.speleodb_session_generation();
+        self.speleodb_finished_here
+            .store(generation.wrapping_add(1), Ordering::SeqCst);
+    }
+
+    /// Whether a Done finished editing the open project here in the CURRENT
+    /// session generation - the inherited-lock reopen must then leave the gate shut.
+    pub(super) fn speleodb_finished_here(&self) -> bool {
+        let generation = self.speleodb_session_generation();
+        self.speleodb_finished_here.load(Ordering::SeqCst) == generation.wrapping_add(1)
+    }
+
+    /// Drop the "finished here" mark: an explicit Start editing is the user asking
+    /// to edit here again.
+    pub(super) fn speleodb_clear_finished_here(&self) {
+        self.speleodb_finished_here.store(0, Ordering::SeqCst);
+    }
+
     /// The generation and the open project's validated link, read together
     /// under the `project` mutex so they describe ONE world. Start Editing's
     /// entry point: capturing them separately is D6 from the abandoned attempt
@@ -441,6 +463,12 @@ impl AppState {
         // the previous account's token and opened the edit gate for the new one -
         // free to mutate a project whose mutex their credentials do not hold.
         let _lock_ops = self.speleodb_lock_ops_guard();
+        // [#576 RV4-R-S1] A Done finished editing here and left the lock with the
+        // account: that session is over, whatever the server says about the
+        // account's lock. Only a new open or an explicit Start editing resumes it.
+        if self.speleodb_finished_here() {
+            return false;
+        }
         // One read, so the holder comparison below cannot pair one account's
         // endpoint with another's email (`speleodb_active_account`).
         let Ok((endpoint, token, me)) = self.speleodb_active_account() else {

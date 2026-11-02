@@ -334,6 +334,10 @@ impl AppState {
                 // here: editing off, nothing released, and say the lock stays with the
                 // account elsewhere.
                 if !self.speleodb_lock_acquired_here(&link.project_id) {
+                    // Marked BEFORE the gate shuts, so a status poll that sees the
+                    // gate shut also sees why, and does not reopen it under the
+                    // account's lock (#576 RV4-R-S1).
+                    self.speleodb_mark_finished_here();
                     self.set_edit_enabled(false);
                     tracing::info!(
                         project_id = %link.project_id,
