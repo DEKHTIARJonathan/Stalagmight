@@ -4,8 +4,9 @@
 // is pinned with a planted literal it MUST report, and each near miss (a t()
 // key, a className, a punctuation-only string, a placeholder-only template)
 // with one it must NOT. The last tests run the whole scan over a throwaway tree
-// on disk, so the scope derivation (dialogs + the common modules they import),
-// the allowlist (covering and stale rows) and the exit code are covered too.
+// on disk, so the scope derivation (dialogs + the common modules they import +
+// the pinned common modules), the allowlist (covering and stale rows) and the
+// exit code are covered too.
 //
 // Pure Node, no test framework (mirrors the sibling scripts/check-*.test.mjs).
 // Run: node scripts/check-i18n-literals.test.mjs  (pnpm lint:i18n-literals:test; CI check job)
@@ -14,7 +15,15 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { analyzeSource, applyAllowlist, hasLetters, scopeFiles, main, ALLOWLIST_FILE } from './check-i18n-literals.mjs';
+import {
+  analyzeSource,
+  applyAllowlist,
+  hasLetters,
+  scopeFiles,
+  main,
+  ALLOWLIST_FILE,
+  PINNED_COMMON,
+} from './check-i18n-literals.mjs';
 
 let passed = 0;
 const failures = [];
@@ -185,9 +194,13 @@ test('an allowlist row covers every occurrence of its text in its file only; unu
 
 // --- the whole scan on a throwaway tree ---------------------------------------------
 
+// Every tree holds the PINNED_COMMON files (clean) unless a test overrides one;
+// `null` leaves it out.
 function tree(files) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'i18n-literals-'));
-  for (const [rel, text] of Object.entries(files)) {
+  const pinned = Object.fromEntries(PINNED_COMMON.map((rel) => [rel, 'export {};\n']));
+  for (const [rel, text] of Object.entries({ ...pinned, ...files })) {
+    if (text === null) continue;
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
     fs.writeFileSync(path.join(root, rel), text);
   }
@@ -208,7 +221,7 @@ const quiet = (fn) => {
 
 const ALLOW = (entries) => JSON.stringify({ entries });
 
-test('scope: every dialog file plus the common modules a dialog imports, tests excluded', () => {
+test('scope: every dialog file plus the common modules a dialog imports and the pinned ones, tests excluded', () => {
   const root = tree({
     'src/components/Dialogs/A.tsx': "import { Button } from '../common/Button';\nexport const A = () => <Button />;\n",
     'src/components/Dialogs/sub/B.tsx': "import X from '../../common/Grid';\nexport const B = X;\n",
@@ -223,8 +236,42 @@ test('scope: every dialog file plus the common modules a dialog imports, tests e
     'src/components/Dialogs/A.tsx',
     'src/components/Dialogs/sub/B.tsx',
     'src/components/common/Button.tsx',
+    'src/components/common/ContextMenu.tsx',
+    'src/components/common/DetailLink.tsx',
+    'src/components/common/ErrorBoundary.tsx',
     'src/components/common/Grid/index.tsx',
   ]);
+  assert.deepEqual(scopeFiles(root).missingPinned, []);
+});
+
+test('pinned: the context menu, error boundary and entity link are in scope with no dialog importing them', () => {
+  assert.deepEqual(PINNED_COMMON, [
+    'src/components/common/ContextMenu.tsx',
+    'src/components/common/DetailLink.tsx',
+    'src/components/common/ErrorBoundary.tsx',
+  ]);
+  const base = {
+    'src/components/Dialogs/A.tsx': 'export const A = () => null;\n',
+    [ALLOWLIST_FILE]: ALLOW([]),
+  };
+  assert.equal(quiet(() => main(tree(base))), 0);
+  for (const [rel, code] of [
+    ['src/components/common/ContextMenu.tsx', "const items = [{ label: 'Edit Station', action }];\n"],
+    ['src/components/common/DetailLink.tsx', 'const v = <button title={`${type} not found`} />;\n'],
+    ['src/components/common/ErrorBoundary.tsx', 'const v = <button>Try Again</button>;\n'],
+  ]) {
+    assert.equal(quiet(() => main(tree({ ...base, [rel]: code }))), 1, rel);
+  }
+});
+
+test('pinned: a pinned file that no longer exists fails the gate (a rename must update the list)', () => {
+  const root = tree({
+    'src/components/Dialogs/A.tsx': 'export const A = () => null;\n',
+    'src/components/common/DetailLink.tsx': null,
+    [ALLOWLIST_FILE]: ALLOW([]),
+  });
+  assert.deepEqual(scopeFiles(root).missingPinned, ['src/components/common/DetailLink.tsx']);
+  assert.equal(quiet(() => main(root)), 1);
 });
 
 test('main: a literal in a dialog or in an imported primitive fails; t() and allowlisted text pass', () => {

@@ -13,6 +13,11 @@
 // primitives dialogs are built from (Button, Select, Toggle, ...). The common set
 // is derived from the imports on every run, so a dialog that starts using a new
 // primitive brings it into scope. Tests are excluded (scripts/lib/src-files.mjs).
+// Plus the common modules in PINNED_COMMON: shared UI with text of its own that no
+// dialog imports, so the derivation never reaches it (#576 NF-W6-2: the survey
+// context menu, the panel error fallback and the entity link). A pinned file that
+// no longer exists fails the gate, as a stale allowlist row does, so a rename
+// cannot quietly drop it from scope.
 //
 // What counts as user-visible text (TypeScript compiler API, syntax only):
 //   - JSX text:                                  <p>Delete shot</p>
@@ -59,6 +64,12 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 export const DIALOGS_DIR = 'src/components/Dialogs';
 export const COMMON_DIR = 'src/components/common';
 export const ALLOWLIST_FILE = 'scripts/i18n-literals-allowlist.json';
+// Always in scope, whether or not a dialog imports them (see the header).
+export const PINNED_COMMON = [
+  `${COMMON_DIR}/ContextMenu.tsx`,
+  `${COMMON_DIR}/DetailLink.tsx`,
+  `${COMMON_DIR}/ErrorBoundary.tsx`,
+];
 
 export const USER_FACING_ATTRS = new Set([
   'title',
@@ -328,7 +339,7 @@ function resolvedImports(root, rel, sourceText) {
   return out;
 }
 
-// The files in scope: {files, symlinks}. See the header.
+// The files in scope: {files, symlinks, missingPinned}. See the header.
 export function scopeFiles(root = REPO_ROOT) {
   const exts = ['.ts', '.tsx'];
   const dialogs = walkFiles(root, DIALOGS_DIR, { exts, skip: isTestPath });
@@ -338,7 +349,13 @@ export function scopeFiles(root = REPO_ROOT) {
       if (dep.startsWith(`${COMMON_DIR}/`) && !isTestPath(dep) && /\.tsx?$/.test(dep)) common.add(dep);
     }
   }
-  return { files: [...dialogs.files, ...[...common].sort()], symlinks: dialogs.symlinks };
+  const missingPinned = [];
+  for (const rel of PINNED_COMMON) {
+    const abs = path.join(root, rel);
+    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) common.add(rel);
+    else missingPinned.push(rel);
+  }
+  return { files: [...dialogs.files, ...[...common].sort()], symlinks: dialogs.symlinks, missingPinned };
 }
 
 export function loadAllowlist(root = REPO_ROOT) {
@@ -363,13 +380,13 @@ export function applyAllowlist(findings, entries) {
 }
 
 export function scan(root = REPO_ROOT) {
-  const { files, symlinks } = scopeFiles(root);
+  const { files, symlinks, missingPinned } = scopeFiles(root);
   const findings = files.flatMap((rel) => analyzeSource(rel, fs.readFileSync(path.join(root, rel), 'utf8')));
-  return { files, symlinks, findings };
+  return { files, symlinks, missingPinned, findings };
 }
 
 export function main(root = REPO_ROOT) {
-  const { files, symlinks, findings } = scan(root);
+  const { files, symlinks, missingPinned, findings } = scan(root);
   const entries = loadAllowlist(root);
   const bad = entries.filter((e) => typeof e.reason !== 'string' || e.reason.trim() === '');
   const { violations, stale } = applyAllowlist(findings, entries);
@@ -395,6 +412,11 @@ export function main(root = REPO_ROOT) {
   if (bad.length > 0) {
     failed = true;
     console.error(`\n✗ i18n literals: ${bad.length} allowlist row(s) without a reason.`);
+  }
+  if (missingPinned.length > 0) {
+    failed = true;
+    console.error(`\n✗ i18n literals: ${missingPinned.length} PINNED_COMMON file(s) do not exist - update the list:\n`);
+    for (const m of missingPinned) console.error(`  ${m}`);
   }
   if (failed) return 1;
   console.log(
