@@ -97,6 +97,25 @@ describe('fills report refused cells (FILL-1)', () => {
     expect(onPasteReport).toHaveBeenCalledWith({ source: 'fill', written: 0, clipped: 0, skipped: 1 });
   });
 
+  // #576 RV3-FE-9: the fill-handle path (commitFill: drag fill and handle
+  // double-click) reports on its own, apart from Ctrl+D / Ctrl+R (doFill).
+  it('a fill-handle fill reports the cells the validator refused', () => {
+    const { onPasteReport, onBatchEdit } = renderGrid([row(1, 0), row(2, 12), row(3, 14)]);
+    fireEvent.mouseDown(screen.getByTestId('grid-cell-0-speed'));
+    fireEvent.mouseUp(screen.getByTestId('grid-cell-0-speed'));
+    // Double-click fills down to the left neighbour's data extent (rows 1-2),
+    // tiling the stored 0, which the column refuses in both.
+    fireEvent.doubleClick(screen.getByTestId('grid-fill-handle'));
+
+    expect(onPasteReport, 'the fill-handle fill said nothing about the two refused cells').toHaveBeenCalledWith({
+      source: 'fill',
+      written: 0,
+      clipped: 0,
+      skipped: 2,
+    });
+    expect(onBatchEdit).not.toHaveBeenCalled();
+  });
+
   it('does not count a locked cell the fill passes over, and stays quiet when nothing was refused', () => {
     const { onPasteReport, onBatchEdit } = renderGrid([row(1, 9), row(2, 12, true), row(3, 14)]);
     selectRange('grid-cell-0-speed', 'grid-cell-2-speed');
