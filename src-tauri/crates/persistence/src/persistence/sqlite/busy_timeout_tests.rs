@@ -37,6 +37,10 @@ fn every_open_path_waits_at_least_five_seconds_for_a_busy_file() {
         ("open (existing file)", Database::open(&path).unwrap()),
         ("open_existing", Database::open_existing(&path).unwrap()),
         (
+            "open_existing_refusing_upgrade",
+            Database::open_existing_refusing_upgrade(&path, "not upgraded here").unwrap(),
+        ),
+        (
             "open_existing + into_read_only",
             Database::open_existing(&path)
                 .unwrap()
