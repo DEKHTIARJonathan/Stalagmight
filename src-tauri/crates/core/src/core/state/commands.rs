@@ -537,8 +537,12 @@ impl AppState {
         // re-measure) above, in an order the shared steps cannot express - the
         // demotion must precede the conversion, and the re-solve replaces the
         // reconcile. The epilogue orders the record and the dirty flip.
-        let changed =
-            self.record_snapshot_edit_if_changed(Command::RepairIntegrity, before_snapshot);
+        let changed = self.record_snapshot_edit_if_changed(
+            None,
+            EpilogueSteps::NONE,
+            Command::RepairIntegrity,
+            before_snapshot,
+        );
         Ok(IntegrityRepairResult {
             // Demotions are already inside the before→after delta: each demoted
             // merge was, by construction, a counted `merge_misaligned` violation

@@ -1,3 +1,4 @@
+use super::command_epilogue::EpilogueSteps;
 use super::session_commit::{CommandsHeld, SessionCommit};
 use super::AppState;
 use crate::core::CommandResult;
@@ -206,6 +207,7 @@ impl AppState {
         }
         let survey_edits_allowed = !self.workspace_mode().is_read_only();
         let before_snapshot = self.capture_project_snapshot().ok();
+        let frame_before = self.frame_datum_key();
         let reference_changed = {
             let mut guard = self.project.lock();
             let Some(project) = guard.as_mut() else {
@@ -259,8 +261,18 @@ impl AppState {
         }
         // Record an undo entry (before -> after) so the change is on the stack, and
         // flip the dirty bit (#191, D-B16) - through the shared forward epilogue
-        // (#576 A4). A settings edit needs no derived-state step.
+        // (#576 A4). A name or threshold edit needs no derived-state step. A changed
+        // north reference does (#576 RV4-R-C1): each inheriting section turned about
+        // its own stored origin, so the offsets are re-derived (the reconcile) before
+        // the after-snapshot, or sections merged at a junction come apart.
+        let steps = if reference_changed {
+            EpilogueSteps::GEOMETRY
+        } else {
+            EpilogueSteps::NONE
+        };
         self.record_snapshot_edit_if_changed(
+            frame_before,
+            steps,
             crate::core::Command::UpdateProjectSettings,
             before_snapshot,
         );
@@ -315,6 +327,8 @@ impl AppState {
         self.lift_unreadable_project_setting("surface_elevation");
         // [#576 A4] Recorded through the shared forward epilogue, like the settings.
         self.record_snapshot_edit_if_changed(
+            None,
+            EpilogueSteps::NONE,
             crate::core::Command::SetSurfaceElevation,
             before_snapshot,
         );

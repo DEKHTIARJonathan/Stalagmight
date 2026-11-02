@@ -116,18 +116,27 @@ impl AppState {
         })
     }
 
-    /// [`Self::forward_epilogue`] with no derived-state step, for an edit that is
-    /// recorded only when it changed the project (the project settings, Repair):
-    /// push `cmd` with the pair and flip the dirty bit when the after-snapshot
-    /// differs from `before`. Returns whether it recorded. A snapshot that could
-    /// not be taken records nothing, as before.
+    /// [`Self::forward_epilogue`] for an edit that is recorded only when it changed
+    /// the project (the project settings, the entrance elevation, Repair): settle
+    /// `steps`, then push `cmd` with the pair and flip the dirty bit when the
+    /// after-snapshot differs from `before`. Returns whether it recorded. A
+    /// snapshot that could not be taken records nothing, as before.
+    ///
+    /// Most callers pass [`EpilogueSteps::NONE`]. A settings save that changes the
+    /// default north reference passes [`EpilogueSteps::GEOMETRY`] (#576 RV4-R-C1):
+    /// it turns every section that declares no reference of its own about its own
+    /// origin, so the stored section offsets must be re-derived before the
+    /// after-snapshot is taken, or merged stations come apart in the live project
+    /// and in the undo entry.
     pub(super) fn record_snapshot_edit_if_changed(
         &self,
+        frame_before: Option<StationKey>,
+        steps: EpilogueSteps,
         cmd: Command,
         before: Option<String>,
     ) -> bool {
         let mut changed = false;
-        let _ = self.forward_epilogue(None, EpilogueSteps::NONE, || {
+        let _ = self.forward_epilogue(frame_before, steps, || {
             let Some(before) = before else {
                 return Ok(false);
             };
