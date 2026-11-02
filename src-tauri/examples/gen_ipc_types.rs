@@ -64,7 +64,9 @@ use stalagmight_lib::parsers::tml::{
     TmlShotType, TmlUnit,
 };
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
-use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
+use stalagmight_lib::persistence::{
+    BackupInfo, BackupKind, RawTableData, RepairResult, SalvagedData,
+};
 use stalagmight_lib::speleodb::{
     AdoptUpload, DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult,
     RemoteState, SpeleoAdoptResult, SpeleoCollaborator, SpeleoCollaborators, SpeleoDbAction,
@@ -304,6 +306,7 @@ fn main() {
 
     // Recovery (SPEC 14.4)
     export::<BackupInfo>(&out_dir);
+    export::<BackupKind>(&out_dir);
     export::<RepairResult>(&out_dir);
     export::<SalvagedData>(&out_dir);
 
@@ -544,6 +547,7 @@ fn main() {
         "RingLogEntry",
         "LogsSince",
         "BackupInfo",
+        "BackupKind",
         "RepairResult",
         "SalvagedData",
         "RawTableData",

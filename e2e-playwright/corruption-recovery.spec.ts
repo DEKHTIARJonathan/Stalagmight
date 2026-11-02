@@ -44,11 +44,20 @@ function setupRecoveryMocks(page: Page): Promise<void> {
         path: '/mock/corrupt-project.stalx.bak.1',
         modifiedAt: '2026-02-05 14:30:00',
         sizeBytes: 51200,
+        // #576 C15: what the backend now says about each candidate.
+        kind: 'backup',
+        restoreNumber: null,
+        usable: true,
+        problem: null,
       },
       {
         path: '/mock/corrupt-project.stalx.bak.2',
         modifiedAt: '2026-02-04 10:15:00',
         sizeBytes: 48000,
+        kind: 'backup',
+        restoreNumber: null,
+        usable: true,
+        problem: null,
       },
     ];
 
@@ -160,7 +169,7 @@ test.describe('Corruption Recovery Dialog', () => {
 
     // Should show backup list
     const dialog = page.getByTestId('corruption-recovery-dialog');
-    await expect(dialog).toContainText('Select a backup', { timeout: 5000 });
+    await expect(dialog).toContainText('Select a file to restore', { timeout: 5000 });
 
     // Should show backup items
     const backupItems = recoveryBackupItems(page);
@@ -178,7 +187,7 @@ test.describe('Corruption Recovery Dialog', () => {
 
     // Wait for backup list
     const dialog = page.getByTestId('corruption-recovery-dialog');
-    await expect(dialog).toContainText('Select a backup', { timeout: 5000 });
+    await expect(dialog).toContainText('Select a file to restore', { timeout: 5000 });
 
     // Click first backup
     const firstBackup = recoveryBackupItems(page).first();
@@ -195,10 +204,11 @@ test.describe('Corruption Recovery Dialog', () => {
     await page.getByTestId('recovery-restore-backup').click();
 
     const dialog = page.getByTestId('corruption-recovery-dialog');
-    await expect(dialog).toContainText('Select a backup', { timeout: 5000 });
+    await expect(dialog).toContainText('Select a file to restore', { timeout: 5000 });
 
-    // Click Back
-    await dialog.getByRole('button', { name: /Back/i }).click();
+    // Click Back. By test id: the candidates are labelled ("Backup", #576 C15), so
+    // a /Back/i role query matches them too.
+    await dialog.getByTestId('recovery-backup-back').click();
 
     // Should return to choice screen
     await expect(page.getByTestId('recovery-attempt-repair')).toBeVisible();

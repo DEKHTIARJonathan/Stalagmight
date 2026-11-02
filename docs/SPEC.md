@@ -2069,14 +2069,28 @@ function useNetworkStatus() {
 4. Cancel
 
 #### Backup Before Repair
-Always create backup before attempting repair:
-```rust
-fn backup_before_repair(path: &Path) -> Result<PathBuf> {
-    let backup = path.with_extension("stalx.backup");
-    fs::copy(path, &backup)?;
-    Ok(backup)
-}
-```
+Always create a backup before attempting repair: a numbered `<name>.stalx.backup`,
+`.backup.1`, ... that never overwrites an earlier one.
+
+#### Restore from Backup (#576 C15)
+The Restore list offers every file the project can be restored from, each labelled
+and checked:
+- **Backup**: Repair's numbered backups and the copy kept before a file-format
+  upgrade (`<name>.stalx.pre-v<N>.backup`).
+- **Interrupted save**: a `<name>.stalx.tmp` left by a save that did not finish. It
+  can hold the newest edits, or be incomplete; the check decides.
+- **Your file before restore N**: `<name>.stalx.pre-restore.N`, the file an earlier
+  restore replaced, so a restore can be undone from the same list.
+
+Each one is checked the way a restore would install it (with the rollback journal
+beside it, if there is one): it must open, pass `PRAGMA quick_check` and hold a
+project. One that fails is listed greyed out with the reason and cannot be picked.
+
+A restore checks the candidate again on a copy staged beside the project (refused,
+with nothing touched, if it fails), keeps the current file as the next free
+`.pre-restore.N` (never overwriting an earlier one, and moving a rollback journal
+left beside it along with it, so it can never be rolled back into the restored
+file), and then renames the staged copy over the project in one step.
 
 ### 14.5 Validation Error Recovery
 

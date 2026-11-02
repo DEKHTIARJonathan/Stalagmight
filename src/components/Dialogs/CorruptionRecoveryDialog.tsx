@@ -14,6 +14,24 @@ import { recoveryBackupItemTestId } from '../../utils/testId';
 
 type Step = 'choose' | 'repairing' | 'listing-backups' | 'pick-backup' | 'restoring' | 'salvaging' | 'result';
 
+/**
+ * [#576 C15] What a restore candidate is, in the user's words. The backend says
+ * what each file is (`kind`); the label is the dialog's.
+ */
+function backupLabel(backup: BackupInfo): string {
+  switch (backup.kind) {
+    case 'interrupted_save':
+      return 'Interrupted save';
+    case 'pre_restore':
+      return backup.restoreNumber !== null
+        ? `Your file before restore ${backup.restoreNumber}`
+        : 'Your file before an earlier restore';
+    case 'backup':
+    default:
+      return 'Backup';
+  }
+}
+
 interface ResultInfo {
   success: boolean;
   title: string;
@@ -271,7 +289,12 @@ export default function CorruptionRecoveryDialog() {
     if (step === 'pick-backup') {
       return (
         <div className="space-y-4">
-          <p className="text-text-secondary">Select a backup to restore:</p>
+          <p className="text-text-secondary">Select a file to restore:</p>
+          <p className="text-sm text-text-tertiary">
+            Each file was checked: it has to open, pass the database integrity check and
+            hold a project. Files that do not are greyed out. Your current file is kept
+            before anything is replaced.
+          </p>
           <div className="space-y-1 max-h-60 overflow-auto">
             {backups.map((backup, index) => {
               // sizeBytes comes as bigint from ts-rs but may arrive as number from Tauri IPC
@@ -280,18 +303,28 @@ export default function CorruptionRecoveryDialog() {
                 : Number(backup.sizeBytes);
               const sizeKb = (sizeNum / 1024).toFixed(1);
               const filename = extractFilename(backup.path);
+              // [#576 C15] An unusable candidate is listed (so the user sees it
+              // exists, and why it is not offered) but cannot be picked.
               return (
                 <button
                   key={backup.path}
                   type="button"
                   onClick={() => handleRestoreBackup(backup.path)}
-                  className="w-full text-left p-2 rounded border border-border hover:bg-surface-alt transition-colors"
+                  disabled={!backup.usable}
+                  aria-disabled={!backup.usable}
+                  className="w-full text-left p-2 rounded border border-border hover:bg-surface-alt transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                   data-testid={recoveryBackupItemTestId(index)}
                 >
-                  <div className="font-mono text-sm">{filename}</div>
+                  <div className="text-sm font-medium">{backupLabel(backup)}</div>
+                  <div className="font-mono text-xs text-text-secondary mt-0.5">{filename}</div>
                   <div className="text-xs text-text-tertiary mt-0.5">
                     {sizeKb} KB &middot; {backup.modifiedAt}
                   </div>
+                  {!backup.usable && (
+                    <div className="text-xs text-error mt-0.5">
+                      Cannot be restored: {backup.problem ?? 'it did not pass the checks'}.
+                    </div>
+                  )}
                 </button>
               );
             })}

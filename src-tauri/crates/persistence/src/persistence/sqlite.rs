@@ -586,7 +586,8 @@ pub struct RawTableData {
     pub total_rows: u32,
 }
 
-/// Information about a backup file.
+/// A file the recovery dialog's Restore list offers (#576 C15): what it is, and
+/// whether it can be restored.
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../bindings/")]
 #[serde(rename_all = "camelCase")]
@@ -594,6 +595,41 @@ pub struct BackupInfo {
     pub path: String,
     pub size_bytes: u64,
     pub modified_at: String,
+    /// What the file is, which the dialog turns into its label.
+    pub kind: BackupKind,
+    /// For [`BackupKind::PreRestore`]: which restore replaced it (1 = the
+    /// first), or `None` for the unnumbered copy older builds kept.
+    pub restore_number: Option<u32>,
+    /// It opens, passes SQLite's quick integrity check and holds a project -
+    /// checked the way a restore would install it (with its rollback journal, if
+    /// one is beside it), without changing it. The dialog greys out the rest.
+    pub usable: bool,
+    /// Why it cannot be restored, when `usable` is false.
+    pub problem: Option<String>,
+}
+
+/// What a [`BackupInfo`] is (#576 C15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../bindings/")]
+#[serde(rename_all = "snake_case")]
+pub enum BackupKind {
+    /// A copy this app made on purpose: Repair's numbered `.backup`, `.backup.N`,
+    /// or the copy kept before a file-format upgrade (`.pre-v<N>.backup`).
+    Backup,
+    /// A `.tmp` left by a save that did not finish. It may hold the newest edits
+    /// (the write can finish before the rename) or be incomplete; the check says.
+    InterruptedSave,
+    /// The project file as it was before a restore replaced it
+    /// (`.pre-restore.N`).
+    PreRestore,
+}
+
+/// What [`Database::restore_from_backup`] did (#576 C15).
+#[derive(Debug, Clone)]
+pub struct RestoreOutcome {
+    /// Where the file the restore replaced was kept, or `None` when there was
+    /// no file to keep.
+    pub safety_copy: Option<std::path::PathBuf>,
 }
 
 /// Result of attempting to repair a corrupt database.
@@ -655,6 +691,14 @@ pub struct ResolvedWarning {
 #[expect(clippy::unwrap_used, clippy::print_stderr)]
 mod diagnostic_tests;
 
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod recovery_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
