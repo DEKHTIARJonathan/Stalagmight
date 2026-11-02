@@ -3453,6 +3453,15 @@ export default function DmpNewImportDialog({
                 </div>
               </div>
 
+              {/* Error - at the top, where the screen opens: a segment import that
+                  failed after a drop on the map lands here (#576 D13), and below
+                  the section settings it was out of view. */}
+              {error && (
+                <div className="text-sm text-error" role="alert" data-testid="wizard-error">
+                  {error}
+                </div>
+              )}
+
               {/* Placement mode radio group */}
               <SegmentPlacementModes
                 segmentSkippedSuggestion={segmentSkippedSuggestion}
@@ -3519,13 +3528,6 @@ export default function DmpNewImportDialog({
                     />
                   </div>
                 </>
-              )}
-
-              {/* Error */}
-              {error && (
-                <div className="text-sm text-error" data-testid="wizard-error">
-                  {error}
-                </div>
               )}
             </div>
             </div>
