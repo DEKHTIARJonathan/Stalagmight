@@ -1814,8 +1814,9 @@ pub fn convert_compass_to_import_configs(
         .and_then(|a| chains.iter().position(|ch| ch.names.iter().any(|n| n == a)));
 
     let mut placement: Vec<Option<ImportPlacement>> = vec![None; chains.len()];
-    let mut placement_merge_station: Vec<Option<u32>> = vec![None; chains.len()];
-    let mut placement_parent: Vec<Option<usize>> = vec![None; chains.len()];
+    // Each placed chain's spanning-tree merge edge: (its station, the parent
+    // chain, the parent's station) - two occurrences of one name made ONE point.
+    let mut merge_edges: Vec<(usize, u32, usize, u32)> = Vec::new();
     let mut visited = vec![false; chains.len()];
     let mut creation_order: Vec<usize> = Vec::with_capacity(chains.len());
     let mut queue: VecDeque<usize> = VecDeque::new();
@@ -1853,8 +1854,7 @@ pub fn convert_compass_to_import_configs(
                         target_section_index: chains[parent_idx].section_index,
                         target_station_index: parent_st,
                     });
-                    placement_merge_station[nb] = Some(child_st);
-                    placement_parent[nb] = Some(parent_idx);
+                    merge_edges.push((nb, child_st, parent_idx, parent_st));
                 }
                 visited[nb] = true;
                 creation_order.push(nb);
@@ -1881,55 +1881,70 @@ pub fn convert_compass_to_import_configs(
         }
     }
 
-    // Pass 2c: emit loop closures for shared stations that aren't the
-    // spanning-tree merge edge - pin each chain's other shared station to the
-    // canonical (earliest by section_index) occurrence.
-    let mut canonical: HashMap<&str, (u32, u32)> = HashMap::new();
-    for chain in &chains {
+    // Pass 2c: emit loop closures for shared stations - pin every other
+    // occurrence of a name to its canonical (earliest by section_index) one.
+    //
+    // Decided per merged POINT, not per occurrence (#576 NF-W2C-1): the
+    // spanning-tree merge edges join occurrences into points, transitively,
+    // and through any chain's edge, not only the chain's own. An occurrence
+    // already on the canonical point needs no closure (one would tie a point
+    // to itself, zero misclosure), and a point holding several occurrences
+    // needs ONE closure, not one per occurrence (that counted its loop twice
+    // in the least-squares solve). A station revisited later in the SAME chain
+    // (a loop inside one survey, A1 -> A2 -> A3 -> A1) is never merged, so it
+    // keeps its intra-section closure (#576 B3).
+    let mut canonical: HashMap<&str, (usize, u32)> = HashMap::new();
+    for (ci, chain) in chains.iter().enumerate() {
         for (k, name) in chain.names.iter().enumerate() {
             canonical
                 .entry(name.as_str())
                 .and_modify(|prev| {
-                    if chain.section_index < prev.0 {
-                        *prev = (chain.section_index, k as u32);
+                    if chain.section_index < chains[prev.0].section_index {
+                        *prev = (ci, k as u32);
                     }
                 })
-                .or_insert((chain.section_index, k as u32));
+                .or_insert((ci, k as u32));
         }
     }
+    // One union-find node per (chain, station) occurrence.
+    let mut first_node: Vec<usize> = Vec::with_capacity(chains.len());
+    let mut nodes = 0usize;
+    for chain in &chains {
+        first_node.push(nodes);
+        nodes += chain.names.len();
+    }
+    let node = |ci: usize, k: u32| first_node[ci] + k as usize;
+    let mut point: Vec<usize> = (0..nodes).collect();
+    fn root(point: &mut [usize], mut x: usize) -> usize {
+        while point[x] != x {
+            point[x] = point[point[x]];
+            x = point[x];
+        }
+        x
+    }
+    for &(child, child_st, parent, parent_st) in &merge_edges {
+        let a = root(&mut point, node(child, child_st));
+        let b = root(&mut point, node(parent, parent_st));
+        point[a] = b;
+    }
     let mut closures: Vec<ImportClosure> = Vec::new();
-    let mut closure_keys: HashSet<(u32, u32, u32, u32)> = HashSet::new();
+    let mut pinned: HashSet<(usize, usize)> = HashSet::new();
     for (ci, chain) in chains.iter().enumerate() {
-        let merge_st = placement_merge_station[ci];
-        let parent_section = placement_parent[ci].map(|p| chains[p].section_index);
         for (k, name) in chain.names.iter().enumerate() {
-            if let Some(&(canon_sec, canon_st)) = canonical.get(name.as_str()) {
-                // The canonical occurrence itself needs no closure.
-                if canon_sec == chain.section_index && canon_st == k as u32 {
-                    continue;
-                }
-                // A station revisited later in the SAME chain (a loop closed
-                // inside one survey, A1 -> A2 -> A3 -> A1) is the same physical
-                // station as its canonical occurrence and needs an intra-section
-                // closure, so only a cross-section tie can be the spanning-tree
-                // merge edge this chain was placed by (the Walls rule,
-                // `walls::convert::build_closures`; #576 B3).
-                if canon_sec != chain.section_index
-                    && Some(k as u32) == merge_st
-                    && parent_section == Some(canon_sec)
-                {
-                    continue;
-                }
-                let key = (chain.section_index, k as u32, canon_sec, canon_st);
-                if closure_keys.insert(key) {
-                    closures.push(ImportClosure {
-                        from_section_index: chain.section_index,
-                        from_station_index: k as u32,
-                        to_section_index: canon_sec,
-                        to_station_index: canon_st,
-                    });
-                }
+            let Some(&(canon_ci, canon_st)) = canonical.get(name.as_str()) else {
+                continue;
+            };
+            let here = root(&mut point, node(ci, k as u32));
+            let there = root(&mut point, node(canon_ci, canon_st));
+            if here == there || !pinned.insert((here, there)) {
+                continue;
             }
+            closures.push(ImportClosure {
+                from_section_index: chain.section_index,
+                from_station_index: k as u32,
+                to_section_index: chains[canon_ci].section_index,
+                to_station_index: canon_st,
+            });
         }
     }
 
@@ -3953,6 +3968,81 @@ mod tests {
     /// emitted none, so the misclosure was never reported or distributed. The
     /// Walls converter had the same bug, fixed and pinned by
     /// `contiguous_self_loop_emits_closure`.
+    /// #576 NF-W2C-1: three surveys share J and E3 - two independent loops, so
+    /// exactly two closures. The spanning tree merges Main's J onto Side's J
+    /// and Loop's E3 onto Side's E3. Closures were decided per occurrence
+    /// against each chain's OWN merge edge, so Side's J (merged onto the
+    /// canonical J by Main's edge) got a closure to the point it already is
+    /// (zero misclosure), and Side's E3 and Loop's E3 - one merged point - got
+    /// one closure each, counting that loop twice in the least-squares solve.
+    #[test]
+    fn each_loop_gets_one_closure_and_merged_points_none() {
+        let text = [
+            synthetic_survey_text(
+                "Main",
+                "DDDDLRUDLADN",
+                &[
+                    "E1 E2 10.00 90.00 0.00 1 1 1 1",
+                    "E2 J 10.00 90.00 0.00 1 1 1 1",
+                    "J E3 10.00 90.00 0.00 1 1 1 1",
+                ],
+            ),
+            synthetic_survey_text(
+                "Side",
+                "DDDDLRUDLADN",
+                &[
+                    "J S1 10.00 0.00 0.00 1 1 1 1",
+                    "S1 S2 10.00 0.00 0.00 1 1 1 1",
+                    "S2 E3 14.50 135.00 0.00 1 1 1 1",
+                ],
+            ),
+            synthetic_survey_text(
+                "Loop",
+                "DDDDLRUDLADN",
+                &[
+                    "E3 L1 10.00 180.00 0.00 1 1 1 1",
+                    "L1 J 14.00 315.00 0.00 1 1 1 1",
+                    "J X1 10.00 200.00 0.00 1 1 1 1",
+                ],
+            ),
+        ]
+        .concat();
+        let mut parsed = parse_dat_text(&text);
+        parsed.fixed_stations.push(FixedStation {
+            name: "S1".to_string(),
+            easting: 500_000.0,
+            northing: 2_200_000.0,
+            elevation: 0.0,
+            datum: Some(Datum::WGS1984),
+            utm_zone: Some(16),
+        });
+        parsed.utm_zone = Some(16);
+        parsed.datum = Some(Datum::WGS1984);
+        let (configs, closures, _) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        for config in &configs {
+            println!(
+                "section {} {:?}: {:?}",
+                config.section_index, config.name, config.placement
+            );
+        }
+        let mut pairs: Vec<String> = closures
+            .iter()
+            .map(|c| {
+                format!(
+                    "{}:{}->{}:{}",
+                    c.from_section_index,
+                    c.from_station_index,
+                    c.to_section_index,
+                    c.to_station_index
+                )
+            })
+            .collect();
+        pairs.sort();
+        println!("closures: {pairs:?}");
+        assert_eq!(pairs, ["1:3->0:3", "2:2->0:2"]);
+    }
+
     #[test]
     fn a_loop_inside_one_survey_gets_a_closure() {
         let (configs, closures, warnings) = convert_text(
