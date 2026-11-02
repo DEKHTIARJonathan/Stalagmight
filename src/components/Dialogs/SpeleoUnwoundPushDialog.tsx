@@ -85,7 +85,9 @@ export default function SpeleoUnwoundPushDialog() {
       if (outcome === 'editing') {
         showToast(t('speleodb.unwoundPush.discardedToast'), TOAST_KEYS.SPELEODB_DISCARDED, 'success');
       }
-      trackDialogComplete('speleodb-unwound-push');
+      // [#576 NF-FIX4FE-1] Refused in the read-only Plan/Export workspace (the notice is
+      // up): leave as on Cancel - nothing was done, so the dialog did not complete.
+      if (outcome !== 'workspace_read_only') trackDialogComplete('speleodb-unwound-push');
       // Not the exit: this branch keeps the lock so the user can carry on editing, and
       // quitting on a button that says so would be a lie. It still has to hand the exit
       // prompt back rather than close over it - the request was to leave, and the state

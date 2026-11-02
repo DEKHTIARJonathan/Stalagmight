@@ -934,7 +934,7 @@ describe('useSpeleoActions - survey swaps refused in the Plan/Export workspace (
     useUIStore.setState({ appMode: 'export' });
     invokeIpcMock.mockResolvedValue('/cache/p1.stalx');
     const { result } = renderHook(() => useSpeleoActions());
-    let took: boolean | undefined;
+    let took: Awaited<ReturnType<typeof result.current.takeRemote>> | undefined;
 
     await act(async () => {
       took = await result.current.takeRemote();
@@ -942,7 +942,8 @@ describe('useSpeleoActions - survey swaps refused in the Plan/Export workspace (
 
     const commands = invokeIpcMock.mock.calls.map((c) => c[0]);
     console.log(`[SP4] take remote in export: took=${took} ipc=${JSON.stringify(commands)}`);
-    expect(took).toBe(false);
+    // [#576 NF-FIX4FE-1] Reported as the refusal it is, so the dialog can close.
+    expect(took).toBe('workspace_read_only');
     expect(commands).toEqual([]);
     expect(useUIStore.getState().showToast).toHaveBeenCalledWith(notice, 'edit-disabled', 'warning');
   });

@@ -100,10 +100,12 @@ export interface SpeleoActions {
     opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit },
   ) => Promise<DoneResult | null>;
   /** #198 "Take remote": DISCARD local unpushed edits and reset to the server
-      tip. Returns `true` once the tree is reloaded, `false` if the call threw (or was
-      refused before any IPC in the read-only Plan or Export workspace, #576
-      RV4-FE-SP4). The caller must gate this behind a destroy-confirmation. */
-  takeRemote: () => Promise<boolean>;
+      tip. `took` once the tree is reloaded, `failed` if the call threw or the reload
+      was superseded, `workspace_read_only` when refused before any IPC in the
+      read-only Plan or Export workspace (#576 RV4-FE-SP4; the notice is already up,
+      so the caller closes rather than offering a retry - NF-FIX4FE-1). The caller
+      must gate this behind a destroy-confirmation. */
+  takeRemote: () => Promise<'took' | 'failed' | 'workspace_read_only'>;
 }
 
 /**
@@ -585,8 +587,8 @@ export function useSpeleoActions(): SpeleoActions {
     ],
   );
 
-  const takeRemote = useCallback(async (): Promise<boolean> => {
-    if (refuseSurveySwapOutsideSurvey()) return false;
+  const takeRemote = useCallback(async (): Promise<'took' | 'failed' | 'workspace_read_only'> => {
+    if (refuseSurveySwapOutsideSurvey()) return 'workspace_read_only';
     const issuedFor = speleoProjectSessionIssuedFor(
       useSpeleoStore.getState().remoteProjectId,
     );
@@ -601,13 +603,13 @@ export function useSpeleoActions(): SpeleoActions {
       // caller thinks it reloaded is not showing. Skip the toast + return false so
       // the divergence dialog doesn't close over a project the user left.
       const { success } = await loadProject(localPath);
-      if (!success) return false;
-      if (!(await applySpeleoTreeReplacement(issuedFor, true))) return false;
+      if (!success) return 'failed';
+      if (!(await applySpeleoTreeReplacement(issuedFor, true))) return 'failed';
       showToast(t('speleodb.editBar.toasts.tookRemote'), TOAST_KEYS.SPELEODB_TOOK_REMOTE, 'success');
-      return true;
+      return 'took';
     } catch (e) {
       handleError(e, 'speleodb.editBar.toasts.takeRemoteFailed');
-      return false;
+      return 'failed';
     } finally {
       bumpPoll();
       endBusy(busyToken);
