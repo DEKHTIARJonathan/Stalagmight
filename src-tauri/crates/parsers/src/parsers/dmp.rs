@@ -2120,7 +2120,7 @@ mod tests {
     }
 
     // ========================================================================
-    // kb5.dmp regression tests (skip by default - requires fixture file)
+    // kb5.dmp regression tests (skipped by default - each `#[ignore]` says why)
 
     /// The `ShotData` these regression tests feed the matcher, built exactly as
     /// the deleted `DmpShot::to_shot_data` did (#576 B24), so their inputs are
@@ -2151,7 +2151,7 @@ mod tests {
     /// Parse kb5.dmp and validate section structure, shot counts, and key shot data.
     /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_parse_regression -- --ignored --nocapture
     #[test]
-    #[ignore]
+    #[ignore = "kb5.dmp regression, run deliberately with --ignored; #576 NF-KB5-ROT un-skips the kb5 tests"]
     fn kb5_parse_regression() {
         let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/kb5.dmp");
         assert!(
@@ -2279,7 +2279,7 @@ mod tests {
     /// and validate the overlap detection results.
     /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_suggestions_regression -- --ignored --nocapture
     #[test]
-    #[ignore]
+    #[ignore = "red since d93f93b2 tightened the placement cutoff; #576 NF-KB5-ROT updates and un-skips it"]
     fn kb5_suggestions_regression() {
         use crate::models::placement_suggest::{
             suggest_all_placements, ExistingSection, ImportSectionForSuggestion, MatchDirection,
@@ -2494,7 +2494,7 @@ mod tests {
     ///
     /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_overlap_treatment_regression -- --ignored --nocapture
     #[test]
-    #[ignore]
+    #[ignore = "red since d93f93b2 tightened the placement cutoff; #576 NF-KB5-ROT updates and un-skips it"]
     fn kb5_overlap_treatment_regression() {
         use crate::models::placement_suggest::{
             suggest_all_placements, CrossSectionSuggestion, ExistingSection,
