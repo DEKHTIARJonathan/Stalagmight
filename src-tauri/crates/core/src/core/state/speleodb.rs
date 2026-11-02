@@ -2217,6 +2217,9 @@ impl AppState {
         // again, and the user has said outright that the managed copy is abandoned.
         self.speleodb_release_held_lock_abandoning();
         {
+            // [#576 NF-W4C-2] Under `command_lock`, like every link write: an autosave
+            // landing in between copies the link at its start and would write it back.
+            let _commands = self.hold_commands();
             let db_guard = self
                 .database
                 .lock()
@@ -2572,6 +2575,12 @@ impl AppState {
 
     /// Load the open project's `speleo_link`, apply `f`, and persist it. Errors if
     /// no remote project is open.
+    ///
+    /// [#576 B35(d) / NF-W4C-2] Call it holding `command_lock` (`hold_commands`, or
+    /// from inside `execute`, as the re-verify stamps do): an autosave copies the link
+    /// at its start, writes a fresh file and renames it over the live one, so a write
+    /// landing inside it went into the replaced file or found no handle. It does not
+    /// take the lock itself because its callers already hold it (it is not reentrant).
     pub(super) fn speleodb_mutate_link(
         &self,
         f: impl FnOnce(&mut crate::models::SpeleoLink),

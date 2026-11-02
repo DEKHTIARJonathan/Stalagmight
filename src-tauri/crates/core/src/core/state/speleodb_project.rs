@@ -201,7 +201,13 @@ impl AppState {
 
         // Fold the (possibly server-normalized) name into the open `.stalx` when it
         // was edited, so the embedded project name tracks SDB without dirtying.
+        // [#576 NF-W4C-2] Under `command_lock`, after the PATCH (never across it):
+        // the fold rewrites the project rows and the link row of the live file, and an
+        // autosave copies the link at its start and renames a fresh file over the
+        // live one, so a write landing inside it was lost. Done's fold is already
+        // under the lock (`speleodb_upload`).
         if patch.name.is_some() {
+            let _commands = self.hold_commands();
             self.speleodb_fold_local_name(&updated.name);
         }
 
@@ -347,62 +353,27 @@ impl AppState {
         // Validate the server-issued id before it reaches a cache-path join.
         validate_project_id(&project_id).map_err(local_dto)?;
 
-        // 2. Relocate the open project's working copy into the SpeleoDB cache. A remote
-        //    project's canonical file lives at `speleodb_cache_path` (open/fast-forward
-        //    both extract there), and the push machinery reads exactly that path.
-        //    `save_project(Some(dest))` writes a fresh `.stalx` there AND switches the
-        //    active database + `project.file_path` to it.
+        // 2. + 3. Relocate the open project's working copy into the SpeleoDB cache
+        //    and stamp a fresh hand-off link onto it, in one `command_lock` span (see
+        //    `speleodb_publish_relocate`). BASE = the create response's latest_commit
+        //    (None for a brand-new empty repo); dirty = true (the local content is not
+        //    on the server yet). New sanctioned stamp site.
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
         }
-        let save = self.save_project(Some(dest.clone()));
-        if !save.success {
-            return Err(local_dto(SpeleoDbError::Io(format!(
-                "failed to write project into the SpeleoDB cache: {}",
-                save.error.unwrap_or_else(|| "unknown error".to_owned())
-            ))));
-        }
-
-        // 3. Stamp a fresh hand-off link onto the cached file. BASE = the create
-        //    response's latest_commit (None for a brand-new empty repo); dirty = true
-        //    (the local content is not on the server yet). New sanctioned stamp site.
-        let link = crate::models::SpeleoLink {
-            endpoint: endpoint.clone(),
-            project_id: project_id.clone(),
-            project_name: params.name.clone(),
-            base_commit_sha: created.latest_commit.as_ref().map(|c| c.id.clone()),
-            has_unpushed_edits: true,
-            last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
-            last_verify_at: None,
-            // [#303] A new link materializes the application default immediately.
-            // Re-publishing a detached managed copy preserves its explicit project value.
-            undo_mode: Some({
-                let db_guard = self.database.lock().map_err(|_| {
-                    local_dto(SpeleoDbError::Io("database lock poisoned".to_owned()))
-                })?;
-                let db = db_guard.as_ref().ok_or_else(|| {
-                    local_dto(SpeleoDbError::Io(
-                        "no open database after writing the cache file".to_owned(),
-                    ))
-                })?;
-                self.effective_undo_mode(super::speleodb_cache::preserved_undo_mode(db))
-            }),
-        };
-        {
-            let db_guard = self
-                .database
-                .lock()
-                .map_err(|_| local_dto(SpeleoDbError::Io("database lock poisoned".to_owned())))?;
-            let db = db_guard.as_ref().ok_or_else(|| {
-                local_dto(SpeleoDbError::Io(
-                    "no open database after writing the cache file".to_owned(),
-                ))
+        let link =
+            self.speleodb_publish_relocate(&dest, |undo_mode| crate::models::SpeleoLink {
+                endpoint: endpoint.clone(),
+                project_id: project_id.clone(),
+                project_name: params.name.clone(),
+                base_commit_sha: created.latest_commit.as_ref().map(|c| c.id.clone()),
+                has_unpushed_edits: true,
+                last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
+                last_verify_at: None,
+                undo_mode: Some(undo_mode),
             })?;
-            db.save_speleo_link(Some(&link))
-                .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
-        }
 
         // 4. Initial push (BEST-EFFORT): acquire the lock (we are the creator/ADMIN, so
         //    it is free), upload the snapshot + `.tml` render, then release. No fence -
@@ -473,6 +444,8 @@ impl AppState {
         {
             match self.speleodb_server_head(&endpoint, &token, insecure_http, &project_id) {
                 Ok((tip, _)) if tip.is_some() => {
+                    // [#576 NF-W4C-2] Under `command_lock`, like every link write.
+                    let _commands = self.hold_commands();
                     let _ = self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone());
                 }
                 Ok(_) => {}
@@ -490,6 +463,56 @@ impl AppState {
             endpoint,
             local_path: dest.to_string_lossy().into_owned(),
         })
+    }
+
+    /// Publish's LOCAL half (steps 2 and 3): relocate the open project into `dest`
+    /// and stamp the hand-off link `make_link` builds onto it, both inside ONE
+    /// `command_lock` span [#576 NF-W4C-1]. `make_link` gets the undo mode the new
+    /// link materializes.
+    ///
+    /// One span, because an autosave (`execute` -> `SaveProject`) copies the link at
+    /// its start, writes a fresh file and renames it over the live one: landing
+    /// between the relocation and the stamp, it wrote the cache file without the
+    /// link (the stamp went into the file it replaced), or the stamp found the
+    /// handle out of the slot. No network call happens inside the span.
+    ///
+    /// `save_project(Some(dest))` relocates only because the project is still
+    /// UNLINKED when it runs - a linked explicit-destination save is a Save a Copy -
+    /// so the relocation must come before the stamp.
+    pub(super) fn speleodb_publish_relocate(
+        &self,
+        dest: &std::path::Path,
+        make_link: impl FnOnce(crate::models::UndoMode) -> crate::models::SpeleoLink,
+    ) -> Result<crate::models::SpeleoLink, SpeleoErrorDto> {
+        let _commands = self.hold_commands();
+        // 2. Relocate the open project's working copy into the SpeleoDB cache. A remote
+        //    project's canonical file lives at `speleodb_cache_path` (open/fast-forward
+        //    both extract there), and the push machinery reads exactly that path.
+        //    `save_project(Some(dest))` writes a fresh `.stalx` there AND switches the
+        //    active database + `project.file_path` to it.
+        let save = self.save_project(Some(dest.to_path_buf()));
+        if !save.success {
+            return Err(local_dto(SpeleoDbError::Io(format!(
+                "failed to write project into the SpeleoDB cache: {}",
+                save.error.unwrap_or_else(|| "unknown error".to_owned())
+            ))));
+        }
+        let db_guard = self
+            .database
+            .lock()
+            .map_err(|_| local_dto(SpeleoDbError::Io("database lock poisoned".to_owned())))?;
+        let db = db_guard.as_ref().ok_or_else(|| {
+            local_dto(SpeleoDbError::Io(
+                "no open database after writing the cache file".to_owned(),
+            ))
+        })?;
+        // [#303] A new link materializes the application default immediately.
+        // Re-publishing a detached managed copy preserves its explicit project value.
+        let link =
+            make_link(self.effective_undo_mode(super::speleodb_cache::preserved_undo_mode(db)));
+        db.save_speleo_link(Some(&link))
+            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        Ok(link)
     }
 }
 
@@ -645,12 +668,16 @@ mod tests {
         // stays on the user's original file). Guarded by ORDER in the source, the
         // same idiom the pull-guard test uses: a behavioural version needs the
         // process-global app dirs.
+        // (Both steps live in `speleodb_publish_relocate`, publish's local half.)
         let src = include_str!("speleodb_project.rs");
         let start = src
-            .find("fn speleodb_publish")
-            .expect("the publish body is present");
+            .find("fn speleodb_publish_relocate")
+            .expect("the publish local half is present");
         let body = &src[start..];
         let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+        let commands = body
+            .find("self.hold_commands()")
+            .expect("publish's local half holds command_lock (#576 NF-W4C-1)");
         let relocate = body
             .find("self.save_project(Some(")
             .expect("publish relocates via an explicit-destination save");
@@ -661,6 +688,10 @@ mod tests {
             relocate < stamp,
             "publish must relocate into the cache BEFORE the link exists - a linked \
              explicit-destination save is a copy save and would not relocate"
+        );
+        assert!(
+            commands < relocate,
+            "the relocation and the stamp share one command_lock span"
         );
     }
 }

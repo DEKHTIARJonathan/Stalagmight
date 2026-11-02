@@ -248,6 +248,12 @@ impl AppState {
         project_id: &str,
         acquired_here: bool,
     ) -> Result<(), SpeleoDbError> {
+        // [#576 NF-W4C-2] `command_lock` first (it sits below `speleodb_lock_ops`,
+        // which every caller holds, and above `project`): the commit's link write
+        // (the re-verify stamp below) must not land inside an autosave, which copies
+        // the link at its start and renames a fresh file over the live one. No
+        // caller holds `command_lock` here, and nothing below makes a network call.
+        let _commands = self.hold_commands();
         let _proj_guard = self
             .project
             .lock()
