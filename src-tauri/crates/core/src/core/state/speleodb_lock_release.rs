@@ -80,7 +80,8 @@ enum ReleaseIntent {
 
 impl AppState {
     /// Snapshot of what a best-effort lock release needs, or `None` when no held
-    /// remote edit session is active - or when releasing would strand local work.
+    /// remote edit session is active - or when releasing would strand local work,
+    /// or when this app session did not take the lock (#576 RV4-R-S2).
     /// Cheap + non-blocking (reads the open link + config, no network), so a caller
     /// that must not block on the OLD project's server - the app-exit path, a
     /// project switch - can hand the actual HTTP release to a bounded / detached
@@ -138,6 +139,22 @@ impl AppState {
                 return None;
             }
         };
+        // [#576 RV4-R-S2] Release only a lock THIS app session acquired (decision
+        // RV2-R-13). The gate alone cannot say: a second window or computer on the
+        // same account opens it through the status poll's inherited-lock reopen
+        // without taking the lock, and a clean close, switch or quit there used to
+        // free the lock the other session is editing under. An inherited lock is
+        // handed back only by a deliberate verb (Release in the held-lock prompt,
+        // the Admin tab, Done after a Continue-editing claim) or by an abandon.
+        if intent == ReleaseIntent::Silent && !self.speleodb_lock_acquired_here(&link.project_id) {
+            tracing::info!(
+                project_id = %link.project_id,
+                purpose = "release only a lock this app session acquired (#576 RV2-R-13)",
+                "speleodb: skipping the silent lock release; this session did not take \
+                 the lock, so it stays with the account"
+            );
+            return None;
+        }
         // Data-safety asymmetry, deliberate: never SILENTLY release a lock whose
         // project still has un-pushed local edits. The two failure modes are not
         // symmetric. Keeping the lock held is recoverable - the user reopens the
