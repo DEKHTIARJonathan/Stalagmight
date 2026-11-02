@@ -32,6 +32,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { walkFiles } from './lib/src-files.mjs';
+import { stripComments } from './lib/js-comments.mjs';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const SCAN_DIR = 'e2e-playwright';
@@ -97,42 +98,11 @@ export function isAllowed(relFile, ruleId) {
   return ALLOW.some((a) => a.file === relFile && a.rule === ruleId);
 }
 
-// Remove comments from a file's lines, keeping string and template contents
-// (a rule must still see `'localhost:5173'`). `/* */` and template literals
-// carry across lines; '...' and "..." end at the line end. The old per-line
-// version opened a block comment at ANY `/*` - including one inside a string
-// such as 'fixtures/*.dmp' - and then blanked the rest of the file.
-export function stripComments(lines) {
-  const out = [];
-  let inBlock = false;
-  let inTemplate = false;
-  for (const line of lines) {
-    let code = '';
-    let quote = null;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      const n = line[i + 1];
-      if (inBlock) {
-        if (c === '*' && n === '/') { inBlock = false; i++; code += ' '; }
-        continue;
-      }
-      if (inTemplate || quote) {
-        code += c;
-        if (c === '\\') { code += n ?? ''; i++; continue; }
-        if (inTemplate && c === '`') inTemplate = false;
-        else if (quote && c === quote) quote = null;
-        continue;
-      }
-      if (c === '/' && n === '/') break;
-      if (c === '/' && n === '*') { inBlock = true; i++; code += ' '; continue; }
-      if (c === "'" || c === '"') quote = c;
-      else if (c === '`') inTemplate = true;
-      code += c;
-    }
-    out.push(code);
-  }
-  return out;
-}
+// Comment stripping is the shared string-aware scanner in
+// scripts/lib/js-comments.mjs (re-exported for the fixture test). The old
+// per-line version here opened a block comment at ANY `/*` - including one
+// inside a string such as 'fixtures/*.dmp' - and then blanked the rest of the file.
+export { stripComments };
 
 // Scan files (repo-relative paths). `readFile(rel)` returns text; injected so
 // the fixture test drives every rule without a tree on disk.
