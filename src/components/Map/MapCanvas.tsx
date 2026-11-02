@@ -13,7 +13,7 @@ import {
 import { pickUIKeys, type UIStoreState } from '../../store/uiSelectKeys';
 import { selectComputeGate, useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
-import { isMutatingTool, shouldResetNavigationTool, toolCursor } from '../../utils/toolUtils';
+import { isMutatingTool, shouldResetNavigationTool } from '../../utils/toolUtils';
 import { mapGestureMode } from '../../utils/mapGestures';
 import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
 import { wheelZoomRateForLevels, ZOOM_LEVELS_PER_NOTCH_DEFAULT } from '../../utils/zoomRate';
@@ -43,6 +43,7 @@ import { useGasPlanDropMarkers } from './useGasPlanDropMarkers';
 import { useMoveCarryGuards } from './useMoveCarryGuards';
 import { beginMoveCarry, commitMoveCarry, endMoveCarry, isMoveCarryLive } from '../../store/moveCarry';
 import SurveyLayer, { type SurveyLayerCallbacks } from './SurveyLayer';
+import { mapCursorFor } from './mapCursor';
 import { SATELLITE_BOTTOM_CANDIDATES } from './mapUtils';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
@@ -340,7 +341,6 @@ function MapCanvas() {
   const ctrlPanActiveRef = useRef(false);
   // Timestamp of the last mouse event during a Ctrl+left-drag (for spurious keyup filtering)
   const ctrlPanMouseEventTimeRef = useRef(0);
-  const [isHoveringFeature, setIsHoveringFeature] = useState(false);
   // Placement mode cursor position (screen pixels)
   const [placementCursor, setPlacementCursor] = useState<{ x: number; y: number } | null>(null);
   // Current map scale in pixels per meter (for to-scale placement preview)
@@ -1170,7 +1170,6 @@ function MapCanvas() {
 
   const baseToolCallbacks = useMapTools({
     onMoveDragStart: handleMoveDragStart,
-    onFeatureHover: setIsHoveringFeature,
     immovableStationKeys,
     gpsOrigin,
     querySnapAtPoint,
@@ -2734,35 +2733,14 @@ function MapCanvas() {
     }
   }, [mapLoaded]);
 
-  // Update cursor based on tool (and Ctrl state for select mode)
+  // Hand the tool, the Ctrl-held pan modifier and placement mode to the map's
+  // cursor owner (mapCursor.ts, #576 D3), which weighs them against SurveyLayer's
+  // hover verdict and a running modifier pan. It is the only writer of the canvas
+  // cursor, so the order these inputs arrive in no longer decides what shows.
   useEffect(() => {
     if (!map.current) return;
-
-    // Placement mode manages its own cursor - don't override
-    if (placementActive) return;
-
-    // In supported tools with Ctrl held, show grab cursor for panning
-    const ctrlPan = activeTool !== 'pan' && ctrlHeld;
-    const base = ctrlPan ? 'grab' : toolCursor(activeTool);
-
-    // If hovering over a feature, SurveyLayer sets cursor to 'pointer'
-    // Otherwise, set cursor based on active tool
-    // Force zoom-in cursor for zoom tool even when hovering over features
-    if (!isHoveringFeature || activeTool === 'zoom') {
-      map.current.getCanvas().style.cursor = base;
-    }
-    // Hand the same value to SurveyLayer, which writes this property too and needs
-    // something to fall back to when nothing is hovered. It cannot derive `base`
-    // itself - the tool map and the Ctrl-held grab both live here - and without it
-    // its own recomputes (which continue after this passive effect has run for the
-    // last time) reset the cursor to a bare arrow (#24). Unconditional: it is the
-    // RESTING cursor, true whether or not something is hovered right now.
-    surveyLayerRef.current?.setBaseCursor(base, ctrlPan);
-    // `mapLoaded` is a dependency for the hand-off above, not for the write: on the
-    // first run the layer does not exist yet, and none of the other deps change on
-    // map load, so without it the starting tool's resting cursor would never reach
-    // SurveyLayer at all.
-  }, [activeTool, ctrlHeld, isHoveringFeature, placementActive, mapLoaded]);
+    mapCursorFor(map.current).set({ tool: activeTool, ctrlHeld, placement: placementActive });
+  }, [activeTool, ctrlHeld, placementActive]);
 
   // ONE gesture decision for the whole component, destructured to primitives so
   // the effects below can depend on it. Three consumers read it: the dragPan
@@ -2879,6 +2857,7 @@ function MapCanvas() {
       customPanActiveRef.current = false;
       ctrlPanActiveRef.current = false;
       setCtrlHeld(false);
+      if (map.current) mapCursorFor(map.current).set({ panning: false });
       // Cancel any active zoom box
       setZoomBox({ start: null, end: null });
     };
@@ -2992,8 +2971,8 @@ function MapCanvas() {
       e.stopPropagation();
       e.preventDefault();
 
-      // Change cursor to indicate panning
-      map.current.getCanvas().style.cursor = 'grabbing';
+      // Show the panning cursor until the gesture ends (restoreCursorAfterPan).
+      mapCursorFor(map.current).set({ panning: true });
     };
 
     const handleMouseDownCapture = (e: MouseEvent) => {
@@ -3061,23 +3040,15 @@ function MapCanvas() {
     };
 
     /**
-     * Restore cursor after a claimed pan: if Ctrl is still held, show the grab
-     * cursor for the next potential pan; otherwise restore the tool cursor.
-     * Hand it to SurveyLayer rather than writing the canvas directly, exactly as
-     * the passive effect above does - it owns the hover-vs-tool precedence,
-     * including Move Station/Shot's arrow fallback, which a raw `move` write
-     * here would defeat with nothing to correct it (hover only re-derives when
-     * the hovered id CHANGES, so a pointer resting on empty map keeps it).
+     * End the pan cursor after a claimed pan. The release's own `ctrlKey` is the
+     * freshest word on the modifier (a Ctrl keyup near the mouseup can be a
+     * spurious one the keyup filter swallowed), so it updates the owner's Ctrl
+     * input too: still held shows the grab for the next pan, released falls back
+     * to whatever the tool, placement and hover say.
      */
     const restoreCursorAfterPan = (e: MouseEvent) => {
       if (!map.current) return;
-      const ctrlStillPanning = e.ctrlKey && activeTool !== 'pan';
-      const restored = ctrlStillPanning ? 'grab' : toolCursor(activeTool);
-      if (surveyLayerRef.current) {
-        surveyLayerRef.current.setBaseCursor(restored, ctrlStillPanning);
-      } else {
-        map.current.getCanvas().style.cursor = restored;
-      }
+      mapCursorFor(map.current).set({ panning: false, ctrlHeld: e.ctrlKey });
     };
 
     const handleMouseUpCapture = (e: MouseEvent) => {
@@ -3891,28 +3862,6 @@ function MapCanvas() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [placementActive, handlePlacementCancel]);
-
-  // Update cursor style for placement mode
-  useEffect(() => {
-    if (!map.current) return;
-
-    if (placementActive) {
-      map.current.getCanvas().style.cursor = 'crosshair';
-    } else {
-      // Reset cursor based on current tool. This effect keys on `activeTool` as
-      // well as `placementActive`, so it also runs on an ordinary tool switch,
-      // AFTER the passive effect above (effects run in declaration order) - a
-      // raw write here therefore lands on top of the precedence that effect just
-      // applied. Today the end state is still correct, because a later hover
-      // recompute settles it back, but that is luck rather than design: hand it
-      // to the same owner instead of racing it.
-      if (surveyLayerRef.current) {
-        surveyLayerRef.current.setBaseCursor(toolCursor(activeTool));
-      } else {
-        map.current.getCanvas().style.cursor = toolCursor(activeTool);
-      }
-    }
-  }, [placementActive, activeTool]);
 
   // `touchAction` - block browser gestures only where the tool or mode owns the
   // drag - comes from the single `mapGestureMode` call above.

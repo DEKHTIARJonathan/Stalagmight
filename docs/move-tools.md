@@ -265,13 +265,22 @@ A window-level `mouseup` handler (`handleMouseUpGlobal`) clears pan state if the
 
 ### Override Rules (highest priority first)
 
-1. **Ctrl held**: `grab` (overrides everything except active drag)
-2. **Ctrl+drag active**: `grabbing`
-3. **Hovering interactive feature**: `pointer` (unless anchored/immovable)
-4. **Hovering anchored/immovable feature**: `default` (no pointer)
-5. **No hover**: Tool default cursor
+1. **Ctrl+drag or middle-drag active**: `grabbing`
+2. **Placement mode**: `crosshair`, whatever is hovered or held
+3. **Hovering interactive feature**: `pointer` (unless anchored/immovable) - also while Ctrl is held, since Ctrl+click toggles that feature's selection
+4. **Move Station / Move Shot, nothing movable hovered** (anchored/immovable included): `default`, unless Ctrl is held
+5. **Ctrl held** (any tool but Pan): `grab`
+6. **Otherwise**: the tool's resting cursor (`toolCursor`)
 
 Move Station and Move Shot use `default` as their base cursor (with `pointer` on hover) rather than `move`, so the user sees a clear distinction between "hovering a movable feature" and "not hovering anything".
+
+One owner applies these rules: `src/components/Map/mapCursor.ts` is the only
+code that writes the survey canvas's `style.cursor` (#576 D3). MapCanvas pushes
+the tool, Ctrl, placement and pan state into it and SurveyLayer pushes its hover
+verdict (pointer or not, after the anchored/immovable suppression); the owner
+derives the cursor from all of them at once, so the order the inputs arrive in
+cannot change what shows. Six writers used to race here, which shipped #24 and
+#316 and let a hover or a modifier pan take a placement's crosshair away.
 
 ---
 
@@ -298,7 +307,8 @@ Move Station and Move Shot use `default` as their base cursor (with `pointer` on
 | File | Responsibility |
 |------|---------------|
 | `src/components/Map/MapCanvas.tsx` | Drag state management, Ctrl+drag panning, immovable/anchored computation, snap-to-merge detection |
-| `src/components/Map/SurveyLayer.tsx` | Hover detection, visual state (feature-state), drag preview layers, cursor management |
+| `src/components/Map/SurveyLayer.tsx` | Hover detection, visual state (feature-state), drag preview layers, the hover verdict for the cursor |
+| `src/components/Map/mapCursor.ts` | The one writer of the canvas cursor: precedence of pan, placement, hover, Ctrl and tool |
 | `src/hooks/useMapTools.ts` | Per-tool click/hover handlers, immovable guards, drag initiation callbacks |
 | `src/components/Map/surveyLayer/ghostFeatures.ts` | Ghost section preview GeoJSON (`buildGhostFeatures`) |
 | `src/store/moveCarry.ts` | The carry registry: in flight or not, the R1 refusal, the commit marker and the R3 stale check |
