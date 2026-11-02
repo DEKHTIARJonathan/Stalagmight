@@ -368,10 +368,15 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
           : [];
         // Apply per-stage drop overrides (#246): pin a drop to its dragged station and flag it
         // over-reserve when that station sits DEEPER (more gas-to-reach) than the strategy drop.
-        // ⚠ This is a DELIBERATELY simplified stand-in, NOT the engine's rule: the engine flags
-        // over-reserve on `contribution > safe_in_litres` (with a pin-to-default no-op) and folds
-        // the budget/turn/reach; the mock only moves the ref + sets a station-depth flag and keeps
-        // the budget fixed. So the e2e asserts UI WIRING (colour, reset, warning) only; the flag
+        // ⚠ This is a DELIBERATELY simplified stand-in, NOT the engine's rule
+        // (`apply_stage_drop_overrides`, models/src/project/gas.rs): the engine takes the litres
+        // `breathed` to the pinned station (its route gas minus the cumulative at the previous drop,
+        // clamped to [0, tank-empty]), flags over-reserve on
+        // `breathed > safe_in_litres + OVER_RESERVE_EPS_LITRES` (with a pin-to-default no-op), and
+        // adds `breathed.min(safe_in_litres) - safe_in_litres` to the budget - so only a SHALLOWER
+        // pin shrinks the budget (and the reach), a deeper one is flagged but buys no reach, and the
+        // back-gas turn is untouched. The mock only moves the ref + sets a station-depth flag and
+        // keeps the budget fixed. So the e2e asserts UI WIRING (colour, reset, warning) only; the flag
         // semantics + the recompute math are covered by the Rust unit tests, which are the source
         // of truth. A pin-to-default is a no-op here too (same station ⇒ not deeper ⇒ not flagged).
         const stageOverrides = (args?.stageDropOverrides ?? []) as Array<{
