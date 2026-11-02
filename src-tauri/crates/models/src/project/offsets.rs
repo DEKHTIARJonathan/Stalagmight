@@ -101,9 +101,10 @@ impl Project {
     /// * this function is THE write point, and everything routes through it -
     ///   [`Self::adjust_section_offset`], [`Self::set_section_offset`],
     ///   [`Self::restore_section_offsets`], the offset solver, the closure solve,
-    ///   the move tools, the undo restore arms, and the two sites that cannot call
-    ///   a `&mut self` method because they hold a live borrow of `self.sections`
-    ///   (`Project::apply_station_move_internal`, `AppState::move_station`);
+    ///   the move tools, the undo restore arms, and the site that cannot call a
+    ///   `&mut self` method because it holds a live borrow of `self.sections`
+    ///   (`Project::apply_station_move_internal`). The map is private (#576
+    ///   A10), so code outside this module cannot write it any other way;
     /// * [`Self::normalize_section_offsets`] enforces it on a map this app did not
     ///   write - a `.stalx` from a build that predates the invariant, and the
     ///   snapshot payload of an undo entry persisted by one.
@@ -217,6 +218,22 @@ impl Project {
     /// [`Self::remove_section_offset`], i.e. through
     /// [`Self::write_section_offset`], so no caller can store the dust-zero
     /// spelling of "not displaced".
+    ///
+    /// The map itself is private, so nothing outside this module can store a
+    /// value past that invariant:
+    ///
+    /// ```compile_fail
+    /// let mut project = stalagmight_models::Project::new("CaveA".to_owned(), None);
+    /// project.section_offsets.insert(0, (1.0, 2.0));
+    /// ```
+    ///
+    /// ```
+    /// let mut project = stalagmight_models::Project::new("CaveA".to_owned(), None);
+    /// project.set_section_offset(0, (1.0, 2.0));
+    /// project.set_section_offset(1, (0.0, 0.0));
+    /// assert_eq!(project.section_offsets().get(&0), Some(&(1.0, 2.0)));
+    /// assert!(!project.section_offsets().contains_key(&1));
+    /// ```
     pub fn section_offsets(&self) -> &HashMap<SectionId, (f64, f64)> {
         &self.section_offsets
     }
@@ -229,6 +246,25 @@ impl Project {
     /// Remove a section's offset entry entirely.
     pub fn remove_section_offset(&mut self, id: SectionId) {
         self.section_offsets.remove(&id);
+    }
+
+    /// [#576 A10] Drop the offset of every section that no longer exists and
+    /// return how many were dropped: `save_project`'s orphan heal (the SQLite
+    /// row carries a FOREIGN KEY to `sections(id)`, so one orphan would abort
+    /// the whole save). Removal only, so it cannot break the dust-zero invariant.
+    pub fn drop_orphan_section_offsets(&mut self) -> usize {
+        let existing: HashSet<SectionId> = self.sections.iter().map(|s| s.id).collect();
+        let before = self.section_offsets.len();
+        self.section_offsets.retain(|id, _| existing.contains(id));
+        before - self.section_offsets.len()
+    }
+
+    /// Store `value` for `id` exactly as given, UNCHECKED - for tests that must
+    /// build a state the writers above refuse (a dust-zero, non-finite or orphan
+    /// row, a legacy file's map). Never compiled into a production build.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_raw_section_offset(&mut self, id: SectionId, value: (f64, f64)) {
+        self.section_offsets.insert(id, value);
     }
 
     /// Apply the same delta to every section in a merge group.

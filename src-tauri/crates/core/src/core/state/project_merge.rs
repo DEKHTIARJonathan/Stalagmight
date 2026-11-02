@@ -220,13 +220,9 @@ impl AppState {
             // copied forward into the merged project and re-serialized: the map
             // means "sections that are actually displaced", and (0, 0) is the
             // same geometry as no entry at all.
-            for (old_section_id, offset) in &source_project.section_offsets {
+            for (old_section_id, offset) in source_project.section_offsets() {
                 if let Some(&new_section_id) = section_id_map.get(&(proj_idx, *old_section_id)) {
-                    Project::write_section_offset(
-                        &mut merged_project.section_offsets,
-                        new_section_id,
-                        *offset,
-                    );
+                    merged_project.set_section_offset(new_section_id, *offset);
                 } else {
                     tracing::warn!(
                         project = %source_project.name,

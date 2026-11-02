@@ -268,14 +268,15 @@ pub struct Project {
     pub next_section_id: SectionId,
     /// Section offsets (x, y) applied when sections are merged/aligned
     ///
-    /// [#576 A10] Read it through [`Self::section_offsets`] and write it through
-    /// [`Self::set_section_offset`] / [`Self::adjust_section_offset`] /
-    /// [`Self::remove_section_offset`] (all via [`Self::write_section_offset`]);
-    /// a reader builds a project through [`Self::from_loaded`]. Still `pub`
-    /// only because `core/state/project_io.rs` and `project_merge.rs` and the
-    /// test suites write it directly; it goes private once they use these.
+    /// [#576 A10] Private: read it through [`Self::section_offsets`] and write it
+    /// through [`Self::set_section_offset`] / [`Self::adjust_section_offset`] /
+    /// [`Self::remove_section_offset`] / [`Self::drop_orphan_section_offsets`]
+    /// (every value written via [`Self::write_section_offset`], the one place
+    /// that holds the dust-zero invariant); a reader builds a project through
+    /// [`Self::from_loaded`]. Tests that must build a state those writers refuse
+    /// use the test-support `set_raw_section_offset`.
     #[serde(default, serialize_with = "serialize_section_offsets")]
-    pub section_offsets: HashMap<SectionId, (f64, f64)>,
+    section_offsets: HashMap<SectionId, (f64, f64)>,
     /// Station offsets (x, y, z) applied when individual stations are moved
     #[serde(
         default,

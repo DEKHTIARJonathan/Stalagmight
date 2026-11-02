@@ -254,8 +254,8 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
 
     // Verify section offsets exist for merged sections
     assert!(
-        project_after.section_offsets.contains_key(&sec_a)
-            || project_after.section_offsets.contains_key(&sec_b),
+        project_after.section_offsets().contains_key(&sec_a)
+            || project_after.section_offsets().contains_key(&sec_b),
         "at least one section should have an offset after merge"
     );
 

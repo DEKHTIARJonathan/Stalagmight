@@ -873,7 +873,7 @@ fn test_move_section_offset() {
     ));
 
     // Manually set section offset
-    project.section_offsets.insert(0, (10.0, 20.0));
+    project.set_section_offset(0, (10.0, 20.0));
 
     let stations = project.compute_station_coordinates();
 
@@ -895,7 +895,7 @@ fn test_move_preserves_shot_data() {
     let original_length = project.get_section(0).unwrap().shots[0].length;
 
     // Apply offset
-    project.section_offsets.insert(0, (100.0, 100.0));
+    project.set_section_offset(0, (100.0, 100.0));
 
     // Shot data should be unchanged
     let new_length = project.get_section(0).unwrap().shots[0].length;
@@ -1834,13 +1834,13 @@ fn test_save_load_with_section_offsets() {
         "A",
         vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
     ));
-    project.section_offsets.insert(0, (15.5, -20.3));
+    project.set_section_offset(0, (15.5, -20.3));
 
     let mut db = Database::in_memory().unwrap();
     db.save_project(&project).unwrap();
     let loaded = db.load_project().unwrap();
 
-    let offset = loaded.section_offsets.get(&0).unwrap();
+    let offset = loaded.section_offsets().get(&0).unwrap();
     assert!((offset.0 - 15.5).abs() < 0.0001);
     assert!((offset.1 - (-20.3)).abs() < 0.0001);
 }

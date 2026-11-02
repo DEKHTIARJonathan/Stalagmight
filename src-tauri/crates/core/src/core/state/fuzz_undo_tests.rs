@@ -2765,7 +2765,7 @@ pub(super) fn topology_signature(state: &AppState) -> String {
         bucket(project.loop_closures.len()),
         cyclic,
         bucket(project.zero_datums.len()),
-        bucket(project.section_offsets.len()),
+        bucket(project.section_offsets().len()),
         bucket(project.station_comments.len()),
         diverged,
     )
@@ -5777,7 +5777,7 @@ impl Fuzzer {
         let peak = &mut self.outcome.peak;
         peak.sections = peak.sections.max(project.sections.len());
         peak.stations = peak.stations.max(stations);
-        peak.section_offsets = peak.section_offsets.max(project.section_offsets.len());
+        peak.section_offsets = peak.section_offsets.max(project.section_offsets().len());
         peak.station_offsets = peak.station_offsets.max(project.station_offsets.len());
         peak.station_comments = peak.station_comments.max(project.station_comments.len());
         peak.merges = peak.merges.max(project.station_merges.len());

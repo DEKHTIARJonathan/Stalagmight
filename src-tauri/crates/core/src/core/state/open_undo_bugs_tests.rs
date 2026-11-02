@@ -389,7 +389,7 @@ fn undo_after_reload_deletes_the_shot_it_created() {
 fn section_offset(state: &AppState, section_id: SectionId) -> Option<(f64, f64)> {
     state
         .get_project_state()?
-        .section_offsets
+        .section_offsets()
         .get(&section_id)
         .copied()
 }
@@ -1937,7 +1937,7 @@ fn the_adjusted_solve_is_a_function_of_the_project() {
 fn section_offsets(state: &AppState) -> Vec<(SectionId, (f64, f64))> {
     let project = state.get_project_state().expect("no project open");
     let mut out: Vec<(SectionId, (f64, f64))> = project
-        .section_offsets
+        .section_offsets()
         .iter()
         .map(|(id, offset)| (*id, (offset.0, offset.1)))
         .collect();
@@ -2612,7 +2612,7 @@ fn all_section_offsets(state: &AppState) -> std::collections::HashMap<SectionId,
     state
         .get_project_state()
         .expect("no project open")
-        .section_offsets
+        .section_offsets()
         .clone()
 }
 

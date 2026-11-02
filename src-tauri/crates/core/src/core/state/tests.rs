@@ -1310,7 +1310,7 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
             ..Default::default()
         })
         .id;
-    project_a.section_offsets.insert(section_a, (1.0, 2.0));
+    project_a.set_section_offset(section_a, (1.0, 2.0));
     project_a
         .station_offsets
         .insert(StationRef::new(section_a, 0).into(), (0.5, -0.5, 1.0));
@@ -1339,7 +1339,7 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
             ..Default::default()
         })
         .id;
-    project_b.section_offsets.insert(section_b, (3.0, 4.0));
+    project_b.set_section_offset(section_b, (3.0, 4.0));
     project_b
         .station_offsets
         .insert(StationRef::new(section_b, 0).into(), (-1.0, 1.5, 0.0));
@@ -1396,11 +1396,11 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
         .id;
 
     assert_eq!(
-        merged.section_offsets.get(&merged_section_a),
+        merged.section_offsets().get(&merged_section_a),
         Some(&(1.0, 2.0))
     );
     assert_eq!(
-        merged.section_offsets.get(&merged_section_b),
+        merged.section_offsets().get(&merged_section_b),
         Some(&(3.0, 4.0))
     );
 
@@ -1500,8 +1500,8 @@ fn merge_projects_does_not_renormalise_the_open_project() {
     {
         let mut guard = state.project.lock().unwrap();
         let project = guard.as_mut().unwrap();
-        project.section_offsets.insert(open_a, (137.0, -42.0));
-        project.section_offsets.insert(open_b, (-311.0, 63.0));
+        project.set_section_offset(open_a, (137.0, -42.0));
+        project.set_section_offset(open_b, (-311.0, 63.0));
         assert!(
             project.zero_datums.is_empty() && project.frame_datum_key().is_none(),
             "the open project must have NO frame, so the gate sees None on the before side"
@@ -1509,7 +1509,7 @@ fn merge_projects_does_not_renormalise_the_open_project() {
     }
     let open_offsets_before = {
         let guard = state.project.lock().unwrap();
-        guard.as_ref().unwrap().section_offsets.clone()
+        guard.as_ref().unwrap().section_offsets().clone()
     };
     let open_coords_before = abs_coord_map(&state.get_project_state().unwrap());
 
@@ -1523,9 +1523,7 @@ fn merge_projects_does_not_renormalise_the_open_project() {
             ..Default::default()
         })
         .id;
-    source_project_a
-        .section_offsets
-        .insert(source_section_a, (5.0, 6.0));
+    source_project_a.set_section_offset(source_section_a, (5.0, 6.0));
     source_project_a
         .store_zero_datum_without_repositioning(
             StationRef::new(source_section_a, 0),
@@ -1541,9 +1539,7 @@ fn merge_projects_does_not_renormalise_the_open_project() {
             ..Default::default()
         })
         .id;
-    source_project_b
-        .section_offsets
-        .insert(source_section_b, (-8.0, 3.0));
+    source_project_b.set_section_offset(source_section_b, (-8.0, 3.0));
 
     let source_a = temp_dir.path().join("source-a.stalx");
     let source_b = temp_dir.path().join("source-b.stalx");
@@ -1580,7 +1576,8 @@ fn merge_projects_does_not_renormalise_the_open_project() {
     // no datum.
     let open_after = state.get_project_state().unwrap();
     assert_eq!(
-        open_after.section_offsets, open_offsets_before,
+        open_after.section_offsets(),
+        &open_offsets_before,
         "MergeProjects translated the open project's sections"
     );
     let open_coords_after = abs_coord_map(&open_after);
@@ -2256,7 +2253,7 @@ fn save_drops_orphan_section_offset() {
         ..Default::default()
     });
     project.ensure_shot_uuids();
-    project.section_offsets.insert(99999, (5.0, 6.0)); // no such section
+    project.set_raw_section_offset(99999, (5.0, 6.0)); // no such section
     state.set_project_for_tests(project);
 
     let result = state.save_project(Some(temp_dir.path().join("orphan")));
@@ -2268,7 +2265,7 @@ fn save_drops_orphan_section_offset() {
     let saved = state.get_project_state().unwrap();
     assert!(
         saved
-            .section_offsets
+            .section_offsets()
             .keys()
             .all(|sid| saved.get_section(*sid).is_some()),
         "orphan section_offsets must be dropped on save"
@@ -2308,7 +2305,7 @@ fn opening_drops_a_legacy_sub_gate_section_offset() {
             project.ensure_shot_uuids();
             // Straight into the map: routing through the writer would normalize it
             // away, which is the point - this state is unrepresentable in memory.
-            project.section_offsets.insert(section_id, LEGACY_OFFSET);
+            project.set_raw_section_offset(section_id, LEGACY_OFFSET);
 
             // The drop is `normalize_section_offsets`' doing. Asked directly, it
             // claims exactly this one row.
@@ -2331,7 +2328,7 @@ fn opening_drops_a_legacy_sub_gate_section_offset() {
                 .unwrap()
                 .load_project()
                 .unwrap()
-                .section_offsets
+                .section_offsets()
                 .get(&section_id)
                 .copied(),
             Some(LEGACY_OFFSET),
@@ -2345,9 +2342,9 @@ fn opening_drops_a_legacy_sub_gate_section_offset() {
         );
         let opened = state.get_project_state().unwrap();
         assert!(
-            !opened.section_offsets.contains_key(&section_id),
+            !opened.section_offsets().contains_key(&section_id),
             "the load boundary must drop a sub-gate offset: {:?}",
-            opened.section_offsets.get(&section_id)
+            opened.section_offsets().get(&section_id)
         );
 
         // ...and the geometry it moved by is the value that went: under a
@@ -2368,9 +2365,9 @@ fn opening_drops_a_legacy_sub_gate_section_offset() {
         assert!(reopened_state.open_project(path).success);
         let reopened = reopened_state.get_project_state().unwrap();
         assert!(
-            !reopened.section_offsets.contains_key(&section_id),
+            !reopened.section_offsets().contains_key(&section_id),
             "a sub-gate offset must not resurrect across save/reopen: {:?}",
-            reopened.section_offsets.get(&section_id)
+            reopened.section_offsets().get(&section_id)
         );
         let again = reopened.compute_station_raw_coords(station).unwrap();
         assert_eq!(
@@ -2432,7 +2429,7 @@ fn save_sanitizes_non_finite_section_offset() {
         })
         .id;
     project.ensure_shot_uuids();
-    project.section_offsets.insert(a, (f64::NAN, f64::INFINITY));
+    project.set_raw_section_offset(a, (f64::NAN, f64::INFINITY));
     state.set_project_for_tests(project);
 
     let result = state.save_project(Some(temp_dir.path().join("nf_offset")));
@@ -2442,28 +2439,28 @@ fn save_sanitizes_non_finite_section_offset() {
         result.error
     );
     let saved = state.get_project_state().unwrap();
-    let off = saved.section_offsets.get(&a).copied().unwrap_or((0.0, 0.0));
+    let off = saved.section_offset(a);
     assert!(
         off.0.is_finite() && off.1.is_finite(),
         "section offset sanitized on save"
     );
     assert!(
-        !saved.section_offsets.contains_key(&a),
+        !saved.section_offsets().contains_key(&a),
         "a wholly non-finite offset sanitizes to no displacement, so the KEY must go - \
          a (0, 0) row is an inert entry the next save serializes again: {:?}",
-        saved.section_offsets.get(&a)
+        saved.section_offsets().get(&a)
     );
 
     // A half-non-finite offset keeps the component that IS a position: only the
     // poisoned axis is neutralized, so the key stays with the finite value.
     let mut project = state.get_project_state().unwrap();
-    project.section_offsets.insert(a, (7.5, f64::NAN));
+    project.set_raw_section_offset(a, (7.5, f64::NAN));
     state.set_project_for_tests(project);
     let result = state.save_project(Some(temp_dir.path().join("nf_offset_half")));
     assert!(result.success, "half-non-finite: {:?}", result.error);
     let saved = state.get_project_state().unwrap();
     assert_eq!(
-        saved.section_offsets.get(&a).copied(),
+        saved.section_offsets().get(&a).copied(),
         Some((7.5, 0.0)),
         "only the non-finite component is neutralized; the section is still displaced"
     );
@@ -7421,7 +7418,7 @@ fn test_move_section() {
 
     let project = state.get_project_state().unwrap();
     assert_eq!(
-        project.section_offsets.get(&section_id),
+        project.section_offsets().get(&section_id),
         Some(&(10.0, 20.0)),
         "First move should set offset to (10, 20)"
     );
@@ -7435,7 +7432,7 @@ fn test_move_section() {
 
     let project = state.get_project_state().unwrap();
     assert_eq!(
-        project.section_offsets.get(&section_id),
+        project.section_offsets().get(&section_id),
         Some(&(15.0, 10.0)),
         "Second move should accumulate to (15, 10)"
     );
@@ -7469,7 +7466,7 @@ fn test_move_section_undo_redo() {
 
     let project = state.get_project_state().unwrap();
     assert_eq!(
-        project.section_offsets.get(&section_id),
+        project.section_offsets().get(&section_id),
         Some(&(10.0, 20.0))
     );
 
@@ -7480,7 +7477,7 @@ fn test_move_section_undo_redo() {
     let project = state.get_project_state().unwrap();
     assert_eq!(
         project
-            .section_offsets
+            .section_offsets()
             .get(&section_id)
             .copied()
             .unwrap_or((0.0, 0.0)),
@@ -7494,7 +7491,7 @@ fn test_move_section_undo_redo() {
 
     let project = state.get_project_state().unwrap();
     assert_eq!(
-        project.section_offsets.get(&section_id),
+        project.section_offsets().get(&section_id),
         Some(&(10.0, 20.0)),
         "Redo should re-apply the move"
     );
@@ -7542,7 +7539,7 @@ fn move_section_moves_the_whole_merged_group_and_sticks() {
     let off = |st: &AppState, id| {
         st.get_project_state()
             .unwrap()
-            .section_offsets
+            .section_offsets()
             .get(&id)
             .copied()
             .unwrap_or((0.0, 0.0))
@@ -7816,8 +7813,8 @@ fn test_execute_merge_stations_command() {
 
     // Verify section offsets were updated - one section should have an offset
     // (the moving section gets an offset to align with the anchor)
-    let has_offset = project.section_offsets.contains_key(&section_a_id)
-        || project.section_offsets.contains_key(&section_b_id);
+    let has_offset = project.section_offsets().contains_key(&section_a_id)
+        || project.section_offsets().contains_key(&section_b_id);
     assert!(has_offset, "Section offsets should be updated after merge");
 }
 
@@ -7898,7 +7895,7 @@ fn test_undo_set_zero_datum_restores_section_offsets() {
     {
         let mut proj = state.project.lock().unwrap();
         let project = proj.as_mut().unwrap();
-        project.section_offsets.insert(section_a, (100.0, 200.0));
+        project.set_section_offset(section_a, (100.0, 200.0));
     }
 
     // Merge the sections so they're connected
@@ -7918,8 +7915,8 @@ fn test_undo_set_zero_datum_restores_section_offsets() {
         let proj = state.project.lock().unwrap();
         let project = proj.as_ref().unwrap();
         (
-            project.section_offsets.get(&section_a).copied(),
-            project.section_offsets.get(&section_b).copied(),
+            project.section_offsets().get(&section_a).copied(),
+            project.section_offsets().get(&section_b).copied(),
             project.zero_datums.len(),
         )
     };
@@ -7938,8 +7935,8 @@ fn test_undo_set_zero_datum_restores_section_offsets() {
         let proj = state.project.lock().unwrap();
         let project = proj.as_ref().unwrap();
         (
-            project.section_offsets.get(&section_a).copied(),
-            project.section_offsets.get(&section_b).copied(),
+            project.section_offsets().get(&section_a).copied(),
+            project.section_offsets().get(&section_b).copied(),
             project.zero_datums.len(),
         )
     };
@@ -7966,8 +7963,8 @@ fn test_undo_set_zero_datum_restores_section_offsets() {
         let proj = state.project.lock().unwrap();
         let project = proj.as_ref().unwrap();
         (
-            project.section_offsets.get(&section_a).copied(),
-            project.section_offsets.get(&section_b).copied(),
+            project.section_offsets().get(&section_a).copied(),
+            project.section_offsets().get(&section_b).copied(),
             project.zero_datums.len(),
         )
     };
@@ -9672,7 +9669,7 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
     let offsets_before_update = {
         let proj = state.project.lock().unwrap();
         let project = proj.as_ref().unwrap();
-        project.section_offsets.clone()
+        project.section_offsets().clone()
     };
 
     // Clear undo stack to focus on the update
@@ -9769,7 +9766,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
     let (offsets_after_a, gps_after_a) = {
         let proj = state.project.lock().unwrap();
         let project = proj.as_ref().unwrap();
-        let offsets = project.section_offsets.clone();
+        let offsets = project.section_offsets().clone();
         let gps = project
             .zero_datums
             .iter()
@@ -9821,7 +9818,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
     let (restored_offsets, restored_gps) = {
         let proj = state.project.lock().unwrap();
         let project = proj.as_ref().unwrap();
-        let offsets = project.section_offsets.clone();
+        let offsets = project.section_offsets().clone();
         let gps = project
             .zero_datums
             .iter()
@@ -10333,7 +10330,7 @@ fn test_move_station_zero_updates_section_offset() {
     );
 
     let offset = after
-        .section_offsets
+        .section_offsets()
         .get(&section_id)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12123,12 +12120,12 @@ fn test_move_segment() {
     // Record offsets after merge (merge may set non-zero offsets)
     let project = state.get_project_state().unwrap();
     let a_before = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let b_before = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12143,12 +12140,12 @@ fn test_move_segment() {
     // Both sections should have been moved by the offset delta
     let project = state.get_project_state().unwrap();
     let a_after = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let b_after = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12208,12 +12205,12 @@ fn test_move_segment_undo_redo() {
     // Record offsets after merge (merge may set non-zero offsets)
     let project = state.get_project_state().unwrap();
     let a_pre_move = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let b_pre_move = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12227,12 +12224,12 @@ fn test_move_segment_undo_redo() {
     // Verify both moved by delta
     let project = state.get_project_state().unwrap();
     let a_post_move = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let b_post_move = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12247,12 +12244,12 @@ fn test_move_segment_undo_redo() {
 
     let project = state.get_project_state().unwrap();
     let a_after_undo = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let b_after_undo = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12279,12 +12276,12 @@ fn test_move_segment_undo_redo() {
 
     let project = state.get_project_state().unwrap();
     let a_after_redo = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let b_after_redo = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12376,12 +12373,12 @@ fn test_move_segment_unaligned_closure_independent() {
     // Record offsets before move
     let project = state.get_project_state().unwrap();
     let a_before = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let b_before = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12396,12 +12393,12 @@ fn test_move_segment_unaligned_closure_independent() {
     // Only the starting section should move (closure is not aligned yet)
     let project = state.get_project_state().unwrap();
     let a_after = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let b_after = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12476,12 +12473,12 @@ fn test_move_segment_aligned_closure_connectivity() {
     // Record offsets before move
     let project = state.get_project_state().unwrap();
     let a_before = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let b_before = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12496,12 +12493,12 @@ fn test_move_segment_aligned_closure_connectivity() {
     // Both sections should have moved (connected via aligned closure)
     let project = state.get_project_state().unwrap();
     let a_after = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let b_after = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12593,7 +12590,7 @@ fn test_move_segment_blocked_by_datum_over_a_closure_only_link() {
 
     let before = state.get_project_state().unwrap();
     let a_before = before
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12610,7 +12607,7 @@ fn test_move_segment_blocked_by_datum_over_a_closure_only_link() {
 
     let after = state.get_project_state().unwrap();
     let a_after = after
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12653,12 +12650,12 @@ fn test_move_segment_isolated() {
     // Record offsets before move
     let project = state.get_project_state().unwrap();
     let a_before = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let b_before = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12673,13 +12670,13 @@ fn test_move_segment_isolated() {
     // Section A should have moved (entry must exist after MoveSegment)
     let project = state.get_project_state().unwrap();
     let a_after = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .expect("Section A offset should exist after MoveSegment");
     // Section B was not moved; entry may or may not exist
     let b_after = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12726,7 +12723,7 @@ fn test_move_segment_accumulates() {
     // Record initial offset
     let project = state.get_project_state().unwrap();
     let initial = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -12740,7 +12737,7 @@ fn test_move_segment_accumulates() {
 
     let project = state.get_project_state().unwrap();
     let after_first = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .expect("Offset should exist after first MoveSegment");
@@ -12762,7 +12759,7 @@ fn test_move_segment_accumulates() {
 
     let project = state.get_project_state().unwrap();
     let after_second = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .expect("Offset should exist after second MoveSegment");
@@ -12784,7 +12781,7 @@ fn test_move_segment_accumulates() {
 
     let project = state.get_project_state().unwrap();
     let after_third = project
-        .section_offsets
+        .section_offsets()
         .get(&sid_a)
         .copied()
         .expect("Offset should exist after third MoveSegment");
@@ -13038,7 +13035,7 @@ fn test_split_recalculates_offset_b() {
     // With azimuth 90, sin(90) = 1, cos(90) = 0
     // So bx = horizontal_sum, by = 0 (approximately)
     let proj = state.get_project_state().unwrap();
-    let b_offset = proj.section_offsets.get(&new_id);
+    let b_offset = proj.section_offsets().get(&new_id);
     assert!(b_offset.is_some(), "Section B should have an offset");
     let (bx, by) = b_offset.unwrap();
     let expected =
@@ -13310,7 +13307,7 @@ fn test_delete_range_split_preserves_after_position() {
     let new_id = result.section_id.unwrap();
 
     let proj = state.get_project_state().unwrap();
-    let (bx, by) = *proj.section_offsets.get(&new_id).expect("B offset");
+    let (bx, by) = *proj.section_offsets().get(&new_id).expect("B offset");
     let h = |l: f64| (l * l - 1.0_f64).sqrt();
     let expected = h(10.0) + h(5.0) + h(7.0);
     assert!((bx - expected).abs() < 0.001, "bx ~{expected}, got {bx}");
@@ -15540,7 +15537,7 @@ fn test_delete_last_shot_cleans_up_offsets() {
     {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
-        project.section_offsets.insert(section_id, (10.0, 20.0));
+        project.set_section_offset(section_id, (10.0, 20.0));
     }
 
     let shot_id = {
@@ -15554,7 +15551,7 @@ fn test_delete_last_shot_cleans_up_offsets() {
     // Verify section offset is cleaned up
     let proj = state.get_project_state().unwrap();
     assert!(
-        !proj.section_offsets.contains_key(&section_id),
+        !proj.section_offsets().contains_key(&section_id),
         "Section offset should be removed"
     );
 }
@@ -16843,7 +16840,7 @@ fn test_insert_before_pos0_undo_restores_offsets() {
     {
         let proj = state.get_project_state().unwrap();
         let offset = proj
-            .section_offsets
+            .section_offsets()
             .get(&sec_a)
             .copied()
             .unwrap_or((0.0, 0.0));
@@ -16949,7 +16946,7 @@ fn test_insert_before_pos_gt0_no_offset_adjustment() {
     // Get the section offset before insert
     let offset_before = {
         let proj = state.get_project_state().unwrap();
-        proj.section_offsets
+        proj.section_offsets()
             .get(&sec_a)
             .copied()
             .unwrap_or((0.0, 0.0))
@@ -16969,7 +16966,7 @@ fn test_insert_before_pos_gt0_no_offset_adjustment() {
     // Section offset should NOT have changed (only pos=0 triggers adjustment)
     let proj = state.get_project_state().unwrap();
     let offset_after = proj
-        .section_offsets
+        .section_offsets()
         .get(&sec_a)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -18955,7 +18952,7 @@ fn test_execute_import_sections_manual_with_offset() {
 
     let project = state.get_project_state().unwrap();
     let section_id = project.sections[0].id;
-    let offset = project.section_offsets.get(&section_id);
+    let offset = project.section_offsets().get(&section_id);
     assert!(
         offset.is_some(),
         "section should have offset from Manual placement"
@@ -20153,7 +20150,7 @@ fn test_delete_section_cascades_closures_and_offsets() {
     // set_zero_datum displaced A, so it has an offset (stronger than the
     // "the map is non-empty" this used to assert).
     assert!(
-        project.section_offsets.contains_key(&sec_a),
+        project.section_offsets().contains_key(&sec_a),
         "set_zero_datum should give the displaced section an offset"
     );
 
@@ -20170,7 +20167,7 @@ fn test_delete_section_cascades_closures_and_offsets() {
         "zero datum should be cascaded"
     );
     assert!(
-        !project.section_offsets.contains_key(&sec_a),
+        !project.section_offsets().contains_key(&sec_a),
         "section A offset should be cascaded"
     );
 }
@@ -21291,7 +21288,7 @@ fn test_merge_datum_section_does_not_move() {
 
     // The datum section A must not have received a non-zero section offset
     // (SetZeroDatum may write a (0,0) entry, but must not shift A during merge)
-    if let Some(&(ox, oy)) = proj.section_offsets.get(&a) {
+    if let Some(&(ox, oy)) = proj.section_offsets().get(&a) {
         assert!(
             ox.abs() < eps && oy.abs() < eps,
             "Datum section A must not receive a non-zero offset from merge: offset=({ox},{oy})"
@@ -21299,7 +21296,7 @@ fn test_merge_datum_section_does_not_move() {
     }
     // B must have received an offset (it moved to align with A)
     assert!(
-        proj.section_offsets.contains_key(&b),
+        proj.section_offsets().contains_key(&b),
         "Non-datum section B must have received a section offset from merge"
     );
 }
@@ -25264,7 +25261,7 @@ fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_remov
         promoted.y
     );
 
-    let before = state.get_project_state().unwrap().section_offsets.clone();
+    let before = state.get_project_state().unwrap().section_offsets().clone();
     let shot_id = state
         .get_project_state()
         .unwrap()
@@ -25294,7 +25291,7 @@ fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_remov
     );
 
     assert!(state.undo().success);
-    let after = state.get_project_state().unwrap().section_offsets.clone();
+    let after = state.get_project_state().unwrap().section_offsets().clone();
     for (section_id, offset) in &before {
         let now = after.get(section_id).copied().unwrap_or((0.0, 0.0));
         assert!(
@@ -25383,7 +25380,7 @@ fn two_merged_sections(state: &AppState) -> (SectionId, SectionId) {
 fn inject_drift(state: &AppState, partner: SectionId) {
     let mut guard = state.project.lock().expect("project lock poisoned");
     let project = guard.as_mut().expect("no project open");
-    project.section_offsets.insert(partner, (7.0, 0.0));
+    project.set_section_offset(partner, (7.0, 0.0));
     assert!(
         !project.check_merge_alignment().is_empty(),
         "setup: the injected offset should leave the merge misaligned"
@@ -25604,10 +25601,11 @@ fn undo_to_lands_where_the_same_number_of_single_undos_lands_over_a_drifted_step
         (stepped_anchored, stepped_partner),
         "the two routes were not built on the same topology, so nothing below compares anything"
     );
-    let jumped_offsets = jumped.get_project_state().unwrap().section_offsets;
-    let stepped_offsets = stepped.get_project_state().unwrap().section_offsets;
+    let jumped_project = jumped.get_project_state().unwrap();
+    let stepped_project = stepped.get_project_state().unwrap();
     assert_eq!(
-        jumped_offsets, stepped_offsets,
+        jumped_project.section_offsets(),
+        stepped_project.section_offsets(),
         "a three-step undo_to left the survey somewhere three single undos do not"
     );
     assert_eq!(

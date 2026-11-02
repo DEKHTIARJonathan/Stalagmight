@@ -3180,13 +3180,13 @@ fn test_move_segment_moves_connected_sections() {
     let before = project::get_project_state(state(&app)).expect("project state");
     let offset_a_before = before
         .project
-        .section_offsets
+        .section_offsets()
         .get(&section_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let offset_b_before = before
         .project
-        .section_offsets
+        .section_offsets()
         .get(&section_b)
         .copied()
         .unwrap_or((0.0, 0.0));
@@ -3197,13 +3197,13 @@ fn test_move_segment_moves_connected_sections() {
     let after = project::get_project_state(state(&app)).expect("project state");
     let offset_a_after = after
         .project
-        .section_offsets
+        .section_offsets()
         .get(&section_a)
         .copied()
         .unwrap_or((0.0, 0.0));
     let offset_b_after = after
         .project
-        .section_offsets
+        .section_offsets()
         .get(&section_b)
         .copied()
         .unwrap_or((0.0, 0.0));

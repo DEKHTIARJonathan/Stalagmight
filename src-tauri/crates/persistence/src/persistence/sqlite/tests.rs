@@ -1315,11 +1315,9 @@ fn test_save_load_section_offsets() {
     }
 
     // Add section offsets with varying precision
-    project
-        .section_offsets
-        .insert(0, (10.123_456_789, -20.987_654_321));
-    project.section_offsets.insert(1, (0.0, 0.0));
-    project.section_offsets.insert(2, (-100.5, 200.75));
+    project.set_raw_section_offset(0, (10.123_456_789, -20.987_654_321));
+    project.set_raw_section_offset(1, (0.0, 0.0));
+    project.set_raw_section_offset(2, (-100.5, 200.75));
 
     // Save
     {
@@ -1331,17 +1329,17 @@ fn test_save_load_section_offsets() {
     let db = Database::open_existing(&db_path).unwrap();
     let loaded = db.load_project().unwrap();
 
-    assert_eq!(loaded.section_offsets.len(), 3);
+    assert_eq!(loaded.section_offsets().len(), 3);
 
-    let offset0 = loaded.section_offsets.get(&0).unwrap();
+    let offset0 = loaded.section_offsets().get(&0).unwrap();
     assert!((offset0.0 - 10.123_456_789).abs() < 1e-8);
     assert!((offset0.1 - (-20.987_654_321)).abs() < 1e-8);
 
-    let offset1 = loaded.section_offsets.get(&1).unwrap();
+    let offset1 = loaded.section_offsets().get(&1).unwrap();
     assert_eq!(offset1.0, 0.0);
     assert_eq!(offset1.1, 0.0);
 
-    let offset2 = loaded.section_offsets.get(&2).unwrap();
+    let offset2 = loaded.section_offsets().get(&2).unwrap();
     assert_eq!(offset2.0, -100.5);
     assert_eq!(offset2.1, 200.75);
 }
@@ -3128,7 +3126,7 @@ fn test_save_load_complex_project_round_trip() {
         .id;
 
     // Add section offsets
-    project.section_offsets.insert(section_a, (10.0, -5.0));
+    project.set_section_offset(section_a, (10.0, -5.0));
 
     // Add station merge
     project.station_merges.push(StationMerge {
@@ -3191,7 +3189,7 @@ fn test_save_load_complex_project_round_trip() {
 
     // Verify section offsets
     let s_a_id = s_a.id;
-    let offset = loaded.section_offsets.get(&s_a_id).unwrap();
+    let offset = loaded.section_offsets().get(&s_a_id).unwrap();
     assert!((offset.0 - 10.0).abs() < 1e-10);
     assert!((offset.1 - (-5.0)).abs() < 1e-10);
 
@@ -3896,8 +3894,8 @@ fn test_save_load_round_trip_all_metadata() {
     // displaced", so a section the datum leaves on exactly (0, 0) has no entry
     // to persist (#413 finding 2). This used to assert `len() == 2`, counting
     // that inert entry and checking no value at all.
-    assert_eq!(loaded.section_offsets, project.section_offsets);
-    assert_eq!(loaded.section_offsets.len(), 1);
+    assert_eq!(loaded.section_offsets(), project.section_offsets());
+    assert_eq!(loaded.section_offsets().len(), 1);
     assert_eq!(loaded.station_offsets.len(), 1);
     assert_eq!(loaded.imported_file_hashes.len(), 1);
     assert_eq!(loaded.imported_file_hashes[0], "abc123def456");

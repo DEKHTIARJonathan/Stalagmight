@@ -4807,9 +4807,7 @@ mod tests {
                     let offset_x = -current.x;
                     let offset_y = -current.y;
                     if offset_x.abs() > 1e-9 || offset_y.abs() > 1e-9 {
-                        project
-                            .section_offsets
-                            .insert(section_id, (offset_x, offset_y));
+                        project.set_section_offset(section_id, (offset_x, offset_y));
                     }
                 }
                 ImportPlacement::FromExisting { .. } => {

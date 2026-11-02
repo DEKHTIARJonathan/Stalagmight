@@ -224,11 +224,7 @@ fn apply_save_heals(project: &mut Project) {
     // user to Repair. Lossless (matches repair_structural_integrity), so heal on
     // save. (orphan_section_offset is Critical but the save gate only sees
     // station cross-refs, not section_offsets.)
-    let existing_sections: std::collections::HashSet<SectionId> =
-        project.sections.iter().map(|s| s.id).collect();
-    project
-        .section_offsets
-        .retain(|sid, _| existing_sections.contains(sid));
+    project.drop_orphan_section_offsets();
 
     // Sanitize non-finite (NaN/inf) section offsets before persisting, mirroring
     // the load-boundary guard and the shot sanitize below. section_offsets has no
@@ -243,7 +239,7 @@ fn apply_save_heals(project: &mut Project) {
     // - the exact shape `write_section_offset` exists to prevent (#413 finding
     // 2) - and the row then had to be loaded, cascaded over and re-saved.
     let non_finite: Vec<SectionId> = project
-        .section_offsets
+        .section_offsets()
         .iter()
         .filter(|(_, offset)| !offset.0.is_finite() || !offset.1.is_finite())
         .map(|(id, _)| *id)
@@ -254,7 +250,7 @@ fn apply_save_heals(project: &mut Project) {
             if offset.0.is_finite() { offset.0 } else { 0.0 },
             if offset.1.is_finite() { offset.1 } else { 0.0 },
         );
-        Project::write_section_offset(&mut project.section_offsets, id, finite);
+        project.set_section_offset(id, finite);
     }
 
     // Sanitize non-finite (NaN/inf) shot geometry before binding. A NaN cannot

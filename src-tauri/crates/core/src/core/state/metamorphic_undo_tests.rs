@@ -688,7 +688,9 @@ fn plant_legacy_zero_offset_rows(state: &AppState) {
     };
     let ids: Vec<SectionId> = project.sections.iter().map(|section| section.id).collect();
     for id in ids {
-        project.section_offsets.entry(id).or_insert((0.0, 0.0));
+        if !project.section_offsets().contains_key(&id) {
+            project.set_raw_section_offset(id, (0.0, 0.0));
+        }
     }
 }
 
@@ -737,7 +739,7 @@ impl Twins {
             // measuring the wrong thing.
             let project = side.get_project_state()?;
             let survivors: Vec<(SectionId, (f64, f64))> = project
-                .section_offsets
+                .section_offsets()
                 .iter()
                 .filter(|(_, offset)| {
                     offset.0.abs() <= Project::OFFSET_DUST_M
