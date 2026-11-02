@@ -77,7 +77,10 @@ describe('DMP device fields through the wizard conversion', () => {
     expect(sent.marker_index).toBe(7);
   });
 
-  it('sends none for a row added in the wizard', () => {
+  // A PIN, not a B24 regression test: a blank row sent nulls before the B24
+  // fix too, so this passes without it (#576 RV2-FE-D5). It keeps the fix
+  // from inventing device fields for a row the device never recorded.
+  it('pin: sends none for a row added in the wizard', () => {
     const sent = editableShotToShotData({ ...blankEditableShot(-1), length: 3 });
     expect(sent.temperature).toBeNull();
     expect(sent.marker_index).toBeNull();
@@ -112,7 +115,10 @@ describe('DMP device fields through the wizard conversion', () => {
     expect([sent.left, sent.right, sent.up, sent.down]).toEqual([1.5, 0, 2, 0.4]);
   });
 
-  it('carries the pitch in the frame the parser left it, unflipped', () => {
+  // A PIN, not a B24 regression test: the conversion never flipped the pitch,
+  // so this passes without the fix (#576 RV2-FE-D5). It guards the frame
+  // against a future "correction" that would invert every slope.
+  it('pin: carries the pitch in the frame the parser left it, unflipped', () => {
     // `parse_section` already turned the device's +up reading into the
     // model's +down frame; a second flip here would invert every slope.
     const [row] = convertToEditableShots(

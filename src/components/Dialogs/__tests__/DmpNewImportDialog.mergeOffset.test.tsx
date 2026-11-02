@@ -9,7 +9,7 @@
  * for crossing another passage.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import type { DmpFile } from '../../../types/commands';
 import type { CrossSectionSuggestion } from '../../../types/ipc/CrossSectionSuggestion';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
@@ -129,9 +129,15 @@ describe('DMP wizard: the merge station a suggestion opens with (#576 D12)', () 
     );
 
     const select = await screen.findByTestId('merge-station-select');
-    // Let every effect queued by the suggestion's arrival run.
     await waitFor(() => expect(screen.getByTestId('wizard-merge-station-control')).toBeInTheDocument());
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Let every render and passive effect queued by the suggestion's arrival run:
+    // an awaited act() drains React's work queue, so the old overriding effect
+    // would have rewritten the select by the time it returns (the waitFor above,
+    // which RTL wraps in act, already does this; the explicit flush says so).
+    // Not a fixed wait (#576 RV2-FE-D5), and not a waitFor on the text either:
+    // the FIRST render already shows the preferred offset, so that would pass
+    // before such an effect ran.
+    await act(async () => {});
     // Offset 1: B stn 1 onto A stn 3. The deepest (offset 3) would read "stn 3 -> A stn 5".
     expect(select.textContent).toMatch(/^stn 1 → A stn 3/);
   });
