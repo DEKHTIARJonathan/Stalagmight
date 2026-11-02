@@ -433,8 +433,7 @@ impl TileCache {
         };
 
         cache.init_schema()?;
-        cache.total_bytes = cache.sum_size_bytes()?;
-        cache.provider_totals = cache.sum_by_provider()?;
+        cache.read_totals()?;
         Ok(cache)
     }
 
@@ -451,8 +450,7 @@ impl TileCache {
             provider_ttl_seconds: HashMap::new(),
         };
         cache.init_schema()?;
-        cache.total_bytes = cache.sum_size_bytes()?;
-        cache.provider_totals = cache.sum_by_provider()?;
+        cache.read_totals()?;
         Ok(cache)
     }
 
@@ -675,8 +673,9 @@ impl TileCache {
         Ok(freed_bytes)
     }
 
-    /// `SUM(size_bytes)` over the whole table - the full pass `total_bytes`
-    /// exists to keep off the write path. Run at open, and to resync.
+    /// `SUM(size_bytes)` over the whole table: the tests' independent oracle
+    /// for `total_bytes`. Production reads it off [`Self::read_totals`].
+    #[cfg(test)]
     fn sum_size_bytes(&self) -> rusqlite::Result<u64> {
         self.conn
             .query_row(
@@ -687,21 +686,31 @@ impl TileCache {
             .map(|bytes| bytes.max(0) as u64)
     }
 
-    /// Re-read `total_bytes` from disk after a write failed: its transaction
-    /// rolled back (or half-ran), so the in-memory deltas cannot be trusted.
+    /// Re-read the running totals from disk after a write failed: its
+    /// transaction rolled back (or half-ran), so the in-memory deltas cannot be
+    /// trusted.
     fn resync_total_bytes(&mut self) {
-        match self.sum_size_bytes() {
-            Ok(bytes) => self.total_bytes = bytes,
-            Err(e) => tracing::warn!(error = %e, "Could not re-read the tile cache size"),
-        }
-        match self.sum_by_provider() {
-            Ok(totals) => self.provider_totals = totals,
-            Err(e) => tracing::warn!(error = %e, "Could not re-read the per-provider cache size"),
+        if let Err(e) = self.read_totals() {
+            tracing::warn!(error = %e, "Could not re-read the tile cache size");
         }
     }
 
+    /// Read `provider_totals` from the table and derive `total_bytes` from
+    /// it: one full pass, at open and to resync. `total_bytes` is exactly the
+    /// sum of the per-provider byte column, so a separate `SUM` pass over every
+    /// BLOB would only repeat the walk (#576 RV4-R-NITS T-2).
+    fn read_totals(&mut self) -> rusqlite::Result<()> {
+        let totals = self.sum_by_provider()?;
+        self.total_bytes = totals
+            .values()
+            .fold(0u64, |sum, (_, bytes)| sum.saturating_add(*bytes));
+        self.provider_totals = totals;
+        Ok(())
+    }
+
     /// Tiles and bytes per provider, from the table: the full pass
-    /// `provider_totals` exists to keep off the panel. Run at open, and to resync.
+    /// `provider_totals` and `total_bytes` exist to keep off the panel and the
+    /// write path. Run by [`Self::read_totals`] only.
     fn sum_by_provider(&self) -> rusqlite::Result<HashMap<String, (u64, u64)>> {
         let mut stmt = self.conn.prepare(
             "SELECT provider, COUNT(*), COALESCE(SUM(size_bytes), 0) FROM tiles GROUP BY provider",
@@ -1433,6 +1442,10 @@ mod accounting_tests;
               are the evidence a run captures, and SQLite counts are never negative"
 )]
 mod provider_totals_tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod totals_rv4_tests;
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
