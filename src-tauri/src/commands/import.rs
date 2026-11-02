@@ -332,6 +332,44 @@ pub fn execute_tml_import(
     selected_sections: Option<Vec<u32>>,
     root_placement: Option<TmlRootPlacement>,
 ) -> CommandResult {
+    execute_tml_import_impl(
+        state.inner(),
+        tauri_sink(app),
+        &path,
+        file_hash,
+        include_excluded,
+        comments_on_stations,
+        virtual_shot_mode,
+        selected_sections,
+        root_placement,
+    )
+}
+
+/// [`execute_tml_import`] with its progress going to `sink`.
+///
+/// The commands take an `AppHandle` (Wry) only to build the event sink their
+/// progress goes to, and `tauri::test` builds a `MockRuntime` app whose handle
+/// is a different type - so a test cannot call the command itself. Each
+/// `execute_*_import` therefore forwards its IPC arguments unchanged to an
+/// `_impl` that takes the sink instead (as [`execute_gpx_import_impl`] does),
+/// and the tests in `import_command_tests.rs` drive that (#576
+/// NF-IMPORT-APPHANDLE). Keep the command a pure forward: anything it did
+/// beyond `state.inner()` and `tauri_sink(app)` would be untested.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the command's IPC arguments, forwarded one for one"
+)]
+pub(crate) fn execute_tml_import_impl(
+    state: &AppState,
+    sink: std::sync::Arc<dyn crate::core::events::EventSink>,
+    path: &std::path::Path,
+    file_hash: Option<String>,
+    include_excluded: bool,
+    comments_on_stations: bool,
+    virtual_shot_mode: Option<VirtualShotMode>,
+    selected_sections: Option<Vec<u32>>,
+    root_placement: Option<TmlRootPlacement>,
+) -> CommandResult {
     let opts = TmlImportOptions {
         include_excluded,
         comments_on_stations,
@@ -344,10 +382,10 @@ pub fn execute_tml_import(
         root_placement,
     };
     run_file_import(
-        state.inner(),
-        tauri_sink(app),
+        state,
+        sink,
         &TML_IMPORT,
-        &path,
+        path,
         file_hash,
         virtual_shot_mode.unwrap_or_default(),
         crate::parsers::tml::parse_tml,
@@ -422,16 +460,38 @@ pub fn execute_compass_import(
     apply_corrections: bool,
     comments_on_stations: bool,
 ) -> CommandResult {
+    execute_compass_import_impl(
+        state.inner(),
+        tauri_sink(app),
+        &path,
+        file_hash,
+        include_excluded,
+        apply_corrections,
+        comments_on_stations,
+    )
+}
+
+/// [`execute_compass_import`] with its progress going to `sink`. See
+/// [`execute_tml_import_impl`] for why the seam exists.
+pub(crate) fn execute_compass_import_impl(
+    state: &AppState,
+    sink: std::sync::Arc<dyn crate::core::events::EventSink>,
+    path: &std::path::Path,
+    file_hash: Option<String>,
+    include_excluded: bool,
+    apply_corrections: bool,
+    comments_on_stations: bool,
+) -> CommandResult {
     let opts = CompassImportOptions {
         include_excluded,
         apply_corrections,
         comments_on_stations,
     };
     run_file_import(
-        state.inner(),
-        tauri_sink(app),
+        state,
+        sink,
         &COMPASS_IMPORT,
-        &path,
+        path,
         file_hash,
         // Auto: no dialog on this path carries a per-file override, so the
         // chain rule decides (decision C10-D1).
@@ -749,6 +809,28 @@ pub fn execute_walls_import(
     include_splays: bool,
     selected_surveys: Option<Vec<u32>>,
 ) -> CommandResult {
+    execute_walls_import_impl(
+        state.inner(),
+        tauri_sink(app),
+        &path,
+        file_hash,
+        comments_on_stations,
+        include_splays,
+        selected_surveys,
+    )
+}
+
+/// [`execute_walls_import`] with its progress going to `sink`. See
+/// [`execute_tml_import_impl`] for why the seam exists.
+pub(crate) fn execute_walls_import_impl(
+    state: &AppState,
+    sink: std::sync::Arc<dyn crate::core::events::EventSink>,
+    path: &std::path::Path,
+    file_hash: Option<String>,
+    comments_on_stations: bool,
+    include_splays: bool,
+    selected_surveys: Option<Vec<u32>>,
+) -> CommandResult {
     let opts = WallsImportOptions {
         comments_on_stations,
         include_splays,
@@ -758,10 +840,10 @@ pub fn execute_walls_import(
         selected_surveys: selected_surveys.map(|v| v.into_iter().collect()),
     };
     run_file_import(
-        state.inner(),
-        tauri_sink(app),
+        state,
+        sink,
         &WALLS_IMPORT,
-        &path,
+        path,
         file_hash,
         // Auto: no dialog on this path carries a per-file override, so the
         // chain rule decides (decision C10-D1).
