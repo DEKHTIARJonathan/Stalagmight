@@ -140,10 +140,7 @@ fn publish_relocates_and_stamps_whatever_an_autosave_is_doing() {
         if !ok {
             lost.push(format!(
                 "round {round}: publish -> {:?}; open link {}; link in the cache file {}",
-                published
-                    .as_ref()
-                    .map(|_| ())
-                    .map_err(|e| e.message.clone()),
+                published.as_ref().map(|_| ()).map_err(ToString::to_string),
                 if open_link.is_ok() {
                     "present"
                 } else {

@@ -260,6 +260,14 @@ mod sdb_fold_refusal_tests;
 mod sdb_lock_rule_tests;
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              counts are the evidence a run captures"
+)]
+mod sdb_lock_span_tests;
+#[cfg(test)]
+#[expect(
     clippy::expect_used,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, and the printed \
@@ -313,14 +321,6 @@ mod shot_uuid_tests;
     reason = "test module: the printed keys are the evidence a run captures"
 )]
 mod sidecar_key_coverage_tests;
-#[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::print_stdout,
-    reason = "test module: panics on a failed assumption are the point, and the printed \
-              counts are the evidence a run captures"
-)]
-mod sdb_lock_span_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

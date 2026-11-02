@@ -363,8 +363,8 @@ impl AppState {
             std::fs::create_dir_all(parent)
                 .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
         }
-        let link =
-            self.speleodb_publish_relocate(&dest, |undo_mode| crate::models::SpeleoLink {
+        let link = self
+            .speleodb_publish_relocate(&dest, |undo_mode| crate::models::SpeleoLink {
                 endpoint: endpoint.clone(),
                 project_id: project_id.clone(),
                 project_name: params.name.clone(),
@@ -373,7 +373,8 @@ impl AppState {
                 last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
                 last_verify_at: None,
                 undo_mode: Some(undo_mode),
-            })?;
+            })
+            .map_err(local_dto)?;
 
         // 4. Initial push (BEST-EFFORT): acquire the lock (we are the creator/ADMIN, so
         //    it is free), upload the snapshot + `.tml` render, then release. No fence -
@@ -483,7 +484,7 @@ impl AppState {
         &self,
         dest: &std::path::Path,
         make_link: impl FnOnce(crate::models::UndoMode) -> crate::models::SpeleoLink,
-    ) -> Result<crate::models::SpeleoLink, SpeleoErrorDto> {
+    ) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
         let _commands = self.hold_commands();
         // 2. Relocate the open project's working copy into the SpeleoDB cache. A remote
         //    project's canonical file lives at `speleodb_cache_path` (open/fast-forward
@@ -492,26 +493,24 @@ impl AppState {
         //    active database + `project.file_path` to it.
         let save = self.save_project(Some(dest.to_path_buf()));
         if !save.success {
-            return Err(local_dto(SpeleoDbError::Io(format!(
+            return Err(SpeleoDbError::Io(format!(
                 "failed to write project into the SpeleoDB cache: {}",
                 save.error.unwrap_or_else(|| "unknown error".to_owned())
-            ))));
+            )));
         }
         let db_guard = self
             .database
             .lock()
-            .map_err(|_| local_dto(SpeleoDbError::Io("database lock poisoned".to_owned())))?;
+            .map_err(|_| SpeleoDbError::Io("database lock poisoned".to_owned()))?;
         let db = db_guard.as_ref().ok_or_else(|| {
-            local_dto(SpeleoDbError::Io(
-                "no open database after writing the cache file".to_owned(),
-            ))
+            SpeleoDbError::Io("no open database after writing the cache file".to_owned())
         })?;
         // [#303] A new link materializes the application default immediately.
         // Re-publishing a detached managed copy preserves its explicit project value.
         let link =
             make_link(self.effective_undo_mode(super::speleodb_cache::preserved_undo_mode(db)));
         db.save_speleo_link(Some(&link))
-            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+            .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
         Ok(link)
     }
 }
