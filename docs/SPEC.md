@@ -1106,10 +1106,22 @@ to its mirrored station so each relationship stays on its original physical
 station. That list is the complete set of `StationKey`-bearing collections on
 `Project` (`for_each_station_ref`), but it is *not* everything in the app that
 names a station: the gas plan's pins (origin, endpoint, way points, marked
-points, stage-drop overrides) and the UI's selection are positional
-`StationRef`s the backend cannot reach. The plan's pins are mirrored frontend-
-side so the plan stays on the physical stations the diver picked; selection and
-merge staging are cleared.
+points, stage-drop overrides), the distance-gradient origin and the UI's
+selection are positional `StationRef`s the backend cannot reach. The plan's
+pins and the distance-gradient origin are not mirrored; they hold backend
+anchors (#310, #576 D39(g)). Before every survey edit, undo or redo the
+frontend anchors each of them to the shots its station sits between
+(`plan_anchors_for_refs`), and once the edit lands it re-resolves those anchors
+in the new numbering (`plan_refs_for_anchors`), so they stay on the physical
+stations the diver picked through a reverse - and through an insert or a
+delete, which renumber just as silently. A plan pin whose anchor no longer
+resolves is kept and flagged as unresolved, which blocks saving the plan; an
+origin whose station is gone falls back to the entrance with a notice. The one
+mirror left is a fallback: when the origin's anchor cannot be taken (the call
+fails, or the backend has no anchor for it), a reverse mirrors the origin from
+`reversed_sections` as it did before the anchors, and any other edit leaves it
+where it is; the anchor and the mirror never both move it. Selection, merge
+staging, the move-comment pickup and the comment popover are cleared.
 
 Pins inside a *saved* `.plnx` need **no** rewriting, because a plan does not name a
 station by its position. It records the two shots a station sits BETWEEN, and a
@@ -1140,9 +1152,10 @@ the ignore onto the mirrored shot.
 on the forward reverse, on a batch of them, and on an undo or redo of either
 (undoing a reverse re-reverses the numbering). A reverse keeps every station's
 world position, so there is nothing in the geometry for a consumer to diff; the
-field exists so the frontend mirrors its positional refs exactly instead of
-inferring a reverse from moved stations, an inference that cannot tell a
-reversed section from one that was reversed *and* moved in the same action. It
+field exists so the frontend acts on a renumbering exactly (the clears and the
+origin fallback above) instead of inferring a reverse from moved stations, an
+inference that cannot tell a reversed section from one that was reversed *and*
+moved in the same action. It
 is omitted from the payload entirely when nothing was renumbered.
 
 The section's `direction` (In/Out) is metadata and is deliberately **not**
