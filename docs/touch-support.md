@@ -42,8 +42,9 @@ There is no single rule. Three patterns coexist:
   touch, with `e.pointerType` consulted only where the behavior must differ.
 - **Mouse-only, deliberately.** The custom Ctrl+drag / middle-drag map pan uses
   raw `mousedown`/`mousemove`/`mouseup` capture listeners on the map container
-  (`MapCanvas.tsx:2880-3105`) and its pointer-capture guard explicitly requires
-  `e.pointerType === 'mouse'` (`MapCanvas.tsx:3044`). There is no modifier key on
+  (`useModifierPan.ts`) and its pointer-capture guards explicitly require
+  `e.pointerType === 'mouse'` (`handlePointerDownCapture` / `handlePointerUpCapture`
+  there). There is no modifier key on
   touch, so this is intentional - and since #409 no loss either, because plain
   one-finger drag pans.
 - **Mouse-only, by omission.** Most of the app was never converted. The
@@ -236,7 +237,7 @@ free. `GlobalSurveyLayer` likewise resolves via its own `pickSystemAt` index.
 
 **Placement mode** is the one map interaction explicitly written for touch:
 `handlePlacementClick` recomputes the cursor position from the event because
-`pointerdown` precedes any `pointermove` on touch (`MapCanvas.tsx:3949`), and
+`pointerdown` precedes any `pointermove` on touch (`usePlacement.ts`), and
 `PlacementOverlay` shows a Cancel button when `navigator.maxTouchPoints > 0`
 because right-click-to-cancel is unavailable.
 

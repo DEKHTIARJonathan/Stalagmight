@@ -21,7 +21,7 @@ Click a station to begin dragging it. If the station shares coordinates with oth
 **Hover**: Only stations get hover highlight. Shot hover is suppressed.
 
 **Drag flow**:
-1. Click on station &rarr; `handleMoveDragStart` (MapCanvas) &rarr; immovable guard check
+1. Click on station &rarr; `handleMoveDragStart` (`useMoveDrag.ts`) &rarr; immovable guard check
 2. `beginStationDragPreview()` (SurveyLayer) &rarr; BFS to find co-located stations, create temp layers + dynamic sources for connected shots
 3. Per-mousemove: `updateStationDragPreview(dx, dy)` updates *-translate and rebuilds connected shot geometry. Snap-to-merge detection runs each frame (see [Snap-to-Merge](#snap-to-merge)).
 4. On the release of a press that stayed put (see [The drop is click-gated](#the-drop-is-click-gated)): if snapped, opens merge/closure dialog. Otherwise if movement > 1mm, `commitDragPreview()` + `moveStation()` backend call (batched for co-located stations)
@@ -169,7 +169,7 @@ A **survey mutation** is any IPC command whose backend handler calls
 | R2: the survey changes underneath | `projectTreeGeneration` moves off the one captured at pickup (a refresh after a mutation that was already in flight, a SpeleoDB tree replacement, an import, a config refetch, the save-path heal): cancelled, with a toast. A project load, create or close (the project's `created_at` identity changes) cancels it silently: the ghost goes with its survey. Also when `isEditingBlockedNow()` turns true (Plan/Export, Closures Computed View, lost SpeleoDB lock), with its own toast | Store subscriptions in `src/components/Map/useMoveCarryGuards.ts` |
 | R3: the commit is stale | The carry's own commit is re-checked inside the serialized section, right before `invokeIpc`, because it can queue behind a mutation that was in flight. A generation mismatch refuses it with nothing sent, restores the preview (`endDragPreview`) and toasts. A snap-merge dialog confirmed after its carry was cancelled sends nothing | `commitMoveCarry` marks the one command the commit issues (`takeMoveCarryCommit`); `refuseStaleCarryCommit` runs in `executeCommandInner` |
 | R4: another tool is chosen | Switching to anything but the three move tools, or entering placement mode (DMP / new-section placement), cancels the carry silently, so one click can never both drop the ghost and run another tool's action. Switching among the move tools keeps it | `useMoveCarryGuards.ts` |
-| R5: one cancel routine | Escape, R1, R2 and R4 all run `cancelMoveCarryState` (MapCanvas), which also closes a snap-merge dialog this carry opened. R3 restores the preview through the same registration | `MapCanvas.tsx` |
+| R5: one cancel routine | Escape, R1, R2 and R4 all run `cancelMoveCarryState` (`useMoveDrag.ts`), which also closes a snap-merge dialog this carry opened. R3 restores the preview through the same registration | `useMoveDrag.ts` |
 
 Choices worth knowing:
 
@@ -306,7 +306,9 @@ cannot change what shows. Six writers used to race here, which shipped #24 and
 
 | File | Responsibility |
 |------|---------------|
-| `src/components/Map/MapCanvas.tsx` | Drag state management, Ctrl+drag panning, immovable/anchored computation, snap-to-merge detection |
+| `src/components/Map/MapCanvas.tsx` | Immovable/anchored computation, the carry token and its guards, the pointer handlers and the drop's click gate (`pressClientRef`) |
+| `src/components/Map/useMoveDrag.ts` | Drag state, pickup / per-move preview / drop, snap-to-merge detection and prompt, the one carry cancel routine |
+| `src/components/Map/useModifierPan.ts` | Ctrl+drag / middle-drag panning and the Ctrl-held tracking |
 | `src/components/Map/SurveyLayer.tsx` | Hover detection, visual state (feature-state), drag preview layers, the hover verdict for the cursor |
 | `src/components/Map/mapCursor.ts` | The one writer of the canvas cursor: precedence of pan, placement, hover, Ctrl and tool |
 | `src/hooks/useMapTools.ts` | Per-tool click/hover handlers, immovable guards, drag initiation callbacks |
