@@ -82,7 +82,7 @@ fn junction_gap(state: &AppState, a: SectionId, b: SectionId) -> f64 {
 }
 
 fn reference_of(state: &AppState) -> Option<AzimuthReference> {
-    state.get_project_state().unwrap().default_azimuth_reference
+    state.get_project_state()?.default_azimuth_reference
 }
 
 fn change_reference(state: &AppState, reference: AzimuthReference) {
