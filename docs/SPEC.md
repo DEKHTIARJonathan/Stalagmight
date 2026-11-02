@@ -1148,7 +1148,7 @@ the reverse keeps shot *ids* on positions - so the save-time carry-over would
 otherwise re-read the row's `(section_id, shot_id)` as an identity and migrate
 the ignore onto the mirrored shot.
 
-`CommandResult.reversed_sections` names the sections a command renumbered -
+`reversed_sections` (`ReverseOutcome` / `BatchOutcome`; `HistoryOutcome.reversed_steps` for undo and redo) names the sections a command renumbered -
 on the forward reverse, on a batch of them, and on an undo or redo of either
 (undoing a reverse re-reverses the numbering). A reverse keeps every station's
 world position, so there is nothing in the geometry for a consumer to diff; the
@@ -1551,8 +1551,8 @@ The undo/redo stacks are exposed to the frontend via Tauri IPC commands:
 |---------|-------------|---------|
 | `get_undo_stack` | Get full undo stack with preview data | `Vec<UndoHistoryItem>` |
 | `get_redo_stack` | Get full redo stack with preview data | `Vec<UndoHistoryItem>` |
-| `undo_to` | Undo multiple steps to index N | `CommandResult` |
-| `redo_to` | Redo multiple steps to index N | `CommandResult` |
+| `undo_to` | Undo multiple steps to index N | `HistoryOutcome` (or `CommandError`) |
+| `redo_to` | Redo multiple steps to index N | `HistoryOutcome` (or `CommandError`) |
 
 **UndoHistoryItem DTO:**
 ```typescript
@@ -1576,7 +1576,7 @@ interface UndoHistoryItem {
 **Failure behavior:**
 - On single `undo()`/`redo()` failure, the popped entry is pushed back to the original stack so no entry is lost
 - On `undo_to(N)`/`redo_to(N)` failure, execution stops at the failing step; already-completed steps remain applied, and the failing entry is pushed back to its original stack
-- `undo_to`/`redo_to` return an enhanced error message on partial failure: `"Undo failed at step {current} of {total}: {reason}"` (or `"Redo failed at step..."`)
+- `undo_to`/`redo_to` fail on partial failure with the code `HISTORY_STEP_FAILED` and `history_step: { failed_step, total_steps }` (#576 C4); the display message reads `"Undo failed at step {current} of {total}: {reason}"` (or `"Redo failed at step..."`), and nothing parses it
 - A `tracing::error!` is logged whenever a popped entry fails to apply, including command description, undo data variant name, and failure reason (no full snapshot JSON)
 - Frontend shows an error toast with the failure reason (`result.error ?? 'Unknown error'`) using de-duplication keys `'undo-failed'` / `'redo-failed'`
 - Frontend always calls `refreshProjectState()` on both success and failure (via `try/finally`) to sync UI with backend state

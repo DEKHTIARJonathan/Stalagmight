@@ -35,7 +35,7 @@ matter which crate a type came from.
 ### The freshness gate
 
 This is the tree the frontend, the Playwright IPC mock and `tsc` compile
-against, and most of it has no other writer: `Project`, `CommandResult`,
+against, and most of it has no other writer: `Project`, `CommandError`,
 `Config` and the rest carry no `#[ts(export)]`, so no test regenerates them.
 A Rust change that skipped `pnpm gen:ipc-types` used to leave `tsc` and the mock
 agreeing with the stale declaration, and the mismatch first showed up at runtime
@@ -68,8 +68,11 @@ command's argument names. The generator reads both and writes the manifest
   `args` holds the keys Tauri deserializes (its default camelCase of the Rust
   parameter names; an `Option` parameter may be omitted); `result` is what the
   command resolves with (`ArrayBuffer` for a raw `tauri::ipc::Response`, `null`
-  for `()`); `error` is its `Err` type (`never` when it returns no `Result`;
-  Tauri still rejects with a string when it cannot deserialize the arguments).
+  for `()`); `error` is its `Err` type - `CommandError` for every fallible
+  command (#576 C4, see docs/architecture.md "Command results and errors") except
+  the settings writes in `commands/config.rs`, which are still `string`; `never`
+  when it returns no `Result`. Tauri still rejects with a plain string when it
+  cannot deserialize the arguments.
 - `src/types/ipc/ipcCommands.json` - the same data, machine-readable, with the
   Rust spelling of every type, for the Rust tests.
 
@@ -192,11 +195,19 @@ pays for the bytes:
 | Once per payload (a command result, a header) | **Drop `skip_serializing_if`.** The array is a few bytes and the already-generated required type becomes true - no consumer changes, no `?? []` that encodes nothing. |
 | Once per ELEMENT of a large collection | **Keep the skip, retype the field `Option<Vec<T>>`.** ts-rs then emits `foo?:` and `tsc` flags every unguarded read. |
 
-The two live examples, one of each:
+The live examples:
 
-- `CommandResult::section_ids` (`crates/core/src/core/command.rs`) dropped the
-  skip. One `"section_ids":[]` per command result is unmeasurable, and absence
-  and empty stated the same fact.
+- `section_ids` (`BatchOutcome`, `ImportOutcome`, `crates/core/src/core/outcome.rs`;
+  formerly on `CommandResult`) dropped the skip. One `"section_ids":[]` per
+  command result is unmeasurable, and absence and empty stated the same fact. The
+  same holds for every per-command outcome (#576 A12): nothing on them is omitted -
+  an unset `remote_link` is `null`, an empty `reversed_sections` is `[]`.
+- `CommandError`'s payloads (`crates/core/src/core/command_error.rs`) keep the skip
+  and are each an `Option`, so ts-rs declares them `?:`: each is set only for the
+  codes named on it, which is what makes its presence a discriminant, and only
+  `code` and `message` are always sent. They live in a boxed struct flattened into
+  the error (`#[serde(flatten)]`), so the wire and the declaration stay one flat
+  object.
 - `Station::closures_with` (`crates/models/src/station.rs`) kept it and became
   `Option<Vec<ClosureRef>>` + `#[ts(optional)]`. That skip is paid per station on
   every JSON `get_project_state` and on `get_adjusted_stations`, which returns a
@@ -220,13 +231,16 @@ halves (the key is on the wire iff the declaration lacks `?`):
 
 - `models::station::tests::closures_with_is_omitted_when_empty_and_declared_optional`
 - `models::station::tests::an_emptied_closure_list_leaves_the_wire_like_an_absent_one`
-- `core::command::tests::omitted_fields_are_exactly_the_ones_declared_optional`
+- `core::command_error::tests::omitted_fields_are_exactly_the_ones_declared_optional`
+- `core::outcome::tests::no_outcome_field_is_omitted_or_declared_optional`
 
 Add the same pair when you add a serde-omitted field. In the Playwright IPC mock
 (`e2e-playwright/mocks/tauri-ipc.ts`) the same convention applies by hand: an
 omitted field is written **absent**, not present-and-empty (`closures_with` on
 the `get_project_state` stations), and an always-present one is written even when
-empty (`section_ids` on every `-> CommandResult` handler). Half of that is
+empty (`section_ids` on every `BatchOutcome` / `ImportOutcome` reply,
+`remote_link` on every mutation outcome); a failure is a rejection with a
+`CommandError` object, its payloads absent unless set. Half of that is
 gated since #576 C3: every reply is checked against the generated result type
 (`MockReply`, see "The command manifest"), so a required field cannot be left
 out. The other half is not - a type cannot tell an absent optional field from a

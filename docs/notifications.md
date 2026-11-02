@@ -149,10 +149,21 @@ regions). Read the comment blocks in those two files plus
 
 ## Command-failure contract
 
-- **`success: false` never dies silently.** Precedence: a specific handler first
-  (read-only `EDIT_DISABLED` notice, divergence prompt, the save/import routers);
-  when nothing specific claims the failure, `executeCommandInner`'s catch-all
-  error toast (key `command-failed`) surfaces `result.error`. The catch-all
+- **Route on the code, show the message.** A command the backend refuses rejects
+  with a `CommandError` (#576 C4, docs/architecture.md "Command results and
+  errors"): its `code` (`CommandErrorCode`) is what decides the surface, its
+  `message` is display-only. Never decide anything from the message text - no
+  `startsWith`, `includes` or regex on it - and never put a code marker into one.
+  A failure that needs a surface of its own gets a code of its own.
+- **A refused command never dies silently.** The store's mutations answer
+  `success: false` with the refusal's `code` and `error` (its message).
+  Precedence: a specific handler, chosen by code, first (the edit-gate codes
+  `EDIT_DISABLED` / `WORKSPACE_READ_ONLY` / `NEWER_FILE_EDIT_DISABLED` /
+  `ADOPTION_IN_PROGRESS` -> the read-only notice; `EDIT_REVERIFY_DIVERGED` ->
+  the divergence prompt; the save/import routers on their codes); when nothing
+  specific claims the failure,
+  `executeCommandInner`'s catch-all error toast (key `command-failed`) surfaces
+  the message. The catch-all
   yields while ANY dialog is open - dialogs own their inline errors and are open
   when they issue commands - so a panel or map flow must NOT add its own
   failure toast for an `executeCommand`-backed action; the catch-all is the
@@ -161,12 +172,14 @@ regions). Read the comment blocks in those two files plus
   global, so a non-dialog command failing while an unrelated dialog happens to
   be open is still silent - the cost of never double-messaging a dialog.
   Undo/redo keep their own equivalent fallback (same localized default).
-- **`CommandResult::with_warning` (code `"SYSTEM"`) is exclusive to the deferred-
-  save contract** (#92/#104): "imported but could not save" keeps
-  `success: true` + warning so data survives exit. Never route ordinary warnings
-  through it; import-quality warnings ride `CommandResult.import_receipt`.
-- Genuine IPC rejections (transport errors) re-sync state and re-throw; the caller
-  that initiated the action owns surfacing them under the rules above.
+- **`CommandResult::with_warning` (warning code `"SYSTEM"`) is exclusive to the
+  deferred-save contract** (#92/#104): "imported but could not save" is a SUCCESS
+  whose `ImportOutcome.warnings` carry it, so data survives exit. Never route
+  ordinary warnings through it; import-quality warnings ride
+  `ImportOutcome.import_receipt`.
+- Any other rejection (a transport failure, Tauri's own plain-string argument
+  error) re-syncs state and re-throws; the caller that initiated the action owns
+  surfacing it under the rules above.
 
 ## Copy
 

@@ -392,7 +392,7 @@ Sections unreachable after all passes remain in the wizard's manual segment-plac
 |---------|-------|--------|-------|
 | `suggest_all_import_placements` | `ImportSectionForSuggestion[]` | `CrossSectionSuggestion[]` | Compares against existing + other imports |
 | `get_segment_geometry` | `sectionId` | `SegmentGeometry` | All connected sections' shot-lines, centered on queried section |
-| `import_sections` | `sections, fileHash, existingShotUpdates`, provenance, `sourceWarnings` | `CommandResult` | Batch import with atomic existing shot updates and undo support; `sourceWarnings` lead the receipt |
+| `import_sections` | `sections, fileHash, existingShotUpdates`, provenance, `sourceWarnings` | `ImportOutcome` | Batch import with atomic existing shot updates and undo support; `sourceWarnings` lead the receipt |
 
 ## Parse Warnings
 

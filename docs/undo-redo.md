@@ -846,8 +846,11 @@ likewise only ever bumped while holding `project`; see the module doc in
   index / empty-stack check, the failure arm reconciles geometry and marks the
   remote copy un-pushed too, because the steps before it landed and the failing
   arm itself may have mutated before reporting. Only a failure AT the check (an
-  invalid index, nothing to undo) leaves the dirty bit alone. The frontend mirrors
-  that for every "failed at step N of M", N = 1 included
+  invalid index, nothing to undo) leaves the dirty bit alone. Such a failure
+  carries the code `HISTORY_STEP_FAILED` with `history_step` (step N of M, a
+  single step reporting 1 of 1) and the `reversed_sections` that landed (#576 C4);
+  the frontend marks the project dirty on that code, and takes the SpeleoDB bits
+  from the answer's `remote_link` (#576 D22) instead of mirroring them
 - **Click button while open**: performs single undo/redo, refreshes the list, stays open
 - **Keyboard**: Arrow keys navigate, Enter selects, Escape closes
 - Actions are queued and processed sequentially (`actionQueueRef`)

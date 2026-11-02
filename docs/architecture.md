@@ -65,6 +65,44 @@ executes them and manages undo/redo; the executor bodies are split one module pe
 family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
 `src-tauri/crates/core/src/core/state/`.
 
+## Command results and errors
+
+Every fallible IPC command returns `Result<T, CommandError>` (#576 C4). There is
+one error envelope: `CommandError` (`crates/core/src/core/command_error.rs`) carries
+a `code: CommandErrorCode` (`crates/models/src/command_error.rs`, one ts-rs enum for
+the whole app, A6), a display-only `message`, and optional payloads flattened into
+the same wire object (`details` and `speleodb_managed` for an open, the SpeleoDB
+`status` / `transport` / `unpushed_local` / `dump_candidates`, `history_step` and
+`reversed_sections` for a failed undo/redo, `session_closed`, `remote_link`). The
+frontend routes on the code and never on the message: the string markers that used
+to be prefixed onto the text (`EDIT_DISABLED: ...`, `FS_PERMISSION_DENIED: ...`) and
+matched with `startsWith` are gone. The subsystems keep their own error types where
+they need them and carry the same code: `LoadError` (open / create) and the SpeleoDB
+crate's `SpeleoErrorDto` / `SpeleoDbError::Refused` convert into `CommandError`
+losslessly at the boundary. Commands that cannot fail stay infallible; the settings
+write commands in `commands/config.rs` still return `Result<_, String>` (rejected as a
+plain string).
+
+The success side is per command (A12). `AppState` methods still build their answer
+in the internal `CommandResult` accumulator, which no longer crosses the IPC: each
+command converts it with `CommandResult::into_outcome::<T>()` into the type that says
+exactly what it reports - `EditOutcome`, `SectionCreated`, `ShotCreated`,
+`ReverseOutcome` (a parity-reduced `reversed_sections`), `BatchOutcome`,
+`HistoryOutcome` (`reversed_steps`, the ordered per-step log a consumer composes),
+`ImportOutcome`, `SaveOutcome`, `DeleteProjectOutcome`, `ProjectFileOutcome`
+(`crates/core/src/core/outcome.rs`) - and a failure into a `CommandError` with the
+producer's code (`CommandResult::refused`).
+
+**SpeleoDB link bits (D22).** Every survey mutation answers through
+`commands/pool.rs` `run_mutation`, which attaches `remote_link` (`has_unpushed_edits`,
+`unwound`, read by `AppState::remote_link_bits` right after the command) to its
+outcome and to its error. The frontend applies it in one place, `invokeIpc`
+(`src/utils/ipc.ts`), so no editing path keeps its own copy of the backend's dirty
+bookkeeping (the copies used to drift: a provable no-op such as reversing a shot-less
+section marked the copy un-pushed on screen while the backend stayed clean). A source
+tripwire fails when a command whose answer carries the bits is not run through
+`run_mutation`.
+
 ## Where commands run
 
 Tauri runs a plain (non-`async`) `#[tauri::command]` inline in its IPC handler, on
@@ -72,7 +110,7 @@ the **main thread**: the window cannot repaint, scroll or deliver an event until
 returns, and every later IPC call - `cancel_loading` included - waits behind it. So
 no command does its work there (#576 C2). Every command is `async`, generic over the
 Tauri `Runtime`, takes the `AppHandle`, and hands its body to the blocking pool
-through `commands/pool.rs` (`pool::run` / `run_infallible`, and the `run_stateless*`
+through `commands/pool.rs` (`pool::run` / `run_mutation` / `run_infallible`, and the `run_stateless*`
 pair for a body that needs no `AppState`); the main thread only parses the arguments.
 The SpeleoDB commands do the same through their own `run_blocking`. A contract test
 (`app_contract_tests.rs`) fails when a registered command is not `async`.

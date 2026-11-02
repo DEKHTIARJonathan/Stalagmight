@@ -54,7 +54,7 @@ half.** The frontend reports every `appMode` change to the backend
 `main.tsx`), and the backend resets its copy to Survey on every project open,
 create and close - the same reset `applyDisplaySettings` does. While the mode is
 Plan or Export, `AppState::guard_mutation` refuses every entry point that calls it
-with `EDIT_DISABLED: WORKSPACE_READ_ONLY: ...`, which the frontend shows as its own
+with the code `WORKSPACE_READ_ONLY` (#576 C4), which the frontend shows as its own
 notice ("switch to Survey", `editGate.workspaceReadOnlyNotice`), not as the
 SpeleoDB lock notice. It is **deny by default**: a new entry point that calls
 `guard_mutation` is refused in Plan and Export without anyone having to remember.

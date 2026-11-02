@@ -85,13 +85,13 @@ opens the project **read-only** and never writes the file (#576 B6-D1):
   wrote it; none of it is restored into this build's undo stack, whose payloads no
   migration arm here has vetted.
 - **Editing is blocked.** The load commits `AppState::newer_file_schema`, and
-  `guard_mutation` refuses every edit with `EDIT_DISABLED: NEWER_FILE_READ_ONLY: ...`
+  `guard_mutation` refuses every edit with the code `NEWER_FILE_EDIT_DISABLED`
   ahead of any SpeleoDB lock state. The frontend gets the same verdict on the load
   result (`newerSchemaVersion`) and composes it into the canonical edit gate
   (`useEditingBlocked`, see [app-modes.md](app-modes.md)), and a banner says why:
   "This project was saved by a newer version of Stalagmight. Update to edit it."
 - **Every save is refused** - in place, Save As, the pre-push flush - with the
-  `NEWER_FILE_READ_ONLY` marker, which `surfaceSaveFailure` turns into a warning
+  `NEWER_FILE_READ_ONLY` code, which `surfaceSaveFailure` turns into a warning
   toast. Auto-save never attempts one. Writing the file at this build's older
   schema is exactly the silent downgrade this exists to prevent, and a Save As is
   the same downgrade under another name.
@@ -124,8 +124,8 @@ handling.
 7. Update project.file_path
 8. Swap in the new database handle
 9. Update recent projects list in config
-10. Return CommandResult with saved_path, plus a warning for anything the save
-    went ahead without
+10. Return a SaveOutcome with saved_path, plus a warning for anything the save
+    went ahead without (a failure is a CommandError with its code)
 ```
 
 Steps 1-5 are the critical path for data safety. Step 4 writes every side table, the undo/redo stacks included, while the file is still staged, so a partial rewrite is never renamed into place.
@@ -236,7 +236,7 @@ fixpoint, and a legacy file is one from its first save onward.
 For a SpeleoDB-managed project given an explicit destination (Save a Copy, see
 below), the pipeline diverges after step 4: the copy is written and renamed into
 place, recorded in Recent Projects, and the function returns with
-`CommandResult.unlinked_copy_path` set - steps 6, 7 and 8 are skipped on
+`SaveOutcome.unlinked_copy_path` set - steps 6, 7 and 8 are skipped on
 purpose, because the session stays on the managed file.
 
 ### Frontend (`saveProject` in `projectStore.ts`)
@@ -253,7 +253,7 @@ purpose, because the session stays on the managed file.
    went ahead without (also on the copy path in step 2)
 ```
 
-A successful save's `CommandResult.warnings` is what it could not keep:
+A successful save's `SaveOutcome.warnings` is what it could not keep:
 `UNDO_HISTORY_DROPPED`, `DISPLAY_SETTINGS_NOT_SAVED`, `DATABASE_NOT_REOPENED` and
 `SIDE_TABLES_NOT_CARRIED` (#576 RV2-R-7: a Save As to another file away from an open
 file whose database could not be reopened - the way out - goes ahead without the
@@ -266,7 +266,7 @@ pre-push flush is the same save: its warnings ride the Done / Push answer
 (`SpeleoDoneReport` / `SpeleoPushReport.save_warnings`, #576 NF-W2SAVE-1) and
 `useSpeleoActions` shows them the same way.
 
-The frontend calls `refreshProjectState()` after a save ONLY when the project entered the save with integrity issues (the backend's save-time heals mutate the live project). A clean save skips it: it changes no computed data (stations, stats, warnings), so recomputing everything would be wasted work. The only state that changes is `file_path` (on first save or save-as), which the backend returns via `CommandResult.saved_path`. When the save produced a detached copy instead (see Save a Copy below), the path comes back in `unlinked_copy_path` and `saved_path` is absent.
+The frontend calls `refreshProjectState()` after a save ONLY when the project entered the save with integrity issues (the backend's save-time heals mutate the live project). A clean save skips it: it changes no computed data (stations, stats, warnings), so recomputing everything would be wasted work. The only state that changes is `file_path` (on first save or save-as), which the backend returns via `SaveOutcome.saved_path`. When the save produced a detached copy instead (see Save a Copy below), the path comes back in `unlinked_copy_path` and `saved_path` is `null`.
 
 ## Atomic Save (Temp File + Rename)
 
@@ -283,13 +283,14 @@ That gate (`src-tauri/crates/core/src/core/state/crash_property_tests.rs`, see [
 ## Failure classification
 
 Every failing save goes through `save_failure` (`project_io.rs`), which logs the
-whole `anyhow` chain at WARN and prefixes the `CommandResult.error` with the
-marker that tells the frontend which remediation to show. `src/utils/saveErrors.ts`
-mirrors the markers; `saveFeedback.ts` turns them into copy. (The newer-version
-refusal is stamped at the top of `save_project` itself, before anything is
-attempted, with the same marker idiom.)
+whole `anyhow` chain at WARN and gives the failure the `CommandErrorCode` that tells
+the frontend which remediation to show (#576 C4: the code travels on the
+`CommandError`, not as a prefix of its message, which is display-only).
+`src/utils/saveErrors.ts` classifies the codes; `saveFeedback.ts` turns them into
+copy. (The newer-version refusal is coded at the top of `save_project` itself,
+before anything is attempted.)
 
-| Marker | Means | Surface |
+| Code | Means | Surface |
 |---|---|---|
 | `FS_PERMISSION_DENIED` | The OS refuses a destination that IS there | `SavePermissionDialog` (folder-access guidance) |
 | `FS_PATH_NOT_FOUND` | The folder is gone, or its drive is not connected | Error dialog, "the folder no longer exists or the drive is not connected" |
@@ -320,7 +321,7 @@ therefore does not relocate the session; it writes a detached copy:
   plain unmanaged project.
 - The session stays on the managed file: `project.file_path`, the database
   handle and the dirty state are untouched. The backend reports the copy via
-  `CommandResult.unlinked_copy_path` and deliberately leaves `saved_path`
+  `SaveOutcome.unlinked_copy_path` and deliberately leaves `saved_path`
   unset so the frontend cannot re-point itself at the copy.
 - The copy is added to Recent Projects.
 - Saving a copy onto the managed file itself (its own path, or an alias of the
@@ -409,13 +410,12 @@ Undo and redo stacks are persisted to the SQLite database synchronously on each 
 - On project open, persisted stacks are restored from the database
 - See [Undo/Redo](undo-redo.md) for the full undo system documentation, including the hybrid SpeleoDB mode and when the stack is cleared
 
-## CommandResult.saved_path
+## SaveOutcome.saved_path
 
-The `save_project` backend command returns the save path as a string in `CommandResult.saved_path`. This allows the frontend to update `project.file_path` without a full state refresh. A Save a Copy on a managed project returns `unlinked_copy_path` instead and leaves `saved_path` absent, precisely so this update cannot fire.
+The `save_project` backend command answers with a `SaveOutcome` (#576 A12) whose `saved_path` is the save path as a string. This allows the frontend to update `project.file_path` without a full state refresh. A Save a Copy on a managed project returns `unlinked_copy_path` instead and leaves `saved_path` `null`, precisely so this update cannot fire.
 
-- Present on successful saves (regular save and save-as)
-- Absent (`None`/`undefined`) on all other command results
-- Serialized with `#[serde(skip_serializing_if = "Option::is_none")]` to keep other results compact
+- Set on successful saves (regular save and save-as)
+- `null` on a Save a Copy; both keys are always on the wire (the outcome types omit nothing, docs/ipc-typegen.md)
 
 ## Key Files
 
@@ -423,7 +423,7 @@ The `save_project` backend command returns the save path as a string in `Command
 |------|---------|
 | `src-tauri/crates/core/src/core/state/project_io.rs` | Backend `save_project`, atomic save logic (`open_project` lives in `project_load.rs`) |
 | `src-tauri/crates/core/src/core/state/save_sidecars.rs` | The side-table registry, its failure policies and `SaveMode` |
-| `src-tauri/crates/core/src/core/command.rs` | `CommandResult` with `saved_path` field |
+| `src-tauri/crates/core/src/core/outcome.rs` | `SaveOutcome` (`saved_path`, `unlinked_copy_path`, `warnings`) |
 | `src/store/projectStore.ts` | Frontend `saveProject()` action |
 | `src/hooks/useAutoSave.ts` | Debounced auto-save hook |
 | `src-tauri/crates/persistence/src/persistence/sqlite.rs` | SQLite database operations |
