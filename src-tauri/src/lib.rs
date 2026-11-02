@@ -311,8 +311,10 @@ pub fn run() {
             // per-endpoint traffic metrics through (it has no AppHandle to reach
             // Tauri-managed state, so it records via this write-once sink).
             speleodb::metrics::install(collector.clone());
-            telemetry::start_periodic_flush(collector.clone());
-            collector.send_buffered();
+            // Also drains what earlier sessions buffered, as that thread's
+            // first job: draining here, on the setup thread, let a slow
+            // telemetry endpoint hold up startup (#576 B17).
+            telemetry::start_periodic_flush(collector);
 
             // Bound the log directory once per launch (#319). `cleanup_logs`
             // existed but had no caller, so logs and crash markers grew

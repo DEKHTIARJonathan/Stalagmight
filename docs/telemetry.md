@@ -25,6 +25,15 @@ is capped at 100 payload files; beyond that the oldest are dropped, so a very
 long offline stretch loses its oldest usage counts rather than growing the
 directory without bound.
 
+**Neither startup nor quit waits on the network** (#576 B17). On app close,
+`flush_telemetry` writes the pending counts to that buffer instead of posting
+them, so quitting costs milliseconds whatever the server is doing. The buffer is
+drained on the telemetry thread - first thing when it starts, then on the
+60-second ticks after a failure - and each pass stops after 20 seconds in total
+(each request is given only the time that is left), leaving the rest for the
+next pass. A slow endpoint that still answers therefore never holds anything up;
+an unreachable one stops a pass at its first failure.
+
 **Feature-gated**: All Rust telemetry is behind `#[cfg(feature = "telemetry")]`.
 When disabled, all methods are zero-cost no-ops eliminated by the compiler.
 The frontend self-gates by calling `is_telemetry_available` at startup.
@@ -178,7 +187,8 @@ dwell.global-view              - seconds on the Welcome/project-list screen
 | `cancelPlacementMode()` / `confirmPlacement()` | `tool.{activeTool}` |
 
 **Flush on close**: `flushTelemetry()` calls `flushDwell()` to capture the
-final state's accumulated time before sending.
+final state's accumulated time before handing the counts to the backend, which
+buffers them for the next launch to send.
 
 **Same-key no-op**: Calling `setDwellState` with the same key is a no-op -
 prevents timer resets from redundant calls.

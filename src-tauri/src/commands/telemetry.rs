@@ -15,10 +15,14 @@ pub fn track_events(
     Ok(())
 }
 
-/// Flush current telemetry buffer to the backend.
+/// Hand the pending telemetry to the offline buffer - the app-close path.
+///
+/// No network: sending here made quitting wait on the server, one request per
+/// open project bucket (#576 B17). The next launch's background drain sends
+/// what this writes.
 #[tauri::command]
 pub fn flush_telemetry(state: State<'_, TelemetryCollector>) -> Result<(), String> {
-    state.flush();
+    state.buffer_pending();
     Ok(())
 }
 
