@@ -87,7 +87,8 @@ stalagmight/
 │
 ├── e2e-playwright/               # Playwright E2E tests (mocked IPC, 100+ spec files)
 │   ├── mocks/                    # Tauri IPC mocks
-│   │   └── tauri-ipc.ts          # Mock command handlers
+│   │   ├── tauri-ipc.ts          # Mock command handlers (the core)
+│   │   └── ipc/                  # Its command families (config, Plan mode, DMP, tiles, SpeleoDB)
 │   ├── fixtures/                 # Test data
 │   ├── dmp-import.spec.ts        # Import DMP dialog tests
 │   ├── project-crud.spec.ts      # Project operations tests

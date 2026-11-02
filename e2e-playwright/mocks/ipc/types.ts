@@ -1,0 +1,20 @@
+/**
+ * The contract between the Playwright IPC mock's core (`../tauri-ipc.ts`) and the
+ * command families split out of it (#576 E8). The core installs the mock in the page;
+ * every command its own dispatcher does not handle is offered to each family in turn,
+ * and the first answer that is not `ctx.unhandled` is the result. A family owns its
+ * commands and the state only they use, and reaches the core only through `ctx`.
+ */
+export interface MockIpcContext {
+  /** What a family returns for a command it does not handle. */
+  readonly unhandled: object;
+  /** The core's open project (null when none), read at call time. */
+  currentProject(): { sections: unknown[] } | null;
+  /** The whole mock dispatcher (overrides, guards, core and families), as the app calls it. */
+  invoke(cmd: string, args?: Record<string, unknown>): unknown;
+}
+
+export type MockCommandHandler = (cmd: string, args?: Record<string, unknown>) => unknown;
+
+/** Runs in the page (serialized with `Function.prototype.toString`): only `ctx` and browser globals. */
+export type MockCommandFamily = (ctx: MockIpcContext) => MockCommandHandler;

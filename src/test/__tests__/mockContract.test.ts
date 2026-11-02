@@ -21,9 +21,18 @@ const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../../../');
 const LIB_RS_PATH = path.join(REPO_ROOT, 'src-tauri/src/lib.rs');
 const MOCK_TS_PATH = path.join(REPO_ROOT, 'e2e-playwright/mocks/tauri-ipc.ts');
+// The command families split out of the mock (#576 E8): each module exports one
+// `MockCommandFamily` factory with its own `switch (cmd)`.
+const MOCK_FAMILY_DIR = path.join(REPO_ROOT, 'e2e-playwright/mocks/ipc');
 
 const libRsSource = fs.readFileSync(LIB_RS_PATH, 'utf8');
 const mockTsSource = fs.readFileSync(MOCK_TS_PATH, 'utf8');
+const mockFamilySources = fs
+  .readdirSync(MOCK_FAMILY_DIR)
+  .filter((name) => name.endsWith('.ts'))
+  .sort()
+  .map((name) => ({ name, source: fs.readFileSync(path.join(MOCK_FAMILY_DIR, name), 'utf8') }))
+  .filter(({ source }) => /export const \w+: MockCommandFamily\b/.test(source));
 
 /**
  * Scans `source` starting at `openIndex` (which must point at an opening
@@ -218,6 +227,32 @@ function parseMockedCommands(source: string): string[] {
   return [...names].sort();
 }
 
+/**
+ * Every command the mock handles: the core's switch (`tauri-ipc.ts`) plus the switch of
+ * each command family under `e2e-playwright/mocks/ipc/` (#576 E8). A family file whose
+ * factory the core does not list in `MOCK_COMMAND_FAMILIES` is never asked about any
+ * command, so its cases are not mocked - that fails here rather than counting them.
+ */
+function parseAllMockedCommands(): string[] {
+  const listMatch = /const MOCK_COMMAND_FAMILIES[^=]*=\s*\[([^\]]*)\]/.exec(mockTsSource);
+  if (!listMatch) {
+    throw new Error('parseAllMockedCommands: could not find `MOCK_COMMAND_FAMILIES` in e2e-playwright/mocks/tauri-ipc.ts.');
+  }
+  const registeredFamilies = new Set(listMatch[1]!.split(',').map((s) => s.trim()).filter(Boolean));
+  const names = new Set(parseMockedCommands(mockTsSource));
+  for (const { name, source } of mockFamilySources) {
+    const family = /export const (\w+): MockCommandFamily\b/.exec(source)?.[1];
+    if (!family || !registeredFamilies.has(family)) {
+      throw new Error(
+        `parseAllMockedCommands: the command family ${family ?? '?'} (e2e-playwright/mocks/ipc/${name}) ` +
+          'is not listed in MOCK_COMMAND_FAMILIES in tauri-ipc.ts, so none of its cases is reachable.'
+      );
+    }
+    for (const cmd of parseMockedCommands(source)) names.add(cmd);
+  }
+  return [...names].sort();
+}
+
 // ----------------------------------------------------------------------------
 // Allowlist: registered Rust commands with no mock case in the shared switch,
 // each with a one-line reason it's deliberately unmocked today. If a command
@@ -329,18 +364,18 @@ describe('mock contract tripwire (#275)', () => {
   });
 
   it('parses a non-empty mocked command list', () => {
-    expect(parseMockedCommands(mockTsSource).length).toBeGreaterThan(0);
+    expect(parseAllMockedCommands().length).toBeGreaterThan(0);
   });
 
   it('every registered Rust command has a mock case or an allowlist reason', () => {
     const registered = parseRegisteredRustCommands(libRsSource);
-    const mocked = new Set(parseMockedCommands(mockTsSource));
+    const mocked = new Set(parseAllMockedCommands());
 
     const missing = registered.filter((cmd) => !mocked.has(cmd) && !(cmd in UNMOCKED_COMMAND_REASONS));
 
     if (missing.length > 0) {
       throw new Error(
-        `${missing.length} registered #[tauri::command](s) have no mock case in e2e-playwright/mocks/tauri-ipc.ts ` +
+        `${missing.length} registered #[tauri::command](s) have no mock case in e2e-playwright/mocks/tauri-ipc.ts or mocks/ipc/ ` +
           `and no allowlist entry: ${missing.join(', ')}. ` +
           'Add a mock case in tauri-ipc.ts or allowlist with a reason.'
       );
@@ -349,13 +384,13 @@ describe('mock contract tripwire (#275)', () => {
 
   it('every mock case corresponds to a registered command or an allowlist reason', () => {
     const registered = new Set(parseRegisteredRustCommands(libRsSource));
-    const mocked = parseMockedCommands(mockTsSource);
+    const mocked = parseAllMockedCommands();
 
     const orphaned = mocked.filter((cmd) => !registered.has(cmd) && !(cmd in STALE_MOCK_CASE_REASONS));
 
     if (orphaned.length > 0) {
       throw new Error(
-        `${orphaned.length} mock case(s) in e2e-playwright/mocks/tauri-ipc.ts have no matching registered ` +
+        `${orphaned.length} mock case(s) in e2e-playwright/mocks/tauri-ipc.ts or mocks/ipc/ have no matching registered ` +
           `#[tauri::command] and no allowlist entry: ${orphaned.join(', ')}. ` +
           'Add a mock case in tauri-ipc.ts or allowlist with a reason.'
       );
@@ -364,7 +399,7 @@ describe('mock contract tripwire (#275)', () => {
 
   it('UNMOCKED_COMMAND_REASONS has no stale entries', () => {
     const registered = new Set(parseRegisteredRustCommands(libRsSource));
-    const mocked = new Set(parseMockedCommands(mockTsSource));
+    const mocked = new Set(parseAllMockedCommands());
 
     const stale = Object.keys(UNMOCKED_COMMAND_REASONS).filter(
       (cmd) => !registered.has(cmd) || mocked.has(cmd)
@@ -398,7 +433,7 @@ describe('mock contract tripwire (#275)', () => {
 
   it('STALE_MOCK_CASE_REASONS has no stale entries', () => {
     const registered = new Set(parseRegisteredRustCommands(libRsSource));
-    const mocked = new Set(parseMockedCommands(mockTsSource));
+    const mocked = new Set(parseAllMockedCommands());
 
     const stale = Object.keys(STALE_MOCK_CASE_REASONS).filter(
       (cmd) => registered.has(cmd) || !mocked.has(cmd)

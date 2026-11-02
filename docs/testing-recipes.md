@@ -754,7 +754,8 @@ Specs live in `e2e-playwright/`, flat, one file per feature area, alongside:
 ```
 e2e-playwright/
 ├── helpers/app.ts          # shared setup + waiters (import from here)
-├── mocks/tauri-ipc.ts      # the mocked Tauri IPC backend
+├── mocks/tauri-ipc.ts      # the mocked Tauri IPC backend (its core)
+├── mocks/ipc/*.ts          # its command families (config, Plan mode, DMP, tiles, SpeleoDB)
 ├── fixtures/coverage.ts    # the test fixture every spec imports `test` from
 ├── fixtures/*.dmp          # binary survey files. Nothing reads them: the mock
 │                           #   fabricates data and never parses a file
@@ -962,7 +963,7 @@ the two diverge by several percent.
    captured on first retry).
 4. `PW_RETRIES=0` to fail fast instead of watching a flake pass on retry.
 5. Add `console.log()` inside the relevant mock handler in
-   `mocks/tauri-ipc.ts`.
+   `mocks/tauri-ipc.ts` (or its command family under `mocks/ipc/`).
 
 `e2e-playwright/debug.spec.ts` is a minimal end-to-end sanity spec (create a
 project, assert the map canvas renders) - useful to confirm the harness itself
@@ -972,6 +973,16 @@ works before blaming your test.
 
 `e2e-playwright/mocks/tauri-ipc.ts` intercepts `__TAURI_INTERNALS__.invoke()`
 and hand-simulates the Rust backend for every Playwright spec.
+
+Its own `switch (cmd)` handles the project lifecycle, load and edit commands.
+The command families under `mocks/ipc/` (config, Plan mode, the DMP parse, tile
+cache, SpeleoDB - #576 E8) each own their commands and the state only they use;
+the core asks them in turn about any command its switch does not handle. A
+family runs in the page like the core, serialized with
+`Function.prototype.toString`, so it may use only its `ctx` argument
+(`mocks/ipc/types.ts`) and browser globals, never an import. A new command goes
+into the family it belongs to, or into the core when it reads or replaces the
+open project's lifecycle state.
 
 ### A new IPC command needs a mock case
 
@@ -1671,7 +1682,7 @@ data for a specific edge case, and record what it is for in the fixtures README.
 
 | Symptom | Check |
 |---------|-------|
-| A command returns `null`, UI takes the failure path | The command has no case in `mocks/tauri-ipc.ts`. `pnpm exec vitest run src/test/__tests__/mockContract.test.ts` will say so. |
+| A command returns `null`, UI takes the failure path | The command has no case in `mocks/tauri-ipc.ts` or `mocks/ipc/`. `pnpm exec vitest run src/test/__tests__/mockContract.test.ts` will say so. |
 | A panel renders empty while stats show the right count | A reference-keyed memo froze - the mock returned the same project object twice. See the fresh-identity rule above. |
 | A new gate disables UI in every spec | The mock never initializes the state the gate reads. Fix the mock, not the gate. |
 | Settings tests fail after adding a category | The mock's **two** config objects need the new block; `focus-management.spec.ts` hardcodes the category order. |
