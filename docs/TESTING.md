@@ -185,6 +185,13 @@ Three workflows gate `master`:
   skip `**/*.md` and `docs/**` - exactly where a leak, a Unicode dash or a stale
   attribution bundle lands.
 
+So a change that touches only markdown or `docs/` is gated by `leak-scan.yml`
+alone, by design (#576 E18(i)): nothing `check` or `smoke` builds or tests reads
+those files - the one markdown file a build bundles, the third-party attribution
+bundle, is gated right here - and a malformed `CHANGELOG.md` is caught when a
+release is tagged (`scripts/release-tag.sh` runs `scripts/release-notes.sh` on
+it, see [releasing.md](releasing.md)).
+
 One more, narrow, workflow: **`os-helper.yml`** runs `cargo fmt --check`, clippy
 (`-D warnings`), the tests and a release build of the agent harness's standalone,
 macOS-only OS helper crate (`e2e/agent/os/helper`) on a macOS runner, and only when
