@@ -244,7 +244,11 @@ export class DragGhostController {
     this.armLand();
     this.ghostFollow = new GhostFollow({
       bake: (pos) => this.bakeStock(pos.dx, pos.dy),
-      translate: (t) => setDragPreviewTranslate(this.map, [t.dx, t.dy]),
+      // Not while the WebGL context is lost: the preview layers went with the
+      // style, and getLayer reads it (#576 RV4-FE-SL2).
+      translate: (t) => {
+        if (hasLiveStyle(this.map)) setDragPreviewTranslate(this.map, [t.dx, t.dy]);
+      },
     });
     this.ghostFollow.start();
   }
@@ -253,9 +257,14 @@ export class DragGhostController {
    *  arm the fallback land timer. Single-flight is enforced by {@link GhostFollow}. */
   private bakeStock(dx: number, dy: number): void {
     if (this.mode === 'idle' || !this.set) return;
-    const fc = buildDragPreviewFeatureCollection(this.set, this.opts.projector(), dx, dy);
-    const src = this.map.getSource(DRAG_PREVIEW_SOURCE);
-    if (src && 'setData' in src) (src as maplibregl.GeoJSONSource).setData(fc);
+    // While the WebGL context is lost there is no source to bake into (getSource
+    // reads the missing style, #576 RV4-FE-SL2). The fallback land timer below
+    // still runs, so the single-flight queue keeps moving until the restore.
+    if (hasLiveStyle(this.map)) {
+      const fc = buildDragPreviewFeatureCollection(this.set, this.opts.projector(), dx, dy);
+      const src = this.map.getSource(DRAG_PREVIEW_SOURCE);
+      if (src && 'setData' in src) (src as maplibregl.GeoJSONSource).setData(fc);
+    }
     if (this.bakeTimeout !== null) clearTimeout(this.bakeTimeout);
     this.bakeTimeout = setTimeout(() => this.onBakeLanded(), GHOST_BAKE_TIMEOUT_MS);
   }
@@ -286,7 +295,9 @@ export class DragGhostController {
 
   private disarmStock(): void {
     this.dropStockListeners();
-    if (this.ghostFollow) setDragPreviewTranslate(this.map, [0, 0]);
+    // A stock carry cancelled while the WebGL context is lost: the preview layers
+    // went with the style, so there is no translate to reset (#576 RV4-FE-SL2).
+    if (this.ghostFollow && hasLiveStyle(this.map)) setDragPreviewTranslate(this.map, [0, 0]);
     this.ghostFollow = null;
   }
 

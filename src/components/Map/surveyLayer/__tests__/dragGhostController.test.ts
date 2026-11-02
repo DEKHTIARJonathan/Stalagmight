@@ -299,6 +299,44 @@ describe('a carry cancelled while the WebGL context is lost (#576 NF-MAP-5)', ()
   });
 });
 
+describe('a STOCK-ghost carry while the WebGL context is lost (#576 RV4-FE-SL2)', () => {
+  it('move() and end() do not read the missing style', () => {
+    // The custom ghost cannot initialize, so the carry runs on the stock ghost.
+    h.layerState.disabledAfterAdd = true;
+    const fake = makeFakeMap();
+    const ctrl = new DragGhostController(fake.map, makeOptions());
+    expect(ctrl.begin(SET)).toBe('stock');
+    const setDataBefore = fake.setDataCount;
+
+    // The loss: every style-backed call, sources and paint included, throws.
+    dropStyle(fake.map);
+    const m = fake.map as unknown as Record<string, unknown>;
+    const thrower = (name: string) => () => {
+      throw new TypeError(`Cannot read properties of null (reading '${name}')`);
+    };
+    m.getSource = thrower('getSource');
+    m.removeSource = thrower('removeSource');
+    m.setPaintProperty = thrower('setPaintProperty');
+
+    let threw: unknown = null;
+    try {
+      // A small move (translate only), the @0 bake landing, then a move past the
+      // rebake threshold (a bake), then the cancel.
+      ctrl.move(2, 1);
+      fake.sourcedataListeners.forEach((fn) => fn({ sourceId: DRAG_PREVIEW_SOURCE }));
+      ctrl.move(200, 0);
+      ctrl.end();
+    } catch (e) {
+      threw = e;
+    }
+    console.log('[SL2] stock carry during a loss threw:', threw ? String(threw) : 'no');
+    expect(threw).toBeNull();
+    expect(ctrl.isCustom()).toBe(false);
+    // Nothing was pushed into a source the loss took away.
+    expect(fake.setDataCount).toBe(setDataBefore);
+  });
+});
+
 describe('a pick-up while the WebGL context is lost (#576 NF-W4MAP-1)', () => {
   it('begins idle: nothing thrown, no layer or source added, and the next pick-up draws again', () => {
     const fake = makeFakeMap();
