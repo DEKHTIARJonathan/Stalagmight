@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc } from '../../utils/ipc';
+import { chainSettingWrite } from '../../utils/settingWriteChain';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 
 type AngleMode = 'avg' | 'inout' | 'off';
@@ -225,23 +226,27 @@ export function useDataTableViewPersistence(
           },
         });
       }
-      void invokeIpc(
-        'update_data_table_view',
-        {
-          columnOrder: shotColumnOrder,
-          hiddenColumns: hidden,
-          azimuthMode,
-          inclinationMode,
-          stationColumnOrder,
-          stationHiddenColumns: stationHidden,
-          columnWidths: shotColumnWidths,
-          stationColumnWidths,
-        },
-        { purpose: 'persist data-table view state' }
+      // [#576 SETTINGS-ORDER] In save order: the unmount flush and a remount's first
+      // save can both be in flight, and the older view must not land last.
+      void chainSettingWrite('update_data_table_view', () =>
+        invokeIpc(
+          'update_data_table_view',
+          {
+            columnOrder: shotColumnOrder,
+            hiddenColumns: hidden,
+            azimuthMode,
+            inclinationMode,
+            stationColumnOrder,
+            stationHiddenColumns: stationHidden,
+            columnWidths: shotColumnWidths,
+            stationColumnWidths,
+          },
+          { purpose: 'persist data-table view state' }
+        )
+          // Re-sync the in-memory config: a remount re-seeds from it, so a stale
+          // copy would silently revert what was just saved to disk.
+          .then(() => useProjectStore.getState().loadConfig())
       )
-        // Re-sync the in-memory config: a remount re-seeds from it, so a stale
-        // copy would silently revert what was just saved to disk.
-        .then(() => useProjectStore.getState().loadConfig())
         .catch((e) => {
           if (lastSavedViewRef.current === snapshot) {
             lastSavedViewRef.current = previouslySaved;

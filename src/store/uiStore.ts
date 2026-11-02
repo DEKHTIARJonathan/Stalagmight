@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
+import { chainSettingWrite, SETTING_KEYS } from '../utils/settingWriteChain';
 import { clampRound } from '../utils/clamp';
 import {
   PANEL_SIZE_BOUNDS,
@@ -1394,7 +1395,10 @@ export const useUIStore = create<UIStore>((set) => ({
     const { min, max } = PANEL_SIZE_BOUNDS[panel];
     const fields = { [PANEL_WIDTH_FIELDS[panel]]: clampRound(size, min, max) };
     try {
-      await invokeIpc('update_panel_sizes', fields, { purpose: 'persist panel layout', fields });
+      // [#576 SETTINGS-ORDER] Same panel, issue order: the last size dragged to wins.
+      await chainSettingWrite(SETTING_KEYS.panelSize(PANEL_WIDTH_FIELDS[panel]), () =>
+        invokeIpc('update_panel_sizes', fields, { purpose: 'persist panel layout', fields }),
+      );
     } catch (e) {
       console.error('Failed to save panel sizes:', e);
     }
@@ -1417,10 +1421,14 @@ export const useUIStore = create<UIStore>((set) => ({
       dataTableMode: s.dataTableMode,
     };
     try {
-      await invokeIpc('update_panel_layout', fields, {
-        purpose: 'persist panel reveal layout',
-        fields,
-      });
+      // [#576 SETTINGS-ORDER] Each call snapshots all six fields, so an older
+      // snapshot landing last would put back a panel the user had since toggled.
+      await chainSettingWrite(SETTING_KEYS.panelLayout, () =>
+        invokeIpc('update_panel_layout', fields, {
+          purpose: 'persist panel reveal layout',
+          fields,
+        }),
+      );
     } catch (e) {
       console.error('Failed to save panel layout:', e);
     }
@@ -1839,21 +1847,27 @@ export const useUIStore = create<UIStore>((set) => ({
     set({ gridSpacing: spacing });
     // Scoped to Plan/Export while there (restored on exit) - don't persist it.
     if (useUIStore.getState().appMode !== 'survey') return;
-    // Persist the spacing setting
-    invokeIpc(
-      'save_display_setting',
-      { key: 'gridSpacing', value: String(spacing) },
-      { purpose: 'persist display setting', fields: { key: 'gridSpacing' } }
+    // Persist the spacing setting ([#576 SETTINGS-ORDER] in click order: last wins)
+    chainSettingWrite(SETTING_KEYS.displaySetting('gridSpacing'), () =>
+      invokeIpc(
+        'save_display_setting',
+        { key: 'gridSpacing', value: String(spacing) },
+        { purpose: 'persist display setting', fields: { key: 'gridSpacing' } }
+      )
     ).catch((e) => {
       console.warn('Failed to save grid spacing:', e);
     });
   },
   saveDisplaySetting: async (key, value) => {
     try {
-      await invokeIpc('save_display_setting', { key, value: String(value) }, {
-        purpose: 'persist display setting',
-        fields: { key: String(key) },
-      });
+      // [#576 SETTINGS-ORDER] Same key, click order: a toggle flipped twice lands
+      // as the second flip, not whichever IPC the pool happened to finish last.
+      await chainSettingWrite(SETTING_KEYS.displaySetting(String(key)), () =>
+        invokeIpc('save_display_setting', { key, value: String(value) }, {
+          purpose: 'persist display setting',
+          fields: { key: String(key) },
+        }),
+      );
     } catch (e) {
       console.warn('Failed to save display setting:', e);
     }
@@ -1971,11 +1985,14 @@ export const useUIStore = create<UIStore>((set) => ({
     trackAction('toggle.geometryMode', source);
     // Distances depend on the active geometry; a stale ruler readout would lie.
     set({ geometryMode: mode, ...MEASURE_CLEARED });
-    // Persist for "remember last used" across sessions (string value, like gridSpacing).
-    invokeIpc(
-      'save_display_setting',
-      { key: 'geometryMode', value: mode },
-      { purpose: 'persist display setting', fields: { key: 'geometryMode' } }
+    // Persist for "remember last used" across sessions (string value, like gridSpacing),
+    // in toggle order ([#576 SETTINGS-ORDER]).
+    chainSettingWrite(SETTING_KEYS.displaySetting('geometryMode'), () =>
+      invokeIpc(
+        'save_display_setting',
+        { key: 'geometryMode', value: mode },
+        { purpose: 'persist display setting', fields: { key: 'geometryMode' } }
+      )
     ).catch((e) => {
       console.warn('Failed to save geometry mode:', e);
     });

@@ -1,6 +1,7 @@
 import type { StoreApi } from 'zustand';
 import i18n from '../i18n';
 import { invokeIpc } from '../utils/ipc';
+import { chainSettingWrite, SETTING_KEYS } from '../utils/settingWriteChain';
 import { useUIStore } from './uiStore';
 import type { Config } from '../types/config';
 import type { GasConfig } from '../types/ipc.generated';
@@ -56,8 +57,17 @@ export function createProjectConfigActions(
    * The shared tail of a config save, whole or patched: run `save`, say what a save
    * can half-do, then pick up the backend-normalized config and drop what a settings
    * change invalidates.
+   *
+   * [#576 SETTINGS-ORDER] One save at a time, in the order they were made, each with
+   * its re-read: two fire-and-forget patches of one setting (the onboarding flags,
+   * the wizard's overlap mode) would otherwise race on the backend's pool and the
+   * earlier value could land last - and an earlier save's re-read could land after a
+   * later one's and show the store a config without it.
    */
-  const persistConfig = async (save: () => Promise<ConfigSaveReport | null>): Promise<CommandResult> => {
+  const persistConfig = (save: () => Promise<ConfigSaveReport | null>): Promise<CommandResult> =>
+    chainSettingWrite(SETTING_KEYS.config, () => persistConfigNow(save));
+
+  const persistConfigNow = async (save: () => Promise<ConfigSaveReport | null>): Promise<CommandResult> => {
     try {
       const routingBefore = get().config?.gas.include_reference_legs;
       // The Rust command returns Result<ConfigSaveReport, String> - an error throws;

@@ -26,6 +26,7 @@ import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc } from '../../utils/ipc';
+import { chainSettingWrite } from '../../utils/settingWriteChain';
 import { stableWidths } from '../SingleSystemView/useDataTableViewPersistence';
 
 /** The layout a host owns and hands in. */
@@ -135,12 +136,15 @@ export function useGridViewPersistence(
           },
         });
       }
-      void invokeIpc(
-        command,
-        { columnOrder, hiddenColumns: hidden, columnWidths },
-        { purpose: `persist ${toastKey} grid view state` }
+      // [#576 SETTINGS-ORDER] In save order: the unmount flush and the next mount's
+      // first save can both be in flight, and the older layout must not land last.
+      void chainSettingWrite(command, () =>
+        invokeIpc(
+          command,
+          { columnOrder, hiddenColumns: hidden, columnWidths },
+          { purpose: `persist ${toastKey} grid view state` }
+        ).then(() => useProjectStore.getState().loadConfig())
       )
-        .then(() => useProjectStore.getState().loadConfig())
         .catch((e) => {
           if (lastSavedRef.current === snapshot) {
             lastSavedRef.current = previouslySaved;
