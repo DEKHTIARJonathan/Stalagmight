@@ -213,6 +213,12 @@ warns, and - so the count can only go down - when a count drops below its row:
 fixing a warning means running `pnpm lint:eslint --update` and committing the
 smaller baseline. Errors are never baselined. Raising a number is a
 review-visible decision; fix the warning unless there is a reason not to.
+It is a count ratchet (#576 RV5-LS-5): it compares the number of warnings per
+rule and file, not which lines warn, so fixing one warning and adding another
+of the same rule in the same file passes unseen; and because `--update`
+rewrites every row from the current tree, it also locks in any growth made
+elsewhere in the same change - read the `eslint-baseline.json` diff in review,
+not only the rows you meant to lower.
 
 **Disabling a rule on one line** needs a reason after ` -- `, and
 `stalagmight/require-disable-reason` (error, every linted tree; #576 RV5-LS-4)
