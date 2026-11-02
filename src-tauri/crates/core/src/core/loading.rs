@@ -898,20 +898,19 @@ pub struct LoadProjectFullResult {
     /// opens the project read-only - else `None`. Handed to the frontend so its
     /// read-only gate and banner settle with the load, exactly as `is_remote`.
     ///
-    /// Carried on the BINARY envelope only (`load_binary::encode`), which is what
-    /// the frontend loads through; the JSON `load_project_full` - kept for
-    /// back-compat and tests - does not serialize it, so this type's generated
-    /// TypeScript binding is unchanged. Either way the backend refuses every edit
-    /// and save of such a project; the flag only decides what the UI presents.
-    #[serde(skip)]
-    #[ts(skip)]
+    /// Carried on the binary envelope (`load_binary::encode`), which is what the
+    /// frontend loads through, AND on the JSON `load_project_full` (#576 P-NEWER
+    /// open question 1): that command is registered too, and without the field
+    /// it handed a client such a project with nothing saying it is read-only.
+    /// Either way the backend refuses every edit and save of such a project; the
+    /// flag only decides what the UI presents.
     pub newer_schema_version: Option<i32>,
     /// [#576 B35(b) review] The file carries a `speleo_link` table whose row could
     /// not be read. The project opened as a local one (`is_remote` false), but
     /// every save that would rewrite this file is refused, because the rebuilt file
     /// would lose the row; the frontend says so as soon as the project opens rather
-    /// than at the first failed save. Binary envelope only, like
-    /// `newer_schema_version`, so the generated binding is unchanged.
+    /// than at the first failed save. Binary envelope only, so the generated
+    /// binding does not carry it.
     #[serde(skip)]
     #[ts(skip)]
     pub speleo_link_unreadable: bool,
@@ -920,14 +919,14 @@ pub struct LoadProjectFullResult {
     /// list this load committed as `AppState::unreadable_project_settings`, which
     /// refuses every save. The project opened with defaults in their place; the
     /// frontend names them so the user knows why saving is off. Binary envelope
-    /// only, like `newer_schema_version`, so no generated binding changes.
+    /// only, so the generated binding does not carry it.
     #[serde(skip)]
     #[ts(skip)]
     pub unreadable_project_settings: Vec<String>,
     /// [#576 B35(h)] What this load reset or dropped because it could not use it
     /// (non-finite shot values, section and station offsets, GPS tie points), per
     /// kind. The next save makes the reset permanent, so the frontend shows one
-    /// notice after the open. Binary envelope only, like `newer_schema_version`.
+    /// notice after the open. Binary envelope only.
     #[serde(skip)]
     #[ts(skip)]
     pub load_repairs: crate::persistence::LoadRepairs,

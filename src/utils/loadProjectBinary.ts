@@ -61,7 +61,8 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
   /** [#576 B6-D1] The file's schema version when a NEWER Stalagmight saved it,
    *  else null. The backend opened such a project read-only (every edit and save
    *  refused); the store gates the UI on this so the two settle together, like
-   *  `isRemote`. Binary envelope only, like `frozen_shots`. */
+   *  `isRemote`. On the JSON result too since #576 P-NEWER (open question 1), so
+   *  this restates the generated field. */
   newerSchemaVersion: number | null;
   /** [#576 B35(b) review] The file's SpeleoDB link row could not be read. The
    *  project opened as a local one, but every save over this file is refused (the
