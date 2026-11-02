@@ -4,8 +4,8 @@ use rusqlite::{params, OptionalExtension};
 use std::collections::HashMap;
 
 use crate::models::{
-    AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
-    MergeTopology, NorthReference, Project, Section, SectionData, SectionId, Shot, ShotKind,
+    AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoadedProject,
+    LoopClosure, NorthReference, Project, Section, SectionData, SectionId, Shot, ShotKind,
     StationKey, StationMerge, SurveyDirection, UnrecognisedShotKind, ZeroDatum, FEATURE_ID_STRIDE,
     MAX_SECTION_ID,
 };
@@ -764,41 +764,21 @@ impl Database {
             self.load_project_default_azimuth_reference(),
         );
 
-        // Pre-populate the section_id → index lookup so callers get
-        // O(1) get_section without needing rebuild_section_index().
-        let mut section_index_cache = HashMap::with_capacity(sections.len());
-        for (i, s) in sections.iter().enumerate() {
-            section_index_cache.insert(s.id, i);
-        }
-        // (The merge adjacency needs no priming: `MergeTopology` builds it the
-        // first time `get_merged_section_ids` asks.)
-        // Pre-build the shot-UUID index too, so `resolve_key`'s `AfterShot` arm
-        // is O(1) right after load (mirrors the two caches above).
-        let mut shot_uuid_index = HashMap::new();
-        for s in &sections {
-            for (i, shot) in s.shots.iter().enumerate() {
-                if let Some(u) = &shot.uuid {
-                    // First occurrence wins, matching `add_section` /
-                    // `rebuild_shot_uuid_index` / the `resolve_key` cold scan; a
-                    // plain `.insert` would be last-write-wins and silently break
-                    // that invariant if a duplicate UUID ever slipped through.
-                    shot_uuid_index.entry((s.id, u.clone())).or_insert(i as u32);
-                }
-            }
-        }
-        let project = Project {
+        // Through the loader constructor (#576 A10): the lookup caches are
+        // private to `Project`, which builds both of them up front so callers
+        // get O(1) `get_section` / `resolve_key` right after load.
+        let project = Project::from_loaded(LoadedProject {
             name,
             location,
             created_at,
             modified_at,
             sections,
-            station_merges: MergeTopology::from(station_merges),
+            station_merges,
             zero_datums,
             loop_closures,
             section_offsets,
             station_offsets,
             station_comments,
-            file_path: None,
             next_section_id,
             imported_file_hashes,
             imported_section_hashes,
@@ -806,13 +786,7 @@ impl Database {
             validation,
             surface_elevation,
             default_azimuth_reference,
-            cascade_deferred: false,
-            section_index_cache,
-            shot_uuid_index,
-            // Nothing loaded from disk is a proven solver fixpoint; the load path
-            // re-solves offsets from scratch anyway (`redrive_offsets_after_load`).
-            realign_fixpoint: None,
-        };
+        });
         Ok((project, report))
     }
 

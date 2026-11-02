@@ -393,6 +393,9 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         .iter()
         .filter_map(|(k, v)| Some((project.resolve_key(k)?, v.clone())))
         .collect();
+    // Read before the header moves fields out of `project` (#576 A10: the map is
+    // reached through its accessor).
+    let section_offsets = hashmap_to_pairs(project.section_offsets().clone());
 
     let project_header = ProjectHeaderBinary {
         name: project.name,
@@ -409,7 +412,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         station_merges,
         zero_datums,
         loop_closures,
-        section_offsets: hashmap_to_pairs(project.section_offsets),
+        section_offsets,
         station_offsets,
         station_comments_map,
         imported_file_hashes: project.imported_file_hashes,

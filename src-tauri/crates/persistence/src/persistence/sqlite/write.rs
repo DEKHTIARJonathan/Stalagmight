@@ -219,7 +219,7 @@ impl Database {
         }
 
         // Save section offsets
-        for (section_id, (offset_x, offset_y)) in &project.section_offsets {
+        for (section_id, (offset_x, offset_y)) in project.section_offsets() {
             tx.execute(
                 "INSERT INTO section_offsets (section_id, offset_x, offset_y) VALUES (?1, ?2, ?3)",
                 params![section_id, offset_x, offset_y],

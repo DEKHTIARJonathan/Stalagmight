@@ -48,6 +48,9 @@ mod stats;
 
 #[cfg(test)]
 mod anchor_fuzz;
+#[cfg(test)]
+#[expect(clippy::print_stdout)]
+mod cache_coherence_tests;
 
 pub use classify::ClassifyScope;
 pub use gas::{
@@ -262,6 +265,13 @@ pub struct Project {
     /// Next section ID to assign
     pub next_section_id: SectionId,
     /// Section offsets (x, y) applied when sections are merged/aligned
+    ///
+    /// [#576 A10] Read it through [`Self::section_offsets`] and write it through
+    /// [`Self::set_section_offset`] / [`Self::adjust_section_offset`] /
+    /// [`Self::remove_section_offset`] (all via [`Self::write_section_offset`]);
+    /// a reader builds a project through [`Self::from_loaded`]. Still `pub`
+    /// only because `core/state/project_io.rs` and `project_merge.rs` and the
+    /// test suites write it directly; it goes private once they use these.
     #[serde(default, serialize_with = "serialize_section_offsets")]
     pub section_offsets: HashMap<SectionId, (f64, f64)>,
     /// Station offsets (x, y, z) applied when individual stations are moved
@@ -340,26 +350,36 @@ pub struct Project {
     /// consult this map first to avoid the O(N) linear scan that used to
     /// dominate `merge_stations` and `compute_station_raw_coords` on
     /// large imports (~4 lookups per merge × 14 k merges = ~400 M ops).
-    /// Maintained incrementally by `add_section` / `remove_section`.
-    /// After deserialization the map is empty and a linear fallback
-    /// kicks in - callers that hammer the lookup (e.g. the batch
-    /// importer) should call [`Self::rebuild_section_index`] first.
+    ///
+    /// [#576 A10] PRIVATE, and maintained by the methods that move sections:
+    /// `add_section` / `add_section_with_identity` / [`Self::push_restored_section`]
+    /// append to it, [`Self::remove_section`] shifts it, the loader
+    /// ([`Self::from_loaded`]) and the snapshot restore rebuild it. A lookup
+    /// still re-checks the id at the cached index, so code that edits
+    /// `sections` directly can make an entry stale but never wrong. It used to be
+    /// public, and `remove_section` CLEARED it: every later lookup was a linear
+    /// scan for the rest of the session (the coordinate solve went from 0.25 s
+    /// to 2 s per edit at 14,300 sections after one section delete).
     #[serde(skip, default)]
     #[ts(skip)]
-    pub section_index_cache: HashMap<SectionId, usize>,
+    section_index_cache: HashMap<SectionId, usize>,
 
-    /// `(section_id, shot_uuid)` → shot vector index. Transient, NOT persisted.
+    /// section → (shot uuid → shot vector index). Transient, NOT persisted.
     /// Turns `resolve_key`'s `AfterShot` arm from an O(shots) linear scan with a
     /// per-element UUID string compare into an O(1) lookup - the dominant cost
     /// when building merge/closure connectivity over a large import (issue:
-    /// importing a big Walls project pinned one core for minutes). Populated only
-    /// by [`Self::rebuild_shot_uuid_index`] (batch import, post-load, snapshot
-    /// restore); empty after deserialization, where `resolve_key` falls back to
-    /// the linear scan. `resolve_key` re-checks the cached index against the
-    /// shot's UUID, so a stale entry is harmless (it falls back to the scan).
+    /// importing a big Walls project pinned one core for minutes).
+    ///
+    /// [#576 A10/A13] PRIVATE and maintained: a section's map is built when the
+    /// section is added or restored and REBUILT whenever its shots move (insert,
+    /// delete, split, reverse, uuid re-mint), and dropped with the section.
+    /// Nested by section so a lookup borrows the uuid (`&str`) instead of
+    /// building a `(SectionId, String)` key per probe. A lookup still re-checks
+    /// the shot's uuid at the cached index, so a stale entry is a slow path,
+    /// never a wrong answer.
     #[serde(skip, default)]
     #[ts(skip)]
-    pub shot_uuid_index: HashMap<(SectionId, String), u32>,
+    shot_uuid_index: HashMap<SectionId, HashMap<String, u32>>,
 
     /// Fingerprint of a merge residual the offset solver has already proven it
     /// cannot reduce. Transient, NOT persisted. Read and written by exactly one
@@ -646,6 +666,34 @@ pub fn serialize_project_ipc<S: serde::ser::Serializer>(
     Serialize::serialize(&ProjectIpc(p), s)
 }
 
+/// [#576 A10] Every persisted field of a [`Project`], as a `.stalx` reader
+/// loads them - the input of [`Project::from_loaded`], so a reader can build a
+/// project without reaching the transient caches (which are private) or
+/// writing `section_offsets` past [`Project::write_section_offset`] by hand.
+pub struct LoadedProject {
+    pub name: String,
+    pub location: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub modified_at: DateTime<Utc>,
+    pub sections: Vec<Section>,
+    pub station_merges: Vec<StationMerge>,
+    pub zero_datums: Vec<ZeroDatum>,
+    pub loop_closures: Vec<LoopClosure>,
+    /// The rows as stored. Taken verbatim: the load path re-solves every offset
+    /// right after (`redrive_offsets_after_load`), and that solve is what
+    /// normalizes them through [`Project::write_section_offset`].
+    pub section_offsets: HashMap<SectionId, (f64, f64)>,
+    pub station_offsets: HashMap<StationKey, (f64, f64, f64)>,
+    pub station_comments: HashMap<StationKey, String>,
+    pub next_section_id: SectionId,
+    pub imported_file_hashes: Vec<String>,
+    pub imported_section_hashes: Vec<String>,
+    pub next_closure_id: u64,
+    pub validation: crate::config::ValidationConfig,
+    pub surface_elevation: Option<f64>,
+    pub default_azimuth_reference: Option<AzimuthReference>,
+}
+
 impl Project {
     /// Create a new empty project
     pub fn new(name: String, location: Option<String>) -> Self {
@@ -675,6 +723,41 @@ impl Project {
             shot_uuid_index: HashMap::new(),
             realign_fixpoint: None,
         }
+    }
+
+    /// A project from what a `.stalx` reader loaded, with both lookup caches
+    /// built up front so `get_section` and `resolve_key` are O(1) right after
+    /// the load. Nothing loaded from disk is a proven solver fixpoint, and the
+    /// load path re-solves offsets from scratch anyway.
+    pub fn from_loaded(loaded: LoadedProject) -> Self {
+        let mut project = Self {
+            name: loaded.name,
+            location: loaded.location,
+            created_at: loaded.created_at,
+            modified_at: loaded.modified_at,
+            sections: loaded.sections,
+            station_merges: MergeTopology::from(loaded.station_merges),
+            zero_datums: loaded.zero_datums,
+            loop_closures: loaded.loop_closures,
+            file_path: None,
+            next_section_id: loaded.next_section_id,
+            section_offsets: loaded.section_offsets,
+            station_offsets: loaded.station_offsets,
+            station_comments: loaded.station_comments,
+            imported_file_hashes: loaded.imported_file_hashes,
+            imported_section_hashes: loaded.imported_section_hashes,
+            next_closure_id: loaded.next_closure_id,
+            validation: loaded.validation,
+            surface_elevation: loaded.surface_elevation,
+            default_azimuth_reference: loaded.default_azimuth_reference,
+            cascade_deferred: false,
+            section_index_cache: HashMap::new(),
+            shot_uuid_index: HashMap::new(),
+            realign_fixpoint: None,
+        };
+        project.rebuild_section_index();
+        project.rebuild_shot_uuid_index();
+        project
     }
 
     /// Assign sequential IDs to any loop closures that have id=0 (legacy projects),
@@ -748,20 +831,35 @@ impl Project {
         // merges/closures that reference them by shot UUID (the import's hot
         // path). `Section::new` mints a UUID for every shot, so they are all
         // present here.
-        for (i, shot) in section.shots.iter().enumerate() {
-            if let Some(u) = &shot.uuid {
-                // First-occurrence wins: mirror the cold-path `resolve_key`,
-                // which uses `shots.iter().position(...)` (first match). Under a
-                // duplicated within-section UUID, `or_insert` keeps the earliest
-                // index so the warm cache agrees with the cold scan.
-                self.shot_uuid_index
-                    .entry((section.id, u.clone()))
-                    .or_insert(i as u32);
-            }
-        }
+        Self::index_section_uuids(&mut self.shot_uuid_index, &section);
         self.sections.push(section);
         self.touch();
         &self.sections[new_idx]
+    }
+
+    /// Append a section that keeps its OWN id - an undo putting back a section
+    /// it deleted - with both lookup caches kept in step. The caller owns
+    /// `next_section_id` and `touch`.
+    pub fn push_restored_section(&mut self, section: Section) {
+        self.section_index_cache
+            .insert(section.id, self.sections.len());
+        Self::index_section_uuids(&mut self.shot_uuid_index, &section);
+        self.sections.push(section);
+    }
+
+    /// Add `section`'s shots to the uuid index, first occurrence winning: the
+    /// cold scan `resolve_key` falls back to takes the FIRST shot with a uuid,
+    /// so under a duplicated within-section uuid the warm cache must agree.
+    fn index_section_uuids(
+        index: &mut HashMap<SectionId, HashMap<String, u32>>,
+        section: &Section,
+    ) {
+        let map = index.entry(section.id).or_default();
+        for (i, shot) in section.shots.iter().enumerate() {
+            if let Some(u) = &shot.uuid {
+                map.entry(u.clone()).or_insert(i as u32);
+            }
+        }
     }
 
     /// Get a section by ID. First tries the O(1) `section_index_cache`;
@@ -807,14 +905,24 @@ impl Project {
     /// Remove a section by ID
     pub fn remove_section(&mut self, section_id: SectionId) -> Option<Section> {
         let pos = self.sections.iter().position(|s| s.id == section_id)?;
-        // Removing shifts every later section's index down by one - rather
-        // than touching N cache entries, we drop the cache and let the
-        // linear fallback rebuild it on demand (removes are rare relative
-        // to lookups). Callers running a batch can call
-        // `rebuild_section_index()` to restore O(1) lookups afterwards.
-        self.section_index_cache.clear();
+        let removed = self.sections.remove(pos);
+        // Removing shifts every later section's index down by one, so the cache
+        // shifts with it (#576 A10). It used to be CLEARED here, and nothing on
+        // the forward path rebuilt it, so every lookup for the rest of the
+        // session was a linear scan. A cache that did not cover every section
+        // (one built before a direct edit of `sections`) is rebuilt instead.
+        self.section_index_cache.remove(&section_id);
+        for index in self.section_index_cache.values_mut() {
+            if *index > pos {
+                *index -= 1;
+            }
+        }
+        if self.section_index_cache.len() != self.sections.len() {
+            self.rebuild_section_index();
+        }
+        self.shot_uuid_index.remove(&section_id);
         self.touch();
-        Some(self.sections.remove(pos))
+        Some(removed)
     }
 
     /// Mint v4 UUIDs for any shot whose `uuid` field is `None` and write
@@ -833,12 +941,18 @@ impl Project {
     /// Calling this once at the top of `save_project` guarantees every
     /// consumer receives the same UUIDs.
     pub fn ensure_shot_uuids(&mut self) {
+        let mut minted = false;
         for section in &mut self.sections {
             for shot in &mut section.shots {
                 if shot.uuid.as_deref().map_or(true, str::is_empty) {
                     shot.uuid = Some(uuid::Uuid::new_v4().to_string());
+                    minted = true;
                 }
             }
+        }
+        // The new uuids are anchors from here on; index them (#576 A10).
+        if minted {
+            self.rebuild_shot_uuid_index();
         }
     }
 
@@ -889,6 +1003,8 @@ impl Project {
             }
         }
         if reminted > 0 {
+            // A re-minted shot is now reachable only by its new uuid (#576 A10).
+            self.rebuild_shot_uuid_index();
             self.touch();
         }
         reminted
@@ -908,6 +1024,27 @@ impl Project {
                     .filter_map(move |sh| sh.uuid.clone().map(|u| ((s.id, sh.id), u)))
             })
             .collect()
+    }
+
+    /// Both lookup caches as ordered maps, for tests comparing them with a
+    /// fresh rebuild.
+    #[cfg(test)]
+    pub(crate) fn cache_snapshot(
+        &self,
+    ) -> (
+        BTreeMap<SectionId, usize>,
+        BTreeMap<(SectionId, String), u32>,
+    ) {
+        (
+            self.section_index_cache
+                .iter()
+                .map(|(k, v)| (*k, *v))
+                .collect(),
+            self.shot_uuid_index
+                .iter()
+                .flat_map(|(sid, by_uuid)| by_uuid.iter().map(|(u, i)| ((*sid, u.clone()), *i)))
+                .collect(),
+        )
     }
 
     /// Rebuild the section-id → index cache from the current `sections`
@@ -931,17 +1068,7 @@ impl Project {
     pub fn rebuild_shot_uuid_index(&mut self) {
         self.shot_uuid_index.clear();
         for s in &self.sections {
-            for (i, shot) in s.shots.iter().enumerate() {
-                if let Some(u) = &shot.uuid {
-                    // First-occurrence wins: mirror the cold-path `resolve_key`,
-                    // which uses `shots.iter().position(...)` (first match). Under
-                    // a duplicated within-section UUID, `or_insert` keeps the
-                    // earliest index so the warm cache agrees with the cold scan.
-                    self.shot_uuid_index
-                        .entry((s.id, u.clone()))
-                        .or_insert(i as u32);
-                }
-            }
+            Self::index_section_uuids(&mut self.shot_uuid_index, s);
         }
     }
 
@@ -955,23 +1082,65 @@ impl Project {
     /// its entries at once, so every later `resolve_key` into that section pays the
     /// O(shots) scan until something else rebuilds the cache.
     pub fn reindex_section_shot_uuids(&mut self, section_id: SectionId) {
-        self.shot_uuid_index
-            .retain(|(sid, _), _| *sid != section_id);
-        let Some(section) = self.get_section(section_id) else {
+        self.shot_uuid_index.remove(&section_id);
+        // Through the cache-aware lookup, then the index field directly: two
+        // disjoint borrows of `self`.
+        let Some(section) = self
+            .section_index_cache
+            .get(&section_id)
+            .and_then(|&i| self.sections.get(i))
+            .filter(|s| s.id == section_id)
+            .or_else(|| self.sections.iter().find(|s| s.id == section_id))
+        else {
             return;
         };
-        // Collected first: `section` borrows self immutably, the insert needs it
-        // mutably.
-        let entries: Vec<((SectionId, String), u32)> = section
+        Self::index_section_uuids(&mut self.shot_uuid_index, section);
+    }
+
+    /// Record a shot APPENDED at `index` of `section_id` in the uuid index:
+    /// the one shot move that leaves every other index valid, so it does not
+    /// need the section-wide [`Self::reindex_section_shot_uuids`] (which would
+    /// make a run of appends quadratic).
+    pub(crate) fn index_appended_shot(&mut self, section_id: SectionId, index: usize) {
+        let uuid = self
+            .get_section(section_id)
+            .and_then(|s| s.shots.get(index))
+            .and_then(|shot| shot.uuid.clone());
+        if let Some(uuid) = uuid {
+            self.shot_uuid_index
+                .entry(section_id)
+                .or_default()
+                .entry(uuid)
+                .or_insert(index as u32);
+        }
+    }
+
+    /// The vector index of the FIRST shot of `section` carrying `uuid`: the
+    /// uuid index when it answers (re-checked against the shot, so a stale
+    /// entry costs only the scan), else a scan. The one lookup `resolve_key`
+    /// and the dive-plan anchors share.
+    pub fn shot_position_by_uuid(&self, section: &Section, uuid: &str) -> Option<usize> {
+        let cached = self
+            .shot_uuid_index
+            .get(&section.id)
+            .and_then(|by_uuid| by_uuid.get(uuid))
+            .map(|&i| i as usize);
+        if let Some(i) = cached {
+            if section.shots.get(i).and_then(|s| s.uuid.as_deref()) == Some(uuid) {
+                return Some(i);
+            }
+        }
+        section
             .shots
             .iter()
-            .enumerate()
-            .filter_map(|(i, shot)| shot.uuid.clone().map(|u| ((section_id, u), i as u32)))
-            .collect();
-        for (key, index) in entries {
-            // First-occurrence wins, as in `rebuild_shot_uuid_index`.
-            self.shot_uuid_index.entry(key).or_insert(index);
-        }
+            .position(|s| s.uuid.as_deref() == Some(uuid))
+    }
+
+    /// How many sections the id -> index cache holds (tests asserting a
+    /// restore re-warmed it).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn section_index_cache_len(&self) -> usize {
+        self.section_index_cache.len()
     }
 
     /// Record a new merge. Thin wrapper over [`MergeTopology::push`] (which
@@ -1362,25 +1531,11 @@ impl Project {
         let index = match &key.anchor {
             StationAnchor::SectionStart => 0,
             StationAnchor::AfterShot(uuid) => {
-                // O(1) via the shot-UUID index when warm. The index re-check
-                // makes a stale/absent entry harmless: it falls back to the
-                // authoritative linear scan, so the cache can never resolve to the
-                // wrong station and never needs eager invalidation for safety.
-                if let Some(&i) = self.shot_uuid_index.get(&(key.section_id, uuid.clone())) {
-                    if section
-                        .shots
-                        .get(i as usize)
-                        .and_then(|s| s.uuid.as_deref())
-                        == Some(uuid.as_str())
-                    {
-                        return Some(StationRef::new(key.section_id, i + 1));
-                    }
-                }
-                let pos = section
-                    .shots
-                    .iter()
-                    .position(|s| s.uuid.as_deref() == Some(uuid.as_str()))?;
-                (pos + 1) as u32
+                // O(1) via the shot-UUID index when warm, borrowing the uuid
+                // (#576 A13). The index re-check makes a stale/absent entry
+                // harmless: it falls back to the authoritative linear scan, so the
+                // cache can never resolve to the wrong station.
+                (self.shot_position_by_uuid(section, uuid)? + 1) as u32
             }
             StationAnchor::Index(i) => {
                 if *i as usize > section.shots.len() {

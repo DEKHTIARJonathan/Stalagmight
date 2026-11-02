@@ -503,14 +503,10 @@ impl AppState {
                             // a `ProjectSnapshotPair`.
                             match prev_section_offset {
                                 Some(offset) => {
-                                    crate::models::Project::write_section_offset(
-                                        &mut project.section_offsets,
-                                        station_ref.section_id,
-                                        *offset,
-                                    );
+                                    project.set_section_offset(station_ref.section_id, *offset);
                                 }
                                 None => {
-                                    project.section_offsets.remove(&station_ref.section_id);
+                                    project.remove_section_offset(station_ref.section_id);
                                 }
                             }
                             project.touch();
@@ -860,6 +856,7 @@ impl AppState {
                                                 Some(Shot::uuid_or_mint(uuid.clone())),
                                             ),
                                         );
+                                        project.reindex_section_shot_uuids(*section_id);
                                         project.touch();
                                         true
                                     } else {
@@ -892,23 +889,13 @@ impl AppState {
                                 if !existing.contains(sid) {
                                     continue;
                                 }
-                                let current = project
-                                    .section_offsets
-                                    .get(sid)
-                                    .copied()
-                                    .unwrap_or((0.0, 0.0));
-                                let new_offset = (current.0 + offset.0, current.1 + offset.1);
                                 // Through the same writer the FORWARD move uses
                                 // (`adjust_section_offset`): a redo that lands the
                                 // offset back within dust of the origin must drop
                                 // the key, not leave an inert entry the original
                                 // execute did not have (#413 finding 2, and the
                                 // invariant on `write_section_offset`).
-                                crate::models::Project::write_section_offset(
-                                    &mut project.section_offsets,
-                                    *sid,
-                                    new_offset,
-                                );
+                                project.adjust_section_offset(*sid, offset.0, offset.1);
                             }
                             project.touch();
                             CommandResult::success()

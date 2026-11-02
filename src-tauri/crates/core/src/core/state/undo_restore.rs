@@ -198,22 +198,12 @@ impl AppState {
             ));
         }
 
-        // Create section with original ID
+        // Create section with original ID. `push_restored_section` keeps both
+        // lookup caches in step (#576 A10): the restored shots keep the uuids
+        // the entry recorded, and a missing cache entry, while never wrong,
+        // would make every lookup into this section a linear scan.
         let section = Section::restore_with_identity(original_id, data, identity);
-        // Keep section_index_cache in step.  The matching
-        // `remove_section` cleared the cache; without this insert
-        // every subsequent `get_section` would fall back to the O(N)
-        // linear scan until something else rebuilds the cache.
-        project
-            .section_index_cache
-            .insert(section.id, project.sections.len());
-        project.sections.push(section);
-        // The restored shots keep the uuids the entry recorded, so the
-        // `(section, uuid) -> index` cache `add_section` maintains incrementally
-        // has to be refreshed for them too; a missing entry is not wrong (
-        // `resolve_key` falls back to a linear scan) but every AfterShot lookup
-        // into this section would pay for it.
-        project.reindex_section_shot_uuids(original_id);
+        project.push_restored_section(section);
         project.touch();
 
         // Update next_section_id if needed
@@ -299,6 +289,8 @@ impl AppState {
         } else {
             section.shots.push(shot);
         }
+        // The insert moved every later shot of the section (#576 A10).
+        project.reindex_section_shot_uuids(section_id);
 
         project.touch();
 

@@ -469,7 +469,7 @@ impl AppState {
                     .collect();
                 let mut previous_offsets = std::collections::HashMap::new();
                 for sid in &connected {
-                    previous_offsets.insert(*sid, project.section_offsets.get(sid).copied());
+                    previous_offsets.insert(*sid, project.section_offsets().get(sid).copied());
                 }
                 UndoData::SegmentMoveInfo {
                     affected_sections: connected,

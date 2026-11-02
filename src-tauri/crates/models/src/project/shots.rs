@@ -149,6 +149,9 @@ impl Project {
         }
         let shot = section.add_shot(data);
         let shot_id = shot.id;
+        let appended_at = section.shots.len() - 1;
+        // An append moves no other shot: index just the new one (#576 A10).
+        self.index_appended_shot(section_id, appended_at);
         self.touch();
         self.get_section(section_id)?.get_shot(shot_id)
     }
@@ -316,6 +319,8 @@ impl Project {
         let shot =
             section.insert_shot_after_with_id(after_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
+        // The insert moved every later shot of the section (#576 A10).
+        self.reindex_section_shot_uuids(section_id);
         // Station keys are position-independent: no ref-shifting on insert (the
         // junction the new shot extends from keeps its anchor; shots beyond keep
         // theirs). The new shot's displacement still shifts stations > pos+1 in
@@ -374,6 +379,8 @@ impl Project {
         let shot =
             section.insert_shot_before_with_id(before_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
+        // The insert moved every later shot of the section (#576 A10).
+        self.reindex_section_shot_uuids(section_id);
         // Prepend is the one insert that shifts identity: the old section-start
         // station is now *after* the new first shot, so re-anchor any ref on this
         // section that was `SectionStart` to `AfterShot(new_shot)`. Every other
@@ -463,6 +470,8 @@ impl Project {
             .insert_shot_before_with_id(shot_id, head_data.clone(), None, None)
             .ok_or_else(|| format!("Failed to insert split shot before {shot_id}"))?;
         let new_shot_id = new_shot.id;
+        // The insert moved every later shot of the section (#576 A10).
+        self.reindex_section_shot_uuids(section_id);
 
         self.debug_assert_merge_alignment("split_shot_at_distance");
         self.touch();
@@ -1403,6 +1412,8 @@ impl Project {
                 .remove_shot(shot_id)
                 .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?
         };
+        // The removal moved every later shot of the section (#576 A10).
+        self.reindex_section_shot_uuids(section_id);
 
         // Station keys are position-independent - no ref-shifting on delete. The
         // deleted station's own refs were rewired above; every surviving ref keeps
@@ -1595,6 +1606,8 @@ impl Project {
             .get_section_mut(section_id)
             .and_then(|section| section.remove_shot(shot_id))
             .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+        // Removing the first shot moved every other one (#576 A10).
+        self.reindex_section_shot_uuids(section_id);
 
         // Same duty `remove_shot_with_rewire` discharges after ITS retains
         // and its shot removal, for the same reason and in the same place: dropping

@@ -867,14 +867,20 @@ mod tests {
 
         // The record that was at index 0 is now last.
         assert_eq!(
-            project.shot_uuid_index.get(&(id, first_uuid)),
+            project
+                .shot_uuid_index
+                .get(&id)
+                .and_then(|m| m.get(&first_uuid)),
             Some(&2),
             "the uuid index must follow the record to its mirrored position"
         );
         // And the cache still agrees with the cold scan for every shot.
         for (i, shot) in project.get_section(id).unwrap().shots.iter().enumerate() {
             let uuid = shot.uuid.clone().unwrap();
-            assert_eq!(project.shot_uuid_index.get(&(id, uuid)), Some(&(i as u32)));
+            assert_eq!(
+                project.shot_uuid_index.get(&id).and_then(|m| m.get(&uuid)),
+                Some(&(i as u32))
+            );
         }
     }
 

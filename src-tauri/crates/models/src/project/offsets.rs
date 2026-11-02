@@ -212,6 +212,15 @@ impl Project {
         );
     }
 
+    /// Every displaced section's offset, read-only (#576 A10). Writes go
+    /// through [`Self::set_section_offset`] / [`Self::adjust_section_offset`] /
+    /// [`Self::remove_section_offset`], i.e. through
+    /// [`Self::write_section_offset`], so no caller can store the dust-zero
+    /// spelling of "not displaced".
+    pub fn section_offsets(&self) -> &HashMap<SectionId, (f64, f64)> {
+        &self.section_offsets
+    }
+
     /// Set an exact offset value (for undo restoration / initial placement).
     pub fn set_section_offset(&mut self, id: SectionId, offset: (f64, f64)) {
         Self::write_section_offset(&mut self.section_offsets, id, offset);

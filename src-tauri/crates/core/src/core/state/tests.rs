@@ -3356,7 +3356,7 @@ fn restore_snapshot_into_rebuilds_transient_caches() {
     assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
     let p = slot.expect("restored");
     assert!(
-        !p.section_index_cache.is_empty(),
+        p.section_index_cache_len() > 0,
         "section index cache must be rebuilt"
     );
     let merged = p.get_merged_section_ids(a);

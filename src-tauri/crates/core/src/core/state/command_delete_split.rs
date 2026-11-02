@@ -162,6 +162,7 @@ impl AppState {
             };
             section_mut.name = Some(name_a);
             section_mut.shots.truncate(pos); // keep shots[0..pos], drop deleted + after
+            project.reindex_section_shot_uuids(section_id);
 
             // Step 4: Calculate offset for section B
             // Walk shots_before + deleted shot to accumulate (bx, by)
@@ -447,6 +448,7 @@ impl AppState {
             };
             section_mut.name = Some(name_a);
             section_mut.shots.truncate(start_pos);
+            project.reindex_section_shot_uuids(section_id);
 
             // Section B offset = section offset + displacement of (before ++ deleted).
             let mut bx: f64 = 0.0;
