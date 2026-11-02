@@ -18,6 +18,7 @@ import { metersToMapCoords } from '../../../utils/coordinates';
 import { getErrorColor } from '../../../utils/colors';
 import type { MapThemeColors } from '../../../utils/themeColors';
 import type { AnalyticalOverlays } from './analyticalOverlays';
+import { hasLiveStyle } from '../mapUtils';
 import { AUX_IDS } from './auxiliaryLayers';
 import {
   resolveShotDisplayColor,
@@ -189,15 +190,18 @@ export class DragPreviewController {
     // dragged and a stationary section are hidden during the drag and reappear
     // with correct geometry on commit. (The survey geometry + labels are hidden in
     // the custom layers via the drag exclusion in installDragPreview.)
-    const existingClosureFilter = this.map.getFilter(AUX_IDS.loopClosuresLayerId);
-    this.dragSavedFilters.set(AUX_IDS.loopClosuresLayerId, existingClosureFilter ?? undefined);
-    const eitherEndpointExclusion: maplibregl.FilterSpecification = ['!', ['any',
-      ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
-      ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
-    ]] as unknown as maplibregl.FilterSpecification;
-    this.map.setFilter(AUX_IDS.loopClosuresLayerId, (existingClosureFilter && typeof existingClosureFilter === 'object')
-      ? (['all', existingClosureFilter, eitherEndpointExclusion] as unknown as maplibregl.FilterSpecification)
-      : eitherEndpointExclusion);
+    // (Not while the WebGL context is lost: no style to filter, #576 NF-MAP-5.)
+    if (hasLiveStyle(this.map)) {
+      const existingClosureFilter = this.map.getFilter(AUX_IDS.loopClosuresLayerId);
+      this.dragSavedFilters.set(AUX_IDS.loopClosuresLayerId, existingClosureFilter ?? undefined);
+      const eitherEndpointExclusion: maplibregl.FilterSpecification = ['!', ['any',
+        ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
+        ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
+      ]] as unknown as maplibregl.FilterSpecification;
+      this.map.setFilter(AUX_IDS.loopClosuresLayerId, (existingClosureFilter && typeof existingClosureFilter === 'object')
+        ? (['all', existingClosureFilter, eitherEndpointExclusion] as unknown as maplibregl.FilterSpecification)
+        : eitherEndpointExclusion);
+    }
 
     // Capture the moving geometry once. Everything in the segment moves uniformly.
     // Attached text (labels / comments / section names) is not captured - it is
@@ -468,7 +472,7 @@ export class DragPreviewController {
         ['==', ['get', 'stationB'], keyB],
       ] as unknown as maplibregl.FilterSpecification);
     }
-    if (closureExclusions.length > 0) {
+    if (closureExclusions.length > 0 && hasLiveStyle(this.map)) {
       const closureExclusion: maplibregl.FilterSpecification = ['!',
         ['any', ...closureExclusions],
       ] as unknown as maplibregl.FilterSpecification;
@@ -638,7 +642,7 @@ export class DragPreviewController {
     // geometry + labels are custom-rendered and their drag exclusion is dropped
     // synchronously below, so they land at the new position at once).
     for (const [layerId, saved] of this.dragSavedFilters) {
-      if (this.map.getLayer(layerId)) this.map.setFilter(layerId, saved ?? null);
+      if (hasLiveStyle(this.map) && this.map.getLayer(layerId)) this.map.setFilter(layerId, saved ?? null);
     }
     this.clearDragOverlayFollow();
 

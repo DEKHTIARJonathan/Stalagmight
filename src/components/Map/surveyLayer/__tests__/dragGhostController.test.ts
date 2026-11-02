@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import { DRAG_PREVIEW_SOURCE } from '../dragPreviewLayers';
 import type { DragPreviewSet } from '../dragPreviewSource';
+import { dropStyle } from '../customRender/__tests__/styleGone';
 
 /**
  * Drag-ghost controller (#mem drag latency). Locks the behaviour that replaces
@@ -69,6 +70,8 @@ function makeFakeMap(): FakeMap {
   const sourcedataListeners: Array<(e: unknown) => void> = [];
   const state = { setDataCount: 0, translateCount: 0, repaintCount: 0 };
   const map = {
+    // A live style, as MapLibre has outside a lost WebGL context (hasLiveStyle).
+    style: {},
     addSource: (id: string) => sources.add(id),
     getSource: (id: string) =>
       sources.has(id) ? { setData: () => { state.setDataCount++; } } : undefined,
@@ -282,5 +285,16 @@ describe('dispose (map-free teardown for the lightweight unmount)', () => {
     ctrl.dispose();
     holder.fn!();
     expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(false);
+  });
+});
+
+describe('a carry cancelled while the WebGL context is lost (#576 NF-MAP-5)', () => {
+  it('end() does not read the missing style', () => {
+    const fake = makeFakeMap();
+    const ctrl = new DragGhostController(fake.map, makeOptions());
+    expect(ctrl.begin(SET)).toBe('custom');
+    dropStyle(fake.map);
+    expect(() => ctrl.end()).not.toThrow();
+    expect(ctrl.isCustom()).toBe(false);
   });
 });

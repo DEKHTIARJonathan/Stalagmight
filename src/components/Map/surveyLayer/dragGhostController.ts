@@ -24,6 +24,7 @@
 // controller only drives the ghost geometry.
 
 import type maplibregl from 'maplibre-gl';
+import { hasLiveStyle } from '../mapUtils';
 import { GhostFollow } from './dragGhostFollow';
 import {
   DRAG_PREVIEW_SOURCE,
@@ -136,8 +137,12 @@ export class DragGhostController {
     this.dragGeneration++;
     this.selfDisableScheduled = false;
     this.disarmStock();
-    removeDragPreviewLayers(this.map);
-    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    // A carry cancelled while the WebGL context is lost: the style, and every
+    // preview layer with it, is already gone (#576 NF-MAP-5).
+    if (hasLiveStyle(this.map)) {
+      removeDragPreviewLayers(this.map);
+      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    }
     this.layer = null;
     this.set = null;
     this.mode = 'idle';

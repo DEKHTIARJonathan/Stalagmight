@@ -16,6 +16,7 @@ import { getMapThemeColors } from '../../utils/themeColors';
 import type { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import type SurveyLayer from './SurveyLayer';
 import type { SurveyLayerCallbacks } from './SurveyLayer';
+import { hasLiveStyle } from './mapUtils';
 
 // Helper to convert StationRef to highlight ID format (section_id:station_index)
 // Moved outside component to avoid recreating on each render
@@ -28,6 +29,8 @@ interface SurveyLayerSyncOptions {
   map: MutableRefObject<maplibregl.Map | null>;
   surveyLayerRef: MutableRefObject<SurveyLayer | null>;
   mapLoaded: boolean;
+  /** Moves once the style is back after a WebGL context restore (useStyleEpoch). */
+  styleEpoch: number;
   project: ProjectStore['project'];
   activeStations: Station[];
   gpsOrigin: GpsOrigin | null;
@@ -78,6 +81,7 @@ export function useSurveyLayerSync({
   map,
   surveyLayerRef,
   mapLoaded,
+  styleEpoch,
   project,
   activeStations,
   gpsOrigin,
@@ -159,11 +163,13 @@ export function useSurveyLayerSync({
     if (surveyLayerRef.current) {
       surveyLayerRef.current.applyThemeColors(colors);
     }
-    // Re-apply map background color to match the active theme
-    if (map.current && mapLoaded) {
+    // Re-apply map background color to match the active theme. Not while the
+    // WebGL context is lost (no style; the write would throw): styleEpoch runs
+    // this again once the restored style has loaded (#576 NF-MAP-5).
+    if (map.current && mapLoaded && hasLiveStyle(map.current)) {
       map.current.setPaintProperty('background', 'background-color', colors.background);
     }
-  }, [resolvedTheme, mapLoaded]);
+  }, [resolvedTheme, mapLoaded, styleEpoch]);
 
   // Sync selection state with SurveyLayer for visual feedback.
   // useLayoutEffect (not useEffect) so it clears before paint, in the same commit

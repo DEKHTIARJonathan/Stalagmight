@@ -39,7 +39,8 @@ import { mapCursorFor } from './mapCursor';
 import { createSurveyMap, SATELLITE_SOURCE_ID } from './createSurveyMap';
 import { pixelsPerMeterAt } from './placementScale';
 import { useContextLossToast } from './useContextLossToast';
-import { SATELLITE_BOTTOM_CANDIDATES } from './mapUtils';
+import { useStyleEpoch } from './useStyleEpoch';
+import { SATELLITE_BOTTOM_CANDIDATES, hasLiveStyle } from './mapUtils';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
@@ -168,6 +169,9 @@ function MapCanvas({ onReloadMap }: MapCanvasProps) {
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const scaleControlAddedRef = useRef<boolean>(false);
   const [mapLoaded, setMapLoaded] = useState(false);
+  // Moves once the style is back after a WebGL context restore: style-writing
+  // effects that skipped while it was gone run again (#576 NF-MAP-5).
+  const styleEpoch = useStyleEpoch(map, mapLoaded);
   const [ctrlHeld, setCtrlHeld] = useState(false);
   // True briefly after placement confirmation to suppress the spurious MapLibre click
   const placementJustConfirmedRef = useRef(false);
@@ -1007,6 +1011,7 @@ function MapCanvas({ onReloadMap }: MapCanvasProps) {
     map,
     surveyLayerRef,
     mapLoaded,
+    styleEpoch,
     project,
     activeStations,
     gpsOrigin,
@@ -1216,7 +1221,9 @@ function MapCanvas({ onReloadMap }: MapCanvasProps) {
 
   // Handle satellite toggle
   useEffect(() => {
-    if (!map.current || !mapLoaded) return;
+    // No style while the WebGL context is lost (reading it throws); styleEpoch
+    // re-runs this once the restored style has loaded (#576 NF-MAP-5).
+    if (!map.current || !mapLoaded || !hasLiveStyle(map.current)) return;
 
     // Store reference for cleanup
     const currentMap = map.current;
@@ -1275,7 +1282,7 @@ function MapCanvas({ onReloadMap }: MapCanvasProps) {
         currentMap.off('error', errorHandler);
       }
     };
-  }, [showSatellite, getSatelliteTileConfig, mapLoaded]);
+  }, [showSatellite, getSatelliteTileConfig, mapLoaded, styleEpoch]);
 
   // Satellite tiles that failed offline reload when the connection returns:
   // createSurveyMap owns that for all three maps (#576 D18).
@@ -1517,7 +1524,7 @@ function MapCanvas({ onReloadMap }: MapCanvasProps) {
       )}
 
       {/* Grid overlay using MapLibre layer */}
-      {mapLoaded && map.current && <GridOverlay map={map.current} gpsOrigin={gpsOrigin} />}
+      {mapLoaded && map.current && <GridOverlay map={map.current} gpsOrigin={gpsOrigin} styleEpoch={styleEpoch} />}
 
       {/* Depth legend when depth gradient is enabled (suppressed while the
           distance overlay is active - distance wins visually, one legend). */}

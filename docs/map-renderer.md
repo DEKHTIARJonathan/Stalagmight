@@ -216,7 +216,13 @@ re-adds one on restore - it re-applies a serialized style that skips them.
 loss and, once the restored style has loaded, has each controller re-add its
 live layer object at its old position (`reattach`); the layer's `onAdd` then
 re-uploads from its own data. SurveyLayer replays the last flush afterwards,
-including one that arrived while the context was lost. The Global View layer
+including one that arrived while the context was lost. While the style is gone
+nothing may read it (MapLibre's `getLayer`, `setPaintProperty` and friends throw,
+and a throw in an effect takes down the map panel), so the style-writing
+setters and effects skip their writes then: SurveyLayer's replay re-applies its
+stock-layer state (visibility, paint, ghost section), and MapCanvas's own
+style-writing effects (satellite, grid, background) re-run on `useStyleEpoch`,
+which moves once the restored style has loaded (#576 NF-MAP-5). The Global View layer
 recovers the same way (`GlobalSurveyLayer` runs the same watch over its one
 controller and applies systems that arrived during the loss after the restore).
 

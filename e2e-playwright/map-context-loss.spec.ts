@@ -200,6 +200,68 @@ test.describe('Map survives a WebGL context loss', () => {
   });
 });
 
+/** Read map style state, or null while there is no style (context lost). */
+async function styleState(page: Page): Promise<{ satellite: boolean; grid: boolean; closures: unknown; interactStations: unknown } | null> {
+  return page.evaluate(() => {
+    const map = (window as unknown as {
+      __stalagmight_map__: { getLayer: (id: string) => unknown; getLayoutProperty: (id: string, p: string) => unknown };
+    }).__stalagmight_map__;
+    try {
+      return {
+        satellite: Boolean(map.getLayer('satellite-tiles')),
+        grid: Boolean(map.getLayer('grid-lines')),
+        closures: map.getLayoutProperty('survey-loop-closures', 'visibility'),
+        interactStations: map.getLayoutProperty('survey-interact-stations', 'visibility'),
+      };
+    } catch {
+      return null;
+    }
+  });
+}
+
+/** Run store actions in the page, the way the toolbar / Display menu do. */
+async function act(page: Page, code: string): Promise<void> {
+  await page.evaluate((code) => {
+    const w = window as unknown as { __E2E_TEST__: { uiStore: { getState: () => unknown }; projectStore: { getState: () => unknown } } };
+    // eslint-disable-next-line no-new-func
+    new Function('ui', 'ps', code)(w.__E2E_TEST__.uiStore.getState(), w.__E2E_TEST__.projectStore.getState());
+  }, code);
+}
+
+test.describe('Map work while the WebGL context is lost (#576 NF-MAP-5)', () => {
+  test('throws nothing, and the style catches up after the restore', async ({ page }) => {
+    const errors = collectErrors(page);
+    await openSeededAndZoom(page, 'Context Lost Edits');
+    const before = await styleState(page);
+    expect(before).toMatchObject({ satellite: true, grid: false });
+
+    await loseContext(page);
+    // Display menu toggles that write the style: satellite off, grid on, stations off.
+    await act(page, "ui.toggleDisplay('showSatellite')");
+    await act(page, "ui.toggleDisplay('showGrid')");
+    await act(page, "ui.toggleDisplay('showStations')");
+    // Theme, tools, selection, overlays and modes, which repaint or re-dim.
+    await act(page, "ui.setResolvedTheme(ui.resolvedTheme === 'dark' ? 'light' : 'dark')");
+    for (const tool of ['move_station', 'move_segment', 'move_shot', 'measure', 'merge', 'comment', 'select']) {
+      await act(page, `ui.setActiveTool('${tool}')`);
+    }
+    await act(page, "ui.setSelection({ type: 'shot', sectionId: ps.project.sections[0].id, shotId: ps.project.sections[0].shots[0].id })");
+    await act(page, 'ui.toggleDistanceGradient()');
+    await act(page, "ui.setAppMode('plan')");
+    await act(page, "ui.setAppMode('survey')");
+    await expect(page.getByText('Map encountered an error')).toHaveCount(0);
+
+    await restoreContext(page);
+    // The writes skipped during the loss land once the restored style has loaded.
+    await expect
+      .poll(() => styleState(page))
+      .toEqual({ satellite: false, grid: true, closures: 'none', interactStations: 'none' });
+    await expect.poll(async () => inkAt(page, await shotMidpoints(page)), { timeout: 10000 }).toBeGreaterThan(0);
+    await expect(page.getByText('Map encountered an error')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+});
+
 test.describe('Global View survives a WebGL context loss (#576 D38)', () => {
   test('the global survey layer comes back, in its old stacking order', async ({ page }) => {
     const errors = collectErrors(page);

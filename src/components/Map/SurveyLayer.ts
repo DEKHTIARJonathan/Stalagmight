@@ -234,6 +234,8 @@ export default class SurveyLayer {
   // Visibility state (for hidden feature detection)
   private stationsVisible: boolean = true;
   private shotsVisible: boolean = true;
+  /** The merge-preview ghost section (setGhostSection), kept for the context-restore replay. */
+  private ghostSection: GhostSectionData | null = null;
 
   // GPS origin for coordinate transforms (enables satellite tile alignment)
   private gpsOrigin: GpsOrigin | null = null;
@@ -413,6 +415,16 @@ export default class SurveyLayer {
     if (args) this.flushUpdateSync(...args);
     // Closure dimming is a paint property the lost window could not write.
     this.updateClosureOpacity();
+    // So are the rest of the stock layers' style state: the restored style is the
+    // one serialized at the loss, and the setters below skipped their writes
+    // while it was gone (#576 NF-MAP-5).
+    this.applyStockVisibility();
+    this.applyConfigPaint();
+    applyAuxiliaryThemeColors(this.map, this.themeColors);
+    this.applyInteractPaint();
+    applyGhostSection(this.map, this.ghostSection, this.gpsOrigin);
+    this.lastInteractKey = null;
+    this.refreshInteractOverlay();
   }
 
   /**
@@ -446,11 +458,18 @@ export default class SurveyLayer {
   // Config setter - triggers layer updates when config changes
   public setConfig(config: Config): void {
     this.config = config;
-    updateGhostHitboxLayers(this.map, this.getStationHitArea(), this.getShotHitArea());
-    updateGhostVisualLayers(this.map, this.getStationRadius(), this.getShotWidth());
+    this.applyConfigPaint();
     // Overlay features carry config-derived widths/radii - force a rebuild.
     this.lastInteractKey = null;
     this.updateVisualState();
+  }
+
+  /** Config-derived paint of the stock ghost layers. Skipped while the WebGL
+   *  context is lost (no style); replayAfterContextRestore re-applies it. */
+  private applyConfigPaint(): void {
+    if (!hasLiveStyle(this.map)) return;
+    updateGhostHitboxLayers(this.map, this.getStationHitArea(), this.getShotHitArea());
+    updateGhostVisualLayers(this.map, this.getStationRadius(), this.getShotWidth());
     updateGhostDebugVisualization(this.map, this.config?.debug?.map?.show_hitboxes ?? false);
   }
 
@@ -1545,16 +1564,12 @@ export default class SurveyLayer {
   setShowStations(visible: boolean): void {
     if (!this.map) return;
     this.stationsVisible = visible;
-    const visibility = visible ? 'visible' : 'none';
     // Clear hover state FIRST when hiding to prevent any race conditions.
     if (!visible) {
       this.clearStationHover();
     }
     this.customRender?.setStationsVisible(visible);
-    this.map.setLayoutProperty(AUX_IDS.loopClosuresLayerId, 'visibility', visibility);
-    // Interact overlay tracks the stations layer: a hover/selection highlight
-    // must not surface a hidden station (#mem).
-    this.map.setLayoutProperty(AUX_IDS.interactStationsLayerId, 'visibility', visibility);
+    this.applyStockVisibility();
     // Note: stationsHighlightLayerId intentionally NOT hidden - it shows only
     // snapped/origin stations even when the main stations layer is hidden.
     // Drop/restore the measured-path station discs with the stations toggle.
@@ -1566,15 +1581,12 @@ export default class SurveyLayer {
   setShowShots(visible: boolean): void {
     if (!this.map) return;
     this.shotsVisible = visible;
-    const visibility = visible ? 'visible' : 'none';
     // Clear hover state FIRST when hiding to prevent any race conditions.
     if (!visible) {
       this.clearShotHover();
     }
     this.customRender?.setShotsVisible(visible);
-    // Interact overlay tracks the shots layers (#mem).
-    this.map.setLayoutProperty(AUX_IDS.interactShotsLayerId, 'visibility', visibility);
-    this.map.setLayoutProperty(AUX_IDS.interactShotsMeasuredLayerId, 'visibility', visibility);
+    this.applyStockVisibility();
     // Keep the interact overlay's colors + features in step.
     this.applyOverlayPaint();
     // Drop/restore the measured-path shot lines with the shots toggle.
@@ -1884,7 +1896,27 @@ export default class SurveyLayer {
    * Pass null to clear the ghost section.
    */
   setGhostSection(data: GhostSectionData | null) {
+    this.ghostSection = data;
+    // No style while the WebGL context is lost; the restore replays it.
+    if (!hasLiveStyle(this.map)) return;
     applyGhostSection(this.map, data, this.gpsOrigin);
+  }
+
+  /**
+   * The stock layers that follow the user's Stations / Shots toggles: loop
+   * closures and the interact overlay's station layer hide with the stations, the
+   * interact overlay's shot layers with the shots - a hover/selection highlight
+   * must not surface a hidden feature (#mem). Skipped while the WebGL context is
+   * lost (no style); replayAfterContextRestore re-applies it (#576 NF-MAP-5).
+   */
+  private applyStockVisibility(): void {
+    if (!hasLiveStyle(this.map)) return;
+    const stations = this.stationsVisible ? 'visible' : 'none';
+    const shots = this.shotsVisible ? 'visible' : 'none';
+    this.map.setLayoutProperty(AUX_IDS.loopClosuresLayerId, 'visibility', stations);
+    this.map.setLayoutProperty(AUX_IDS.interactStationsLayerId, 'visibility', stations);
+    this.map.setLayoutProperty(AUX_IDS.interactShotsLayerId, 'visibility', shots);
+    this.map.setLayoutProperty(AUX_IDS.interactShotsMeasuredLayerId, 'visibility', shots);
   }
 
   /**
