@@ -865,6 +865,36 @@ impl AppState {
         self.speleodb_upload(endpoint, token, insecure_http, link, message, true)
     }
 
+    /// The pre-push flush: save the in-memory project to the live `.stalx` the
+    /// snapshot is taken from (see [`Self::speleodb_upload`]).
+    ///
+    /// [#576 NF-W2SAVE-1] A refused or failed save fails the push with the SAVE's
+    /// own reason, verbatim - its routing marker included, which the frontend turns
+    /// into the same line a refused save gets. It used to be replaced by "failed to
+    /// flush project before push", which named none of the save's causes (a newer
+    /// file, unread settings, an unreadable side table, a full disk). A successful
+    /// save's warnings (what it could not keep) are logged here; the push results
+    /// carry no channel for them yet (see the package report).
+    pub(super) fn speleodb_flush_before_push(&self) -> Result<(), SpeleoErrorDto> {
+        let flushed = self.save_project(None);
+        for warning in &flushed.warnings {
+            tracing::warn!(
+                code = %warning.code,
+                message = %warning.message,
+                purpose = "say what the pre-push save could not keep (#576 NF-W2SAVE-1)",
+                "speleodb: the pre-push save completed with a warning"
+            );
+        }
+        if !flushed.success {
+            let mut dto = local_dto(SpeleoDbError::Io(String::new()));
+            dto.message = flushed
+                .error
+                .unwrap_or_else(|| "the project could not be saved before the push".to_owned());
+            return Err(dto);
+        }
+        Ok(())
+    }
+
     /// Build the upload (VACUUM snapshot with the dirty bit cleared in the copy +
     /// the `.tml` render) and push it as one commit, then reconcile the dirty bit
     /// from the result.
@@ -947,11 +977,7 @@ impl AppState {
         // shot identity + geometry. Rendering first would ship a `.tml` built from
         // the un-healed project for a legacy file carrying within-section duplicate
         // UUIDs or non-finite values (#196).
-        if !self.save_project(None).success {
-            return Err(local_dto(SpeleoDbError::Io(
-                "failed to flush project before push".to_owned(),
-            )));
-        }
+        self.speleodb_flush_before_push()?;
         self.speleodb_render_tml(&tml).map_err(local_dto)?;
 
         // Self-contained snapshot of the live `.stalx` (#195), dirty bit cleared in

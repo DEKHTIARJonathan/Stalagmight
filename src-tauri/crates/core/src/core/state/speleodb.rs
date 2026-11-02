@@ -3669,9 +3669,20 @@ mod tests {
             .map(|(_, rest)| rest)
             .and_then(|rest| rest.split("\n    fn ").next())
             .expect("speleodb_upload body precedes the next method");
+        // [#576 NF-W2SAVE-1] The flush is its own helper (so its refusal can carry the
+        // save's reason); it must still be a `save_project` of the live file.
         let save = upload
-            .find("self.save_project(")
-            .expect("push flushes via save_project");
+            .find("self.speleodb_flush_before_push()")
+            .expect("push flushes via the pre-push save");
+        let flush = src
+            .split_once("fn speleodb_flush_before_push")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    fn ").next())
+            .expect("the pre-push flush helper is present");
+        assert!(
+            flush.contains("self.save_project(None)"),
+            "the pre-push flush saves the live file in place"
+        );
         let vacuum = upload
             .find("vacuum_snapshot(")
             .expect("push snapshots via vacuum_snapshot");

@@ -214,16 +214,33 @@ impl AppState {
     /// touches the `speleo_link` table), and refresh the link's cached `project_name`.
     /// Best-effort - a failure is logged, never surfaced (the server write already
     /// landed). Locks project → database in that order (mirrors `speleodb_render_tml`).
+    ///
+    /// [#576 RV2-R-6] Refused - nothing renamed, persisted or re-cached - whenever a
+    /// save would refuse to write this project ([`Self::model_write_refusal`]): the
+    /// in-place save below writes the WHOLE model, so in the B15 state it put the
+    /// in-memory defaults over the stored settings, and it ran before the flush that
+    /// would have refused. The server keeps the name; the next fold after a clean
+    /// reopen picks it up.
     pub(super) fn speleodb_fold_local_name(&self, name: &str) {
         // Snapshot + update the in-memory name under the project lock, then release it
         // before taking the database lock (project → database order).
         let to_persist = match self.project.lock() {
             Ok(mut proj_guard) => match proj_guard.as_mut() {
-                Some(project) if project.name != name => {
-                    project.name = name.to_owned();
-                    Some(project.clone())
+                Some(project) => {
+                    if let Some(refusal) = self.model_write_refusal(project) {
+                        tracing::warn!(
+                            reason = ?refusal.error,
+                            purpose = "never write a project the save would refuse (#576 RV2-R-6)",
+                            "speleodb: not folding the SpeleoDB name into this project"
+                        );
+                        return;
+                    }
+                    (project.name != name).then(|| {
+                        project.name = name.to_owned();
+                        project.clone()
+                    })
                 }
-                _ => None,
+                None => None,
             },
             Err(_) => None,
         };

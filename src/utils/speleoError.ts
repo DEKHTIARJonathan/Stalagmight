@@ -9,6 +9,8 @@ import i18n from '../i18n';
 import type { DumpPickerKind } from '../store/speleoStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { isEditDisabledError, READ_ONLY_EDIT_NOTICE } from './editErrors';
+import { classifySaveError } from './saveErrors';
+import { autosaveFailureMessage } from './saveFeedback';
 import { getErrorMessage } from './ipc';
 
 /**
@@ -75,8 +77,11 @@ export function humanizeSpeleoError(e: unknown, contextPrefix?: string): string 
   // read-only Plan or Export workspace) carries the backend's coded markers; a marker
   // must never reach a surface, so it gets the same notice a refused edit gets.
   if (isEditDisabledError(raw)) return READ_ONLY_EDIT_NOTICE(raw);
+  // [#576 NF-W2SAVE-1] A Done/Push whose pre-push save refused carries the save's
+  // own reason, routing marker included: worded like any refused save's line.
+  const saved = classifySaveError(raw) === 'other' ? raw : autosaveFailureMessage(raw);
   // Strip a trailing period so "…credentials." reads cleanly after our prefix.
-  const msg = raw.replace(/\.\s*$/, '');
+  const msg = saved.replace(/\.\s*$/, '');
   if (!contextPrefix) return msg;
   return `${contextPrefix}: ${msg}`;
 }

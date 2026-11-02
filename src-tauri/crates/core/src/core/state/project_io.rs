@@ -403,15 +403,16 @@ impl AppState {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub(super) fn save_project(&self, path: Option<PathBuf>) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
-
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
-
+    /// The refusals a save makes BEFORE it touches the live project or any file:
+    /// a project a newer build saved (#576 B6-D1), stored settings the open could
+    /// not read (#576 B15), and unresolvable cross-references. Called under the
+    /// `project` lock, like the checks it reads.
+    ///
+    /// [#576 RV2-R-6] Its own method so EVERY in-place write of the model applies
+    /// the same rules as the save: the SpeleoDB name fold persists the whole model
+    /// beside the save path, and ran before the flush that would have refused - so
+    /// it wrote the in-memory defaults over unread settings.
+    pub(super) fn model_write_refusal(&self, project: &Project) -> Option<CommandResult> {
         // [#576 B6-D1] A project a NEWER build saved is never written by this one -
         // not in place (Ctrl+S, autosave, the pre-push flush) and not elsewhere
         // either: a Save As would write this build's schema of it, the same silent
@@ -423,10 +424,10 @@ impl AppState {
                 purpose = "never downgrade a project saved by a newer version",
                 "Refused to save a project saved by a newer version of Stalagmight"
             );
-            return CommandResult::failure(format!(
+            return Some(CommandResult::failure(format!(
                 "{}: Saving is disabled: {reason}",
                 crate::core::loading::NEWER_FILE_READ_ONLY_CODE
-            ));
+            )));
         }
 
         // [#576 B15] Stored per-project settings the open could not read are held as
@@ -442,7 +443,7 @@ impl AppState {
                 "Refused to save: stored project settings could not be read when the project \
                  was opened"
             );
-            return refusal;
+            return Some(refusal);
         }
 
         // Refuse to persist a project with unresolvable cross-references (a station an
@@ -481,12 +482,27 @@ impl AppState {
                 purpose = "block persisting unresolvable cross-references",
                 "Refused to save project with dangling cross-references"
             );
-            return CommandResult::failure(format!(
+            return Some(CommandResult::failure(format!(
                 "Can't save: the project has {count} unresolved cross-reference{} \
                  (a station they point to was deleted). Use \"Repair\" in the \
                  integrity banner, then save.",
                 if count == 1 { "" } else { "s" }
-            ));
+            )));
+        }
+        None
+    }
+
+    pub(super) fn save_project(&self, path: Option<PathBuf>) -> CommandResult {
+        let Ok(mut proj_guard) = self.project.lock() else {
+            return CommandResult::failure("Failed to lock project".to_string());
+        };
+
+        let Some(project) = proj_guard.as_mut() else {
+            return CommandResult::failure("No project open".to_string());
+        };
+
+        if let Some(refusal) = self.model_write_refusal(project) {
+            return refusal;
         }
 
         // The undo-less heals, all of them, in `apply_save_heals` - which is
