@@ -12,7 +12,12 @@ import {
 } from '../utils/editErrors';
 import { hasEligibleClosures } from '../utils/closures';
 import { applyReverseAftermath, composeReverseTransforms, flushPlanAnchors, remapPlanPins } from '../utils/reverseAftermath';
-import { captureDistanceOrigin, remapDistanceOrigin, type OriginCapture } from '../utils/distanceOriginAnchor';
+import {
+  captureDistanceOrigin,
+  dropDormantDistanceOrigin,
+  remapDistanceOrigin,
+  type OriginCapture,
+} from '../utils/distanceOriginAnchor';
 import { useUIStore } from './uiStore';
 import { autosaveFailureMessage, surfaceSaveFailure, surfaceSaveWarnings } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
@@ -651,6 +656,8 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
   useExportStore.getState().reset();
   // #204: drop the SpeleoDB action-shell edit-state - no project is open.
   speleoState()?.clearLink();
+  // The distance origin a delete displaced belonged to the project now gone.
+  dropDormantDistanceOrigin();
 }
 
 export const useProjectStore = create<ProjectStore>((set, get) => {
@@ -1161,6 +1168,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // load the old project is still displayed, so its armed tool refs are
         // still valid and must not be cleared.
         useUIStore.getState().resetToolTransientsForProjectSwitch();
+        // An undo in this project must not bring back the previous one's distance origin
+        // (#576 RV4-FE-FEA2) - nor this project's own, from before it was reopened.
+        dropDormantDistanceOrigin();
         const tViewStart = performance.now();
         useUIStore.getState().setView('single');
         const tViewDone = performance.now();
@@ -1401,6 +1411,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       useUIStore.getState().clearSelection();
       // Stale tool state must not carry into the new project either (#275 B1).
       useUIStore.getState().resetToolTransientsForProjectSwitch();
+      dropDormantDistanceOrigin();
       useUIStore.getState().setView('single');
       await get().loadRecentProjects();
       get().resetLoading();

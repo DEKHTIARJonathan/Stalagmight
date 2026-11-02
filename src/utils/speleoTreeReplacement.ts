@@ -7,6 +7,7 @@ import {
 } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import type { OpenFileFlags } from '../types/ipc.generated';
+import { dropDormantDistanceOrigin } from './distanceOriginAnchor';
 import { invokeIpc } from './ipc';
 import { runTreeReplacement } from './projectTransition';
 
@@ -56,6 +57,7 @@ export async function applySpeleoTreeReplacement(
     ui.clearSelection();
     ui.resetToolTransientsForProjectSwitch();
     ui.setDistanceGradientOrigin(null);
+    dropDormantDistanceOrigin();
     useGasPlanStore.getState().reset();
     ui.setView('single');
 

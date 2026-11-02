@@ -22,10 +22,13 @@ import { useProjectStore } from '../projectStore';
 import { useGasPlanStore } from '../gasPlanStore';
 import { useUIStore } from '../uiStore';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { applySpeleoTreeReplacement } from '../../utils/speleoTreeReplacement';
 import type { StationRef } from '../../types/project';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+const loadBinaryMock = vi.hoisted(() => vi.fn());
+vi.mock('../../utils/loadProjectBinary', () => ({ loadProjectFullBinary: loadBinaryMock }));
 
 const SECTION = 1;
 const ref = (station_index: number): StationRef => ({ section_id: SECTION, station_index });
@@ -269,5 +272,102 @@ describe('a reverse mirrors the origin when its anchor could not be taken', () =
     });
     await useProjectStore.getState().reverseSection(SECTION, false);
     expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(1));
+  });
+});
+
+/**
+ * #576 RV4-FE-FEA2: the anchor a delete displaced is kept for an undo only while the
+ * choice it stood for is still the user's. Turning the overlay off (which clears the
+ * origin so re-enabling starts at the entrance), opening a project - another one, or
+ * the same one again - and an in-place tree swap all replace that choice; the anchor
+ * used to survive every one of them, because the origin was already null and only a
+ * CHANGE of origin dropped it.
+ */
+describe('the displaced origin is forgotten once the overlay or the project moves on', () => {
+  async function deleteTheOriginStation() {
+    useUIStore.getState().setDistanceGradientOrigin(ref(5));
+    serve(null);
+    await useProjectStore.getState().deleteShot(SECTION, 4);
+    expect(useUIStore.getState().distanceGradientOrigin, 'origin after deleting its station').toBeNull();
+  }
+
+  /** The load result for `p`, as the binary loader hands it to loadProject. */
+  function loaded(p: ReturnType<typeof project>) {
+    return {
+      loadingId: 1,
+      isRemote: false,
+      project: p,
+      stations: [],
+      surveyData: { shots: [], stations: [] },
+      stats: null,
+      warnings: [],
+      frozen_shots: [],
+      displaySettings: {},
+    };
+  }
+
+  /** `serve`, plus the recent-projects list a load refreshes. */
+  function serveForLoad(resolveTo: StationRef | null) {
+    const anchorCalls = serve(resolveTo);
+    const served = invokeIpcMock.getMockImplementation()!;
+    invokeIpcMock.mockImplementation(async (command: string, args?: { refs?: StationRef[] }) =>
+      command === 'list_recent_projects' ? [] : served(command, args),
+    );
+    return anchorCalls;
+  }
+
+  it('drops it when the distance gradient is turned off', async () => {
+    useUIStore.setState({ showDistanceGradient: true });
+    await deleteTheOriginStation();
+    useUIStore.getState().toggleDistanceGradient();
+
+    const anchorCalls = serve(ref(5));
+    await useProjectStore.getState().undo();
+    console.log('[FEA2] gradient off, then undo: origin =', JSON.stringify(useUIStore.getState().distanceGradientOrigin));
+    expect(useUIStore.getState().distanceGradientOrigin, 'origin set while the gradient is off').toBeNull();
+    expect(anchorCalls).toEqual([]);
+    // Re-enabling starts fresh at the entrance.
+    useUIStore.getState().toggleDistanceGradient();
+    expect(useUIStore.getState().distanceGradientOrigin).toBeNull();
+  });
+
+  it('keeps it across Plan, which suppresses the overlay and restores it on return', async () => {
+    useUIStore.setState({ showDistanceGradient: true, appMode: 'survey' });
+    await deleteTheOriginStation();
+    useUIStore.getState().setAppMode('plan');
+    useUIStore.getState().setAppMode('survey');
+    expect(useUIStore.getState().showDistanceGradient).toBe(true);
+
+    serve(ref(5));
+    await useProjectStore.getState().undo();
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(5));
+  });
+
+  it('drops it when another project is opened, even once the first is open again', async () => {
+    await deleteTheOriginStation();
+    serveForLoad(null);
+    loadBinaryMock.mockResolvedValueOnce(loaded({ ...project(), created_at: '2026-02-02T00:00:00Z', file_path: '/tmp/other.stalx' }));
+    await useProjectStore.getState().loadProject('/tmp/other.stalx');
+    loadBinaryMock.mockResolvedValueOnce(loaded(project()));
+    await useProjectStore.getState().loadProject('/tmp/origin.stalx');
+    expect(useProjectStore.getState().project?.created_at).toBe(project().created_at);
+
+    const anchorCalls = serveForLoad(ref(5));
+    await useProjectStore.getState().undo();
+    console.log('[FEA2] switch away and back, then undo: origin =', JSON.stringify(useUIStore.getState().distanceGradientOrigin));
+    expect(useUIStore.getState().distanceGradientOrigin, 'dormant survived the switch').toBeNull();
+    expect(anchorCalls).toEqual([]);
+  });
+
+  it('drops it on an in-place tree swap', async () => {
+    await deleteTheOriginStation();
+    serve(null);
+    await applySpeleoTreeReplacement(undefined, true);
+
+    const anchorCalls = serve(ref(5));
+    await useProjectStore.getState().undo();
+    console.log('[FEA2] tree swap, then undo: origin =', JSON.stringify(useUIStore.getState().distanceGradientOrigin));
+    expect(useUIStore.getState().distanceGradientOrigin).toBeNull();
+    expect(anchorCalls).toEqual([]);
   });
 });

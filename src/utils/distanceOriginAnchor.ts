@@ -27,8 +27,13 @@
  * restoring the deleted origin station brings the origin back"). The fallback keeps
  * the anchor it was following, dormant, for the project it was taken in; the
  * undo/redo seam re-resolves it while the origin is still on the entrance, and puts
- * the origin back once it names a station again. Any change of origin in between - a
- * pick, a reset, a project switch's reset - drops it: the user's choice since wins.
+ * the origin back once it names a station again. Anything that replaces the choice it
+ * stood for drops it (#576 RV4-FE-FEA2): a pick of another origin; turning the
+ * distance overlay off (which clears the origin so re-enabling starts at the
+ * entrance - Plan/Export's suppression is not that: it restores the overlay on
+ * return); opening a project, another one or the same one again; and an in-place
+ * SpeleoDB tree swap. The last two call {@link dropDormantDistanceOrigin}; the origin
+ * is already the entrance then, so no change of it could tell.
  */
 import type { StationRef } from '../types/project';
 import { useUIStore } from '../store/uiStore';
@@ -55,10 +60,24 @@ function setDormant(next: typeof dormant): void {
   stopWatchingOrigin = null;
   dormant = next;
   if (next === null) return;
-  // Any change of origin after the fallback is the user's (or a project switch's): drop it.
   stopWatchingOrigin = useUIStore.subscribe((state, prev) => {
+    // Any change of origin after the fallback is the user's: drop it.
     if (state.distanceGradientOrigin !== prev.distanceGradientOrigin) setDormant(null);
+    // So is turning the overlay off. Entering Plan/Export turns it off in the same
+    // update that changes the mode, and returning restores it: not the user's.
+    else if (prev.showDistanceGradient && !state.showDistanceGradient && state.appMode === prev.appMode) {
+      setDormant(null);
+    }
   });
+}
+
+/**
+ * Forget the anchor a delete displaced: a project was opened (another one, or the same
+ * one again) or the open tree was swapped in place, so an undo that brings its station
+ * back no longer restores the user's choice (#576 RV4-FE-FEA2).
+ */
+export function dropDormantDistanceOrigin(): void {
+  setDormant(null);
 }
 
 const sameRef = (a: StationRef | null, b: StationRef | null): boolean =>
