@@ -1,9 +1,4 @@
-#![expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::print_stdout,
-    clippy::print_stderr
-)]
+#![expect(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout)]
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -12,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::Datelike;
 
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
+use crate::models::test_support::require_env_file;
 use crate::parsers::encoding::read_cp1252;
 
 use super::*;
@@ -2061,18 +2057,8 @@ fn per_survey_fixed_station_count_dedups_and_validates() {
 #[test]
 #[ignore = "needs a private Walls project tree; set WALLS_WPJ to its .WPJ"]
 fn real_qr_project_tree() {
-    let wpj = match std::env::var_os("WALLS_WPJ") {
-        Some(p) => PathBuf::from(p),
-        None => {
-            // Maintainer-held private survey tree; point WALLS_WPJ at a local copy.
-            eprintln!("skip: WALLS_WPJ not set");
-            return;
-        }
-    };
-    if !wpj.exists() {
-        eprintln!("skip: {} not found", wpj.display());
-        return;
-    }
+    // Maintainer-held private survey tree; point WALLS_WPJ at a local copy.
+    let wpj = require_env_file("WALLS_WPJ");
     let parsed = parse_walls(&wpj).unwrap();
     let resolved = parsed.surveys.iter().filter(|s| s.resolved).count();
     println!(
@@ -2097,11 +2083,7 @@ fn real_qr_project_tree() {
 #[test]
 #[ignore = "needs a folder of private .SRV files; set WALLS_SRV_DIR"]
 fn real_qr_srv_dir() {
-    let Some(dir) = std::env::var_os("WALLS_SRV_DIR") else {
-        eprintln!("skip: set WALLS_SRV_DIR to a folder of real .SRV files");
-        return;
-    };
-    let dir = PathBuf::from(dir);
+    let dir = require_env_file("WALLS_SRV_DIR");
     let mut total_shots = 0usize;
     let mut files = 0usize;
     for entry in std::fs::read_dir(&dir).unwrap() {
@@ -2140,10 +2122,7 @@ fn real_qr_srv_dir() {
 #[test]
 #[ignore = "sweeps a Walls corpus kept outside the repo; set WALLS_CORPUS"]
 fn corpus_sweep() {
-    let Some(root) = std::env::var_os("WALLS_CORPUS") else {
-        eprintln!("skip: set WALLS_CORPUS to a directory tree of Walls files");
-        return;
-    };
+    let root = require_env_file("WALLS_CORPUS");
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         if let Ok(rd) = std::fs::read_dir(dir) {
             for e in rd.flatten() {
@@ -2160,7 +2139,7 @@ fn corpus_sweep() {
         }
     }
     let mut files = Vec::new();
-    walk(&PathBuf::from(root), &mut files);
+    walk(&root, &mut files);
     files.sort();
 
     let (mut wpj_ok, mut srv_ok) = (0usize, 0usize);

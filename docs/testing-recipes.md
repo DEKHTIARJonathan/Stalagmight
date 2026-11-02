@@ -1551,8 +1551,9 @@ up; from the app crate (`src-tauri/`) it is one.
 fn parses_v5_dmp() {
     // In a member crate (here: stalagmight-parsers). From the app crate the
     // prefix is "../e2e/fixtures/" instead.
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp");
-    assert!(path.exists(), "Fixture missing: {}", path.display());
+    let path = require_file(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp"),
+    );
 
     let dmp = parse_dmp(&path).expect("v5 DMP should parse");
     assert_eq!(dmp.version, 5);
@@ -1562,6 +1563,37 @@ fn parses_v5_dmp() {
 
 Because Rust tests read `e2e/fixtures/`, the CI `check` job must keep running on
 changes there - never path-ignore `e2e/**`.
+
+A missing committed fixture fails the test (`require_file` panics naming the
+path); it never skips. A skip there would make the test unfailable exactly
+when the fixture it guards has gone.
+
+### Opt-in tests
+
+A test that needs something the repo cannot carry - a live SpeleoDB box, a
+private survey file, a corpus directory, a tool binary - is `#[ignore]`d, and
+takes its prerequisites through the helpers in
+`stalagmight_models::test_support` (a member crate reaches them by enabling
+`stalagmight-models`' `test-support` feature in its `[dev-dependencies]`):
+
+| Helper | Use for |
+|--------|---------|
+| `require_env("VAR")` | a value: credentials, a URL, a binary name |
+| `require_env_file("VAR")` | a path the variable names, which must exist |
+| `require_file(path)` | a fixed path (an uncommitted fixture, a committed one) |
+| `missing_prerequisite(what)` | anything else - e.g. a build-time setting |
+
+Each panics naming what is missing. `#[ignore]` is the skip: a default
+`cargo test` never runs these tests, and someone who runs one on purpose must
+see a failure when a variable is unset or mistyped, not an `ok` from a test
+that returned before its first assertion (#576 E13). Never early-return from
+an opt-in test, and never hard-code a path on your own machine into one - take
+it from a variable.
+
+The consequence: a blanket `cargo test -- --ignored` fails every opt-in test
+whose prerequisites are absent. Run the ones you can feed by name, as the
+recipes above do (`--lib fuzz_shrink -- --ignored`), and leave out the rest
+with libtest's repeatable `--skip <filter>`.
 
 ### Inducing save failures must be root-safe
 

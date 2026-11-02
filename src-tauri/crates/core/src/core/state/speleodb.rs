@@ -7932,6 +7932,7 @@ mod tests {
     // DEV_SPELEODB_* + #[ignore]; run with `--ignored --test-threads=1`.
 
     use crate::core::{AppState, Command};
+    use crate::models::test_support::require_env;
     use crate::models::ShotData;
     use crate::speleodb::client;
     use crate::speleodb::{StartEditingResult, UpdateResult};
@@ -7952,23 +7953,26 @@ mod tests {
         "/../../tests/fixtures/test_simple.tml"
     );
 
-    fn orch_env() -> Option<(String, String, String)> {
-        Some((
-            std::env::var("DEV_SPELEODB_URL").ok()?,
-            std::env::var("DEV_SPELEODB_EMAIL").ok()?,
-            std::env::var("DEV_SPELEODB_PASSWORD").ok()?,
-        ))
+    /// The box and the first account. A test run on purpose without them fails
+    /// naming the unset variable (#576 E13): `#[ignore]` is the skip, so a
+    /// deliberate run must not report `ok` having tested nothing.
+    fn orch_env() -> (String, String, String) {
+        (
+            require_env("DEV_SPELEODB_URL"),
+            require_env("DEV_SPELEODB_EMAIL"),
+            require_env("DEV_SPELEODB_PASSWORD"),
+        )
     }
 
-    /// The second pre-provisioned collaborator account (email + password). `None`
-    /// when `DEV_SPELEODB_EMAIL2`/`_PASSWORD2` are unset - the two-account tests
-    /// skip rather than fail. (That account can't be created over HTTP; see
+    /// The second pre-provisioned collaborator account (email + password); the
+    /// two-account tests fail when `DEV_SPELEODB_EMAIL2`/`_PASSWORD2` are unset.
+    /// (That account can't be created over HTTP; see
     /// docs/speleodb-dev-testing.md.)
-    fn orch_env2() -> Option<(String, String)> {
-        Some((
-            std::env::var("DEV_SPELEODB_EMAIL2").ok()?,
-            std::env::var("DEV_SPELEODB_PASSWORD2").ok()?,
-        ))
+    fn orch_env2() -> (String, String) {
+        (
+            require_env("DEV_SPELEODB_EMAIL2"),
+            require_env("DEV_SPELEODB_PASSWORD2"),
+        )
     }
 
     /// Deletes the per-test project on drop (even on panic), so live runs don't leak.
@@ -8097,9 +8101,7 @@ mod tests {
     #[test]
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
     fn live_orch_start_editing_edit_done_advances_base() {
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
+        let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let id = orch_seed(&url, &token, "orch-roundtrip", ORCH_SEED);
         let _cleanup = OrchCleanup {
@@ -8195,9 +8197,7 @@ mod tests {
     #[test]
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
     fn live_orch_push_then_edit_then_done_does_not_self_conflict() {
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
+        let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let id = orch_seed(&url, &token, "orch-push-twice", ORCH_SEED);
         let _cleanup = OrchCleanup {
@@ -8307,9 +8307,7 @@ mod tests {
     #[test]
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
     fn live_orch_stale_poll_snapshot_does_not_report_our_own_push_as_conflict() {
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
+        let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let id = orch_seed(&url, &token, "orch-stale-poll", ORCH_SEED);
         let _cleanup = OrchCleanup {
@@ -8360,9 +8358,7 @@ mod tests {
     #[test]
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
     fn live_orch_release_current_lock_closes_the_edit_gate() {
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
+        let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let id = orch_seed(&url, &token, "orch-release-gate", ORCH_SEED);
         let _cleanup = OrchCleanup {
@@ -8393,9 +8389,7 @@ mod tests {
     #[test]
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
     fn live_orch_update_up_to_date_on_fresh_open() {
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
+        let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let id = orch_seed(&url, &token, "orch-update-utd", ORCH_SEED);
         let _cleanup = OrchCleanup {
@@ -8424,9 +8418,7 @@ mod tests {
     #[test]
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
     fn live_orch_update_diverges_when_dirty_and_tip_moved() {
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
+        let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let id = orch_seed(&url, &token, "orch-diverge", ORCH_SEED);
         let _cleanup = OrchCleanup {
@@ -8457,9 +8449,7 @@ mod tests {
     #[test]
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
     fn live_orch_open_flags_concurrent_same_account_lock() {
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
+        let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let id = orch_seed(&url, &token, "orch-concurrent", ORCH_SEED);
         let _cleanup = OrchCleanup {
@@ -8501,9 +8491,7 @@ mod tests {
         // SAME "can't reconcile -> divergence" routing (#193 b2): Start editing must
         // surface the divergence PROMPT (never a hard error) and release the lock it
         // just took, not strand it.
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
+        let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let id = orch_seed(&url, &token, "orch-se-diverge", ORCH_SEED);
         let _cleanup = OrchCleanup {
@@ -8553,9 +8541,7 @@ mod tests {
         // The #194 b3 hazard the first assertion relaxes is contained elsewhere now: a
         // pulled stack is cleared on every implicit adopt path, and is only handed back
         // through the explicit, confirmed, lock-held Unwind.
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
+        let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let id = orch_seed(&url, &token, "orch-undo", ORCH_SEED);
         let _cleanup = OrchCleanup {
@@ -8677,10 +8663,7 @@ mod tests {
         // #194 b5: a contended acquire (HTTP 400 - lock held by someone else) maps
         // to StartEditingResult::LockedBy{email}, surfacing WHO holds it, not an
         // error. Needs the second collaborator account.
-        let (Some((url, owner_email, owner_pw)), Some((email2, pw2))) = (orch_env(), orch_env2())
-        else {
-            return;
-        };
+        let ((url, owner_email, owner_pw), (email2, pw2)) = (orch_env(), orch_env2());
         let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
         let id = orch_seed(&url, &owner, "orch-lockedby", ORCH_SEED);
         let _cleanup = OrchCleanup {
@@ -8724,9 +8707,7 @@ mod tests {
         // (bullets 1/2/3). The cache `.stalx` is default DELETE journal mode, so this
         // also exercises the push pipeline under DELETE (bullet 4 DELETE); the WAL
         // case is a client-local vacuum concern covered by vacuum_snapshot_under_wal_mode.
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
+        let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let id = orch_seed(&url, &token, "orch-dump", ORCH_SEED);
         let _cleanup = OrchCleanup {
@@ -8823,9 +8804,7 @@ mod tests {
         // unchanged content never churns the .tml. (The offline byte-stability test
         // proves the render is deterministic; this proves the bytes the server holds
         // are exactly that deterministic render, intact through the round-trip.)
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
+        let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let id = orch_seed(&url, &token, "orch-tmlstable", ORCH_SEED);
         let _cleanup = OrchCleanup {
@@ -8891,9 +8870,7 @@ mod tests {
     fn live_orch_done_without_edits_skips_push_and_releases() {
         // #197 b1: a non-dirty Done must push NOTHING (the dirty-bit gate skips the
         // upload) yet still release the lock back to read-only - no empty commit.
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
+        let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let id = orch_seed(&url, &token, "orch-noedit", ORCH_SEED);
         let _cleanup = OrchCleanup {
@@ -8953,9 +8930,7 @@ mod tests {
         // un-pushed edits survive for ancestry recovery (g7) on the next Done. Forced
         // by pointing the UPLOAD at a dead port (connection refused -> Transport ->
         // StayDirty) while reusing a live-opened project for the real flush/snapshot.
-        let Some((url, email, password)) = orch_env() else {
-            return;
-        };
+        let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let id = orch_seed(&url, &token, "orch-ambig", ORCH_SEED);
         let _cleanup = OrchCleanup {
@@ -9023,10 +8998,7 @@ mod tests {
         // like the rest of the orchestration suite. Needs the second account as the
         // collaborator target (the server rejects granting a non-existent user).
         use crate::speleodb::Permission;
-        let (Some((url, owner_email, owner_pw)), Some((email2, _pw2))) = (orch_env(), orch_env2())
-        else {
-            return;
-        };
+        let ((url, owner_email, owner_pw), (email2, _pw2)) = (orch_env(), orch_env2());
         let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
         let id = orch_seed(&url, &owner, "orch-admin", ORCH_SEED);
         let _cleanup = OrchCleanup {

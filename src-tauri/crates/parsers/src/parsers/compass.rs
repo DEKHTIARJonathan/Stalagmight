@@ -1847,12 +1847,16 @@ mod tests {
     // a real-cave Compass corpus.  That corpus is private survey data and is
     // not committed; place `PrivateCave.MAK` (and the .DAT files it
     // references) under `src-tauri/tests/fixtures/compass/` locally and
-    // re-run with `cargo test -- --ignored` to enable them.
+    // re-run with `cargo test -- --ignored` to enable them. Run without it,
+    // each fails naming the missing file (#576 E13).
+    fn private_cave_mak() -> PathBuf {
+        crate::models::test_support::require_file(fixture("PrivateCave.MAK"))
+    }
 
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
     fn private_cave_mak_reads_georeference() {
-        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
+        let parsed = parse_compass(&private_cave_mak()).unwrap();
         assert!(!parsed.surveys.is_empty());
         assert!(parsed.datum.is_some());
         assert!(parsed.utm_zone.is_some());
@@ -1865,7 +1869,7 @@ mod tests {
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
     fn private_cave_first_shot_geometry_is_depth_based() {
-        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
+        let parsed = parse_compass(&private_cave_mak()).unwrap();
         let (configs, _closures, _warnings) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         assert!(!configs.is_empty());
@@ -1908,7 +1912,7 @@ mod tests {
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
     fn private_cave_zero_datum_projects_to_plausible_coords() {
-        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
+        let parsed = parse_compass(&private_cave_mak()).unwrap();
         let (configs, _closures, _warnings) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         let coords = configs
@@ -1936,7 +1940,7 @@ mod tests {
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
     fn private_cave_excluded_shots_are_filtered_by_default() {
-        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
+        let parsed = parse_compass(&private_cave_mak()).unwrap();
         let (default_configs, _, _) = convert_compass_to_import_configs(
             &parsed,
             &CompassImportOptions {
@@ -2414,7 +2418,7 @@ mod tests {
         // comment should be cleared.  The private fixture's first shot
         // carries an entrance note on its FROM station; this test asserts
         // that note migrates to station 0 of the anchor section.
-        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
+        let parsed = parse_compass(&private_cave_mak()).unwrap();
         let (promoted, _, _) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         let anchor = promoted
@@ -2471,7 +2475,7 @@ mod tests {
         // first-occurrence placement previously left ~20 sections detached
         // because their connection station was first defined in a
         // later-processed survey.
-        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
+        let parsed = parse_compass(&private_cave_mak()).unwrap();
         let (configs, _closures, warnings) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         let mut zero = 0;
@@ -2494,7 +2498,7 @@ mod tests {
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
     fn private_cave_corpus_converts_without_error() {
-        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
+        let parsed = parse_compass(&private_cave_mak()).unwrap();
         let preview = build_preview(&parsed);
         assert!(preview.has_georeference);
         assert!(preview.survey_count >= 3);

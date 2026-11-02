@@ -818,11 +818,11 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
     clippy::print_stdout,
     clippy::float_cmp,
     clippy::expect_used,
-    clippy::panic,
-    clippy::print_stderr
+    clippy::panic
 )]
 mod tests {
     use super::*;
+    use crate::models::test_support::require_file;
     use crate::models::ShotKind;
     use chrono::Datelike;
     use std::io::Write;
@@ -3032,10 +3032,7 @@ mod tests {
     fn test_parse_v5_fixture_pitch_values() {
         let test_file =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp");
-        if !test_file.exists() {
-            eprintln!("Skipping: fixture not found at {}", test_file.display());
-            return;
-        }
+        let test_file = require_file(test_file);
 
         let dmp = parse_dmp(&test_file).expect("should parse v5 fixture");
 
@@ -3068,10 +3065,7 @@ mod tests {
     fn section_hash_is_unchanged_by_the_pitch_normalisation() {
         let test_file =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v5.dmp");
-        if !test_file.exists() {
-            eprintln!("Skipping: fixture not found at {}", test_file.display());
-            return;
-        }
+        let test_file = require_file(test_file);
 
         let dmp = parse_dmp(&test_file).expect("should parse v5 fixture");
         let s0 = &dmp.sections[0];
@@ -3097,10 +3091,7 @@ mod tests {
     fn test_parse_v2_fixture_pitch_values() {
         let test_file =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/test_v2.dmp");
-        if !test_file.exists() {
-            eprintln!("Skipping: fixture not found at {}", test_file.display());
-            return;
-        }
+        let test_file = require_file(test_file);
 
         let dmp = parse_dmp(&test_file).expect("should parse v2 fixture");
 
@@ -3144,10 +3135,7 @@ mod tests {
             let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../../e2e/fixtures")
                 .join(fixture);
-            if !test_file.exists() {
-                eprintln!("Skipping: fixture not found at {}", test_file.display());
-                continue;
-            }
+            let test_file = require_file(test_file);
 
             let dmp = parse_dmp(&test_file).expect("should parse fixture");
             for (si, section) in dmp.sections.iter().enumerate() {

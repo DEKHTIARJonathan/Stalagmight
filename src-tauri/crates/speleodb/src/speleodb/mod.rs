@@ -347,15 +347,18 @@ mod live_tests {
     //! Env-gated live tests against a real SpeleoDB box. `#[ignore]` so they
     //! never run in normal `cargo test`/CI; run explicitly with:
     //!   DEV_SPELEODB_URL=… DEV_SPELEODB_EMAIL=… DEV_SPELEODB_PASSWORD=… \
-    //!   cargo test -p stalagmight speleodb -- --ignored
+    //!   cargo test -p stalagmight-speleodb --lib live_ -- --ignored
     //! Each test creates throwaway projects per run and deletes them on the way
     //! out (see `ProjectCleanup`), so it owns its own state. The two-account
     //! tests additionally need a pre-provisioned, email-verified collaborator via
     //! `DEV_SPELEODB_EMAIL2`/`_PASSWORD2` (that account can't be created over
-    //! HTTP) and skip when those are absent. See `docs/speleodb-dev-testing.md`.
+    //! HTTP). See `docs/speleodb-dev-testing.md`.
     //!
-    //! Env-var tiers (each test early-returns/skips cleanly when its tier's vars
-    //! are absent - they NEVER run in CI, there is no dev box there):
+    //! Env-var tiers. A test run without its tier's vars FAILS, naming the
+    //! missing one (#576 E13): `#[ignore]` is the skip, so a deliberate run that
+    //! forgot a variable must not report `ok` having tested nothing. Filter a
+    //! run to the tier you have the vars for. They NEVER run in CI - there is no
+    //! dev box there:
     //! - **URL-only** (needs `DEV_SPELEODB_URL`): `live_bad_credentials_returns_400`,
     //!   `live_missing_auth_header_returns_403`, `live_dead_token_returns_403`,
     //!   `live_http_to_public_blocked` (the public-host block needs no box at all).
@@ -376,24 +379,26 @@ mod live_tests {
 
     use super::dump::{self, DumpClassification};
     use super::{client, Permission, SpeleoDbError, SpeleoProjectSummary};
+    use stalagmight_models::test_support::{missing_prerequisite, require_env};
 
-    fn live_env() -> Option<(String, String, String)> {
-        Some((
-            std::env::var("DEV_SPELEODB_URL").ok()?,
-            std::env::var("DEV_SPELEODB_EMAIL").ok()?,
-            std::env::var("DEV_SPELEODB_PASSWORD").ok()?,
-        ))
+    /// The box and the first account; fails the test naming any that is unset.
+    fn live_env() -> (String, String, String) {
+        (
+            require_env("DEV_SPELEODB_URL"),
+            require_env("DEV_SPELEODB_EMAIL"),
+            require_env("DEV_SPELEODB_PASSWORD"),
+        )
     }
 
     /// The SECOND account (a pre-provisioned, email-verified collaborator). It
     /// can't be created over HTTP - the box enforces mandatory email
-    /// verification - so the two-account tests skip unless these are set.
-    fn live_env2() -> Option<(String, String, String)> {
-        Some((
-            std::env::var("DEV_SPELEODB_URL").ok()?,
-            std::env::var("DEV_SPELEODB_EMAIL2").ok()?,
-            std::env::var("DEV_SPELEODB_PASSWORD2").ok()?,
-        ))
+    /// verification - so the two-account tests fail unless these are set.
+    fn live_env2() -> (String, String, String) {
+        (
+            require_env("DEV_SPELEODB_URL"),
+            require_env("DEV_SPELEODB_EMAIL2"),
+            require_env("DEV_SPELEODB_PASSWORD2"),
+        )
     }
 
     const SEED_FIXTURE: &str = concat!(
@@ -457,16 +462,9 @@ mod live_tests {
     /// `DEV_SPELEODB_URL`, so it can run against the box without any account.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_URL (run with --ignored)"]
-    #[expect(
-        clippy::expect_used,
-        clippy::print_stderr,
-        reason = "ignored live integration test"
-    )]
+    #[expect(clippy::expect_used, reason = "ignored live integration test")]
     fn live_bad_credentials_returns_400() {
-        let Ok(url) = std::env::var("DEV_SPELEODB_URL") else {
-            eprintln!("skipping live_bad_credentials_returns_400: set DEV_SPELEODB_URL");
-            return;
-        };
+        let url = require_env("DEV_SPELEODB_URL");
         let err = client::login(&url, false, "nobody@example.com", "definitely-wrong")
             .expect_err("junk credentials must be rejected");
         assert!(
@@ -479,15 +477,11 @@ mod live_tests {
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
     #[expect(
         clippy::expect_used,
-        clippy::print_stderr,
         clippy::panic,
         reason = "ignored live integration test"
     )]
     fn live_round_trip_seed_pull_open() {
-        let Some((url, email, password)) = live_env() else {
-            eprintln!("skipping live_round_trip: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
-            return;
-        };
+        let (url, email, password) = live_env();
 
         // 1. Auth.
         let token = client::login(&url, false, &email, &password).expect("login should succeed");
@@ -566,16 +560,9 @@ mod live_tests {
     /// token-paste login path deriving the email from the token instead of input.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
-    #[expect(
-        clippy::expect_used,
-        clippy::print_stderr,
-        reason = "ignored live integration test"
-    )]
+    #[expect(clippy::expect_used, reason = "ignored live integration test")]
     fn live_fetch_user_email_matches_token_owner() {
-        let Some((url, email, password)) = live_env() else {
-            eprintln!("skipping live_fetch_user_email: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
-            return;
-        };
+        let (url, email, password) = live_env();
         let token = client::login(&url, false, &email, &password).expect("login should succeed");
         let got =
             client::fetch_user_email(&url, &token, false).expect("fetch_user_email should succeed");
@@ -587,18 +574,9 @@ mod live_tests {
     /// format is the string label, not the integer the issues describe.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* + _EMAIL2/_PASSWORD2 (run with --ignored)"]
-    #[expect(
-        clippy::expect_used,
-        clippy::print_stderr,
-        reason = "ignored live integration test"
-    )]
+    #[expect(clippy::expect_used, reason = "ignored live integration test")]
     fn live_collaborator_sees_read_only_label() {
-        let (Some((url, owner_email, owner_pw)), Some((_, email2, pw2))) =
-            (live_env(), live_env2())
-        else {
-            eprintln!("skipping live_collaborator_sees_read_only_label: set DEV_SPELEODB_* and _EMAIL2/_PASSWORD2");
-            return;
-        };
+        let ((url, owner_email, owner_pw), (_, email2, pw2)) = (live_env(), live_env2());
         let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
         let name = format!("stalagmight-perm-{}", uuid::Uuid::new_v4());
         let project_id = client::create_project(&url, &owner, false, &name)
@@ -630,18 +608,9 @@ mod live_tests {
     /// view-only rows" gating builds on.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* + _EMAIL2/_PASSWORD2 (run with --ignored)"]
-    #[expect(
-        clippy::expect_used,
-        clippy::print_stderr,
-        reason = "ignored live integration test"
-    )]
+    #[expect(clippy::expect_used, reason = "ignored live integration test")]
     fn live_web_viewer_cannot_download() {
-        let (Some((url, owner_email, owner_pw)), Some((_, email2, pw2))) =
-            (live_env(), live_env2())
-        else {
-            eprintln!("skipping live_web_viewer_cannot_download: set DEV_SPELEODB_* and _EMAIL2/_PASSWORD2");
-            return;
-        };
+        let ((url, owner_email, owner_pw), (_, email2, pw2)) = (live_env(), live_env2());
         let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
         let name = format!("stalagmight-wv-{}", uuid::Uuid::new_v4());
         let project_id = client::create_project(&url, &owner, false, &name)
@@ -706,12 +675,7 @@ mod live_tests {
         reason = "ignored live integration test"
     )]
     fn live_lock_holder_reflects_other_user() {
-        let (Some((url, owner_email, owner_pw)), Some((_, email2, pw2))) =
-            (live_env(), live_env2())
-        else {
-            eprintln!("skipping live_lock_holder_reflects_other_user: set DEV_SPELEODB_* and _EMAIL2/_PASSWORD2");
-            return;
-        };
+        let ((url, owner_email, owner_pw), (_, email2, pw2)) = (live_env(), live_env2());
         let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
         let name = format!("stalagmight-lock-{}", uuid::Uuid::new_v4());
         let project_id = client::create_project(&url, &owner, false, &name)
@@ -758,16 +722,9 @@ mod live_tests {
     /// `DEV_SPELEODB_URL`.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_URL (run with --ignored)"]
-    #[expect(
-        clippy::expect_used,
-        clippy::print_stderr,
-        reason = "ignored live integration test"
-    )]
+    #[expect(clippy::expect_used, reason = "ignored live integration test")]
     fn live_missing_auth_header_returns_403() {
-        let Ok(url) = std::env::var("DEV_SPELEODB_URL") else {
-            eprintln!("skipping live_missing_auth_header_returns_403: set DEV_SPELEODB_URL");
-            return;
-        };
+        let url = require_env("DEV_SPELEODB_URL");
         let resp = raw_agent()
             .get(&api_url(&url, "projects/"))
             // Deliberately NO Authorization header.
@@ -797,16 +754,9 @@ mod live_tests {
     /// follow-up.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_URL (run with --ignored)"]
-    #[expect(
-        clippy::expect_used,
-        clippy::print_stderr,
-        reason = "ignored live integration test"
-    )]
+    #[expect(clippy::expect_used, reason = "ignored live integration test")]
     fn live_dead_token_returns_403() {
-        let Ok(url) = std::env::var("DEV_SPELEODB_URL") else {
-            eprintln!("skipping live_dead_token_returns_403: set DEV_SPELEODB_URL");
-            return;
-        };
+        let url = require_env("DEV_SPELEODB_URL");
         let resp = raw_agent()
             .get(&api_url(&url, "user/"))
             .header("Authorization", "Bearer this-token-is-not-real-deadbeef")
@@ -830,18 +780,9 @@ mod live_tests {
     /// `None`), and the un-granted project is invisible to the collaborator.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* + _EMAIL2/_PASSWORD2 (run with --ignored)"]
-    #[expect(
-        clippy::expect_used,
-        clippy::print_stderr,
-        reason = "ignored live integration test"
-    )]
+    #[expect(clippy::expect_used, reason = "ignored live integration test")]
     fn live_no_permission_field_absent() {
-        let (Some((url, owner_email, owner_pw)), Some((_, email2, pw2))) =
-            (live_env(), live_env2())
-        else {
-            eprintln!("skipping live_no_permission_field_absent: set DEV_SPELEODB_* and _EMAIL2/_PASSWORD2");
-            return;
-        };
+        let ((url, owner_email, owner_pw), (_, email2, pw2)) = (live_env(), live_env2());
         let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
         let name = format!("stalagmight-noperm-{}", uuid::Uuid::new_v4());
         let project_id = client::create_project(&url, &owner, false, &name)
@@ -884,12 +825,7 @@ mod live_tests {
         reason = "ignored live integration test"
     )]
     fn live_acquire_contended_returns_400() {
-        let (Some((url, owner_email, owner_pw)), Some((_, email2, pw2))) =
-            (live_env(), live_env2())
-        else {
-            eprintln!("skipping live_acquire_contended_returns_400: set DEV_SPELEODB_* and _EMAIL2/_PASSWORD2");
-            return;
-        };
+        let ((url, owner_email, owner_pw), (_, email2, pw2)) = (live_env(), live_env2());
         let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
         let name = format!("stalagmight-contend-{}", uuid::Uuid::new_v4());
         let project_id = client::create_project(&url, &owner, false, &name)
@@ -927,18 +863,9 @@ mod live_tests {
     /// the contrast to contention's 400 (L10). `map_status(Acquire, 403) == Fence`.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* + _EMAIL2/_PASSWORD2 (run with --ignored)"]
-    #[expect(
-        clippy::expect_used,
-        clippy::print_stderr,
-        reason = "ignored live integration test"
-    )]
+    #[expect(clippy::expect_used, reason = "ignored live integration test")]
     fn live_acquire_no_perm_returns_403() {
-        let (Some((url, owner_email, owner_pw)), Some((_, email2, pw2))) =
-            (live_env(), live_env2())
-        else {
-            eprintln!("skipping live_acquire_no_perm_returns_403: set DEV_SPELEODB_* and _EMAIL2/_PASSWORD2");
-            return;
-        };
+        let ((url, owner_email, owner_pw), (_, email2, pw2)) = (live_env(), live_env2());
         let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
         let name = format!("stalagmight-noperm-acq-{}", uuid::Uuid::new_v4());
         let project_id = client::create_project(&url, &owner, false, &name)
@@ -1002,10 +929,7 @@ mod live_tests {
         reason = "ignored live integration test"
     )]
     fn live_upload_200_returns_hexsha_and_project() {
-        let Some((url, email, password)) = live_env() else {
-            eprintln!("skipping live_upload_200: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
-            return;
-        };
+        let (url, email, password) = live_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let (cleanup, fixture, tml_dir) = seed_and_acquire(&url, &token);
         let tml_sidecar = tml_dir.path().join("ariane.tml");
@@ -1048,10 +972,7 @@ mod live_tests {
         reason = "ignored live integration test"
     )]
     fn live_get_revisions_returns_linear_authored_history() {
-        let Some((url, email, password)) = live_env() else {
-            eprintln!("skipping live_get_revisions: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
-            return;
-        };
+        let (url, email, password) = live_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let my_email = client::fetch_user_email(&url, &token, false).expect("whoami");
         let (cleanup, fixture, tml_dir) = seed_and_acquire(&url, &token);
@@ -1124,10 +1045,7 @@ mod live_tests {
         reason = "ignored live integration test"
     )]
     fn live_upload_304_when_unchanged() {
-        let Some((url, email, password)) = live_env() else {
-            eprintln!("skipping live_upload_304: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
-            return;
-        };
+        let (url, email, password) = live_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let (cleanup, fixture, tml_dir) = seed_and_acquire(&url, &token);
         let tml_sidecar = tml_dir.path().join("ariane.tml");
@@ -1186,10 +1104,7 @@ mod live_tests {
     fn live_upload_malformed_returns_400() {
         use ureq::unversioned::multipart::Form;
 
-        let Some((url, email, password)) = live_env() else {
-            eprintln!("skipping live_upload_malformed: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
-            return;
-        };
+        let (url, email, password) = live_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let name = format!("stalagmight-upload400-{}", uuid::Uuid::new_v4());
         let project_id = client::create_project(&url, &token, false, &name)
@@ -1231,18 +1146,9 @@ mod live_tests {
     /// (`acquire_lock` first); the production push path never uploads unlocked.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
-    #[expect(
-        clippy::expect_used,
-        clippy::print_stderr,
-        reason = "ignored live integration test"
-    )]
+    #[expect(clippy::expect_used, reason = "ignored live integration test")]
     fn live_upload_without_mutex_returns_403() {
-        let Some((url, email, password)) = live_env() else {
-            eprintln!(
-                "skipping live_upload_without_mutex: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD"
-            );
-            return;
-        };
+        let (url, email, password) = live_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let name = format!("stalagmight-nomutex-{}", uuid::Uuid::new_v4());
         let project_id = client::create_project(&url, &token, false, &name)
@@ -1294,10 +1200,7 @@ mod live_tests {
         reason = "ignored live integration test"
     )]
     fn live_stalx_round_trips_through_auto() {
-        let Some((url, email, password)) = live_env() else {
-            eprintln!("skipping live_stalx_round_trips: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
-            return;
-        };
+        let (url, email, password) = live_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let (cleanup, fixture, tml_dir) = seed_and_acquire(&url, &token);
         let tml_sidecar = tml_dir.path().join("ariane.tml");
@@ -1361,10 +1264,7 @@ mod live_tests {
     fn live_auto_rejects_unknown_extension_canary() {
         use ureq::unversioned::multipart::{Form, Part};
 
-        let Some((url, email, password)) = live_env() else {
-            eprintln!("skipping live_auto_rejects_unknown_extension_canary: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
-            return;
-        };
+        let (url, email, password) = live_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let name = format!("stalagmight-canary-{}", uuid::Uuid::new_v4());
         let project_id = client::create_project(&url, &token, false, &name)
@@ -1462,17 +1362,13 @@ mod live_tests {
         reason = "ignored live integration test"
     )]
     fn live_http_to_private_box_allowed() {
-        let Some((url, email, password)) = live_env() else {
-            eprintln!("skipping live_http_to_private_box_allowed: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
-            return;
-        };
-        // If the configured box isn't http (e.g. someone pointed the suite at an
-        // https box), there is nothing to prove about the http private policy.
+        let (url, email, password) = live_env();
+        // An https box has nothing to prove about the http private policy, so
+        // this test needs the suite pointed at a plain-http one.
         if !url.starts_with("http://") {
-            eprintln!(
-                "skipping live_http_to_private_box_allowed: DEV_SPELEODB_URL is not http:// ({url})"
-            );
-            return;
+            missing_prerequisite(&format!(
+                "DEV_SPELEODB_URL naming an http:// box (it is {url})"
+            ));
         }
         let token = client::login(&url, false, &email, &password).expect("login over private http");
         // A successful list proves enforce() did NOT block the private http box.
@@ -1595,12 +1491,7 @@ mod live_tests {
         reason = "ignored live integration test"
     )]
     fn live_render_compat_georef_generates_geojson() {
-        let Some((url, email, password)) = live_env() else {
-            eprintln!(
-                "skipping live_render_compat_georef: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD"
-            );
-            return;
-        };
+        let (url, email, password) = live_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let name = format!("stalagmight-render-{}", uuid::Uuid::new_v4());
         let project_id = client::create_project(&url, &token, false, &name)
@@ -1682,12 +1573,7 @@ mod live_tests {
         reason = "ignored live integration test"
     )]
     fn live_render_compat_no_anchor_records_geojson_state() {
-        let Some((url, email, password)) = live_env() else {
-            eprintln!(
-                "skipping live_render_compat_no_anchor: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD"
-            );
-            return;
-        };
+        let (url, email, password) = live_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let name = format!("stalagmight-noanchor-{}", uuid::Uuid::new_v4());
         let project_id = client::create_project(&url, &token, false, &name)
@@ -1758,12 +1644,7 @@ mod live_tests {
     fn live_open1_bare_tml_mime_outcome() {
         use ureq::unversioned::multipart::{Form, Part};
 
-        let Some((url, email, password)) = live_env() else {
-            eprintln!(
-                "skipping live_open1_bare_tml_mime: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD"
-            );
-            return;
-        };
+        let (url, email, password) = live_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let name = format!("stalagmight-open1-{}", uuid::Uuid::new_v4());
         let project_id = client::create_project(&url, &token, false, &name)
@@ -1826,18 +1707,9 @@ mod live_tests {
     /// tip, see `speleodb_server_head`, so the holder check is the whole signal.)
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
-    #[expect(
-        clippy::expect_used,
-        clippy::print_stderr,
-        reason = "ignored live integration test"
-    )]
+    #[expect(clippy::expect_used, reason = "ignored live integration test")]
     fn live_get_project_reflects_holder_and_tip() {
-        let Some((url, email, password)) = live_env() else {
-            eprintln!(
-                "skipping live_get_project_reflects_holder_and_tip: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD"
-            );
-            return;
-        };
+        let (url, email, password) = live_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let my_email = client::fetch_user_email(&url, &token, false).expect("whoami");
         let (cleanup, fixture, tml_dir) = seed_and_acquire(&url, &token);
@@ -1896,18 +1768,9 @@ mod live_tests {
     /// docs/speleodb-dev-testing.md).
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
-    #[expect(
-        clippy::expect_used,
-        clippy::print_stderr,
-        reason = "ignored live integration test"
-    )]
+    #[expect(clippy::expect_used, reason = "ignored live integration test")]
     fn live_release_all_locks_releases_held() {
-        let Some((url, email, password)) = live_env() else {
-            eprintln!(
-                "skipping live_release_all_locks_releases_held: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD"
-            );
-            return;
-        };
+        let (url, email, password) = live_env();
         let token = client::login(&url, false, &email, &password).expect("login");
 
         // Two throwaway projects, both locked by us, so "release ALL" is meaningful.
@@ -1959,18 +1822,9 @@ mod live_tests {
     /// the metadata PATCH on write permission, not the mutex.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
-    #[expect(
-        clippy::expect_used,
-        clippy::print_stderr,
-        reason = "ignored live integration test"
-    )]
+    #[expect(clippy::expect_used, reason = "ignored live integration test")]
     fn live_patch_exclude_geojson_roundtrips() {
-        let Some((url, email, password)) = live_env() else {
-            eprintln!(
-                "skipping live_patch_exclude_geojson_roundtrips: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD"
-            );
-            return;
-        };
+        let (url, email, password) = live_env();
         let token = client::login(&url, false, &email, &password).expect("login");
         let name = format!("stalagmight-excljson-{}", uuid::Uuid::new_v4());
         let project_id = client::create_project(&url, &token, false, &name)

@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use stalagmight_models::test_support::missing_prerequisite;
 use tempfile::TempDir;
 
 use super::{
@@ -191,8 +192,10 @@ fn app_close(collector: &TelemetryCollector) {
             with --ignored --nocapture (the endpoint is compiled in)"]
 fn neither_startup_nor_quit_waits_on_a_slow_endpoint() {
     let Some(addr) = local_endpoint() else {
-        println!("skipped: built for {ENDPOINT_URL}, not a http://127.0.0.1:<port> endpoint");
-        return;
+        missing_prerequisite(&format!(
+            "a build with TELEMETRY_ENDPOINT=http://127.0.0.1:<port>/... (this one was built \
+             for {ENDPOINT_URL})"
+        ));
     };
     const BUFFERED: u128 = 30;
     let latency = Duration::from_secs(1);

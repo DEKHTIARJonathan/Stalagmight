@@ -23309,8 +23309,7 @@ fn profile_tml_import_full() {
     use crate::persistence::Database;
     use std::time::Instant;
 
-    let path = std::env::var("STALAGMIGHT_PROFILE_TML")
-        .expect("set STALAGMIGHT_PROFILE_TML to the .tml file path");
+    let path = crate::models::test_support::require_env_file("STALAGMIGHT_PROFILE_TML");
 
     // Use the test framework's tracing-subscriber init guard so we
     // don't double-init when the test runs alongside others.
@@ -23343,7 +23342,7 @@ fn profile_tml_import_full() {
     let total_shots: usize = sections.iter().map(|s| s.shots.len()).sum();
 
     eprintln!("\n┌─ profile_tml_import_full ─────────────────────────────");
-    eprintln!("│ file:     {path}");
+    eprintln!("│ file:     {}", path.display());
     eprintln!("│ sections: {}", sections.len());
     eprintln!("│ shots:    {}", total_shots);
     eprintln!("│ closures: {}", closures.len());
@@ -23404,8 +23403,7 @@ fn profile_stalx_load() {
     use crate::persistence::Database;
     use std::time::Instant;
 
-    let path = std::env::var("STALAGMIGHT_PROFILE_STALX")
-        .expect("set STALAGMIGHT_PROFILE_STALX to the .stalx file path");
+    let path = crate::models::test_support::require_env_file("STALAGMIGHT_PROFILE_STALX");
 
     let _ = tracing_subscriber::fmt()
         .with_target(false)
@@ -23475,7 +23473,7 @@ fn profile_stalx_load() {
     let t8 = Instant::now();
 
     eprintln!("\n┌─ profile_stalx_load ──────────────────────────────────");
-    eprintln!("│ file:      {path}");
+    eprintln!("│ file:      {}", path.display());
     eprintln!("│ sections:  {section_count}");
     eprintln!("│ shots:     {shot_count}");
     eprintln!("│ stations:  {station_count}");

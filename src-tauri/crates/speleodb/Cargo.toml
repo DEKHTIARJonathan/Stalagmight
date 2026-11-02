@@ -63,6 +63,9 @@ keyring = { version = "3", default-features = false, features = ["apple-native"]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 [dev-dependencies]
+# The shared test helpers (`stalagmight_models::test_support`): opt-in
+# prerequisites fail the test naming what is missing (#576 E13).
+stalagmight-models = { path = "../models", features = ["test-support"] }
 # Test-only and acyclic: the env-gated live tests in mod.rs seed a real server
 # round trip - exporting a project to `.tml` and opening the extracted `.stalx`.
 stalagmight-export = { path = "../export" }

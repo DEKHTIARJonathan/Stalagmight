@@ -17,7 +17,7 @@ A throwaway SpeleoDB instance on the lab network. Connection details live in the
 | `DEV_SPELEODB_URL` | Base URL of the dev box (e.g. `http://10.10.0.220:8000/`). The client appends the `/api/v2/...` paths. |
 | `DEV_SPELEODB_EMAIL` | Login email for the primary (superuser) test account. |
 | `DEV_SPELEODB_PASSWORD` | Login password for the primary test account. |
-| `DEV_SPELEODB_EMAIL2` | Login email for a **second**, email-verified collaborator (for the two-account tests). Optional - those tests skip if unset. |
+| `DEV_SPELEODB_EMAIL2` | Login email for a **second**, email-verified collaborator (for the two-account tests). Needed only by those tests, which fail naming it when it is unset. |
 | `DEV_SPELEODB_PASSWORD2` | Login password for the second account. |
 
 > `cargo test` does **not** auto-load `.env`. The live tests read these from the
@@ -61,9 +61,10 @@ python manage.py shell -c "from django.contrib.auth import get_user_model; from 
 The two-account tests then **self-seed** the rest over HTTP: the superuser creates
 a throwaway project, grants `user2` a permission level
 (`POST /api/v2/projects/{id}/permission/user/detail/` `{"user","level"}`), and/or
-has `user2` hold the mutex - then deletes the project on the way out. They **skip
-cleanly** when `DEV_SPELEODB_EMAIL2`/`_PASSWORD2` are absent, so a box without the
-second account still runs the single-account suite.
+has `user2` hold the mutex - then deletes the project on the way out. Without
+`DEV_SPELEODB_EMAIL2`/`_PASSWORD2` they **fail**, naming the missing variable, so
+on a box without the second account run the single-account tier and `--skip` the
+two-account tests (see "Running the live tests").
 
 ## Test layers
 
@@ -73,9 +74,10 @@ The client follows a two-layer convention (see the plan for #183 and the epic #1
    parsing, Bearer/URL construction, the in-memory `TokenStore` fallback. These run
    in normal `cargo test` and in CI.
 2. **Env-gated live tests** - real HTTP against the dev box. Marked `#[ignore]` so
-   they never run in normal `cargo test` or CI, and they early-return (skip) if the
-   `DEV_SPELEODB_*` env vars are absent. They live in the `live_tests` module of
-   `src-tauri/crates/speleodb/src/speleodb/mod.rs`.
+   they never run in normal `cargo test` or CI. Run on purpose without the
+   `DEV_SPELEODB_*` env vars they fail, naming the missing one (#576 E13) - a
+   deliberate run must not report `ok` having tested nothing. They live in the
+   `live_tests` module of `src-tauri/crates/speleodb/src/speleodb/mod.rs`.
 
 ### Self-seeding, self-cleaning (no shared fixtures)
 
@@ -124,8 +126,13 @@ cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-speleodb --featur
 - `TELEMETRY_ENDPOINT` is needed because the telemetry member's `build.rs`
   (`src-tauri/crates/telemetry/build.rs`) requires it under
   `--features telemetry` (which the project's test command uses anyway).
-- Drop the `DEV_SPELEODB_*` vars and the tests skip cleanly (they print a skip line
-  and pass), so this command is safe to leave in a script.
+- Drop a `DEV_SPELEODB_*` var and every test that needs it fails, naming it. On a
+  box without the second account, leave the two-account tier out with
+  `--skip live_collaborator_sees_read_only_label --skip live_web_viewer_cannot_download
+  --skip live_lock_holder_reflects_other_user --skip live_no_permission_field_absent
+  --skip live_acquire_contended_returns_400 --skip live_acquire_no_perm_returns_403`
+  (and, for the orchestration suite, `--skip live_orch_start_editing_reports_locked_by_other_account
+  --skip live_orch_admin_collaborators_teams_and_delete_unlink`).
 - `live_bad_credentials_returns_400` needs only `DEV_SPELEODB_URL` (it sends junk
   credentials and asserts the 400 contract); the full round-trip needs all three.
 
@@ -348,7 +355,7 @@ acceptance item maps to concrete tests across `speleodb::live_tests` (client) an
 
 | #212 criterion | Covering test(s) |
 |----------------|------------------|
-| Skips when the box is absent; CI/offline stay green | `#[ignore]` on every live test + `live_env()`/`orch_env()` early-return when `DEV_SPELEODB_*` is unset |
+| CI/offline stay green | `#[ignore]` on every live test; a deliberate run without `DEV_SPELEODB_*` fails in `live_env()`/`orch_env()`, naming the unset variable (#576 E13) |
 | Round-trip tree shape + 2nd-checkout pull matches | `live_round_trip_seed_pull_open` (seed → pull a fresh checkout → open self-contained), `live_orch_start_editing_edit_done_advances_base` (full start→edit→done loop, BASE advances), `live_orch_pushed_dump_is_self_contained_without_sidecars` (server dump = one `.stalx` located by suffix + `ariane.tml` at root + no sqlite sidecar; re-opens carrying the pushed edit) |
 | Render-compat: `ProjectGeoJSON` + OGC feature counts; no-anchor → no render + D2 | `live_render_compat_georef_generates_geojson` (OGC `<sha>_points`=1 / `<sha>_lines`=2), `live_render_compat_no_anchor_records_geojson_state` (0/0 START → 404 render → D2 "may be stale") |
 | Negative: 403-no-mutex | `live_upload_without_mutex_returns_403` (push while `active_mutex` is unheld → `UserOwnsProjectMutex` → 403) |

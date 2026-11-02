@@ -14615,7 +14615,7 @@ fn parse_gama_adjusted(xml: &str) -> HashMap<String, f64> {
 #[ignore = "regenerates Gama gold fixtures; set GAMA_LOCAL=/path/to/gama-local"]
 fn generate_gama_golden_fixtures() {
     use std::collections::BTreeMap;
-    let gama = std::env::var("GAMA_LOCAL").expect("set GAMA_LOCAL to the gama-local binary");
+    let gama = crate::test_support::require_env("GAMA_LOCAL");
     let config = ClosureAdjustmentConfig::default();
     let mut all: BTreeMap<String, Vec<GoldStation>> = BTreeMap::new();
     let mut worst = 0.0_f64;

@@ -15,6 +15,8 @@ pub mod section;
 pub mod shot;
 pub mod speleo_link;
 pub mod station;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod undo_mode;
 pub mod warning;
 

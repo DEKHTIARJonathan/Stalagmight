@@ -1900,6 +1900,7 @@ mod tests {
     use super::linearize::{MAX_TRIP_CUTS_PER_FILE, MAX_TRIP_CUTS_PER_RUN};
     use super::test_helpers::*;
     use super::*;
+    use crate::models::test_support::require_env_file;
     use crate::models::ImportPlacement;
     use crate::parsers::station_graph::dependency_order;
 
@@ -6906,12 +6907,8 @@ mod tests {
     #[test]
     #[ignore = "measurement harness for #412, not a check; set TML_MEASURE_PATH"]
     fn measure_tml_fragmentation() {
-        let Ok(path_str) = std::env::var("TML_MEASURE_PATH") else {
-            eprintln!("Skipping: TML_MEASURE_PATH not set");
-            return;
-        };
-        let path = Path::new(&path_str);
-        let tml = parse_tml(path).expect("parse");
+        let path = require_env_file("TML_MEASURE_PATH");
+        let tml = parse_tml(&path).expect("parse");
         let file_names: std::collections::BTreeSet<String> = tml
             .sections
             .iter()
@@ -6947,7 +6944,7 @@ mod tests {
         let tiny = sizes.iter().filter(|&&n| n <= 2).count();
         eprintln!(
             "FRAG {}: file_section_names={} configs={} closures={} warnings={} shots_min={} shots_median={} shots_max={} fragments_le2={}",
-            path_str,
+            path.display(),
             file_names.len(),
             configs.len(),
             closures.len(),

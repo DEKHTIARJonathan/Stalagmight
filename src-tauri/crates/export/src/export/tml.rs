@@ -2084,6 +2084,7 @@ fn reverse_pre_zero_azimuth(forward: f64) -> f64 {
 #[expect(clippy::unwrap_used, clippy::approx_constant)]
 mod tests {
     use super::*;
+    use crate::models::test_support::require_env_file;
     use crate::models::{
         ClosureStrategy, GpsCoordinates, LoopClosure, SectionData, ShotData, ShotKind,
         StationAnchor, StationKey, StationMerge, ZeroDatum,
@@ -3541,8 +3542,8 @@ mod tests {
 
     /// Round-trip a REAL `.tml` through the importer and back out, then assert the
     /// emitted chain is representable. Env-gated in the same spirit as the SpeleoDB
-    /// live tests: it needs a file we cannot commit (someone's survey), so it skips
-    /// cleanly when `TML_ROUNDTRIP_IN` is unset.
+    /// live tests: it needs a file we cannot commit (someone's survey), so a run
+    /// without `TML_ROUNDTRIP_IN` fails naming it (#576 E13).
     ///
     /// ```text
     /// TML_ROUNDTRIP_IN=/path/in.tml TML_ROUNDTRIP_OUT=/path/out.tml \
@@ -3555,10 +3556,8 @@ mod tests {
         reason = "a hand-run diagnostic tool; the shot count and output path are its result"
     )]
     fn reexport_of_a_real_tml_keeps_the_chain_representable() {
-        let Ok(input) = std::env::var("TML_ROUNDTRIP_IN") else {
-            return;
-        };
-        let tml = crate::parsers::tml::parse_tml(Path::new(&input)).unwrap();
+        let input = require_env_file("TML_ROUNDTRIP_IN");
+        let tml = crate::parsers::tml::parse_tml(&input).unwrap();
         let (sections, _closures, _warnings) =
             crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true).unwrap();
 
@@ -3593,7 +3592,7 @@ mod tests {
         }
 
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
-        println!("re-exported {} shots from {input}", shots.len());
+        println!("re-exported {} shots from {}", shots.len(), input.display());
         assert_ariane_chain_is_representable(&shots);
 
         if let Ok(out) = std::env::var("TML_ROUNDTRIP_OUT") {
@@ -3606,7 +3605,8 @@ mod tests {
     /// project side: exports a real `.stalx` and checks Ariane can root every shot.
     /// A parentless non-START shot plus any closure blanks Ariane's map entirely, and
     /// the shape that produces one needs a real merge topology (a station shared by
-    /// three sections) that is tedious to hand-build. Skips when the var is unset.
+    /// three sections) that is tedious to hand-build. Fails, naming the var, when it
+    /// is unset (#576 E13).
     ///
     /// ```text
     /// STALX_EXPORT_IN=/path/project.stalx \
@@ -3619,13 +3619,9 @@ mod tests {
         reason = "a hand-run diagnostic tool; the orphan list is its result"
     )]
     fn export_of_a_real_stalx_roots_every_shot() {
-        let Ok(input) = std::env::var("STALX_EXPORT_IN") else {
-            return;
-        };
-        let db = stalagmight_persistence::persistence::sqlite::Database::open_readonly(Path::new(
-            &input,
-        ))
-        .unwrap();
+        let input = require_env_file("STALX_EXPORT_IN");
+        let db =
+            stalagmight_persistence::persistence::sqlite::Database::open_readonly(&input).unwrap();
         let project = db.load_project().unwrap();
 
         let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
@@ -3640,9 +3636,10 @@ mod tests {
             );
         }
         println!(
-            "{} shots, {} orphan(s) from {input}",
+            "{} shots, {} orphan(s) from {}",
             shots.len(),
-            orphans.len()
+            orphans.len(),
+            input.display()
         );
 
         assert!(
