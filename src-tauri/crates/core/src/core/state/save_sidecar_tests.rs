@@ -25,7 +25,7 @@ use tempfile::TempDir;
 use super::save_sidecars::{fault, SaveMode, SaveRequest, Sidecar, SidecarPolicy};
 use super::AppState;
 use crate::core::{Command, CommandResult};
-use crate::models::{Project, SectionData, ShotData, ShotUpdates, SpeleoLink};
+use crate::models::{CommandErrorCode, Project, SectionData, ShotData, ShotUpdates, SpeleoLink};
 use crate::persistence::{Database, ResolvedWarning, SAVE_PROJECT_TABLES};
 
 const DISPLAY_KEY: &str = "show_grid";
@@ -278,8 +278,9 @@ fn unreadable_undo_chain_markers_refuse_the_save_and_leave_the_file_untouched() 
     assert_refused_and_untouched(&fx, &before, &result);
     let error = result.error.as_deref().unwrap_or_default();
     assert!(
-        error.starts_with("UNDO_MARKERS_UNREADABLE: "),
-        "the refusal carries its marker, got: {error}"
+        result.code == Some(CommandErrorCode::UndoMarkersUnreadable)
+            && error.starts_with("Can't save: "),
+        "the refusal carries its code (and no marker), got: {error}"
     );
     assert!(
         fx.state.undo_stack.lock().can_undo(),
@@ -456,8 +457,9 @@ fn unreadable_project_settings_are_never_saved_over() {
     for refused in [&in_place, &save_as] {
         let error = refused.error.as_deref().unwrap_or_default();
         assert!(
-            error.starts_with("PROJECT_SETTINGS_UNREADABLE: "),
-            "the refusal carries its marker, got: {error}"
+            refused.code == Some(CommandErrorCode::ProjectSettingsUnreadable)
+                && error.starts_with("Can't save: "),
+            "the refusal carries its code (and no marker), got: {error}"
         );
     }
     assert!(
@@ -730,8 +732,9 @@ fn an_unreadable_link_refusal_carries_its_marker() {
     assert_refused_and_untouched(&fx, &before, &result);
     let error = result.error.as_deref().unwrap_or_default();
     assert!(
-        error.starts_with("SPELEODB_LINK_UNREADABLE: "),
-        "the refusal carries its marker, got: {error}"
+        result.code == Some(CommandErrorCode::SpeleodbLinkUnreadable)
+            && error.starts_with("Can't save: "),
+        "the refusal carries its code (and no marker), got: {error}"
     );
     assert!(
         error.contains("Use Save As"),

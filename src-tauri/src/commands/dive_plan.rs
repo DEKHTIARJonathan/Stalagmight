@@ -20,7 +20,9 @@ pub async fn list_dive_plans(
     .await
     {
         Ok(res) => res.map_err(CommandError::from),
-        Err(e) => Err(CommandError::failed(format!("list dive plans failed: {e}"))),
+        Err(e) => Err(CommandError::internal(format!(
+            "list dive plans failed: {e}"
+        ))),
     }
 }
 
@@ -36,7 +38,9 @@ pub async fn load_dive_plan(
     .await
     {
         Ok(res) => res.map_err(CommandError::from),
-        Err(e) => Err(CommandError::failed(format!("load dive plan failed: {e}"))),
+        Err(e) => Err(CommandError::internal(format!(
+            "load dive plan failed: {e}"
+        ))),
     }
 }
 
@@ -58,7 +62,9 @@ pub async fn save_dive_plan(
     .await
     {
         Ok(res) => res.map_err(CommandError::from),
-        Err(e) => Err(CommandError::failed(format!("save dive plan failed: {e}"))),
+        Err(e) => Err(CommandError::internal(format!(
+            "save dive plan failed: {e}"
+        ))),
     }
 }
 
@@ -87,7 +93,7 @@ pub async fn plan_anchors_for_refs(
     .await
     {
         Ok(res) => res.map_err(CommandError::from),
-        Err(e) => Err(CommandError::failed(format!(
+        Err(e) => Err(CommandError::internal(format!(
             "plan anchors for refs failed: {e}"
         ))),
     }
@@ -110,7 +116,7 @@ pub async fn plan_refs_for_anchors(
     .await
     {
         Ok(res) => res.map_err(CommandError::from),
-        Err(e) => Err(CommandError::failed(format!(
+        Err(e) => Err(CommandError::internal(format!(
             "plan refs for anchors failed: {e}"
         ))),
     }
@@ -125,7 +131,7 @@ pub async fn delete_dive_plan(app_handle: tauri::AppHandle, id: i64) -> Result<(
     .await
     {
         Ok(res) => res.map_err(CommandError::from),
-        Err(e) => Err(CommandError::failed(format!(
+        Err(e) => Err(CommandError::internal(format!(
             "delete dive plan failed: {e}"
         ))),
     }

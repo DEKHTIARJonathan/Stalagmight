@@ -20,7 +20,7 @@ impl AppState {
         let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Insert station (split shot)") {
-            return f;
+            return CommandResult::refused(f);
         }
 
         // Reject non-finite distance before it reaches the coordinate path

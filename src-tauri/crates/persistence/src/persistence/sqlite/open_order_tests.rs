@@ -89,17 +89,18 @@ fn database_open_refuses_a_pre_release_file_before_writing_to_it() {
     );
     let before = std::fs::read(&path).unwrap();
 
-    let message = Database::open(&path)
-        .err()
-        .map(|e| format!("{e:#}"))
-        .unwrap_or_default();
+    let refused = Database::open(&path).err();
+    let typed = refused
+        .as_ref()
+        .and_then(|e| e.downcast_ref::<super::PreReleaseFile>().copied());
+    let message = refused.map(|e| format!("{e:#}")).unwrap_or_default();
     let unchanged = std::fs::read(&path).unwrap() == before;
     let recreated = has_table(&path, "station_comments");
     println!(
         "Database::open(pre-release file) -> {message}; file unchanged: {unchanged}; \
          station_comments recreated: {recreated}"
     );
-    assert!(message.contains(super::PRE_RELEASE_FILE_CODE), "{message}");
+    assert!(typed.is_some(), "refused as a pre-release file: {message}");
     assert!(!recreated, "a refused file gains no tables");
     assert!(
         unchanged,

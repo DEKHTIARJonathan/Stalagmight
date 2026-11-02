@@ -367,15 +367,17 @@ impl AppState {
     /// ignores from the open file into a fresh temp file and renames it over the
     /// open one, so an ignore written through the open handle in between was
     /// lost with `Ok` returned. Never call it while holding `command_lock`.
+    ///
+    /// [#576 C4] A refusal is the gate's own [`crate::core::CommandError`], so its
+    /// code reaches the IPC; a persistence failure is unclassified (`FAILED`).
     pub fn save_resolved_warning_gated(
         &self,
         warning: &crate::persistence::ResolvedWarning,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::core::CommandError> {
         let _between_commands = self.hold_commands();
-        self.guard_mutation("Resolve warning")
-            .map_err(|f| f.error.unwrap_or_default())?;
+        self.guard_mutation("Resolve warning")?;
         self.save_resolved_warning(warning)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| crate::core::CommandError::failed(e.to_string()))?;
         // Dirty-bit flip (#191/#197): set-only; no-op for local-only (no speleo_link).
         self.mark_remote_forward_edit();
         Ok(())
@@ -391,12 +393,11 @@ impl AppState {
         shot_id: u32,
         warning_code: &str,
         shot_uuid: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::core::CommandError> {
         let _between_commands = self.hold_commands();
-        self.guard_mutation("Unresolve warning")
-            .map_err(|f| f.error.unwrap_or_default())?;
+        self.guard_mutation("Unresolve warning")?;
         self.delete_resolved_warning(section_id, shot_id, warning_code, shot_uuid)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| crate::core::CommandError::failed(e.to_string()))?;
         self.mark_remote_forward_edit();
         Ok(())
     }

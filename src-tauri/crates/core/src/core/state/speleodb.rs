@@ -262,6 +262,32 @@ pub(super) fn local_dto(err: SpeleoDbError) -> SpeleoErrorDto {
     dto_for_error(Endpoint::User, &err)
 }
 
+/// [#576 C4] A SpeleoDB verb refused by a core refusal (the edit gate, the crash
+/// refusal, a refused save): its message as written and its own code, so the
+/// frontend routes it as that refusal rather than as `SPELEODB_FATAL`.
+pub(super) fn refused_by(err: crate::core::CommandError) -> SpeleoDbError {
+    SpeleoDbError::refused_with(err.code, err.message)
+}
+
+/// [#576 B6-D1 / C4] A SpeleoDB verb refused because a newer Stalagmight saved the
+/// open project: `reason` (`AppState::newer_file_refusal`) under
+/// `NEWER_FILE_READ_ONLY`, the code a refused save of that file carries.
+pub(super) fn newer_file_refused(reason: String) -> SpeleoDbError {
+    SpeleoDbError::refused_with(crate::models::CommandErrorCode::NewerFileReadOnly, reason)
+}
+
+/// [#576 C4] A SpeleoDB verb refused because the save it runs first was: the
+/// save's message as written (`fallback` when it has none) under the save's own
+/// code. An unclassified save failure stays the verb's local failure
+/// (`SPELEODB_FATAL`), as before.
+pub(super) fn refused_by_save(save: crate::core::CommandResult, fallback: &str) -> SpeleoDbError {
+    let message = save.error.unwrap_or_else(|| fallback.to_owned());
+    match save.code {
+        Some(code) => SpeleoDbError::refused_with(code, message),
+        None => SpeleoDbError::refused(message),
+    }
+}
+
 /// [Track C] (#188, C5): the pure 401 auto-drop predicate. A genuine 401 on an
 /// established-session call drops the token; **everything else is kept** - 403 is
 /// never a drop (D-B4, robust to a DRF 401→403 downgrade), and 2xx/5xx/transport/
@@ -1718,10 +1744,10 @@ impl AppState {
         // [#576 B6-D1] A project a newer build saved cannot be edited here, so
         // there is no edit session to force.
         if let Some(reason) = self.newer_file_refusal() {
-            return Err(local_dto(SpeleoDbError::Refused(reason)));
+            return Err(local_dto(newer_file_refused(reason)));
         }
         if !self.speleodb_allow_force_edit() {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "force-edit is disabled; enable it in SpeleoDB settings first".to_owned(),
             )));
         }
@@ -1729,7 +1755,7 @@ impl AppState {
         let _link = self.speleodb_validated_link()?;
         // Refuse when we are already editing WITH the lock held (nothing to force).
         if self.edit_enabled() && !self.force_editing() {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "already editing with the write lock held".to_owned(),
             )));
         }
@@ -1778,7 +1804,7 @@ impl AppState {
         // edited here, and taking the server lock for it would only keep every
         // collaborator out of a project this session can never change or push.
         if let Some(reason) = self.newer_file_refusal() {
-            return Err(local_dto(SpeleoDbError::Refused(reason)));
+            return Err(local_dto(newer_file_refused(reason)));
         }
         // The lock-ops span opens FIRST, before a single fact is read: everything
         // below is decided from facts (the session generation, the link, the
@@ -2176,9 +2202,9 @@ impl AppState {
 
     /// [#576 RV2-R-15] The read-only workspace gate for the SpeleoDB verbs that
     /// replace the survey outside the command chokepoint (Restore revision, Unwind,
-    /// Take remote, Discard changes): the coded refusal of
-    /// [`Self::guard_workspace`], shown as written so the frontend recognises it as
-    /// the edit gate and shows its notice.
+    /// Take remote, Discard changes): the refusal of [`Self::guard_workspace`],
+    /// carrying its `WORKSPACE_READ_ONLY` code (#576 C4) so the frontend recognises
+    /// it as the edit gate and shows its notice.
     #[expect(
         clippy::result_large_err,
         reason = "the SpeleoErrorDto every SpeleoDB verb returns; boxing the error type is a \
@@ -2186,7 +2212,7 @@ impl AppState {
     )]
     pub(super) fn speleodb_guard_workspace(&self, what: &str) -> Result<(), SpeleoErrorDto> {
         self.guard_workspace(what)
-            .map_err(|refusal| local_dto(SpeleoDbError::Refused(refusal.error.unwrap_or_default())))
+            .map_err(|refusal| local_dto(refused_by(refusal)))
     }
 
     /// The open project's hand-off link with its `project_id` validated (the
@@ -2660,7 +2686,7 @@ impl AppState {
     /// - Still ours: stamp `last_verify_at` and allow.
     /// - Transient / offline GET failure: stamp the attempt (keeps the <=3/hr bound)
     ///   and ALLOW the edit - offline editing stays first-class.
-    pub(super) fn speleodb_verify_lock_if_expired(&self) -> Result<(), crate::core::CommandResult> {
+    pub(super) fn speleodb_verify_lock_if_expired(&self) -> Result<(), crate::core::CommandError> {
         // Only an active LOCK-HELD edit session on a remote project re-verifies. A
         // read-only remote project (gate off) or a local project (no link row) never
         // does. #213: a force-editor holds no lock, so there is nothing to re-verify -
@@ -2691,10 +2717,10 @@ impl AppState {
                     // the gate (so further edits are cleanly read-only until resolved)
                     // and route the user to the divergence prompt.
                     self.set_edit_enabled(false);
-                    return Err(crate::core::CommandResult::failure(format!(
-                        "{}: the SpeleoDB write lock is no longer held - reconcile before editing.",
-                        crate::core::command::EDIT_REVERIFY_DIVERGED_CODE
-                    )));
+                    return Err(crate::core::CommandError::new(
+                        crate::models::CommandErrorCode::EditReverifyDiverged,
+                        "the SpeleoDB write lock is no longer held - reconcile before editing.",
+                    ));
                 }
                 // Still ours: stamp the verify and allow the edit.
                 let _ = self.speleodb_mutate_link(|l| l.last_verify_at = Some(now.to_rfc3339()));

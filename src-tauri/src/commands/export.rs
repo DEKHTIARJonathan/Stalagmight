@@ -440,7 +440,7 @@ pub async fn export_dive_profile(
         Ok(())
     })
     .await
-    .map_err(|e| format!("Dive profile export task panicked: {e}"))?
+    .map_err(|e| CommandError::internal(format!("Dive profile export task panicked: {e}")))?
     .map_err(CommandError::from)
 }
 
@@ -459,7 +459,7 @@ pub async fn render_dive_profile_text(
         render_profile_for(&project, request, ProfileFormat::PlainText)
     })
     .await
-    .map_err(|e| format!("Dive profile render task panicked: {e}"))?
+    .map_err(|e| CommandError::internal(format!("Dive profile render task panicked: {e}")))?
     .map_err(CommandError::from)
 }
 
@@ -493,7 +493,7 @@ pub async fn preview_svg_export(
             .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| format!("Preview task panicked: {e}"))?
+    .map_err(|e| CommandError::internal(format!("Preview task panicked: {e}")))?
     .map_err(CommandError::from)
 }
 

@@ -450,7 +450,9 @@ impl AppState {
     /// a newer-version file, a read-only SpeleoDB project, a read-only Plan/Export
     /// workspace), so the frontend shows its read-only notice instead of reporting
     /// a repair that never ran (#576 D39(a)).
-    pub fn repair_open_project_integrity(&self) -> Result<IntegrityRepairResult, String> {
+    pub fn repair_open_project_integrity(
+        &self,
+    ) -> Result<IntegrityRepairResult, crate::core::CommandError> {
         // Serialize against execute()/undo()/redo() for the WHOLE operation. Repair
         // captures before_snapshot, mutates, and pushes a snapshot-pair undo across
         // several independent project locks; without command_lock a concurrent
@@ -461,8 +463,8 @@ impl AppState {
         // same capture/snapshot/undo helpers).
         let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B5): Repair mutates the project, so it is
-        // gated like every other edit. The refusal is returned as the coded error
-        // itself (`EDIT_DISABLED...`), not as a zero result: `{ fixed: 0,
+        // gated like every other edit. The refusal is returned as the gate's error
+        // itself (its edit-gate code), not as a zero result: `{ fixed: 0,
         // remaining: 0 }` read as a clean repair, and the frontend showed
         // "Repaired 0 issues. Save to keep the fix." for a repair that never ran
         // (#576 D39(a)). (The integrity banner stays dismissable for non-blocking
@@ -472,9 +474,7 @@ impl AppState {
                 purpose = "read-only project or workspace",
                 "repair_open_project_integrity rejected: edit disabled"
             );
-            return Err(refused
-                .error
-                .unwrap_or_else(|| crate::core::command::EDIT_DISABLED_CODE.to_string()));
+            return Err(refused);
         }
         // Count over the full violation set before repairing. Locks the project
         // internally, so it must run with no project guard held.
@@ -603,7 +603,7 @@ impl AppState {
         // (`gate_rejects_every_mutation_entrypoint`).
         if !Self::is_lifecycle_passthrough(&cmd) {
             if let Err(f) = self.guard_mutation(&cmd.description()) {
-                return f;
+                return CommandResult::refused(f);
             }
             // Lazy 20-min lock re-verify (#202): on a lock-held remote edit through
             // this chokepoint, confirm (at most ~3x/hr) we still hold the write lock
@@ -612,7 +612,7 @@ impl AppState {
             // mutation entrypoints - undo/redo etc. - do not re-verify; the
             // release-time fence + a 403 on push are the correctness backstops).
             if let Err(f) = self.speleodb_verify_lock_if_expired() {
-                return f;
+                return CommandResult::refused(f);
             }
         }
         // A reverse of a section that has no shots provably changes nothing (#24):

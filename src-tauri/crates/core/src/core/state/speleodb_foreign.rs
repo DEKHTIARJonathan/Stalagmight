@@ -264,7 +264,7 @@ impl AppState {
             .and_then(|project| project.file_path.as_deref())
             .is_some_and(|open| super::project_io::same_file(open, &path))
         {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "that file is the project currently open; detach it from SpeleoDB instead"
                     .to_owned(),
             )));
@@ -295,7 +295,7 @@ impl AppState {
                     "Refusing to strip a link: the file at this path is a different \
                      managed project than the prompt was raised for"
                 );
-                return Err(local_dto(SpeleoDbError::Refused(
+                return Err(local_dto(SpeleoDbError::refused(
                     "that file is a different SpeleoDB project than the one this \
                      prompt was about; reopen it to see what it is now"
                         .to_owned(),
@@ -321,7 +321,7 @@ impl AppState {
                     "Refusing to strip a link: this path now resolves to the \
                      project's canonical cache copy"
                 );
-                return Err(local_dto(SpeleoDbError::Refused(
+                return Err(local_dto(SpeleoDbError::refused(
                     "that path now leads to this project's managed copy, which \
                      cannot be unlinked here; reopen it to see what it is now"
                         .to_owned(),

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 use super::{AppState, WorkspaceMode};
-use crate::core::command::{EDIT_DISABLED_CODE, WORKSPACE_READ_ONLY_CODE};
+use crate::models::CommandErrorCode;
 use crate::models::{AzimuthReference, CorrectionSource, Project, SectionData, ShotData};
 use crate::persistence::Database;
 
@@ -78,11 +78,14 @@ fn a_changed_north_reference_is_refused_in_plan_and_export() {
             "{mode:?}: a changed north reference is a survey edit"
         );
         let error = set.error.unwrap_or_default();
-        assert!(
-            error.starts_with(&format!(
-                "{EDIT_DISABLED_CODE}: {WORKSPACE_READ_ONLY_CODE}:"
-            )),
+        assert_eq!(
+            set.code,
+            Some(CommandErrorCode::WorkspaceReadOnly),
             "{mode:?}: refused as a read-only workspace: {error:?}"
+        );
+        assert!(
+            !error.contains("WORKSPACE_READ_ONLY"),
+            "{mode:?}: no marker in the text: {error:?}"
         );
         assert_eq!(after.default_azimuth_reference, None, "{mode:?}: unchanged");
         assert_eq!(after.name, live.name, "{mode:?}: the whole save is refused");

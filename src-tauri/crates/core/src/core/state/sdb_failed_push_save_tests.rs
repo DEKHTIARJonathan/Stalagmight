@@ -54,7 +54,7 @@ fn a_push_failing_after_its_save_still_reports_the_save_warnings() {
         // The save went through and lost the display settings ...
         collected.push(lost_display_settings());
         // ... then the upload was refused.
-        Err(local_dto(SpeleoDbError::Refused(
+        Err(local_dto(SpeleoDbError::refused(
             "upload refused".to_owned(),
         )))
     });
@@ -84,7 +84,7 @@ fn a_successful_push_or_a_failure_with_nothing_lost_sends_no_event() {
         Ok(7)
     });
     let failed_clean = state.speleodb_with_pre_push_save(|_| -> Result<(), _> {
-        Err(local_dto(SpeleoDbError::Refused(
+        Err(local_dto(SpeleoDbError::refused(
             "upload refused".to_owned(),
         )))
     });

@@ -93,7 +93,7 @@ pub async fn get_survey_geometry_for_file(path: PathBuf) -> Result<SurveyGeometr
     // Use spawn_blocking for UI responsiveness
     tauri::async_runtime::spawn_blocking(move || get_survey_geometry_for_file_impl(&path))
         .await
-        .map_err(|e| CommandError::failed(format!("Internal error: {e}")))?
+        .map_err(|e| CommandError::internal(format!("Internal error: {e}")))?
         .map_err(|e| CommandError::failed(e.message))
 }
 

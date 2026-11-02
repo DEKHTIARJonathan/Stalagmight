@@ -25,8 +25,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use serde::Deserialize;
 
 use super::AppState;
-use crate::core::command::{EDIT_DISABLED_CODE, WORKSPACE_READ_ONLY_CODE};
-use crate::core::CommandResult;
+use crate::core::{CommandError, CommandErrorCode};
 
 /// The three workspace modes, spelled as the frontend's `AppMode` spells them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ts_rs::TS)]
@@ -112,9 +111,9 @@ impl AppState {
         self.workspace_mode.set(WorkspaceMode::Survey);
     }
 
-    /// The workspace half of `guard_mutation`: `Err` with the coded refusal while
-    /// the workspace is Plan or Export.
-    pub(super) fn guard_workspace(&self, what: &str) -> Result<(), CommandResult> {
+    /// The workspace half of `guard_mutation`: `Err` with the `WORKSPACE_READ_ONLY`
+    /// refusal while the workspace is Plan or Export.
+    pub(super) fn guard_workspace(&self, what: &str) -> Result<(), CommandError> {
         let mode = self.workspace_mode();
         if !mode.is_read_only() {
             return Ok(());
@@ -125,10 +124,13 @@ impl AppState {
             purpose = "backstop the read-only Plan/Export workspace",
             "Mutation refused: the workspace is read-only"
         );
-        Err(CommandResult::failure(format!(
-            "{EDIT_DISABLED_CODE}: {WORKSPACE_READ_ONLY_CODE}: {what} is disabled: the {} \
+        Err(CommandError::new(
+            CommandErrorCode::WorkspaceReadOnly,
+            format!(
+                "{what} is disabled: the {} \
              workspace is read-only. Switch to Survey to edit.",
-            mode.label()
-        )))
+                mode.label()
+            ),
+        ))
     }
 }

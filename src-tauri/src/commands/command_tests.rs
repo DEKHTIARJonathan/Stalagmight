@@ -2044,12 +2044,14 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             "a permission-classified save failure must be humanized: {:?}",
             result.warnings
         );
-        // ...and the internal marker must never reach the user-facing message.
+        // ...and no marker reaches the user-facing message (#576 C4: the save's
+        // classification is its code, so there is none to strip).
         assert!(
-            result.warnings.iter().all(|w| !w
-                .message
-                .contains(crate::core::loading::PERMISSION_DENIED_CODE)),
-            "the internal FS_PERMISSION_DENIED marker must be stripped, not leaked: {:?}",
+            result
+                .warnings
+                .iter()
+                .all(|w| !w.message.contains("FS_PERMISSION_DENIED")),
+            "the FS_PERMISSION_DENIED marker must not reach the warning: {:?}",
             result.warnings
         );
     });
@@ -2121,9 +2123,9 @@ fn test_import_sections_deferred_save_generic_open_failure_is_not_a_denial() {
             result.warnings
         );
         for marker in [
-            crate::core::loading::PERMISSION_DENIED_CODE,
-            crate::core::loading::PATH_NOT_FOUND_CODE,
-            crate::core::loading::PATH_TOO_LONG_CODE,
+            "FS_PERMISSION_DENIED",
+            "FS_PATH_NOT_FOUND",
+            "FS_PATH_TOO_LONG",
         ] {
             assert!(
                 result.warnings.iter().all(|w| !w.message.contains(marker)),
@@ -3126,7 +3128,11 @@ fn test_save_project_fails_when_directory_missing() {
             &result,
             "the folder no longer exists or the drive is not connected",
         );
-        assert_failure_contains(&result, crate::core::loading::PATH_NOT_FOUND_CODE);
+        // [#576 C4] The code the save router keys on, not a marker in the text.
+        assert_eq!(
+            result.as_ref().err().map(|e| e.code),
+            Some(crate::core::CommandErrorCode::FsPathNotFound)
+        );
         assert!(!missing_dir.exists());
     });
 }

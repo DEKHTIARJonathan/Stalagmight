@@ -168,7 +168,10 @@ fn the_commands_refuse_before_writing_or_deleting() {
             saved.as_ref().err()
         );
         assert!(saved.is_err());
-        assert!(saved.unwrap_err().message.contains("system folder"));
+        assert!(saved
+            .expect_err("a save into a system folder is refused")
+            .message
+            .contains("system folder"));
     }
 
     // The ordinary cases still go through.

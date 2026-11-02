@@ -336,14 +336,21 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         | SpeleoDbError::Parse(_)
         | SpeleoDbError::EmptyDump
         | SpeleoDbError::Io(_)
-        | SpeleoDbError::Refused(_)
+        | SpeleoDbError::Refused { .. }
         | SpeleoDbError::InvalidProjectId
         | SpeleoDbError::InvalidRevision
         | SpeleoDbError::InsecureEndpoint { .. }
         | SpeleoDbError::NoRemoteProject => (SpeleoDbAction::Fatal, None, err.to_string()),
     };
+    // [#576 C4] A local refusal carries the refusing gate's own code (the edit
+    // gate, a refused save, ...); `action` stays `Fatal` for the backend's own
+    // branches, and every other error's code is its action's.
+    let code = match err {
+        SpeleoDbError::Refused { code, .. } => *code,
+        _ => code_for_action(action),
+    };
     SpeleoErrorDto {
-        code: code_for_action(action),
+        code,
         message,
         action,
         status,
@@ -642,6 +649,33 @@ mod tests {
             !body.contains("_ =>"),
             "the action match must stay exhaustive - a wildcard lets a new SpeleoDbError \
              variant default to Fatal without anyone deciding that it should"
+        );
+    }
+
+    /// [#576 C4] A verb refused by a core refusal reaches the frontend with that
+    /// refusal's code (the edit gate's, a refused save's, ...) instead of
+    /// `SPELEODB_FATAL`; a plain local refusal stays `SPELEODB_FATAL`. The backend's
+    /// own branches still see a local failure (`action == Fatal`) either way.
+    #[test]
+    fn a_local_refusal_carries_the_refusing_gates_code() {
+        use crate::models::CommandErrorCode;
+        let plain = dto_for_error(Endpoint::User, &SpeleoDbError::refused("not linked"));
+        assert_eq!(plain.action, SpeleoDbAction::Fatal);
+        assert_eq!(plain.code, CommandErrorCode::SpeleodbFatal);
+        assert_eq!(plain.message, "not linked");
+
+        let gated = dto_for_error(
+            Endpoint::User,
+            &SpeleoDbError::refused_with(
+                CommandErrorCode::WorkspaceReadOnly,
+                "Discard changes is disabled",
+            ),
+        );
+        assert_eq!(gated.action, SpeleoDbAction::Fatal);
+        assert_eq!(gated.code, CommandErrorCode::WorkspaceReadOnly);
+        assert_eq!(
+            gated.message, "Discard changes is disabled",
+            "shown as written"
         );
     }
 

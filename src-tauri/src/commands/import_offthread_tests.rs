@@ -108,6 +108,15 @@ fn error_message(answer: &Result<Value, Value>) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+/// The rejected answer's routing code (`CommandError::code`), if it was rejected.
+fn error_code(answer: &Result<Value, Value>) -> Option<&str> {
+    answer
+        .as_ref()
+        .err()
+        .and_then(|error| error.get("code"))
+        .and_then(Value::as_str)
+}
+
 /// One importer's command, the synthetic file it imports and its IPC arguments.
 struct ImportCase {
     command: &'static str,
@@ -280,8 +289,12 @@ fn a_cancel_dispatched_while_an_import_reads_its_file_stops_it_with_nothing_comm
             "{}: the read-phase progress reaches the window while the import runs",
             case.command
         );
+        // [#576 C4] The webview receives the rejection's code, and display text
+        // with no marker in it.
         assert!(
-            error_message(&seen.result).is_some_and(|e| e.starts_with("IMPORT_CANCELLED:")),
+            error_code(&seen.result) == Some("IMPORT_CANCELLED")
+                && error_message(&seen.result)
+                    .is_some_and(|e| e.contains("was cancelled") && !e.contains("IMPORT_CANCELLED")),
             "{}: the Cancel reached the running import: {:?}",
             case.command,
             seen.result.as_ref().err()

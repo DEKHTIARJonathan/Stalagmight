@@ -583,7 +583,7 @@ pub async fn speleodb_remove_link_at(
     .map_err(|why| {
         crate::speleodb::contract::dto_for_error(
             crate::speleodb::contract::Endpoint::User,
-            &crate::speleodb::SpeleoDbError::Refused(why),
+            &crate::speleodb::SpeleoDbError::refused(why),
         )
     })?;
     run_blocking(app, move |s| s.speleodb_remove_link_at(path, expected)).await

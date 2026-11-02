@@ -39,7 +39,7 @@ impl AppState {
         let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Delete shot and split section") {
-            return f;
+            return CommandResult::refused(f);
         }
         tracing::info!(
             section_id,
@@ -311,7 +311,7 @@ impl AppState {
         let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Delete shot range and split section") {
-            return f;
+            return CommandResult::refused(f);
         }
         tracing::info!(
             section_id,
@@ -585,7 +585,7 @@ impl AppState {
         let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Delete shot range and shift") {
-            return f;
+            return CommandResult::refused(f);
         }
         tracing::info!(
             section_id,
@@ -789,7 +789,7 @@ impl AppState {
         let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Delete last shot and section") {
-            return f;
+            return CommandResult::refused(f);
         }
         tracing::info!(
             section_id,

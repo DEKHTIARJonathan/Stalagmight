@@ -23,7 +23,7 @@ use crate::commands::import::{decorate_receipt, finalize_deferred_import};
 use crate::core::events::EventSink;
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::state::{AppState, VirtualShotMode};
-use crate::core::CommandResult;
+use crate::core::{CommandError, CommandErrorCode, CommandResult};
 use crate::models::{ImportClosure, ImportSectionConfig};
 
 /// How an importer's messages name it.
@@ -189,20 +189,19 @@ pub(crate) fn run_file_import<P>(
     result
 }
 
-/// The failure a cancelled import answers: nothing was imported. The marker lets
-/// the import dialogs say so quietly rather than as an import error.
+/// The failure a cancelled import answers: nothing was imported. Its code
+/// (`IMPORT_CANCELLED`, #576 C4) lets the import dialogs say so quietly rather
+/// than as an import error.
 fn cancelled(label: &str) -> CommandResult {
     tracing::info!(
         purpose = "stop an import the user cancelled (#576 NF-FIX3A-2)",
         "{label} import cancelled before anything was applied"
     );
-    CommandResult::failure(format!(
-        "{IMPORT_CANCELLED_CODE}: the {label} import was cancelled; nothing was imported"
+    CommandResult::refused(CommandError::new(
+        CommandErrorCode::ImportCancelled,
+        format!("the {label} import was cancelled; nothing was imported"),
     ))
 }
-
-/// The marker a cancelled import's failure starts with (`saveFeedback.ts` reads it).
-pub(crate) const IMPORT_CANCELLED_CODE: &str = "IMPORT_CANCELLED";
 
 /// An import registered as the app's active load (`AppState::start_new_load`), so
 /// `cancel_loading` flips its token; cleared when it ends, however it ends

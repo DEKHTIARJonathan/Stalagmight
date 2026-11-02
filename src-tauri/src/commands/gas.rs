@@ -151,7 +151,7 @@ pub async fn compute_gas_reach_field(
     .await
     // A JoinError (engine panic / cancellation) is a real backend bug, so surface it as
     // Err rather than collapsing it to Ok(None) - which is reserved for "no project open".
-    .map_err(|e| format!("gas reach computation failed: {e}"))?;
+    .map_err(|e| CommandError::internal(format!("gas reach computation failed: {e}")))?;
     Ok(field)
 }
 

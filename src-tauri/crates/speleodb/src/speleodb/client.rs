@@ -1237,7 +1237,7 @@ fn send_json_request(
 /// so there is nothing faithful to send back - refused before any request.
 fn grantable(level: Permission) -> Result<Permission, SpeleoDbError> {
     if level == Permission::Unknown {
-        return Err(SpeleoDbError::Refused(
+        return Err(SpeleoDbError::refused(
             "this access level is not one this version of Stalagmight knows, so it cannot be \
              granted - pick another level"
                 .to_owned(),

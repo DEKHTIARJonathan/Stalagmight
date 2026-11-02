@@ -222,7 +222,7 @@ impl AppState {
         {
             return Ok(());
         }
-        Err(local_dto(SpeleoDbError::Refused(
+        Err(local_dto(SpeleoDbError::refused(
             "that revision is not the next step in the direction requested; reopen the \
              undo history to pick it up again"
                 .to_owned(),
@@ -239,7 +239,7 @@ impl AppState {
         // un-walked work, so it has to fail closed on not knowing - and say why
         // (#576 A11, the second refusal site in `refuse_after_crash`).
         self.refuse_after_crash("Loading another version's history")
-            .map_err(|reason| local_dto(SpeleoDbError::Refused(reason)))?;
+            .map_err(|refusal| local_dto(super::speleodb::refused_by(refusal)))?;
         let stack_empty = {
             let s = self.undo_stack.lock();
             if chain_forward {
@@ -249,7 +249,7 @@ impl AppState {
             }
         };
         if !stack_empty {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 if chain_forward {
                     "redo the remaining steps before loading the next version's history"
                 } else {
@@ -264,7 +264,7 @@ impl AppState {
                 self.speleodb_unwound_from().as_deref(),
             )
         {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "this copy holds un-pushed edits that the undo history no longer covers; \
                  push or discard them before loading earlier history"
                     .to_owned(),
@@ -568,7 +568,7 @@ impl AppState {
         // clearing force_editing below would hide the big-red "no lock held" warning.
         // Refuse both until the user finishes or discards the force-edit session.
         if self.force_editing() {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "finish or discard force-editing before viewing or restoring a revision".to_owned(),
             )));
         }
@@ -591,7 +591,7 @@ impl AppState {
         // force-editing already excluded above, edit_enabled here means a real lock).
         // View is a read-only peek and needs no lock.
         if restore && !self.edit_enabled() {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "acquire the write lock before restoring a revision".to_owned(),
             )));
         }
@@ -613,7 +613,7 @@ impl AppState {
         // Spelled as the full precondition rather than `!restore`, so it does not quietly
         // depend on the gate above running first: this refusal has to hold on its own.
         if keep_undo_history && !(restore && self.edit_enabled()) {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "loading a revision's undo history needs a restore with the write lock held"
                     .to_owned(),
             )));
@@ -688,7 +688,7 @@ impl AppState {
             let target_mode =
                 downloaded_revision_undo_mode(&mut dump, &entry, &dest).map_err(local_dto)?;
             if !target_mode.pushes_history() {
-                return Err(local_dto(SpeleoDbError::Refused(
+                return Err(local_dto(SpeleoDbError::refused(
                     "the next revision did not publish undo history, so there is no forward \
                      history step to load"
                         .to_owned(),

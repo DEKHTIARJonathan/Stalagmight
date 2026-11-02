@@ -16,7 +16,7 @@ use crate::persistence::Database;
 use crate::tile_stats::TileFetchStats;
 use crate::tilemap_cache::TilemapCache;
 
-use crate::core::{CommandResult, UndoStack};
+use crate::core::{CommandError, CommandErrorCode, CommandResult, UndoStack};
 
 use super::project_io::reapply_heals_after_restore;
 use super::project_slot::ProjectSlot;
@@ -566,18 +566,22 @@ impl AppState {
     ///
     /// [#576 B6-D1] A project saved by a NEWER Stalagmight is refused FIRST, ahead
     /// of the lock: it is read-only whatever the SpeleoDB lock state says, and the
-    /// reason the user is told must be the version, not the lock. Same
-    /// `EDIT_DISABLED` code, so every caller that already treats a gated refusal
-    /// as "read-only, not a failure" keeps doing so, followed by
-    /// `NEWER_FILE_READ_ONLY` so the frontend's notice can say which read-only
+    /// reason the user is told must be the version, not the lock. Its own edit-gate
+    /// code (`NEWER_FILE_EDIT_DISABLED`, [`CommandErrorCode::is_edit_gate`]), so
+    /// every caller that already treats a gated refusal as "read-only, not a
+    /// failure" keeps doing so, and the frontend's notice can say which read-only
     /// this is without trusting its own copy of the flag.
     ///
     /// [#576 C5] Then, while the frontend's workspace is Plan or Export, EVERY
-    /// caller is refused (`EDIT_DISABLED` + `WORKSPACE_READ_ONLY`): deny by
+    /// caller is refused (`WORKSPACE_READ_ONLY`, also an edit-gate code): deny by
     /// default, so a new entry point is read-only in those modes without anyone
     /// remembering it. The two deliberate exceptions call
     /// [`Self::guard_metadata_mutation`] instead.
-    pub(super) fn guard_mutation(&self, what: &str) -> Result<(), CommandResult> {
+    ///
+    /// [#576 C4] The refusal is a [`CommandError`]: the code says which gate, the
+    /// message only what the user reads. A `CommandResult` producer returns it
+    /// through [`CommandResult::refused`].
+    pub(super) fn guard_mutation(&self, what: &str) -> Result<(), CommandError> {
         self.guard_metadata_mutation(what)?;
         self.guard_workspace(what)
     }
@@ -613,8 +617,9 @@ impl AppState {
     ///    poisoned, so a saved history would be replayed there.
     ///
     /// Takes no lock (the caller may hold `command_lock`); a poisoned cell found
-    /// here is reported like any other, so the banner explains the refusal.
-    pub(super) fn refuse_after_crash(&self, what: &str) -> Result<(), String> {
+    /// here is reported like any other, so the banner explains the refusal. The
+    /// refusal's code is `REFUSED_AFTER_INTERNAL_ERROR` (#576 C4).
+    pub(super) fn refuse_after_crash(&self, what: &str) -> Result<(), CommandError> {
         for cell in [
             self.command_lock.refuse_if_poisoned(),
             self.project.refuse_if_poisoned(),
@@ -627,9 +632,12 @@ impl AppState {
                     purpose = "never replay or publish half-written data (#576 A11)",
                     "Refused after an internal error"
                 );
-                return Err(format!(
-                    "{what} is unavailable after an internal error. Save your work and \
-                     restart Stalagmight."
+                return Err(CommandError::new(
+                    CommandErrorCode::RefusedAfterInternalError,
+                    format!(
+                        "{what} is unavailable after an internal error. Save your work and \
+                         restart Stalagmight."
+                    ),
                 ));
             }
         }
@@ -646,31 +654,35 @@ impl AppState {
     ///
     /// which ProjectSettingsDialog deliberately keeps enabled in every mode
     /// (docs/app-modes.md). Everything else that mutates calls `guard_mutation`.
-    pub(super) fn guard_metadata_mutation(&self, what: &str) -> Result<(), CommandResult> {
+    pub(super) fn guard_metadata_mutation(&self, what: &str) -> Result<(), CommandError> {
         if let Some(version) = self.newer_file_schema() {
             return Err(newer_file_edit_refusal(what, version));
         }
         // [#576 NF-W4C-3-EDIT] An Ariane adoption is handing this project over to
-        // SpeleoDB: no edit until its push has landed. The read-only code, so every
-        // caller treats it as read-only, then `ADOPTION_IN_PROGRESS` so the
-        // frontend's notice says "being handed over" rather than inviting a Start
-        // editing that would race the adoption's lock operations (RV5-F4-5).
+        // SpeleoDB: no edit until its push has landed. `ADOPTION_IN_PROGRESS` is in
+        // the edit-gate family (`is_edit_gate`), so every caller treats it as
+        // read-only, and the frontend's notice says "being handed over" rather than
+        // inviting a Start editing that would race the adoption's lock operations
+        // (RV5-F4-5).
         if self.speleodb_adoption_holds_gate() {
-            return Err(CommandResult::failure(format!(
-                "{}: {}: {what} is disabled: this project is being handed over to \
-                 SpeleoDB. Edit it once the upload has finished.",
-                crate::core::command::EDIT_DISABLED_CODE,
-                crate::core::command::ADOPTION_IN_PROGRESS_CODE
-            )));
+            return Err(CommandError::new(
+                CommandErrorCode::AdoptionInProgress,
+                format!(
+                    "{what} is disabled: this project is being handed over to SpeleoDB. \
+                     Edit it once the upload has finished."
+                ),
+            ));
         }
         if self.edit_enabled() {
             return Ok(());
         }
-        Err(CommandResult::failure(format!(
-            "{}: {what} is disabled: this SpeleoDB project is open read-only. \
-             Acquire the lock to edit.",
-            crate::core::command::EDIT_DISABLED_CODE
-        )))
+        Err(CommandError::new(
+            CommandErrorCode::EditDisabled,
+            format!(
+                "{what} is disabled: this SpeleoDB project is open read-only. \
+                 Acquire the lock to edit."
+            ),
+        ))
     }
 
     /// Flip `has_unpushed_edits` `false → true` AND refresh `last_edit_at` on a
@@ -1416,12 +1428,11 @@ fn newer_file_reason(version: i32) -> String {
 }
 
 /// [#576 B6-D1] The refusal of an edit (`what`) to a file a newer build saved:
-/// `EDIT_DISABLED`, then `NEWER_FILE_READ_ONLY`, then the reason.
-pub(super) fn newer_file_edit_refusal(what: &str, version: i32) -> CommandResult {
-    CommandResult::failure(format!(
-        "{}: {}: {what} is disabled: {}",
-        crate::core::command::EDIT_DISABLED_CODE,
-        crate::core::loading::NEWER_FILE_READ_ONLY_CODE,
-        newer_file_reason(version)
-    ))
+/// `NEWER_FILE_EDIT_DISABLED` (#576 C4), an edit-gate code - a refused SAVE of
+/// the same file is `NEWER_FILE_READ_ONLY` instead.
+pub(super) fn newer_file_edit_refusal(what: &str, version: i32) -> CommandError {
+    CommandError::new(
+        CommandErrorCode::NewerFileEditDisabled,
+        format!("{what} is disabled: {}", newer_file_reason(version)),
+    )
 }

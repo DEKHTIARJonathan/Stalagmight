@@ -18,9 +18,8 @@ use std::time::SystemTime;
 use tempfile::TempDir;
 
 use super::AppState;
-use crate::core::command::EDIT_DISABLED_CODE;
-use crate::core::loading::NEWER_FILE_READ_ONLY_CODE;
 use crate::core::{Command, CommandResult};
+use crate::models::CommandErrorCode;
 use crate::models::{Project, SectionData, ShotData, ShotUpdates};
 use crate::persistence::Database;
 
@@ -237,14 +236,25 @@ fn edits_to_a_newer_file_are_refused() {
         edit.success, edit.error
     );
     assert_refused_as_newer("execute", &edit);
+    // [#576 C4] The edit gate's newer-file code (what used to read
+    // "EDIT_DISABLED: NEWER_FILE_READ_ONLY: ..."), and display text with no marker.
+    assert_eq!(
+        edit.code,
+        Some(CommandErrorCode::NewerFileEditDisabled),
+        "the refusal must carry the edit gate's newer-file code, got: {:?}",
+        edit.error
+    );
+    assert!(
+        edit.code.is_some_and(CommandErrorCode::is_edit_gate),
+        "a newer-file edit refusal is an edit-gate refusal"
+    );
     assert!(
         edit.error.as_deref().is_some_and(|e| {
-            e.starts_with(&format!(
-                "{EDIT_DISABLED_CODE}: {NEWER_FILE_READ_ONLY_CODE}: "
-            ))
+            e.contains(" is disabled: this project was saved by a newer version")
+                && !e.contains("EDIT_DISABLED")
+                && !e.contains("NEWER_FILE_READ_ONLY")
         }),
-        "the refusal must carry the read-only gate's code and then the newer-file \
-         marker, got: {:?}",
+        "the text is the plain sentence, got: {:?}",
         edit.error
     );
     assert_refused_as_newer(
@@ -295,12 +305,18 @@ fn saving_a_newer_file_is_refused() {
     assert_refused_as_newer("save_project(Some(own path))", &explicit);
     assert_refused_as_newer("save_project(Some(other path))", &save_as);
     for refused in [&in_place, &explicit, &save_as] {
+        assert_eq!(
+            refused.code,
+            Some(CommandErrorCode::NewerFileReadOnly),
+            "a refused save carries the code the frontend routes on, got: {:?}",
+            refused.error
+        );
         assert!(
             refused
                 .error
                 .as_deref()
-                .is_some_and(|e| e.starts_with(NEWER_FILE_READ_ONLY_CODE)),
-            "a refused save leads with the marker the frontend routes on, got: {:?}",
+                .is_some_and(|e| e.starts_with("Saving is disabled: ")),
+            "and its text is the plain sentence, got: {:?}",
             refused.error
         );
     }

@@ -4,15 +4,15 @@
 //! The refusal carried only `EDIT_DISABLED`, so the frontend showed its generic
 //! "open read-only - click Start editing to take the write lock" notice in the
 //! middle of the hand-over, which invites a Start editing that races the
-//! adoption's own lock operations. It now puts `ADOPTION_IN_PROGRESS` behind
-//! `EDIT_DISABLED`, the same pattern as `NEWER_FILE_READ_ONLY` and
-//! `WORKSPACE_READ_ONLY`, so every caller that treats a gated refusal as
-//! "read-only, not a failure" keeps doing so. All data is synthetic.
+//! adoption's own lock operations. It now carries `ADOPTION_IN_PROGRESS`, a code
+//! of the edit-gate family (`CommandErrorCode::is_edit_gate`) like
+//! `NEWER_FILE_EDIT_DISABLED` and `WORKSPACE_READ_ONLY`, so every caller that
+//! treats a gated refusal as "read-only, not a failure" keeps doing so (#576 C4:
+//! the code, not a marker in the message). All data is synthetic.
 
 use super::AppState;
-use crate::core::command::{ADOPTION_IN_PROGRESS_CODE, EDIT_DISABLED_CODE};
 use crate::core::Command;
-use crate::models::ShotData;
+use crate::models::{CommandErrorCode, ShotData};
 
 #[test]
 fn an_edit_during_an_adoption_hand_over_carries_the_adoption_code() {
@@ -37,17 +37,24 @@ fn an_edit_during_an_adoption_hand_over_carries_the_adoption_code() {
             ..Default::default()
         }],
     });
-    let error = refused.error.unwrap_or_default();
+    let error = refused.error.clone().unwrap_or_default();
     println!(
-        "edit during the hand-over: success {}, error {error:?}",
-        refused.success
+        "edit during the hand-over: success {}, code {:?}, error {error:?}",
+        refused.success, refused.code
     );
     assert!(!refused.success);
+    assert_eq!(
+        refused.code,
+        Some(CommandErrorCode::AdoptionInProgress),
+        "the refusal names the adoption in its code: {error:?}"
+    );
     assert!(
-        error.starts_with(&format!(
-            "{EDIT_DISABLED_CODE}: {ADOPTION_IN_PROGRESS_CODE}: "
-        )),
-        "the refusal names the adoption behind EDIT_DISABLED: {error:?}"
+        refused.code.is_some_and(CommandErrorCode::is_edit_gate),
+        "the adoption refusal is an edit-gate refusal"
+    );
+    assert!(
+        !error.contains("EDIT_DISABLED") && !error.contains("ADOPTION_IN_PROGRESS"),
+        "the message carries no marker: {error:?}"
     );
     assert!(error.contains("handed over to SpeleoDB"));
 

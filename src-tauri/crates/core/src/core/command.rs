@@ -245,40 +245,6 @@ pub enum Command {
     SetSurfaceElevation,
 }
 
-/// Coded-failure prefix for a mutation rejected because the open project is a
-/// remote SpeleoDB project opened without a write lock (#191, D-B7). Mirrors the
-/// `loading::PERMISSION_DENIED_CODE` string-prefix idiom: `CommandResult` has no
-/// `code` field, so the code is prefixed onto the `error` string and the FE
-/// (#204) pattern-matches `err.starts_with(EDIT_DISABLED_CODE)` to suppress the
-/// toast. Deliberately NO `edit_enabled` query command here (that IPC is
-/// #204/#209).
-pub const EDIT_DISABLED_CODE: &str = "EDIT_DISABLED";
-
-/// Second code behind [`EDIT_DISABLED_CODE`] on a mutation refused because the
-/// frontend's workspace is Plan or Export, which are read-only (#576 C5,
-/// `AppState::set_workspace_mode`). Behind `EDIT_DISABLED` so every caller that
-/// already treats a gated refusal as "read-only, not a failure" keeps doing so;
-/// the frontend reads this one to say which read-only it is, the same pattern as
-/// `loading::NEWER_FILE_READ_ONLY_CODE`.
-pub const WORKSPACE_READ_ONLY_CODE: &str = "WORKSPACE_READ_ONLY";
-
-/// Second code behind [`EDIT_DISABLED_CODE`] on a mutation refused because an
-/// Ariane adoption is handing the open project over to SpeleoDB (#576
-/// NF-W4C-3-EDIT, RV5-F4-5). The frontend reads it to say "being handed over",
-/// not "click Start editing": a Start editing in the middle of the hand-over
-/// would race the adoption's own lock operations. Mirrored by
-/// `ADOPTION_IN_PROGRESS` in `src/utils/editErrors.ts`.
-pub const ADOPTION_IN_PROGRESS_CODE: &str = "ADOPTION_IN_PROGRESS";
-
-/// Coded-failure prefix for a mutation blocked by the lazy 20-min lock re-verify
-/// (#202) because a definitive server answer showed the write lock is no longer
-/// held by us. Same string-prefix idiom as [`EDIT_DISABLED_CODE`],
-/// but distinct so the FE routes it to the divergence prompt (reconcile) instead of
-/// the plain read-only notice. NOT a correctness guard - the release-time fence + a
-/// 403 on push are - so a transient re-verify failure never emits this (it lets the
-/// edit through and the fence catches any real conflict).
-pub(crate) const EDIT_REVERIFY_DIVERGED_CODE: &str = "EDIT_REVERIFY_DIVERGED";
-
 /// One section whose station numbering an operation reversed, together with the
 /// shot count `N` that was IN FORCE at that reverse - the divisor the mirror
 /// `i -> N - i` needs.

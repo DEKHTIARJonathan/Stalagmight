@@ -73,7 +73,7 @@ impl AppState {
         // unconditional there), and no link row to write it into.
         let _link = self.speleodb_validated_link()?;
         if !self.edit_enabled() {
-            return Err(super::speleodb::local_dto(SpeleoDbError::Refused(
+            return Err(super::speleodb::local_dto(SpeleoDbError::refused(
                 "start editing before changing the undo-history setting".to_owned(),
             )));
         }

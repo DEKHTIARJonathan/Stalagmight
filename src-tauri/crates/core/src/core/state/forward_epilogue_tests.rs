@@ -142,7 +142,10 @@ fn every_forward_entry_point_runs_the_shared_epilogue() {
         }))
     });
     all &= check("repair_open_project_integrity", EpilogueSteps::NONE, || {
-        state.repair_open_project_integrity().map(|_| ())
+        state
+            .repair_open_project_integrity()
+            .map(|_| ())
+            .map_err(|e| e.message)
     });
     all &= check("update_project_settings", EpilogueSteps::NONE, || {
         ok(state.update_project_settings(

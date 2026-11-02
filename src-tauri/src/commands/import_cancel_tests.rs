@@ -105,16 +105,44 @@ fn cancel_during_an_import_phase_commits_nothing() {
             !result.success,
             "{phase}: a cancelled import does not succeed"
         );
-        assert!(
-            result
-                .error
-                .as_deref()
-                .is_some_and(|e| e.starts_with("IMPORT_CANCELLED:")),
+        assert_eq!(
+            result.code,
+            Some(crate::core::CommandErrorCode::ImportCancelled),
             "{phase}: the failure says it was cancelled: {:?}",
             result.error
         );
         assert_eq!(sections, 0, "{phase}: nothing was imported");
         assert!(!state.can_undo(), "{phase}: and nothing was recorded");
+    }
+}
+
+/// [#576 C4] The cancelled import's message is display text: the kind of failure
+/// is its code, so no marker leads the sentence the import dialog shows.
+#[test]
+fn a_cancelled_imports_message_carries_no_marker() {
+    for (phase, during_convert) in [("reading", false), ("converting", true)] {
+        let state = project_state();
+        let result = import_cancelling_during(&state, during_convert);
+        let error = result.error.clone().unwrap_or_default();
+        println!(
+            "Cancel while {phase}: code={:?} message={error:?}",
+            result.code
+        );
+        assert!(
+            !result.success,
+            "{phase}: a cancelled import does not succeed"
+        );
+        assert!(
+            !error.starts_with("IMPORT_CANCELLED") && !error.contains("IMPORT_CANCELLED:"),
+            "{phase}: the message carries the IMPORT_CANCELLED marker: {error:?}"
+        );
+        assert!(
+            error.contains("was cancelled; nothing was imported"),
+            "{phase}: the message still says what happened: {error:?}"
+        );
+        // ...and the IPC error carries the code the dialog routes on.
+        let wire = result.into_error();
+        assert_eq!(wire.code, crate::core::CommandErrorCode::ImportCancelled);
     }
 }
 

@@ -16,8 +16,7 @@ use tempfile::TempDir;
 
 use super::tests::{probe_mutation_entrypoints, MUTATION_ENTRYPOINTS};
 use super::{AppState, WorkspaceMode};
-use crate::core::command::{EDIT_DISABLED_CODE, WORKSPACE_READ_ONLY_CODE};
-use crate::core::Command;
+use crate::core::{Command, CommandError, CommandErrorCode};
 use crate::models::{Coordinates, Project, SectionData, SectionId, ShotData, ShotId, StationRef};
 use crate::persistence::Database;
 
@@ -69,10 +68,13 @@ fn move_station(state: &AppState, sid: SectionId) -> crate::core::CommandResult 
     })
 }
 
-fn refused_by_workspace(error: &str) -> bool {
-    error.starts_with(&format!(
-        "{EDIT_DISABLED_CODE}: {WORKSPACE_READ_ONLY_CODE}:"
-    ))
+/// [#576 C4] The workspace refusal: its code, an edit-gate one, and display text
+/// with no marker in it (it used to read "EDIT_DISABLED: WORKSPACE_READ_ONLY: ...").
+fn refused_by_workspace(error: &CommandError) -> bool {
+    error.code == CommandErrorCode::WorkspaceReadOnly
+        && error.code.is_edit_gate()
+        && !error.message.contains("WORKSPACE_READ_ONLY")
+        && !error.message.contains("EDIT_DISABLED")
 }
 
 #[test]
@@ -104,7 +106,7 @@ fn every_entrypoint_is_refused_in_plan_and_export_except_the_allowlist() {
                     .unwrap_or_else(|| panic!("{label} must be refused in {mode:?}"));
                 assert!(
                     refused_by_workspace(error),
-                    "{label} must carry EDIT_DISABLED + WORKSPACE_READ_ONLY in {mode:?}, got {error:?}"
+                    "{label} must carry WORKSPACE_READ_ONLY in {mode:?}, got {error:?}"
                 );
             }
         }
@@ -155,7 +157,7 @@ fn survey_mode_refuses_nothing() {
     for (label, outcome) in probe_mutation_entrypoints(&state, sid, shid) {
         if let Err(error) = &outcome {
             assert!(
-                !error.contains(WORKSPACE_READ_ONLY_CODE),
+                error.code != CommandErrorCode::WorkspaceReadOnly,
                 "{label} must not be refused by the workspace in Survey, got {error:?}"
             );
         }
@@ -211,11 +213,12 @@ fn the_older_gates_still_come_first_for_the_allowlist() {
         state.update_project_settings("Renamed".to_string(), state.get_config().validation, None);
     let error = settings.error.unwrap_or_default();
     assert!(!settings.success, "refused by the lock gate");
-    assert!(error.starts_with(EDIT_DISABLED_CODE), "got {error:?}");
-    assert!(
-        !error.contains(WORKSPACE_READ_ONLY_CODE),
+    assert_eq!(
+        settings.code,
+        Some(CommandErrorCode::EditDisabled),
         "the lock refusal, not the workspace one: {error:?}"
     );
+    assert!(!error.contains("EDIT_DISABLED"), "no marker: {error:?}");
 }
 
 #[test]

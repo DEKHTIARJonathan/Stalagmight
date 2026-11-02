@@ -51,18 +51,13 @@ pub async fn check_project_integrity<R: Runtime>(app: AppHandle<R>) -> Integrity
 /// remaining }`. The project is left dirty so the user can save the repair.
 /// `remaining > 0` means some issues are detect-only (drifted aligned loop
 /// closures, non-finite geometry) and need manual attention. Rejects with the
-/// coded read-only refusal (`EDIT_DISABLED...`) when editing is blocked, rather
+/// edit gate's refusal (an edit-gate code, #576 C4) when editing is blocked, rather
 /// than resolving with a zero result that reads as a clean repair (#576 D39(a)).
 #[tauri::command]
 pub async fn repair_project_integrity<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<IntegrityRepairResult, CommandError> {
-    pool::run_mutation(app, |state| {
-        state
-            .repair_open_project_integrity()
-            .map_err(CommandError::from)
-    })
-    .await
+    pool::run_mutation(app, AppState::repair_open_project_integrity).await
 }
 
 /// An ignore-list edit's answer: it reports no validation warnings of its own
@@ -150,9 +145,10 @@ pub async fn resolve_warning<R: Runtime>(
             .save_resolved_warning_gated(&warning)
             .map(|()| ignore_list_edited())
             .map_err(|e| {
-                // A read-only rejection (EDIT_DISABLED) is expected control flow on a remote
-                // project opened without the lock, not a persistence failure worth an error log.
-                if !e.starts_with(crate::core::command::EDIT_DISABLED_CODE) {
+                // A read-only rejection (an edit-gate code) is expected control flow on a
+                // remote project opened without the lock, not a persistence failure worth an
+                // error log.
+                if !e.code.is_edit_gate() {
                     tracing::error!(
                         section_id = warning.section_id,
                         shot_id = warning.shot_id,
@@ -162,7 +158,7 @@ pub async fn resolve_warning<R: Runtime>(
                         "Failed to resolve warning"
                     );
                 }
-                CommandError::from(e)
+                e
             })
     })
     .await
@@ -189,9 +185,9 @@ pub async fn unresolve_warning<R: Runtime>(
             .delete_resolved_warning_gated(section_id, shot_id, &warning_code, shot_uuid.as_deref())
             .map(|()| ignore_list_edited())
             .map_err(|e| {
-                // A read-only rejection (EDIT_DISABLED) is expected control flow, not a
+                // A read-only rejection (an edit-gate code) is expected control flow, not a
                 // persistence failure worth an error log.
-                if !e.starts_with(crate::core::command::EDIT_DISABLED_CODE) {
+                if !e.code.is_edit_gate() {
                     tracing::error!(
                         section_id = section_id,
                         shot_id = shot_id,
@@ -201,7 +197,7 @@ pub async fn unresolve_warning<R: Runtime>(
                         "Failed to unresolve warning"
                     );
                 }
-                CommandError::from(e)
+                e
             })
     })
     .await

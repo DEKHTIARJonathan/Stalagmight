@@ -2069,7 +2069,10 @@ impl AppState {
             Some(staged.to_path_buf()),
             true,
         )
-        .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        // [#576 C4] The create's own code and plain message. Its `Display` used to
+        // be JSON, and wrapped in `Io` that reached the user as
+        // "filesystem error: {\"code\":...}".
+        .map_err(|e| local_dto(SpeleoDbError::refused_with(e.code, e.message)))?;
 
         let tml = crate::parsers::tml::parse_tml(tml_path)
             .map_err(|e| local_dto(SpeleoDbError::Parse(e.to_string())))?;

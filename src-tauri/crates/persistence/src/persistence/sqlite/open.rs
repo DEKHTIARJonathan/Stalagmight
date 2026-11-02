@@ -123,7 +123,8 @@ impl Database {
     /// can read as it is opens exactly as it would anywhere, but one the open would
     /// UPGRADE in place - the migration chain, and the pre-upgrade copy it keeps
     /// beside the file - is refused before the first write, with
-    /// `"{UPGRADE_REFUSED_CODE}: {refusal}"`, and left as it was. `refusal` is the
+    /// an [`UpgradeRefused`](super::UpgradeRefused) carrying `refusal`, and left as
+    /// it was. `refusal` is the
     /// user-facing message.
     pub fn open_existing_refusing_upgrade(path: &Path, refusal: &str) -> Result<Self> {
         Self::open_existing_with(path, Some(refusal))

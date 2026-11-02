@@ -2,13 +2,13 @@ use super::project_slot::ProjectSlot;
 use super::save_sidecars::{SaveMode, SaveRequest};
 use super::session_commit::{CommandsHeld, SessionCommit};
 use super::AppState;
-use crate::core::{CommandResult, PersistStack, UndoStack};
+use crate::core::{CommandError, CommandErrorCode, CommandResult, PersistStack, UndoStack};
 use crate::models::{Project, SectionId};
 use crate::persistence::Database;
 use std::path::{Path, PathBuf};
 
 /// What a failed save actually was, once the error chain and the destination
-/// have both been consulted. Each variant except `Other` carries a marker the
+/// have both been consulted. Each variant except `Other` carries a code the
 /// frontend keys on to pick the remediation it shows.
 #[derive(Clone, Copy)]
 enum SaveFailureKind {
@@ -26,13 +26,13 @@ enum SaveFailureKind {
 }
 
 impl SaveFailureKind {
-    /// The marker prefixed onto the `CommandResult` error, or `None` when the
-    /// message stands on its own.
-    fn code(self) -> Option<&'static str> {
+    /// The failure's code (#576 C4), or `None` when the message stands on its
+    /// own (`FAILED` at the boundary).
+    fn code(self) -> Option<CommandErrorCode> {
         match self {
-            Self::PermissionDenied => Some(crate::core::loading::PERMISSION_DENIED_CODE),
-            Self::PathNotFound => Some(crate::core::loading::PATH_NOT_FOUND_CODE),
-            Self::PathTooLong => Some(crate::core::loading::PATH_TOO_LONG_CODE),
+            Self::PermissionDenied => Some(CommandErrorCode::FsPermissionDenied),
+            Self::PathNotFound => Some(CommandErrorCode::FsPathNotFound),
+            Self::PathTooLong => Some(CommandErrorCode::FsPathTooLong),
             Self::Other => None,
         }
     }
@@ -166,7 +166,7 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Build a save-failure `CommandResult`, tagging it with the marker that tells
+/// Build a save-failure `CommandResult`, tagging it with the code that tells
 /// the frontend which remediation to show, and logging the full error chain -
 /// the one place every failing save passes through, so a failure that only ever
 /// happens on a user's machine is still diagnosable from their log (#429).
@@ -182,7 +182,7 @@ pub(super) fn save_failure(context: &str, target: &Path, err: &anyhow::Error) ->
         "Save failed"
     );
     match kind.code() {
-        Some(code) => CommandResult::failure(format!("{code}: {detail}")),
+        Some(code) => CommandResult::refused(CommandError::new(code, detail)),
         None => CommandResult::failure(detail),
     }
 }
@@ -431,9 +431,9 @@ impl AppState {
                 purpose = "never downgrade a project saved by a newer version",
                 "Refused to save a project saved by a newer version of Stalagmight"
             );
-            return Some(CommandResult::failure(format!(
-                "{}: Saving is disabled: {reason}",
-                crate::core::loading::NEWER_FILE_READ_ONLY_CODE
+            return Some(CommandResult::refused(CommandError::new(
+                CommandErrorCode::NewerFileReadOnly,
+                format!("Saving is disabled: {reason}"),
             )));
         }
 
@@ -588,11 +588,13 @@ impl AppState {
                     purpose = "persist edits safely",
                     "Save refused: the destination folder is not reachable"
                 );
-                return CommandResult::failure(format!(
-                    "{}: Cannot save to {}: the folder no longer exists or the drive is not \
-                     connected",
-                    crate::core::loading::PATH_NOT_FOUND_CODE,
-                    save_path.display()
+                return CommandResult::refused(CommandError::new(
+                    CommandErrorCode::FsPathNotFound,
+                    format!(
+                        "Cannot save to {}: the folder no longer exists or the drive is not \
+                         connected",
+                        save_path.display()
+                    ),
                 ));
             }
         }

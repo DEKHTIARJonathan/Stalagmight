@@ -629,7 +629,7 @@ impl AppState {
         // Plan/Export like the project-settings name save.
         if is_open_project {
             if let Err(f) = self.guard_metadata_mutation("Rename project") {
-                return f;
+                return CommandResult::refused(f);
             }
         }
         // [#576 B6-D1] A file a NEWER build saved is read-only whether or not it
@@ -637,7 +637,10 @@ impl AppState {
         // does not know. The open one was refused just above; this is the closed
         // one the recent-projects panel can reach.
         if let Some(version) = db.newer_schema_version() {
-            return super::app_state::newer_file_edit_refusal("Rename project", version);
+            return CommandResult::refused(super::app_state::newer_file_edit_refusal(
+                "Rename project",
+                version,
+            ));
         }
 
         if let Err(e) = db.save_project_name(trimmed) {

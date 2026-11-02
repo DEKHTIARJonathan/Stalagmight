@@ -40,21 +40,20 @@ pub struct SpeleoManagedFile {
     pub can_open_remote: bool,
 }
 
-/// Error type for load/create operations with guaranteed valid JSON in Display impl.
+/// Error type for load/create operations.
 ///
 /// [#576 C4] No longer an IPC type: the load commands convert it into a
-/// [`crate::core::CommandError`] (`From<LoadError>`), which carries the same code.
-#[derive(Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
+/// [`crate::core::CommandError`] (`From<LoadError>`), which carries the same code
+/// and payloads. Its `Display` is the plain `message`: the JSON rendering it used
+/// to have existed for a string-typed IPC error the frontend parsed, and inside
+/// another error's message (a SpeleoDB reload failure) it put raw JSON in front of
+/// the user.
+#[derive(Debug, Clone)]
 pub struct LoadError {
     pub code: CommandErrorCode,
     pub message: String,
     pub details: Option<String>,
-    /// Set only by [`Self::speleodb_managed`]. The manual `Display` fallback
-    /// below drops this payload, which is acceptable: it only runs if
-    /// `serde_json::to_string` fails (it cannot for these fields), and the
-    /// degradation is the generic error UI instead of the managed-file prompt.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Set only by [`Self::speleodb_managed`].
     pub speleodb_managed: Option<SpeleoManagedFile>,
 }
 
@@ -134,63 +133,6 @@ impl LoadError {
         err
     }
 }
-
-/// Prefix stamped onto a save `CommandResult` error when the failure is a
-/// filesystem permission denial, so the frontend can show folder-access
-/// guidance instead of a misleading "corrupted"/raw-OS message.
-pub const PERMISSION_DENIED_CODE: &str = "FS_PERMISSION_DENIED";
-
-/// Prefix stamped onto a save `CommandResult` error when the destination is not
-/// reachable at all - the folder was deleted or renamed, or the drive it lives
-/// on is not connected. Distinct from [`PERMISSION_DENIED_CODE`] because the two
-/// have no remediation in common: no amount of granting folder access brings
-/// back a `Z:` that is not plugged in (#429).
-pub const PATH_NOT_FOUND_CODE: &str = "FS_PATH_NOT_FOUND";
-
-/// Prefix stamped onto a save `CommandResult` error when the destination path is
-/// longer than the OS will open. SQLite's win32 VFS opens files through a plain
-/// `CreateFileW` bounded by `MAX_PATH`, while Rust's own std calls go through
-/// `\\?\` verbatim paths and are not - so an over-long destination fails to open
-/// while its parent directory stats perfectly fine, which is exactly the shape
-/// that used to be answered with macOS Privacy & Security steps (#429).
-pub const PATH_TOO_LONG_CODE: &str = "FS_PATH_TOO_LONG";
-
-/// Prefix stamped onto a save `CommandResult` error when the project's ignore
-/// list could not be read, so the save was refused rather than rebuilding the
-/// file without it (#517).
-///
-/// It needs a marker of its own because the frontend's failure router
-/// (`surfaceSaveFailure`) sends any UNMARKED failure to Review & Repair
-/// whenever `integritySaveBlocked` is set - and Review & Repair cannot fix a
-/// broken `resolved_warnings` table, so on a project with both problems this
-/// refusal would never reach a surface at all.
-pub const IGNORES_UNREADABLE_CODE: &str = "IGNORES_UNREADABLE";
-
-/// Prefix stamped onto a save `CommandResult` error when the open project's
-/// SpeleoDB link could not be read and the save would rewrite the file without it
-/// (#576 B35(b), A3). Same routing reason as [`IGNORES_UNREADABLE_CODE`].
-pub const SPELEODB_LINK_UNREADABLE_CODE: &str = "SPELEODB_LINK_UNREADABLE";
-
-/// Prefix stamped onto a save `CommandResult` error when the open project's
-/// SpeleoDB undo-history markers (`speleo_undo_chain` / `speleo_undo_watermark`,
-/// #303) could not be read (#576 A3). Same routing reason as
-/// [`IGNORES_UNREADABLE_CODE`].
-pub const UNDO_MARKERS_UNREADABLE_CODE: &str = "UNDO_MARKERS_UNREADABLE";
-
-/// Prefix stamped onto a save `CommandResult` error when stored per-project
-/// settings (validation thresholds, entrance elevation, default north reference)
-/// could not be read when the project was opened (#576 B15): the session holds
-/// defaults in their place, and any save would write those over the stored
-/// values. Every save is refused until the project is reopened.
-pub const PROJECT_SETTINGS_UNREADABLE_CODE: &str = "PROJECT_SETTINGS_UNREADABLE";
-
-/// Prefix stamped onto a save `CommandResult` error when the open project was
-/// saved by a NEWER Stalagmight and is open read-only (#576 B6-D1): saving would
-/// rewrite it at this build's older schema and drop whatever the newer one
-/// stored. A marker of its own for the same routing reason as
-/// [`IGNORES_UNREADABLE_CODE`]: the frontend turns it into a read-only notice,
-/// not an error dialog, and never into Review & Repair.
-pub const NEWER_FILE_READ_ONLY_CODE: &str = "NEWER_FILE_READ_ONLY";
 
 /// How much of an underlying error may be quoted into a user-facing message.
 ///
@@ -321,52 +263,9 @@ pub(crate) fn error_chain(err: &anyhow::Error) -> String {
         .join(" <- ")
 }
 
-/// Escape a string for JSON, handling quotes, backslashes, and control characters.
-fn escape_json_string(s: &str) -> String {
-    let mut escaped = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            c if c.is_control() => {
-                // Escape other control characters as \uXXXX
-                use std::fmt::Write as _;
-                let _ = write!(escaped, "\\u{:04x}", c as u32);
-            }
-            c => escaped.push(c),
-        }
-    }
-    escaped
-}
-
 impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // ALWAYS produce valid JSON - use serde_json with fallback
-        if let Ok(json) = serde_json::to_string(self) {
-            write!(f, "{json}")
-        } else {
-            // Fallback: manually construct valid JSON with fully escaped strings
-            let escaped_code = escape_json_string(self.code.as_str());
-            let escaped_msg = escape_json_string(&self.message);
-            match &self.details {
-                Some(details) => {
-                    let escaped_details = escape_json_string(details);
-                    write!(
-                        f,
-                        r#"{{"code":"{escaped_code}","message":"{escaped_msg}","details":"{escaped_details}"}}"#
-                    )
-                }
-                None => {
-                    write!(
-                        f,
-                        r#"{{"code":"{escaped_code}","message":"{escaped_msg}","details":null}}"#
-                    )
-                }
-            }
-        }
+        f.write_str(&self.message)
     }
 }
 
@@ -998,38 +897,22 @@ pub struct CreateProjectFullResult {
 mod tests {
     use super::*;
 
+    /// [#576 C4] `Display` is the message as written: quotes and control
+    /// characters pass through, and neither the code nor a JSON wrapper is added
+    /// (a SpeleoDB reload failure quotes it inside its own message).
     #[test]
-    fn test_load_error_display_produces_valid_json() {
-        let error = LoadError::new(CommandErrorCode::Failed, "Test message");
-        let display = error.to_string();
-
-        // Should be valid JSON
-        let parsed: serde_json::Value =
-            serde_json::from_str(&display).expect("Display should produce valid JSON");
-        assert_eq!(parsed["code"], "FAILED");
-        assert_eq!(parsed["message"], "Test message");
-    }
-
-    #[test]
-    fn test_load_error_display_escapes_quotes() {
-        let error = LoadError::new(CommandErrorCode::Failed, r#"Message with "quotes""#);
-        let display = error.to_string();
-
-        // Should be valid JSON even with quotes in message
-        let parsed: serde_json::Value =
-            serde_json::from_str(&display).expect("Display should produce valid JSON");
-        assert_eq!(parsed["message"], r#"Message with "quotes""#);
-    }
-
-    #[test]
-    fn test_load_error_display_escapes_control_chars() {
-        let error = LoadError::new(CommandErrorCode::Failed, "Line1\nLine2\tTabbed");
-        let display = error.to_string();
-
-        // Should be valid JSON even with control characters
-        let parsed: serde_json::Value =
-            serde_json::from_str(&display).expect("Display should produce valid JSON");
-        assert_eq!(parsed["message"], "Line1\nLine2\tTabbed");
+    fn test_load_error_display_is_the_plain_message() {
+        for message in [
+            "Test message",
+            r#"Message with "quotes""#,
+            "Line1\nLine2\tTabbed",
+        ] {
+            let error = LoadError::new(CommandErrorCode::Database, message);
+            assert_eq!(error.to_string(), message);
+            assert!(!error.to_string().contains("DATABASE"));
+        }
+        let corrupt = LoadError::corrupt("broken", "/tmp/a.stalx");
+        assert_eq!(corrupt.to_string(), "broken", "details are not in the text");
     }
 
     #[test]
@@ -1049,8 +932,11 @@ mod tests {
         );
     }
 
+    /// The managed-file prompt's payload reaches the IPC error the open rejects
+    /// with (`From<LoadError> for CommandError`), and an error without it omits
+    /// the key entirely, so the frontend's `speleodb_managed` check is reliable.
     #[test]
-    fn speleodb_managed_carries_the_link_through_the_json_display() {
+    fn speleodb_managed_carries_the_link_to_the_ipc_error() {
         let err = LoadError::speleodb_managed(SpeleoManagedFile {
             path: "/tmp/foreign.stalx".to_string(),
             project_id: "11111111-2222-3333-4444-555555555555".to_string(),
@@ -1058,29 +944,25 @@ mod tests {
             endpoint: "https://sdb.example".to_string(),
             can_open_remote: true,
         });
-        let parsed: serde_json::Value =
-            serde_json::from_str(&err.to_string()).expect("Display should produce valid JSON");
+        let parsed = serde_json::to_value(crate::core::CommandError::from(err))
+            .expect("the IPC error serializes");
         assert_eq!(parsed["code"], "SPELEODB_MANAGED");
-        let managed = &parsed["speleodbManaged"];
+        let managed = &parsed["speleodb_managed"];
         assert_eq!(managed["path"], "/tmp/foreign.stalx");
         assert_eq!(managed["projectId"], "11111111-2222-3333-4444-555555555555");
         assert_eq!(managed["projectName"], "Cave");
         assert_eq!(managed["endpoint"], "https://sdb.example");
         assert_eq!(managed["canOpenRemote"], true);
-        // Errors WITHOUT the payload must omit the key entirely (skip_serializing_if),
-        // so the frontend's `error.speleodbManaged` truthiness check is reliable.
-        let plain: serde_json::Value =
-            serde_json::from_str(&LoadError::internal("x").to_string()).expect("valid JSON");
-        assert!(plain.get("speleodbManaged").is_none());
-    }
-
-    #[test]
-    fn test_escape_json_string() {
-        assert_eq!(escape_json_string("hello"), "hello");
-        assert_eq!(escape_json_string(r#"say "hi""#), r#"say \"hi\""#);
-        assert_eq!(escape_json_string("back\\slash"), "back\\\\slash");
-        assert_eq!(escape_json_string("line\nbreak"), "line\\nbreak");
-        assert_eq!(escape_json_string("tab\there"), "tab\\there");
+        let plain = serde_json::to_value(crate::core::CommandError::from(LoadError::internal("x")))
+            .expect("the IPC error serializes");
+        assert!(plain.get("speleodb_managed").is_none());
+        let corrupt = serde_json::to_value(crate::core::CommandError::from(LoadError::corrupt(
+            "broken",
+            "/tmp/a.stalx",
+        )))
+        .expect("the IPC error serializes");
+        assert_eq!(corrupt["code"], "CORRUPT");
+        assert_eq!(corrupt["details"], "/tmp/a.stalx");
     }
 
     #[test]

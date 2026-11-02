@@ -154,7 +154,7 @@ impl AppState {
         // Read-only edit gate (#191, D-B6): a TML create+merge mutates the
         // project, so it is gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Import section and merge") {
-            return f;
+            return CommandResult::refused(f);
         }
         tracing::info!(
             purpose = "keep undo atomic for import merge",
@@ -376,7 +376,7 @@ impl AppState {
         // it is gated on a read-only remote project. (Empty-import early return
         // below is a no-op, but gating first keeps the chokepoint uniform.)
         if let Err(f) = self.guard_mutation("Import sections") {
-            return f;
+            return CommandResult::refused(f);
         }
 
         if sections.is_empty() {

@@ -91,6 +91,15 @@ mod config_patch_tests;
 mod crash_property_tests;
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              messages are the evidence a run captures"
+)]
+mod error_marker_tests;
+#[cfg(test)]
+#[expect(
     clippy::panic,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, and the printed \

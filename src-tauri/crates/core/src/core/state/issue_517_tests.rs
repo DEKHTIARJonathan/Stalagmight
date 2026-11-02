@@ -25,7 +25,7 @@
 use tempfile::TempDir;
 
 use super::AppState;
-use crate::core::loading::IGNORES_UNREADABLE_CODE;
+use crate::models::CommandErrorCode;
 use crate::models::{Project, SectionData, ShotData};
 use crate::persistence::Database;
 
@@ -486,11 +486,12 @@ fn a_save_is_refused_when_the_ignore_list_cannot_be_read_at_all() {
         "a save that cannot read the ignore list it is about to rewrite must be refused"
     );
     let error = saved.error.unwrap_or_default();
-    // The marker is what keeps the refusal out of the Review & Repair route,
+    // The code is what keeps the refusal out of the Review & Repair route,
     // which cannot fix this (`surfaceSaveFailure`).
     assert!(
-        error.starts_with(IGNORES_UNREADABLE_CODE),
-        "the refusal must carry its routing marker, got: {error}"
+        saved.code == Some(CommandErrorCode::IgnoresUnreadable)
+            && !error.contains("IGNORES_UNREADABLE"),
+        "the refusal must carry its routing code, and no marker in its text, got: {error}"
     );
     // ...and it must be the STRUCTURAL refusal, naming the missing column - not
     // a row-level complaint, which no longer refuses anything.
@@ -554,8 +555,9 @@ fn a_save_refuses_while_the_ignore_list_cannot_be_reached() {
     );
     let error = saved.error.unwrap_or_default();
     assert!(
-        error.starts_with(IGNORES_UNREADABLE_CODE),
-        "the refusal must carry its routing marker, got: {error}"
+        saved.code == Some(CommandErrorCode::IgnoresUnreadable)
+            && !error.contains("IGNORES_UNREADABLE"),
+        "the refusal must carry its routing code, and no marker in its text, got: {error}"
     );
     assert_eq!(
         raw_row_count(&path),

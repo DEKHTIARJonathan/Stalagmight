@@ -300,7 +300,7 @@ impl AppState {
         // (the server would 403 the lockless upload). The FE offers "Reconnect to
         // sync" (Start editing) instead; guard here as a backstop.
         if self.force_editing() {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "reconnect to acquire the write lock before pushing".to_owned(),
             )));
         }
@@ -478,7 +478,7 @@ impl AppState {
         // #213: a force-editor holds no lock, so a push would 403. Refuse with the
         // same reconnect hint as Done (the FE never offers push in force-edit).
         if self.force_editing() {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "reconnect to acquire the write lock before pushing".to_owned(),
             )));
         }
@@ -546,7 +546,7 @@ impl AppState {
         acknowledged: bool,
     ) -> Result<(), SpeleoErrorDto> {
         if link.has_unpushed_edits && self.speleodb_unwound_from().is_some() && !acknowledged {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "uploading an older unwound revision must be confirmed".to_owned(),
             )));
         }
@@ -620,7 +620,7 @@ impl AppState {
         // Plan and Export workspaces, before any network call (as Restore, RV2-R-15).
         self.speleodb_guard_workspace("Discard changes")?;
         if !acknowledged {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "discarding the local copy destroys un-pushed work and must be confirmed"
                     .to_owned(),
             )));
@@ -906,7 +906,7 @@ impl AppState {
         // gate Done/Push need stays closed - and kept here, at the one upload
         // every push funnels through, so it stays that way.
         if let Some(reason) = self.newer_file_refusal() {
-            return Err(local_dto(SpeleoDbError::Refused(reason)));
+            return Err(local_dto(super::speleodb::newer_file_refused(reason)));
         }
         let project_id = &link.project_id;
 
@@ -1032,10 +1032,11 @@ impl AppState {
             );
         }
         if !flushed.success {
-            return Err(local_dto(SpeleoDbError::Refused(
-                flushed
-                    .error
-                    .unwrap_or_else(|| "the project could not be saved before the push".to_owned()),
+            // [#576 C4] The save's own refusal, its code included (a coded save
+            // refusal routes as that refusal; an unclassified one stays fatal).
+            return Err(local_dto(super::speleodb::refused_by_save(
+                flushed,
+                "the project could not be saved before the push",
             )));
         }
         Ok(flushed.warnings)
@@ -1058,7 +1059,7 @@ impl AppState {
         // anything is read or sent: a half-written edit must not become every
         // collaborator's (`refuse_after_crash`). Done and Push both come through here.
         self.refuse_after_crash("Pushing to SpeleoDB")
-            .map_err(|reason| local_dto(SpeleoDbError::Refused(reason)))?;
+            .map_err(|refusal| local_dto(super::speleodb::refused_by(refusal)))?;
         let project_id = &link.project_id;
         let commit_message = message
             .map(|m| m.trim().to_owned())

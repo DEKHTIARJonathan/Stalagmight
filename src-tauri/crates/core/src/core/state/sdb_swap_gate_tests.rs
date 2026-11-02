@@ -6,7 +6,7 @@
 
 use super::speleodb::{editing_fixture, recording_stub, HELD_BY_SAME_ACCOUNT_AT_BASE_BODY};
 use super::WorkspaceMode;
-use crate::core::command::{EDIT_DISABLED_CODE, WORKSPACE_READ_ONLY_CODE};
+use crate::models::CommandErrorCode;
 
 #[test]
 fn take_remote_and_discard_are_refused_in_plan_and_export() {
@@ -17,21 +17,18 @@ fn take_remote_and_discard_are_refused_in_plan_and_export() {
             let (_temp, state) = editing_fixture(&base);
             state.set_workspace_mode(mode);
 
-            let message = match verb {
-                "Take remote" => state.speleodb_take_remote().err().map(|e| e.message),
-                _ => state
-                    .speleodb_discard_changes(true, true)
-                    .err()
-                    .map(|e| e.message),
+            let refusal = match verb {
+                "Take remote" => state.speleodb_take_remote().err(),
+                _ => state.speleodb_discard_changes(true, true).err(),
             };
 
             let requests = seen.lock().unwrap().len();
-            let coded = message.as_deref().is_some_and(|m| {
-                m.starts_with(&format!(
-                    "{EDIT_DISABLED_CODE}: {WORKSPACE_READ_ONLY_CODE}:"
-                ))
+            // [#576 C4] The workspace gate's own code, and no marker in the text.
+            let coded = refusal.as_ref().is_some_and(|e| {
+                e.code == CommandErrorCode::WorkspaceReadOnly
+                    && !e.message.contains("WORKSPACE_READ_ONLY")
             });
-            println!("{verb} in {mode:?} -> refusal {message:?}; requests sent: {requests}");
+            println!("{verb} in {mode:?} -> refusal {refusal:?}; requests sent: {requests}");
             refused_everywhere &= coded && requests == 0 && state.edit_enabled();
         }
     }

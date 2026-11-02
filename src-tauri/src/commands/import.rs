@@ -9,7 +9,7 @@ use crate::commands::import_runner::{
 };
 use crate::commands::pool;
 use crate::core::state::{AppState, VirtualShotMode};
-use crate::core::{CommandError, CommandResult, ImportOutcome};
+use crate::core::{CommandError, CommandErrorCode, CommandResult, ImportOutcome};
 use crate::models::placement_suggest::{
     suggest_all_placements, suggest_placements, CrossSectionSuggestion, ExistingSection,
     ImportSectionForSuggestion, OrphanPlacementSuggestion, PlacementSuggestion,
@@ -211,15 +211,19 @@ fn merge_deferred_save_outcome(
         "Deferred-save resolution failed after import"
     );
     let raw = saved.error.unwrap_or_else(|| "unknown error".to_string());
-    // Don't leak the internal classification markers into the user-facing warning.
-    let detail = if raw.starts_with(crate::core::loading::PERMISSION_DENIED_CODE) {
-        "permission denied (check folder access in Privacy & Security)".to_string()
-    } else if raw.starts_with(crate::core::loading::PATH_NOT_FOUND_CODE) {
-        "the folder no longer exists or the drive is not connected".to_string()
-    } else if raw.starts_with(crate::core::loading::PATH_TOO_LONG_CODE) {
-        "the path is too long for the system to open".to_string()
-    } else {
-        raw
+    // [#576 C4] Routed on the save's code: a classified filesystem failure gets
+    // the plain-words remediation, anything else its own message.
+    let detail = match saved.code {
+        Some(CommandErrorCode::FsPermissionDenied) => {
+            "permission denied (check folder access in Privacy & Security)".to_string()
+        }
+        Some(CommandErrorCode::FsPathNotFound) => {
+            "the folder no longer exists or the drive is not connected".to_string()
+        }
+        Some(CommandErrorCode::FsPathTooLong) => {
+            "the path is too long for the system to open".to_string()
+        }
+        _ => raw,
     };
     import_result.with_warning(&format!(
         "Imported, but could not save the new project to disk: {detail}. \

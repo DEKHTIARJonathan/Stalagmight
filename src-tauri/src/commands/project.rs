@@ -218,7 +218,7 @@ pub async fn get_station_distances_from(
         state.inner().distance_field_checked(from.as_ref())
     })
     .await;
-    settle_blocking("the distance field", joined).map_err(CommandError::from)
+    settle_blocking("the distance field", joined)
 }
 
 /// Along-cave-line distance between two ruler endpoints (#26): the shortest path
@@ -240,7 +240,7 @@ pub async fn get_along_line_distance(
         state.inner().along_line_between_checked(a, b)
     })
     .await;
-    settle_blocking("the along-line distance", joined).map_err(CommandError::from)
+    settle_blocking("the along-line distance", joined)
 }
 
 /// Get closure-adjusted station coordinates for the current project.
@@ -270,23 +270,24 @@ pub async fn get_adjusted_stations(
         state.inner().adjusted_stations_checked()
     })
     .await;
-    settle_blocking("the closure-adjusted solve", joined)
-        .map(Option::unwrap_or_default)
-        .map_err(CommandError::from)
+    settle_blocking("the closure-adjusted solve", joined).map(Option::unwrap_or_default)
 }
 
 /// [#576 C7] A blocking query's outcome as the frontend receives it: the query's own
 /// answer, or - when the task panicked or was cancelled (`joined` is `Err`) - a
 /// rejection naming `what` failed. Never an empty answer standing in for a failure.
+/// [#576 C4] The query's own failure is `FAILED`; a crashed task is
+/// `INTERNAL_ERROR`, as on the shared pool.
 pub(crate) fn settle_blocking<T, E: std::fmt::Display>(
     what: &str,
     joined: Result<Result<T, String>, E>,
-) -> Result<T, String> {
+) -> Result<T, CommandError> {
     match joined {
-        Ok(answer) => answer.map_err(|reason| format!("Could not compute {what}: {reason}")),
-        Err(crash) => Err(format!(
+        Ok(answer) => answer
+            .map_err(|reason| CommandError::failed(format!("Could not compute {what}: {reason}"))),
+        Err(crash) => Err(CommandError::internal(format!(
             "Could not compute {what}: the computation failed ({crash})"
-        )),
+        ))),
     }
 }
 

@@ -203,7 +203,7 @@ impl AppState {
         // (docs/app-modes.md says why). The north reference is not (NF-W3-2-PLAN):
         // its own workspace check is below, once it is known to change.
         if let Err(f) = self.guard_metadata_mutation("Update project settings") {
-            return f;
+            return CommandResult::refused(f);
         }
         let survey_edits_allowed = !self.workspace_mode().is_read_only();
         let before_snapshot = self.capture_project_snapshot().ok();
@@ -237,7 +237,7 @@ impl AppState {
             // Plan or Export the whole save is refused, before anything is applied.
             if reference_changed {
                 if let Err(f) = self.guard_workspace("Change the default north reference") {
-                    return f;
+                    return CommandResult::refused(f);
                 }
             }
             // [#576 RV5-F4-2] Where each anchoring datum is, measured BEFORE the
@@ -314,7 +314,7 @@ impl AppState {
         // update_project_settings.
         let _cmd_guard = self.command_lock.lock();
         if let Err(f) = self.guard_mutation("Set entrance elevation") {
-            return f;
+            return CommandResult::refused(f);
         }
         let before_snapshot = self.capture_project_snapshot().ok();
         {

@@ -138,9 +138,7 @@ pub async fn fetch_tile(
     y: u32,
     x: u32,
 ) -> Result<Vec<u8>, CommandError> {
-    fetch_tile_impl(Some(&app), state.inner(), provider, z, y, x)
-        .await
-        .map_err(CommandError::from)
+    fetch_tile_impl(Some(&app), state.inner(), provider, z, y, x).await
 }
 
 /// `app` carries the telemetry collector, and is `None` only where there is no
@@ -155,7 +153,7 @@ pub(crate) async fn fetch_tile_impl(
     z: u32,
     y: u32,
     x: u32,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, CommandError> {
     use crate::tile_fetch_impl;
 
     let tile_cache = state.tile_cache();
@@ -179,9 +177,10 @@ pub(crate) async fn fetch_tile_impl(
         )
     })
     .await
-    .map_err(|e| format!("Tile fetch task failed: {e}"))?;
+    // [#576 C4] A crashed task is INTERNAL_ERROR, as on the shared pool.
+    .map_err(|e| CommandError::internal(format!("Tile fetch task failed: {e}")))?;
 
-    let (data, serve_source) = result?;
+    let (data, serve_source) = result.map_err(CommandError::failed)?;
 
     // One event per SERVED tile, tagged by where its bytes came from - the same
     // three buckets the desktop protocol handler emits. Errors are not counted,
@@ -224,7 +223,7 @@ pub async fn get_tile_attribution(
         crate::tile_attribution::get_attribution(&provider)
     })
     .await
-    .map_err(|e| CommandError::failed(format!("Attribution task failed: {e}")))
+    .map_err(|e| CommandError::internal(format!("Attribution task failed: {e}")))
 }
 
 /// Tile fetch statistics returned by the get_tile_fetch_stats command.

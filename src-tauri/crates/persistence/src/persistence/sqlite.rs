@@ -98,20 +98,55 @@ const SCHEMA_VERSION: i32 = 18;
 /// release (v0.0.3) shipped. A file whose `PRAGMA user_version` - or, when it
 /// carries no stamp, whose project row - is below this is a pre-release test file
 /// (no schema-1 build ever wrote the stamp) and is refused with
-/// [`PRE_RELEASE_FILE_CODE`] rather than migrated: see docs/saving.md "Schema
+/// [`PreReleaseFile`] rather than migrated: see docs/saving.md "Schema
 /// version and pre-release files".
 const OLDEST_SUPPORTED_SCHEMA_VERSION: i32 = 2;
 
-/// [#576 B1-D1] Prefix of the error an open returns for a file older than
+/// [#576 B1-D1] The error an open returns for a file older than
 /// [`OLDEST_SUPPORTED_SCHEMA_VERSION`], so the load path can give it its own
-/// error code instead of a generic database failure.
-pub const PRE_RELEASE_FILE_CODE: &str = "PRE_RELEASE_FILE";
+/// error code (`PRE_RELEASE_FILE`) instead of a generic database failure. [#576 C4]
+/// A type the load path downcasts to, not a prefix on the message: its `Display`
+/// is the sentence the user is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreReleaseFile {
+    /// The file format the file carries.
+    pub version: i32,
+}
 
-/// [#576 RV4-R-M3-OPEN] Prefix of the error [`Database::open_existing_refusing_upgrade`]
+impl std::fmt::Display for PreReleaseFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "This project was saved by a pre-release version of Stalagmight (file format {}) \
+             and cannot be opened by this version. Create a new project and import it again \
+             from the original survey files (for example the .dmp, .tml, .mak or .wpj it came \
+             from).",
+            self.version
+        )
+    }
+}
+
+impl std::error::Error for PreReleaseFile {}
+
+/// [#576 RV4-R-M3-OPEN] The error [`Database::open_existing_refusing_upgrade`]
 /// returns for a file the open would have upgraded in place: the caller said the
 /// file sits where nothing may be written, so the upgrade (and the pre-upgrade copy
-/// it writes beside the file) is refused and the file is left as it was.
-pub const UPGRADE_REFUSED_CODE: &str = "UPGRADE_REFUSED";
+/// it writes beside the file) is refused and the file is left as it was. [#576 C4]
+/// A type the load path downcasts to (its code `UPGRADE_REFUSED`), not a prefix on
+/// the message: its `Display` is the caller's user-facing refusal, as given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpgradeRefused {
+    /// The user-facing message the caller handed the open.
+    pub refusal: String,
+}
+
+impl std::fmt::Display for UpgradeRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.refusal)
+    }
+}
+
+impl std::error::Error for UpgradeRefused {}
 
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///

@@ -175,7 +175,7 @@ impl AppState {
         // fine; only an explicit empty/whitespace `Some` is refused. (The FE also gates
         // this, but the backend must not depend on it.)
         if patch.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "a project name cannot be empty".to_owned(),
             )));
         }
@@ -299,10 +299,10 @@ impl AppState {
         //  - [#576 B6-D1] a project a newer build saved: publishing saves it into
         //    the cache, and that save is refused - after the create POST.
         if let Some(reason) = self.newer_file_refusal() {
-            return Err(local_dto(SpeleoDbError::Refused(reason)));
+            return Err(local_dto(super::speleodb::newer_file_refused(reason)));
         }
         if params.name.trim().is_empty() {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "a project name is required to publish".to_owned(),
             )));
         }
@@ -310,24 +310,24 @@ impl AppState {
         // so a blank one 400s the create. Reject it up front (the FE gates on it too)
         // for a clear message instead of a raw server validation error.
         if params.description.trim().is_empty() {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "a project description is required to publish".to_owned(),
             )));
         }
         if self.speleodb_open_link().is_ok() {
-            return Err(local_dto(SpeleoDbError::Refused(
+            return Err(local_dto(SpeleoDbError::refused(
                 "this project is already linked to SpeleoDB".to_owned(),
             )));
         }
         {
             let proj_guard = self.project.lock();
             let project = proj_guard.as_ref().ok_or_else(|| {
-                local_dto(SpeleoDbError::Refused(
+                local_dto(SpeleoDbError::refused(
                     "no project is open to publish".to_owned(),
                 ))
             })?;
             if project.has_unresolvable_cross_references() {
-                return Err(local_dto(SpeleoDbError::Refused(
+                return Err(local_dto(SpeleoDbError::refused(
                     "can't publish: the project has unresolved cross-references (use Repair first)"
                         .to_owned(),
                 )));
@@ -508,9 +508,10 @@ impl AppState {
             // into the SpeleoDB cache: <marker>", hiding a coded save refusal (such as
             // the unread-settings marker) behind a disk-error prefix (#576 RV4-R-NITS
             // S-9).
-            return Err(SpeleoDbError::Refused(save.error.unwrap_or_else(|| {
-                "the project could not be written into the SpeleoDB cache".to_owned()
-            })));
+            return Err(super::speleodb::refused_by_save(
+                save,
+                "the project could not be written into the SpeleoDB cache",
+            ));
         }
         let db_guard = self.database.lock();
         let db = db_guard.as_ref().ok_or_else(|| {

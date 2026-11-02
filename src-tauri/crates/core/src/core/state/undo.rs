@@ -1,4 +1,7 @@
-use crate::core::{Command, CommandResult, ReversedSection, UndoData, UndoEntry};
+use crate::core::{
+    history_step_failure, Command, CommandError, CommandErrorCode, CommandResult, ReversedSection,
+    UndoData, UndoEntry,
+};
 use crate::models::{SectionId, SectionIdentity, SectionUpdates, Shot, ShotId, ShotUpdates};
 
 use super::AppState;
@@ -11,6 +14,44 @@ enum HistoryMove {
     Redo,
 }
 
+impl HistoryMove {
+    /// [#576 C4] The refusal of a step with nothing to take: nothing ran.
+    fn nothing_to_step(self) -> CommandResult {
+        CommandResult::refused(match self {
+            Self::Undo => CommandError::new(CommandErrorCode::NothingToUndo, "Nothing to undo"),
+            Self::Redo => CommandError::new(CommandErrorCode::NothingToRedo, "Nothing to redo"),
+        })
+    }
+}
+
+/// [#576 C4] A history step that RAN and failed: `HISTORY_STEP_FAILED`, step
+/// `failed_step` of `total_steps`, with `message` as the display text. The
+/// project changed (the steps before it landed, and a failing step can mutate
+/// before it reports), which is what the code tells the frontend.
+fn history_step_failed(message: String, failed_step: usize, total_steps: usize) -> CommandResult {
+    let mut err = CommandError::new(CommandErrorCode::HistoryStepFailed, message);
+    err.payload.history_step = Some(history_step_failure(failed_step, total_steps));
+    CommandResult::refused(err)
+}
+
+/// [#576 C4] A single undo/redo's answer: a failure of the step it ran is step 1
+/// of 1 (`HISTORY_STEP_FAILED`), its message unchanged. An empty stack found by
+/// the step itself stays `NOTHING_TO_*`: nothing ran.
+fn single_step_answer(result: CommandResult) -> CommandResult {
+    let nothing_ran = matches!(
+        result.code,
+        Some(CommandErrorCode::NothingToUndo | CommandErrorCode::NothingToRedo)
+    );
+    if result.success || nothing_ran {
+        return result;
+    }
+    history_step_failed(
+        result.error.unwrap_or_else(|| "Unknown error".to_string()),
+        1,
+        1,
+    )
+}
+
 impl AppState {
     // === Project operations ===
 
@@ -21,12 +62,12 @@ impl AppState {
         // [#576 A11] Refused rather than recovered after an internal crash: the
         // inverse would land on what the crash left (`refuse_after_crash`).
         if let Err(refused) = self.refuse_after_crash("Undo") {
-            return CommandResult::failure(refused);
+            return CommandResult::refused(refused);
         }
         // Read-only edit gate (#191, D-B6): you cannot mutate a read-only remote
         // project even to revert. Gated unconditionally.
         if let Err(f) = self.guard_mutation("Undo") {
-            return f;
+            return CommandResult::refused(f);
         }
         self.invalidate_adjusted_cache();
         // [#576 A18(a) / NF-AN3-1] The index check `undo_to` makes, before anything can
@@ -55,7 +96,7 @@ impl AppState {
         // sub-tolerance offset change is below realign_merges' threshold, so the
         // `before` snapshot's offsets are preserved exactly there.)
         self.reconcile_geometry();
-        result
+        single_step_answer(result)
     }
 
     /// Undo implementation (caller must hold command_lock)
@@ -65,7 +106,7 @@ impl AppState {
             let mut stack = self.undo_stack.lock();
 
             let Some(e) = stack.pop_undo() else {
-                return CommandResult::failure("Nothing to undo".to_string());
+                return HistoryMove::Undo.nothing_to_step();
             };
             e
         };
@@ -574,11 +615,11 @@ impl AppState {
         // [#576 A11] Refused rather than recovered after an internal crash: the
         // inverse would land on what the crash left (`refuse_after_crash`).
         if let Err(refused) = self.refuse_after_crash("Redo") {
-            return CommandResult::failure(refused);
+            return CommandResult::refused(refused);
         }
         // Read-only edit gate (#191, D-B6): gated unconditionally (see undo()).
         if let Err(f) = self.guard_mutation("Redo") {
-            return f;
+            return CommandResult::refused(f);
         }
         self.invalidate_adjusted_cache();
         // [#576 A18(a) / NF-AN3-1] As in `undo()`: past the empty-stack check, a failed
@@ -592,7 +633,7 @@ impl AppState {
         // local-only.
         self.mark_remote_dirty();
         self.reconcile_geometry();
-        result
+        single_step_answer(result)
     }
 
     /// [#576 A18(a)] The "is there a step to take" check single-step undo/redo make
@@ -600,18 +641,19 @@ impl AppState {
     ///
     /// It draws the line the dirty bit needs: a failure HERE changed nothing, while a
     /// failure after it may have (the arms report only after running their inverse),
-    /// so only failures past it mark the remote copy un-pushed. Same messages the
-    /// inner steps use, so callers see no difference on an empty stack.
+    /// so only failures past it mark the remote copy un-pushed. Same refusal the
+    /// inner steps make (`NOTHING_TO_UNDO` / `NOTHING_TO_REDO`), so callers see no
+    /// difference on an empty stack.
     fn history_step_available(&self, direction: HistoryMove) -> Result<(), CommandResult> {
         let stack = self.undo_stack.lock();
-        match direction {
-            HistoryMove::Undo if !stack.can_undo() => {
-                Err(CommandResult::failure("Nothing to undo".to_string()))
-            }
-            HistoryMove::Redo if !stack.can_redo() => {
-                Err(CommandResult::failure("Nothing to redo".to_string()))
-            }
-            HistoryMove::Undo | HistoryMove::Redo => Ok(()),
+        let available = match direction {
+            HistoryMove::Undo => stack.can_undo(),
+            HistoryMove::Redo => stack.can_redo(),
+        };
+        if available {
+            Ok(())
+        } else {
+            Err(direction.nothing_to_step())
         }
     }
 
@@ -622,7 +664,7 @@ impl AppState {
             let mut stack = self.undo_stack.lock();
 
             let Some(e) = stack.pop_redo() else {
-                return CommandResult::failure("Nothing to redo".to_string());
+                return HistoryMove::Redo.nothing_to_step();
             };
             e
         };
@@ -1258,11 +1300,11 @@ impl AppState {
         // [#576 A11] Refused rather than recovered after an internal crash: the
         // inverse would land on what the crash left (`refuse_after_crash`).
         if let Err(refused) = self.refuse_after_crash("Undo") {
-            return CommandResult::failure(refused);
+            return CommandResult::refused(refused);
         }
         // Read-only edit gate (#191, D-B6): gated unconditionally (see undo()).
         if let Err(f) = self.guard_mutation("Undo") {
-            return f;
+            return CommandResult::refused(f);
         }
 
         // Validate index first
@@ -1294,12 +1336,16 @@ impl AppState {
                 // rolled back, so the failure has to carry what was applied -
                 // otherwise the frontend's positional refs are left mirrored with
                 // nothing on the wire to say so.
-                let failure = CommandResult::failure(format!(
-                    "Undo failed at step {} of {}: {}",
+                let failure = history_step_failed(
+                    format!(
+                        "Undo failed at step {} of {}: {}",
+                        i + 1,
+                        count,
+                        result.error.unwrap_or_else(|| "Unknown error".to_string())
+                    ),
                     i + 1,
                     count,
-                    result.error.unwrap_or_else(|| "Unknown error".to_string())
-                ));
+                );
                 // The FAILED step can have mutated too: an arm reports its
                 // failure only after running its inverse, and the inverse
                 // mutates as it goes (`remove_created_shot` ->
@@ -1367,11 +1413,11 @@ impl AppState {
         // [#576 A11] Refused rather than recovered after an internal crash: the
         // inverse would land on what the crash left (`refuse_after_crash`).
         if let Err(refused) = self.refuse_after_crash("Redo") {
-            return CommandResult::failure(refused);
+            return CommandResult::refused(refused);
         }
         // Read-only edit gate (#191, D-B6): gated unconditionally (see undo()).
         if let Err(f) = self.guard_mutation("Redo") {
-            return f;
+            return CommandResult::refused(f);
         }
 
         // Validate index first
@@ -1397,12 +1443,16 @@ impl AppState {
                 // Same reasoning as `undo_to`: the steps that already ran are not
                 // rolled back, so the failure carries their entries - and the
                 // failed step's own partial mutation is reconciled with them.
-                let failure = CommandResult::failure(format!(
-                    "Redo failed at step {} of {}: {}",
+                let failure = history_step_failed(
+                    format!(
+                        "Redo failed at step {} of {}: {}",
+                        i + 1,
+                        count,
+                        result.error.unwrap_or_else(|| "Unknown error".to_string())
+                    ),
                     i + 1,
                     count,
-                    result.error.unwrap_or_else(|| "Unknown error".to_string())
-                ));
+                );
                 self.reconcile_geometry();
                 // [#576 A18(a)] As in `undo_to`: past the index check, mark the copy.
                 self.mark_remote_dirty();

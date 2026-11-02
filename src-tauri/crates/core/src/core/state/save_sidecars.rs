@@ -36,11 +36,10 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use super::AppState;
-use crate::core::loading::{
-    clamp_quoted_error, IGNORES_UNREADABLE_CODE, PROJECT_SETTINGS_UNREADABLE_CODE,
-    SPELEODB_LINK_UNREADABLE_CODE, UNDO_MARKERS_UNREADABLE_CODE,
+use crate::core::loading::clamp_quoted_error;
+use crate::core::{
+    CommandError, CommandErrorCode, CommandResult, ValidationWarning, WarningSeverity,
 };
-use crate::core::{CommandResult, ValidationWarning, WarningSeverity};
 use crate::models::{Project, SectionId, SpeleoLink};
 use crate::persistence::{Database, ResolvedWarning};
 
@@ -88,8 +87,8 @@ pub(super) enum SaveMode {
 pub(super) enum SidecarPolicy {
     /// The save stops before anything is renamed into place: nothing is written,
     /// the destination is untouched. An unreadable table is refused with
-    /// `unreadable_code`, a marker the frontend routes on.
-    Refuse { unreadable_code: &'static str },
+    /// `unreadable_code`, the code the frontend routes on.
+    Refuse { unreadable_code: CommandErrorCode },
     /// The save goes ahead without the table, and its result carries
     /// `warning_code`.
     WarnAndContinue { warning_code: &'static str },
@@ -136,13 +135,13 @@ impl Sidecar {
                 warning_code: DISPLAY_SETTINGS_NOT_SAVED_CODE,
             },
             Self::ResolvedWarnings => SidecarPolicy::Refuse {
-                unreadable_code: IGNORES_UNREADABLE_CODE,
+                unreadable_code: CommandErrorCode::IgnoresUnreadable,
             },
             Self::SpeleoLink => SidecarPolicy::Refuse {
-                unreadable_code: SPELEODB_LINK_UNREADABLE_CODE,
+                unreadable_code: CommandErrorCode::SpeleodbLinkUnreadable,
             },
             Self::UndoMarkers => SidecarPolicy::Refuse {
-                unreadable_code: UNDO_MARKERS_UNREADABLE_CODE,
+                unreadable_code: CommandErrorCode::UndoMarkersUnreadable,
             },
             Self::History => SidecarPolicy::DropHistory {
                 warning_code: UNDO_HISTORY_DROPPED_CODE,
@@ -190,7 +189,7 @@ impl Sidecar {
     /// give up. Nothing exists on disk yet, so nothing was written; the quoted
     /// cause is clamped, because SQLite error text embeds the file's own
     /// identifiers.
-    fn unreadable_refusal(self, code: &str, cause: &anyhow::Error) -> CommandResult {
+    fn unreadable_refusal(self, code: CommandErrorCode, cause: &anyhow::Error) -> CommandResult {
         // The link alone has a way out: a Save As to ANOTHER file leaves the managed
         // file untouched, so it goes ahead unlinked (#576 B35(b)).
         let way_out = if matches!(self, Self::SpeleoLink) {
@@ -198,13 +197,16 @@ impl Sidecar {
         } else {
             ""
         };
-        CommandResult::failure(format!(
-            "{code}: Can't save: this project's {} could not be read ({}). Saving would \
-             rewrite the file without {}, so nothing was written - the file on disk is \
-             unchanged.{way_out}",
-            self.noun(),
-            clamp_quoted_error(&cause.to_string()),
-            self.pronoun(),
+        CommandResult::refused(CommandError::new(
+            code,
+            format!(
+                "Can't save: this project's {} could not be read ({}). Saving would \
+                 rewrite the file without {}, so nothing was written - the file on disk is \
+                 unchanged.{way_out}",
+                self.noun(),
+                clamp_quoted_error(&cause.to_string()),
+                self.pronoun(),
+            ),
         ))
     }
 
@@ -589,9 +591,10 @@ fn read_speleo_link(
                 "Refused to save: the speleo_link table could not be read, and the save would \
                  rebuild the file without it"
             );
-            Err(Box::new(
-                Sidecar::SpeleoLink.unreadable_refusal(SPELEODB_LINK_UNREADABLE_CODE, &e),
-            ))
+            Err(Box::new(Sidecar::SpeleoLink.unreadable_refusal(
+                CommandErrorCode::SpeleodbLinkUnreadable,
+                &e,
+            )))
         }
         Err(e) => {
             tracing::warn!(
@@ -635,11 +638,14 @@ pub(super) fn unread_settings_refusal(keys: &[String]) -> Option<CommandResult> 
     // [#576 NF-W3-2] Every key the open can leave unread has a control in Project
     // Settings now, and setting it there lifts the refusal (B15-EDIT): say so,
     // rather than send the user away to close and reopen.
-    Some(CommandResult::failure(format!(
-        "{PROJECT_SETTINGS_UNREADABLE_CODE}: Can't save: this project's stored {listed} could \
-         not be read when it was opened. Saving would replace {pronoun} with defaults, so \
-         nothing was written - the file on disk is unchanged. Export still works. To save \
-         again, set {pronoun} in Project Settings and save that dialog."
+    Some(CommandResult::refused(CommandError::new(
+        CommandErrorCode::ProjectSettingsUnreadable,
+        format!(
+            "Can't save: this project's stored {listed} could not be read when it was \
+             opened. Saving would replace {pronoun} with defaults, so nothing was written - \
+             the file on disk is unchanged. Export still works. To save again, set \
+             {pronoun} in Project Settings and save that dialog."
+        ),
     )))
 }
 

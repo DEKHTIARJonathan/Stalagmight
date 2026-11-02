@@ -6,8 +6,8 @@
 //! derived before the link was stamped. Through the hand-over (Start editing, the
 //! push, Done) and up to the adoption's final close, an edit could land and ride
 //! the push, or be lost by the close. Decided: shut the gate from the adoption
-//! until the hand-over lands; an edit there is refused with the read-only notice
-//! (`EDIT_DISABLED`).
+//! until the hand-over lands; an edit there is refused as an edit-gate refusal
+//! (`ADOPTION_IN_PROGRESS`, RV5-F4-5).
 //!
 //! Driven through `adopt_import_and_save`, the local half, with a synthetic remote
 //! file under a temp dir; nothing reaches a server.
@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 use super::AppState;
-use crate::core::command::EDIT_DISABLED_CODE;
-use crate::core::Command;
+use crate::core::{Command, CommandError};
+use crate::models::CommandErrorCode;
 use crate::models::{ShotUpdates, SpeleoLink};
 use crate::parsers::tml::test_helpers::{wrap_xml, TripShot};
 
@@ -51,7 +51,7 @@ fn remote_file(dir: &Path) -> PathBuf {
 }
 
 /// An edit of the adopted project: the first shot's length.
-fn try_edit(state: &AppState) -> Result<(), String> {
+fn try_edit(state: &AppState) -> Result<(), CommandError> {
     let project = state.get_project_state().unwrap();
     let section = &project.sections[0];
     let edited = state.execute(Command::UpdateShot {
@@ -65,7 +65,7 @@ fn try_edit(state: &AppState) -> Result<(), String> {
     if edited.success {
         Ok(())
     } else {
-        Err(edited.error.unwrap_or_default())
+        Err(edited.into_error())
     }
 }
 
@@ -106,7 +106,10 @@ fn an_edit_between_the_adoptions_local_span_and_its_hand_over_is_refused() {
     assert!(
         during
             .as_ref()
-            .is_err_and(|e| e.starts_with(EDIT_DISABLED_CODE)),
+            .is_err_and(|e| e.code == CommandErrorCode::AdoptionInProgress
+                && e.code.is_edit_gate()
+                && !e.message.contains("EDIT_DISABLED")
+                && !e.message.contains("ADOPTION_IN_PROGRESS")),
         "an edit there is refused with the read-only notice, got {during:?}"
     );
 

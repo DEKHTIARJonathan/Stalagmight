@@ -32,8 +32,8 @@ impl AppState {
         // `try_exists()` rather than `exists()`: a metadata-access denial (e.g.
         // macOS folder-permission loss after an OS/app update) must not collapse to
         // a misleading "not found" - `exists()` would do exactly that. Parity with
-        // `do_load_project_full` (#169 / #92 / #104). A denial is tagged with
-        // `PERMISSION_DENIED_CODE`, matching the save path's `save_failure`.
+        // `do_load_project_full` (#169 / #92 / #104). A denial carries
+        // `FS_PERMISSION_DENIED`, matching the save path's `save_failure`.
         // NOTE: `open_project` is the legacy command - its frontend consumer
         // (`openProject`, projectStore.ts) does NOT strip the marker or run
         // `isPermissionError` (the load/save paths do). So this tag is currently
@@ -60,10 +60,9 @@ impl AppState {
                         reason = "permission denied",
                         "Project open failed"
                     );
-                    return CommandResult::failure(format!(
-                        "{}: Cannot access {}: {e}",
-                        crate::core::loading::PERMISSION_DENIED_CODE,
-                        path.display()
+                    return CommandResult::refused(crate::core::CommandError::new(
+                        crate::models::CommandErrorCode::FsPermissionDenied,
+                        format!("Cannot access {}: {e}", path.display()),
                     ));
                 }
                 tracing::warn!(
@@ -362,10 +361,9 @@ impl AppState {
     /// [#576 RV4-R-M3-OPEN] `upgrade_refusal` is for a file in a place nothing may
     /// be written (the app's own folders, a system folder): it opens as anywhere
     /// else, but an older-format file - one the open would upgrade in place and
-    /// copy beside itself first - is refused with [`UPGRADE_REFUSED_CODE`] and this
+    /// copy beside itself first - is refused with the code `UPGRADE_REFUSED` and this
     /// message, untouched. `None` everywhere a user keeps projects.
     ///
-    /// [`UPGRADE_REFUSED_CODE`]: crate::persistence::UPGRADE_REFUSED_CODE
     pub fn do_load_project_full_with(
         &self,
         path: PathBuf,
@@ -502,27 +500,23 @@ impl AppState {
                 }
                 // [#576 B1-D1] A file from before the first public release: its own
                 // code, and the message alone (it says what to do), not a generic
-                // database failure. The file was not touched.
-                if let Some(message) = msg
-                    .strip_prefix(crate::persistence::PRE_RELEASE_FILE_CODE)
-                    .map(|rest| rest.trim_start_matches(':').trim())
-                {
+                // database failure. The file was not touched. [#576 C4] Recognised by
+                // its type, not by a prefix on the message.
+                if let Some(pre_release) = e.downcast_ref::<crate::persistence::PreReleaseFile>() {
                     early_return_err!(LoadError::with_details(
                         crate::models::CommandErrorCode::PreReleaseFile,
-                        message,
+                        pre_release.to_string(),
                         path.display().to_string()
                     ));
                 }
                 // [#576 RV4-R-M3-OPEN] An older file in a place nothing may be
                 // written: the same shape - its own code, the message alone (it says
                 // to copy the project somewhere writable), the file untouched.
-                if let Some(message) = msg
-                    .strip_prefix(crate::persistence::UPGRADE_REFUSED_CODE)
-                    .map(|rest| rest.trim_start_matches(':').trim())
-                {
+                // [#576 C4] Recognised by its type, not by a prefix on the message.
+                if let Some(refused) = e.downcast_ref::<crate::persistence::UpgradeRefused>() {
                     early_return_err!(LoadError::with_details(
                         crate::models::CommandErrorCode::UpgradeRefused,
-                        message,
+                        refused.to_string(),
                         path.display().to_string()
                     ));
                 }

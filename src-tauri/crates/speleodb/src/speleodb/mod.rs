@@ -142,8 +142,16 @@ pub enum SpeleoDbError {
     /// sentence says why and what to do ("reconnect to acquire the write lock before
     /// pushing"). Shown as written: wrapping these in [`Self::Io`] prefixed them with
     /// "filesystem error:", which they are not.
-    #[error("{0}")]
-    Refused(String),
+    ///
+    /// [#576 C4] `code` is what the frontend routes the refusal on: the refusing
+    /// gate's own code when the core refused it (the edit gate, the crash refusal,
+    /// a refused save, a newer file), `SPELEODB_FATAL` when it is only a sentence
+    /// ([`Self::refused`]). Build it with [`Self::refused`] / [`Self::refused_with`].
+    #[error("{message}")]
+    Refused {
+        code: crate::models::CommandErrorCode,
+        message: String,
+    },
     /// The project id supplied over IPC was not a valid SpeleoDB project UUID.
     /// Guards the cache-path join and request-URL interpolation against path /
     /// route traversal at the trust boundary.
@@ -200,6 +208,22 @@ pub enum SpeleoDbError {
         local_path: String,
         last_edit_at: Option<String>,
     },
+}
+
+impl SpeleoDbError {
+    /// A verb refused locally with `message` and no classification of its own:
+    /// it reaches the frontend as `SPELEODB_FATAL`, like every local failure.
+    pub fn refused(message: impl Into<String>) -> Self {
+        Self::refused_with(crate::models::CommandErrorCode::SpeleodbFatal, message)
+    }
+
+    /// A verb refused locally by a refusal that has its own `code` (#576 C4).
+    pub fn refused_with(code: crate::models::CommandErrorCode, message: impl Into<String>) -> Self {
+        Self::Refused {
+            code,
+            message: message.into(),
+        }
+    }
 }
 
 /// The user-facing line for [`SpeleoDbError::LockNotHeld`]: who holds the lock now

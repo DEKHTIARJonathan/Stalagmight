@@ -34,14 +34,24 @@ fn a_pre_release_file_is_refused_with_a_reimport_message_and_left_untouched() {
     let before = std::fs::read(&path).unwrap();
 
     let refused = Database::open_existing(&path);
-    let message = match refused {
-        Ok(_) => String::from("<opened>"),
-        Err(e) => format!("{e:#}"),
+    let (message, typed) = match refused {
+        Ok(_) => (String::from("<opened>"), None),
+        Err(e) => (
+            format!("{e:#}"),
+            e.downcast_ref::<PreReleaseFile>().copied(),
+        ),
     };
-    println!("open_existing(stamp 0, row 1) -> {message}");
+    println!("open_existing(stamp 0, row 1) -> {message}; typed: {typed:?}");
+    // [#576 C4] Its own error TYPE, which the load path turns into the
+    // PRE_RELEASE_FILE code - no longer a prefix on the message.
+    assert_eq!(
+        typed,
+        Some(PreReleaseFile { version: 1 }),
+        "a pre-release file must be refused with its own error, got: {message}"
+    );
     assert!(
-        message.contains("PRE_RELEASE_FILE"),
-        "a pre-release file must be refused with its own code, got: {message}"
+        !message.contains("PRE_RELEASE_FILE"),
+        "the message is display text, with no code prefix: {message}"
     );
     assert!(
         message.contains("import it again"),
@@ -70,13 +80,17 @@ fn a_pre_release_file_is_refused_by_database_open_too() {
             .unwrap();
     }
 
-    let message = match Database::open(&path) {
-        Ok(_) => String::from("<opened>"),
-        Err(e) => format!("{e:#}"),
+    let (message, typed) = match Database::open(&path) {
+        Ok(_) => (String::from("<opened>"), None),
+        Err(e) => (
+            format!("{e:#}"),
+            e.downcast_ref::<PreReleaseFile>().copied(),
+        ),
     };
-    println!("Database::open(stamp 1, row 1) -> {message}");
-    assert!(
-        message.contains("PRE_RELEASE_FILE"),
+    println!("Database::open(stamp 1, row 1) -> {message}; typed: {typed:?}");
+    assert_eq!(
+        typed,
+        Some(PreReleaseFile { version: 1 }),
         "a pre-release project must be refused on this path too, got: {message}"
     );
 }

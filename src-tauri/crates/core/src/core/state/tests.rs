@@ -6856,7 +6856,7 @@ fn over_legacy_path_limit_measures_the_windows_max_path_budget() {
 
 #[test]
 fn save_failure_tags_a_corroborated_denial_with_the_permission_code() {
-    use crate::core::loading::PERMISSION_DENIED_CODE;
+    use crate::models::CommandErrorCode;
     let temp_dir = TempDir::new().unwrap();
     let target = temp_dir.path().join("cave.stalx");
     let err = anyhow::Error::from(std::io::Error::new(
@@ -6869,14 +6869,14 @@ fn save_failure_tags_a_corroborated_denial_with_the_permission_code() {
 
     let msg = result.error.unwrap_or_default();
     assert!(
-        msg.starts_with(PERMISSION_DENIED_CODE),
+        result.code == Some(CommandErrorCode::FsPermissionDenied) && !msg.starts_with("FS_"),
         "a typed PermissionDenied chain is a denial, got: {msg}"
     );
 }
 
 #[test]
 fn save_failure_tags_a_vanished_folder_with_the_path_code() {
-    use crate::core::loading::{PATH_NOT_FOUND_CODE, PERMISSION_DENIED_CODE};
+    use crate::models::CommandErrorCode;
     let temp_dir = TempDir::new().unwrap();
     // Nothing was ever created at `gone/`, so the destination folder is absent.
     let target = temp_dir.path().join("gone").join("cave.stalx");
@@ -6887,15 +6887,15 @@ fn save_failure_tags_a_vanished_folder_with_the_path_code() {
 
     let msg = result.error.unwrap_or_default();
     assert!(
-        msg.starts_with(PATH_NOT_FOUND_CODE),
+        result.code == Some(CommandErrorCode::FsPathNotFound) && !msg.starts_with("FS_"),
         "a missing destination folder is a path error, got: {msg}"
     );
-    assert!(!msg.starts_with(PERMISSION_DENIED_CODE));
+    assert_ne!(result.code, Some(CommandErrorCode::FsPermissionDenied));
 }
 
 #[test]
 fn save_failure_leaves_a_generic_open_failure_unclassified() {
-    use crate::core::loading::{PATH_NOT_FOUND_CODE, PERMISSION_DENIED_CODE};
+    use crate::models::CommandErrorCode;
     // The regression that started #429: the folder exists AND accepts files, so
     // SQLite's ambiguous "unable to open database file" is corroborated by
     // nothing. It must stay an ordinary failure rather than send the user to
@@ -6909,10 +6909,14 @@ fn save_failure_leaves_a_generic_open_failure_unclassified() {
 
     let msg = result.error.unwrap_or_default();
     assert!(
-        !msg.starts_with(PERMISSION_DENIED_CODE),
+        result.code != Some(CommandErrorCode::FsPermissionDenied),
         "a writable destination folder is denying nothing, got: {msg}"
     );
-    assert!(!msg.starts_with(PATH_NOT_FOUND_CODE), "got: {msg}");
+    assert_ne!(
+        result.code,
+        Some(CommandErrorCode::FsPathNotFound),
+        "got: {msg}"
+    );
     assert_eq!(
         msg, "Failed to create save file: Failed to open database",
         "the backend message is passed through unmarked"
@@ -6968,7 +6972,7 @@ fn write_probe_does_not_write_through_a_planted_symlink() {
 #[cfg(windows)]
 #[test]
 fn save_failure_tags_an_over_max_path_destination_as_too_long() {
-    use crate::core::loading::{PATH_TOO_LONG_CODE, PERMISSION_DENIED_CODE};
+    use crate::models::CommandErrorCode;
     // #429 item 2's repro: a ~335-character destination whose folders all
     // exist. Rust stats the parent fine (std uses `\\?\` verbatim paths) while
     // SQLite's win32 VFS cannot open the file, so the parent probe alone would
@@ -6983,16 +6987,16 @@ fn save_failure_tags_an_over_max_path_destination_as_too_long() {
 
     let msg = result.error.unwrap_or_default();
     assert!(
-        msg.starts_with(PATH_TOO_LONG_CODE),
+        result.code == Some(CommandErrorCode::FsPathTooLong) && !msg.starts_with("FS_"),
         "an over-MAX_PATH destination is a path-length error, got: {msg}"
     );
-    assert!(!msg.starts_with(PERMISSION_DENIED_CODE));
+    assert_ne!(result.code, Some(CommandErrorCode::FsPermissionDenied));
 }
 
 #[cfg(unix)]
 #[test]
 fn save_into_unwritable_dir_reports_permission_code() {
-    use crate::core::loading::PERMISSION_DENIED_CODE;
+    use crate::models::CommandErrorCode;
     use std::os::unix::fs::PermissionsExt;
 
     let temp_dir = TempDir::new().unwrap();
@@ -7018,7 +7022,7 @@ fn save_into_unwritable_dir_reports_permission_code() {
     assert!(!result.success, "save into an unwritable dir should fail");
     let err = result.error.unwrap_or_default();
     assert!(
-        err.starts_with(PERMISSION_DENIED_CODE),
+        result.code == Some(CommandErrorCode::FsPermissionDenied) && !err.starts_with("FS_"),
         "expected permission code prefix, got: {err}"
     );
 }
@@ -7027,11 +7031,11 @@ fn save_into_unwritable_dir_reports_permission_code() {
 #[test]
 fn open_project_into_unreadable_dir_reports_permission_code() {
     // open_project switched exists() -> try_exists() so a metadata-access denial
-    // surfaces as PERMISSION_DENIED_CODE instead of collapsing to "File not found"
+    // surfaces as FS_PERMISSION_DENIED instead of collapsing to "File not found"
     // (#169). try_exists() on a path inside a 0o000 dir returns Err(PermissionDenied)
     // because the dir can't be traversed. Same 0o000 idiom (precondition asserted)
     // as save_into_unwritable_dir_reports_permission_code.
-    use crate::core::loading::PERMISSION_DENIED_CODE;
+    use crate::models::CommandErrorCode;
     use std::os::unix::fs::PermissionsExt;
 
     let temp_dir = TempDir::new().unwrap();
@@ -7050,14 +7054,14 @@ fn open_project_into_unreadable_dir_reports_permission_code() {
     assert!(!result.success, "open inside an unreadable dir should fail");
     let err = result.error.unwrap_or_default();
     assert!(
-        err.starts_with(PERMISSION_DENIED_CODE),
+        result.code == Some(CommandErrorCode::FsPermissionDenied) && !err.starts_with("FS_"),
         "open_project should tag a metadata-access denial with the permission code, got: {err}"
     );
 }
 
 #[test]
 fn save_into_missing_dir_is_not_a_permission_error() {
-    use crate::core::loading::{PATH_NOT_FOUND_CODE, PERMISSION_DENIED_CODE};
+    use crate::models::CommandErrorCode;
 
     // A deleted/renamed save folder yields SQLite's generic "unable to open
     // database file" too - but that's a vanished location, not a permission
@@ -7080,11 +7084,11 @@ fn save_into_missing_dir_is_not_a_permission_error() {
     assert!(!result.success, "save into a missing dir should fail");
     let err = result.error.unwrap_or_default();
     assert!(
-        !err.starts_with(PERMISSION_DENIED_CODE),
+        result.code != Some(CommandErrorCode::FsPermissionDenied),
         "missing dir should not be a permission failure, got: {err}"
     );
     assert!(
-        err.starts_with(PATH_NOT_FOUND_CODE),
+        result.code == Some(CommandErrorCode::FsPathNotFound) && !err.starts_with("FS_"),
         "missing dir should be reported as a missing destination, got: {err}"
     );
     assert!(
@@ -17611,11 +17615,12 @@ fn unreadable_undo_markers_refuse_the_save() {
 
     assert!(!result.success, "the save must be refused: {result:?}");
     assert!(
-        result
-            .error
-            .as_deref()
-            .is_some_and(|e| e.starts_with("UNDO_MARKERS_UNREADABLE: ")),
-        "the refusal carries its marker: {result:?}"
+        result.code == Some(CommandErrorCode::UndoMarkersUnreadable)
+            && result
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("Can't save: ")),
+        "the refusal carries its code (and no marker): {result:?}"
     );
     assert!(
         std::fs::read(&path).unwrap() == before,
@@ -23768,8 +23773,8 @@ fn repair_command_demotes_a_double_anchoring_bridge_merge() {
 // mark_remote_dirty / is_lifecycle_passthrough.
 // ===========================================================================
 
-use crate::core::command::EDIT_DISABLED_CODE;
-use crate::models::SpeleoLink;
+use crate::core::CommandError;
+use crate::models::{CommandErrorCode, SpeleoLink};
 
 /// A SpeleoLink fixture (clean: no unpushed edits).
 fn fixture_speleo_link() -> SpeleoLink {
@@ -24043,19 +24048,19 @@ pub(super) const MUTATION_ENTRYPOINTS: &[&str] = &[
 /// the OPEN project (which must have been saved: `set_project_name_for_path` is
 /// gated only for the open project's own path). One outcome per entry: `Ok` when
 /// the entry point accepted the call, `Err(error)` when it refused it - the
-/// `CommandResult` error, or the `String` error of the entries that return a
-/// `Result`. On an editable project the accepted calls really mutate it, so later
+/// `CommandResult` failure as its `CommandError` (#576 C4), or the error of the
+/// entries that return a `Result`. On an editable project the accepted calls really mutate it, so later
 /// entries may fail for their own reasons; callers assert on the refusal codes.
 pub(super) fn probe_mutation_entrypoints(
     state: &AppState,
     sid: SectionId,
     shid: ShotId,
-) -> Vec<(&'static str, Result<(), String>)> {
+) -> Vec<(&'static str, Result<(), CommandError>)> {
     let outcome = |r: CommandResult| {
         if r.success {
             Ok(())
         } else {
-            Err(r.error.unwrap_or_default())
+            Err(r.into_error())
         }
     };
     let open_path = state
@@ -24241,9 +24246,8 @@ pub(super) fn probe_mutation_entrypoints(
             outcome(state.set_project_name_for_path(open_path, "Renamed Again".to_string())),
         ),
         // warning resolve/unresolve (#197): gated because resolved_warnings
-        // proliferates to the server. They return Result<(), String>; the code is
-        // carried as the String error prefix, exactly as the frontend's read-only
-        // handler pattern-matches it.
+        // proliferates to the server. They return Result<(), CommandError>, the
+        // gate's own code included (#576 C4).
         (
             "save_resolved_warning_gated",
             state.save_resolved_warning_gated(&warning),
@@ -24281,8 +24285,9 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             .err()
             .unwrap_or_else(|| panic!("{label} must be rejected when edit disabled"));
         assert!(
-            error.starts_with(EDIT_DISABLED_CODE),
-            "{label} must carry the EDIT_DISABLED code, got: {error:?}"
+            error.code == CommandErrorCode::EditDisabled
+                && !error.message.contains("EDIT_DISABLED"),
+            "{label} must carry the EDIT_DISABLED code (and no marker), got: {error:?}"
         );
     }
     // The gate fires BEFORE any DB write, so the dirty bit must NOT have flipped.
@@ -24708,27 +24713,25 @@ fn the_copy_carries_the_undo_history() {
 }
 
 #[test]
-fn edit_disabled_code_prefix_is_distinct() {
+fn edit_disabled_code_is_distinct() {
     // The EDIT_DISABLED code is distinct from the FS permission code, so the FE
-    // can pattern-match it independently (#204).
-    assert_eq!(EDIT_DISABLED_CODE, "EDIT_DISABLED");
+    // can route on it independently (#204; a code since #576 C4).
+    assert_eq!(CommandErrorCode::EditDisabled.as_str(), "EDIT_DISABLED");
     assert_ne!(
-        EDIT_DISABLED_CODE,
-        crate::core::loading::PERMISSION_DENIED_CODE
+        CommandErrorCode::EditDisabled,
+        CommandErrorCode::FsPermissionDenied
     );
     let (state, sid, shid, _temp) = remote_fixture();
-    let err = state
-        .execute(Command::UpdateShot {
-            section_id: sid,
-            shot_id: shid,
-            updates: ShotUpdates::default(),
-        })
-        .error
-        .unwrap();
-    assert!(err.starts_with(EDIT_DISABLED_CODE));
+    let refused = state.execute(Command::UpdateShot {
+        section_id: sid,
+        shot_id: shid,
+        updates: ShotUpdates::default(),
+    });
+    assert_eq!(refused.code, Some(CommandErrorCode::EditDisabled));
+    let err = refused.error.unwrap();
     assert!(
-        !err.starts_with(crate::core::loading::PERMISSION_DENIED_CODE),
-        "must not collide with the permission-denied prefix"
+        !err.contains("EDIT_DISABLED") && !err.contains("FS_PERMISSION_DENIED"),
+        "the message is display text with no marker: {err}"
     );
 }
 
@@ -24745,7 +24748,8 @@ fn repair_and_settings_gated_on_locked_remote() {
     println!("read-only remote project: repair_open_project_integrity() -> {repair:?}");
     let refusal = repair.expect_err("a refused repair must be an error, not a clean result");
     assert!(
-        refusal.starts_with(EDIT_DISABLED_CODE),
+        refusal.code == CommandErrorCode::EditDisabled
+            && !refusal.message.contains("EDIT_DISABLED"),
         "the refusal carries the EDIT_DISABLED code, got: {refusal:?}"
     );
     assert_eq!(
@@ -24762,10 +24766,7 @@ fn repair_and_settings_gated_on_locked_remote() {
     let settings =
         state.update_project_settings("New Name".to_string(), state.get_config().validation, None);
     assert!(!settings.success);
-    assert!(settings
-        .error
-        .as_deref()
-        .is_some_and(|e| e.starts_with(EDIT_DISABLED_CODE)));
+    assert_eq!(settings.code, Some(CommandErrorCode::EditDisabled));
 }
 
 // === Wedge healing: entries `undo()` cannot apply (Q8) ===

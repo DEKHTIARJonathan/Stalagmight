@@ -7,8 +7,8 @@ use rusqlite::{params, Connection, DatabaseName, Transaction, TransactionBehavio
 use crate::models::FEATURE_ID_STRIDE;
 
 use super::{
-    Database, OLDEST_SUPPORTED_SCHEMA_VERSION, PRE_RELEASE_FILE_CODE, SCHEMA_VERSION,
-    UNDO_FORMAT_SAFE_VERSION, UPGRADE_REFUSED_CODE,
+    Database, PreReleaseFile, UpgradeRefused, OLDEST_SUPPORTED_SCHEMA_VERSION, SCHEMA_VERSION,
+    UNDO_FORMAT_SAFE_VERSION,
 };
 
 /// Columns of `speleo_link` that MUST survive every future SCHEMA_VERSION bump
@@ -1252,12 +1252,7 @@ impl Database {
                 purpose = "refuse a pre-release project file",
                 "Database predates the oldest supported schema; refusing to open it"
             );
-            anyhow::bail!(
-                "{PRE_RELEASE_FILE_CODE}: This project was saved by a pre-release version of \
-                 Stalagmight (file format {current}) and cannot be opened by this version. \
-                 Create a new project and import it again from the original survey files \
-                 (for example the .dmp, .tml, .mak or .wpj it came from)."
-            );
+            return Err(PreReleaseFile { version: current }.into());
         }
         Ok(())
     }
@@ -1268,7 +1263,7 @@ impl Database {
     }
 
     /// [`Self::ensure_schema_version`], refusing the upgrade with `refuse_upgrade`
-    /// (`"{UPGRADE_REFUSED_CODE}: {refusal}"`) when it would write - the migration
+    /// (an [`UpgradeRefused`] carrying it) when it would write - the migration
     /// chain and the pre-upgrade copy alike (#576 RV4-R-M3-OPEN). A file it would
     /// not write to (current, newer, unstamped on read-only media) passes as before.
     pub(super) fn ensure_schema_version_with(&self, refuse_upgrade: Option<&str>) -> Result<()> {
@@ -1406,7 +1401,10 @@ impl Database {
                 purpose = "refuse to upgrade a project where nothing may be written (#576 RV4-R-M3)",
                 "Not upgrading an older project in place: it is in a folder the app does not write to"
             );
-            anyhow::bail!("{UPGRADE_REFUSED_CODE}: {refusal}");
+            return Err(UpgradeRefused {
+                refusal: refusal.to_owned(),
+            }
+            .into());
         }
         let chain = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
 

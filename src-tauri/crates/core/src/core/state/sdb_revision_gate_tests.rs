@@ -8,13 +8,14 @@ use super::speleodb::{
     editing_fixture, recording_stub, HELD_BY_SAME_ACCOUNT_AT_BASE_BODY, REMOTE_ID,
 };
 use super::WorkspaceMode;
-use crate::core::command::{EDIT_DISABLED_CODE, WORKSPACE_READ_ONLY_CODE};
+use crate::core::CommandError;
+use crate::models::CommandErrorCode;
 
 const SHA: &str = "abc1230000000000000000000000000000000000";
 
 /// One Restore (`keep_undo_history == false`) or Unwind (`true`) request, the way
 /// the dialogs send it.
-fn restore(state: &super::AppState, keep_undo_history: bool) -> Result<(), String> {
+fn restore(state: &super::AppState, keep_undo_history: bool) -> Result<(), CommandError> {
     state
         .speleodb_restore_revision(
             REMOTE_ID.to_owned(),
@@ -28,7 +29,7 @@ fn restore(state: &super::AppState, keep_undo_history: bool) -> Result<(), Strin
             false,
         )
         .map(|_| ())
-        .map_err(|e| e.message)
+        .map_err(CommandError::from)
 }
 
 #[test]
@@ -43,12 +44,13 @@ fn restore_and_unwind_are_refused_in_plan_and_export() {
 
             let requests = seen.lock().expect("request log").len();
             println!("{what} in {mode:?} -> {result:?}; requests sent: {requests}");
-            let message = result.expect_err("a survey-replacing swap is refused here");
+            let refusal = result.expect_err("a survey-replacing swap is refused here");
+            // [#576 C4] The workspace gate's own code, not SPELEODB_FATAL, and no
+            // marker in the text.
             assert!(
-                message.starts_with(&format!(
-                    "{EDIT_DISABLED_CODE}: {WORKSPACE_READ_ONLY_CODE}:"
-                )),
-                "{what} in {mode:?}: refused with the workspace notice, got: {message}"
+                refusal.code == CommandErrorCode::WorkspaceReadOnly
+                    && !refusal.message.contains("WORKSPACE_READ_ONLY"),
+                "{what} in {mode:?}: refused with the workspace notice, got: {refusal:?}"
             );
             assert_eq!(requests, 0, "refused before any download");
             assert!(state.edit_enabled(), "the edit session itself is untouched");
@@ -78,7 +80,7 @@ fn view_is_not_a_survey_change_and_is_not_refused_by_the_workspace() {
     // View fails further on - but never on the workspace gate.
     if let Err(e) = result {
         assert!(
-            !e.message.contains(WORKSPACE_READ_ONLY_CODE),
+            e.code != CommandErrorCode::WorkspaceReadOnly,
             "a View is not refused by the workspace gate: {}",
             e.message
         );
