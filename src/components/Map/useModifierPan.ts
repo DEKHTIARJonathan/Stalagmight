@@ -396,6 +396,14 @@ export function useModifierPan({
       window.removeEventListener('mousedown', handleMouseDownGlobal, { capture: true });
       window.removeEventListener('mouseup', handleMouseUpGlobal);
       detachDragReleaseForwarder();
+      // A pan this registration claimed is abandoned here (a tool hotkey during
+      // a middle-drag, Escape ending placement during a Ctrl+drag): the next
+      // registration starts with no claim, so the release that ends the gesture
+      // would never undo `panning`, the cursor owner's highest-precedence input,
+      // and the canvas would stay `grabbing` (#576 RV4-FE-MH1).
+      if (customPanClaimed && map.current) {
+        mapCursorFor(map.current).set({ panning: false });
+      }
     };
     // `mapLibreDragPan` decides whether a Ctrl+left press is claimed outright or
     // only watched, so the handlers have to be re-registered when it flips. That
