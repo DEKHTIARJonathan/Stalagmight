@@ -16,6 +16,7 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../../i18n';
 import type { CommandResult, ImportSectionConfig } from '../../../types/commands';
 import type { ImportReceipt } from '../../../types/ipc/ImportReceipt';
 import type { DmpFile } from '../../../types/commands';
@@ -341,7 +342,9 @@ export function useDmpImportRun({
           const targetDmpIndex = emittedDmpIndices[placement.target_section_index];
           const existingTargetId = targetDmpIndex != null ? earlyImportedRef.current.get(targetDmpIndex) : undefined;
           if (existingTargetId == null) {
-            fail('segment', t('dialogs.dmpNewImport.segmentTargetUnresolved'));
+            // The module's i18n, not the hook's `t`: as a dependency it would rebuild
+            // this callback whenever `t` changes identity (#576 RV5-LS-1).
+            fail('segment', i18n.t('dialogs.dmpNewImport.segmentTargetUnresolved'));
             return null;
           }
           cfg.placement = {
@@ -360,7 +363,7 @@ export function useDmpImportRun({
         settle(segmentDmpIndices, result.section_ids);
         return true;
       }),
-    [fail, send, settle, step, t],
+    [fail, send, settle, step],
   );
 
   // ─── Withdrawal (Cancel / Back) ─────────────────────────────────────────────
