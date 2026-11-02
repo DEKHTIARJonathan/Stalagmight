@@ -168,6 +168,11 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   const [mapLoaded, setMapLoaded] = useState(false);
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
+  // Read by the marker tooltip at hover time: the markers are built once per
+  // system set (#576 D10), so a precision captured at build time went stale when
+  // the user changed it in Settings (#576 RV3-FE-NITS).
+  const precisionRef = useRef(precision);
+  precisionRef.current = precision;
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   // Buffer for geometry data that arrives before map is ready
   const pendingGeometryRef = useRef<Map<string, SurveyGeometry> | null>(null);
@@ -921,10 +926,11 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
           // Format length like survey view
           let lengthStr: string;
+          const lengthDigits = precisionRef.current.length;
           if (totalLength >= 1000) {
-            lengthStr = `${formatFixed(totalLength / 1000, undefined, precision.length)} ${t('common.units.kilometers')}`;
+            lengthStr = `${formatFixed(totalLength / 1000, undefined, lengthDigits)} ${t('common.units.kilometers')}`;
           } else {
-            lengthStr = `${formatFixed(totalLength, undefined, precision.length)} ${t('common.units.meters')}`;
+            lengthStr = `${formatFixed(totalLength, undefined, lengthDigits)} ${t('common.units.meters')}`;
           }
 
           // Build tooltip content using DOM to prevent XSS (matches survey view format)

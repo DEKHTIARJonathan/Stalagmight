@@ -7,11 +7,17 @@
  *   it: one endpoint without two finite numbers turned the system's centroid into
  *   NaN, and arrow-key navigation could never reach that system.
  *
+ * - #576 RV3-FE-NITS (tooltip precision): since D10 the markers are built once per
+ *   system set, and the hover tooltip formatted the length with the decimal
+ *   precision captured when the marker was BUILT, so changing the length
+ *   precision in Settings did not reach the Global View tooltips until the recent
+ *   list reloaded.
+ *
  * Component tier: the real GlobalViewMap, with maplibre-gl and the WebGL survey
  * layer replaced by fakes.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { createRef } from 'react';
 
 const h = vi.hoisted(() => {
@@ -144,6 +150,16 @@ vi.mock('../../../utils/ipc', () => ({ invokeIpc: vi.fn(async () => undefined) }
 import GlobalViewMap, { type GlobalViewMapHandle } from '../GlobalViewMap';
 import type { ProjectMetadata } from '../../../types/project';
 import type { SurveyGeometry } from '../../../types/survey';
+import { useProjectStore } from '../../../store/projectStore';
+import { defaultConfig, type Config } from '../../../types/config';
+import { testIdPart } from '../../../utils/testId';
+
+function setLengthPrecision(length: number): void {
+  const config = defaultConfig as Config;
+  useProjectStore.setState({
+    config: { ...config, units: { ...config.units, decimal_precision: { ...config.units.decimal_precision, length } } },
+  });
+}
 
 const project = (file_path: string, gps_center: [number, number]): ProjectMetadata =>
   ({
@@ -167,6 +183,7 @@ beforeEach(() => {
 
 afterEach(() => {
   document.body.innerHTML = '';
+  useProjectStore.setState({ config: null });
 });
 
 describe('Global View system centroids (#576 NF-W3UI-4)', () => {
@@ -194,5 +211,32 @@ describe('Global View system centroids (#576 NF-W3UI-4)', () => {
     const centroids = ref.current!.getSystemCentroids();
     expect(centroids.get(A)).toEqual([10.5, 20.5]);
     expect(centroids.get(B)).toEqual([30, 40]);
+  });
+});
+
+describe('Global View marker tooltip (#576 RV3-FE-NITS)', () => {
+  it('formats the length with the precision current when it is shown, not when the marker was built', () => {
+    const A = '/caves/CaveA.stalx';
+    setLengthPrecision(1);
+    render(
+      <GlobalViewMap
+        projects={[project(A, [10, 20])]}
+        selectedProjectId={null}
+        onProjectSelect={() => {}}
+        onProjectOpen={() => {}}
+      />
+    );
+    act(() => h.state.map?.fire('load'));
+    const marker = screen.getByTestId(`system-marker-${testIdPart(A)}`);
+    const tooltip = () => document.querySelector('.globalview-marker-tooltip')?.textContent ?? '';
+
+    fireEvent.mouseEnter(marker);
+    expect(tooltip()).toContain('1.2 km');
+    fireEvent.mouseLeave(marker);
+
+    // Settings -> length precision 3. The markers are not rebuilt for it.
+    act(() => setLengthPrecision(3));
+    fireEvent.mouseEnter(marker);
+    expect(tooltip()).toContain('1.235 km');
   });
 });
