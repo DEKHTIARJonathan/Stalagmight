@@ -16,8 +16,8 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 use super::AppState;
-use crate::models::{Project, SectionData, ShotData};
-use crate::persistence::{Database, UPGRADE_REFUSED_CODE};
+use crate::models::{CommandErrorCode, Project, SectionData, ShotData};
+use crate::persistence::Database;
 
 const REFUSAL: &str = "CaveL.stalx was saved by an older version of Stalagmight (test refusal). \
                        Copy the project to a folder of your own and open the copy.";
@@ -137,7 +137,7 @@ fn an_older_project_where_nothing_may_be_written_is_refused_untouched() {
         after == before,
         files_in(dir.path())
     );
-    assert_eq!(error.code, UPGRADE_REFUSED_CODE);
+    assert_eq!(error.code, CommandErrorCode::UpgradeRefused);
     assert_eq!(
         error.message, REFUSAL,
         "shown as-is, so the message carries no code prefix"

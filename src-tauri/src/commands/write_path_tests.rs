@@ -148,11 +148,11 @@ fn the_commands_refuse_before_writing_or_deleting() {
     ));
     println!(
         "delete_project on keep.txt: success={} error={:?}; file still there: {}",
-        deleted.success,
-        deleted.error,
+        deleted.is_ok(),
+        deleted.as_ref().err(),
         keep.exists()
     );
-    assert!(!deleted.success, "refused");
+    assert!(deleted.is_err(), "refused");
     assert!(keep.exists(), "and nothing was deleted");
 
     // Save As into a system folder.
@@ -163,9 +163,12 @@ fn the_commands_refuse_before_writing_or_deleting() {
             Some(PathBuf::from("/etc/stalagmight-w4.stalx")),
             None,
         ));
-        println!("save as /etc/stalagmight-w4.stalx: {:?}", saved.error);
-        assert!(!saved.success);
-        assert!(saved.error.unwrap_or_default().contains("system folder"));
+        println!(
+            "save as /etc/stalagmight-w4.stalx: {:?}",
+            saved.as_ref().err()
+        );
+        assert!(saved.is_err());
+        assert!(saved.unwrap_err().message.contains("system folder"));
     }
 
     // The ordinary cases still go through.

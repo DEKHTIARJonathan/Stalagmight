@@ -33,7 +33,7 @@ use super::import_command_tests::{
 };
 use super::import_runner::parse_gate;
 use crate::core::state::AppState;
-use crate::core::{Command, CommandResult};
+use crate::core::Command;
 
 /// A `tauri::test` app wired with the real import commands and `cancel_loading`,
 /// managing an app state with an open, empty project, plus its window.
@@ -88,6 +88,24 @@ fn dispatch(window: &WebviewWindow<MockRuntime>, request: InvokeRequest) -> Rece
         }),
     );
     rx
+}
+
+/// A command's answer as the webview receives it (#576 C4): the resolved value,
+/// or the rejected `CommandError` object.
+fn answer_of(answer: Value) -> Result<Value, Value> {
+    match answer.get("ipc_error") {
+        Some(error) => Err(error.clone()),
+        None => Ok(answer),
+    }
+}
+
+/// The rejected answer's display message, if it was rejected.
+fn error_message(answer: &Result<Value, Value>) -> Option<&str> {
+    answer
+        .as_ref()
+        .err()
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str)
 }
 
 /// One importer's command, the synthetic file it imports and its IPC arguments.
@@ -155,7 +173,7 @@ struct Observed {
     /// was in hand.
     running_when_progress_seen: bool,
     progress_phase: String,
-    result: CommandResult,
+    result: Result<Value, Value>,
     sections: usize,
     undo_available: bool,
 }
@@ -204,7 +222,7 @@ fn run_with_cancel_in_read_phase(case: &ImportCase) -> Observed {
     let answer = early
         .or_else(|| import.recv_timeout(Duration::from_secs(20)).ok())
         .expect("the import answers");
-    let result: CommandResult = serde_json::from_value(answer).expect("a CommandResult");
+    let result = answer_of(answer);
     let state = app.state::<AppState>();
     let sections = state.get_project_state().expect("project").sections.len();
     Observed {
@@ -238,8 +256,8 @@ fn a_cancel_dispatched_while_an_import_reads_its_file_stops_it_with_nothing_comm
             seen.dispatch_held_thread.as_secs_f64(),
             seen.progress_phase,
             seen.running_when_progress_seen,
-            seen.result.success,
-            seen.result.error,
+            seen.result.is_ok(),
+            seen.result.as_ref().err(),
             seen.sections,
             seen.undo_available,
         );
@@ -263,16 +281,13 @@ fn a_cancel_dispatched_while_an_import_reads_its_file_stops_it_with_nothing_comm
             case.command
         );
         assert!(
-            seen.result
-                .error
-                .as_deref()
-                .is_some_and(|e| e.starts_with("IMPORT_CANCELLED:")),
+            error_message(&seen.result).is_some_and(|e| e.starts_with("IMPORT_CANCELLED:")),
             "{}: the Cancel reached the running import: {:?}",
             case.command,
-            seen.result.error
+            seen.result.as_ref().err()
         );
         assert!(
-            !seen.result.success,
+            seen.result.is_err(),
             "{}: a cancelled import fails",
             case.command
         );
@@ -298,8 +313,8 @@ fn an_import_dispatched_off_the_main_thread_still_lands() {
         let answer = import
             .recv_timeout(Duration::from_secs(20))
             .expect("the import answers");
-        let result: CommandResult = serde_json::from_value(answer).expect("a CommandResult");
-        assert!(result.success, "{}: {:?}", case.command, result.error);
+        let result = answer_of(answer);
+        assert!(result.is_ok(), "{}: {:?}", case.command, result.err());
         let sections = app
             .state::<AppState>()
             .get_project_state()

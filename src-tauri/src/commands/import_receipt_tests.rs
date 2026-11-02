@@ -57,6 +57,8 @@ fn test_import_sections_provenance_params_decorate_receipt() {
         ));
         assert_success(&result);
         let receipt = result
+            .as_ref()
+            .expect("the import succeeds")
             .import_receipt
             .as_ref()
             .expect("import must attach an import receipt");
@@ -122,6 +124,8 @@ fn test_import_sections_sanitizes_hostile_zero_datum_section_name() {
         assert_success(&result);
 
         let receipt = result
+            .as_ref()
+            .expect("the import succeeds")
             .import_receipt
             .as_ref()
             .expect("import must attach an import receipt");
@@ -179,6 +183,8 @@ fn test_import_sections_without_provenance_params_leaves_receipt_defaults() {
         ));
         assert_success(&result);
         let receipt = result
+            .as_ref()
+            .expect("the import succeeds")
             .import_receipt
             .as_ref()
             .expect("import must attach an import receipt");
@@ -228,6 +234,8 @@ fn test_execute_gpx_import_decorates_receipt() {
         ));
         assert_success(&result);
         let receipt = result
+            .as_ref()
+            .expect("the import succeeds")
             .import_receipt
             .as_ref()
             .expect("import must attach an import receipt");
@@ -267,6 +275,8 @@ fn test_import_sections_with_nothing_to_import_still_reports_a_receipt() {
 
         assert_success(&result);
         let receipt = result
+            .as_ref()
+            .expect("the import succeeds")
             .import_receipt
             .as_ref()
             .expect("an import that landed nothing must still report a receipt");

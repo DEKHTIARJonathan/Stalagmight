@@ -3,7 +3,7 @@
 use super::{
     cache, config, export, history, import, project, raw_data, section, shot, station, validation,
 };
-use crate::core::{AppState, Command, CommandResult};
+use crate::core::{AppState, Command, CommandError, CommandResult};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
     ShotKind, ShotUpdates, StationRef, SurveyDirection,
@@ -89,18 +89,44 @@ impl Drop for EnvVarGuard {
     }
 }
 
-pub(super) fn assert_success(result: &CommandResult) {
-    assert!(
-        result.success,
-        "expected success, got error: {:?}",
-        result.error
-    );
-    assert!(result.error.is_none());
+/// A command's answer as the assertions below read it (#576 C4): a command
+/// answers `Result<T, CommandError>`, an `AppState` method a `CommandResult`.
+pub(super) trait Answer {
+    /// `true` when the answer is a success.
+    fn succeeded(&self) -> bool;
+    /// The failure's display message (`None` on success or when there is none).
+    fn failure_message(&self) -> Option<&str>;
 }
 
-fn assert_failure_contains(result: &CommandResult, needle: &str) {
-    assert!(!result.success, "expected failure");
-    let err = result.error.as_deref().unwrap_or("<none>");
+impl Answer for CommandResult {
+    fn succeeded(&self) -> bool {
+        self.success && self.error.is_none()
+    }
+    fn failure_message(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+}
+
+impl<T> Answer for Result<T, CommandError> {
+    fn succeeded(&self) -> bool {
+        self.is_ok()
+    }
+    fn failure_message(&self) -> Option<&str> {
+        self.as_ref().err().map(|e| e.message.as_str())
+    }
+}
+
+pub(super) fn assert_success(result: &impl Answer) {
+    assert!(
+        result.succeeded(),
+        "expected success, got error: {:?}",
+        result.failure_message()
+    );
+}
+
+fn assert_failure_contains(result: &impl Answer, needle: &str) {
+    assert!(!result.succeeded(), "expected failure");
+    let err = result.failure_message().unwrap_or("<none>");
     assert!(
         err.contains(needle),
         "expected error containing '{needle}', got '{err}'"
@@ -168,7 +194,7 @@ fn create_section_with_shots(app: &tauri::App<MockRuntime>, shots: Vec<ShotData>
         shots,
     ));
     assert_success(&result);
-    result.section_id.expect("section id")
+    result.expect("section id").section_id
 }
 
 fn project_with_section(shots: Vec<ShotData>) -> Project {
@@ -1237,8 +1263,8 @@ fn test_undo_to_fails_when_index_out_of_bounds() {
 
     // Index 0 should work (1 item), but index 1 should fail
     let result = run(history::undo_to(h(&app), 1));
-    assert!(!result.success);
-    assert!(result.error.unwrap().contains("Invalid undo index"));
+    assert!(result.is_err());
+    assert!(result.unwrap_err().message.contains("Invalid undo index"));
 }
 
 #[test]
@@ -1289,8 +1315,8 @@ fn test_redo_to_fails_when_index_out_of_bounds() {
 
     // Index 0 should work (1 item), but index 1 should fail
     let result = run(history::redo_to(h(&app), 1));
-    assert!(!result.success);
-    assert!(result.error.unwrap().contains("Invalid redo index"));
+    assert!(result.is_err());
+    assert!(result.unwrap_err().message.contains("Invalid redo index"));
 }
 
 #[test]
@@ -1344,8 +1370,8 @@ fn test_undo_to_fails_when_stack_empty() {
     let app = app_with_state();
     // No project or actions
     let result = run(history::undo_to(h(&app), 0));
-    assert!(!result.success);
-    assert!(result.error.unwrap().contains("Invalid undo index"));
+    assert!(result.is_err());
+    assert!(result.unwrap_err().message.contains("Invalid undo index"));
 }
 
 #[test]
@@ -1353,8 +1379,8 @@ fn test_redo_to_fails_when_stack_empty() {
     let app = app_with_state();
     // No project or actions, so no redo available
     let result = run(history::redo_to(h(&app), 0));
-    assert!(!result.success);
-    assert!(result.error.unwrap().contains("Invalid redo index"));
+    assert!(result.is_err());
+    assert!(result.unwrap_err().message.contains("Invalid redo index"));
 }
 
 // === Project commands ===
@@ -1792,6 +1818,7 @@ fn test_import_sections_persists_deferred_new_project() {
             None,
         ));
         assert_success(&result);
+        let result = result.expect("the import succeeds");
 
         // The command resolved the deferred save: file on disk + in Recent Projects.
         assert!(
@@ -1883,6 +1910,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
         // Partial success: the import itself still succeeds, but a warning flags the
         // failed save instead of reporting a phantom "saved".
         assert_success(&result);
+        let result = result.expect("the import succeeds");
         assert!(
             result
                 .warnings
@@ -2007,6 +2035,7 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
 
         // Partial success carrying a HUMANIZED permission warning...
         assert_success(&result);
+        let result = result.expect("the import succeeds");
         assert!(
             result
                 .warnings
@@ -2078,6 +2107,7 @@ fn test_import_sections_deferred_save_generic_open_failure_is_not_a_denial() {
         ));
 
         assert_success(&result);
+        let result = result.expect("the import succeeds");
         assert!(
             !result.warnings.is_empty(),
             "the deferred save failed, so the import must say it is unsaved"
@@ -2244,7 +2274,7 @@ fn test_delete_project_leaves_a_same_stem_tml_alone() {
 
             let result = run(project::delete_project(h(&app), saved_path.clone()));
 
-            assert!(result.success, "the .stalx delete succeeded");
+            assert!(result.is_ok(), "the .stalx delete succeeded");
             assert!(!saved_path.exists(), "project .stalx should be trashed");
             assert!(
                 tml.exists(),
@@ -2321,10 +2351,11 @@ fn test_delete_project_partial_failure_still_prunes_recents() {
     fs::set_permissions(readonly_dir.path(), perms).unwrap();
 
     assert!(
-        result.success,
+        result.is_ok(),
         "the .stalx was trashed, so the delete succeeded overall: {:?}",
-        result.error
+        result.as_ref().err()
     );
+    let result = result.expect("the delete succeeded");
     assert!(!saved_path.exists(), "project .stalx should be trashed");
     assert!(
         result
@@ -2408,7 +2439,7 @@ fn test_delete_project_of_open_project_tears_down_the_session() {
                 "the database handle LEAKED: still open on a file that was just deleted",
             );
             assert!(
-                db_err.contains("No project database"),
+                db_err.message.contains("No project database"),
                 "expected the no-database error, got: {db_err}"
             );
             assert!(
@@ -2524,7 +2555,11 @@ fn test_delete_project_tears_down_before_removing_the_file() {
             // and a frontend that tried kept rendering a project the backend had
             // already dropped.
             assert_eq!(
-                result.session_closed,
+                result
+                    .as_ref()
+                    .expect_err("the delete failed")
+                    .payload
+                    .session_closed,
                 Some(true),
                 "a failed delete that already tore the session down must still report it"
             );
@@ -2563,8 +2598,8 @@ fn test_delete_project_reports_whether_it_closed_the_session() {
             let other = run(project::delete_project(h(&app), other_path.clone()));
             assert_success(&other);
             assert!(!other_path.exists(), "the unrelated .stalx was deleted");
-            assert_eq!(
-                other.session_closed, None,
+            assert!(
+                !other.expect("the delete succeeded").session_closed,
                 "deleting an unrelated project must not report - or perform - a close"
             );
             assert!(
@@ -2582,9 +2617,8 @@ fn test_delete_project_reports_whether_it_closed_the_session() {
 
             let own = run(project::delete_project(h(&app), open_path.clone()));
             assert_success(&own);
-            assert_eq!(
-                own.session_closed,
-                Some(true),
+            assert!(
+                own.expect("the delete succeeded").session_closed,
                 "deleting the OPEN project's own .stalx must report the close"
             );
             assert!(
@@ -2635,9 +2669,8 @@ fn test_delete_project_matches_an_alias_of_the_open_path() {
             let result = run(project::delete_project(h(&app), alias));
 
             assert_success(&result);
-            assert_eq!(
-                result.session_closed,
-                Some(true),
+            assert!(
+                result.expect("the delete succeeded").session_closed,
                 "an alias of the open project's path must still close the session"
             );
             assert!(!saved_path.exists(), "the aliased .stalx should be trashed");
@@ -2742,8 +2775,8 @@ fn test_delete_project_by_an_alias_prunes_the_recents_entry() {
                 "and must not over-prune: an unrelated project's row has to survive: \
                  {recents_after:?}"
             );
-            assert_eq!(
-                result.session_closed, None,
+            assert!(
+                !result.expect("the delete succeeded").session_closed,
                 "the deleted project was already closed and the OPEN one is a \
                  different file, so no session was torn down"
             );
@@ -2856,8 +2889,8 @@ fn test_delete_project_of_a_symlink_to_the_open_project_spares_the_referent() {
             );
 
             // The session is still valid: its file is right there.
-            assert_eq!(
-                result.session_closed, None,
+            assert!(
+                !result.expect("the delete succeeded").session_closed,
                 "the referent's session is still backed by a real file, so nothing may \
                  be torn down - and the frontend must not be told it was"
             );
@@ -2951,9 +2984,8 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
                 "the referent was not named, so it survives even here"
             );
 
-            assert_eq!(
-                result.session_closed,
-                Some(true),
+            assert!(
+                result.expect("the delete succeeded").session_closed,
                 "the session's own file_path was the link we just removed, so it MUST \
                  be torn down - leaving it open points every later save at a path that \
                  no longer exists"
@@ -3045,9 +3077,8 @@ fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
                 "the delete really did destroy the file under the real path, so \
                  referent identity is the correct reading here"
             );
-            assert_eq!(
-                result.session_closed,
-                Some(true),
+            assert!(
+                result.expect("the delete succeeded").session_closed,
                 "a second spelling of the open project's path must still close the \
                  session: on Windows the trash is denied outright while SQLite's handle \
                  is alive"
@@ -3159,7 +3190,7 @@ fn test_create_section_defaults_direction() {
         vec![shot_data(1.0)],
     ));
     assert_success(&result);
-    let section = get_section(state(&app), result.section_id.unwrap()).unwrap();
+    let section = get_section(state(&app), result.unwrap().section_id).unwrap();
     assert_eq!(section.direction, SurveyDirection::In);
 }
 
@@ -3327,7 +3358,7 @@ fn test_create_section_with_validation_warnings() {
         None,
         vec![shot_data(0.05)],
     ));
-    assert!(result.success);
+    let result = result.expect("success");
     assert!(!result.warnings.is_empty());
 }
 
@@ -3383,12 +3414,12 @@ fn test_create_shot_returns_warning_for_short() {
     create_project(&app);
     let id = create_section_with_shots(&app, vec![]);
     let result = run(shot::create_shot(h(&app), id, shot_data(0.05), None, None));
-    assert!(result.success);
+    // `ShotCreated::shot_id` is required: a success without it is INTERNAL_ERROR,
+    // so the `expect` is the "shot_id is returned" assertion.
+    let result = result.expect("shot_id must be returned even when warnings are present");
     assert!(!result.warnings.is_empty());
-    assert!(
-        result.shot_id.is_some(),
-        "shot_id must be returned even when warnings are present"
-    );
+    let section = get_section(state(&app), id).unwrap();
+    assert_eq!(section.shots.last().map(|s| s.id), Some(result.shot_id));
 }
 
 #[test]
@@ -3420,11 +3451,12 @@ fn test_create_shot_before_inserts_at_position() {
         Some(0),
     ));
     assert_success(&result);
-    assert!(
-        result.shot_id.is_some(),
-        "shot_id must be returned on success"
-    );
+    let shot_id = result.expect("shot_id must be returned on success").shot_id;
     let section = get_section(state(&app), id).unwrap();
+    assert_eq!(
+        section.shots[0].id, shot_id,
+        "the returned id names the new shot"
+    );
     assert_eq!(section.shots.len(), 3);
     assert_eq!(
         section.shots[0].length, 5.0,
@@ -3552,7 +3584,7 @@ fn test_delete_shot_and_split_creates_new_section() {
         "Section B".to_string(),
     ));
     assert_success(&result);
-    let new_id = result.section_id.expect("new section id");
+    let new_id = result.expect("new section id").section_id;
 
     let section_a = get_section(state(&app), id).unwrap();
     let section_b = get_section(state(&app), new_id).unwrap();
@@ -3964,7 +3996,7 @@ fn test_export_image_refuses_to_overwrite_open_project_file() {
         "must refuse to export an image over the open project file"
     );
     assert!(
-        result.unwrap_err().contains("open project"),
+        result.unwrap_err().message.contains("open project"),
         "error must explain the clobber guard"
     );
     // The project database on disk is untouched (still present, not an SVG).
@@ -4000,7 +4032,7 @@ fn test_export_image_refuses_to_overwrite_the_plnx_sibling() {
         "an image export must refuse the open project's .plnx sibling"
     );
     assert!(
-        result.unwrap_err().contains("open project"),
+        result.unwrap_err().message.contains("open project"),
         "error must explain the clobber guard"
     );
     assert_eq!(
@@ -4029,7 +4061,7 @@ fn test_text_exports_refuse_to_overwrite_the_plnx_sibling() {
     ] {
         assert!(res.is_err(), "text export must refuse the .plnx sibling");
         assert!(
-            res.unwrap_err().contains("open project"),
+            res.unwrap_err().message.contains("open project"),
             "error must explain the clobber guard"
         );
     }
@@ -4058,7 +4090,7 @@ fn test_text_exports_refuse_to_overwrite_open_project_file() {
             "text export must refuse the open project path"
         );
         assert!(
-            res.unwrap_err().contains("open project"),
+            res.unwrap_err().message.contains("open project"),
             "error must explain the clobber guard"
         );
     }
@@ -5300,7 +5332,7 @@ fn test_create_section_with_date_roundtrip() {
         vec![shot_data(1.0)],
     ));
     assert_success(&result);
-    let section = get_section(state(&app), result.section_id.unwrap()).unwrap();
+    let section = get_section(state(&app), result.unwrap().section_id).unwrap();
     assert_eq!(section.date, Some(date));
     assert_eq!(section.direction, SurveyDirection::Out);
 }
@@ -5343,7 +5375,7 @@ fn test_create_section_and_merge_success() {
     ));
 
     assert_success(&result);
-    let new_section_id = result.section_id.expect("new section id");
+    let new_section_id = result.expect("new section id").section_id;
     let project_state = run(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 2);
     assert_eq!(project_state.project.station_merges.len(), 1);
@@ -5478,7 +5510,7 @@ fn test_get_segment_geometry_no_project_errors() {
     let app = app_with_state();
     let result = run(section::get_segment_geometry(h(&app), 0));
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("No project open"));
+    assert!(result.unwrap_err().message.contains("No project open"));
 }
 
 #[test]
@@ -5487,7 +5519,7 @@ fn test_get_segment_geometry_invalid_section_errors() {
     create_project(&app);
     let result = run(section::get_segment_geometry(h(&app), 999));
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("not found"));
+    assert!(result.unwrap_err().message.contains("not found"));
 }
 
 #[test]
@@ -5671,7 +5703,7 @@ fn test_get_raw_table_rejects_injection_names() {
     for name in ["shots; DROP TABLE shots", "sqlite_master"] {
         let err = run(raw_data::get_raw_table(h(&app), name.to_string(), 100, 0)).unwrap_err();
         assert!(
-            err.contains("Unknown table"),
+            err.message.contains("Unknown table"),
             "expected rejection for {name:?}, got: {err}"
         );
     }
@@ -5682,7 +5714,7 @@ fn test_raw_data_commands_fail_without_db() {
     let app = app_with_state();
 
     let err = run(raw_data::get_raw_table_names(h(&app))).unwrap_err();
-    assert!(err.contains("save the project"), "got: {err}");
+    assert!(err.message.contains("save the project"), "got: {err}");
 
     let err = run(raw_data::get_raw_table(
         h(&app),
@@ -5691,7 +5723,7 @@ fn test_raw_data_commands_fail_without_db() {
         0,
     ))
     .unwrap_err();
-    assert!(err.contains("save the project"), "got: {err}");
+    assert!(err.message.contains("save the project"), "got: {err}");
 }
 
 // ========================================================================

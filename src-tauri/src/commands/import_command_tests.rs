@@ -18,7 +18,7 @@ use super::import::{
     check_duplicate_import, execute_compass_import, execute_tml_import, execute_walls_import,
 };
 use crate::core::state::AppState;
-use crate::core::{Command, CommandResult};
+use crate::core::{Command, CommandError, ImportOutcome};
 
 /// A `tauri::test` app managing a fresh app state with an open, empty project.
 fn project_app() -> App<MockRuntime> {
@@ -56,8 +56,8 @@ pub(super) fn write(dir: &TempDir, name: &str, body: &str) -> PathBuf {
 
 /// The receipt's source label, unit note and found count, after asserting the
 /// import succeeded.
-fn receipt_of(result: &CommandResult) -> (String, Option<String>, u32) {
-    assert!(result.success, "{:?}", result.error);
+fn receipt_of(result: &Result<ImportOutcome, CommandError>) -> (String, Option<String>, u32) {
+    let result = result.as_ref().expect("the import succeeds");
     let receipt = result.import_receipt.as_ref().expect("an import receipt");
     (
         receipt.source_format.clone(),
@@ -93,7 +93,7 @@ fn tml_import(
     path: &Path,
     hash: Option<&str>,
     sections: Option<Vec<u32>>,
-) -> (App<MockRuntime>, CommandResult) {
+) -> (App<MockRuntime>, Result<ImportOutcome, CommandError>) {
     let app = project_app();
     let result = block_on(execute_tml_import(
         app.handle().clone(),
@@ -180,7 +180,7 @@ fn compass_import(
     path: &Path,
     hash: Option<&str>,
     include_excluded: bool,
-) -> (App<MockRuntime>, CommandResult) {
+) -> (App<MockRuntime>, Result<ImportOutcome, CommandError>) {
     let app = project_app();
     let result = block_on(execute_compass_import(
         app.handle().clone(),
@@ -239,7 +239,7 @@ fn walls_import(
     path: &Path,
     hash: Option<&str>,
     include_splays: bool,
-) -> (App<MockRuntime>, CommandResult) {
+) -> (App<MockRuntime>, Result<ImportOutcome, CommandError>) {
     let app = project_app();
     let result = block_on(execute_walls_import(
         app.handle().clone(),

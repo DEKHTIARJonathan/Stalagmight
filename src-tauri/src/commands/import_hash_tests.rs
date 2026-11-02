@@ -29,7 +29,7 @@ fn a_folder_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let err = block_on(calculate_file_hash(dir.path().to_path_buf())).unwrap_err();
     println!("hash of a folder -> {err}");
-    assert!(err.contains("not a regular file"), "{err}");
+    assert!(err.message.contains("not a regular file"), "{err}");
 }
 
 /// A FIFO is refused at once instead of blocking the command until somebody
@@ -62,5 +62,5 @@ fn a_fifo_is_refused_without_blocking() {
     let err = outcome
         .expect("must return within five seconds")
         .unwrap_err();
-    assert!(err.contains("not a regular file"), "{err}");
+    assert!(err.message.contains("not a regular file"), "{err}");
 }

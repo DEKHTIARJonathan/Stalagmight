@@ -1006,7 +1006,7 @@ mod tests {
         // Should be valid JSON
         let parsed: serde_json::Value =
             serde_json::from_str(&display).expect("Display should produce valid JSON");
-        assert_eq!(parsed["code"], "TEST_ERROR");
+        assert_eq!(parsed["code"], "FAILED");
         assert_eq!(parsed["message"], "Test message");
     }
 
@@ -1034,10 +1034,19 @@ mod tests {
 
     #[test]
     fn test_load_error_constructors() {
-        assert_eq!(LoadError::already_open().code, "ALREADY_OPEN");
-        assert_eq!(LoadError::cancelled().code, "CANCELLED");
-        assert_eq!(LoadError::not_found("/path/to/file").code, "NOT_FOUND");
-        assert_eq!(LoadError::internal("error").code, "INTERNAL");
+        assert_eq!(
+            LoadError::already_open().code,
+            CommandErrorCode::AlreadyOpen
+        );
+        assert_eq!(LoadError::cancelled().code, CommandErrorCode::Cancelled);
+        assert_eq!(
+            LoadError::not_found("/path/to/file").code,
+            CommandErrorCode::NotFound
+        );
+        assert_eq!(
+            LoadError::internal("error").code,
+            CommandErrorCode::InternalError
+        );
     }
 
     #[test]

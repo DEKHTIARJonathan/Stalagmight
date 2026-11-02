@@ -59,7 +59,7 @@ fn pre_restore_copies(project: &Path) -> Vec<(String, String)> {
     copies
 }
 
-fn restore(project: &Path, candidate: &Path) -> Result<String, String> {
+fn restore(project: &Path, candidate: &Path) -> Result<String, crate::core::CommandError> {
     tauri::async_runtime::block_on(recovery::restore_from_backup(
         project.to_path_buf(),
         candidate.to_path_buf(),

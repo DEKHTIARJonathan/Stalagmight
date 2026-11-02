@@ -87,7 +87,7 @@ fn the_load_path_refuses_a_pre_release_file_with_its_own_code() {
         "load_project_full -> code={} message={:?}",
         error.code, error.message
     );
-    assert_eq!(error.code, "PRE_RELEASE_FILE");
+    assert_eq!(error.code, crate::models::CommandErrorCode::PreReleaseFile);
     assert!(
         error
             .message

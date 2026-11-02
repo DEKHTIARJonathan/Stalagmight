@@ -85,7 +85,11 @@ fn an_older_project_whose_copy_cannot_be_written_is_refused_with_the_reason() {
         "load -> code {}: {} (details {:?})",
         error.code, error.message, error.details
     );
-    assert_eq!(error.code, "PERMISSION", "{error:?}");
+    assert_eq!(
+        error.code,
+        crate::models::CommandErrorCode::FsPermissionDenied,
+        "{error:?}"
+    );
     assert!(
         error
             .message
