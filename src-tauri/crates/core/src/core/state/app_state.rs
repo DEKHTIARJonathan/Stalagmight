@@ -241,6 +241,15 @@ pub struct AppState {
     /// open, a close, a logout bump the generation); an explicit Start editing
     /// clears it. Transient, never persisted; an atomic, so it is no lock cell.
     pub(super) speleodb_finished_here: AtomicU64,
+    /// [#576 NF-W4C-3-EDIT] The session generation, plus one, an Ariane adoption
+    /// shut the edit gate in, from its local span until its hand-over push has
+    /// landed (0: not shut): the adopted project is open (and reopened editable,
+    /// before its link was stamped) through the hand-over, and an edit there could
+    /// ride the push or be lost by the adoption's final close. Read by
+    /// `guard_metadata_mutation`; lapses at the next session boundary and is
+    /// cleared when the adoption returns. Transient, never persisted; an atomic,
+    /// so it is no lock cell.
+    pub(super) speleodb_adoption_gate: AtomicU64,
     /// Serializes SpeleoDB lock-acquisition spans against lock releases that run
     /// detached from the session that captured them (the delete's captured
     /// release, the stranded-claim janitor). Start Editing holds this across
@@ -355,6 +364,7 @@ impl AppState {
             adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),
             speleodb_finished_here: AtomicU64::new(0),
+            speleodb_adoption_gate: AtomicU64::new(0),
             speleodb_lock_ops: RecoveringMutex::with_monitor("speleodb_lock_ops", (), &poison),
             poison,
         })
@@ -600,6 +610,16 @@ impl AppState {
     pub(super) fn guard_metadata_mutation(&self, what: &str) -> Result<(), CommandResult> {
         if let Some(version) = self.newer_file_schema() {
             return Err(newer_file_edit_refusal(what, version));
+        }
+        // [#576 NF-W4C-3-EDIT] An Ariane adoption is handing this project over to
+        // SpeleoDB: no edit until its push has landed. The read-only code, so the
+        // frontend shows its read-only notice.
+        if self.speleodb_adoption_holds_gate() {
+            return Err(CommandResult::failure(format!(
+                "{}: {what} is disabled: this project is being handed over to SpeleoDB. \
+                 Edit it once the upload has finished.",
+                crate::core::command::EDIT_DISABLED_CODE
+            )));
         }
         if self.edit_enabled() {
             return Ok(());

@@ -227,6 +227,28 @@ impl AppState {
         self.speleodb_finished_here.load(Ordering::SeqCst) == generation.wrapping_add(1)
     }
 
+    /// [#576 NF-W4C-3-EDIT] Shut the edit gate for an Ariane adoption's hand-over,
+    /// in the current session generation (see `AppState::speleodb_adoption_gate`).
+    /// Called inside the adoption's `command_lock` span, so no edit can land between
+    /// the span and the gate.
+    pub(super) fn speleodb_shut_gate_for_adoption(&self) {
+        let generation = self.speleodb_session_generation();
+        self.speleodb_adoption_gate
+            .store(generation.wrapping_add(1), Ordering::SeqCst);
+    }
+
+    /// Whether an adoption's hand-over holds the edit gate shut in the current
+    /// session generation.
+    pub(super) fn speleodb_adoption_holds_gate(&self) -> bool {
+        let generation = self.speleodb_session_generation();
+        self.speleodb_adoption_gate.load(Ordering::SeqCst) == generation.wrapping_add(1)
+    }
+
+    /// Lift the adoption's hold on the edit gate: the adoption has returned.
+    pub(super) fn speleodb_open_gate_after_adoption(&self) {
+        self.speleodb_adoption_gate.store(0, Ordering::SeqCst);
+    }
+
     /// Drop the "finished here" mark: an explicit Start editing is the user asking
     /// to edit here again.
     pub(super) fn speleodb_clear_finished_here(&self) {

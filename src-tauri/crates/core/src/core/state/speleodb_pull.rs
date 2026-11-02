@@ -58,6 +58,16 @@ const ADOPT_COMMIT_MESSAGE: &str = "Adopt into Stalagmight";
 /// candidate.
 const ADOPT_STAGING_PREFIX: &str = "adopt-staging-";
 
+/// [#576 NF-W4C-3-EDIT] Lifts an adoption's hold on the edit gate (see
+/// `AppState::speleodb_shut_gate_for_adoption`) when the adoption returns.
+struct AdoptionEditGate<'a>(&'a AppState);
+
+impl Drop for AdoptionEditGate<'_> {
+    fn drop(&mut self) {
+        self.0.speleodb_open_gate_after_adoption();
+    }
+}
+
 /// This process's staging filename. Per-process, so two instances adopting the same
 /// project cannot delete each other's work in progress.
 fn adopt_staging_name() -> String {
@@ -1332,6 +1342,9 @@ impl AppState {
         // [#576 NF-W4C-3] Built here, STAMPED inside `adopt_import_and_save`, as the
         // last step of the one `command_lock` span that builds, saves, promotes and
         // reopens the copy - see that function for what a separate stamp let in.
+        // [#576 NF-W4C-3-EDIT] Lifts the edit gate the local span shuts, when this
+        // adoption returns - on every path, early or not.
+        let _edit_gate = AdoptionEditGate(self);
         let adopt = self.adopt_import_and_save(
             guard_local_edits_of,
             &tml_scratch,
@@ -1917,6 +1930,10 @@ impl AppState {
         let adopted_undo_mode = self.speleodb_open_link().ok().and_then(|l| l.undo_mode);
         let stamped =
             self.speleodb_set_open_link(&make_link(self.effective_undo_mode(adopted_undo_mode)));
+        // [#576 NF-W4C-3-EDIT] Still inside the span: the adopted project stays shut
+        // to edits until the hand-over push lands. `speleodb_adopt_ariane` lifts it
+        // when it returns (`AdoptionEditGate`).
+        self.speleodb_shut_gate_for_adoption();
         drop(commands);
         Ok((receipt, stamped))
     }
