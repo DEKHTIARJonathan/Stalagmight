@@ -279,6 +279,15 @@ mod save_sidecar_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod sdb_adopt_guard_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, and the printed \
               counts are the evidence a run captures"

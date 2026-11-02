@@ -154,6 +154,7 @@ fn fixture() -> Fixture {
 /// span once it is one). `Ok` only when the build AND the stamp succeeded.
 fn adopt(f: &Fixture, observe: impl FnOnce()) -> Result<(), String> {
     let adopted = f.state.adopt_import_and_save(
+        None,
         &f.remote,
         "ariane.tml",
         &f.dest,

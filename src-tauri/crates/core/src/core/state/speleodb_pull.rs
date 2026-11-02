@@ -1280,10 +1280,11 @@ impl AppState {
         // then only compared against, purely so a source-string tripwire in
         // `speleodb_cache` would count it. See that module's test for what pins the
         // waiver now.
-        if !discard_local {
-            self.guard_local_edits(&project_id, &dest)
-                .map_err(local_dto)?;
-        }
+        //
+        // [#576 NF-W5L-3] Checked INSIDE the adoption's `command_lock` span (see
+        // `adopt_import_and_save`), not here: checked before the span, an edit to the
+        // open cache copy landing between the check and the span was overwritten.
+        let guard_local_edits_of = (!discard_local).then_some(project_id.as_str());
         let tml_scratch = dest.with_file_name("adopt-source.tml");
         dump.extract_entry_to(&tml_entry, &tml_scratch)
             .map_err(local_dto)?;
@@ -1332,6 +1333,7 @@ impl AppState {
         // last step of the one `command_lock` span that builds, saves, promotes and
         // reopens the copy - see that function for what a separate stamp let in.
         let adopt = self.adopt_import_and_save(
+            guard_local_edits_of,
             &tml_scratch,
             &tml_entry,
             &dest,
@@ -1890,6 +1892,7 @@ impl AppState {
     )]
     pub(super) fn adopt_import_and_save(
         &self,
+        guard_local_edits_of: Option<&str>,
         tml_path: &Path,
         entry_name: &str,
         dest: &Path,
@@ -1897,6 +1900,13 @@ impl AppState {
         make_link: impl FnOnce(crate::models::UndoMode) -> crate::models::SpeleoLink,
     ) -> Result<(Option<ImportReceipt>, Result<(), SpeleoDbError>), SpeleoErrorDto> {
         let commands = self.hold_commands();
+        // [#576 NF-W5L-3] The local-edits guard, first thing inside the span: an edit
+        // to the open cache copy either landed before it (and is seen) or waits for
+        // the span to end. `None` when the user has confirmed discarding them.
+        if let Some(project_id) = guard_local_edits_of {
+            self.guard_local_edits(project_id, dest)
+                .map_err(local_dto)?;
+        }
         let receipt =
             self.adopt_build_and_promote(&commands, tml_path, entry_name, dest, project_name)?;
         // [#303] Adoption builds the `.stalx` from an imported `.tml`, so there is
@@ -2985,6 +2995,7 @@ mod tests {
 
         let state = AppState::new().expect("state");
         let failed = state.adopt_import_and_save(
+            None,
             &not_a_tml,
             "ariane.tml",
             &dest,
@@ -3050,6 +3061,7 @@ mod tests {
 
         let dest = temp.path().join("project.stalx");
         let failed = state.adopt_import_and_save(
+            None,
             &not_a_tml,
             "ariane.tml",
             &dest,
