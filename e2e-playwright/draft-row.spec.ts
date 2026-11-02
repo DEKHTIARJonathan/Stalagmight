@@ -335,7 +335,8 @@ test.describe('Draft shot rows', () => {
       });
     await expect.poll(newShotLeft, { timeout: 5000 }).toBe(2.5);
     await expect(page.getByTestId('grid-cell-3-left')).toHaveText('2.5');
-    // Long enough for a second create of the same row to have landed, had one been sent.
+    // settle: proves NO second create_shot of this row is sent - a poll would pass on its
+    // first read. Long enough for a second create of the same row to have landed, had one been sent.
     await page.waitForTimeout(CREATE_DELAY_MS + 500);
     expect(await page.evaluate(() => (window as unknown as { __draftCalls__: string[] }).__draftCalls__)).toEqual([
       'create_shot',
