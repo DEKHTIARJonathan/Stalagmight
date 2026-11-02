@@ -291,6 +291,10 @@ impl AppState {
         // would be a teardown for nothing. See `names_the_deleted_file` above.)
         let mut cleared_claim = None;
         let (session_closed, held_lock) = {
+            // [#576 A1] `command_lock` before `project`: the teardown is a slot commit,
+            // and one landing inside an edit or an undo left that command's entry on
+            // the emptied session's stacks.
+            let commands = self.hold_commands();
             let mut open = self.project.lock().unwrap_or_else(|e| e.into_inner());
             // A never-saved project has no `file_path` and so can never be the file
             // being deleted - same predicate `open_project_path` encodes.
@@ -352,7 +356,7 @@ impl AppState {
                     purpose = "release the live handle before deleting the file",
                     "Closing the open project because its .stalx is being deleted"
                 );
-                self.close_open_project_locked(&mut open);
+                self.close_open_project_locked(&commands, &mut open);
             }
             (deleting_open_project, held_lock)
         };

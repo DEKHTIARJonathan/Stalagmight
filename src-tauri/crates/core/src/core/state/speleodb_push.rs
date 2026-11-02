@@ -834,8 +834,13 @@ impl AppState {
                 // upload below because that upload can come back ambiguous and return
                 // without concluding anything.
                 self.speleodb_note_prior_push_landed(project_id);
+                // [#576 B35(d)] Under `command_lock`, like every link write of the push:
+                // an autosave copies the link at its start and renames a fresh file over
+                // the live one, so a write landing inside it was lost.
+                let commands = self.hold_commands();
                 self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone())
                     .map_err(local_dto)?;
+                drop(commands);
             }
             // Forward-compatible only (unreachable while push-start is unpersisted):
             // the prior push landed and no edit followed, so adopt the tip and clear
@@ -846,6 +851,8 @@ impl AppState {
                 // recall went stale when that upload landed, so a failure to record
                 // the adoption locally must not be what leaves it standing.
                 let landed = self.speleodb_revision_landed(project_id);
+                // [#576 B35(d)] Under `command_lock`; see the arm above.
+                let _commands = self.hold_commands();
                 self.speleodb_mutate_link(|l| {
                     l.base_commit_sha = tip.clone();
                     l.has_unpushed_edits = false;
@@ -929,6 +936,9 @@ impl AppState {
         // fold so the self-heal below costs no extra round-trip. `None` means we could
         // not read it, which is not the same as "it is fine" - see the heal.
         let mut server_kind: Option<String> = None;
+        // The authoritative name, folded below under `command_lock` - the GET itself
+        // stays outside it, like every network call here.
+        let mut fetched_name: Option<String> = None;
         if fold_metadata {
             // `fetched`, not `project`, and deliberately so:
             // `bump_sites_are_exactly_the_known_set` recognises a commit into the
@@ -940,7 +950,7 @@ impl AppState {
             // describes the needle rather than quoting it.)
             match client::get_project(endpoint, token, insecure_http, project_id) {
                 Ok(fetched) => {
-                    self.speleodb_fold_local_name(&fetched.name);
+                    fetched_name = Some(fetched.name);
                     server_kind = Some(fetched.kind);
                 }
                 Err(e) => tracing::warn!(
@@ -960,6 +970,17 @@ impl AppState {
             .ok_or_else(|| local_dto(SpeleoDbError::Io("cache path has no parent".to_owned())))?;
         let snapshot = dir.join("snapshot.stalx");
         let tml = dir.join("ariane.tml");
+
+        // [#576 B35(d)] The LOCAL half of the push - the name fold, the push-start
+        // fence, the flush, the render and the snapshot - under `command_lock`, so an
+        // autosave (which runs through `execute`) can neither interleave with Done's own
+        // save nor slip an edit between the fence and the snapshot. Never across the
+        // network calls: an edit made while the upload runs must keep working, and the
+        // push-start fence keeps it (and its undo entry) for the next push.
+        let commands = self.hold_commands();
+        if let Some(name) = fetched_name.as_deref() {
+            self.speleodb_fold_local_name(name);
+        }
 
         // Push-start fence (#197): capture the instant BEFORE the flush/snapshot.
         // Any edit recorded after this (last_edit_at > push_start) is NOT in the
@@ -1008,6 +1029,8 @@ impl AppState {
             .to_rfc3339();
         drop(snapshot_db);
 
+        drop(commands);
+
         // FATAL if it fails: an unsanitized snapshot still carries the pusher's redo
         // history (and a stale dirty bit) and must never be uploaded. In Disabled mode
         // the undo history is fatal to leak too; in Full mode it is the payload.
@@ -1051,41 +1074,38 @@ impl AppState {
                     server_kind.as_deref(),
                 );
                 let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
-                self.speleodb_mutate_link(|l| {
-                    // NEVER let a successful push move BASE BACKWARD. A None BASE
-                    // over a dirty copy fences straight to Diverged, then walks the
-                    // whole history to the service-account creation root and calls
-                    // that a stranger's commit; the user gets a divergence prompt
-                    // against their own just-landed push. Keeping the previous BASE
-                    // instead costs at most one redundant ancestry recovery on the
-                    // next push, which is exactly what that machinery is for. Mirrors
-                    // the same guard the revision-restore path already applies.
-                    //
-                    // Presence is a sufficient test only because
-                    // `parse_upload_auto_response` now populates `latest_commit`
-                    // SOLELY from the 200 envelope's authoritative top-level
-                    // `hexsha`. It used to fall back to the response's own
-                    // eventually-consistent `latest_commit`, which is documented (and
-                    // was observed live) still pointing at the PRIOR tip right after
-                    // a push - a stale ancestor that sails through this check and
-                    // moves BASE backward past every intervening commit, which is the
-                    // exact failure the guard is here to prevent.
-                    if new_base.is_some() {
-                        l.base_commit_sha = new_base;
-                    } else {
-                        tracing::warn!(
-                            project_id,
-                            "upload 200 carried no commit sha; keeping the previous BASE \
-                             rather than resetting it to the empty-repo sentinel"
-                        );
-                    }
-                    if sync::edits_captured_by_push(l.last_edit_at.as_deref(), Some(&push_start)) {
-                        l.has_unpushed_edits = false;
-                        l.last_edit_at = None;
-                    }
-                })
+                // NEVER let a successful push move BASE BACKWARD. A None BASE
+                // over a dirty copy fences straight to Diverged, then walks the
+                // whole history to the service-account creation root and calls
+                // that a stranger's commit; the user gets a divergence prompt
+                // against their own just-landed push. Keeping the previous BASE
+                // instead costs at most one redundant ancestry recovery on the
+                // next push, which is exactly what that machinery is for. Mirrors
+                // the same guard the revision-restore path already applies.
+                //
+                // Presence is a sufficient test only because
+                // `parse_upload_auto_response` now populates `latest_commit`
+                // SOLELY from the 200 envelope's authoritative top-level
+                // `hexsha`. It used to fall back to the response's own
+                // eventually-consistent `latest_commit`, which is documented (and
+                // was observed live) still pointing at the PRIOR tip right after
+                // a push - a stale ancestor that sails through this check and
+                // moves BASE backward past every intervening commit, which is the
+                // exact failure the guard is here to prevent.
+                if new_base.is_none() {
+                    tracing::warn!(
+                        project_id,
+                        "upload 200 carried no commit sha; keeping the previous BASE \
+                         rather than resetting it to the empty-repo sentinel"
+                    );
+                }
+                self.speleodb_record_landed_upload(
+                    new_base.as_deref(),
+                    &push_start,
+                    &undo_cutoff,
+                    snapshot_newest,
+                )
                 .map_err(local_dto)?;
-                self.speleodb_clear_undo_after_push(&undo_cutoff, snapshot_newest);
                 Ok(landed)
             }
             Err(e) => {
@@ -1105,17 +1125,14 @@ impl AppState {
                         project_id,
                         server_kind.as_deref(),
                     );
-                    self.speleodb_mutate_link(|l| {
-                        if sync::edits_captured_by_push(
-                            l.last_edit_at.as_deref(),
-                            Some(&push_start),
-                        ) {
-                            l.has_unpushed_edits = false;
-                            l.last_edit_at = None;
-                        }
-                    })
+                    // BASE unchanged: the tree already matched.
+                    self.speleodb_record_landed_upload(
+                        None,
+                        &push_start,
+                        &undo_cutoff,
+                        snapshot_newest,
+                    )
                     .map_err(local_dto)?;
-                    self.speleodb_clear_undo_after_push(&undo_cutoff, snapshot_newest);
                     return Ok(landed);
                 }
                 // Ambiguous (retried-then-exhausted 5xx, or a transport drop): we
@@ -1205,6 +1222,38 @@ impl AppState {
                 "speleodb: could not flip the project type after a landed push; the next push retries"
             ),
         }
+    }
+
+    /// [#576 B35(d)] Record an upload that CONCLUDED (a 200, or a 304 whose tree
+    /// already matched) on the open copy: advance BASE to `new_base` when there is
+    /// one, clear the dirty bit when no edit was recorded after `push_start`, and cut
+    /// the history the commit carried ([`Self::speleodb_clear_undo_after_push`]).
+    ///
+    /// Under `command_lock`. An autosave runs through `execute`, copies the link at
+    /// its start and renames a fresh file over the live one - with the handle out of
+    /// the slot in between - so a link write landing inside it either went into the
+    /// file about to be replaced (BASE and the dirty bit came back stale: a later
+    /// self-conflict) or failed with `NoRemoteProject` (Done reported an error for a
+    /// revision that landed, and skipped the history cut so it rode again).
+    pub(super) fn speleodb_record_landed_upload(
+        &self,
+        new_base: Option<&str>,
+        push_start: &str,
+        undo_cutoff: &str,
+        captured_through: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<(), SpeleoDbError> {
+        let _commands = self.hold_commands();
+        self.speleodb_mutate_link(|l| {
+            if let Some(base) = new_base {
+                l.base_commit_sha = Some(base.to_owned());
+            }
+            if sync::edits_captured_by_push(l.last_edit_at.as_deref(), Some(push_start)) {
+                l.has_unpushed_edits = false;
+                l.last_edit_at = None;
+            }
+        })?;
+        self.speleodb_clear_undo_after_push(undo_cutoff, captured_through);
+        Ok(())
     }
 
     /// [#303] Clear-on-push (q8 / Q25): after a CONFIRMED push, drop the undo entries

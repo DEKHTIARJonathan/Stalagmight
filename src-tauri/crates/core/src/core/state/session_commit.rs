@@ -17,16 +17,34 @@
 //! `project` acquisition. A cell is therefore written by every commit or by none,
 //! and adding a cell means adding a field the compiler then demands at every
 //! construction site. Pinned behaviourally by `session_commit_tests.rs`.
+//!
+//! [#576 A1] Every commit also holds `command_lock`, proven by a [`CommandsHeld`]
+//! argument. `execute`/undo/redo hold that lock for a whole command but take and
+//! release `project` several times inside it (undo data, mutation, epilogue, undo
+//! push); a commit that took only `project` could land in between and leave the
+//! OLD project's undo entry on the NEW project's freshly reset stack (the #413
+//! class). The caller takes the lock AFTER its slow file read, so a load still
+//! never blocks edits for the length of the read. Lock order, outermost first:
+//! `speleodb_lock_ops` -> `command_lock` -> `project` -> `database` ->
+//! `undo_stack` (docs/undo-redo.md, Lock Ordering). Pinned by
+//! `lifecycle_lock_tests.rs`.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::PoisonError;
+use std::sync::{MutexGuard, PoisonError};
 
 use chrono::{DateTime, Utc};
 
 use super::AppState;
 use crate::models::{Project, UndoPolicy};
 use crate::persistence::Database;
+
+/// Proof that the holder owns `command_lock`, the lock that serializes every
+/// command, undo and redo. A project-slot commit takes one as an argument, so a
+/// commit cannot be written without it.
+pub(super) struct CommandsHeld<'a> {
+    _guard: MutexGuard<'a, ()>,
+}
 
 /// One persisted history row as the load reads it: command, undo data, timestamp.
 pub(super) type HistoryRow = (String, String, Option<String>);
@@ -120,10 +138,30 @@ impl SessionCommit {
 }
 
 impl AppState {
-    /// Install `commit` as the open session, under one `project` acquisition.
-    pub(super) fn commit_open_session(&self, commit: SessionCommit) {
+    /// Take `command_lock` for a project-slot commit (or for anything else that must
+    /// not interleave with a command). Waits for an in-flight command to finish.
+    ///
+    /// RECOVERS a poisoned lock rather than refusing: the guarded value is `()`, so a
+    /// panicking holder left nothing half-written behind it, and refusing would make
+    /// every later load, create and close impossible for the rest of the session.
+    ///
+    /// Never call it while holding `project`, `database` or `undo_stack` (they sit
+    /// below it), and never take `speleodb_lock_ops` while holding it (that one sits
+    /// above it).
+    pub(super) fn hold_commands(&self) -> CommandsHeld<'_> {
+        CommandsHeld {
+            _guard: self
+                .command_lock
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        }
+    }
+
+    /// Install `commit` as the open session, under one `project` acquisition taken
+    /// inside the caller's `command_lock`.
+    pub(super) fn commit_open_session(&self, commands: &CommandsHeld<'_>, commit: SessionCommit) {
         let mut slot = self.project.lock().unwrap_or_else(PoisonError::into_inner);
-        self.commit_open_session_into(&mut slot, commit);
+        self.commit_open_session_into(commands, &mut slot, commit);
     }
 
     /// [`Self::commit_open_session`] with the `project` guard supplied by a caller
@@ -139,6 +177,7 @@ impl AppState {
     /// leaves a previous project's cell behind.
     pub(super) fn commit_open_session_into(
         &self,
+        _commands: &CommandsHeld<'_>,
         slot: &mut Option<Project>,
         commit: SessionCommit,
     ) {

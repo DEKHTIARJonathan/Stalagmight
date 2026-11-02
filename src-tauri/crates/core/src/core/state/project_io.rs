@@ -1,5 +1,5 @@
 use super::save_sidecars::{SaveMode, SaveRequest};
-use super::session_commit::SessionCommit;
+use super::session_commit::{CommandsHeld, SessionCommit};
 use super::AppState;
 use crate::core::{CommandResult, PersistStack, UndoStack};
 use crate::models::{Project, SectionId};
@@ -1060,9 +1060,12 @@ impl AppState {
     /// its 256 MB mmap, so the caller went on to rename a new file over it - the
     /// exact SIGBUS / `MoveFileEx`-denied hazard the guard exists to prevent.
     pub(super) fn close_project(&self) -> CommandResult {
+        // [#576 A1] `command_lock` first: a close landing inside an edit or an undo
+        // would leave that command's entry on the emptied session's stacks.
+        let commands = self.hold_commands();
         tracing::debug!("close_project: acquiring project lock");
         let mut proj = self.project.lock().unwrap_or_else(|e| e.into_inner());
-        self.close_open_project_locked(&mut proj)
+        self.close_open_project_locked(&commands, &mut proj)
     }
 
     /// [`close_project`](Self::close_project)'s teardown, with the `project` guard
@@ -1087,14 +1090,18 @@ impl AppState {
     /// The caller owns the poison recovery for the `project` lock (both of this
     /// function's callers use `PoisonError::into_inner`, for the reason spelled out
     /// on `close_project`); the locks taken here recover it themselves.
-    pub(super) fn close_open_project_locked(&self, project: &mut Option<Project>) -> CommandResult {
+    pub(super) fn close_open_project_locked(
+        &self,
+        commands: &CommandsHeld<'_>,
+        project: &mut Option<Project>,
+    ) -> CommandResult {
         // [#576 A5] The same commit every load and create goes through, installing the
         // empty session: every per-project cell back to its no-project value - the undo
         // stack's depth bound AND its inherited-history watermark included (#576
         // NF-AN3-6) - and the session generation bumped under the caller's guard (the
         // `speleodb_session` rule). Covers close, delete and the project switch, which
         // all route through here.
-        self.commit_open_session_into(project, SessionCommit::closed());
+        self.commit_open_session_into(commands, project, SessionCommit::closed());
         tracing::info!(purpose = "release project resources", "Project closed");
         CommandResult::success()
     }
@@ -1129,11 +1136,19 @@ impl AppState {
     /// USUALLY, but not always, the open project (a pull can target a cached
     /// project the user does not currently have open), and dropping an unrelated
     /// open project would throw away its undo/redo history for nothing.
+    ///
+    /// [#576 A1] Decided and closed under ONE `project` acquisition inside
+    /// `command_lock`, like `delete_project`'s check-and-teardown: checking through
+    /// `open_project_path` and closing through `close_project` re-took the lock in
+    /// between, so a load finishing in that gap had ITS session torn down instead.
     pub(super) fn close_project_if_open_at(&self, dest: &Path) -> bool {
-        let Some(open_path) = self.open_project_path() else {
-            return false;
-        };
-        if !same_file(&open_path, dest) {
+        let commands = self.hold_commands();
+        let mut open = self.project.lock().unwrap_or_else(|e| e.into_inner());
+        let is_dest = open
+            .as_ref()
+            .and_then(|p| p.file_path.as_deref())
+            .is_some_and(|open_path| same_file(open_path, dest));
+        if !is_dest {
             return false;
         }
         tracing::info!(
@@ -1141,7 +1156,7 @@ impl AppState {
             purpose = "release the live handle before replacing the file",
             "Closing the open project because its .stalx is about to be replaced"
         );
-        self.close_project();
+        self.close_open_project_locked(&commands, &mut open);
         true
     }
 }

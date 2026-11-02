@@ -745,7 +745,17 @@ from the rule, and those operations still live in the commits they came from.
 
 ## Lock Ordering
 
-`command_lock` is always outermost. Below it, the mutation paths avoid holding two
+`command_lock` is always outermost. It serializes every command, undo and redo, and
+(#576 A1) every PROJECT-SLOT COMMIT too: both loads, both creates, close, the
+delete's check-and-teardown and the SpeleoDB cache close all write the slot through
+`commit_open_session` (`core/state/session_commit.rs`), which demands a
+`CommandsHeld` proof, so a commit can never land between a command's mutation and
+its undo push and leave the old project's entry on the new project's stack. A load
+takes it only after its file read, and `execute` dispatches Open/Close/Create
+BEFORE taking it (they take it themselves). Done's local halves - the pre-push
+flush, render and snapshot, and the link and history writes after the upload
+concluded - hold it as well, never across a network call (#576 B35(d)). Below it,
+the mutation paths avoid holding two
 of `undo_stack` / `project` / `database` at once at all - `undo()`/`redo()` pop the
 entry and drop the `undo_stack` guard before touching the project, and
 `get_undo_stack()`/`get_redo_stack()` release the project lock before acquiring

@@ -6312,9 +6312,10 @@ mod tests {
         // stand down (`speleodb_live_session_accounts_for`), so a fixture that
         // skipped the close would model a world the real sequence never produces.
         {
+            let commands = state.hold_commands();
             let mut open = state.project.lock().unwrap_or_else(|e| e.into_inner());
             state.speleodb_forget_lock_acquired_for(&params.project_id);
-            state.close_open_project_locked(&mut open);
+            state.close_open_project_locked(&commands, &mut open);
         }
 
         state
@@ -6455,9 +6456,10 @@ mod tests {
         // deleted project's session must be GONE before the deferred POST, or
         // the round-5 live-session eye would (correctly) stand down for it.
         {
+            let commands = state.hold_commands();
             let mut open = state.project.lock().unwrap_or_else(|e| e.into_inner());
             state.speleodb_forget_lock_acquired_for(&params.project_id);
-            state.close_open_project_locked(&mut open);
+            state.close_open_project_locked(&commands, &mut open);
         }
         // Exactly what a successful Start editing on the NEXT project does, in the
         // window `delete_project` opens by releasing the `project` mutex first.

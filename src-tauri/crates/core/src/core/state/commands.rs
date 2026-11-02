@@ -588,6 +588,21 @@ impl AppState {
 
     /// Execute a command and return the result
     pub fn execute(&self, cmd: Command) -> CommandResult {
+        // [#576 A1] The project-slot lifecycle commands take `command_lock`
+        // THEMSELVES, around their commit only (`commit_open_session`), so a load's
+        // file read never blocks every edit. They are dispatched before the lock is
+        // taken here: holding it into them would self-deadlock. None of them has an
+        // undo entry, a gate or an epilogue below to skip.
+        match &cmd {
+            Command::OpenProject { path } => return self.open_project(path.clone()),
+            Command::CloseProject => return self.close_project(),
+            // [#576 NF-AN3-5] Test builds only; a release build refuses it below.
+            #[cfg(any(test, feature = "test-support"))]
+            Command::CreateProject { name, location } => {
+                return self.create_project(name.clone(), location.clone());
+            }
+            _ => {}
+        }
         // Serialize all command execution to prevent concurrent interleaving
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
@@ -691,18 +706,15 @@ impl AppState {
             // release build issues this variant - there is no generic execute IPC, so
             // the webview cannot send it. The variant stays (it is part of the
             // serialized `Command`); a release build refuses it, so a project with no
-            // file can never be committed through this door.
-            #[cfg(any(test, feature = "test-support"))]
-            Command::CreateProject { name, location } => {
-                self.create_project(name.clone(), location.clone())
-            }
-            #[cfg(not(any(test, feature = "test-support")))]
+            // file can never be committed through this door. (A test build dispatches
+            // it above, before `command_lock`, with open and close.)
             Command::CreateProject { .. } => CommandResult::failure(
                 "CreateProject is applied via create_project_full, not execute()".to_string(),
             ),
-            Command::OpenProject { path } => self.open_project(path.clone()),
+            Command::OpenProject { .. } | Command::CloseProject => CommandResult::failure(
+                "project open/close is dispatched before command_lock".to_string(),
+            ),
             Command::SaveProject { path } => self.save_project(path.clone()),
-            Command::CloseProject => self.close_project(),
             Command::CreateSection {
                 name,
                 surveyor,

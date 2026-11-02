@@ -155,7 +155,8 @@ impl AppState {
         // gates after dropping the guard, and kept the previous project's database
         // handle and undo watermark). A project created from nothing has no file,
         // so no handle, nothing deferred and no Recent Projects row.
-        self.commit_open_session(SessionCommit::new_local(project, None));
+        let commands = self.hold_commands();
+        self.commit_open_session(&commands, SessionCommit::new_local(project, None));
 
         CommandResult::success()
     }
@@ -517,24 +518,31 @@ impl AppState {
         // world). The shared commit is also what puts a new project on the local undo
         // window with no inherited-history watermark: File > New over a Full-mode
         // linked project used to keep its byte budget and watermark (#576 A18(f)).
-        self.commit_open_session(SessionCommit {
-            // A deferred new project has no file on disk yet, so its first import must
-            // durably persist it.
-            initial_save_deferred: defer_initial_save,
-            // ...and no database to read its display settings from: seed the cache
-            // with the defaults just chosen.
-            display_settings: if defer_initial_save {
-                settings_map
-                    .iter()
-                    .map(|(key, value)| ((*key).to_string(), value.clone()))
-                    .collect()
-            } else {
-                Vec::new()
+        // [#576 A1] Under `command_lock`, so the commit cannot land inside an edit of
+        // the previous project and inherit its undo entry.
+        let commands = self.hold_commands();
+        self.commit_open_session(
+            &commands,
+            SessionCommit {
+                // A deferred new project has no file on disk yet, so its first import must
+                // durably persist it.
+                initial_save_deferred: defer_initial_save,
+                // ...and no database to read its display settings from: seed the cache
+                // with the defaults just chosen.
+                display_settings: if defer_initial_save {
+                    settings_map
+                        .iter()
+                        .map(|(key, value)| ((*key).to_string(), value.clone()))
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+                // Recent Projects only after a real file exists.
+                recent: (!defer_initial_save).then(|| db_path.clone()),
+                ..SessionCommit::new_local(project.clone(), db)
             },
-            // Recent Projects only after a real file exists.
-            recent: (!defer_initial_save).then(|| db_path.clone()),
-            ..SessionCommit::new_local(project.clone(), db)
-        });
+        );
+        drop(commands);
 
         // Get loading_id before clearing token
         let loading_id = progress.loading_id();

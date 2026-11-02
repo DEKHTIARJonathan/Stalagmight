@@ -280,29 +280,36 @@ impl AppState {
         // read off the file's own handle rather than through `undo_policy()`, which takes
         // the `database` lock this commit is mid-swap on.
         let policy = self.undo_policy_for(speleo_link.as_ref());
-        self.commit_open_session(SessionCommit {
-            project: Some(project),
-            database: Some(db),
-            // Opened an existing project from disk - its initial save is not deferred.
-            initial_save_deferred: false,
-            // [Track B] (#191) Read-only edit gate: remote => edit disabled, local-only
-            // => enabled (see do_load_project_full). Off the link read above, which came
-            // from the same handle before `db` moves.
-            edit_enabled: speleo_link.is_none(),
-            history_discarded,
-            // [#576 B6-D1] The read-only state of a file a newer build saved.
-            newer_file_schema: newer_schema,
-            unreadable_project_settings: unread_settings,
-            // Settings will be loaded from the DB by the frontend.
-            display_settings: Vec::new(),
-            history: SessionHistory {
-                policy,
-                inherited_through: speleo_undo_watermark,
-                undo: undo_entries,
-                redo: redo_entries,
+        // [#576 A1] Under `command_lock`, taken only now that the file has been read,
+        // so the commit cannot land inside an edit of the previous project.
+        let commands = self.hold_commands();
+        self.commit_open_session(
+            &commands,
+            SessionCommit {
+                project: Some(project),
+                database: Some(db),
+                // Opened an existing project from disk - its initial save is not deferred.
+                initial_save_deferred: false,
+                // [Track B] (#191) Read-only edit gate: remote => edit disabled, local-only
+                // => enabled (see do_load_project_full). Off the link read above, which came
+                // from the same handle before `db` moves.
+                edit_enabled: speleo_link.is_none(),
+                history_discarded,
+                // [#576 B6-D1] The read-only state of a file a newer build saved.
+                newer_file_schema: newer_schema,
+                unreadable_project_settings: unread_settings,
+                // Settings will be loaded from the DB by the frontend.
+                display_settings: Vec::new(),
+                history: SessionHistory {
+                    policy,
+                    inherited_through: speleo_undo_watermark,
+                    undo: undo_entries,
+                    redo: redo_entries,
+                },
+                recent: Some(path),
             },
-            recent: Some(path),
-        });
+        );
+        drop(commands);
 
         tracing::info!(
             path = %path_display,
@@ -895,6 +902,13 @@ impl AppState {
         // new project on the old server. A same-project fast-forward reload doesn't
         // reach here (it `close_project`s first, clearing the link) and the "already
         // open" guard rejects reopening the same path, so neither releases our lock.
+        //
+        // [#576 A1] From here to the end of the commit under `command_lock`, taken only
+        // now that the file has been read and solved: an edit of the outgoing project
+        // finishes before the old link is read and the slot is swapped, and none can
+        // start in between. The detached release takes `project` only briefly and
+        // never `speleodb_lock_ops` on this thread, so it is safe under it.
+        let commands = self.hold_commands();
         self.speleodb_release_held_lock_detached();
 
         // [#576 A5] ALL commits under ONE `project` acquisition, through the commit
@@ -915,28 +929,32 @@ impl AppState {
         // [#303] As in the non-staged load: the depth bound the entries are restored
         // under, from the link read off this file's own handle.
         let policy = self.undo_policy_for(speleo_link.as_ref());
-        self.commit_open_session(SessionCommit {
-            project: Some(project.clone()),
-            database: Some(db),
-            // Loaded an existing project from disk - its initial save is not deferred.
-            initial_save_deferred: false,
-            edit_enabled: !is_remote,
-            // [#473] A cancelled load never reaches this finalize section, so it cannot
-            // leave its verdict on the project the user actually opened.
-            history_discarded,
-            // [#576 B6-D1] The value handed to the frontend below, so the two gates
-            // cannot disagree about this load (the #270 shape).
-            newer_file_schema: newer_schema,
-            unreadable_project_settings: unread_settings.clone(),
-            display_settings: Vec::new(),
-            history: SessionHistory {
-                policy,
-                inherited_through: speleo_undo_watermark,
-                undo: undo_entries,
-                redo: redo_entries,
+        self.commit_open_session(
+            &commands,
+            SessionCommit {
+                project: Some(project.clone()),
+                database: Some(db),
+                // Loaded an existing project from disk - its initial save is not deferred.
+                initial_save_deferred: false,
+                edit_enabled: !is_remote,
+                // [#473] A cancelled load never reaches this finalize section, so it cannot
+                // leave its verdict on the project the user actually opened.
+                history_discarded,
+                // [#576 B6-D1] The value handed to the frontend below, so the two gates
+                // cannot disagree about this load (the #270 shape).
+                newer_file_schema: newer_schema,
+                unreadable_project_settings: unread_settings.clone(),
+                display_settings: Vec::new(),
+                history: SessionHistory {
+                    policy,
+                    inherited_through: speleo_undo_watermark,
+                    undo: undo_entries,
+                    redo: redo_entries,
+                },
+                recent: Some(path.clone()),
             },
-            recent: Some(path.clone()),
-        });
+        );
+        drop(commands);
 
         progress.complete_phase(LoadingPhase::Finalizing);
 
