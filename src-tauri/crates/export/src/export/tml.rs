@@ -25,7 +25,7 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
 use crate::models::comment_split;
-use crate::models::{normalize_azimuth, Project, SectionId, Shot, StationRef};
+use crate::models::{normalize_azimuth, AzimuthReference, Project, SectionId, Shot, StationRef};
 use crate::parsers::tml::schema::{
     self, color_to_ariane, element as el, pitch_to_inclination, ElementName, Spelling,
 };
@@ -66,11 +66,11 @@ fn reversed_leg_pitch(shot: &Shot) -> Option<f64> {
 #[derive(Debug)]
 struct ExportShot {
     id: i64,
-    /// Persistent Stalagmight shot UUID, emitted as `<UUID>`. `None` for the
-    /// synthesized shots (START, CLOSURE, reversed / pre-zero-datum legs) that
-    /// have no 1:1 Stalagmight shot behind them. This cannot be derived from
-    /// `shot_type`: a reversed leg re-exports a REAL shot in the opposite
-    /// direction, so it carries a real type but no identity of its own.
+    /// Persistent Stalagmight shot UUID, emitted as `<UUID>`. Carried by every
+    /// row that stands for a real project shot - forward legs AND the reversed /
+    /// pre-zero-datum legs, each a shot's only appearance in the document (see
+    /// `write_shot`). `None` only for the rows this exporter synthesizes: START,
+    /// CLOSURE and the sidecar's VIRTUAL padding shot.
     uuid: Option<String>,
     from_id: i64,
     shot_type: &'static str, // one of the `schema::TYPE_*` values
@@ -98,6 +98,194 @@ struct ExportShot {
     longitude: f64,
     closure_to_id: i64,
     locked: bool,
+}
+
+/// What every row one section emits shares: its trip (surveyor and date), its
+/// colour, and the north reference its bearings are written in (#438).
+struct RowContext {
+    explorer: Option<String>,
+    date: Option<String>,
+    color: String,
+    emit_reference: AzimuthReference,
+}
+
+/// The Ariane `<Type>` of a project shot: one virtual category (#27 q9).
+fn ariane_shot_type(shot: &Shot) -> &'static str {
+    if shot.kind.is_virtual() {
+        schema::TYPE_VIRTUAL
+    } else {
+        schema::TYPE_REAL
+    }
+}
+
+/// The one place each kind of row is built (#576 B27(a)). The shot loops used
+/// to spell all 23 fields out ten times over, restating the reversed-leg rules
+/// in each of the three reversing blocks; one missed copy of exactly that shape
+/// once cost 78 shots their identity.
+impl ExportShot {
+    /// A row with no identity and every measurement at Ariane's zero - the base
+    /// of the rows this exporter synthesizes.
+    fn synthesized(
+        id: i64,
+        from_id: i64,
+        shot_type: &'static str,
+        section: String,
+        color: String,
+        (depth_in, depth): (f64, f64),
+    ) -> Self {
+        Self {
+            id,
+            uuid: None,
+            from_id,
+            shot_type,
+            section,
+            azimuth: 0.0,
+            length: 0.0,
+            depth,
+            depth_in,
+            depth_in_same_as_prev: false,
+            inclination: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            comment: None,
+            explorer: None,
+            date: None,
+            color,
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: -1,
+            locked: false,
+        }
+    }
+
+    /// The START row of an entrance whose station stands at `depth`. Its GPS
+    /// is stamped later, by the pass that resolves each entrance's datum.
+    fn start(id: i64, section: &str, depth: f64, rows: &RowContext) -> Self {
+        Self {
+            comment: Some("START".to_string()),
+            explorer: rows.explorer.clone(),
+            date: rows.date.clone(),
+            locked: true,
+            ..Self::synthesized(
+                id,
+                -1,
+                schema::TYPE_START,
+                section.to_string(),
+                rows.color.clone(),
+                (depth, depth),
+            )
+        }
+    }
+
+    /// `shot` walked the way it was surveyed. `prev_depth` is where the chain
+    /// it hangs off ends, which decides whether `DepthIn` can be the
+    /// same-as-previous sentinel.
+    fn forward(
+        id: i64,
+        from_id: i64,
+        section: &str,
+        shot: &Shot,
+        prev_depth: f64,
+        rows: &RowContext,
+    ) -> Self {
+        Self {
+            id,
+            uuid: Some(shot_export_uuid(shot)),
+            from_id,
+            shot_type: ariane_shot_type(shot),
+            section: section.to_string(),
+            azimuth: rows.emit_reference.to_true(shot.average_azimuth_measured()),
+            length: shot.length,
+            depth: shot.depth_out,
+            depth_in: shot.depth_in,
+            depth_in_same_as_prev: (shot.depth_in - prev_depth).abs() < 1e-9,
+            inclination: pitch_to_inclination(shot.pitch_in),
+            left: shot.left.unwrap_or(0.0),
+            right: shot.right.unwrap_or(0.0),
+            up: shot.up.unwrap_or(0.0),
+            down: shot.down.unwrap_or(0.0),
+            comment: shot.comment.clone(),
+            explorer: rows.explorer.clone(),
+            date: rows.date.clone(),
+            color: rows.color.clone(),
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: -1,
+            locked: false,
+        }
+    }
+
+    /// `shot` walked backwards - the reversed and pre-zero-datum legs Ariane
+    /// needs because it carries one forward azimuth per shot. The rules of
+    /// turning round, stated once: the bearing turns through 180 degrees, the
+    /// pitch negates, the two depths swap and so do left and right (up and down
+    /// do not - turning round does not turn you over). It keeps the shot's
+    /// identity: a reversed leg is that shot's only appearance in the document.
+    fn reversed(
+        id: i64,
+        from_id: i64,
+        section: &str,
+        shot: &Shot,
+        prev_depth: f64,
+        rows: &RowContext,
+    ) -> Self {
+        let forward = Self::forward(id, from_id, section, shot, prev_depth, rows);
+        Self {
+            azimuth: reverse_pre_zero_azimuth(forward.azimuth),
+            depth: shot.depth_in,
+            depth_in: shot.depth_out,
+            depth_in_same_as_prev: (shot.depth_out - prev_depth).abs() < 1e-9,
+            inclination: pitch_to_inclination(reversed_leg_pitch(shot)),
+            left: forward.right,
+            right: forward.left,
+            ..forward
+        }
+    }
+
+    /// A CLOSURE row tying Ariane node `from_id` to `to_id`, whose emitted
+    /// depths are `depth_a` and `depth_b`. The two ends are the same physical
+    /// point surveyed twice, so the connector's length IS the vertical part of
+    /// the closure error: exactly that keeps `|depth - origin_depth| <= length`
+    /// true by construction, and stays honest - a perfectly closed loop still
+    /// gets 0.
+    fn closure(
+        id: i64,
+        (from_id, to_id): (i64, i64),
+        section: String,
+        color: String,
+        (depth_a, depth_b): (f64, f64),
+    ) -> Self {
+        Self {
+            length: (depth_b - depth_a).abs(),
+            closure_to_id: to_id,
+            ..Self::synthesized(
+                id,
+                from_id,
+                schema::TYPE_CLOSURE,
+                section,
+                color,
+                (depth_a, depth_b),
+            )
+        }
+    }
+
+    /// The sidecar's padding row: a parentless VIRTUAL standing on `anchor`,
+    /// so it can displace nothing (see `harden_for_speleodb`).
+    fn padding(id: i64, anchor: &ExportShot) -> Self {
+        Self {
+            date: Some(schema::UNDATED_PLACEHOLDER.to_owned()),
+            ..Self::synthesized(
+                id,
+                -1,
+                schema::TYPE_VIRTUAL,
+                anchor.section.clone(),
+                anchor.color.clone(),
+                (anchor.depth, anchor.depth),
+            )
+        }
+    }
 }
 
 /// Which consumer the emitted document is written for.
@@ -623,16 +811,6 @@ fn remint_duplicate_uuids(shots: &mut [ExportShot]) {
     }
 }
 
-/// The shot list alone; see [`build_export_shots_with_report`] for the variant
-/// `build_xml` uses to surface unwritten GPS anchors as an export note.
-fn build_export_shots(
-    project: &Project,
-    profile: TmlProfile,
-    azimuth_export: AzimuthExport,
-) -> Vec<ExportShot> {
-    build_export_shots_with_report(project, profile, azimuth_export).0
-}
-
 /// Returns the shots plus how many of the project's GPS anchors ended up on no
 /// START (the count behind the `gps-anchors-not-written` note).
 fn build_export_shots_with_report(
@@ -715,9 +893,12 @@ fn build_export_shots_with_report(
             .as_deref()
             .unwrap_or(&format!("Section {}", section.id))
             .to_string();
-        let color = color_to_ariane(&section.color);
-        let explorer = section.surveyor.clone();
-        let date = section.date.map(|d| d.format("%Y-%m-%d").to_string());
+        let rows = RowContext {
+            explorer: section.surveyor.clone(),
+            date: section.date.map(|d| d.format("%Y-%m-%d").to_string()),
+            color: color_to_ariane(&section.color),
+            emit_reference,
+        };
 
         // Which datum this entrance's START sits on. The root uses the FRAME datum
         // (see `root_section_id` above); any other entrance uses its own section's
@@ -762,32 +943,12 @@ fn build_export_shots_with_report(
             let start_depth = station_depth(section, split_idx);
             start_anchors.push((start_id, section.id, split_idx as u32));
 
-            let mut root_shots = Vec::new();
-            root_shots.push(ExportShot {
-                id: start_id,
-                uuid: None,
-                from_id: -1,
-                shot_type: schema::TYPE_START,
-                section: section_name.clone(),
-                azimuth: 0.0,
-                length: 0.0,
-                depth: start_depth,
-                depth_in: start_depth,
-                depth_in_same_as_prev: false,
-                inclination: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                comment: Some("START".to_string()),
-                explorer: explorer.clone(),
-                date: date.clone(),
-                color: color.clone(),
-                latitude: 0.0,
-                longitude: 0.0,
-                closure_to_id: -1,
-                locked: true,
-            });
+            let mut root_shots = vec![ExportShot::start(
+                start_id,
+                &section_name,
+                start_depth,
+                &rows,
+            )];
             station_to_ariane.insert((section.id, split_idx as u32), start_id);
 
             // Forward segment: datum station -> original section end.
@@ -802,39 +963,16 @@ fn build_export_shots_with_report(
                 } else {
                     shot_ariane_id - 1
                 };
-                let prev_depth = cumulative_depth;
-                cumulative_depth = shot.depth_out;
-                let depth_in_same_as_prev = (shot.depth_in - prev_depth).abs() < 1e-9;
-
-                root_shots.push(ExportShot {
-                    id: shot_ariane_id,
-                    uuid: Some(shot_export_uuid(shot)),
-                    from_id: prev_id,
-                    shot_type: if shot.kind.is_virtual() {
-                        schema::TYPE_VIRTUAL
-                    } else {
-                        schema::TYPE_REAL
-                    },
-                    section: section_name.clone(),
-                    azimuth: emit_reference.to_true(shot.average_azimuth_measured()),
-                    length: shot.length,
-                    depth: shot.depth_out,
-                    depth_in: shot.depth_in,
-                    depth_in_same_as_prev,
-                    inclination: pitch_to_inclination(shot.pitch_in),
-                    left: shot.left.unwrap_or(0.0),
-                    right: shot.right.unwrap_or(0.0),
-                    up: shot.up.unwrap_or(0.0),
-                    down: shot.down.unwrap_or(0.0),
-                    comment: shot.comment.clone(),
-                    explorer: explorer.clone(),
-                    date: date.clone(),
-                    color: color.clone(),
-                    latitude: 0.0,
-                    longitude: 0.0,
-                    closure_to_id: -1,
-                    locked: false,
-                });
+                let leg = ExportShot::forward(
+                    shot_ariane_id,
+                    prev_id,
+                    &section_name,
+                    shot,
+                    cumulative_depth,
+                    &rows,
+                );
+                cumulative_depth = leg.depth;
+                root_shots.push(leg);
 
                 station_to_ariane.insert((section.id, (shot_idx + 1) as u32), shot_ariane_id);
             }
@@ -862,50 +1000,16 @@ fn build_export_shots_with_report(
                     } else {
                         shot_ariane_id - 1
                     };
-
-                    let reversed_depth_in = shot.depth_out;
-                    let reversed_depth_out = shot.depth_in;
-                    let prev_depth = cumulative_depth;
-                    cumulative_depth = reversed_depth_out;
-                    let depth_in_same_as_prev = (reversed_depth_in - prev_depth).abs() < 1e-9;
-
-                    reverse_shots.push(ExportShot {
-                        id: shot_ariane_id,
-                        // The reversed leg IS this shot's only appearance in the
-                        // document (the forward block covers a DISJOINT index range),
-                        // so it carries the shot's identity. See `write_shot`.
-                        uuid: Some(shot_export_uuid(shot)),
-                        from_id: prev_id,
-                        shot_type: if shot.kind.is_virtual() {
-                            schema::TYPE_VIRTUAL
-                        } else {
-                            schema::TYPE_REAL
-                        },
-                        section: split_name.clone(),
-                        // Ariane carries a single forward azimuth per shot, so the
-                        // reverse pre-zero leg is the reciprocal of the bearing the
-                        // app draws (`reverse_pre_zero_azimuth`).
-                        azimuth: reverse_pre_zero_azimuth(
-                            emit_reference.to_true(shot.average_azimuth_measured()),
-                        ),
-                        length: shot.length,
-                        depth: reversed_depth_out,
-                        depth_in: reversed_depth_in,
-                        depth_in_same_as_prev,
-                        inclination: pitch_to_inclination(reversed_leg_pitch(shot)),
-                        left: shot.right.unwrap_or(0.0),
-                        right: shot.left.unwrap_or(0.0),
-                        up: shot.up.unwrap_or(0.0),
-                        down: shot.down.unwrap_or(0.0),
-                        comment: shot.comment.clone(),
-                        explorer: explorer.clone(),
-                        date: date.clone(),
-                        color: color.clone(),
-                        latitude: 0.0,
-                        longitude: 0.0,
-                        closure_to_id: -1,
-                        locked: false,
-                    });
+                    let leg = ExportShot::reversed(
+                        shot_ariane_id,
+                        prev_id,
+                        &split_name,
+                        shot,
+                        cumulative_depth,
+                        &rows,
+                    );
+                    cumulative_depth = leg.depth;
+                    reverse_shots.push(leg);
 
                     // Reversed shot from station (shot_idx + 1) to shot_idx:
                     // it ends at the original station shot_idx.
@@ -945,40 +1049,16 @@ fn build_export_shots_with_report(
                         } else {
                             shot_ariane_id - 1
                         };
-
-                        let prev_depth = cumulative_depth;
-                        cumulative_depth = shot.depth_out;
-                        let depth_in_same_as_prev = (shot.depth_in - prev_depth).abs() < 1e-9;
-
-                        fwd_shots.push(ExportShot {
-                            id: shot_ariane_id,
-                            uuid: Some(shot_export_uuid(shot)),
-                            from_id: prev_id,
-                            shot_type: if shot.kind.is_virtual() {
-                                schema::TYPE_VIRTUAL
-                            } else {
-                                schema::TYPE_REAL
-                            },
-                            section: section_name.clone(),
-                            azimuth: emit_reference.to_true(shot.average_azimuth_measured()),
-                            length: shot.length,
-                            depth: shot.depth_out,
-                            depth_in: shot.depth_in,
-                            depth_in_same_as_prev,
-                            inclination: pitch_to_inclination(shot.pitch_in),
-                            left: shot.left.unwrap_or(0.0),
-                            right: shot.right.unwrap_or(0.0),
-                            up: shot.up.unwrap_or(0.0),
-                            down: shot.down.unwrap_or(0.0),
-                            comment: shot.comment.clone(),
-                            explorer: explorer.clone(),
-                            date: date.clone(),
-                            color: color.clone(),
-                            latitude: 0.0,
-                            longitude: 0.0,
-                            closure_to_id: -1,
-                            locked: false,
-                        });
+                        let leg = ExportShot::forward(
+                            shot_ariane_id,
+                            prev_id,
+                            &section_name,
+                            shot,
+                            cumulative_depth,
+                            &rows,
+                        );
+                        cumulative_depth = leg.depth;
+                        fwd_shots.push(leg);
 
                         station_to_ariane
                             .insert((section.id, (shot_idx + 1) as u32), shot_ariane_id);
@@ -1006,47 +1086,16 @@ fn build_export_shots_with_report(
                         } else {
                             shot_ariane_id - 1
                         };
-
-                        let reversed_depth_in = shot.depth_out;
-                        let reversed_depth_out = shot.depth_in;
-                        let prev_depth = cumulative_depth;
-                        cumulative_depth = reversed_depth_out;
-                        let depth_in_same_as_prev = (reversed_depth_in - prev_depth).abs() < 1e-9;
-
-                        rev_shots.push(ExportShot {
-                            id: shot_ariane_id,
-                            // The reversed leg IS this shot's only appearance in the
-                            // document (the forward block covers a DISJOINT index range),
-                            // so it carries the shot's identity. See `write_shot`.
-                            uuid: Some(shot_export_uuid(shot)),
-                            from_id: prev_id,
-                            shot_type: if shot.kind.is_virtual() {
-                                schema::TYPE_VIRTUAL
-                            } else {
-                                schema::TYPE_REAL
-                            },
-                            section: rev_name.clone(),
-                            azimuth: reverse_pre_zero_azimuth(
-                                emit_reference.to_true(shot.average_azimuth_measured()),
-                            ),
-                            length: shot.length,
-                            depth: reversed_depth_out,
-                            depth_in: reversed_depth_in,
-                            depth_in_same_as_prev,
-                            inclination: pitch_to_inclination(reversed_leg_pitch(shot)),
-                            left: shot.right.unwrap_or(0.0),
-                            right: shot.left.unwrap_or(0.0),
-                            up: shot.up.unwrap_or(0.0),
-                            down: shot.down.unwrap_or(0.0),
-                            comment: shot.comment.clone(),
-                            explorer: explorer.clone(),
-                            date: date.clone(),
-                            color: color.clone(),
-                            latitude: 0.0,
-                            longitude: 0.0,
-                            closure_to_id: -1,
-                            locked: false,
-                        });
+                        let leg = ExportShot::reversed(
+                            shot_ariane_id,
+                            prev_id,
+                            &rev_name,
+                            shot,
+                            cumulative_depth,
+                            &rows,
+                        );
+                        cumulative_depth = leg.depth;
+                        rev_shots.push(leg);
 
                         // Reversed shot ends at original station shot_idx.
                         station_to_ariane.insert((section.id, shot_idx as u32), shot_ariane_id);
@@ -1076,47 +1125,16 @@ fn build_export_shots_with_report(
                         } else {
                             shot_ariane_id - 1
                         };
-
-                        let reversed_depth_in = shot.depth_out;
-                        let reversed_depth_out = shot.depth_in;
-                        let prev_depth = cumulative_depth;
-                        cumulative_depth = reversed_depth_out;
-                        let depth_in_same_as_prev = (reversed_depth_in - prev_depth).abs() < 1e-9;
-
-                        rev_shots.push(ExportShot {
-                            id: shot_ariane_id,
-                            // The reversed leg IS this shot's only appearance in the
-                            // document (the forward block covers a DISJOINT index range),
-                            // so it carries the shot's identity. See `write_shot`.
-                            uuid: Some(shot_export_uuid(shot)),
-                            from_id: prev_id,
-                            shot_type: if shot.kind.is_virtual() {
-                                schema::TYPE_VIRTUAL
-                            } else {
-                                schema::TYPE_REAL
-                            },
-                            section: rev_name.clone(),
-                            azimuth: reverse_pre_zero_azimuth(
-                                emit_reference.to_true(shot.average_azimuth_measured()),
-                            ),
-                            length: shot.length,
-                            depth: reversed_depth_out,
-                            depth_in: reversed_depth_in,
-                            depth_in_same_as_prev,
-                            inclination: pitch_to_inclination(reversed_leg_pitch(shot)),
-                            left: shot.right.unwrap_or(0.0),
-                            right: shot.left.unwrap_or(0.0),
-                            up: shot.up.unwrap_or(0.0),
-                            down: shot.down.unwrap_or(0.0),
-                            comment: shot.comment.clone(),
-                            explorer: explorer.clone(),
-                            date: date.clone(),
-                            color: color.clone(),
-                            latitude: 0.0,
-                            longitude: 0.0,
-                            closure_to_id: -1,
-                            locked: false,
-                        });
+                        let leg = ExportShot::reversed(
+                            shot_ariane_id,
+                            prev_id,
+                            &rev_name,
+                            shot,
+                            cumulative_depth,
+                            &rows,
+                        );
+                        cumulative_depth = leg.depth;
+                        rev_shots.push(leg);
 
                         // Reversed shot ends at original station shot_idx.
                         station_to_ariane.insert((section.id, shot_idx as u32), shot_ariane_id);
@@ -1142,46 +1160,18 @@ fn build_export_shots_with_report(
             next_id += 1;
             start_anchors.push((start_id, section.id, 0));
 
-            let start_depth = if let Some(first_shot) = section.shots.first() {
-                first_shot.depth_in
-            } else {
-                0.0
-            };
-
-            shots.push(ExportShot {
-                id: start_id,
-                uuid: None,
-                from_id: -1,
-                shot_type: schema::TYPE_START,
-                section: section_name.clone(),
-                azimuth: 0.0,
-                length: 0.0,
-                depth: start_depth,
-                depth_in: start_depth,
-                depth_in_same_as_prev: false,
-                inclination: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                comment: Some("START".to_string()),
-                explorer: explorer.clone(),
-                date: date.clone(),
-                color: color.clone(),
-                latitude: 0.0,
-                longitude: 0.0,
-                closure_to_id: -1,
-                locked: true,
-            });
+            let start_depth = section.shots.first().map_or(0.0, |first| first.depth_in);
+            shots.push(ExportShot::start(
+                start_id,
+                &section_name,
+                start_depth,
+                &rows,
+            ));
 
             station_to_ariane.insert((section.id, 0), start_id);
         }
 
-        let mut cumulative_depth: f64 = if let Some(first_shot) = section.shots.first() {
-            first_shot.depth_in
-        } else {
-            0.0
-        };
+        let mut cumulative_depth = section.shots.first().map_or(0.0, |first| first.depth_in);
 
         for (i, shot) in section.shots.iter().enumerate() {
             let shot_ariane_id = next_id;
@@ -1199,40 +1189,16 @@ fn build_export_shots_with_report(
             } else {
                 shot_ariane_id - 1
             };
-
-            let prev_depth = cumulative_depth;
-            cumulative_depth = shot.depth_out;
-            let depth_in_same_as_prev = (shot.depth_in - prev_depth).abs() < 1e-9;
-
-            shots.push(ExportShot {
-                id: shot_ariane_id,
-                uuid: Some(shot_export_uuid(shot)),
-                from_id: prev_id,
-                shot_type: if shot.kind.is_virtual() {
-                    schema::TYPE_VIRTUAL
-                } else {
-                    schema::TYPE_REAL
-                },
-                section: section_name.clone(),
-                azimuth: emit_reference.to_true(shot.average_azimuth_measured()),
-                length: shot.length,
-                depth: shot.depth_out,
-                depth_in: shot.depth_in,
-                depth_in_same_as_prev,
-                inclination: pitch_to_inclination(shot.pitch_in),
-                left: shot.left.unwrap_or(0.0),
-                right: shot.right.unwrap_or(0.0),
-                up: shot.up.unwrap_or(0.0),
-                down: shot.down.unwrap_or(0.0),
-                comment: shot.comment.clone(),
-                explorer: explorer.clone(),
-                date: date.clone(),
-                color: color.clone(),
-                latitude: 0.0,
-                longitude: 0.0,
-                closure_to_id: -1,
-                locked: false,
-            });
+            let leg = ExportShot::forward(
+                shot_ariane_id,
+                prev_id,
+                &section_name,
+                shot,
+                cumulative_depth,
+                &rows,
+            );
+            cumulative_depth = leg.depth;
+            shots.push(leg);
 
             // Station (i+1) is after this shot
             station_to_ariane.insert((section.id, (i + 1) as u32), shot_ariane_id);
@@ -1528,37 +1494,13 @@ fn build_export_shots_with_report(
         //   would mean rebuilding the closures after the repair - for a phantom.
         let depth_a = node_depth.get(&from_id).copied().unwrap_or(0.0);
         let depth_b = node_depth.get(&to_id).copied().unwrap_or(0.0);
-        // The two endpoints are the same physical point surveyed twice, so the
-        // connector's length IS the vertical part of the closure error. Emitting
-        // exactly that keeps `|depth - origin_depth| <= length` true by
-        // construction, and stays honest: a perfectly closed loop still gets 0.
-        let closure_length = (depth_b - depth_a).abs();
-
-        closure_shots.push(ExportShot {
-            id: closure_id,
-            uuid: None,
-            from_id,
-            shot_type: schema::TYPE_CLOSURE,
-            section: section_name,
-            azimuth: 0.0,
-            length: closure_length,
-            depth: depth_b,
-            depth_in: depth_a,
-            depth_in_same_as_prev: false,
-            inclination: 0.0,
-            left: 0.0,
-            right: 0.0,
-            up: 0.0,
-            down: 0.0,
-            comment: None,
-            explorer: None,
-            date: None,
+        closure_shots.push(ExportShot::closure(
+            closure_id,
+            (from_id, to_id),
+            section_name,
             color,
-            latitude: 0.0,
-            longitude: 0.0,
-            closure_to_id: to_id,
-            locked: false,
-        });
+            (depth_a, depth_b),
+        ));
     }
 
     // Flatten all blocks + closure shots
@@ -2107,32 +2049,7 @@ fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
     // ignores as an orphan, so it changes nothing but the element count.
     if shots.len() == 1 {
         let pad_id = shots.iter().map(|s| s.id).max().unwrap_or(-1) + 1;
-        let anchor = &shots[0];
-        let pad = ExportShot {
-            id: pad_id,
-            uuid: None,
-            from_id: -1,
-            shot_type: schema::TYPE_VIRTUAL,
-            section: anchor.section.clone(),
-            azimuth: 0.0,
-            length: 0.0,
-            depth: anchor.depth,
-            depth_in: anchor.depth,
-            depth_in_same_as_prev: false,
-            inclination: 0.0,
-            left: 0.0,
-            right: 0.0,
-            up: 0.0,
-            down: 0.0,
-            comment: None,
-            explorer: None,
-            date: Some(schema::UNDATED_PLACEHOLDER.to_owned()),
-            color: anchor.color.clone(),
-            latitude: 0.0,
-            longitude: 0.0,
-            closure_to_id: -1,
-            locked: false,
-        };
+        let pad = ExportShot::padding(pad_id, &shots[0]);
         shots.push(pad);
     }
 
@@ -2171,6 +2088,18 @@ mod tests {
         StationAnchor, StationKey, StationMerge, ZeroDatum,
     };
     use tempfile::NamedTempFile;
+
+    /// The shot list alone, for the tests that inspect it; production goes
+    /// through [`build_export_shots_with_report`] (via `build_xml`), which
+    /// also counts the GPS anchors no START could carry. Test-only, so it
+    /// lives here rather than as dead code in every non-test build.
+    fn build_export_shots(
+        project: &Project,
+        profile: TmlProfile,
+        azimuth_export: AzimuthExport,
+    ) -> Vec<ExportShot> {
+        build_export_shots_with_report(project, profile, azimuth_export).0
+    }
 
     /// The model is +down and Ariane is treated as +up, so the two must be
     /// mirror images and a round-trip must land back on the original value
@@ -2625,10 +2554,7 @@ mod tests {
         let reference = configs[0].azimuth_reference.unwrap();
         assert_eq!(
             reference,
-            crate::models::AzimuthReference::magnetic(
-                0.0,
-                crate::models::CorrectionSource::Unknown
-            ),
+            AzimuthReference::magnetic(0.0, crate::models::CorrectionSource::Unknown),
             "no date means no epoch to evaluate a declination at"
         );
     }
