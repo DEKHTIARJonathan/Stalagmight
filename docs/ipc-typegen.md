@@ -80,7 +80,8 @@ Its consumers, which used to keep their own copies or re-parse `lib.rs`:
   compile, and callers no longer assert a result type. `plugin:*` commands stay
   untyped; a dispatcher that forwards a command name it was handed (the
   mutation queue) calls it as `ForwardedInvoke` and types its own callers with
-  `IpcCallArgs<K>`.
+  `QueuedCallArgs<K>`, which, like `invokeIpc`, lets the arguments be left out
+  only for a command that takes no required one (#576 RV5-PI-6).
 - The Playwright IPC mock types every reply with `MockReply<'name'>`
   (`e2e-playwright/mocks/ipc/types.ts`), so `pnpm typecheck:playwright` fails
   when a mocked reply drifts from what the backend returns.

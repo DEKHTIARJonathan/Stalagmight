@@ -370,7 +370,10 @@ compile on a cell. `AppState`'s cells report to its own monitor; process-wide ce
 `poison_policy::global_monitor()`, which app setup forwards into the managed
 state's monitor so the user sees one banner. `poison_policy_tests.rs` enumerates
 every `AppState` cell by exhaustive destructuring, poisons each and drives the
-public API through it.
+public API through it. A lock outside `AppState` is not in that list, so
+`models/src/raw_lock_scan_tests.rs` scans the backend sources and fails on any std
+`Mutex`/`RwLock` in production code (test code and `poison_policy.rs` itself
+excepted): wrap a new lock in `RecoveringMutex` (#576 RV5-PI-5).
 
 ### Safe File Save
 
