@@ -1748,8 +1748,24 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
         return;
     }
 
-    // Kahn's algorithm
-    let n = configs.len();
+    let order = dependency_order(&dep);
+
+    // Reorder configs
+    let mut old_configs: Vec<Option<ImportSectionConfig>> =
+        std::mem::take(configs).into_iter().map(Some).collect();
+    *configs = order
+        .into_iter()
+        .filter_map(|i| old_configs[i].take())
+        .collect();
+}
+
+/// Kahn's algorithm over `dep` (`dep[i] = Some(j)`: `i` must come after `j`),
+/// ties in index order; anything left on a cycle is appended in its original
+/// order. The cycle tail is marked in a bitmap (#576 B27(d)): the previous
+/// `order.contains(&i)` per index was quadratic in the section count, which a
+/// crafted file controls.
+fn dependency_order(dep: &[Option<usize>]) -> Vec<usize> {
+    let n = dep.len();
     let mut in_degree = vec![0u32; n];
     let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
     for (i, d) in dep.iter().enumerate() {
@@ -1779,20 +1795,13 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
 
     // Append any remaining (cycle - shouldn't happen, but be safe)
     if order.len() < n {
-        for i in 0..n {
-            if !order.contains(&i) {
-                order.push(i);
-            }
+        let mut placed = vec![false; n];
+        for &i in &order {
+            placed[i] = true;
         }
+        order.extend((0..n).filter(|&i| !placed[i]));
     }
-
-    // Reorder configs
-    let mut old_configs: Vec<Option<ImportSectionConfig>> =
-        std::mem::take(configs).into_iter().map(Some).collect();
-    *configs = order
-        .into_iter()
-        .filter_map(|i| old_configs[i].take())
-        .collect();
+    order
 }
 
 /// Resolve a TML shot's entry depth, handling the `-1.0` "same as previous" sentinel.
@@ -6977,5 +6986,92 @@ mod tests {
             sizes.last().copied().unwrap_or(0),
             tiny,
         );
+    }
+
+    /// The section order as it was computed before #576 B27(d): the cycle tail
+    /// found by `order.contains` for every index. Kept as the oracle for
+    /// [`dependency_order`].
+    fn dependency_order_by_contains(dep: &[Option<usize>]) -> Vec<usize> {
+        let n = dep.len();
+        let mut in_degree = vec![0u32; n];
+        let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (i, d) in dep.iter().enumerate() {
+            if let Some(j) = d {
+                in_degree[i] += 1;
+                dependents[*j].push(i);
+            }
+        }
+        let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+        for (i, &deg) in in_degree.iter().enumerate() {
+            if deg == 0 {
+                queue.push_back(i);
+            }
+        }
+        let mut order: Vec<usize> = Vec::with_capacity(n);
+        while let Some(i) = queue.pop_front() {
+            order.push(i);
+            for &dep_i in &dependents[i] {
+                in_degree[dep_i] -= 1;
+                if in_degree[dep_i] == 0 {
+                    queue.push_back(dep_i);
+                }
+            }
+        }
+        if order.len() < n {
+            for i in 0..n {
+                if !order.contains(&i) {
+                    order.push(i);
+                }
+            }
+        }
+        order
+    }
+
+    /// Same order as the oracle on random dependency graphs, cycles included
+    /// (a crafted file's `FromImporting` targets can form one).
+    #[test]
+    fn dependency_order_matches_the_contains_scan() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut below = |bound: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % bound
+        };
+        let mut with_cycle = 0;
+        for case in 0..500 {
+            let n = 1 + below(80) as usize;
+            let dep: Vec<Option<usize>> = (0..n)
+                .map(|_| (below(3) > 0).then(|| below(n as u64) as usize))
+                .collect();
+            let fast = dependency_order(&dep);
+            let slow = dependency_order_by_contains(&dep);
+            assert_eq!(fast, slow, "case {case}: {dep:?}");
+            let mut sorted = fast.clone();
+            sorted.sort_unstable();
+            assert_eq!(sorted, (0..n).collect::<Vec<_>>(), "a permutation");
+            with_cycle += usize::from(dep.iter().enumerate().any(|(i, d)| *d == Some(i)));
+        }
+        assert!(with_cycle > 50, "{with_cycle}");
+    }
+
+    /// Timing probe, not a test: `cargo test -p stalagmight-parsers --lib
+    /// dependency_order_timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing probe; run by hand"]
+    fn dependency_order_timing() {
+        for n in [10_000, 20_000, 40_000] {
+            // One cycle through every section: Kahn's queue never starts, so
+            // the whole order is the fallback tail.
+            let dep: Vec<Option<usize>> = (0..n).map(|i| Some((i + 1) % n)).collect();
+            let start = std::time::Instant::now();
+            let fast = dependency_order(&dep);
+            let fast_ms = start.elapsed().as_millis();
+            let start = std::time::Instant::now();
+            let slow = dependency_order_by_contains(&dep);
+            let slow_ms = start.elapsed().as_millis();
+            assert_eq!(fast, slow);
+            eprintln!("{n} sections on one cycle: bitmap {fast_ms} ms, contains scan {slow_ms} ms");
+        }
     }
 }
