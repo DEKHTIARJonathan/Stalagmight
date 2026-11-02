@@ -14,7 +14,7 @@ impl AppState {
     pub fn set_project_for_tests(&self, project: Project) {
         {
             let mut guard = self.project.lock();
-            *guard = Some(project);
+            guard.set(Some(project));
         }
     }
 

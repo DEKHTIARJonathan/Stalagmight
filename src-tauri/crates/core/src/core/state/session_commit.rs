@@ -29,6 +29,7 @@
 //! `undo_stack` (docs/undo-redo.md, Lock Ordering). Pinned by
 //! `lifecycle_lock_tests.rs`.
 
+use super::project_slot::ProjectSlot;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::MutexGuard;
@@ -175,7 +176,7 @@ impl AppState {
     pub(super) fn commit_open_session_into(
         &self,
         _commands: &CommandsHeld<'_>,
-        slot: &mut Option<Project>,
+        slot: &mut ProjectSlot,
         commit: SessionCommit,
     ) {
         let SessionCommit {
@@ -191,7 +192,7 @@ impl AppState {
             recent,
         } = commit;
 
-        *slot = project;
+        slot.set(project);
         // A session boundary, bumped under the guard per the `speleodb_session` rule.
         self.bump_speleodb_session();
         // The verdicts describe exactly the project in the slot, so they are written

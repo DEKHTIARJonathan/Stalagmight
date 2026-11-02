@@ -34,7 +34,7 @@ pub fn repair_project_integrity(state: State<AppState>) -> Result<IntegrityRepai
 }
 
 pub(crate) fn get_project_warnings_impl(state: &AppState) -> Vec<ProjectWarning> {
-    let Some(project) = state.get_project_state() else {
+    let Some(project) = state.project_snapshot() else {
         return Vec::new();
     };
 

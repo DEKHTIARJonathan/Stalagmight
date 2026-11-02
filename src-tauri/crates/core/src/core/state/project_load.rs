@@ -379,7 +379,7 @@ impl AppState {
         // Check if the same project is already open (avoid unnecessary reload)
         {
             let proj_guard = self.project.lock();
-            if let Some(ref project) = *proj_guard {
+            if let Some(project) = proj_guard.as_ref() {
                 if project.file_path.as_ref() == Some(&path) {
                     return Err(LoadError::already_open());
                 }

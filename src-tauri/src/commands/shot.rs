@@ -110,7 +110,7 @@ pub(crate) fn preview_delete_shot_impl(
     shot_id: ShotId,
 ) -> Result<DeleteShotImpact, String> {
     let project = state
-        .get_project_state()
+        .project_snapshot()
         .ok_or_else(|| "No project open".to_string())?;
     project.preview_delete_shot(section_id, shot_id)
 }
@@ -214,7 +214,7 @@ pub(crate) fn preview_delete_shot_range_impl(
     end_shot_id: ShotId,
 ) -> Result<DeleteShotRangeImpact, String> {
     let project = state
-        .get_project_state()
+        .project_snapshot()
         .ok_or_else(|| "No project open".to_string())?;
     project.preview_delete_shot_range(section_id, start_shot_id, end_shot_id)
 }

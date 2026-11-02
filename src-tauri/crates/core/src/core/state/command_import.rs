@@ -1,4 +1,5 @@
 use super::command_epilogue::EpilogueSteps;
+use super::project_slot::ProjectSlot;
 use super::session_commit::CommandsHeld;
 use super::AppState;
 use crate::core::{Command, CommandResult};
@@ -89,7 +90,7 @@ fn tally_closure_results(
 /// actually allowed to run (the cascade itself early-exits when the flag
 /// is still `true`).  After `disarm`, `Drop` is a no-op.
 struct CascadeDeferGuard<'a> {
-    project: &'a RecoveringMutex<Option<Project>>,
+    project: &'a RecoveringMutex<ProjectSlot>,
     armed: bool,
 }
 
@@ -98,7 +99,7 @@ impl<'a> CascadeDeferGuard<'a> {
     /// return a guard.  If the lock is already poisoned the flag is set
     /// anyway (the lock recovers it, #576 A11) - the import is about to run
     /// regardless, and we still want the Drop reset to fire.
-    fn arm(project: &'a RecoveringMutex<Option<Project>>) -> Self {
+    fn arm(project: &'a RecoveringMutex<ProjectSlot>) -> Self {
         Self::set_flag(project, true);
         Self {
             project,
@@ -113,7 +114,7 @@ impl<'a> CascadeDeferGuard<'a> {
         self.armed = false;
     }
 
-    fn set_flag(project: &RecoveringMutex<Option<Project>>, value: bool) {
+    fn set_flag(project: &RecoveringMutex<ProjectSlot>, value: bool) {
         let mut guard = project.lock();
         if let Some(p) = guard.as_mut() {
             p.cascade_deferred = value;

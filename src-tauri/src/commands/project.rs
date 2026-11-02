@@ -112,7 +112,7 @@ pub fn get_project_state(state: State<AppState>) -> Option<ProjectState> {
 }
 
 pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
-    let project = state.get_project_state()?;
+    let project = state.project_snapshot()?;
     let stations = project.compute_station_coordinates();
     let mut stats = project.stats();
 
@@ -334,11 +334,21 @@ pub struct ProjectState {
     /// `StationKey` shape that derived serde would emit. ts-rs still reads the
     /// field type (`Project`) for the generated binding, so the TS contract is
     /// unchanged; only the runtime serde payload is corrected.
-    #[serde(serialize_with = "crate::models::project::serialize_project_ipc")]
-    pub project: Project,
+    ///
+    /// A snapshot of the open project (#576 A9), not a copy of it; ts-rs reads
+    /// `Arc<Project>` as `Project`.
+    #[serde(serialize_with = "serialize_project_snapshot")]
+    pub project: std::sync::Arc<Project>,
     pub stations: Vec<Station>,
     pub stats: ProjectStats,
     pub frozen_shots: Vec<FrozenShotRef>,
+}
+
+fn serialize_project_snapshot<S: serde::Serializer>(
+    project: &std::sync::Arc<Project>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    crate::models::project::serialize_project_ipc(project, s)
 }
 
 /// Load project with full progress reporting.

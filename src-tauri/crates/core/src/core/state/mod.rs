@@ -18,6 +18,7 @@ mod project_create;
 mod project_io;
 mod project_load;
 mod project_merge;
+mod project_slot;
 mod raw_data;
 mod recent_projects;
 mod save_sidecars;

@@ -1,3 +1,4 @@
+use super::project_slot::ProjectSlot;
 use super::save_sidecars::{SaveMode, SaveRequest};
 use super::session_commit::{CommandsHeld, SessionCommit};
 use super::AppState;
@@ -1079,7 +1080,7 @@ impl AppState {
     pub(super) fn close_open_project_locked(
         &self,
         commands: &CommandsHeld<'_>,
-        project: &mut Option<Project>,
+        project: &mut ProjectSlot,
     ) -> CommandResult {
         // [#576 A5] The same commit every load and create goes through, installing the
         // empty session: every per-project cell back to its no-project value - the undo

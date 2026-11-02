@@ -19,6 +19,7 @@ use crate::tilemap_cache::TilemapCache;
 use crate::core::{CommandResult, UndoStack};
 
 use super::project_io::reapply_heals_after_restore;
+use super::project_slot::ProjectSlot;
 
 /// Trait for types that can represent "no project open" for `with_project_mut` and
 /// `with_project`, so they work with different return types. (A poisoned project
@@ -74,8 +75,9 @@ pub(super) struct ParkAfterMutation {
 
 /// Application state managed by Tauri
 pub struct AppState {
-    /// Current project (if any)
-    pub(super) project: RecoveringMutex<Option<Project>>,
+    /// Current project (if any), copy-on-write (#576 A9): readers take an O(1)
+    /// snapshot, a writer copies only while a snapshot is alive. See [`ProjectSlot`].
+    pub(super) project: RecoveringMutex<ProjectSlot>,
     /// Database connection (if project is open)
     pub(super) database: RecoveringMutex<Option<Database>>,
     /// True while the open project's initial save is still deferred - created with
@@ -317,7 +319,7 @@ impl AppState {
         // test's poisoned cell raises that test's banner and nobody else's.
         let poison = PoisonMonitor::new();
         Ok(Self {
-            project: RecoveringMutex::with_monitor("project", None, &poison),
+            project: RecoveringMutex::with_monitor("project", ProjectSlot::default(), &poison),
             database: RecoveringMutex::with_monitor("database", None, &poison),
             initial_save_deferred: AtomicBool::new(false),
             undo_stack: RecoveringMutex::with_monitor(
@@ -791,13 +793,16 @@ impl AppState {
             let generation = self
                 .adjusted_cache_generation
                 .load(std::sync::atomic::Ordering::SeqCst);
-            let Some(project) = self.get_project_state() else {
+            let Some(project) = self.project_snapshot() else {
                 return Ok(None);
             };
             (project, generation)
         };
         let solved_version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
-        let stations = project.into_adjusted_station_coordinates(&config.closure_adjustment);
+        // The solve adjusts a project of its own: this is the one copy it makes
+        // (none when the slot has moved on and the snapshot is the last holder).
+        let stations = Arc::unwrap_or_clone(project)
+            .into_adjusted_station_coordinates(&config.closure_adjustment);
 
         {
             let mut cache = self.adjusted_cache.lock();
@@ -837,7 +842,7 @@ impl AppState {
         &self,
         from: Option<&StationRef>,
     ) -> Result<Option<DistanceField>, String> {
-        let Some(project) = self.get_project_state() else {
+        let Some(project) = self.project_snapshot() else {
             return Ok(None);
         };
         // Distance uses MEASURED geometry (surveyed shot lengths via the plain
@@ -872,7 +877,7 @@ impl AppState {
         gas_config: &GasConfig,
         stage_drop_overrides: &[Option<StationRef>],
     ) -> Option<GasReachField> {
-        let project = self.get_project_state()?;
+        let project = self.project_snapshot()?;
         Some(project.compute_gas_reach_field_with_overrides(
             origin,
             endpoint,
@@ -909,7 +914,7 @@ impl AppState {
         a: RulerEndpoint,
         b: RulerEndpoint,
     ) -> Result<Option<AlongLineResult>, String> {
-        let Some(project) = self.get_project_state() else {
+        let Some(project) = self.project_snapshot() else {
             return Ok(None);
         };
         // `project` (topology) and `stations` (adjusted coords) are two independent
@@ -1003,7 +1008,7 @@ impl AppState {
     /// construction.
     /// Returns false and leaves `slot` untouched if the snapshot can't be parsed.
     #[must_use]
-    pub(super) fn restore_snapshot_into(slot: &mut Option<Project>, snapshot: &str) -> bool {
+    pub(super) fn restore_snapshot_into(slot: &mut ProjectSlot, snapshot: &str) -> bool {
         // A snapshot persisted by a build predating the per-project `validation`
         // field (#57) has no "validation" key, so serde (the field is
         // #[serde(default)]) fills ValidationConfig::default() - silently changing
@@ -1145,7 +1150,7 @@ impl AppState {
                         "Dropped restored section offsets that were within dust of the origin"
                     );
                 }
-                *slot = Some(restored);
+                slot.set(Some(restored));
                 true
             }
             Err(e) => {

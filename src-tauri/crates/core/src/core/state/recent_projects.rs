@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::core::{CommandResult, ValidationWarning, WarningSeverity};
 use crate::models::{Project, ProjectMetadata};
@@ -7,9 +8,19 @@ use crate::persistence::Database;
 use super::AppState;
 
 impl AppState {
-    /// Get the current project state for the frontend
+    /// [#576 A9] The open project as an O(1) snapshot: what it is now, readable
+    /// with no lock held, never changed by a later edit (see `ProjectSlot`). The
+    /// read every command that only looks at the project uses. `None` when no
+    /// project is open.
+    pub fn project_snapshot(&self) -> Option<Arc<Project>> {
+        self.project.lock().snapshot()
+    }
+
+    /// A deep copy of the open project, for a caller that has to own and change
+    /// it. A caller that only reads takes [`Self::project_snapshot`] instead: this
+    /// copies the whole survey.
     pub fn get_project_state(&self) -> Option<Project> {
-        self.project.lock().clone()
+        self.project_snapshot().map(Arc::unwrap_or_clone)
     }
 
     /// Get recent projects list.

@@ -411,7 +411,7 @@ impl AppState {
     /// the integrity banner non-dismissable while saving is blocked, so the Repair
     /// entry point can't be hidden on a project that can't be saved.
     pub fn integrity_check(&self) -> IntegrityCheckResult {
-        let Some(project) = self.get_project_state() else {
+        let Some(project) = self.project_snapshot() else {
             return IntegrityCheckResult::default();
         };
         // Structural (dangling refs) + geometric (drifted merges + stale,

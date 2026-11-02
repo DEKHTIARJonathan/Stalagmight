@@ -99,6 +99,14 @@ mod load_path_tests;
 )]
 mod recovery_tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "timing probe: panics on a failed assumption are the point, and the printed \
+              values are the measurement"
+)]
+mod refresh_probe_tests;
+#[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod telemetry_coverage_tests;
 #[cfg(test)]

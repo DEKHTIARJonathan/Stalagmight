@@ -605,7 +605,7 @@ pub fn suggest_import_placement(
     // declared nothing.
     azimuth_reference: Option<AzimuthReference>,
 ) -> Result<Vec<PlacementSuggestion>, String> {
-    let project = state.get_project_state().ok_or("No project open")?;
+    let project = state.project_snapshot().ok_or("No project open")?;
 
     let existing_sections: Vec<ExistingSection> = project
         .sections
@@ -642,7 +642,10 @@ pub fn suggest_all_import_placements(
     state: State<'_, AppState>,
     import_sections: Vec<ImportSectionForSuggestion>,
 ) -> Result<Vec<CrossSectionSuggestion>, String> {
-    let existing_sections: Vec<ExistingSection> = match state.get_project_state() {
+    // One snapshot for both reads (#576 NF-AN6-4: the fallback used to take a
+    // second whole-project copy of its own).
+    let project = state.project_snapshot();
+    let existing_sections: Vec<ExistingSection> = match project.as_deref() {
         Some(project) => project
             .sections
             .iter()
@@ -660,8 +663,7 @@ pub fn suggest_all_import_placements(
     };
     // Only the FALLBACK: each section carries its own reference and is scored
     // in it (#438).
-    let fallback_reference = state
-        .get_project_state()
+    let fallback_reference = project
         .and_then(|p| p.default_azimuth_reference)
         .unwrap_or_default();
     let import_sections: Vec<ImportSectionForSuggestion> = import_sections
@@ -690,7 +692,7 @@ pub fn suggest_orphan_placements(
     state: State<'_, AppState>,
     newly_imported_section_ids: Vec<u32>,
 ) -> Result<Vec<OrphanPlacementSuggestion>, String> {
-    let project = state.get_project_state().ok_or("No project open")?;
+    let project = state.project_snapshot().ok_or("No project open")?;
     let config = state.get_config();
     Ok(
         project
@@ -707,7 +709,7 @@ pub fn count_unanchored_sections(
     state: State<'_, AppState>,
     newly_imported_section_ids: Vec<u32>,
 ) -> Result<u32, String> {
-    let project = state.get_project_state().ok_or("No project open")?;
+    let project = state.project_snapshot().ok_or("No project open")?;
     Ok(project.count_unanchored_sections(&newly_imported_section_ids))
 }
 

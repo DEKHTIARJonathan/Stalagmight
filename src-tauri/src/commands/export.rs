@@ -89,7 +89,7 @@ fn export_format_with_notes(
     target: WriteTarget,
     export_fn: impl FnOnce(&Project, &Path) -> Result<Vec<String>, anyhow::Error>,
 ) -> Result<Vec<String>, String> {
-    let project = state.get_project_state().ok_or_else(|| {
+    let project = state.project_snapshot().ok_or_else(|| {
         tracing::warn!(
             path = ?path,
             purpose = "export project for sharing",
@@ -213,7 +213,7 @@ pub async fn export_image(
     // label its penetration with the same graph the app is showing, so this
     // comes from the live config, never from whatever the frontend sent.
     options.include_reference_legs = state.get_config().gas.include_reference_legs;
-    let project = state.get_project_state().ok_or_else(|| {
+    let project = state.project_snapshot().ok_or_else(|| {
         tracing::warn!(
             path = ?path,
             purpose = "export map image for sharing",
@@ -329,7 +329,7 @@ pub(crate) fn export_image_impl(
 ) -> Result<(), String> {
     // See the `export_image` command: config wins over the wire (#27).
     options.include_reference_legs = state.get_config().gas.include_reference_legs;
-    let project = state.get_project_state().ok_or_else(|| {
+    let project = state.project_snapshot().ok_or_else(|| {
         tracing::warn!(
             path = ?path,
             purpose = "export map image for sharing",
@@ -461,7 +461,7 @@ pub async fn export_dive_profile(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         let project = state
-            .get_project_state()
+            .project_snapshot()
             .ok_or_else(|| "No project open".to_string())?;
         let refuse = |path: &PathBuf| {
             tracing::warn!(
@@ -516,7 +516,7 @@ pub async fn render_dive_profile_text(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         let project = state
-            .get_project_state()
+            .project_snapshot()
             .ok_or_else(|| "No project open".to_string())?;
         render_profile_for(&project, request, ProfileFormat::PlainText)
     })
@@ -542,7 +542,7 @@ pub async fn preview_svg_export(
         // disagree with the file it is previewing (#27).
         options.include_reference_legs = state.get_config().gas.include_reference_legs;
         let project = state
-            .get_project_state()
+            .project_snapshot()
             .ok_or_else(|| "No project open".to_string())?;
         // Render from the memoized closure-adjusted solve so the preview matches
         // the on-screen (adjusted) map; falls back to measured coordinates when

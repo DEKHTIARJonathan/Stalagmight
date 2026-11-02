@@ -4405,12 +4405,15 @@ fn a_snapshot_restore_with_an_over_bound_section_id_is_refused() {
     hostile.sections[0].id = crate::models::MAX_SECTION_ID + 1;
     let json = serde_json::to_string(&hostile).unwrap();
 
-    let mut slot = Some(crate::models::Project::new("Live".to_string(), None));
+    let mut slot = super::project_slot::ProjectSlot::new(Some(crate::models::Project::new(
+        "Live".to_string(),
+        None,
+    )));
     assert!(
         !AppState::restore_snapshot_into(&mut slot, &json),
         "an over-bound snapshot must be refused"
     );
-    let live = slot.unwrap();
+    let live = slot.into_project().unwrap();
     assert_eq!(live.name, "Live", "the live project must be untouched");
     assert!(
         live.sections.is_empty(),
@@ -4434,13 +4437,16 @@ fn a_snapshot_restore_with_a_hostile_shot_counter_is_refused() {
     hostile.sections[0].next_shot_id = u32::MAX;
     let json = serde_json::to_string(&hostile).unwrap();
 
-    let mut slot = Some(crate::models::Project::new("Live".to_string(), None));
+    let mut slot = super::project_slot::ProjectSlot::new(Some(crate::models::Project::new(
+        "Live".to_string(),
+        None,
+    )));
     assert!(
         !AppState::restore_snapshot_into(&mut slot, &json),
         "a hostile shot counter must be refused"
     );
     assert!(
-        slot.unwrap().sections.is_empty(),
+        slot.into_project().unwrap().sections.is_empty(),
         "nothing may be installed"
     );
 
@@ -4456,10 +4462,13 @@ fn a_snapshot_restore_with_a_hostile_shot_counter_is_refused() {
         ..Default::default()
     });
     let json = serde_json::to_string(&legit).unwrap();
-    let mut slot = Some(crate::models::Project::new("Live".to_string(), None));
+    let mut slot = super::project_slot::ProjectSlot::new(Some(crate::models::Project::new(
+        "Live".to_string(),
+        None,
+    )));
     assert!(
         AppState::restore_snapshot_into(&mut slot, &json),
         "a legitimate snapshot must still restore"
     );
-    assert_eq!(slot.unwrap().sections.len(), 1);
+    assert_eq!(slot.into_project().unwrap().sections.len(), 1);
 }

@@ -225,7 +225,7 @@ pub(crate) fn get_section_relationships_impl(
     section_id: SectionId,
 ) -> Result<SectionRelationships, String> {
     let project = state
-        .get_project_state()
+        .project_snapshot()
         .ok_or_else(|| "No project open".to_string())?;
 
     if project.get_section(section_id).is_none() {

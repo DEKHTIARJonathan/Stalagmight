@@ -1815,12 +1815,17 @@ mod tests {
                 bumping.push(name.clone());
             }
             // The slot-commit spellings in this tree: the shared project-slot
-            // commit (`*slot = project`, #576 A5 - every load, create and close),
-            // a direct load/create commit (`= Some(project`), the rollback
-            // restore (`= Some(restored`), and a direct close clear
-            // (`*project = None`). Space-prefixed so a `== Some(project_id)`
-            // comparison does not read as an assignment.
-            if src.contains("*slot = project")
+            // commit (`slot.set(project)`, #576 A5 - every load, create and close),
+            // a direct load/create commit (`.set(Some(project`), the rollback
+            // restore (`.set(Some(restored`), and a direct close clear
+            // (`.set(None)`) - the slot is a `ProjectSlot` since #576 A9 - plus the
+            // pre-A9 assignment forms. Space-prefixed where a `== Some(project_id)`
+            // comparison could otherwise read as an assignment.
+            if src.contains("slot.set(project)")
+                || src.contains(".set(Some(project")
+                || src.contains(".set(Some(restored")
+                || src.contains(".set(None)")
+                || src.contains("*slot = project")
                 || src.contains(" = Some(project")
                 || src.contains(" = Some(restored")
                 || src.contains("*project = None")
@@ -1939,7 +1944,7 @@ mod tests {
                 "{func} must install its session through the shared commit, once"
             );
             assert!(
-                !body.contains(" = Some(project"),
+                !body.contains(" = Some(project") && !body.contains(".set(Some(project"),
                 "{func} must not commit the slot outside the shared commit"
             );
         }
@@ -1950,7 +1955,7 @@ mod tests {
             .expect("the shared commit is present");
         let body = &src[start..];
         let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-        let slot = body.find("*slot = project").expect("commits the slot");
+        let slot = body.find("slot.set(project)").expect("commits the slot");
         let db_commit = body.find("= database;").expect("commits the handle");
         let undo = body
             .find("load_from_persisted_with_timestamps(")

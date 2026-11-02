@@ -2194,9 +2194,9 @@ fn restore_snapshot_canonicalizes_legacy_index_anchors() {
         .insert(StationKey::new(s, StationAnchor::Index(2)), (1.0, 2.0, 3.0));
     let snapshot = serde_json::to_string(&project).unwrap();
 
-    let mut slot: Option<Project> = None;
+    let mut slot = project_slot::ProjectSlot::default();
     assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
-    let restored = slot.unwrap();
+    let restored = slot.into_project().unwrap();
 
     // No Index anchor survives into the live project after restore.
     let mut saw_index = false;
@@ -2593,9 +2593,9 @@ fn restore_snapshot_mints_null_uuids_before_reanchor() {
         .insert(StationKey::new(s, StationAnchor::Index(2)), (1.0, 2.0, 3.0));
     let snapshot = serde_json::to_string(&project).unwrap();
 
-    let mut slot: Option<Project> = None;
+    let mut slot = project_slot::ProjectSlot::default();
     assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
-    let restored = slot.unwrap();
+    let restored = slot.into_project().unwrap();
 
     // No Index anchor survives: the null UUIDs were minted, so reanchor could
     // canonicalize Index → AfterShot.
@@ -3357,9 +3357,9 @@ fn restore_snapshot_into_rebuilds_transient_caches() {
 
     // Deserialize into a fresh slot via the chokepoint; serde drops the caches, so
     // restore_snapshot_into must repopulate them.
-    let mut slot: Option<Project> = None;
+    let mut slot = project_slot::ProjectSlot::default();
     assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
-    let p = slot.expect("restored");
+    let p = slot.into_project().expect("restored");
     assert!(
         p.section_index_cache_len() > 0,
         "section index cache must be rebuilt"
@@ -3425,9 +3425,9 @@ fn a_snapshot_restore_is_bit_exact() {
     );
 
     let snapshot = AppState::serialize_project_snapshot(&before).unwrap();
-    let mut slot = Some(before);
+    let mut slot = project_slot::ProjectSlot::new(Some(before));
     assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
-    let after = slot.unwrap();
+    let after = slot.into_project().unwrap();
 
     assert_eq!(
         after.sections[0].shots[0].pitch_out.map(f64::to_bits),
@@ -3465,12 +3465,12 @@ fn restore_snapshot_carries_current_surface_elevation_over_a_legacy_blob() {
         "precondition: the fixture blob must look pre-#431/#448"
     );
 
-    let mut slot = Some(project.clone());
+    let mut slot = project_slot::ProjectSlot::new(Some(project.clone()));
     slot.as_mut().unwrap().surface_elevation = Some(123.5);
     assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
 
     assert_eq!(
-        slot.unwrap().surface_elevation,
+        slot.into_project().unwrap().surface_elevation,
         Some(123.5),
         "restoring a legacy snapshot must carry the CURRENT surface_elevation forward, not drop it to None"
     );
@@ -3497,12 +3497,12 @@ fn restore_snapshot_clears_surface_elevation_when_the_modern_snapshot_says_none(
         "precondition: a modern snapshot must serialize the explicit null, not omit the key: {snapshot}"
     );
 
-    let mut slot = Some(project);
+    let mut slot = project_slot::ProjectSlot::new(Some(project));
     slot.as_mut().unwrap().surface_elevation = Some(123.5);
     assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
 
     assert_eq!(
-        slot.unwrap().surface_elevation,
+        slot.into_project().unwrap().surface_elevation,
         None,
         "a modern snapshot's explicit null must clear surface_elevation, not carry the pre-undo value forward"
     );
@@ -17759,7 +17759,7 @@ fn restoring_a_snapshot_keeps_the_live_file_path() {
     live.file_path = Some(PathBuf::from("/home/me/cave.stalx"));
     let snapshot = AppState::serialize_project_snapshot(&live).expect("serializes");
 
-    let mut slot = Some(live);
+    let mut slot = project_slot::ProjectSlot::new(Some(live));
     assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
 
     assert_eq!(

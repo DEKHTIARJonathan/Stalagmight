@@ -8101,7 +8101,7 @@ mod tests {
         let mut project = db.load_project().expect("load pulled project");
         project.file_path = Some(path);
         *state.database.lock() = Some(db);
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
         state.set_edit_enabled(false);
     }
 

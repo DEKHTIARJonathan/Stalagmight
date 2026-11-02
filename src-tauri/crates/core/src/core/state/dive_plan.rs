@@ -1050,7 +1050,7 @@ mod tests {
         project.file_path = Some(stalx);
         // Project::new stamps a fresh created_at (now), which differs from the
         // "2020-01-01T00:00:00Z" stamped above => Foreign.
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
 
         let list = state.list_dive_plans().unwrap();
         assert!(
@@ -1095,7 +1095,7 @@ mod tests {
         let state = AppState::new().unwrap();
         let mut project = Project::new("Mine".to_string(), None);
         project.file_path = Some(stalx);
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
         state.set_initial_save_deferred_for_tests(true);
 
         let snapshot: DivePlanSnapshot = serde_json::from_str("{}").unwrap();
@@ -1414,7 +1414,7 @@ mod tests {
             })
             .id;
         let state = AppState::new().unwrap();
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
 
         let only = StationRef::new(sec, 0);
         let snapshot = DivePlanSnapshot {
@@ -1549,7 +1549,7 @@ mod tests {
         let (mut project, sec) = project_3_shots();
         let state = AppState::new().unwrap();
         let persisted = {
-            *state.project.lock() = Some(project.clone());
+            *state.project.lock() = Some(project.clone()).into();
             state
                 .to_persisted(&snapshot_with_route_points(sec))
                 .unwrap()
@@ -1557,7 +1557,7 @@ mod tests {
 
         // Delete shot 0: the physical station that was at index 2 is now at index 1.
         project.sections[0].shots.remove(0);
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
         let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
 
         // The plan's ORIGIN was the section's first station, and deleting the first shot deletes
@@ -1585,13 +1585,13 @@ mod tests {
     fn a_reverse_leaves_a_saved_plan_pointing_at_the_same_stations() {
         let (mut project, sec) = project_3_shots();
         let state = AppState::new().unwrap();
-        *state.project.lock() = Some(project.clone());
+        *state.project.lock() = Some(project.clone()).into();
         let persisted = state
             .to_persisted(&snapshot_with_route_points(sec))
             .unwrap();
 
         assert!(project.reverse_section(sec, false));
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
 
         let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
         assert_eq!(stale, 0);
@@ -1615,7 +1615,7 @@ mod tests {
         let (mut project, sec) = project_3_shots();
         project.file_path = Some(temp.path().join("cave.stalx"));
         let state = AppState::new().unwrap();
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
 
         let saved = state
             .save_dive_plan(None, "Plan".to_string(), snapshot_with_route_points(sec))
@@ -1671,13 +1671,13 @@ mod tests {
         // UI can warn that the loaded plan is not what was saved.
         let (mut project, sec) = project_3_shots();
         let state = AppState::new().unwrap();
-        *state.project.lock() = Some(project.clone());
+        *state.project.lock() = Some(project.clone()).into();
         let persisted = state
             .to_persisted(&snapshot_with_route_points(sec))
             .unwrap();
 
         project.sections.clear(); // every anchoring shot is gone
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
         let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
 
         assert!(snapshot.waypoints.is_empty());
@@ -1699,7 +1699,7 @@ mod tests {
         // A way point on a section that is then deleted cannot be anchored at save time.
         let mut snapshot = snapshot_with_route_points(sec);
         snapshot.waypoints = vec![StationRef::new(sec + 99, 1)];
-        *state.project.lock() = Some(project.clone());
+        *state.project.lock() = Some(project.clone()).into();
         let err = state
             .save_dive_plan(None, "Plan".to_string(), snapshot)
             .unwrap_err();
@@ -1720,7 +1720,7 @@ mod tests {
         // Sanity: the same snapshot with anchorable points saves fine, so the refusals above are
         // about the dangling ref and not about some unrelated guard.
         project.ensure_shot_uuids();
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
         assert!(state
             .save_dive_plan(None, "Plan".to_string(), snapshot_with_route_points(sec))
             .is_ok());
@@ -1733,7 +1733,7 @@ mod tests {
         // costs the engine a full extra Dijkstra on every recompute.
         let (project, sec) = project_3_shots();
         let state = AppState::new().unwrap();
-        *state.project.lock() = Some(project.clone());
+        *state.project.lock() = Some(project.clone()).into();
         let key = to_anchor(&project, Some(StationRef::new(sec, 2))).unwrap();
 
         let persisted = PersistedDivePlanSnapshot {
@@ -1821,7 +1821,7 @@ mod tests {
         );
 
         let state = AppState::new().unwrap();
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
         let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
         assert_eq!(stale, 0, "an upgrade must not strand anyone's route");
         assert_eq!(snapshot.origin, Some(StationRef::new(sec, 0)));
@@ -1847,7 +1847,7 @@ mod tests {
         let (mut project, sec) = project_3_shots();
         project.file_path = Some(temp.path().join("cave.stalx"));
         let state = AppState::new().unwrap();
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
 
         let mut snapshot = snapshot_with_route_points(sec);
         snapshot.marked_points[0].label = Some("x".repeat(MAX_MARKED_LABEL_CHARS + 1));
@@ -1870,7 +1870,7 @@ mod tests {
         // must pass through save+load unchanged.
         let (project, sec) = project_3_shots();
         let state = AppState::new().unwrap();
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
 
         let mut snapshot = snapshot_with_route_points(sec);
         snapshot.segments = vec![
@@ -1937,7 +1937,7 @@ mod tests {
             ],
         };
 
-        *state.project.lock() = Some(project.clone());
+        *state.project.lock() = Some(project.clone()).into();
         let persisted = state.to_persisted(&snapshot).unwrap();
 
         // Make way point 1's anchor unplaceable. Since #24 an anchor stores the PAIR of shots it
@@ -1946,7 +1946,7 @@ mod tests {
         // Way points 0 and 2 keep at least one of their own neighbours and still place.
         project.sections[0].shots.remove(3);
         project.sections[0].shots.remove(2);
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
         let (resolved, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
 
         assert_eq!(stale, 1, "only way point 1's anchor should dangle");
@@ -2063,7 +2063,7 @@ mod tests {
         let (mut project, sec) = project_3_shots();
         project.file_path = Some(temp.path().join("cave.stalx"));
         let state = AppState::new().unwrap();
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
 
         let mut long_list = vec![inherited_segment(), inherited_segment()];
         long_list.extend(std::iter::repeat_n(
@@ -2117,7 +2117,7 @@ mod tests {
     fn a_plan_saved_before_segments_existed_loads_one_segment_per_span() {
         let (project, sec) = project_6_shots();
         let state = AppState::new().unwrap();
-        *state.project.lock() = Some(project.clone());
+        *state.project.lock() = Some(project.clone()).into();
 
         let anchor = |i| to_anchor(&project, Some(StationRef::new(sec, i))).unwrap();
         let persisted = PersistedDivePlanSnapshot {
@@ -2156,7 +2156,7 @@ mod tests {
     fn a_short_segment_list_is_padded_rather_than_left_misaligned() {
         let (project, sec) = project_6_shots();
         let state = AppState::new().unwrap();
-        *state.project.lock() = Some(project.clone());
+        *state.project.lock() = Some(project.clone()).into();
 
         let anchor = |i| to_anchor(&project, Some(StationRef::new(sec, i))).unwrap();
         let persisted = PersistedDivePlanSnapshot {
@@ -2185,7 +2185,7 @@ mod tests {
     /// An `AppState` holding `project`, for the #310 command-level tests.
     fn state_with(project: Project) -> AppState {
         let state = AppState::new().unwrap();
-        *state.project.lock() = Some(project);
+        *state.project.lock() = Some(project).into();
         state
     }
 
