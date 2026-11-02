@@ -107,8 +107,14 @@ export function useAutoSave(): AutoSaveState {
       if (selectNewerFileReadOnly(state)) return;
 
       // [#576 B15] Nor while stored project settings could not be read: every
-      // save is refused until the project is reopened (the banner says why).
+      // save is refused until the user sets them again (the banner says why).
       if (state.unreadableProjectSettings.length > 0) return;
+
+      // [#576 RV2-FE-G4] Nor while the file's SpeleoDB link could not be read: a
+      // save over it is refused (only a Save As to another file goes ahead, and
+      // that clears the flag), and each refused attempt would raise the
+      // autosave-failed banner beside the link banner that already says why.
+      if (state.speleoLinkUnreadable) return;
 
       // If we're already executing a save, don't restart timers
       if (savingRef.current) return;
@@ -163,6 +169,7 @@ export function useAutoSave(): AutoSaveState {
           !store.config?.general?.auto_save ||
           selectNewerFileReadOnly(store) ||
           store.unreadableProjectSettings.length > 0 ||
+          store.speleoLinkUnreadable ||
           isAutosaveHeld()
         ) {
           setStatus('idle');

@@ -355,6 +355,8 @@ Auto-save only fires when all of these are true:
 - Autosave is not held (`src/utils/autosaveHold.ts`): no "leave this project"
   prompt is open and no discard is switching projects - the user is deciding
   what happens to these edits, so autosave must not decide first (#576 D34)
+- The file's SpeleoDB link was readable on open (`speleoLinkUnreadable`; a save over the
+  file is refused while it was not, and a Save As to another file clears the flag)
 
 ### Configuration
 
