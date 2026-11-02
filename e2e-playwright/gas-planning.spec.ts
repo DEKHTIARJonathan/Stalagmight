@@ -480,7 +480,7 @@ test.describe('Gas planning', () => {
     expect(await stationPaints(page, UNCONNECTED, grey)).toBe(false);
   });
 
-  test('R9/R10 (#395): Plan opens with the entry card - no legend, no ramp, no bottom panel until an origin is chosen @smoke', async ({
+  test('R9/R10 (#395): Plan opens with the entry card - no legend, no ramp, no bottom panel until an origin is chosen', async ({
     page,
   }) => {
     await waitForDrawnStations(page, 1);
@@ -534,7 +534,7 @@ test.describe('Gas planning', () => {
       .toBe(idlePixelKey);
   });
 
-  test('R9/R10 (#395): "Pick on map" arms a one-shot origin pick, disarmed by Escape or a second press @smoke', async ({
+  test('R9/R10 (#395): "Pick on map" arms a one-shot origin pick, disarmed by Escape or a second press', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -735,7 +735,7 @@ test.describe('Gas planning', () => {
     expect(Array.isArray(sent.request.cylinders)).toBe(true);
   });
 
-  test('Plan swim speed persists to the saved config @smoke', async ({ page }) => {
+  test('Plan swim speed persists to the saved config', async ({ page }) => {
     await enterPlanMode(page);
     const swim = page.locator('[data-testid="gas-swim-speed-input"]');
     await expect(swim).toBeVisible({ timeout: 3000 });
@@ -761,7 +761,7 @@ test.describe('Gas planning', () => {
       .toBe(14);
   });
 
-  test('Display menu is in Survey and Plan (not Export), without the survey-only geometry toggle @smoke', async ({
+  test('Display menu is in Survey and Plan (not Export), without the survey-only geometry toggle', async ({
     page,
   }) => {
     const openMenu = async () => {
@@ -795,7 +795,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="display-menu-button"]')).toHaveCount(0);
   });
 
-  test('adding a stage enables a pushy preset behind the advanced acknowledgment @smoke', async ({
+  test('adding a stage enables a pushy preset behind the advanced acknowledgment', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -867,7 +867,7 @@ test.describe('Gas planning', () => {
       .toBe(false);
   });
 
-  test('disabling the only stage drops the staged reserve control (UI/backend parity #245) @smoke', async ({
+  test('disabling the only stage drops the staged reserve control (UI/backend parity #245)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -887,7 +887,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-reserve-one_stage"]')).toBeDisabled();
   });
 
-  test('the Free strategy makes the usable-gas column editable per cylinder (#245) @smoke', async ({
+  test('the Free strategy makes the usable-gas column editable per cylinder (#245)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -930,7 +930,7 @@ test.describe('Gas planning', () => {
     await expect.poll(() => usableOf(0), { timeout: 2000 }).toBe(0);
   });
 
-  test('readout: no Turn points row; backgas label switches; stage drops show distance (#245) @smoke', async ({
+  test('readout: no Turn points row; backgas label switches; stage drops show distance (#245)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -953,7 +953,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-readout-stage1-drop"]')).toContainText('@');
   });
 
-  test('All-thirds safety margin input appears only in thirds and round-trips to config (#245) @smoke', async ({
+  test('All-thirds safety margin input appears only in thirds and round-trips to config (#245)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -1049,7 +1049,7 @@ test.describe('Gas planning', () => {
     }, stationIndex);
   }
 
-  test('a plain left-click on a station sets the ENDPOINT, not the origin @smoke', async ({
+  test('a plain left-click on a station sets the ENDPOINT, not the origin', async ({
     page,
   }) => {
     // #298 flipped this: a map click used to re-root the origin. Picking a destination is the
@@ -1078,7 +1078,7 @@ test.describe('Gas planning', () => {
     ).toBeNull();
   });
 
-  test('before an origin is chosen, a plain left-click sets the ORIGIN @smoke', async ({
+  test('before an origin is chosen, a plain left-click sets the ORIGIN', async ({
     page,
   }) => {
     // R9/R10 (#395): the entry question needs an answer before a click can mean "endpoint" -
@@ -1269,7 +1269,7 @@ test.describe('Gas planning', () => {
     expect(sent?.station_index).not.toBe(WRONG_OLD_BEHAVIOUR_INDEX);
   });
 
-  test('way points: add, reorder, remove - order reaches the engine @smoke', async ({ page }) => {
+  test('way points: add, reorder, remove - order reaches the engine', async ({ page }) => {
     await enterPlanMode(page);
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     // Empty state first, so the list rows below are proof of the add and not pre-existing.
@@ -1411,7 +1411,7 @@ test.describe('Gas planning', () => {
     await expect.poll(getCalls, { timeout: 2000 }).toEqual(['undo', 'redo']);
   });
 
-  test('Ctrl+I in Plan opens the picker; the DMP raises import-blocked with Stay and Switch-and-continue (#243, #407) @smoke', async ({
+  test('Ctrl+I in Plan opens the picker; the DMP raises import-blocked with Stay and Switch-and-continue (#243, #407)', async ({
     page,
   }) => {
     const openCount = () =>
@@ -1464,7 +1464,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-panel"]')).toHaveCount(0);
   });
 
-  test('the planned route renders as a highlighted overlay @smoke', async ({ page }) => {
+  test('the planned route renders as a highlighted overlay', async ({ page }) => {
     await enterPlanMode(page);
     // The default route (origin → deepest reachable) draws the solid route line over the survey.
     await expect
@@ -1507,7 +1507,7 @@ test.describe('Gas planning', () => {
     expect(opacity).toContain('0.45');
   });
 
-  test('carousel switches Survey/Plan/Export; Plan is read-only; Export has controls @smoke', async ({
+  test('carousel switches Survey/Plan/Export; Plan is read-only; Export has controls', async ({
     page,
   }) => {
     await expect(page.locator('[data-testid="mode-carousel"]')).toBeVisible();
@@ -1614,7 +1614,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="export-mode-preview"]')).toHaveCount(0);
   });
 
-  test('Plan map is read-only: Delete on a selection opens no confirm dialog @smoke', async ({
+  test('Plan map is read-only: Delete on a selection opens no confirm dialog', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -1645,7 +1645,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="confirm-dialog"]')).toHaveCount(0);
   });
 
-  test('Plan stars the zero datum; clicking the star picks it as the origin @smoke', async ({
+  test('Plan stars the zero datum; clicking the star picks it as the origin', async ({
     page,
   }) => {
     // Flag station 0 of the first section as a zero datum, then refresh so the map
@@ -1746,7 +1746,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible();
   });
 
-  test('a stage drop is keyboard-movable - ArrowLeft pins it, sends an override, reset clears it (#246) @smoke', async ({
+  test('a stage drop is keyboard-movable - ArrowLeft pins it, sends an override, reset clears it (#246)', async ({
     page,
   }) => {
     await setupOneStageDrop(page);
@@ -1799,7 +1799,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-readout-over-reserve-warning"]')).toBeVisible();
   });
 
-  test('Segments tab: one row per span; a way point adds a row, removing it takes it away (#317) @smoke', async ({
+  test('Segments tab: one row per span; a way point adds a row, removing it takes it away (#317)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -1827,7 +1827,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid^="segment-row-"]')).toHaveCount(2);
   });
 
-  test('editing a segment speed reaches the backend, not just a local re-render (#317) @smoke', async ({
+  test('editing a segment speed reaches the backend, not just a local re-render (#317)', async ({
     page,
   }) => {
     await enterPlanMode(page);
@@ -1876,7 +1876,7 @@ test.describe('Gas planning', () => {
       .toBeNull();
   });
 
-  test('the DPV scooter checkbox is disabled without a configured rig, and the readout has no scooter row (#317) @smoke', async ({
+  test('the DPV scooter checkbox is disabled without a configured rig, and the readout has no scooter row (#317)', async ({
     page,
   }) => {
     await enterPlanMode(page);

@@ -61,7 +61,7 @@ test.describe('SpeleoDB managed-file prompt', () => {
     await expect(page.getByTestId('global-view')).toBeVisible();
   });
 
-  test('remove link strips the file and opens it as a local project', async ({ page }) => {
+  test('remove link strips the file and opens it as a local project @smoke', async ({ page }) => {
     await openManagedFileDialog(page);
     await page.getByTestId('speleodb-managed-file-remove-link').click();
 

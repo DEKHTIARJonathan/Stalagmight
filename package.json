@@ -23,6 +23,8 @@
     "lint:e2e-parallel:test": "node scripts/check-e2e-parallel-safe.test.mjs",
     "lint:e2e-no-sleep": "node scripts/check-e2e-no-sleep.mjs",
     "lint:e2e-no-sleep:test": "node scripts/check-e2e-no-sleep.test.mjs",
+    "lint:smoke-features": "node scripts/check-smoke-features.mjs",
+    "lint:smoke-features:test": "node scripts/check-smoke-features.test.mjs",
     "lint:rust-file-size": "node scripts/check-rust-file-size.mjs",
     "lint:rust-file-size:test": "node scripts/check-rust-file-size.test.mjs",
     "lint:ts-file-size": "node scripts/check-ts-file-size.mjs",

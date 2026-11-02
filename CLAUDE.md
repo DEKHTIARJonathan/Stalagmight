@@ -86,6 +86,7 @@ pnpm lint:e2e-parallel:test && pnpm lint:e2e-parallel     # Playwright parallel-
 pnpm lint:e2e-no-sleep:test && pnpm lint:e2e-no-sleep     # no unannotated waitForTimeout in Playwright specs
 pnpm typecheck:playwright                                 # e2e-playwright specs + IPC mock
 pnpm test:mock-contract                                   # IPC mock <-> generate_handler! contract
+pnpm lint:smoke-features:test && pnpm lint:smoke-features # every critical feature in docs/TESTING.md has an @smoke test
 pnpm test:pw-timing                                       # timing reporter self-test (a report, not a time budget)
 pnpm test:ui:smoke                                        # the @smoke merge gate (needs a display, e.g. xvfb-run)
 # plus the specs for the feature you changed: pnpm exec playwright test e2e-playwright/<feature>.spec.ts

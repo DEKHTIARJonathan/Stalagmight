@@ -35,7 +35,7 @@ test.describe('GlobalView - Delete project (destructive)', () => {
     await expect(page.getByTestId('context-menu-delete')).toBeVisible();
   });
 
-  test('Delete project opens a confirm dialog naming the project, and confirming deletes', async ({ page }) => {
+  test('Delete project opens a confirm dialog naming the project, and confirming deletes @smoke', async ({ page }) => {
     await page.getByTestId(systemCardTestId(ALPHA)).click({ button: 'right' });
     await page.getByTestId('context-menu-delete').click();
 

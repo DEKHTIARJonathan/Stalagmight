@@ -73,6 +73,15 @@ jobs:
       # deliberate: this is the copy that closes the gap, so do not delete it.
       - name: Mock IPC contract
         run: pnpm test:mock-contract
+      # Every critical feature in docs/TESTING.md ("Critical features") still has
+      # its named @smoke canary (#576 E5) - an untagged, renamed or skipped
+      # canary fails here, before the browser install. The list lives in docs/,
+      # which this workflow path-ignores, so leak-scan.yml runs the same check
+      # for a docs-only edit to the table.
+      - name: Critical-feature smoke canaries
+        run: |
+          pnpm lint:smoke-features:test
+          pnpm lint:smoke-features
       # The per-test timing report below is what the @smoke set's time budget is
       # managed with, so its arithmetic is pinned by fixture tests (hook
       # attribution, Worker Cleanup exclusion, failed-run flagging,

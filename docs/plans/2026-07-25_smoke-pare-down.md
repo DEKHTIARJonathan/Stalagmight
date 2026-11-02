@@ -238,7 +238,12 @@ Parked until Phase A is done and re-measured. If it is still needed:
 - **`gas-planning.spec.ts` 21 -> ~6** is the one large cut: a third of all test
   time for a single feature. Keep: overlay renders, preset apply, cylinder edit,
   route pick, read-only guard, one readout. ⚠ ~61% of its cost is hook, so **A2
-  shrinks this prize** - sequence A2 first and re-derive.
+  shrinks this prize** - sequence A2 first and re-derive. **Done in #576 (E5),
+  from 27 (it had grown) to exactly those six**, paying for one canary per
+  uncovered critical feature (project delete, GPX import, the JSON/TML/PNG/
+  SVG-PDF exports, detail panel, move, SpeleoDB managed file): 93 -> 81 `@smoke`
+  tests, gas-planning 29% -> 7% of the set. The feature list and its gate live
+  in docs/TESTING.md ("Critical features"); re-measure the job on CI.
 - **Body-dominated files are the genuine Phase B candidates**, since A2 will not
   shrink them: `map-tools` (25% hook), `window-close-protection` (34%),
   `toolbar-tool-groups` (43%), `dmp-import` (48%).

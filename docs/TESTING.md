@@ -72,7 +72,8 @@ work:
 - **Tag `@smoke` only if the test covers a critical path *and* is reliable.**
   Append the tag to the test title: `test('does X @smoke', ...)`. Selection is
   `playwright test --grep @smoke`; the convention here is to tag individual
-  tests, not `describe` blocks, so the tagged set stays explicit.
+  tests, not `describe` blocks, so the tagged set stays explicit. "Critical
+  path" means the list below; a test outside it needs a reason to be tagged.
 - A valuable but timing-sensitive test stays **untagged**. It still runs
   nightly.
 - **Do not sleep.** A hard `page.waitForTimeout()` is the single biggest flake
@@ -83,6 +84,49 @@ work:
   the call. `pnpm lint:e2e-no-sleep` (smoke job) fails on any other sleep.
 - Retries are configured in `playwright.config.ts` (2 in CI, 1 locally), so one
   blip does not abort a push. `PW_RETRIES=0` to fail fast while hunting a flake.
+
+### Critical features (the smoke canary list)
+
+The user paths a merge must never break, each with ONE named `@smoke` canary.
+`pnpm lint:smoke-features` (smoke job and leak-scan) fails when a canary is no
+longer an `@smoke` test - renamed, untagged, skipped or deleted - so re-point
+the row in the same PR. A row passes when the spec has a non-skipped test whose
+title contains `@smoke` and the canary fragment. The set is held to the smoke
+job's time budget (under 7 minutes, `docs/plans/2026-07-25_smoke-pare-down.md`):
+pay for a new canary by untagging a redundant test, never by deleting one - an
+untagged test still runs nightly. The per-test timing report on every smoke run
+(`pnpm test:pw-timing` pins its arithmetic) is how the budget is checked.
+
+<!-- smoke-features:start -->
+| Feature | Spec | Canary (title contains) |
+|---|---|---|
+| Create a project | `project-crud.spec.ts` | `should create project with valid name` |
+| Save a project (Ctrl+S) | `project-crud.spec.ts` | `should respond to Ctrl+S` |
+| Autosave status | `auto-save-status.spec.ts` | `when project is clean` |
+| A failed save is surfaced | `error-handling.spec.ts` | `should display error notification on save failure` |
+| Delete a project | `globalview-delete-project.spec.ts` | `confirming deletes` |
+| Import: Discovery DMP | `dmp-import.spec.ts` | `should parse and display DMP file data in import dialog` |
+| Import: Ariane TML/TMLU | `tml-import.spec.ts` | `imports a TML from the unified picker` |
+| Import: Walls WPJ/SRV | `walls-import-dialog.spec.ts` | `all surveys selected imports` |
+| Import: GPX | `gpx-import-workflow.spec.ts` | `imports GPX from home screen` |
+| Export: CSV | `export-dialog.spec.ts` | `should execute export and show success` |
+| Export: JSON | `export-dialog.spec.ts` | `should show JSON format options and preview` |
+| Export: Ariane TML | `export-dialog.spec.ts` | `should continue TML export after unanchored warning confirmation` |
+| Export: image (PNG) | `export-dialog.spec.ts` | `threshold slider updates the displayed value and is passed to export` |
+| Export: image (SVG, PDF) | `export-dialog.spec.ts` | `should hide DPI select for non-PNG formats` |
+| Detail panel | `detail-panel-links.spec.ts` | `clicking Start Station link changes selection to station` |
+| Move a station | `move-carry-integrity.spec.ts` | `a normal drop still commits exactly one move` |
+| Undo / redo | `undo-redo-dropdown.spec.ts` | `clicking item at index 2 executes undo_to` |
+| Plan mode: gas overlay | `gas-planning.spec.ts` | `Plan mode shows the gas overlay` |
+| Plan mode: saved dive plans | `dive-plan.spec.ts` | `Save as creates a plan and loads it` |
+| SpeleoDB managed file | `speleodb-managed-file.spec.ts` | `remove link strips the file and opens it as a local project` |
+| Map renders the survey (custom WebGL) | `custom-renderer-health.spec.ts` | `custom WebGL survey layer initializes and draws` |
+<!-- smoke-features:end -->
+
+Known gap, deliberately not in the table: **Compass `.MAK`/`.DAT` import** has no
+browser-tier flow test to name (only the vitest component test
+`CompassImportDialog.test.tsx`), so it reaches CI only through vitest until a
+Playwright spec exists.
 
 The agent harness is **on-demand plus per-RC** and is in no gated tier above.
 The retired WDIO suite's residual coverage lives in the journeys
@@ -109,20 +153,24 @@ Three workflows gate `master`:
   rule itself is pinned. The order is lints first (fmt, clippy, the release
   check), then the pnpm gates, then the Rust tests; the Rust test steps run
   even after a lint failure (`if: !cancelled()`), so one run reports both.
-- **`e2e-smoke.yml` (`smoke`)** - in order: `pnpm lint:e2e-parallel` (the
-  Playwright parallel-safety scanner), `pnpm typecheck:playwright`,
-  `pnpm test:mock-contract`, `pnpm test:pw-timing` (the per-test timing
-  reporter's self-test - the timing report is observability, not a time
-  budget), then the `@smoke`
-  subset, Chromium-only against a built bundle served by `vite preview`. All
-  four checks run before the browser install, so a cheap failure never pays for
-  Chromium. Any of the five can fail the job. The typecheck and mock-contract
-  steps live here rather than in `check` because `check` path-ignores
-  `e2e-playwright/**` - the very changes they guard.
+- **`e2e-smoke.yml` (`smoke`)** - in order, all before the browser install so a
+  cheap failure never pays for Chromium: the parallel-safety scanner
+  (`pnpm lint:e2e-parallel`) and the no-unannotated-sleep gate
+  (`pnpm lint:e2e-no-sleep`), each after its own `:test`;
+  `pnpm typecheck:playwright`; the TS file-size ratchet (it measures
+  `e2e-playwright/` too); `pnpm test:mock-contract`; the critical-feature
+  canary check (`pnpm lint:smoke-features`, see "Critical features" above);
+  `pnpm test:pw-timing` (the per-test timing reporter's self-test - the timing
+  report is observability, not a time budget). Then the `@smoke` subset,
+  Chromium-only against a built bundle served by `vite preview`. Every step can
+  fail the job. The typecheck and mock-contract steps live here rather than in
+  `check` because `check` path-ignores `e2e-playwright/**` - the very changes
+  they guard.
 - **`leak-scan.yml`** - `lint:private-leaks` + `lint:no-em-dash` over the whole
   tracked tree, `lint:third-party` (THIRD-PARTY-LICENSES.md against the
   hashes of the two lockfiles, the generator and its cargo-about config), and
-  `lint:prepush-checklist` (the CLAUDE.md checklist lists every CI gate). The
+  `lint:prepush-checklist` (the CLAUDE.md checklist lists every CI gate), and
+  `lint:smoke-features` again (the canary list lives in `docs/`). The
   two whole-tree guards share one file reader (`scripts/lib/tracked-files.mjs`):
   a tracked symlink is scanned as its link text, the content git publishes for
   it, and is never followed, and every tracked file PATH is scanned as well as

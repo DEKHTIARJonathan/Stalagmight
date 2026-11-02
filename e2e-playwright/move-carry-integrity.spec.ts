@@ -505,7 +505,7 @@ test.describe('Move carry integrity (GHOST-2)', () => {
     await expect(page.locator(MOVE_CANCELLED_TOAST)).toHaveCount(0);
   });
 
-  test('a normal drop still commits exactly one move', async ({ page }) => {
+  test('a normal drop still commits exactly one move @smoke', async ({ page }) => {
     await recordMutations(page);
     await carryStation(page);
 

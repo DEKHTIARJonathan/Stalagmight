@@ -342,7 +342,7 @@ test.describe('Detail Panel Links', () => {
   });
 
   test.describe('Shot Detail Links', () => {
-    test('clicking Start Station link changes selection to station', async ({ page }) => {
+    test('clicking Start Station link changes selection to station @smoke', async ({ page }) => {
       await createProjectWithSections(page);
 
       const sectionIds = await getSectionIds(page);

@@ -59,7 +59,7 @@ test.describe('Export Dialog', () => {
     await expect(preview).not.toBeVisible();
   });
 
-  test('should show JSON format options and preview', async ({ page }) => {
+  test('should show JSON format options and preview @smoke', async ({ page }) => {
     await createProject(page, 'Export Dialog Test Project');
 
     // Open export dialog
@@ -130,7 +130,7 @@ test.describe('Export Dialog', () => {
     await expect(preview).toBeVisible({ timeout: 5000 });
   });
 
-  test('should hide DPI select for non-PNG formats', async ({ page }) => {
+  test('should hide DPI select for non-PNG formats @smoke', async ({ page }) => {
     await createProject(page, 'Export Dialog Test Project');
 
     await page.keyboard.press('Control+e');
@@ -153,7 +153,7 @@ test.describe('Export Dialog', () => {
     await expect(page.locator('[data-testid="resolution-select"]')).not.toBeVisible();
   });
 
-  test('threshold slider updates the displayed value and is passed to export', async ({ page }) => {
+  test('threshold slider updates the displayed value and is passed to export @smoke', async ({ page }) => {
     await createProject(page, 'Export Dialog Threshold Project');
 
     await page.keyboard.press('Control+e');
@@ -299,7 +299,7 @@ test.describe('Export Dialog', () => {
     expect(saveCalls).toBe(0);
   });
 
-  test('should continue TML export after unanchored warning confirmation', async ({ page }) => {
+  test('should continue TML export after unanchored warning confirmation @smoke', async ({ page }) => {
     await createProject(page, 'TML Warning Continue Project');
 
     await createSectionViaStore(page, {
