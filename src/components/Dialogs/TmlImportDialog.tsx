@@ -10,6 +10,7 @@ import {
   finishImportWithoutOrphanSuggestions,
   suggestOrphanPlacementsAfterImport,
   importFailureMessage,
+  isImportCancelled,
   surfaceImportFailure,
   type ImportFailure,
 } from '../../utils/saveFeedback';
@@ -58,6 +59,8 @@ interface DiscardTarget {
 }
 
 /** Why the dialog is asking what to do with the just-created empty project. */
+/** `message`: for `failed`, the error; for `cancel`, the note that the import itself
+ *  was cancelled (shown plainly - a cancel is not an error). */
 type Residue = { kind: 'cancel' | 'failed'; message?: string; project: DiscardTarget };
 
 /**
@@ -357,6 +360,17 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         // failure reports the same way whichever surface takes it (the router
         // stamps `trackDialogComplete` too).
         trackDialogComplete('tml-import');
+        // A cancelled import is not a failure (#576 RV4-FE-MISC4): the same
+        // keep/discard question, with the cancelled wording the router's toast
+        // uses - never the backend's machine marker in an error box.
+        if (failure.phase === 'command' && isImportCancelled(failure.error)) {
+          setResidue({
+            kind: 'cancel',
+            message: t('dialogs.importFailure.cancelled'),
+            project: discardTarget(),
+          });
+          return;
+        }
         setResidue({
           kind: 'failed',
           message: importFailureMessage(failure),
@@ -434,7 +448,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       resetLoading();
       reportFailure({ phase: 'transport', error: e, format: 'TML' });
     }
-  }, [executeTmlImport, filePath, fileHash, includeExcluded, commentsOnStations, virtualShotMode, allSelected, selectedSections, rootPlacement, tmlFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
+  }, [executeTmlImport, filePath, fileHash, includeExcluded, commentsOnStations, virtualShotMode, allSelected, selectedSections, rootPlacement, tmlFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading, t]);
 
   const handleCancel = useCallback(() => {
     if (isImporting) return;
@@ -517,6 +531,11 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
             >
               {residue.message}
             </div>
+          )}
+          {residue.kind === 'cancel' && residue.message && (
+            <p className="text-text-primary text-sm" data-testid="tml-import-residue-cancelled">
+              {residue.message}
+            </p>
           )}
           <p className="text-text-secondary">{t('dialogs.tmlImport.residue.body')}</p>
 

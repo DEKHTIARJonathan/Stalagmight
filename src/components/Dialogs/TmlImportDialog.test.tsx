@@ -307,6 +307,37 @@ describe('TmlImportDialog failure handling (#411 C2)', () => {
     expect(setView).not.toHaveBeenCalled();
   });
 
+  /**
+   * #576 RV4-FE-MISC4: a CANCELLED import into the project created for it is not a
+   * failure. The residue prompt printed the backend's machine marker verbatim
+   * ("IMPORT_CANCELLED: ...") in its error box; it now asks the same keep/discard
+   * question with the cancelled wording the other import dialogs' toast uses.
+   */
+  it('words a cancelled import as cancelled in the residue prompt, never the raw marker', async () => {
+    openEmptyImportProject();
+    executeTmlImport.mockResolvedValue({
+      success: false,
+      error: 'IMPORT_CANCELLED: the TML import was cancelled; nothing was imported',
+      warnings: [],
+      section_ids: [],
+    } as unknown as CommandResult);
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+
+    await clickImport();
+
+    const prompt = await screen.findByTestId('tml-import-residue-dialog');
+    console.log('[MISC4] residue prompt text:', prompt.textContent);
+    expect(prompt).not.toHaveTextContent('IMPORT_CANCELLED');
+    expect(screen.queryByTestId('tml-import-residue-error')).toBeNull();
+    expect(screen.getByTestId('tml-import-residue-cancelled')).toHaveTextContent(
+      'Import cancelled. Nothing was imported.',
+    );
+    // Still the keep/discard question about the empty project.
+    expect(screen.getByTestId('tml-import-residue-keep')).toBeInTheDocument();
+    expect(screen.getByTestId('tml-import-residue-discard')).toBeInTheDocument();
+    expect(openDialog).not.toHaveBeenCalledWith('error', expect.anything());
+  });
+
   it('raises the residue prompt on a TRANSPORT failure too, instead of stranding the empty project', async () => {
     openEmptyImportProject();
     executeTmlImport.mockRejectedValue(new Error('network gone'));
