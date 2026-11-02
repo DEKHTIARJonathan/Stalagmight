@@ -411,9 +411,15 @@ impl AppState {
     /// the integrity banner non-dismissable while saving is blocked, so the Repair
     /// entry point can't be hidden on a project that can't be saved.
     pub fn integrity_check(&self) -> IntegrityCheckResult {
-        let Some(project) = self.project_snapshot() else {
-            return IntegrityCheckResult::default();
-        };
+        self.project_snapshot()
+            .map_or_else(IntegrityCheckResult::default, |p| {
+                Self::integrity_check_of(&p)
+            })
+    }
+
+    /// [`Self::integrity_check`] of a given project (the IPC read passes its
+    /// settled snapshot, #576 C2).
+    pub fn integrity_check_of(project: &Project) -> IntegrityCheckResult {
         // Structural (dangling refs) + geometric (drifted merges + stale,
         // still-marked-closed loop closures) + topological (a closure that is
         // really a sole-bridge merge).
@@ -818,6 +824,11 @@ impl AppState {
                     .to_string(),
             ),
         };
+
+        // [#576 C2] Test seam: hold here - mutated, not yet settled, still holding
+        // `command_lock` - while a test reads from another thread.
+        #[cfg(any(test, feature = "test-support"))]
+        super::settle_gate::hold(self);
 
         // Block corruption at the source: if a structural command left the
         // project with dangling references, roll back to the pre-command

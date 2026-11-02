@@ -16,6 +16,42 @@ impl AppState {
         self.project.lock().snapshot()
     }
 
+    /// [#576 C2] The open project as it stands BETWEEN commands: a snapshot
+    /// taken under `command_lock`.
+    ///
+    /// The commands run on the blocking pool, concurrently. A command mutates
+    /// the project and then settles it (orphan conversion, frame renormalisation,
+    /// the geometry reconcile, the undo push) under ONE `command_lock` span but
+    /// several `project` acquisitions, so a plain [`Self::project_snapshot`] taken
+    /// mid-command can be a project that was mutated and not yet reconciled - a
+    /// state no user ever sees. Taking the snapshot under `command_lock` makes it
+    /// either before or after every command. The lock is held only for the O(1)
+    /// `Arc` clone; the caller reads the snapshot with no lock held.
+    ///
+    /// Every IPC read of the project goes through this or
+    /// [`Self::settled_read`] (docs/architecture.md, "Where commands run").
+    /// Never call it while holding `command_lock` - from inside `execute`, undo,
+    /// redo, a load or an import - it is not reentrant; code there reads
+    /// [`Self::project_snapshot`].
+    pub fn settled_snapshot(&self) -> Option<Arc<Project>> {
+        let _between_commands = self.hold_commands();
+        self.project_snapshot()
+    }
+
+    /// [#576 C2] Run `read` between commands: under `command_lock`, so whatever
+    /// it reads (the project, the undo stacks, the database) is never caught in
+    /// the middle of a command. For short reads that go through `AppState`'s own
+    /// query methods; a long read takes [`Self::settled_snapshot`] and computes
+    /// on that instead, so it does not hold up the next edit.
+    ///
+    /// `read` must not reach anything that takes `command_lock` itself (`execute`,
+    /// undo/redo, the imports, save, close, load, repair, the adjusted solve):
+    /// the lock is not reentrant.
+    pub fn settled_read<T>(&self, read: impl FnOnce() -> T) -> T {
+        let _between_commands = self.hold_commands();
+        read()
+    }
+
     /// A deep copy of the open project, for a caller that has to own and change
     /// it. A caller that only reads takes [`Self::project_snapshot`] instead: this
     /// copies the whole survey.
@@ -346,7 +382,7 @@ impl AppState {
                 //   the `.stalx` and its link row were destroyed and the frontend
                 //   cleared its link state, while the SERVER mutex stayed held and
                 //   blocked every other diver until it timed out.
-                //   `close_project_impl` gets this right by releasing before it
+                //   the `close_project` command gets this right by releasing before it
                 //   issues `Command::CloseProject`; this path bypasses that command
                 //   entirely, so it has to do the same thing for itself.
                 // - The NETWORK half must not happen under this guard - see the

@@ -23,6 +23,8 @@ mod raw_data;
 mod recent_projects;
 mod save_sidecars;
 mod session_commit;
+#[cfg(any(test, feature = "test-support"))]
+pub mod settle_gate;
 mod speleodb;
 mod speleodb_admin;
 mod speleodb_cache;
@@ -64,6 +66,16 @@ mod azimuth_reference_tests;
               loads' own large LoadError"
 )]
 mod cancelled_load_lock_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, lengths are \
+              compared exactly as written, and the printed values are the evidence a \
+              run captures"
+)]
+mod command_ordering_tests;
 #[cfg(test)]
 mod concurrency_tests;
 #[cfg(test)]
