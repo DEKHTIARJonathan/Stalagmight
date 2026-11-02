@@ -65,6 +65,12 @@ pub(super) enum SaveMode {
     InPlace,
     /// Writes another file and moves the session onto it.
     SaveAs,
+    /// [#576, W2-SAVE question 1] A Save As to ANOTHER file away from an open file
+    /// whose `speleo_link` row could not be read - the way out the save refusal
+    /// leaves (`read_speleo_link`). Moves the session like [`Self::SaveAs`], but
+    /// writes an unlinked project, so like [`Self::DetachedCopy`] it sheds the
+    /// undo-chain markers that describe a server relationship it no longer has.
+    UnlinkedSaveAs,
     /// An explicit destination for a SpeleoDB-managed project: writes an UNLINKED
     /// copy and leaves the session on the managed file (docs/saving.md, "Save a
     /// Copy"). An explicit path naming the managed file itself resolves here too,
@@ -145,10 +151,13 @@ impl Sidecar {
     /// A detached copy is a plain unmanaged project, so it sheds the link AND the
     /// two markers that describe this machine's relationship to the server (#303):
     /// a copy that kept the watermark and was later linked would have its first
-    /// push cut the user's history as "inherited".
+    /// push cut the user's history as "inherited". An unlinked Save As writes the
+    /// same kind of file (its link could not be read), so it sheds them too.
     pub(super) const fn carried_in(self, mode: SaveMode) -> bool {
         match self {
-            Self::SpeleoLink | Self::UndoMarkers => !matches!(mode, SaveMode::DetachedCopy),
+            Self::SpeleoLink | Self::UndoMarkers => {
+                !matches!(mode, SaveMode::DetachedCopy | SaveMode::UnlinkedSaveAs)
+            }
             Self::DisplaySettings | Self::ResolvedWarnings | Self::History => true,
         }
     }
@@ -372,8 +381,16 @@ impl AppState {
         let mut mode_known = false;
         for sidecar in Sidecar::ALL {
             if sidecar == Sidecar::SpeleoLink {
-                carried.speleo_link = read_speleo_link(db, request)?;
-                carried.mode = request.mode(carried.speleo_link.is_some());
+                carried.speleo_link = match read_speleo_link(db, request)? {
+                    LinkRead::Read(link) => {
+                        carried.mode = request.mode(link.is_some());
+                        link
+                    }
+                    LinkRead::UnreadableForAnotherFile => {
+                        carried.mode = SaveMode::UnlinkedSaveAs;
+                        None
+                    }
+                };
                 mode_known = true;
                 continue;
             }
@@ -533,6 +550,15 @@ impl AppState {
     }
 }
 
+/// What [`read_speleo_link`] found.
+enum LinkRead {
+    /// The row, or that there is none.
+    Read(Option<SpeleoLink>),
+    /// The row could not be read, and the save writes another file: it goes
+    /// ahead as [`SaveMode::UnlinkedSaveAs`].
+    UnreadableForAnotherFile,
+}
+
 /// The open file's `speleo_link` row.
 ///
 /// [#576 B35(b)] A link that cannot be READ is not "no link": taken as one, the
@@ -540,13 +566,13 @@ impl AppState {
 /// file, its base revision and dirty bit gone. A save that would rewrite the open
 /// file is refused (no temp exists yet; the file keeps its row). A Save As to
 /// ANOTHER file leaves the open file untouched and is the user's way out, so it
-/// goes ahead, unlinked.
+/// goes ahead, unlinked - and without the undo-chain markers (`UnlinkedSaveAs`).
 fn read_speleo_link(
     db: &Database,
     request: SaveRequest<'_>,
-) -> Result<Option<SpeleoLink>, Box<CommandResult>> {
+) -> Result<LinkRead, Box<CommandResult>> {
     match db.load_speleo_link() {
-        Ok(link) => Ok(link),
+        Ok(link) => Ok(LinkRead::Read(link)),
         Err(e) if request.rewrites_open_file => {
             tracing::error!(
                 error = %e,
@@ -564,9 +590,9 @@ fn read_speleo_link(
                 destination = ?request.destination,
                 purpose = "save to another file without the unreadable link",
                 "The speleo_link table could not be read; saving to the other file as an \
-                 unlinked project"
+                 unlinked project, without the undo-chain markers"
             );
-            Ok(None)
+            Ok(LinkRead::UnreadableForAnotherFile)
         }
     }
 }

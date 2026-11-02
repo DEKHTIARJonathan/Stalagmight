@@ -151,8 +151,8 @@ A stopped save has written nothing: an unreadable table is refused before the te
 file exists, and a failed write discards the temp, so the destination is untouched.
 Two exceptions keep a way out. A SpeleoDB link that cannot be read refuses only a
 save that would rewrite the open file; a Save As to another file goes ahead, as an
-unlinked project (#576 B35(b)). And the undo history stops a save only when even
-emptying it fails.
+unlinked project without the undo-chain markers (#576 B35(b), `UnlinkedSaveAs`).
+And the undo history stops a save only when even emptying it fails.
 
 The coverage test (`save_sidecar_tests`) pins that every table `init_schema`
 creates is either in `SAVE_PROJECT_TABLES` or registered - so a new table has to
@@ -167,10 +167,13 @@ The save MODE is resolved once, in step 2, instead of being inferred at each ste
 | `FirstSave` | A deferred new project's first write; an implicit one picks a free name | Moves onto the file |
 | `InPlace` | Ctrl+S, autosave, the pre-push flush, or a path naming the open file | Stays |
 | `SaveAs` | An explicit destination elsewhere | Moves onto the file |
+| `UnlinkedSaveAs` | An explicit destination elsewhere, from a file whose SpeleoDB link could not be read | Moves onto the file |
 | `DetachedCopy` | An explicit destination for a SpeleoDB-managed project | Stays on the managed file (see Save a Copy) |
 
-A detached copy sheds the link and both undo-chain markers; every other mode
-carries every side table.
+A detached copy and an unlinked Save As write a project without a link, so both
+shed the link and both undo-chain markers: an unlinked file that kept them would,
+once linked again, have its first push cut the user's history as "inherited"
+(#303). Every other mode carries every side table.
 
 ### Stored project settings that could not be read
 
@@ -319,7 +322,7 @@ SpeleoDB or to remove the file's link and open it as a local project.
 A `speleo_link` row that cannot be READ is not "no link" (#576 B35(b)). The
 file opens as a local project, but every save that would rewrite it is refused -
 the rebuilt file would lose the row - while a Save As to another file goes
-ahead, unlinked, and moves the session there. The load reports it
+ahead, unlinked and without the undo-chain markers, and moves the session there. The load reports it
 (`speleo_link_unreadable` on the binary envelope), and a banner says so when the
 project opens, so the first refused save is not the first the user hears of it.
 

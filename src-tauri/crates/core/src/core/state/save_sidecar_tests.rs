@@ -635,6 +635,8 @@ fn a_detached_copy_sheds_the_server_tables_and_every_policy_is_the_decided_one()
     for sidecar in Sidecar::ALL {
         let server_state = matches!(sidecar, Sidecar::SpeleoLink | Sidecar::UndoMarkers);
         assert_eq!(sidecar.carried_in(SaveMode::DetachedCopy), !server_state);
+        // [#576 W2-SAVE question 1] So does a Save As away from an unreadable link.
+        assert_eq!(sidecar.carried_in(SaveMode::UnlinkedSaveAs), !server_state);
         for mode in [SaveMode::FirstSave, SaveMode::InPlace, SaveMode::SaveAs] {
             assert!(
                 sidecar.carried_in(mode),
@@ -669,6 +671,7 @@ fn every_table_read_before_the_link_is_carried_in_every_mode() {
             SaveMode::InPlace,
             SaveMode::SaveAs,
             SaveMode::DetachedCopy,
+            SaveMode::UnlinkedSaveAs,
         ] {
             assert!(
                 sidecar.carried_in(mode),
