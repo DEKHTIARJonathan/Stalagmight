@@ -9,7 +9,7 @@
 // Run: node scripts/pw-timing-reporter.test.mjs
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import TimingReporter from './pw-timing-reporter.mjs';
@@ -153,6 +153,13 @@ test('a missing step duration is treated as zero, not NaN', () => {
 test('stats carry the run count', () => {
   const rep = run([step('Before Hooks', 10)]);
   assert.equal(rep.stats.tests, 1);
+});
+
+// The reports above were written under `dir`; remove it so a run leaves
+// nothing behind in TMPDIR (#576 E18(b)).
+rmSync(dir, { recursive: true, force: true });
+test('the temp report dir is removed again', () => {
+  assert.equal(existsSync(dir), false);
 });
 
 if (failures.length > 0) {
