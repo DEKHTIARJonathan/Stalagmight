@@ -1253,6 +1253,7 @@
       "emptyTitle": "Nothing imported",
       "deferredSaveTitle": "Import Warning",
       "unknown": "Unknown error during import",
+      "cancelled": "Import cancelled. Nothing was imported.",
       "transportFallback": "Failed to import the {{format}} file",
       "wallsMissingFiles_one": "No surveys were imported: {{count}} referenced .SRV file was not found next to the project. Put the survey files in the same folder as the .wpj, or import a .srv file directly.",
       "wallsMissingFiles_other": "No surveys were imported: {{count}} referenced .SRV files were not found next to the project. Put the survey files in the same folder as the .wpj, or import a .srv file directly.",

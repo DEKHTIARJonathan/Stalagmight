@@ -14,6 +14,7 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
@@ -83,7 +84,11 @@ pub(crate) fn run_file_import<P>(
     let label = kind.error_label;
     tracing::info!(path = ?path, purpose, "Executing {label} import");
 
-    let mut emitter = ProgressEmitter::new_for_import(sink);
+    // [#576 NF-FIX3A-2] This import is the active load, so the loading overlay's
+    // Cancel (`cancel_loading`) reaches it; checked between the phases, up to the
+    // apply. Released on every way out.
+    let active = ActiveImport::register(state);
+    let mut emitter = ProgressEmitter::new_for_import(sink, Arc::clone(&active.token));
 
     emitter.start_phase(LoadingPhase::ImportParsing);
     let parsed = match guarded(|| parse(path)) {
@@ -99,6 +104,9 @@ pub(crate) fn run_file_import<P>(
         }
     };
     emitter.complete_phase(LoadingPhase::ImportParsing);
+    if emitter.is_cancelled() {
+        return cancelled(label);
+    }
 
     emitter.start_phase(LoadingPhase::ImportConverting);
     let converted = match guarded(|| convert(&parsed)) {
@@ -114,6 +122,11 @@ pub(crate) fn run_file_import<P>(
         }
     };
     emitter.complete_phase(LoadingPhase::ImportConverting);
+    // The last point where nothing has been committed: once the apply starts the
+    // import lands whole (one undoable step), and Cancel no longer stops it.
+    if emitter.is_cancelled() {
+        return cancelled(label);
+    }
 
     let ConvertedImport {
         sections,
@@ -169,7 +182,47 @@ pub(crate) fn run_file_import<P>(
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);
 
-    finalize_deferred_import(state, result)
+    let result = finalize_deferred_import(state, result);
+    drop(active);
+    result
+}
+
+/// The failure a cancelled import answers: nothing was imported. The marker lets
+/// the import dialogs say so quietly rather than as an import error.
+fn cancelled(label: &str) -> CommandResult {
+    tracing::info!(
+        purpose = "stop an import the user cancelled (#576 NF-FIX3A-2)",
+        "{label} import cancelled before anything was applied"
+    );
+    CommandResult::failure(format!(
+        "{IMPORT_CANCELLED_CODE}: the {label} import was cancelled; nothing was imported"
+    ))
+}
+
+/// The marker a cancelled import's failure starts with (`saveFeedback.ts` reads it).
+pub(crate) const IMPORT_CANCELLED_CODE: &str = "IMPORT_CANCELLED";
+
+/// An import registered as the app's active load (`AppState::start_new_load`), so
+/// `cancel_loading` flips its token; cleared when it ends, however it ends
+/// (`clear_active_load` only clears its own token, never a newer load's).
+struct ActiveImport<'a> {
+    state: &'a AppState,
+    token: Arc<AtomicBool>,
+}
+
+impl<'a> ActiveImport<'a> {
+    fn register(state: &'a AppState) -> Self {
+        Self {
+            state,
+            token: state.start_new_load(),
+        }
+    }
+}
+
+impl Drop for ActiveImport<'_> {
+    fn drop(&mut self) {
+        self.state.clear_active_load(&self.token);
+    }
 }
 
 /// A sink nobody listens to, for tests that run an import without an app.

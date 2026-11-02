@@ -136,6 +136,8 @@ export const TOAST_KEYS = {
 
   // Open / import routing
   IMPORT_IN_PROGRESS: 'import-in-progress',
+  /** An import the loading overlay's Cancel stopped before it applied anything (#576 NF-FIX3A-2). */
+  IMPORT_CANCELLED: 'import-cancelled',
 
   // Debug
   DEBUG_REFRESH: 'debug-refresh',

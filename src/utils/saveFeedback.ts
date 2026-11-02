@@ -370,6 +370,18 @@ export type ImportFailure =
  * which has to ask about the project the failed import created) words it exactly
  * as this router would, instead of minting a second set of strings.
  */
+/**
+ * The marker a file import's failure starts with when the loading overlay's Cancel
+ * stopped it before anything was applied (`IMPORT_CANCELLED_CODE`, the backend's
+ * import runner; #576 NF-FIX3A-2).
+ */
+const IMPORT_CANCELLED_PREFIX = 'IMPORT_CANCELLED:';
+
+/** Whether an import command's error says the user cancelled it (nothing imported). */
+export function isImportCancelled(error: string | null | undefined): boolean {
+  return typeof error === 'string' && error.startsWith(IMPORT_CANCELLED_PREFIX);
+}
+
 export function importFailureMessage(failure: ImportFailure): string {
   switch (failure.phase) {
     case 'transport':
@@ -422,6 +434,12 @@ export function surfaceImportFailure(
       // Report BEFORE anything moves: no setView, no fit-to-bounds.
       trackDialogComplete(dialogName);
       ui.closeDialog();
+      // The user cancelled it (#576 NF-FIX3A-2): nothing was imported and nothing
+      // went wrong, so a quiet note rather than an import-error dialog.
+      if (isImportCancelled(failure.error)) {
+        ui.showToast(i18n.t('dialogs.importFailure.cancelled'), TOAST_KEYS.IMPORT_CANCELLED, 'info');
+        return;
+      }
       // Unlike 'empty', 'command' is NOT a safe class to blanket-hide the
       // report-a-bug hint for (#447 review): execute_tml_import (and its
       // Compass/Walls/GPX siblings) return this same CommandResult::failure

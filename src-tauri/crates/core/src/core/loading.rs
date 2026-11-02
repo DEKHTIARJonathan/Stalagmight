@@ -688,10 +688,10 @@ impl ProgressEmitter {
         Self::new(sink, weights, cancelled)
     }
 
-    /// Create a new emitter for survey-file import operations (TML, Compass)
-    /// with 4 phases summing to 100%. Import doesn't support cancellation today,
-    /// so this uses a dummy token.
-    pub fn new_for_import(sink: Arc<dyn EventSink>) -> Self {
+    /// Create a new emitter for survey-file import operations (Ariane, Compass,
+    /// Walls, GPX) with 4 phases summing to 100%. `cancelled` is the import's
+    /// active-load token (#576 NF-FIX3A-2): the runner checks it between phases.
+    pub fn new_for_import(sink: Arc<dyn EventSink>, cancelled: Arc<AtomicBool>) -> Self {
         let weights = vec![
             (LoadingPhase::ImportParsing, 15.0),
             (LoadingPhase::ImportConverting, 20.0),
@@ -702,8 +702,7 @@ impl ProgressEmitter {
             (weights.iter().map(|(_, w)| w).sum::<f32>() - 100.0).abs() < 0.01,
             "Import phase weights must sum to 100"
         );
-        let dummy_cancelled = Arc::new(AtomicBool::new(false));
-        Self::new(sink, weights, dummy_cancelled)
+        Self::new(sink, weights, cancelled)
     }
 
     /// Create a new emitter for export operations (4 phases summing to 100%).
