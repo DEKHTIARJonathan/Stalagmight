@@ -7,6 +7,7 @@ import {
   waitForNoDialogs,
   type SectionSeed,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E tests for frozen shot display and edit enforcement.
@@ -42,13 +43,13 @@ async function getProjectIds(page: Page): Promise<{
   shotIds: number[];
 }> {
   const ids = await page.evaluate(() => {
-    const e2e = (window as any).__E2E_TEST__;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
     if (!e2e) return null;
     const state = e2e.projectStore.getState();
     const section = state.project?.sections?.[0];
     return {
       sectionId: section?.id ?? 0,
-      shotIds: (section?.shots ?? []).map((s: any) => s.id),
+      shotIds: (section?.shots ?? []).map((s) => s.id),
     };
   });
   if (!ids) throw new Error('Could not retrieve section/shot IDs');
@@ -65,7 +66,7 @@ async function injectFrozenShots(
 ): Promise<void> {
   await page.evaluate(
     (frozen) => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       if (!e2e) return;
       e2e.projectStore.setState({ frozenShots: frozen });
     },

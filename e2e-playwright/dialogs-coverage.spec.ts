@@ -9,6 +9,7 @@ import {
   selectDropdownOption,
 } from './helpers/app';
 import type { Locator } from '@playwright/test';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /** Add a shot the way the app does everywhere: type into the trailing blank
  *  row, which materializes it. There is no Add button. */
@@ -74,11 +75,7 @@ async function setupProjectWithShots(page: Page, shotCount: number): Promise<Pro
   await waitForNoDialogs(page);
 
   const ids = await page.evaluate(() => {
-    const e2e = (window as unknown as {
-      __E2E_TEST__?: {
-        projectStore: { getState: () => { project: any; stations: any[] } };
-      };
-    }).__E2E_TEST__;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
 
     if (!e2e) return null;
 
@@ -107,7 +104,7 @@ async function setupProjectWithShots(page: Page, shotCount: number): Promise<Pro
 async function openDialog(page: Page, name: string, data: Record<string, unknown>) {
   await page.evaluate(
     ({ dialogName, dialogData }) => {
-      (window as any).__E2E_TEST__.uiStore.getState().openDialog(dialogName, dialogData);
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().openDialog(dialogName, dialogData);
     },
     { dialogName: name, dialogData: data }
   );
@@ -145,11 +142,11 @@ test.describe('Dialog Coverage - Edit Shot', () => {
     await dialog.getByRole('button', { name: 'Save' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
 
-    const updatedShot = await page.evaluate(({ sectionId: sId, shotId: shId }) => {
-      const state = (window as any).__E2E_TEST__.projectStore.getState();
-      const section = state.project.sections.find((s: any) => s.id === sId);
-      return section?.shots.find((s: any) => s.id === shId);
-    }, { sectionId, shotId });
+    const updatedShot = (await page.evaluate(({ sectionId: sId, shotId: shId }) => {
+      const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
+      const section = state.project!.sections.find((s) => s.id === sId);
+      return section?.shots.find((s) => s.id === shId);
+    }, { sectionId, shotId }))!;
 
     expect(updatedShot.azimuth_in).toBe(350);
     expect(updatedShot.azimuth_out).toBe(340);
@@ -220,7 +217,7 @@ test.describe('Dialog Coverage - Draw Shot', () => {
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
 
     const selection = await page.evaluate(() => {
-      return (window as any).__E2E_TEST__.uiStore.getState().selection;
+      return (window as E2EWindow).__E2E_TEST__.uiStore.getState().selection;
     });
 
     expect(selection?.type).toBe('shot');
@@ -285,10 +282,10 @@ test.describe('Dialog Coverage - Edit Section', () => {
     await dialog.getByRole('button', { name: 'Save' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
 
-    const updatedSection = await page.evaluate((sId) => {
-      const state = (window as any).__E2E_TEST__.projectStore.getState();
-      return state.project.sections.find((s: any) => s.id === sId);
-    }, sectionId);
+    const updatedSection = (await page.evaluate((sId) => {
+      const state = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
+      return state.project!.sections.find((s) => s.id === sId);
+    }, sectionId))!;
 
     expect(updatedSection.name).toBe('Updated Section');
     expect(updatedSection.surveyor).toBe('New Surveyor');
@@ -348,7 +345,7 @@ test.describe('Dialog Coverage - Confirm Delete', () => {
     const { sectionId, shotId } = await setupProjectWithShots(page, 2);
 
     await page.evaluate(({ sectionId: sId, shotId: shId }) => {
-      (window as any).__E2E_TEST__.uiStore.getState().setSelection({
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().setSelection({
         type: 'shot',
         sectionId: sId,
         shotId: shId,
@@ -369,7 +366,7 @@ test.describe('Dialog Coverage - Confirm Delete', () => {
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
 
     const selection = await page.evaluate(() => {
-      return (window as any).__E2E_TEST__.uiStore.getState().selection;
+      return (window as E2EWindow).__E2E_TEST__.uiStore.getState().selection;
     });
     expect(selection).toBeNull();
   });
@@ -518,7 +515,7 @@ test.describe('Dialog Coverage - Delete Shot Choice', () => {
     const { sectionId, shotId } = await setupProjectWithShots(page, 3);
 
     await page.evaluate(({ sectionId: sId, shotId: shId }) => {
-      (window as any).__E2E_TEST__.uiStore.getState().setSelection({
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().setSelection({
         type: 'shot',
         sectionId: sId,
         shotId: shId,
@@ -543,7 +540,7 @@ test.describe('Dialog Coverage - Delete Shot Choice', () => {
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
 
     const selection = await page.evaluate(() => {
-      return (window as any).__E2E_TEST__.uiStore.getState().selection;
+      return (window as E2EWindow).__E2E_TEST__.uiStore.getState().selection;
     });
     expect(selection).toBeNull();
   });
@@ -599,7 +596,7 @@ test.describe('Dialog Coverage - Split Section', () => {
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
 
     const selection = await page.evaluate(() => {
-      return (window as any).__E2E_TEST__.uiStore.getState().selection;
+      return (window as E2EWindow).__E2E_TEST__.uiStore.getState().selection;
     });
     expect(selection?.type).toBe('section');
     expect(selection?.sectionId).toBe(sectionId);

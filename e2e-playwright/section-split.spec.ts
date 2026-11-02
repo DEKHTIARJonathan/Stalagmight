@@ -7,6 +7,7 @@ import {
   waitForNoDialogs,
   type SectionSeed,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E tests for the section split workflow.
@@ -31,7 +32,7 @@ const sectionSeeds: SectionSeed[] = [
 /** Get section and shot IDs from the project store. */
 async function getIds(page: Page): Promise<{ sectionId: number; shotId: number; sectionName: string }> {
   const ids = await page.evaluate(() => {
-    const e2e = (window as any).__E2E_TEST__;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
     if (!e2e) return null;
     const state = e2e.projectStore.getState();
     const section = state.project?.sections?.[0];
@@ -51,7 +52,7 @@ async function getIds(page: Page): Promise<{ sectionId: number; shotId: number; 
 async function openSplitDialog(page: Page, sectionId: number, shotId: number, sectionName: string): Promise<void> {
   await page.evaluate(
     ({ sectionId, shotId, sectionName }) => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       if (!e2e) return;
       e2e.uiStore.getState().openDialog('split-section', { sectionId, shotId, sectionName });
     },
@@ -136,9 +137,9 @@ test.describe('Section Split Dialog', () => {
 
     // Set up mock override for delete_shot_and_split
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.delete_shot_and_split = { success: true };
-      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
     await openSplitDialog(page, sectionId, shotId, sectionName);
@@ -153,9 +154,9 @@ test.describe('Section Split Dialog', () => {
 
     // Set up mock override to throw error
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.delete_shot_and_split = { __throw: 'Section has too few shots to split' };
-      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
     await openSplitDialog(page, sectionId, shotId, sectionName);

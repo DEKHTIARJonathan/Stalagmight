@@ -9,6 +9,7 @@ import {
   openAppMenu,
 } from './helpers/app';
 import { recordIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * DMP Import Dialog E2E Tests
@@ -182,7 +183,7 @@ test.describe('DMP Import Dialog', () => {
     // project: the store refreshes through the binary envelope, which carries no uuid
     // (#576 A9-D2).
     const uuids = await page.evaluate(() => {
-      const sections = (window as any).__E2E_MOCKS__.getCurrentProject().sections as Array<{
+      const sections = (window as E2EWindow).__E2E_MOCKS__!.getCurrentProject()!.sections as Array<{
         shots: Array<{ uuid?: string | null }>;
       }>;
       return sections.map((section) => section.shots.map((shot) => shot.uuid ?? null));

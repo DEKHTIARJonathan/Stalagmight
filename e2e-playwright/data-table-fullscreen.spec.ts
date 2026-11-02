@@ -8,6 +8,7 @@ import {
   openAppMenu,
   type SectionSeed,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E tests for the data table's fullscreen mode.
@@ -43,14 +44,14 @@ const sectionSeeds: SectionSeed[] = [
 
 async function getIsDirty(page: Page): Promise<boolean> {
   return page.evaluate(() => {
-    const e2e = (window as any).__E2E_TEST__;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
     return e2e.projectStore.getState().isDirty as boolean;
   });
 }
 
 async function getActiveTool(page: Page): Promise<string> {
   return page.evaluate(() => {
-    const e2e = (window as any).__E2E_TEST__;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
     return e2e.uiStore.getState().activeTool as string;
   });
 }

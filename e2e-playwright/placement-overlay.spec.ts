@@ -5,6 +5,13 @@ import {
   waitForMapReady,
   waitForNoDialogs,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
+
+/**
+ * This spec's own page globals: the flag the placement's cancel callback sets, and
+ * the keydown `addEventListener` counter the listener test installs before load.
+ */
+type PlacementWindow = E2EWindow & { __PLACEMENT_CANCELLED__?: boolean; __keydownAdds__: number };
 
 test.describe('Placement Overlay Coverage', () => {
   test('shows placement preview and cancels on Escape @smoke', async ({ page }) => {
@@ -14,8 +21,8 @@ test.describe('Placement Overlay Coverage', () => {
     await waitForNoDialogs(page);
 
     await page.evaluate(() => {
-      (window as any).__PLACEMENT_CANCELLED__ = false;
-      const ui = (window as any).__E2E_TEST__.uiStore.getState();
+      (window as PlacementWindow).__PLACEMENT_CANCELLED__ = false;
+      const ui = (window as E2EWindow).__E2E_TEST__.uiStore.getState();
       ui.startPlacementMode(
         {
           name: 'Placement Section',
@@ -64,7 +71,7 @@ test.describe('Placement Overlay Coverage', () => {
         0,
         undefined,
         () => {
-          (window as any).__PLACEMENT_CANCELLED__ = true;
+          (window as PlacementWindow).__PLACEMENT_CANCELLED__ = true;
         }
       );
     });
@@ -85,7 +92,7 @@ test.describe('Placement Overlay Coverage', () => {
     await expect(page.getByTestId('placement-mode-indicator')).not.toBeVisible({ timeout: 5000 });
     await expect(page.getByTestId('placement-preview')).not.toBeVisible({ timeout: 5000 });
 
-    const cancelled = await page.evaluate(() => (window as any).__PLACEMENT_CANCELLED__);
+    const cancelled = await page.evaluate(() => (window as PlacementWindow).__PLACEMENT_CANCELLED__);
     expect(cancelled).toBe(true);
   });
 
@@ -108,8 +115,8 @@ test.describe('Placement Overlay Coverage', () => {
     await waitForNoDialogs(page);
 
     await page.evaluate(() => {
-      (window as any).__PLACEMENT_CANCELLED__ = false;
-      (window as any).__E2E_TEST__.uiStore.getState().startPlacementMode(
+      (window as PlacementWindow).__PLACEMENT_CANCELLED__ = false;
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().startPlacementMode(
         {
           name: 'Placement Section',
           surveyor: null,
@@ -128,7 +135,7 @@ test.describe('Placement Overlay Coverage', () => {
         0,
         undefined,
         () => {
-          (window as any).__PLACEMENT_CANCELLED__ = true;
+          (window as PlacementWindow).__PLACEMENT_CANCELLED__ = true;
         }
       );
     });
@@ -138,17 +145,17 @@ test.describe('Placement Overlay Coverage', () => {
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await expect(page.getByTestId('placement-preview')).toBeVisible();
 
-    const addsBefore = await page.evaluate(() => (window as any).__keydownAdds__);
+    const addsBefore = await page.evaluate(() => (window as PlacementWindow).__keydownAdds__);
     for (let i = 1; i <= 30; i++) {
       await page.mouse.move(box.x + box.width / 2 + i * 3, box.y + box.height / 2);
     }
     await expect(page.getByTestId('placement-preview')).toBeVisible();
-    const addsAfter = await page.evaluate(() => (window as any).__keydownAdds__);
+    const addsAfter = await page.evaluate(() => (window as PlacementWindow).__keydownAdds__);
     expect(addsAfter - addsBefore).toBe(0);
 
     // The one listener still cancels.
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('placement-mode-indicator')).not.toBeVisible({ timeout: 5000 });
-    expect(await page.evaluate(() => (window as any).__PLACEMENT_CANCELLED__)).toBe(true);
+    expect(await page.evaluate(() => (window as PlacementWindow).__PLACEMENT_CANCELLED__)).toBe(true);
   });
 });

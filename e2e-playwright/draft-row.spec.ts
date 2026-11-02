@@ -8,6 +8,8 @@ import {
   type SectionSeed,
 } from './helpers/app';
 import { clearIpcOverrideKeys, setIpcOverrides } from './helpers/ipcOverrides';
+import type { E2EWindow } from './helpers/e2eWindow';
+import type { IpcCommands } from '../src/types/ipc/IpcCommands';
 
 /**
  * E2E tests for the data table's draft "new shot" rows.
@@ -48,9 +50,9 @@ interface ShotSnapshot {
 
 async function getShots(page: Page): Promise<ShotSnapshot[]> {
   return page.evaluate(() => {
-    const e2e = (window as any).__E2E_TEST__;
+    const e2e = (window as E2EWindow).__E2E_TEST__;
     const shots = e2e?.projectStore.getState().project?.sections?.[0]?.shots ?? [];
-    return shots.map((s: any) => ({
+    return shots.map((s) => ({
       id: s.id,
       length: s.length,
       azimuth_in: s.azimuth_in,
@@ -64,7 +66,10 @@ async function getCreateShotCalls(
   page: Page,
 ): Promise<Array<{ sectionId: number; afterShotId: number | null; beforeShotId: number | null }>> {
   return page.evaluate(() => {
-    const calls = ((window as any).__MOCK_CREATE_SHOT_CALLS__ ?? []) as Array<any>;
+    // Each entry is the args the app invoked create_shot with.
+    const calls = ((window as E2EWindow).__MOCK_CREATE_SHOT_CALLS__ ?? []) as Array<
+      IpcCommands['create_shot']['args']
+    >;
     return calls.map((c) => ({
       sectionId: c?.sectionId ?? null,
       afterShotId: c?.afterShotId ?? null,
@@ -153,7 +158,7 @@ test.describe('Draft shot rows', () => {
     await fillDraftRow(page, 3, '5');
     await expect(page.getByTestId('grid-row-4')).toHaveClass(/sg-row-draft/);
     const uuids = await page.evaluate(() => {
-      const shots = (window as any).__E2E_MOCKS__.getCurrentProject().sections[0].shots as Array<{
+      const shots = (window as E2EWindow).__E2E_MOCKS__!.getCurrentProject()!.sections[0].shots as Array<{
         uuid?: string | null;
       }>;
       return shots.map((s) => s.uuid ?? null);
@@ -349,7 +354,7 @@ test.describe('Draft shot rows', () => {
 
     const newShotLeft = () =>
       page.evaluate(() => {
-        const shots = (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].shots;
+        const shots = (window as E2EWindow).__E2E_TEST__.projectStore.getState().project!.sections[0].shots;
         return shots.length === 4 ? shots[3].left : `shots=${shots.length}`;
       });
     await expect.poll(newShotLeft, { timeout: 5000 }).toBe(2.5);

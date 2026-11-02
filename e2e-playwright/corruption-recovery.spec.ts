@@ -1,6 +1,7 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
 import { recoveryBackupItems } from './helpers/testIds';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E tests for the Corruption Recovery Dialog.
@@ -17,7 +18,7 @@ import { recoveryBackupItems } from './helpers/testIds';
 async function openRecoveryDialog(page: Page, errorMessage?: string): Promise<void> {
   await page.evaluate(
     ({ errorMsg }) => {
-      const e2e = (window as any).__E2E_TEST__;
+      const e2e = (window as E2EWindow).__E2E_TEST__;
       if (!e2e) return;
       e2e.uiStore.getState().openDialog('corruption-recovery', {
         corruptPath: '/mock/corrupt-project.stalx',
@@ -32,7 +33,7 @@ async function openRecoveryDialog(page: Page, errorMessage?: string): Promise<vo
 
 function setupRecoveryMocks(page: Page): Promise<void> {
   return page.evaluate(() => {
-    const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+    const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
 
     overrides.attempt_repair = {
       success: true,
@@ -72,18 +73,18 @@ function setupRecoveryMocks(page: Page): Promise<void> {
       errors: [],
     };
 
-    (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+    (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
   });
 }
 
 function clearRecoveryMocks(page: Page): Promise<void> {
   return page.evaluate(() => {
-    const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+    const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
     delete overrides.attempt_repair;
     delete overrides.list_backups;
     delete overrides.restore_from_backup;
     delete overrides.export_salvageable_data;
-    (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+    (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
   });
 }
 
@@ -219,9 +220,9 @@ test.describe('Corruption Recovery Dialog', () => {
   test('no backups found shows message', async ({ page }) => {
     // Override to return empty backup list
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.list_backups = [];
-      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
     await openRecoveryDialog(page);
@@ -234,12 +235,12 @@ test.describe('Corruption Recovery Dialog', () => {
   test('repair failure shows error and Try Another Option button', async ({ page }) => {
     // Override to return failure
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.attempt_repair = {
         success: false,
         message: 'Database corruption too severe for automatic repair.',
       };
-      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
     await openRecoveryDialog(page);
@@ -255,12 +256,12 @@ test.describe('Corruption Recovery Dialog', () => {
 
   test('Try Another Option returns to choice screen', async ({ page }) => {
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.attempt_repair = {
         success: false,
         message: 'Repair failed.',
       };
-      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
     await openRecoveryDialog(page);
@@ -278,9 +279,9 @@ test.describe('Corruption Recovery Dialog', () => {
   test('repair IPC error shows error result', async ({ page }) => {
     // Override to throw
     await page.evaluate(() => {
-      const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
+      const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.attempt_repair = { __throw: 'Connection lost during repair' };
-      (window as any).__MOCK_IPC_OVERRIDES__ = overrides;
+      (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
     await openRecoveryDialog(page);

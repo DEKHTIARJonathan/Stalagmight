@@ -7,6 +7,7 @@ import {
   waitForNoDialogs,
   type SectionSeed,
 } from './helpers/app';
+import type { E2EWindow } from './helpers/e2eWindow';
 
 /**
  * E2E tests for data-table column preferences (hide / reorder) and their
@@ -38,12 +39,12 @@ const sectionSeeds: SectionSeed[] = [
 ];
 
 async function getViewCalls(page: Page): Promise<Array<Record<string, unknown>>> {
-  return page.evaluate(() => ((window as any).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as Array<Record<string, unknown>>);
+  return page.evaluate(() => ((window as E2EWindow).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as Array<Record<string, unknown>>);
 }
 
 /** panels section of the in-memory config (re-synced via get_config after a save). */
 async function getPanelsConfig(page: Page): Promise<Record<string, unknown>> {
-  return page.evaluate(() => (window as any).__E2E_TEST__?.projectStore.getState().config?.panels ?? {});
+  return page.evaluate(() => (window as E2EWindow).__E2E_TEST__?.projectStore.getState().config?.panels ?? {});
 }
 
 /** Visible grid column keys, in DOM order. */
@@ -118,7 +119,7 @@ async function openDataTable(page: Page): Promise<void> {
 /** Wait for the debounced save to fire, then return its single recorded call. */
 async function waitForSingleViewCall(page: Page): Promise<Record<string, unknown>> {
   await page.waitForFunction(
-    () => (((window as any).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as unknown[]).length >= 1,
+    () => (((window as E2EWindow).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as unknown[]).length >= 1,
     undefined,
     { timeout: 5000 },
   );
@@ -181,7 +182,7 @@ test.describe('Data table column preferences', () => {
     // now carry the stored view state.
     await page.waitForFunction(
       () => {
-        const hidden = ((window as any).__E2E_TEST__?.projectStore.getState().config?.panels
+        const hidden = ((window as E2EWindow).__E2E_TEST__?.projectStore.getState().config?.panels
           ?.data_table_shot_hidden_columns ?? []) as string[];
         return hidden.includes('comment') && !hidden.includes('shot_id');
       },
@@ -234,7 +235,7 @@ test.describe('Data table column preferences', () => {
     // against re-firing the save.)
     await page.waitForFunction(
       () => {
-        const calls = ((window as any).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as Array<{
+        const calls = ((window as E2EWindow).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as Array<{
           columnOrder?: string[];
         }>;
         const order = (calls[calls.length - 1]?.columnOrder ?? []) as string[];
@@ -387,7 +388,7 @@ test.describe('Data table column preferences', () => {
 
     await page.waitForFunction(
       () => {
-        const hidden = ((window as any).__E2E_TEST__?.projectStore.getState().config?.panels
+        const hidden = ((window as E2EWindow).__E2E_TEST__?.projectStore.getState().config?.panels
           ?.data_table_shot_hidden_columns ?? []) as string[];
         return hidden.includes('comment');
       },
