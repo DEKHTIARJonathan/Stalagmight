@@ -41,6 +41,14 @@ export function isReverifyDivergedError(error?: string | null): boolean {
  */
 export const WORKSPACE_READ_ONLY = 'WORKSPACE_READ_ONLY';
 
+/**
+ * Second code the backend puts behind `EDIT_DISABLED` while an Ariane adoption is
+ * handing the open project over to SpeleoDB (#576 NF-W4C-3-EDIT, RV5-F4-5): no
+ * edit until the adoption's push has landed. Mirrors `ADOPTION_IN_PROGRESS_CODE`
+ * in `src-tauri/crates/core/src/core/command.rs`.
+ */
+export const ADOPTION_IN_PROGRESS = 'ADOPTION_IN_PROGRESS';
+
 /** User-facing toast shown when a read-only project rejects an edit. Says "write
     lock" like the rest of the SpeleoDB copy: the point is that someone else has
     exclusive write access, not that the file itself is locked.
@@ -52,9 +60,14 @@ export const WORKSPACE_READ_ONLY = 'WORKSPACE_READ_ONLY';
     store's flag, so it stays right even where the flag has not caught up.
 
     [#576 C5] Or the read-only WORKSPACE (`WORKSPACE_READ_ONLY`): Plan and Export
-    never edit the survey, whatever the project, so its line points at Survey. */
+    never edit the survey, whatever the project, so its line points at Survey.
+
+    [#576 RV5-F4-5] Or the adoption hand-over (`ADOPTION_IN_PROGRESS`): the
+    project is being uploaded to SpeleoDB, so the generic line's "click Start
+    editing" would invite a lock request in the middle of the adoption's own. */
 export function READ_ONLY_EDIT_NOTICE(error?: string | null): string {
   if (error?.includes(NEWER_FILE_READ_ONLY)) return i18n.t('editGate.newerFileNotice');
   if (error?.includes(WORKSPACE_READ_ONLY)) return i18n.t('editGate.workspaceReadOnlyNotice');
+  if (error?.includes(ADOPTION_IN_PROGRESS)) return i18n.t('editGate.adoptionInProgressNotice');
   return i18n.t('editGate.readOnlyNotice');
 }

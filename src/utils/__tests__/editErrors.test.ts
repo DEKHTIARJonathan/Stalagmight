@@ -63,3 +63,21 @@ describe('READ_ONLY_EDIT_NOTICE', () => {
     );
   });
 });
+
+// [#576 RV5-F4-5] The adoption hand-over refusal carries its own second code, so
+// the notice says the project is being handed over instead of inviting a Start
+// editing click in the middle of the adoption's own lock operations.
+describe('READ_ONLY_EDIT_NOTICE during a SpeleoDB adoption', () => {
+  const error =
+    'EDIT_DISABLED: ADOPTION_IN_PROGRESS: Move station 1:1 is disabled: this project is being handed over to ' +
+    'SpeleoDB. Edit it once the upload has finished.';
+
+  it('says the project is being handed over, not "click Start editing"', () => {
+    const notice = READ_ONLY_EDIT_NOTICE(error);
+    console.log(`[RV5-F4-5] notice for an adoption refusal: "${notice}"`);
+    expect(isEditDisabledError(error)).toBe(true);
+    expect(notice).toBe(i18n.t('editGate.adoptionInProgressNotice'));
+    expect(notice).not.toBe(i18n.t('editGate.readOnlyNotice'));
+    expect(notice).not.toMatch(/Start editing/);
+  });
+});

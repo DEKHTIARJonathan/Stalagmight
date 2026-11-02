@@ -3199,6 +3199,7 @@
     "readOnlyNotice": "This project is open read-only - click Start editing to take the write lock.",
     "newerFileNotice": "Read-only: a newer version of Stalagmight saved this project.",
     "workspaceReadOnlyNotice": "Plan and Export are read-only - switch to Survey to edit the survey.",
+    "adoptionInProgressNotice": "This project is being handed over to SpeleoDB - you can edit it once the upload has finished.",
     "commandFailed": "The change could not be applied."
   },
   "importGate": {
