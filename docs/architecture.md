@@ -357,9 +357,11 @@ every later call. Every lock in the backend crates is a
   (`InternalErrorBanner`). Saving keeps working.
 - A short, named list of operations REFUSES instead, because continuing would
   replay or publish what the crash may have half-written: undo / redo / undo to /
-  redo to, the SpeleoDB undo-chain walk, and the SpeleoDB upload. The list and the
-  reason for each live on `AppState::refuse_after_crash`; add to it there, not at
-  a call site.
+  redo to, the SpeleoDB undo-chain walk, and the SpeleoDB upload. The save goes
+  through but writes an empty Undo/Redo history (with the `UNDO_HISTORY_DROPPED`
+  warning), so the restarted session cannot replay it either (#576 RV5-PI-2). The
+  list and the reason for each live on `AppState::refuse_after_crash`; add to it
+  there, not at a call site.
 
 There is no method that returns std's `LockResult`, so `.lock().unwrap()`,
 `.lock().expect(..)`, `if let Ok(..) = x.lock()` and `.lock().map_err(..)` do not

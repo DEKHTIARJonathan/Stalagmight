@@ -932,6 +932,17 @@ impl AppState {
     }
 
     pub(super) fn persist_or_clear_undo_stacks_into(&self, db: &Database) -> anyhow::Result<bool> {
+        // [#576 RV5-PI-2] After a crash under `command_lock`, `project` or
+        // `undo_stack` the history may be out of step with the survey: undo and
+        // redo refuse it for this session (`refuse_after_crash`). Persisting it
+        // would hand it to the restarted session, which has nothing poisoned and
+        // would replay it. The survey is saved with an EMPTY history instead, and
+        // the save says so (`UNDO_HISTORY_DROPPED`), like a history that could not
+        // be written.
+        if self.refuse_after_crash("Saving the Undo history").is_err() {
+            db.clear_history_stacks()?;
+            return Ok(true);
+        }
         let undo_stack = self.undo_stack.lock();
         let (undo_rows, redo_rows) = self.history_rows_to_persist(db, &undo_stack);
         match super::save_sidecars::replace_history_rows(db, undo_rows, redo_rows) {

@@ -595,6 +595,10 @@ impl AppState {
     ///    people pull from. A half-written edit there becomes everyone's. The local
     ///    save stays available, and after a restart the reopened file passes the
     ///    load-time integrity checks before it can be pushed.
+    /// 4. Persisting the history (`persist_or_clear_undo_stacks_into`, #576
+    ///    RV5-PI-2): the save writes the survey with an EMPTY Undo/Redo history and
+    ///    the `UNDO_HISTORY_DROPPED` warning. The restarted session has nothing
+    ///    poisoned, so a saved history would be replayed there.
     ///
     /// Takes no lock (the caller may hold `command_lock`); a poisoned cell found
     /// here is reported like any other, so the banner explains the refusal.
