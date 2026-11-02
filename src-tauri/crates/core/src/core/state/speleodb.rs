@@ -2288,11 +2288,14 @@ impl AppState {
         let _lock_ops = self.speleodb_lock_ops_guard();
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
+        // [#576 B5] Its own row: release-all IS retried, and the `Release` row it
+        // used to borrow reported an exhausted 5xx as "never retried".
+        let row = client::spec::RELEASE_ALL.category;
         self.speleodb_handle_auth(
-            Endpoint::Release,
+            row,
             client::release_all_locks(&endpoint, &token, insecure_http),
         )
-        .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
+        .map_err(|e| dto_for_error(row, &e))?;
         // If the OPEN project is a remote one we were editing UNDER THE LOCK, its lock
         // is gone too: drop the edit gate so the shell falls back to read-only. A
         // local project's always-true gate is left untouched (open_link fails → no
@@ -2633,6 +2636,12 @@ impl AppState {
         }
     }
 }
+
+// The fixtures the sibling test modules (`sdb_*_tests.rs`) share with the tests
+// below. Re-exported at the very end of the production code, so a source scan that
+// cuts the file at its first top-level `#[cfg(test)]` still sees all of it.
+#[cfg(test)]
+pub(super) use tests::{editing_fixture, REMOTE_ID};
 
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
@@ -3758,7 +3767,7 @@ mod tests {
     /// A read-only remote fixture (saved project + `speleo_link`) opened in a fresh
     /// `AppState`. Mirrors `forget_drops_gate_on_remote_edit_session`; the config
     /// opt-in is left OFF (a test enables it when needed). #213.
-    fn remote_readonly_fixture() -> (TempDir, AppState) {
+    pub(in crate::core::state) fn remote_readonly_fixture() -> (TempDir, AppState) {
         remote_fixture_with_dirty_bit(false)
     }
 
@@ -3940,7 +3949,7 @@ mod tests {
 
     /// An authenticated session pointed at `endpoint` (the loopback stub below, or
     /// any unreachable host), so the release paths get past `speleodb_active_token`.
-    fn authed_session_at(endpoint: &str) -> SpeleoDbSession {
+    pub(in crate::core::state) fn authed_session_at(endpoint: &str) -> SpeleoDbSession {
         let mut token_store = TokenStore::from_stores(Box::new(InMemoryStore::new()), None);
         token_store.store(endpoint, "u@x", "tok-1", false);
         SpeleoDbSession {
@@ -3956,7 +3965,7 @@ mod tests {
     }
 
     /// The project id `remote_readonly_fixture` links to.
-    const REMOTE_ID: &str = "11111111-1111-1111-1111-111111111111";
+    pub(in crate::core::state) const REMOTE_ID: &str = "11111111-1111-1111-1111-111111111111";
 
     /// The remote fixture mid-edit-session: the write lock is held (edit gate on,
     /// not force-editing) and a token is available, so the silent release gate has
@@ -3967,7 +3976,7 @@ mod tests {
     /// not the edit gate - is what licenses the authorship shortcut in
     /// `speleodb_remote_state`. (The session assignment resets it, so it is recorded
     /// after.)
-    fn editing_fixture(endpoint: &str) -> (TempDir, AppState) {
+    pub(in crate::core::state) fn editing_fixture(endpoint: &str) -> (TempDir, AppState) {
         let (temp, state) = remote_readonly_fixture();
         *state.speleodb.lock().expect("session lock") = authed_session_at(endpoint);
         state.set_edit_enabled(true);
@@ -4534,7 +4543,7 @@ mod tests {
     /// reconciles UpToDate and KEEPS the lock. (The fast-forward arm needs an app
     /// cache dir only the env-gated live tests initialise, so UpToDate is the only
     /// keep-the-lock arm a unit test can reach.)
-    const HELD_BY_SAME_ACCOUNT_AT_BASE_BODY: &str = r#"{
+    pub(in crate::core::state) const HELD_BY_SAME_ACCOUNT_AT_BASE_BODY: &str = r#"{
         "id":"11111111-1111-1111-1111-111111111111","name":"Remote",
         "active_mutex":{"user":"u@x"},
         "commits":[{"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
@@ -4730,7 +4739,7 @@ mod tests {
     /// history whose tip IS our BASE - the same released-in-between race reaching the
     /// UpToDate arm, which is the only arm that can be observed to record provenance
     /// (the divergence arm releases, and a release ends the claim by design).
-    const HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY: &str = r#"{
+    pub(in crate::core::state) const HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY: &str = r#"{
         "id":"11111111-1111-1111-1111-111111111111","name":"Remote",
         "active_mutex":{"user":"someone.else@x"},
         "commits":[{"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
@@ -5170,7 +5179,7 @@ mod tests {
     ///
     /// The listener is returned for the same reason as the two stubs below: the
     /// caller must keep the port bound for the whole test.
-    fn recording_stub(
+    pub(in crate::core::state) fn recording_stub(
         body: &'static str,
     ) -> (
         String,
@@ -5761,7 +5770,7 @@ mod tests {
 
     /// A mutex at our BASE with nobody on it: the lock this session was editing
     /// under is gone (admin-released, or expired on the server).
-    const FREE_MUTEX_AT_BASE_BODY: &str = r#"{
+    pub(in crate::core::state) const FREE_MUTEX_AT_BASE_BODY: &str = r#"{
         "id":"11111111-1111-1111-1111-111111111111","name":"Remote",
         "commits":[{"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
 

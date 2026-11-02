@@ -35,6 +35,15 @@ pub mod models;
 pub mod sync;
 // [Track A] #187 http/https private-network TLS policy (pure classify_addr + enforce).
 pub(crate) mod tls;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod transport_tests;
 
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
 pub use contract::{SpeleoDbAction, TransportCause};

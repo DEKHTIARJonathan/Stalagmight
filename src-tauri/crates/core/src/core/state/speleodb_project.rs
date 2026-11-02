@@ -125,15 +125,15 @@ impl AppState {
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
         let payload = serde_json::json!({ "exclude_geojson": exclude }).to_string();
-        // The PATCH reuses the GetProject endpoint mapping (there is no dedicated
-        // PatchProject variant): both are project-scoped calls whose only actionable
-        // failure here is a permission/transport error the button surfaces verbatim,
-        // so the humanized-error attribution is equivalent. Purely cosmetic reuse.
+        // [#576 B5] Mapped through the PATCH's own row. It used to borrow GetProject
+        // ("purely cosmetic reuse"), which made a refused PATCH read-only access and a
+        // 5xx "already retried" over a write that runs once.
+        let row = client::spec::PATCH_PROJECT.category;
         self.speleodb_handle_auth(
-            Endpoint::GetProject,
+            row,
             client::patch_project(&endpoint, &token, insecure_http, &link.project_id, &payload),
         )
-        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        .map_err(|e| dto_for_error(row, &e))?;
         Ok(())
     }
 
@@ -188,12 +188,13 @@ impl AppState {
         }
 
         let payload = serde_json::Value::Object(body).to_string();
+        let row = client::spec::PATCH_PROJECT.category;
         let updated = self
             .speleodb_handle_auth(
-                Endpoint::GetProject,
+                row,
                 client::patch_project(&endpoint, &token, insecure_http, &link.project_id, &payload),
             )
-            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+            .map_err(|e| dto_for_error(row, &e))?;
 
         // Fold the (possibly server-normalized) name into the open `.stalx` when it
         // was edited, so the embedded project name tracks SDB without dirtying.

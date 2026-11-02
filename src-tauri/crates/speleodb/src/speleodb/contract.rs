@@ -24,6 +24,15 @@ use super::SpeleoDbError;
 /// HTTP status + the endpoint it came from. Crosses IPC as a ts-rs enum so the
 /// frontend branches on `err.action` rather than on message text (D-B2). Order
 /// is non-load-bearing (no `>=` comparisons - unlike [`super::Permission`]).
+///
+/// [#576 NF-AN3-4] Who reads which: the frontend branches on `ReLogin`, `Adopt`,
+/// `UnpushedLocalEdits` and `Ambiguous` (`utils/speleoError.ts`) and shows the
+/// message for the rest. `ReadOnly` / `Fence` and `StayDirty` are read by the
+/// backend - the ambiguous-403 whoami probe (`speleodb_handle_auth`) and the
+/// push's "did it land?" verdict (`speleodb_upload`) - so they are not dead
+/// outputs; `Retry` is the transport/session-moved signal. Since the endpoint
+/// table (`client::spec`) decides each row's category, these rows now hold by
+/// construction, which is what a frontend that ever branches on them needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub enum SpeleoDbAction {
@@ -33,15 +42,17 @@ pub enum SpeleoDbAction {
     ReLogin,
     /// 403 on a read-capable endpoint (list/get/download = read-only access).
     ReadOnly,
-    /// 403 on upload/acquire/release - no write permission / lock fence.
+    /// 403 on a write endpoint (upload/acquire/release/PATCH/admin writes) - no
+    /// write permission / lock fence.
     Fence,
-    /// A write surfaced without a confirmed server commit - keep dirty (g7).
+    /// A run-once write surfaced without a confirmed server commit - keep dirty
+    /// (g7).
     StayDirty,
     /// Upload-304 - the remote tree is already at this state (benign; the dirty
     /// bit is left unchanged, this is NOT an error).
     UpToDate,
-    /// An idempotent 5xx that the transport already retried + exhausted; the FE
-    /// may offer a manual retry.
+    /// A retry-safe call's 5xx that the transport already retried + exhausted (or
+    /// a transport failure); the FE may offer a manual retry.
     Retry,
     /// The opened project is an Ariane (`.tml`-only) project with no `.stalx`: the
     /// FE should offer the one-time C2 adoption flow (#214) instead of surfacing a
@@ -120,18 +131,29 @@ pub enum Endpoint {
     UploadAuto,
     // [P1] #207 speleodb_publish constructs CreateProject (auth handler + dto_for_error).
     CreateProject,
-    // [#215] Collaborator/team permission writes + project delete. A write (not
-    // read, not idempotent): a 403 is a Fence (no admin/write grant, not read-only
-    // access), a 5xx is StayDirty (never auto-retried - these are non-idempotent
-    // POST/PUT/DELETE). Falls through the `403 => Fence` / `500..=599 => StayDirty`
-    // arms of `map_status` by being absent from both `is_read` and `is_idempotent`.
+    // [#215] Collaborator/team permission writes + the metadata PATCH (#576 B5:
+    // the PATCH used to be mapped as GetProject, a read). A write (not read, not
+    // idempotent): a 403 is a Fence (no admin/write grant, not read-only access),
+    // a 5xx is StayDirty (never auto-retried - these are run-once POST/PUT/PATCH/
+    // DELETE). Falls through the `403 => Fence` / `500..=599 => StayDirty` arms of
+    // `map_status` by being absent from both `is_read` and `is_idempotent`.
     ManageProject,
+    // [#576 B5] `DELETE user/release_all_locks/`: a write whose repetition is a
+    // no-op, so it IS retried - and its exhausted 5xx says so (Retry), where the
+    // `Release` row it used to be mapped through said "never retried".
+    ReleaseAll,
+    // [#576 B5-D2] `DELETE projects/{id}/`: idempotent and retried (a 404 is
+    // "already deleted" in the client). A 403 is a Fence; an exhausted 5xx, Retry.
+    DeleteProject,
 }
 
 impl Endpoint {
-    /// Idempotent (read-like) endpoints retry a transient 5xx (D-B3); the write
-    /// endpoints never auto-retry (double-submit hazard) and surface for g7.
-    fn is_idempotent(self) -> bool {
+    /// Idempotent endpoints are retried on a transient 5xx (D-B3), so their
+    /// exhausted 5xx reads `Retry`; the run-once writes never auto-retry
+    /// (double-submit hazard) and surface for g7 as `StayDirty`. Each row of the
+    /// client's endpoint table must agree with this (`client::spec`, pinned by
+    /// `every_endpoint_row_agrees_with_its_contract_row`).
+    pub(crate) fn is_idempotent(self) -> bool {
         matches!(
             self,
             Endpoint::Login
@@ -139,12 +161,14 @@ impl Endpoint {
                 | Endpoint::ListProjects
                 | Endpoint::GetProject
                 | Endpoint::DownloadDump
+                | Endpoint::ReleaseAll
+                | Endpoint::DeleteProject
         )
     }
 
     /// `true` for the read-capable endpoints whose 403 means "read-only access"
     /// rather than a write fence.
-    fn is_read(self) -> bool {
+    pub(crate) fn is_read(self) -> bool {
         matches!(
             self,
             Endpoint::ListProjects | Endpoint::GetProject | Endpoint::DownloadDump

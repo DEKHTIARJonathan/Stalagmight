@@ -196,7 +196,8 @@ prevents timer resets from redundant calls.
 ### SpeleoDB traffic - `speleodb-api.<kind>.*` (#210, F1)
 
 Every SpeleoDB HTTP call is instrumented at the Rust client's single choke
-points (`client::with_retry` and `client::send_json_request`) so we can size the
+point (`client::with_retry`, which every call reaches through `client::send` and
+its endpoint-table row, #576 B5) so we can size the
 server load Stalagmight causes and spot a runaway poll/retry loop *before* it
 reaches the server. Recorded **per HTTP attempt** (a retried idempotent 5xx
 really re-hits the server, so a retry storm shows up as inflated counts +
