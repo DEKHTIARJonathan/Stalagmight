@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
-import maplibregl from 'maplibre-gl';
+import type maplibregl from 'maplibre-gl';
 import type { DmpSection, DmpShot } from '../../types/commands';
 import type { Section, Station, Shot } from '../../types/project';
 import { metersToMapCoords, getBounds } from '../../utils/coordinates';
 import { circularMeanDegrees } from '../../utils/angles';
 import { useUIStore } from '../../store/uiStore';
-import { useNetworkStore } from '../../store/networkStore';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { getTileConfig } from '../../utils/tileConfig';
 import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
 import { MapAttribution } from '../Map/MapAttribution';
+import { createSurveyMap, SATELLITE_SOURCE_ID } from '../Map/createSurveyMap';
 import type { GpsOrigin } from '../../types/config';
 
 /**
@@ -260,7 +260,7 @@ export default function SectionPreview({
     const maxZoom = 22; // Maximum zoom for detailed inspection
 
     const initialThemeColors = getMapThemeColors();
-    const map = new maplibregl.Map({
+    const map = createSurveyMap({
       container: containerRef.current,
       style: {
         version: 8,
@@ -279,19 +279,12 @@ export default function SectionPreview({
       zoom: baseZoom,
       minZoom,
       maxZoom,
-      attributionControl: false,
-      interactive: true,
+      keyboard: true,
+      boxZoom: true,
     });
 
     // Store map ref immediately for cleanup support
     mapRef.current = map;
-
-    // Disable rotation
-    map.dragRotate.disable();
-    map.touchPitch.disable();
-    // Two-finger twist rotates by default; the preview is a top-down plan, so a
-    // pinch must zoom only.
-    map.touchZoomRotate.disableRotation();
 
     // The preview is a small map inside a dialog, so a pan is easily released
     // over the dialog chrome around it - which would leave it stuck "moving";
@@ -508,7 +501,7 @@ export default function SectionPreview({
       // Add satellite tiles if not already present
       if (!map.getSource('satellite-tiles')) {
         const tileConfig = getTileConfig('esri');
-        map.addSource('satellite-tiles', {
+        map.addSource(SATELLITE_SOURCE_ID, {
           type: 'raster',
           tiles: tileConfig.tiles,
           tileSize: tileConfig.tileSize,
@@ -545,17 +538,6 @@ export default function SectionPreview({
       }
     }
   }, [gpsOrigin, mapLoaded]);
-
-  // Reload stale satellite tiles after offline→online recovery
-  const tileReloadGeneration = useNetworkStore((s) => s.tileReloadGeneration);
-  useEffect(() => {
-    if (!mapRef.current || !mapLoaded || !gpsOrigin || tileReloadGeneration === 0) return;
-    const source = mapRef.current.getSource('satellite-tiles');
-    if (source && 'clearTiles' in source) {
-      (source as any).clearTiles();
-      mapRef.current.triggerRepaint();
-    }
-  }, [tileReloadGeneration, mapLoaded, gpsOrigin]);
 
   // Update data and fit bounds when section changes
   useEffect(() => {

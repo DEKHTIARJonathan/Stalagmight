@@ -35,7 +35,6 @@ import { buildMeasuredPathIds, buildMeasuredStationIds, MEASURE_TINT } from '../
 import { computeImmovableStationKeys } from '../../utils/immovableStations';
 import { installMapE2eHooks } from '../../dev/mapE2eHooks';
 import { getBounds, getBoundsFromStationCoords, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
-import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
 import { getTileConfig } from '../../utils/tileConfig';
 import { useMapTools } from '../../hooks/useMapTools';
 import { useGasPlanPointMarkers } from './useGasPlanPointMarkers';
@@ -44,6 +43,7 @@ import { useMoveCarryGuards } from './useMoveCarryGuards';
 import { beginMoveCarry, commitMoveCarry, endMoveCarry, isMoveCarryLive } from '../../store/moveCarry';
 import SurveyLayer, { type SurveyLayerCallbacks } from './SurveyLayer';
 import { mapCursorFor } from './mapCursor';
+import { createSurveyMap, SATELLITE_SOURCE_ID } from './createSurveyMap';
 import { pixelsPerMeterAt } from './placementScale';
 import { SATELLITE_BOTTOM_CANDIDATES } from './mapUtils';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
@@ -61,7 +61,6 @@ import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { MapTopLeftOverlay } from './MapTopLeftOverlay';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
-import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { debugLog } from '../../utils/debugLog';
 import { TOAST_KEYS } from '../../utils/toastKeys';
@@ -1833,7 +1832,7 @@ function MapCanvas() {
     // Transform to map coordinates
     const mapCenter = metersToMapCoords(centerX, centerY, gpsOrigin);
 
-    map.current = new maplibregl.Map({
+    map.current = createSurveyMap({
       container: mapContainer.current,
       style: {
         version: 8,
@@ -1855,27 +1854,11 @@ function MapCanvas() {
       // dep array, so a subscription could never deliver a newer value here and
       // would only re-render MapCanvas on every 'zoomend' (#430).
       zoom: useUIStore.getState().mapZoom,
-      attributionControl: false,
       // Disable built-in keyboard zoom (handled by useKeyboardShortcuts with config.map.zoom_step)
       keyboard: false,
-
-      // Performance optimizations
-      // See: https://deepwiki.com/maplibre/maplibre-gl-js/5.2-performance-optimization-techniques
-      maxTileCacheSize: 100, // Limit tile cache memory
-      maxTileCacheZoomLevels: 5, // Limit zoom range caching
-      fadeDuration: 0, // Disable fade animations for snappier response
-      renderWorldCopies: false, // Not needed for cave maps (saves render work)
-
-      // WebGL context optimizations (MapLibre v5+)
-      // Type assertion needed: canvasContextAttributes is supported at runtime
-      // but not yet in the MapLibre GL JS TypeScript definitions
-      ...({
-        canvasContextAttributes: {
-          antialias: false, // Disable AA for better performance
-          preserveDrawingBuffer: false, // Allow buffer discard
-          failIfMajorPerformanceCaveat: false, // Don't fail on software renderer
-        },
-      } as Record<string, unknown>),
+      // Disable box zoom (Ctrl+drag draws selection box by default, we want Ctrl+drag to pan)
+      boxZoom: false,
+      performanceTuned: true,
     });
 
     // Optional MapLibre instrumentation; inert unless VITE_DEBUG_MACOS_LOCKUP
@@ -1886,15 +1869,6 @@ function MapCanvas() {
       placementJustConfirmed: placementJustConfirmedRef,
       ctrlPanMouseEventTime: ctrlPanMouseEventTimeRef,
     });
-
-    // Disable rotation (Ctrl+drag rotates by default, we want Ctrl+drag to pan)
-    map.current.dragRotate.disable();
-    map.current.touchPitch.disable();
-    // Two-finger twist rotates by default; the survey is a top-down plan, so a
-    // pinch must zoom only.
-    map.current.touchZoomRotate.disableRotation();
-    // Disable box zoom (Ctrl+drag draws selection box by default, we want Ctrl+drag to pan)
-    map.current.boxZoom.disable();
 
     // Add navigation controls
     map.current.addControl(
@@ -2021,16 +1995,6 @@ function MapCanvas() {
       sz.wheel = orig;
     };
   }, [mapLoaded, invertScroll]);
-
-  // Register the custom tile protocol; the backend caches responses under the
-  // provider's own Cache-Control (see src-tauri/src/cache/tiles.rs)
-  // Uses ref-counted registration to safely handle multiple map instances
-  useEffect(() => {
-    registerTileProtocol();
-    return () => {
-      unregisterTileProtocol();
-    };
-  }, []);
 
   // Expose map instance for E2E testing and keyboard shortcuts
   useEffect(() => {
@@ -3271,10 +3235,10 @@ function MapCanvas() {
 
     if (showSatellite) {
       // Add satellite layer if not already present
-      if (!currentMap.getSource('satellite-tiles')) {
+      if (!currentMap.getSource(SATELLITE_SOURCE_ID)) {
         const tileConfig = getSatelliteTileConfig();
 
-        currentMap.addSource('satellite-tiles', {
+        currentMap.addSource(SATELLITE_SOURCE_ID, {
           type: 'raster',
           tiles: tileConfig.tiles,
           tileSize: tileConfig.tileSize,
@@ -3324,16 +3288,8 @@ function MapCanvas() {
     };
   }, [showSatellite, getSatelliteTileConfig, mapLoaded]);
 
-  // Reload stale satellite tiles after offline→online recovery
-  const tileReloadGeneration = useNetworkStore((s) => s.tileReloadGeneration);
-  useEffect(() => {
-    if (!map.current || !mapLoaded || !showSatellite || tileReloadGeneration === 0) return;
-    const source = map.current.getSource('satellite-tiles');
-    if (source && 'clearTiles' in source) {
-      (source as any).clearTiles();
-      map.current.triggerRepaint();
-    }
-  }, [tileReloadGeneration, mapLoaded, showSatellite]);
+  // Satellite tiles that failed offline reload when the connection returns:
+  // createSurveyMap owns that for all three maps (#576 D18).
 
   // 10% margins on all sides. The map is the central flex column (already
   // sized to exclude the side panels), so no panel offsets are needed - adding

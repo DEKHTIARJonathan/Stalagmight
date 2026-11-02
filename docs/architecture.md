@@ -154,6 +154,7 @@ in `src-tauri/src/commands/telemetry_coverage_tests.rs`.
 | `src/store/globalViewStore.ts` | Global View state (selection, geometry loading) |
 | `src/hooks/useEditingBlocked.ts` | The one sanctioned read-only predicate (map mode + SpeleoDB lock) |
 | `src/components/Map/MapCanvas.tsx` | MapLibre map initialization |
+| `src/components/Map/createSurveyMap.ts` | The one map factory for the survey map, Global View and section preview: shared options, rotation/pitch disabling, the Android tile protocol, satellite reload on reconnect |
 | `src/components/Map/SurveyLayer.tsx` | Survey layer: custom-renderer wiring, GeoJSON auxiliaries, interaction |
 | `src/components/Map/surveyLayer/customRender/controller.ts` | Custom WebGL survey renderer (buffers, colors, layer lifecycle) |
 | `src/components/GlobalView/GlobalView.tsx` | Global View container component |
@@ -162,7 +163,7 @@ in `src-tauri/src/commands/telemetry_coverage_tests.rs`.
 | `src/components/GlobalView/ViewModeToggle.tsx` | View mode toggle and `useViewMode` hook |
 | `src/components/GlobalView/MetadataPanel.tsx` | System metadata display with aggregate stats |
 | `src/utils/coordinates.ts` | Coordinate transforms (meters ↔ GPS) |
-| `src/utils/tileProtocol.ts` | MapLibre tile protocol for caching |
+| `src/utils/tileProtocol.ts` | Android MapLibre tile protocol: registered once at app start, never removed |
 | `src/utils/tileConfig.ts` | Tile source config; platform-specific `stalagmight-tiles` URL form |
 | `src/hooks/useProject.ts` | Project file operations hook |
 | `src/hooks/useMapTools.ts` | Map tool handlers |
@@ -387,7 +388,7 @@ preference:
 |----------|-------------------|
 | macOS / Linux (WRY) | `stalagmight-tiles://<provider>/{z}/{y}/{x}` (provider = host) |
 | **Windows (WebView2)** | `http://stalagmight-tiles.localhost/<provider>/{z}/{y}/{x}` (provider in path) |
-| Android | `stalagmight-tiles://<provider>/{z}/{y}/{x}` via MapLibre `addProtocol` (see `tileProtocol.ts`) |
+| Android | `stalagmight-tiles://<provider>/{z}/{y}/{x}` via MapLibre `addProtocol` (see `tileProtocol.ts`; registered once at app start for every map, never unregistered) |
 
 **Why:** WebView2 cannot navigate a bare custom URI scheme, so it serves
 Tauri-registered protocols only under `http://<scheme>.localhost/...`. Using the

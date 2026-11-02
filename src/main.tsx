@@ -25,6 +25,7 @@ import { shotMaterialization } from './types/survey-data';
 import { getPerfTimings } from './utils/memoryProbe';
 import { routeOpenedFile } from './utils/openOrImport';
 import { startWorkspaceModeSync } from './store/workspaceModeSync';
+import { registerTileProtocol } from './utils/tileProtocol';
 import type { TestFileDialogQueueEntry } from './utils/fileDialogs';
 
 // Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
@@ -164,6 +165,10 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
     resetLoading: () => useProjectStore.getState().resetLoading(),
   };
 }
+
+// The Android tile handler, once for every map and never removed (#576 D18;
+// a no-op on desktop). See utils/tileProtocol.ts.
+registerTileProtocol();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

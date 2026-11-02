@@ -10,11 +10,11 @@ import { getTileConfig } from '../../utils/tileConfig';
 import { attachDragReleaseForwarder } from '../../utils/mapDragRelease';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
-import { useNetworkStore } from '../../store/networkStore';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { testIdPart } from '../../utils/testId';
 import { MapAttribution } from '../Map/MapAttribution';
+import { createSurveyMap, SATELLITE_SOURCE_ID } from '../Map/createSurveyMap';
 
 /** Local storage key for persisting map position/zoom. */
 const MAP_STATE_STORAGE_KEY = 'globalViewMapState';
@@ -382,14 +382,14 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       : [defaultCenter.lng, defaultCenter.lat];
     const initialZoom = persistedState?.zoom ?? 10;
 
-    // Build map options - only include maxBounds if we have GPS projects
+    // No maxBounds - allow free panning and zooming
     const tileConfig = getTileConfig();
-    const mapOptions: maplibregl.MapOptions = {
+    map.current = createSurveyMap({
       container: mapContainer.current,
       style: {
         version: 8,
         sources: {
-          'satellite-tiles': {
+          [SATELLITE_SOURCE_ID]: {
             type: 'raster',
             tiles: tileConfig.tiles,
             tileSize: tileConfig.tileSize,
@@ -402,7 +402,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
           {
             id: 'satellite-tiles',
             type: 'raster',
-            source: 'satellite-tiles',
+            source: SATELLITE_SOURCE_ID,
             paint: {
               'raster-opacity': 1,
             },
@@ -413,22 +413,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       zoom: initialZoom,
       minZoom: 0, // Dynamic minZoom set after load based on system bounds
       maxZoom: tileConfig.maxZoom,
-      attributionControl: false, // Hide provider badge
-    };
-
-    // No maxBounds - allow free panning and zooming
-    map.current = new maplibregl.Map(mapOptions);
-
-    // Disable rotation
-    map.current.dragRotate.disable();
-    map.current.touchPitch.disable();
-    // Two-finger twist rotates by default; the global view is a top-down plan,
-    // so a pinch must zoom only.
-    map.current.touchZoomRotate.disableRotation();
-
-    // Disable MapLibre's built-in keyboard handler to prevent conflicts with our shortcuts
-    // Per memory: disable the map library's built-in keyboard handler to prevent double-zoom
-    map.current.keyboard.disable();
+      // MapLibre's keyboard handler would double-zoom with the app's shortcuts.
+      keyboard: false,
+      boxZoom: true,
+    });
 
     // Add navigation controls
     map.current.addControl(
@@ -624,17 +612,6 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       map.current = null;
     };
   }, []);
-
-  // Reload stale satellite tiles after offline→online recovery
-  const tileReloadGeneration = useNetworkStore((s) => s.tileReloadGeneration);
-  useEffect(() => {
-    if (!map.current || !mapLoaded || tileReloadGeneration === 0) return;
-    const source = map.current.getSource('satellite-tiles');
-    if (source && 'clearTiles' in source) {
-      (source as any).clearTiles();
-      map.current.triggerRepaint();
-    }
-  }, [tileReloadGeneration, mapLoaded]);
 
   // Store callbacks in refs to avoid stale closures in map event handlers
   const onProjectSelectRef = useRef(onProjectSelect);
