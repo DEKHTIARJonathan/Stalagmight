@@ -282,7 +282,7 @@ impl AppState {
     pub fn speleodb_publish(
         &self,
         params: SpeleoPublishParams,
-    ) -> Result<SpeleoPublishResult, SpeleoErrorDto> {
+    ) -> Result<crate::core::command::SpeleoPublishReport, SpeleoErrorDto> {
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -361,7 +361,7 @@ impl AppState {
             std::fs::create_dir_all(parent)
                 .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
         }
-        let link = self
+        let (link, relocation_lost) = self
             .speleodb_publish_relocate(&dest, |undo_mode| crate::models::SpeleoLink {
                 endpoint: endpoint.clone(),
                 project_id: project_id.clone(),
@@ -387,6 +387,7 @@ impl AppState {
         //    acquire/upload failure and STILL return the cache path: the webview reloads a
         //    dirty remote project and the user completes the upload via the normal Start
         //    editing → Done (which surfaces a genuine push error, in context, if any).
+        let mut pre_push_lost = Vec::new();
         match self.speleodb_handle_auth(
             Endpoint::Acquire,
             client::acquire_lock(&endpoint, &token, insecure_http, &project_id),
@@ -401,9 +402,9 @@ impl AppState {
                     // Skip the #216 name fold: the project was just created with this
                     // exact name, so the fold GET would be a guaranteed no-op.
                     false,
-                    // The publish answer has no channel for the pre-push save's
-                    // warnings (#576 NF-W2SAVE-1 covers Done / Push); the flush logs them.
-                    &mut Vec::new(),
+                    // [#576 NF-W4M-2] The pre-push save's warnings ride the
+                    // publish answer, like Done's and Push's (NF-W2SAVE-1).
+                    &mut pre_push_lost,
                 );
                 // Release the lock regardless of the push outcome (best-effort).
                 self.speleodb_release_best_effort(&endpoint, &token, insecure_http, &project_id);
@@ -457,10 +458,13 @@ impl AppState {
             }
         }
 
-        Ok(SpeleoPublishResult {
-            project_id,
-            endpoint,
-            local_path: dest.to_string_lossy().into_owned(),
+        Ok(crate::core::command::SpeleoPublishReport {
+            result: SpeleoPublishResult {
+                project_id,
+                endpoint,
+                local_path: dest.to_string_lossy().into_owned(),
+            },
+            save_warnings: publish_save_losses(relocation_lost, pre_push_lost),
         })
     }
 
@@ -478,11 +482,19 @@ impl AppState {
     /// `save_project(Some(dest))` relocates only because the project is still
     /// UNLINKED when it runs - a linked explicit-destination save is a Save a Copy -
     /// so the relocation must come before the stamp.
+    ///
+    /// Returns the stamped link and the relocation save's warnings (#576 NF-W4M-2).
     pub(super) fn speleodb_publish_relocate(
         &self,
         dest: &std::path::Path,
         make_link: impl FnOnce(crate::models::UndoMode) -> crate::models::SpeleoLink,
-    ) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
+    ) -> Result<
+        (
+            crate::models::SpeleoLink,
+            Vec<crate::core::ValidationWarning>,
+        ),
+        SpeleoDbError,
+    > {
         let _commands = self.hold_commands();
         // 2. Relocate the open project's working copy into the SpeleoDB cache. A remote
         //    project's canonical file lives at `speleodb_cache_path` (open/fast-forward
@@ -510,8 +522,23 @@ impl AppState {
             make_link(self.effective_undo_mode(super::speleodb_cache::preserved_undo_mode(db)));
         db.save_speleo_link(Some(&link))
             .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
-        Ok(link)
+        Ok((link, save.warnings))
     }
+}
+
+/// [#576 NF-W4M-2] What publish's two saves could not keep, each code once: the
+/// relocation's first, then any the pre-push save adds.
+pub(super) fn publish_save_losses(
+    relocation: Vec<crate::core::ValidationWarning>,
+    pre_push: Vec<crate::core::ValidationWarning>,
+) -> Vec<crate::core::ValidationWarning> {
+    let mut lost = relocation;
+    for warning in pre_push {
+        if !lost.iter().any(|w| w.code == warning.code) {
+            lost.push(warning);
+        }
+    }
+    lost
 }
 
 #[cfg(test)]

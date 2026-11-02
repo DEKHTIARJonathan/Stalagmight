@@ -26,6 +26,7 @@ import PublishToSpeleoDbDialog from './PublishToSpeleoDbDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 
 let loadProjectMock: ReturnType<typeof vi.fn>;
 let closeDialogMock: ReturnType<typeof vi.fn>;
@@ -87,6 +88,24 @@ describe('PublishToSpeleoDbDialog', () => {
     });
     // Reloaded the now-remote project and closed on success.
     await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1/project.stalx'));
+    await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
+  });
+
+  it("shows what publish's saves could not keep, like Done and Push (#576 NF-W4M-2)", async () => {
+    invokeIpcMock.mockResolvedValue({
+      result: { project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' },
+      save_warnings: [
+        { code: 'DISPLAY_SETTINGS_NOT_SAVED', message: 'display settings not kept', severity: 'Warning' },
+      ],
+    });
+    render(<PublishToSpeleoDbDialog />);
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
+
+    await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1/project.stalx'));
+    const keys = showToastMock.mock.calls.map((c) => c[1]);
+    expect(keys).toContain(`${TOAST_KEYS.SAVE_WARNING}:DISPLAY_SETTINGS_NOT_SAVED`);
     await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
   });
 

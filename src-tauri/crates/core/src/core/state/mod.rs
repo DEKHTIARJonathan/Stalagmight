@@ -584,3 +584,11 @@ mod crash_history_save_tests;
               captures"
 )]
 mod internal_error_status_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              warnings are the evidence a run captures"
+)]
+mod publish_save_losses_tests;

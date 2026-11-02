@@ -564,6 +564,17 @@ pub struct SpeleoDoneReport {
     pub save_warnings: Vec<ValidationWarning>,
 }
 
+/// [#576 NF-W4M-2] The `speleodb_publish` answer: the publish outcome, plus the
+/// warnings of the two saves publish runs - the one that relocates the project
+/// into the SpeleoDB cache and the pre-push save of its initial push - for what
+/// they could not keep. One-shot like Done's and Push's (see
+/// [`SpeleoDoneReport`]); empty when nothing was lost.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoPublishReport {
+    pub result: crate::speleodb::SpeleoPublishResult,
+    pub save_warnings: Vec<ValidationWarning>,
+}
+
 /// [#576 NF-W2SAVE-1] The `speleodb_push` answer: the Push outcome plus the
 /// pre-push save's warnings (see [`SpeleoDoneReport`]).
 #[derive(Debug, Clone, Serialize, TS)]

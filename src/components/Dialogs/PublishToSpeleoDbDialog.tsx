@@ -14,13 +14,32 @@ import { validateCoordinates } from '../../utils/gps';
 import { reverseGeocodeCountry } from '../../utils/reverseGeocodeCountry';
 import { COUNTRIES } from '../../data/countries';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { surfaceSaveWarnings } from '../../utils/saveFeedback';
 import type {
   Permission,
   SpeleoPublishParams,
+  SpeleoPublishReport,
+  SpeleoPublishResult,
+  ValidationWarning,
   Visibility,
 } from '../../types/ipc.generated';
 
 const inputClass = 'w-full px-2 py-1 bg-background border border-border rounded text-sm';
+
+/**
+ * [#576 NF-W4M-2] Publish answers its outcome together with the warnings of the two
+ * saves it ran (the relocation into the SpeleoDB cache and the initial push's
+ * pre-push save): what they could not keep. One-shot, like Done's and Push's, so
+ * they are shown here like a normal save's. A bare outcome (as test doubles return
+ * it) reads as that outcome with nothing lost.
+ */
+function readPublishReport(raw: SpeleoPublishReport | SpeleoPublishResult): {
+  result: SpeleoPublishResult;
+  saveLosses: ValidationWarning[];
+} {
+  if ('result' in raw) return { result: raw.result, saveLosses: raw.save_warnings ?? [] };
+  return { result: raw, saveLosses: [] };
+}
 
 /** A collaborator queued in the dialog, granted only after the project is created. */
 interface PendingCollaborator {
@@ -120,7 +139,8 @@ export default function PublishToSpeleoDbDialog() {
       longitude: bothCoords ? lonNum : null,
     };
     try {
-      const result = await invokeIpc('speleodb_publish', { params });
+      const { result, saveLosses } = readPublishReport(await invokeIpc('speleodb_publish', { params }));
+      surfaceSaveWarnings(saveLosses);
       // The project now EXISTS on the server and is linked. Reload its cache copy so the
       // app converges on the now-remote project. loadProject reports failure via
       // {success:false} (it never throws - it may have opened a recovery dialog), so a

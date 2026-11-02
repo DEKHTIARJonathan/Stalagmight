@@ -29,8 +29,8 @@ use stalagmight_lib::config::{
 };
 use stalagmight_lib::core::command::{
     Command, CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult,
-    IntegrityRepairResult, ReversedSection, SpeleoDoneReport, SpeleoPushReport, ValidationWarning,
-    WarningSeverity,
+    IntegrityRepairResult, ReversedSection, SpeleoDoneReport, SpeleoPublishReport,
+    SpeleoPushReport, ValidationWarning, WarningSeverity,
 };
 use stalagmight_lib::core::events::InternalErrorNotice;
 use stalagmight_lib::core::loading::{
@@ -447,6 +447,8 @@ fn main() {
     export::<SpeleoProjectMetadataPatch>(&out_dir);
     export::<SpeleoPublishParams>(&out_dir);
     export::<SpeleoPublishResult>(&out_dir);
+    // [#576 NF-W4M-2] The publish answer, carrying its saves' warnings
+    export::<SpeleoPublishReport>(&out_dir);
     // #215 full Project Settings: collaborator roster (users + teams) + team picker
     export::<SpeleoCollaborator>(&out_dir);
     export::<SpeleoTeamGrant>(&out_dir);
@@ -673,6 +675,7 @@ fn main() {
         "SpeleoProjectMetadataPatch",
         "SpeleoPublishParams",
         "SpeleoPublishResult",
+        "SpeleoPublishReport",
         "SpeleoCollaborator",
         "SpeleoTeamGrant",
         "SpeleoCollaborators",

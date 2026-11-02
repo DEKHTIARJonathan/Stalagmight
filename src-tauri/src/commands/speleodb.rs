@@ -32,8 +32,8 @@ use crate::speleodb::{
     Permission, SpeleoAdoptResult, SpeleoCollaborators, SpeleoDbAction, SpeleoDumpCandidate,
     SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult,
     SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
-    SpeleoPublishResult, SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus, SpeleoTeamOption,
-    SpeleoUnwindTarget, SpeleoUserSuggestion, StartEditingResult, UpdateResult,
+    SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus, SpeleoTeamOption, SpeleoUnwindTarget,
+    SpeleoUserSuggestion, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -625,7 +625,7 @@ pub async fn speleodb_patch_project(
 pub async fn speleodb_publish(
     app: AppHandle,
     params: SpeleoPublishParams,
-) -> Result<SpeleoPublishResult, SpeleoErrorDto> {
+) -> Result<crate::core::command::SpeleoPublishReport, SpeleoErrorDto> {
     run_blocking(app, move |s| s.speleodb_publish(params)).await
 }
 

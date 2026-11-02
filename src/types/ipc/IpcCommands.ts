@@ -72,7 +72,7 @@ import type { SpeleoProjectMetadata } from "./SpeleoProjectMetadata";
 import type { SpeleoProjectMetadataPatch } from "./SpeleoProjectMetadataPatch";
 import type { SpeleoProjectSummary } from "./SpeleoProjectSummary";
 import type { SpeleoPublishParams } from "./SpeleoPublishParams";
-import type { SpeleoPublishResult } from "./SpeleoPublishResult";
+import type { SpeleoPublishReport } from "./SpeleoPublishReport";
 import type { SpeleoPushReport } from "./SpeleoPushReport";
 import type { SpeleoRevision } from "./SpeleoRevision";
 import type { SpeleoRewindTarget } from "./SpeleoRewindTarget";
@@ -243,7 +243,7 @@ export interface IpcCommands {
   speleodb_open_project: { args: { projectId: string; projectName: string; latestCommitSha?: string | null; entryPath?: string | null }; result: SpeleoOpenResult; error: SpeleoErrorDto };
   speleodb_open_project_discarding_local: { args: { projectId: string; projectName: string; latestCommitSha?: string | null; entryPath?: string | null }; result: SpeleoOpenResult; error: SpeleoErrorDto };
   speleodb_patch_project: { args: { patch: SpeleoProjectMetadataPatch }; result: SpeleoProjectMetadata; error: SpeleoErrorDto };
-  speleodb_publish: { args: { params: SpeleoPublishParams }; result: SpeleoPublishResult; error: SpeleoErrorDto };
+  speleodb_publish: { args: { params: SpeleoPublishParams }; result: SpeleoPublishReport; error: SpeleoErrorDto };
   speleodb_push: { args: { message?: string | null; acceptOlderVersion?: boolean | null }; result: SpeleoPushReport; error: SpeleoErrorDto };
   speleodb_release_all_locks: { args: Record<string, never>; result: null; error: SpeleoErrorDto };
   speleodb_release_current_lock: { args: Record<string, never>; result: null; error: SpeleoErrorDto };

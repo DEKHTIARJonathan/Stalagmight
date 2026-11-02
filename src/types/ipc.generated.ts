@@ -217,6 +217,7 @@ export * from './ipc/SpeleoProjectMetadata';
 export * from './ipc/SpeleoProjectMetadataPatch';
 export * from './ipc/SpeleoPublishParams';
 export * from './ipc/SpeleoPublishResult';
+export * from './ipc/SpeleoPublishReport';
 export * from './ipc/SpeleoCollaborator';
 export * from './ipc/SpeleoTeamGrant';
 export * from './ipc/SpeleoCollaborators';

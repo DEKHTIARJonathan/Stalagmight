@@ -163,11 +163,15 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
           exclude_geojson: false,
         } satisfies MockReply<'speleodb_get_project_metadata'> & MockReply<'speleodb_patch_project'>;
       case 'speleodb_publish':
-        // #207 publish result: the reloaded (now-remote) local .stalx path.
+        // #207 publish result: the reloaded (now-remote) local .stalx path, with
+        // what publish's saves could not keep (#576 NF-W4M-2: nothing here).
         return {
-          project_id: 'mock-project-id',
-          endpoint: 'https://speleodb.example',
-          local_path: '/mock/project.stalx',
+          result: {
+            project_id: 'mock-project-id',
+            endpoint: 'https://speleodb.example',
+            local_path: '/mock/project.stalx',
+          },
+          save_warnings: [],
         } satisfies MockReply<'speleodb_publish'>;
       case 'speleodb_login':
         return {
