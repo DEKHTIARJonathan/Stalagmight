@@ -6,7 +6,7 @@ vi.mock('../SectionPreview', async (importOriginal) => ({
 }));
 vi.mock('maplibre-gl', () => ({ default: {} }));
 
-import { markSuccessfulDmpImportDirty } from '../DmpNewImportDialog';
+import { markSuccessfulDmpImportDirty } from '../dmpWizard/useDmpImportRun';
 
 describe('DMP direct-import aftermath', () => {
   it('marks both the local file and SpeleoDB forward-edit state dirty', () => {

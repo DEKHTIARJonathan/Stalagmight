@@ -18,6 +18,20 @@ The STORE copy only ever takes `suggesting`, `manual_placing` or `null`, so it i
 a phase oracle - the DOM markers (`wizard-suggestion`, `wizard-manual-placing`, ...)
 are.
 
+### The run (`useDmpImportRun`)
+
+The imports themselves live in a headless hook,
+`src/components/Dialogs/dmpWizard/useDmpImportRun.ts` (#576 D4): the zero-datum
+anchor, the early and late batches, the segment placed on the map, the per-run
+accumulators they bank into (section ids, receipts, the DMP index -> section id
+map, the pending overlap updates, the project the run belongs to - `DmpRunCarry`,
+which `SavedManualPlacingState` extends), and the Back/Cancel withdrawal. The
+dialog decides WHAT to send (`buildBatchImport`, the overlap treatment) and what
+happens next (its phases). Every import goes through the store's `importSections`
+and refuses when the run's project has been replaced. A failure is typed by the
+step that failed (`DmpRunFailure.kind`), so the dialog can show it where the user
+is looking instead of in one shared error string.
+
 ### The manual-placement round trip
 
 Placing a segment on the map needs the map, so `handleStartSegmentPlacement`
@@ -48,7 +62,7 @@ to do while the direct route always ran it.
 Because the imports are eager, both exits have to decide what happens to
 sections that are ALREADY in the project - `connections` does not answer that
 question (it is a client-side record that has imported nothing), so both gates
-read `importedSectionIdsRef` as well.
+read the run's imported section ids as well.
 
 * **Cancel** offers three actions once anything is imported: remove and close,
   keep and close, or continue editing. The copy names the count.

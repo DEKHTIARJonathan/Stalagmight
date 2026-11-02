@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { invokeIpc } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { CheckCircleIcon } from '../common/icons';
-import type { DmpFile, CrossSectionSuggestion, ImportSectionForSuggestion, CommandResult, SegmentGeometry } from '../../types/commands';
+import type { DmpFile, CrossSectionSuggestion, ImportSectionForSuggestion, SegmentGeometry } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { DistanceField, Project, Station, ShotData } from '../../types/project';
 import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from '../../types/commands';
@@ -30,9 +30,7 @@ import {
   finalizePlacementForReverse,
 } from '../../utils/importSectionConfig';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
-import { useProjectStore, projectSwitched, type ImportReceiptProvenance } from '../../store/projectStore';
-import { refuseMutationDuringCarry } from '../../store/moveCarry';
-import { useSpeleoStore } from '../../store/speleoStore';
+import { useProjectStore } from '../../store/projectStore';
 import { convertToEditableShots, editableShotToShotData, editableShotsToDmpSection } from '../../utils/shotConversion';
 import {
   computeMergeOptions,
@@ -74,7 +72,6 @@ import {
   distanceMapFromField,
   rerankSuggestionsByTemporalPlan,
 } from '../../utils/dmpTemporalRerank';
-import { extractFilename } from '../../utils/path';
 import {
   fromEmittedStationIndex,
   isEmittedShot,
@@ -82,23 +79,16 @@ import {
   visibleBefore,
   visibleShotCount,
 } from '../common/emittedShots';
+import { applyAllOverlapTreatments } from '../../utils/overlapTreatment';
 import {
-  applyAllOverlapTreatments,
-  backendExistingShotUpdatesForSections,
-  removeExistingShotUpdatesForSections,
-  type ExistingShotUpdateLocal,
-} from '../../utils/overlapTreatment';
-import {
-  NonFiniteShotError,
   assertSendableShots,
   findIncompleteSections,
 } from '../../utils/importPayloadGuard';
 import { reanchorAfterRunDelete, reanchorStation } from '../../utils/stationReanchor';
 import { blankEditableShot } from '../common/editableShot';
-import { aggregateImportReceipts } from '../../utils/importReceipt';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 import { TOAST_KEYS } from '../../utils/toastKeys';
-import { isEditDisabledError, READ_ONLY_EDIT_NOTICE } from '../../utils/editErrors';
+import { useDmpImportRun, type DmpRunCarry } from './dmpWizard/useDmpImportRun';
 
 interface DmpNewImportDialogProps {
   dmpFile: DmpFile;
@@ -115,22 +105,7 @@ interface DmpNewImportDialogProps {
   autoStartManualPlacement?: boolean;
 }
 
-/** Mirror both frontend stores after a direct `import_sections` mutation. */
-export function markSuccessfulDmpImportDirty(
-  markProjectDirty = useProjectStore.getState().markDirty,
-  markForwardEdit = useSpeleoStore.getState().markForwardEdit,
-): void {
-  markProjectDirty();
-  markForwardEdit();
-}
-
 // SectionEditState and ConfirmedOverlapInfo imported from batchImportHelpers
-
-/** A refusal from the payload guard is already written for the user; anything
- *  else reaching a catch here is a raw failure with no better wording. */
-function importErrorMessage(e: unknown): string {
-  return e instanceof NonFiniteShotError ? e.message : String(e);
-}
 
 // ─── Direct placement (manual_placing phase) ─────────────────────────────────
 
@@ -168,8 +143,12 @@ function normalizeSkippedSuggestionEntry(entry: SavedSkippedSuggestionEntry): Sk
   };
 }
 
-/** Saved state for restoring the dialog after manual map placement. */
-export interface SavedManualPlacingState {
+/**
+ * Saved state for restoring the dialog after manual map placement. The run's
+ * accumulators (receipts, imported section ids, the project they belong to, ...)
+ * are `DmpRunCarry`'s fields - see there for why each must ride along.
+ */
+export interface SavedManualPlacingState extends DmpRunCarry {
   connections: VirtualConnection[];
   skippedIndices: number[];
   segmentQueue: number[][];
@@ -179,45 +158,6 @@ export interface SavedManualPlacingState {
   segmentSkipCounts: Array<[string, number]>;
   sectionEdits: Array<[number, SectionEditState]>;
   confirmedOverlaps?: Array<[number, ConfirmedOverlapInfo]>;
-  existingShotUpdates?: ExistingShotUpdateLocal[];
-  earlyImported?: Array<[number, number]>;
-  /**
-   * Every `import_receipt` this wizard run has banked so far (#487).
-   *
-   * The run's receipts live in a component ref, and manual map placement closes
-   * this dialog and reopens a fresh instance - so without carrying them here the
-   * reopened instance completes the import with an empty list, which aggregates
-   * to `undefined` and silently suppresses the receipt the other import paths
-   * all show. Optional because a state saved by an older build (or a test) has
-   * none; absent reads as "nothing banked yet".
-   */
-  importedReceipts?: ImportReceipt[];
-  /**
-   * Every project `section_id` this wizard run has created so far (#487
-   * residue 2).
-   *
-   * Same carry, same reason, as `importedReceipts` above - and the same
-   * consequence when it is missing: the reopened instance completes with an
-   * empty list, App.tsx's `if (newSectionIds?.length)` is false, and
-   * `suggest_orphan_placements` is never called. So the manual-placement route
-   * silently skipped orphan detection that the direct route always ran.
-   *
-   * It is also what `withdrawImportedSections` needs to be able to undo a run
-   * that crossed the handoff. Optional for the same reason: an older saved
-   * state (or a test) has none, and absent reads as "nothing imported yet".
-   */
-  importedSectionIds?: number[];
-  /**
-   * The `created_at` of the project those ids were created in.
-   *
-   * Nothing clears `dialogData` when the open project changes, so this struct
-   * can outlive the project it describes - and section ids are small
-   * per-project integers, so every one of them would RESOLVE against whatever
-   * is open instead. Carried so the withdrawal can refuse rather than delete
-   * same-numbered sections in the wrong survey. Optional: a state saved by an
-   * older build has none, and absent means "unknown", which never refuses.
-   */
-  projectKey?: string | null;
   /** DMP indices of segments the user chose to discard ("Do not place"). */
   discardedIndices?: number[];
 }
@@ -821,28 +761,6 @@ export function buildBatchImport(
  * suggestions sorted by score, records virtual connections on confirm,
  * then batch-places everything when suggestions are exhausted.
  */
-/**
- * [#576 RV2-FE-D3] The inline text for a wizard import the backend refused: a read-only
- * refusal (EDIT_DISABLED - the lock lost mid-wizard, the Plan/Export workspace) reads as
- * the friendly read-only notice, not the coded string; anything else as the backend
- * said it. The store's edit path is told not to toast the same notice on top
- * (`importSections`' `readOnlyNoticeInline`).
- */
-function importFailureText(result: CommandResult, fallback: string): string {
-  return isEditDisabledError(result.error) ? READ_ONLY_EDIT_NOTICE(result.error) : (result.error ?? fallback);
-}
-
-/**
- * [#576 RV2-FE-D1] Whether the project this run imports into (`runKey`, its
- * `created_at`) has been replaced by another. Checked before EVERY import, not only the
- * withdrawal: the store's own staleness guard captures the project when the import is
- * called, which is already the replacement once the run (its saved state rides
- * `dialogData`, which a project switch does not clear) has outlived a switch.
- */
-function runProjectReplaced(runKey: string | null): boolean {
-  return projectSwitched(runKey, useProjectStore.getState().project?.created_at ?? null);
-}
-
 export default function DmpNewImportDialog({
   dmpFile,
   selectionConfig,
@@ -874,9 +792,6 @@ export default function DmpNewImportDialog({
   const [manualPreviewRef, manualPreviewSize] = usePreviewSize(MAP_PANEL_MAX_WIDTH);
 
   // Store selectors
-  const importSections = useProjectStore((s) => s.importSections);
-  const executeBatch = useProjectStore((s) => s.executeBatch);
-  const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
   const config = useProjectStore((s) => s.config);
   const updateConfig = useProjectStore((s) => s.updateConfig);
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
@@ -888,6 +803,23 @@ export default function DmpNewImportDialog({
   // Shorthand for restoring state
   const saved = savedManualPlacingState;
 
+  // The run: its imports, what they banked, the withdrawal, and the failure of
+  // whichever step failed last (#576 D4).
+  const {
+    isImporting,
+    failure,
+    clearFailure,
+    importAnchor,
+    importBatch,
+    importSegment,
+    withdrawImportedSections,
+    withdrawInFlight,
+    importedCount,
+    completion,
+    carry,
+    earlyImported,
+  } = useDmpImportRun({ dmpFile, selectionConfig, carried: saved });
+
   // Core state - virtual connections instead of imported indices
   const [connections, setConnections] = useState<VirtualConnection[]>(saved?.connections ?? []);
   const [skippedIndices, setSkippedIndices] = useState<Set<number>>(
@@ -897,7 +829,6 @@ export default function DmpNewImportDialog({
   const [alternatives, setAlternatives] = useState<CrossSectionSuggestion[]>([]);
   const [showAlternatives, setShowAlternatives] = useState(true);
   const [isCalculating, setIsCalculating] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
   const [phase, setPhase] = useState<'init' | 'suggesting' | 'manual_placing' | 'placing' | 'done'>(
     saved ? 'manual_placing' : 'init'
   );
@@ -906,7 +837,7 @@ export default function DmpNewImportDialog({
   );
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [showBackConfirm, setShowBackConfirm] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const error = failure?.message ?? null;
   // F8: registers this dialog's footer height with the toast stack for as long
   // as the footer is mounted, so a lingering toast (e.g. the manual-placement
   // hint, which fires just before this dialog closes and can still be on
@@ -963,9 +894,6 @@ export default function DmpNewImportDialog({
   );
   const confirmedOverlapsRef = useRef<Map<number, ConfirmedOverlapInfo>>(
     saved ? new Map(saved.confirmedOverlaps ?? []) : new Map()
-  );
-  const existingShotUpdatesRef = useRef<ExistingShotUpdateLocal[]>(
-    saved?.existingShotUpdates ?? []
   );
   const nextTempIdRef = useRef(1);
 
@@ -1072,11 +1000,6 @@ export default function DmpNewImportDialog({
   // Accumulated direct placements for manual_placing phase
   const directPlacementsRef = useRef<DirectPlacement[]>(saved?.directPlacements ?? []);
 
-  // DMP index → project section_id for sections imported during early import
-  const earlyImportedRef = useRef<Map<number, number>>(
-    saved?.earlyImported ? new Map(saved.earlyImported) : new Map()
-  );
-
   // DMP indices of segments the user chose to discard ("Do not place")
   const discardedIndicesRef = useRef<Set<number>>(
     new Set(saved?.discardedIndices ?? [])
@@ -1095,45 +1018,6 @@ export default function DmpNewImportDialog({
   const suggestionActionInFlightRef = useRef(false);
   // Prevent re-entering early-import transition before state updates land.
   const transitionToPlacingInFlightRef = useRef(false);
-
-  // Accumulate all section IDs created during import for post-import orphan
-  // detection - seeded from the saved state for the same reason the receipts
-  // below are, and with a sharper failure when it is not: an empty list here
-  // reaches App.tsx as "this import created nothing", which skips
-  // `suggest_orphan_placements` altogether.
-  const importedSectionIdsRef = useRef<number[]>([...(saved?.importedSectionIds ?? [])]);
-  // WHICH project those ids belong to, carried with them. `created_at` is the
-  // identity `executeCommand`'s own staleness guard uses: immutable for the life
-  // of a project, unlike `file_path`. Read once (the ref keeps its first value).
-  const importProjectKeyRef = useRef<string | null>(
-    saved?.projectKey ?? useProjectStore.getState().project?.created_at ?? null
-  );
-  // Accumulate the import_receipt from each import_sections call (early/segment/
-  // late) into one #391 summary for the whole wizard run, keyed by
-  // constant file-level provenance (source label/name/total sections) spread
-  // into every call below.
-  //
-  // Seeded from the saved state (#487): manual map placement CLOSES this dialog
-  // (`handleStartSegmentPlacement`) and reopens a fresh instance afterwards, so
-  // every receipt banked before the handoff dies with the old instance's refs
-  // unless it rides `SavedManualPlacingState`. That is the whole run's receipts,
-  // not a subset - the reopened instance completes the wizard, and an empty list
-  // there aggregates to `undefined`, which App.tsx reads as "nothing to show".
-  const importedReceiptsRef = useRef<ImportReceipt[]>([...(saved?.importedReceipts ?? [])]);
-  const dmpFilePath = (useUIStore.getState().dialogData as Record<string, unknown>).filePath as string | undefined;
-  // Called per import, not built once: the file's parse warnings (#576 B13 - a
-  // section cut short, a damaged record) lead the receipt, and a run's receipts
-  // are concatenated at completion, so they ride the run's FIRST import only.
-  // Nothing banked yet means this is it; the banked list survives the
-  // map-placement reopen, so a reopened instance does not send them again.
-  const dmpProvenance = (): ImportReceiptProvenance => ({
-    sourceLabel: 'mNemo DMP',
-    sourceFileName: extractFilename(dmpFilePath ?? ''),
-    sectionsFound: dmpFile.sections.length,
-    ...(importedReceiptsRef.current.length === 0 && (dmpFile.warnings?.length ?? 0) > 0
-      ? { sourceWarnings: dmpFile.warnings }
-      : {}),
-  });
 
   // Refs to avoid stale closures
   const connectionsRef = useRef(connections);
@@ -1959,24 +1843,21 @@ export default function DmpNewImportDialog({
   const transitionToPlacingOrManual = useCallback(async () => {
     if (transitionToPlacingInFlightRef.current) return;
     transitionToPlacingInFlightRef.current = true;
-    setIsImporting(true);
-    setError(null);
 
     try {
-      let unreachable: number[] = [];
-      try {
-        // 1. Apply overlap treatments (single source of truth)
-        let existingShotUpdates: ExistingShotUpdateLocal[] = [];
-        if (fullPoolRef.current.length > 0) {
-          existingShotUpdates = applyAllOverlapTreatments(
-            fullPoolRef.current,
-            confirmedOverlapsRef.current,
-            sectionEditsRef.current,
-            dmpFile,
-            overlapMode,
-          );
-          existingShotUpdatesRef.current = existingShotUpdates;
-        }
+      // Import every reachable section now (the early import).
+      const plan = await importBatch('early', () => {
+        // 1. Overlap treatments (single source of truth): they replace the run's
+        //    pending updates to existing shots.
+        const existingShotUpdates = fullPoolRef.current.length > 0
+          ? applyAllOverlapTreatments(
+              fullPoolRef.current,
+              confirmedOverlapsRef.current,
+              sectionEditsRef.current,
+              dmpFile,
+              overlapMode,
+            )
+          : undefined;
 
         // 2. Redirect connections targeting deleted overlap zones
         redirectDeletedTargets(
@@ -1987,13 +1868,9 @@ export default function DmpNewImportDialog({
         );
 
         // 3. Build batch import configs for reachable sections
-        const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-        let emittedDmpIndices: number[];
-        let configs: BackendImportSectionConfig[];
-        let emptySections: number[];
-        ({ configs, unreachable, emittedDmpIndices, emptySections } = buildBatchImport(
+        const batch = buildBatchImport(
           connectionsRef.current,
-          zeroDatumIdx,
+          zeroDatumConfig?.sectionIndex ?? null,
           dmpFile,
           selectionConfig,
           sectionEditsRef.current,
@@ -2002,64 +1879,12 @@ export default function DmpNewImportDialog({
           undefined,
           skippedIndicesRef.current,
           resolvedTheme,
-        ));
-        reportEmptySections(emptySections);
-
-        // 4. Import reachable sections immediately
-        if (configs.length > 0) {
-          const emittedSet = new Set(emittedDmpIndices);
-          const earlyExistingShotUpdates = backendExistingShotUpdatesForSections(
-            existingShotUpdatesRef.current,
-            emittedSet,
-          );
-          // Through the store's edit path (#576 D6), like the anchor import: it
-          // refuses during a move carry, serializes behind other edits, refreshes,
-          // marks dirty (local and SpeleoDB), resolves a deferred first save and
-          // re-checks integrity - the wizard used to replicate only some of that.
-          if (runProjectReplaced(importProjectKeyRef.current)) {
-            setError(t('dialogs.dmpNewImport.importWrongProject'));
-            return;
-          }
-          const result = await importSections(
-            configs,
-            selectionConfig.fileHash,
-            selectionConfig.sectionHashes,
-            'AllReferences',
-            dmpProvenance(),
-            earlyExistingShotUpdates.length > 0 ? earlyExistingShotUpdates : null,
-            true,
-          );
-
-          if (!result.success) {
-            setError(importFailureText(result, 'Import failed'));
-            return;
-          }
-
-          if (result.section_ids.length > 0) {
-            importedSectionIdsRef.current.push(...result.section_ids);
-          }
-          if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
-
-          // Build DMP index -> section_id mapping for late import.
-          // Use backend response ordering directly; it matches submitted configs.
-          for (let i = 0; i < emittedDmpIndices.length; i++) {
-            const sectionId = result.section_ids[i];
-            if (sectionId != null) {
-              earlyImportedRef.current.set(emittedDmpIndices[i]!, sectionId);
-            }
-          }
-          existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
-            existingShotUpdatesRef.current,
-            emittedSet,
-          );
-        }
-      } catch (e) {
-        console.error('[earlyImport] Error during early import:', e);
-        setError(importErrorMessage(e));
-        return;
-      } finally {
-        setIsImporting(false);
-      }
+        );
+        reportEmptySections(batch.emptySections);
+        return { ...batch, ...(existingShotUpdates ? { existingShotUpdates } : {}) };
+      });
+      if (!plan) return;
+      const { unreachable } = plan;
 
       // 5. Check for unreachable sections
       if (unreachable.length > 0) {
@@ -2085,12 +1910,12 @@ export default function DmpNewImportDialog({
 
       // No unreachable - all done
       trackDialogComplete('dmp-import-new');
-      onComplete(importedSectionIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
+      onComplete(...completion());
     } finally {
       transitionToPlacingInFlightRef.current = false;
       suggestionActionInFlightRef.current = false;
     }
-  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, importSections, reportEmptySections, resolvedTheme, t]);
+  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, importBatch, completion, reportEmptySections, resolvedTheme]);
 
   // On mount: import zero datum section and fire suggest_all_import_placements
   useEffect(() => {
@@ -2100,49 +1925,8 @@ export default function DmpNewImportDialog({
     const init = async () => {
       // 1. Import zero datum section if provided (this is the anchor)
       if (zeroDatumConfig) {
-        setIsImporting(true);
         const { sectionIndex } = zeroDatumConfig;
-        const config: BackendImportSectionConfig = buildZeroDatumSectionConfig(zeroDatumConfig);
-
-        // 'AllReferences', not Auto (#27): the DMP parser only ever emits
-        // Normal shots, so every virtual shot reaching this import is one the
-        // user marked Reference here - the "Keep both (reference)" overlap
-        // treatment. Auto would re-judge them by the chain rule and promote the
-        // bounded ones to Jump, putting the duplicated geometry back into gas
-        // and penetration, which is the double-count keep-both exists to avoid.
-        // AllReferences leaves Normal shots untouched and preserves the choice.
-        // try/finally, unlike the other four import sites which already had it:
-        // a throw here used to leave `isImporting` stuck true forever (this
-        // `init()` is called with no catch). That was merely a stuck spinner
-        // until the exits started refusing to open mid-import - now it would
-        // TRAP the user in a wizard with Cancel and Back both disabled.
-        if (runProjectReplaced(importProjectKeyRef.current)) {
-          setIsImporting(false);
-          setError(t('dialogs.dmpNewImport.importWrongProject'));
-          return;
-        }
-        let result: CommandResult;
-        try {
-          result = await importSections(
-            [config], selectionConfig.fileHash, selectionConfig.sectionHashes, 'AllReferences', dmpProvenance(),
-            null, true,
-          );
-        } catch (e) {
-          setError(importErrorMessage(e));
-          return;
-        } finally {
-          setIsImporting(false);
-        }
-
-        if (!result.success) {
-          setError(importFailureText(result, 'Failed to import zero datum section'));
-          return;
-        }
-
-        if (result.section_ids.length > 0) {
-          importedSectionIdsRef.current.push(...result.section_ids);
-        }
-        if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
+        if (!(await importAnchor(() => buildZeroDatumSectionConfig(zeroDatumConfig)))) return;
 
         // Snap-fit to the newly placed zero datum section
         useUIStore.getState().triggerFitToBounds({ snap: true });
@@ -2241,72 +2025,24 @@ export default function DmpNewImportDialog({
     if (isImporting) return;
 
     const doLateImport = async () => {
-      setIsImporting(true);
-      setError(null);
-
-      let unreachable: number[] = [];
-      try {
-        const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-        let configs: BackendImportSectionConfig[];
-        let emittedDmpIndices: number[];
-        let emptySections: number[];
-        ({ configs, unreachable, emittedDmpIndices, emptySections } = buildBatchImport(
+      const plan = await importBatch('late', () => {
+        const batch = buildBatchImport(
           connectionsRef.current,
-          zeroDatumIdx,
+          zeroDatumConfig?.sectionIndex ?? null,
           dmpFile,
           selectionConfig,
           sectionEditsRef.current,
           fullPoolRef.current,
           directPlacementsRef.current,
-          earlyImportedRef.current,
+          earlyImported,
           undefined,
           resolvedTheme,
-        ));
-        reportEmptySections(emptySections);
-
-        if (configs.length > 0) {
-          const emittedSet = new Set(emittedDmpIndices);
-          const lateExistingShotUpdates = backendExistingShotUpdatesForSections(
-            existingShotUpdatesRef.current,
-            emittedSet,
-          );
-          // Store edit path, as the early import (#576 D6), and its run check (D1).
-          if (runProjectReplaced(importProjectKeyRef.current)) {
-            setError(t('dialogs.dmpNewImport.importWrongProject'));
-            return;
-          }
-          const result = await importSections(
-            configs,
-            selectionConfig.fileHash,
-            selectionConfig.sectionHashes,
-            'AllReferences',
-            dmpProvenance(),
-            lateExistingShotUpdates.length > 0 ? lateExistingShotUpdates : null,
-            true,
-          );
-
-          if (!result.success) {
-            setError(importFailureText(result, 'Late import failed'));
-            return;
-          }
-
-          if (result.section_ids.length > 0) {
-            importedSectionIdsRef.current.push(...result.section_ids);
-          }
-          if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
-
-          existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
-            existingShotUpdatesRef.current,
-            emittedSet,
-          );
-        }
-      } catch (e) {
-        console.error('[lateImport] Error:', e);
-        setError(importErrorMessage(e));
-        return;
-      } finally {
-        setIsImporting(false);
-      }
+        );
+        reportEmptySections(batch.emptySections);
+        return batch;
+      });
+      if (!plan) return;
+      const { unreachable } = plan;
 
       // Filter out discarded segments - they should not be placed later.
       const remaining = unreachable.filter(idx => !discardedIndicesRef.current.has(idx));
@@ -2323,7 +2059,7 @@ export default function DmpNewImportDialog({
           setFromExistingSectionId(null);
           setFromExistingStationIdx(0);
           setAutoStartManualPlacementPending(true);
-          setError(null);
+          clearFailure();
           setCurrentSuggestion(null);
           setPhase('manual_placing');
           return;
@@ -2331,7 +2067,7 @@ export default function DmpNewImportDialog({
       }
 
       trackDialogComplete('dmp-import-new');
-      onComplete(importedSectionIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
+      onComplete(...completion());
     };
 
     doLateImport();
@@ -2360,7 +2096,7 @@ export default function DmpNewImportDialog({
         setFromExistingSectionId(null);
         setFromExistingStationIdx(0);
         setAutoStartManualPlacementPending(true);
-        setError(null);
+        clearFailure();
         setCurrentSuggestion(null);
         setPhase('manual_placing');
         return;
@@ -2372,7 +2108,7 @@ export default function DmpNewImportDialog({
     // is reached after the zero-datum import has already banked one - a
     // single-selected-section file, or a selection with nothing left to
     // suggest - so dropping it silenced the receipt for those imports too.
-    onComplete(importedSectionIdsRef.current, aggregateImportReceipts(importedReceiptsRef.current));
+    onComplete(...completion());
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, isImporting, isCalculating]);
 
@@ -2532,7 +2268,7 @@ export default function DmpNewImportDialog({
         `impStn=${currentSuggestion.importStationIndex} exStn=${currentSuggestion.existingStationIndex}`,
         `matched=${currentSuggestion.matchedShots} dir=${currentSuggestion.direction}`,
       );
-      setError(null);
+      clearFailure();
 
       // Read fresh edit state from the ref (synchronously up-to-date) instead of
       // the editState React state which may be one render behind when the user
@@ -3041,125 +2777,27 @@ export default function DmpNewImportDialog({
     [dmpFile.sections, emittedAnchorStation, selectionConfig.defaultDate, selectionConfig.defaultSurveyor, selectedIndices, sectionPalette],
   );
 
+  /** Import the segment just placed on the map: the whole batch as it stands
+   *  with that placement added, narrowed by the run to the segment's sections. */
   const importPlacedSegmentNow = useCallback(
-    async (segmentIndices: number[], directPlacements: DirectPlacement[]) => {
-      const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-      const { configs, emittedDmpIndices, emptySections } = buildBatchImport(
-        connectionsRef.current,
-        zeroDatumIdx,
-        dmpFile,
-        selectionConfig,
-        sectionEditsRef.current,
-        fullPoolRef.current,
-        directPlacements,
-        earlyImportedRef.current,
-        undefined,
-        resolvedTheme,
-      );
-      reportEmptySections(emptySections);
-
-      const pendingSet = new Set(segmentIndices);
-      const segmentConfigs: BackendImportSectionConfig[] = [];
-      const segmentDmpIndices: number[] = [];
-      // Map original config position -> new position in segmentConfigs
-      const posRemap = new Map<number, number>();
-      for (let i = 0; i < configs.length; i++) {
-        const dmpIdx = emittedDmpIndices[i];
-        if (dmpIdx != null && pendingSet.has(dmpIdx)) {
-          posRemap.set(i, segmentConfigs.length);
-          segmentConfigs.push({ ...configs[i]!, section_index: segmentConfigs.length });
-          segmentDmpIndices.push(dmpIdx);
-        }
-      }
-
-      for (const cfg of segmentConfigs) {
-        if (cfg.placement.type === 'from_importing') {
-          const placement = cfg.placement as {
-            type: 'from_importing';
-            import_station: number;
-            target_section_index: number;
-            target_station_index: number;
-          };
-          const oldTarget = placement.target_section_index;
-          const newTarget = posRemap.get(oldTarget);
-          if (newTarget != null) {
-            placement.target_section_index = newTarget;
-            continue;
-          }
-          const targetDmpIdx = emittedDmpIndices[oldTarget];
-          const existingTargetId = targetDmpIdx != null
-            ? earlyImportedRef.current.get(targetDmpIdx)
-            : undefined;
-          if (existingTargetId != null) {
-            cfg.placement = {
-              type: 'from_existing',
-              import_station: placement.import_station,
-              existing_station: {
-                section_id: existingTargetId,
-                station_index: placement.target_station_index,
-              },
-            };
-            continue;
-          }
-          setError('Segment import failed: unresolved relative placement target');
-          return false;
-        }
-      }
-
-      if (segmentConfigs.length === 0) {
-        return true;
-      }
-
-      // The run's own project, as every wizard import (#576 RV2-FE-D1).
-      if (runProjectReplaced(importProjectKeyRef.current)) {
-        setError(t('dialogs.dmpNewImport.importWrongProject'));
-        return false;
-      }
-      const pendingSetForUpdates = new Set(segmentDmpIndices);
-      const segmentExistingShotUpdates = backendExistingShotUpdatesForSections(
-        existingShotUpdatesRef.current,
-        pendingSetForUpdates,
-      );
-      const result = refuseMutationDuringCarry() ?? await invokeIpc<CommandResult>('import_sections', {
-        sections: segmentConfigs,
-        fileHash: selectionConfig.fileHash ?? null,
-        sectionHashes: selectionConfig.sectionHashes ?? null,
-        existingShotUpdates: segmentExistingShotUpdates.length > 0 ? segmentExistingShotUpdates : null,
-        virtualShotMode: 'AllReferences',
-        ...dmpProvenance(),
-      }, { purpose: 'import placed segment sections' });
-
-      if (!result.success) {
-        setError(importFailureText(result, 'Segment import failed'));
-        return false;
-      }
-
-      if (result.section_ids.length > 0) {
-        importedSectionIdsRef.current.push(...result.section_ids);
-      }
-      // Banked BEFORE the refresh below deliberately: if that throws, the catch
-      // in the placement callback reopens with the same queue and the retry
-      // banks a second receipt - which is the honest count, because the backend
-      // did import twice. Moving this after the await would under-report.
-      if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
-
-      await refreshProjectState();
-      markSuccessfulDmpImportDirty();
-
-      for (let i = 0; i < segmentDmpIndices.length; i++) {
-        const sectionId = result.section_ids[i];
-        if (sectionId != null) {
-          earlyImportedRef.current.set(segmentDmpIndices[i]!, sectionId);
-        }
-      }
-      existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
-        existingShotUpdatesRef.current,
-        pendingSetForUpdates,
-      );
-
-      return true;
-    },
-    [dmpFile, refreshProjectState, reportEmptySections, selectionConfig, zeroDatumConfig?.sectionIndex, resolvedTheme, t],
+    (segmentIndices: number[], directPlacements: DirectPlacement[]) =>
+      importSegment(segmentIndices, () => {
+        const batch = buildBatchImport(
+          connectionsRef.current,
+          zeroDatumConfig?.sectionIndex ?? null,
+          dmpFile,
+          selectionConfig,
+          sectionEditsRef.current,
+          fullPoolRef.current,
+          directPlacements,
+          earlyImported,
+          undefined,
+          resolvedTheme,
+        );
+        reportEmptySections(batch.emptySections);
+        return batch;
+      }),
+    [dmpFile, earlyImported, importSegment, reportEmptySections, selectionConfig, zeroDatumConfig?.sectionIndex, resolvedTheme],
   );
 
   /**
@@ -3204,18 +2842,11 @@ export default function DmpNewImportDialog({
       segmentSkipCounts: Array.from(segmentSkipCountRef.current.entries()),
       sectionEdits: Array.from(sectionEditsRef.current.entries()),
       confirmedOverlaps: Array.from(confirmedOverlapsRef.current.entries()),
-      existingShotUpdates: [...existingShotUpdatesRef.current],
-      earlyImported: Array.from(earlyImportedRef.current.entries()),
       discardedIndices: Array.from(discardedIndicesRef.current),
       // Read live, not captured: the segment import that precedes the reopen
-      // (`importPlacedSegmentNow`) banks its receipt into this ref first, and
+      // (`importPlacedSegmentNow`) banks its receipt and section ids first, and
       // this builder runs inside the placement callback, after it.
-      importedReceipts: [...importedReceiptsRef.current],
-      // Same liveness requirement, same call: that import also banks the
-      // section ids the reopened instance must complete with.
-      importedSectionIds: [...importedSectionIdsRef.current],
-      // Which project they mean. Ids alone are ambiguous across a switch.
-      projectKey: importProjectKeyRef.current,
+      ...carry(),
     });
 
     const openPlacementDialog = (
@@ -3280,16 +2911,7 @@ export default function DmpNewImportDialog({
             const nextDirectPlacements = [...directPlacements, dp];
             directPlacementsRef.current = nextDirectPlacements;
 
-            let segmentImported = false;
-            setIsImporting(true);
-            try {
-              segmentImported = await importPlacedSegmentNow(segment, nextDirectPlacements);
-            } catch (e) {
-              console.error('[manualPlacement] Immediate segment import failed:', e);
-              setError(importErrorMessage(e));
-            } finally {
-              setIsImporting(false);
-            }
+            const segmentImported = await importPlacedSegmentNow(segment, nextDirectPlacements);
             if (!segmentImported) {
               openPlacementDialog(queue, anchor, directPlacements);
               return;
@@ -3336,6 +2958,7 @@ export default function DmpNewImportDialog({
     selectionConfig,
     zeroDatumConfig,
     importPlacedSegmentNow,
+    carry,
     chooseSegmentAnchorSection,
     startPlacementMode,
     closeDialog,
@@ -3422,138 +3045,9 @@ export default function DmpNewImportDialog({
   // that have imported nothing), so cancelling right after the zero-datum import
   // closed silently and left the section behind (#394 F2).
   //
-  // Both exits therefore offer to WITHDRAW what was imported, and the withdrawal
-  // is one batched `delete_section` - one undo entry for one user action, not N.
-
-  /** A withdrawal already running. A REF, not just the state mirror below: two
-   *  clicks in the same tick both read the pre-`setState` value, and the second
-   *  must not send a second batch for ids the first one is already deleting. */
-  const withdrawInFlightRef = useRef(false);
-  const [withdrawInFlight, setWithdrawInFlight] = useState(false);
-
-  /** The removal landed in memory but is not yet on disk. Survives a failed
-   *  save so a second Remove click RETRIES THE SAVE instead of finding an empty
-   *  id list, returning true, and closing over the stale file it just refused to
-   *  close over. */
-  const withdrawalNeedsSaveRef = useRef(false);
-
-  /** Remove every section this wizard run imported, as ONE undoable step, and
-   *  leave the result on disk.
-   *  Returns false (leaving the accumulators untouched) if it refused, the
-   *  backend did, or the follow-up save did, so the caller can keep the wizard
-   *  open on a visible error instead of closing over a project it failed to
-   *  clean up. */
-  const withdrawImportedSections = useCallback(async (): Promise<boolean> => {
-    if (withdrawInFlightRef.current) return false;
-    // DEDUPLICATED: this accumulator is seeded from the saved state AND appended
-    // to by live imports, so one id can appear twice across the map-placement
-    // handoff. `execute_batch` is all-or-nothing and the second delete of an id
-    // fails with "not found", which rolls the WHOLE batch back - the withdrawal
-    // would remove nothing at all and report an error for it.
-    const sectionIds = [...new Set(importedSectionIdsRef.current)];
-    if (sectionIds.length === 0 && !withdrawalNeedsSaveRef.current) return true;
-    // Section ids are small per-project integers, so a withdrawal aimed at a
-    // project that is no longer open would delete same-numbered sections in
-    // whatever replaced it - and every id would RESOLVE, so nothing downstream
-    // fails safe. Nothing clears `dialogData` on a project switch
-    // (`resetToolTransientsForProjectSwitch` leaves the dialog slot alone), so
-    // a saved state really can outlive its project. This is the refusal.
-    const openProjectKey = useProjectStore.getState().project?.created_at ?? null;
-    if (projectSwitched(importProjectKeyRef.current, openProjectKey)) {
-      setError(t('dialogs.dmpNewImport.removeImportedWrongProject'));
-      return false;
-    }
-    withdrawInFlightRef.current = true;
-    setWithdrawInFlight(true);
-    setIsImporting(true);
-    try {
-      if (sectionIds.length > 0) {
-        const fileHashes = selectionConfig.fileHash ? [selectionConfig.fileHash] : [];
-        const sectionHashes = selectionConfig.sectionHashes ?? [];
-        const result = await executeBatch([
-          ...sectionIds.map((sectionId) => ({ type: 'delete_section', section_id: sectionId }) as const),
-          // In the SAME batch, and that is the point of batching it: deleting a
-          // section does not touch the import-dedup hashes `import_sections`
-          // recorded (they are project-level bookkeeping, not references), so
-          // without this the project still claims this file was imported while
-          // none of it remains - and `DmpSelectionDialog` DESELECTS every section
-          // it believes is a duplicate, so the obvious retry silently offers
-          // nothing to import. One batch, so one undo restores the sections and
-          // their tracking together.
-          //
-          // Only the hashes THIS run sent to `import_sections`: `sectionHashes`
-          // holds the selected sections alone (duplicates were auto-deselected
-          // before the wizard opened), so an earlier session's tracking is out of
-          // reach. The file hash is coarser - one per file - so a file imported
-          // in an earlier session too loses its file-level duplicate flag. That
-          // is the intended direction: after a withdrawal the user may well want
-          // to re-import it, and the per-section flags still stand.
-          ...(fileHashes.length > 0 || sectionHashes.length > 0
-            ? [{
-                type: 'untrack_import',
-                file_hashes: fileHashes,
-                section_hashes: sectionHashes,
-              } as const]
-            : []),
-        ]);
-        if (!result.success) {
-          setError(result.error ?? t('dialogs.dmpNewImport.removeImportedFailed'));
-          return false;
-        }
-
-        // DIFFED, not cleared: an import that resolved while the batch was in
-        // flight has pushed an id the batch never named, and that section is
-        // still in the project. Wiping the list would drop it from tracking
-        // while it survives on disk - the very shape F2 exists to prevent. (The
-        // handlers refuse to start a withdrawal mid-import, so this is the
-        // second line of defence, not the first.)
-        const removed = new Set(sectionIds);
-        importedSectionIdsRef.current = importedSectionIdsRef.current.filter((id) => !removed.has(id));
-        for (const dmpIndex of [...earlyImportedRef.current.keys()]) {
-          const sectionId = earlyImportedRef.current.get(dmpIndex);
-          if (sectionId != null && removed.has(sectionId)) earlyImportedRef.current.delete(dmpIndex);
-        }
-        // Receipts are per-`import_sections` CALL and carry no section id, so
-        // they cannot be diffed - only safe to drop once nothing survives.
-        if (importedSectionIdsRef.current.length === 0) importedReceiptsRef.current = [];
-
-        // #394 F14. The eager anchor import already RESOLVED this project's
-        // deferred first save (`finalize_deferred_import`), so the file on disk
-        // still holds the sections just withdrawn. It has to be written through.
-        //
-        // Gated as `saveAfterImport` gates its own save, for its reason:
-        // importing INTO AN EXISTING project the user may have unrelated pending
-        // edits, and committing those behind their back is not this action's to
-        // do. There the withdrawal leaves the project dirty and autosave / the
-        // close guard carry it, as for any other edit.
-        withdrawalNeedsSaveRef.current = useUIStore.getState().importContext === 'new-project';
-      }
-
-      // The save is NOT best-effort: closing here is what makes the removal
-      // final from the user's side, and a `.stalx` still holding the sections
-      // they chose to remove is the exact F2 shape one layer out. So a failed
-      // write keeps the wizard open with the reason on screen, and
-      // `withdrawalNeedsSaveRef` makes the next Remove click retry the SAVE -
-      // without it the retry would find an empty id list, return true, and close
-      // over the very file the first attempt refused to close over.
-      if (withdrawalNeedsSaveRef.current) {
-        const saved = await useProjectStore.getState().saveProject();
-        if (!saved.success) {
-          setError(saved.error ?? t('dialogs.dmpNewImport.removeImportedSaveFailed'));
-          return false;
-        }
-        withdrawalNeedsSaveRef.current = false;
-      }
-      return true;
-    } catch (e) {
-      setError(importErrorMessage(e));
-      return false;
-    } finally {
-      withdrawInFlightRef.current = false;
-      setWithdrawInFlight(false);
-      setIsImporting(false);
-    }
-  }, [executeBatch, selectionConfig.fileHash, selectionConfig.sectionHashes, t]);
+  // Both exits therefore offer to WITHDRAW what was imported
+  // (`withdrawImportedSections`, the run's one batched `delete_section` - one
+  // undo entry for one user action).
 
   /** How many sections the pending confirmation is talking about. Snapshotted
    *  into state when the confirmation opens: the live count lives in a ref, and
@@ -3574,14 +3068,14 @@ export default function DmpNewImportDialog({
 
   const handleCancel = useCallback(() => {
     if (isImporting) return;
-    const importedCount = importedSectionIdsRef.current.length;
-    if (connections.length > 0 || importedCount > 0) {
-      setPendingWithdrawCount(importedCount);
+    const count = importedCount();
+    if (connections.length > 0 || count > 0) {
+      setPendingWithdrawCount(count);
       setShowCancelConfirm(true);
     } else {
       onCancel();
     }
-  }, [connections.length, onCancel, isImporting]);
+  }, [connections.length, onCancel, isImporting, importedCount]);
 
   /** Close the wizard, first removing what it imported. */
   const handleCancelWithRemoval = useCallback(async () => {
@@ -3592,14 +3086,14 @@ export default function DmpNewImportDialog({
 
   const handleBack = useCallback(() => {
     if (isImporting) return;
-    const importedCount = importedSectionIdsRef.current.length;
-    if (connections.length > 0 || importedCount > 0) {
-      setPendingWithdrawCount(importedCount);
+    const count = importedCount();
+    if (connections.length > 0 || count > 0) {
+      setPendingWithdrawCount(count);
       setShowBackConfirm(true);
     } else {
       onBack();
     }
-  }, [connections.length, onBack, isImporting]);
+  }, [connections.length, onBack, isImporting, importedCount]);
 
   /**
    * Back re-enters the flow at a step BEFORE anything was imported (zero-datum
