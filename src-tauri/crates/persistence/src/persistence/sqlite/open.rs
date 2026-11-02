@@ -71,13 +71,21 @@ impl Database {
         let db = Self { conn };
         db.enable_foreign_keys()?;
 
+        // What the file is is decided BEFORE anything writes to it (#576
+        // NF-PNEWER-1): `init_schema` creates every table this build knows that
+        // the file lacks, which is exactly what a newer file (whose schema may
+        // have dropped one) and a refused pre-release file must not get.
         let prior_version = db.get_user_version().unwrap_or(0);
         if prior_version > SCHEMA_VERSION {
             tracing::warn!(
                 current = prior_version,
                 expected = SCHEMA_VERSION,
-                "Database schema version is newer than this app"
+                "Database schema version is newer than this app; leaving the file untouched"
             );
+            return Ok(db);
+        }
+        if file_existed {
+            db.refuse_pre_release_file()?;
         }
         db.init_schema()?;
 
@@ -97,8 +105,8 @@ impl Database {
         } else if prior_version < SCHEMA_VERSION {
             db.ensure_schema_version()?;
         }
-        // An existing file already at (or newer than) SCHEMA_VERSION is left
-        // untouched; a newer version was warned about above.
+        // An existing file already at SCHEMA_VERSION gets nothing more; a newer
+        // one returned above, before `init_schema`.
 
         tracing::debug!("Schema initialized");
 

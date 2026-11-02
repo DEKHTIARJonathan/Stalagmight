@@ -1216,6 +1216,52 @@ impl Database {
         Ok(())
     }
 
+    /// [#576 B1-D1] Refuse a file from before the first public release, before
+    /// anything writes to it - from `ensure_schema_version`, and from
+    /// `Database::open` before its `init_schema` (#576 NF-PNEWER-1). Reads only.
+    ///
+    /// The first release (v0.0.3) already shipped schema 2 and stamped
+    /// `user_version`, and no schema-1 build ever wrote the stamp, so a project
+    /// row claiming below 2 with no stamp of 2 or more to contradict it is a
+    /// pre-release test file or a hand-edited one. A file with NO project row is
+    /// not refused: that is an empty file `Database::open` is about to make a
+    /// project of (Android's document picker leaves a 0-byte placeholder at the
+    /// chosen path), not an old one. Such files used to go through a frozen
+    /// "rebuild with foreign keys" step that had fallen behind the schema (it
+    /// dropped the #438 azimuth columns and the values of `shots.uuid`,
+    /// `loop_closures.is_aligned` and `resolved_warnings.shot_uuid`, and left
+    /// `station_comments` pointing at a dropped table) and then stamped the file
+    /// current. docs/saving.md ("Schema version and pre-release files") states
+    /// the policy: no migration path, re-import from the survey source.
+    pub(super) fn refuse_pre_release_file(&self) -> Result<()> {
+        let stamped = self.get_user_version().unwrap_or(0);
+        // `Ok(None)` (no table or column) and an error (no row yet) alike mean
+        // the row makes no claim.
+        let row_version = self.get_project_schema_version().ok().flatten();
+        if stamped < OLDEST_SUPPORTED_SCHEMA_VERSION
+            && row_version.is_some_and(|row| row < OLDEST_SUPPORTED_SCHEMA_VERSION)
+        {
+            let current = if stamped == 0 {
+                row_version.unwrap_or(stamped)
+            } else {
+                stamped
+            };
+            tracing::warn!(
+                version = current,
+                oldest_supported = OLDEST_SUPPORTED_SCHEMA_VERSION,
+                purpose = "refuse a pre-release project file",
+                "Database predates the oldest supported schema; refusing to open it"
+            );
+            anyhow::bail!(
+                "{PRE_RELEASE_FILE_CODE}: This project was saved by a pre-release version of \
+                 Stalagmight (file format {current}) and cannot be opened by this version. \
+                 Create a new project and import it again from the original survey files \
+                 (for example the .dmp, .tml, .mak or .wpj it came from)."
+            );
+        }
+        Ok(())
+    }
+
     /// Ensure schema migrations are applied and user_version is current.
     pub(super) fn ensure_schema_version(&self) -> Result<()> {
         // Two different claims, and only one of them is evidence that migrations
@@ -1286,36 +1332,8 @@ impl Database {
         }
 
         // [#576 B1-D1] A file from before the first public release is REFUSED,
-        // before anything here writes to it. The first release (v0.0.3) already
-        // shipped schema 2 and stamped `user_version`, and no schema-1 build ever
-        // wrote the stamp, so a project row claiming below 2 with no stamp of 2 or
-        // more to contradict it is a pre-release test file or a hand-edited one.
-        // A file with NO project row is not refused: that is an empty file
-        // `Database::open` is about to make a project of (Android's document
-        // picker leaves a 0-byte placeholder at the chosen path), not an old one.
-        // Such files used to go through a frozen "rebuild with foreign keys"
-        // step that had fallen behind the schema (it dropped the #438 azimuth
-        // columns and the values of `shots.uuid`, `loop_closures.is_aligned` and
-        // `resolved_warnings.shot_uuid`, and left `station_comments` pointing at
-        // a dropped table) and then stamped the file current. docs/saving.md
-        // ("Schema version and pre-release files") states the policy: no
-        // migration path, re-import from the survey source.
-        if stamped < OLDEST_SUPPORTED_SCHEMA_VERSION
-            && row_version.is_some_and(|row| row < OLDEST_SUPPORTED_SCHEMA_VERSION)
-        {
-            tracing::warn!(
-                version = current,
-                oldest_supported = OLDEST_SUPPORTED_SCHEMA_VERSION,
-                purpose = "refuse a pre-release project file",
-                "Database predates the oldest supported schema; refusing to open it"
-            );
-            anyhow::bail!(
-                "{PRE_RELEASE_FILE_CODE}: This project was saved by a pre-release version of \
-                 Stalagmight (file format {current}) and cannot be opened by this version. \
-                 Create a new project and import it again from the original survey files \
-                 (for example the .dmp, .tml, .mak or .wpj it came from)."
-            );
-        }
+        // before anything here writes to it (`refuse_pre_release_file`).
+        self.refuse_pre_release_file()?;
 
         // Everything past this point WRITES. An unstamped file whose row claims
         // exactly the current version used to take the fast path on that claim
