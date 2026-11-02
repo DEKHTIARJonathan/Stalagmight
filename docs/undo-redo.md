@@ -418,7 +418,7 @@ These are never pushed to the undo stack: `OpenProject`, `SaveProject`, `ClosePr
 
 ## Shot ID Display Positions
 
-Shot IDs are internal and opaque. After database reload they follow the formula `section_id * 100_000 + sequence_order` (0-indexed). Before first save they're plain sequential integers (0, 1, 2...).
+Shot IDs are internal and opaque. After database reload they follow the formula `section_id * 100_000 + sequence_order` (0-indexed). Before first save they come from the section's counter, which `Section::new` (`models/section.rs`) starts at `section_id * 100_000` and which counts up as shots are created, so only section 0's are plain 0, 1, 2.
 
 The `shot_display_position(shot_id, section_id)` helper in `models/shot.rs` converts these to 1-indexed display positions for both formats. All user-facing text (command descriptions, preview data) uses this helper so "Update shot 13:5" means section 13, 5th shot - not the raw internal ID.
 

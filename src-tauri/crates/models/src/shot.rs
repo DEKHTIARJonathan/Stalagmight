@@ -9,8 +9,9 @@ use super::{normalize_azimuth, AzimuthReference, SectionId, FEATURE_ID_STRIDE};
 /// Convert a raw ShotId to a 1-indexed display position.
 ///
 /// After database reload, shot IDs have the form `section_id * FEATURE_ID_STRIDE + sequence_order`
-/// where `sequence_order` is 0-indexed. Before first save, shot IDs are plain
-/// sequential integers (0, 1, 2, …).
+/// where `sequence_order` is 0-indexed. Before first save, they come from the
+/// section's counter, which `Section::new` starts at `section_id * FEATURE_ID_STRIDE`
+/// and which counts up as shots are created; only section 0's are plain 0, 1, 2.
 ///
 /// Returns a 1-indexed position suitable for user display (e.g., "13:5").
 ///
