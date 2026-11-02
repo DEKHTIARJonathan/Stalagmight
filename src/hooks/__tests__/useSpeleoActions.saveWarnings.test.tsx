@@ -26,7 +26,7 @@ import i18n from '../../i18n';
 const LOST_DISPLAY = {
   code: 'DISPLAY_SETTINGS_NOT_SAVED',
   message: 'display settings could not be carried',
-  severity: 'Warning',
+  severity: 'warning',
 };
 
 let showToast: ReturnType<typeof vi.fn>;

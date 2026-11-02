@@ -15,7 +15,7 @@ describe('the SIDE_TABLES_NOT_CARRIED save warning (#576 RV2-R-7)', () => {
     useUIStore.setState({ showToast });
 
     surfaceSaveWarnings([
-      { code: 'SIDE_TABLES_NOT_CARRIED', message: 'backend wording', severity: 'Warning' },
+      { code: 'SIDE_TABLES_NOT_CARRIED', message: 'backend wording', severity: 'warning' },
     ]);
 
     expect(showToast).toHaveBeenCalledWith(
