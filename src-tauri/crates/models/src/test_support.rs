@@ -31,8 +31,17 @@
 //! [`assert_lookup_refused`], which fail the test otherwise. CI runs the Rust
 //! tests as an unprivileged user for this reason
 //! (`scripts/ci-cargo-test-unprivileged.sh`).
+//!
+//! # Section lookups (#576 E9(c))
+//!
+//! [`section_named`] and [`section_by_id`] find a section by what the test
+//! means, not by where `Project::sections` happens to store it. New tests use
+//! them rather than `sections[N]`.
 
 use std::path::{Path, PathBuf};
+
+use crate::project::Project;
+use crate::section::{Section, SectionId};
 
 /// Fail the calling test because `what` - an environment variable, a file, a
 /// build-time setting - is not there. The single exit every helper here
@@ -169,6 +178,55 @@ pub fn assert_lookup_refused(path: &Path) {
     }
 }
 
+/// Fail the calling test because a section lookup found nothing to return.
+#[track_caller]
+#[expect(
+    clippy::panic,
+    reason = "a test helper: failing the calling test is its whole job"
+)]
+fn no_such_section(what: &str, project: &Project) -> ! {
+    let have: Vec<(SectionId, Option<&str>)> = project
+        .sections
+        .iter()
+        .map(|s| (s.id, s.name.as_deref()))
+        .collect();
+    panic!("{what}; the project has (id, name): {have:?}")
+}
+
+/// The one section named `name`. Prefer it (or [`section_by_id`]) to
+/// `project.sections[N]` in new tests: it says which section the test means,
+/// and does not tie the test to the order sections are stored in (#576 E9(c)).
+///
+/// # Panics
+///
+/// When no section, or more than one, carries that name.
+#[track_caller]
+pub fn section_named<'a>(project: &'a Project, name: &str) -> &'a Section {
+    let mut matching = project
+        .sections
+        .iter()
+        .filter(|s| s.name.as_deref() == Some(name));
+    match (matching.next(), matching.next()) {
+        (Some(section), None) => section,
+        (None, _) => no_such_section(&format!("no section is named {name:?}"), project),
+        (Some(_), Some(_)) => {
+            no_such_section(&format!("more than one section is named {name:?}"), project)
+        }
+    }
+}
+
+/// The section whose id is `id`.
+///
+/// # Panics
+///
+/// When the project has no such section.
+#[track_caller]
+pub fn section_by_id(project: &Project, id: SectionId) -> &Section {
+    project
+        .get_section(id)
+        .unwrap_or_else(|| no_such_section(&format!("no section has id {id}"), project))
+}
+
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
@@ -292,5 +350,48 @@ mod tests {
         std::fs::set_permissions(&dir.0, std::fs::Permissions::from_mode(0o000))
             .expect("make the dir unsearchable");
         assert_lookup_refused(&file);
+    }
+
+    /// Two sections named A and B, plus a second B; A was added second, so a
+    /// positional `sections[0]` would not find it.
+    fn caves() -> (Project, SectionId) {
+        let mut project = Project::new("CaveA".to_string(), None);
+        let mut add = |name: &str| {
+            project
+                .add_section(crate::section::SectionData {
+                    name: Some(name.to_string()),
+                    ..Default::default()
+                })
+                .id
+        };
+        add("B");
+        let a = add("A");
+        add("B");
+        (project, a)
+    }
+
+    #[test]
+    fn a_section_is_found_by_its_name_and_by_its_id() {
+        let (project, a) = caves();
+        assert_eq!(section_named(&project, "A").id, a);
+        assert_eq!(section_by_id(&project, a).name.as_deref(), Some("A"));
+    }
+
+    #[test]
+    #[should_panic(expected = "no section is named \"C\"")]
+    fn a_missing_name_fails_and_lists_the_sections() {
+        section_named(&caves().0, "C");
+    }
+
+    #[test]
+    #[should_panic(expected = "more than one section is named \"B\"")]
+    fn an_ambiguous_name_fails_rather_than_picking_one() {
+        section_named(&caves().0, "B");
+    }
+
+    #[test]
+    #[should_panic(expected = "no section has id 999")]
+    fn a_missing_id_fails() {
+        section_by_id(&caves().0, 999);
     }
 }

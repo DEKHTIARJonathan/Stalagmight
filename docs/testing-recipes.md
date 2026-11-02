@@ -1541,6 +1541,16 @@ let conn = rusqlite::Connection::open_in_memory()?;
 Used by the tile cache, the `.plnx` dive-plan store, and the project database
 (`src-tauri/crates/persistence/src/persistence/sqlite/open.rs`).
 
+### Find sections by name or id, not by position
+
+In new tests, reach a section with `section_named(&project, "CaveA")` or
+`section_by_id(&project, id)` from `stalagmight_models::test_support` rather
+than `project.sections[0]`: the helper says which section the test means, fails
+listing the sections when the name is missing or ambiguous, and does not tie
+the test to the order sections are stored in (#576 E9(c)). Existing positional
+sites stay; there is no plan to change section storage, so they are not worth
+the churn.
+
 ### Migration tests hand-write the old schema
 
 A migration test builds the file an older build wrote, so it spells out that
