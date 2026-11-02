@@ -220,9 +220,20 @@ pub async fn speleodb_force_edit(app: AppHandle) -> Result<(), SpeleoErrorDto> {
 /// server (#194). Enables editing on a clean reconcile; reports divergence,
 /// contention (locked-by), or an error otherwise. [#213] Also serves as the
 /// force-edit "reconnect".
+///
+/// [#576 RV2-R-13-RESTART] `resume_held_lock`: set by the held-lock prompt's
+/// "Continue editing", which resumes a lock the account already holds and claims it
+/// for this session, so Done releases it. Absent / false everywhere else.
 #[tauri::command]
-pub async fn speleodb_start_editing(app: AppHandle) -> Result<StartEditingResult, SpeleoErrorDto> {
-    run_blocking(app, AppState::speleodb_start_editing).await
+pub async fn speleodb_start_editing(
+    app: AppHandle,
+    resume_held_lock: Option<bool>,
+) -> Result<StartEditingResult, SpeleoErrorDto> {
+    if resume_held_lock == Some(true) {
+        run_blocking(app, AppState::speleodb_resume_held_lock_editing).await
+    } else {
+        run_blocking(app, AppState::speleodb_start_editing).await
+    }
 }
 
 /// Push the open project's edits (if any) and release the lock, returning to

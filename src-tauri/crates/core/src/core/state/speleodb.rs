@@ -1764,7 +1764,17 @@ impl AppState {
     /// now genuinely hold the lock, while the contention (400 `LockedBy`) and
     /// `Diverged` arms leave both gates untouched - so a force-editor stays
     /// force-editing (keeps their edits) rather than reverting to read-only.
-    pub fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
+    ///
+    /// [#576 RV2-R-13-RESTART] `resume_held_lock` is the held-lock prompt's
+    /// "Continue editing" ([`Self::speleodb_resume_held_lock_editing`]): the user
+    /// explicitly resumes a lock their account holds at sign-in - typically this app
+    /// before a restart - so a lock found held by this account is recorded as this
+    /// session's claim once editing starts, and Done releases it as usual. Every
+    /// other caller passes `false` and an inherited lock stays unclaimed.
+    fn speleodb_start_editing_with(
+        &self,
+        resume_held_lock: bool,
+    ) -> Result<StartEditingResult, SpeleoErrorDto> {
         // [#576 B6-D1] Before any of it: a project a newer build saved cannot be
         // edited here, and taking the server lock for it would only keep every
         // collaborator out of a project this session can never change or push.
@@ -1802,7 +1812,9 @@ impl AppState {
         // says nothing about whether this process caused the transition. Without the
         // probe a restarted process, a second window, or the held-lock dialog's
         // "Continue editing" - which calls this verb precisely to resume an INHERITED
-        // lock - would all mint an authorship claim they never earned.
+        // lock - would all mint an authorship claim they never earned. (Continue
+        // editing now claims the lock it resumes on purpose, by the user's explicit
+        // choice - `resume_held_lock`, #576 RV2-R-13-RESTART - not by this probe.)
         //
         // Only a mutex the server says is UNHELD proves the unheld -> ours transition
         // is ours. A FAILED probe is not "unheld": reading it as one would mint the
@@ -1869,6 +1881,9 @@ impl AppState {
         // whole span, and the release's reclaim check then stands down for the live
         // session).
         let me = self.speleodb_my_email();
+        // Whether the lock was already OUR ACCOUNT's (the inherited arm below), for
+        // the held-lock prompt's resume (#576 RV2-R-13-RESTART).
+        let mut inherited = false;
         let (acquired_here, keep_lock_on_unwind) = match self.speleodb_lock_holder_checked(
             &endpoint,
             &token,
@@ -1880,6 +1895,7 @@ impl AppState {
             Ok(None) => (true, false),
             // Already ours -> inherited: no record, and never hand it back.
             Ok(Some(holder)) if lock_held_by_me(Some(holder.as_str()), me.as_deref()) => {
+                inherited = true;
                 (false, true)
             }
             // Someone else's, and the acquire below still succeeded -> they released in
@@ -1891,6 +1907,10 @@ impl AppState {
             // can tell, which is not the only copy there is (see the closure below).
             Ok(Some(_)) | Err(_) => (false, link.has_unpushed_edits),
         };
+        // An inherited lock the user explicitly resumed from the held-lock prompt is
+        // claimed for this session once editing starts (#576 RV2-R-13-RESTART) - and
+        // is still never handed back by an unwind, exactly as inherited.
+        let resumed_here = resume_held_lock && inherited;
 
         // The unwind shared by every arm below that walks away WITHOUT an edit
         // session: hand the lock back, UNLESS one of TWO rules says the lock is worth
@@ -2019,6 +2039,9 @@ impl AppState {
                     release_unless_kept(Some(&e));
                     return Err(local_dto(e));
                 }
+                if resumed_here {
+                    self.speleodb_claim_resumed_lock(&link.project_id);
+                }
                 // [#303] Clear-on-lock (clarification #2 / q14), gated on the copy really
                 // being the file that is in git: `UpToDate` means BASE == the server tip,
                 // and a clean link means we hold nothing the server has not seen. Under
@@ -2083,6 +2106,9 @@ impl AppState {
                     release_unless_kept(Some(&e));
                     return Err(local_dto(e));
                 }
+                if resumed_here {
+                    self.speleodb_claim_resumed_lock(&link.project_id);
+                }
                 Ok(StartEditingResult::FastForwarded { local_path })
             }
             // A fork, a moved tip our BASE isn't an ancestor of, OR a server
@@ -2106,6 +2132,42 @@ impl AppState {
                 release_unless_kept(None);
                 Ok(StartEditingResult::DivergenceNeeded)
             }
+        }
+    }
+
+    /// Start editing the open remote project: acquire its write lock and reconcile
+    /// it (see [`Self::speleodb_start_editing_with`]). A lock the account already
+    /// holds is inherited, and unclaimed.
+    pub fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
+        self.speleodb_start_editing_with(false)
+    }
+
+    /// The held-lock prompt's "Continue editing" (#576 RV2-R-13-RESTART): start
+    /// editing as [`Self::speleodb_start_editing`] does, and record a lock this
+    /// account already holds as THIS session's claim, so a later Done releases it
+    /// (the decided rule releases only a lock the session holds a claim on). The
+    /// prompt lists only locks this account holds at sign-in and the user resumes
+    /// one explicitly - after a restart that is this app's own earlier session.
+    pub fn speleodb_resume_held_lock_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
+        self.speleodb_start_editing_with(true)
+    }
+
+    /// Record the claim for a lock Continue editing resumed, once its edit session
+    /// is committed - under the `project` mutex, like the acquisition record in
+    /// [`Self::speleodb_commit_editing`], and only while that session still stands
+    /// (the gate is open and the same project is open), so a teardown landing after
+    /// the commit leaves no claim behind. Not "this flow's acquisition": the
+    /// stale-context unwind must still never hand back an inherited lock.
+    fn speleodb_claim_resumed_lock(&self, project_id: &str) {
+        let _proj_guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let still_open = self
+            .speleodb_open_link()
+            .is_ok_and(|open| open.project_id == project_id);
+        if self.edit_enabled() && still_open {
+            self.speleodb_note_lock_acquired(Some(project_id));
         }
     }
 
@@ -2642,7 +2704,8 @@ impl AppState {
 // cuts the file at its first top-level `#[cfg(test)]` still sees all of it.
 #[cfg(test)]
 pub(super) use tests::{
-    editing_fixture, recording_stub, FREE_MUTEX_AT_BASE_BODY, HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY,
+    authed_session_at, editing_fixture, recording_stub, remote_readonly_fixture,
+    FREE_MUTEX_AT_BASE_BODY, HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY,
     HELD_BY_SAME_ACCOUNT_AT_BASE_BODY, REMOTE_ID,
 };
 

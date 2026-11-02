@@ -183,9 +183,14 @@ version" or "Save my version as a local copy".
 took it (the same in-memory claim). A session whose gate opened through the
 inherited-lock reopen - a second window or computer on the account, or this app
 after a restart - uploads its edits and ends editing locally, but leaves the lock
-with the account (`DoneResult::LockHeldElsewhere`) and says so. The same restart
-cost applies: a lock you took before restarting is not released by Done; release
-it from the held-lock prompt at sign-in or the SpeleoDB project dialog's Admin tab.
+with the account (`DoneResult::LockHeldElsewhere`) and says so. After a restart,
+resume through the held-lock prompt at sign-in: its "Continue editing" claims the
+lock it resumes for this session (`speleodb_start_editing` with
+`resumeHeldLock`, #576 RV2-R-13-RESTART), so Done then releases it as usual. A
+plain Start editing under the account's lock still claims nothing; such a lock is
+released from the held-lock prompt or the SpeleoDB project dialog's Admin tab.
+The claim also licenses the authorship self-heal above for the resumed session -
+the user chose to resume that lock as their own.
 
 **Mitigation (the notice):** `speleodb_open_project` checks the project's
 `active_mutex` at open time; if the lock is already held by **our own** account, a

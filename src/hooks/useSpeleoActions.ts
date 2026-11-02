@@ -39,8 +39,11 @@ export interface SpeleoActions {
       call - all of which already surface their own toast / routing. Callers that
       hand the shell over on success (the held-lock prompt) MUST check it:
       treating a refusal as success there dismisses the prompt and discards the
-      remaining locks. */
-  startEditing: () => Promise<boolean>;
+      remaining locks.
+      `resumeHeldLock` (#576 RV2-R-13-RESTART): the held-lock prompt's Continue
+      editing - a lock this account already holds is claimed for this session, so
+      a later Done releases it. Every other caller omits it. */
+  startEditing: (options?: { resumeHeldLock?: boolean }) => Promise<boolean>;
   /** Discard the local copy and route the optional Start Editing result returned
       when the caller asks to keep editing. The discard error is left to the caller. */
   discardChanges: (
@@ -207,13 +210,15 @@ export function useSpeleoActions(): SpeleoActions {
     [applyStartEditing, loadProject, showToast, t],
   );
 
-  const startEditing = useCallback(async (): Promise<boolean> => {
+  const startEditing = useCallback(async (options?: { resumeHeldLock?: boolean }): Promise<boolean> => {
     const issuedFor = speleoProjectSessionIssuedFor(
       useSpeleoStore.getState().remoteProjectId,
     );
     const busyToken = beginBusy();
     try {
-      const result = await invokeIpc<StartEditingResult>('speleodb_start_editing');
+      const result = options?.resumeHeldLock
+        ? await invokeIpc<StartEditingResult>('speleodb_start_editing', { resumeHeldLock: true })
+        : await invokeIpc<StartEditingResult>('speleodb_start_editing');
       const routed = await routeStartEditingResult(result, true, issuedFor);
       if (!routed.landed) return false;
       if (routed.treeReplaced && !(await applySpeleoTreeReplacement(issuedFor, true))) {
