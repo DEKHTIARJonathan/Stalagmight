@@ -1,3 +1,4 @@
+use super::session_commit::{SessionCommit, SessionHistory};
 use super::AppState;
 use crate::core::CommandResult;
 use crate::persistence::Database;
@@ -269,117 +270,39 @@ impl AppState {
                     .map(|dt| dt.with_timezone(&chrono::Utc))
             });
 
-        // ALL commits under ONE `project` acquisition, exactly as
-        // `do_load_project_full`'s finalization and for the same reason (round
-        // 5): the delete's check-and-teardown serializes on this mutex, and a
-        // slot commit in its own span let a delete of this path land between
-        // the slot and the handles - tearing down a half-built session that
-        // this function then finished building into an empty world.
-        let mut proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *proj_guard = Some(project);
-        // A session boundary (a project committed into the slot), bumped under
-        // the guard per the `speleodb_session` rule.
-        self.bump_speleodb_session();
-        // [#473] Under the SAME acquisition that commits the project, so the flag can
-        // only ever describe the project in the slot. Unconditional, so a clean load
-        // clears the previous project's verdict.
-        self.set_history_discarded(history_discarded);
-
-        // [#576 B6-D1] Same acquisition, same reason: the read-only state of a file a
-        // newer build saved describes exactly the project in the slot.
-        self.set_newer_file_schema(newer_schema);
-        // [#576 C5] A project opens in Survey, here as in the frontend.
-        self.reset_workspace_mode();
-        // [#576 B15] Same acquisition, same reason: the stored settings this load
-        // could not read belong to the project in the slot, and refuse its saves.
-        self.set_unreadable_project_settings(unread_settings);
-
-        // [Track B] (#191) Read-only edit gate: remote ⇒ edit disabled,
-        // local-only ⇒ enabled (see do_load_project_full). Off the link read above,
-        // which came from the same handle before `db` moves.
-        let is_remote = speleo_link.is_some();
-        self.set_edit_enabled(!is_remote);
-        // #213: force-edit is per-session; a fresh open never starts force-editing.
-        self.set_force_editing(false);
-
-        *self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
-        // Opened an existing project from disk - its initial save is not deferred.
-        self.initial_save_deferred
-            .store(false, std::sync::atomic::Ordering::Relaxed);
-
-        // Clear display settings cache (settings will be loaded from DB by frontend)
-        self.clear_display_settings_cache();
-        self.invalidate_adjusted_cache();
-
-        // [#303] Arm the depth bound for the project about to be restored BEFORE its
-        // entries go in, not after. `load_from_persisted_with_timestamps` ends in
-        // `enforce_depth_limit`, so whichever bound is in force at that instant is the one
-        // that trims - and until this call it is still the PREVIOUS project's (or the
-        // startup default, `Count(undo_history_limit)`). A Full-mode linked project holding
-        // more than that many entries therefore lost the oldest ones on open, the next
-        // full-rewrite save wrote the truncation to disk, and the next push shipped a
-        // commit missing the history it was supposed to carry. Re-arming afterwards cannot
-        // undo it: Count -> Bytes has nothing to put back.
-        //
-        // Resolved from the link read off the file's own handle rather than through
-        // `undo_policy()`, which takes the `database` lock this path is mid-swap on.
-        self.sync_undo_depth_limit_for(speleo_link.as_ref());
-
-        // Restore persisted undo/redo stacks
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            // [#303] Unconditionally, and before the entries: a project with no history
-            // can still carry a watermark, and a value left over from the PREVIOUS project
-            // would otherwise floor this one's stamps at an unrelated instant.
-            undo_stack.set_inherited_through(speleo_undo_watermark);
-            if undo_entries.is_empty() && redo_entries.is_empty() {
-                undo_stack.clear();
-            } else {
-                undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
-                // ...and against the project they will be replayed onto: a
-                // restored entry that cannot find its shot fails and is pushed
-                // straight back, sealing off everything under it (#413).
-                if let Some(project) = proj_guard.as_ref() {
-                    undo_stack.drop_entries_addressing_a_missing_shot(project);
-                }
-                tracing::info!(
-                    undo = undo_stack.len(),
-                    purpose = "restore edit history",
-                    "Restored undo/redo stacks from database"
-                );
-            }
-        }
-
-        // No second `sync_undo_depth_limit()` after the restore: it would re-resolve the
-        // SAME policy from the SAME file and re-apply the SAME bound, and the one thing it
-        // could still do differently is fail its `database` lock and fall back to the count
-        // window - i.e. re-introduce the truncation the arming above exists to avoid.
-
-        // Add to recent projects and persist to config
+        // [#576 A5] ALL commits under ONE `project` acquisition, through the commit
+        // every load, create and close shares - for the same reason as
+        // `do_load_project_full`'s finalization (round 5): the delete's
+        // check-and-teardown serializes on that mutex, and a slot commit in its own
+        // span let a delete of this path land between the slot and the handles.
         let path_display = format!("{}", path.display());
-        if let Ok(mut recent) = self.recent_projects.lock() {
-            recent.retain(|p| p != &path);
-            recent.insert(0, path);
-            if let Ok(mut config) = self.config.lock() {
-                recent.truncate(config.general.recent_projects_max);
-                // Update config with recent projects and save
-                config.general.recent_projects.clone_from(&recent);
-                if let Err(e) = config.save() {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "persist recent projects list",
-                        "Failed to save config with recent projects"
-                    );
-                }
-            }
-        }
-
-        drop(proj_guard);
+        // [#303] The depth bound the entries are restored under, resolved from the link
+        // read off the file's own handle rather than through `undo_policy()`, which takes
+        // the `database` lock this commit is mid-swap on.
+        let policy = self.undo_policy_for(speleo_link.as_ref());
+        self.commit_open_session(SessionCommit {
+            project: Some(project),
+            database: Some(db),
+            // Opened an existing project from disk - its initial save is not deferred.
+            initial_save_deferred: false,
+            // [Track B] (#191) Read-only edit gate: remote => edit disabled, local-only
+            // => enabled (see do_load_project_full). Off the link read above, which came
+            // from the same handle before `db` moves.
+            edit_enabled: speleo_link.is_none(),
+            history_discarded,
+            // [#576 B6-D1] The read-only state of a file a newer build saved.
+            newer_file_schema: newer_schema,
+            unreadable_project_settings: unread_settings,
+            // Settings will be loaded from the DB by the frontend.
+            display_settings: Vec::new(),
+            history: SessionHistory {
+                policy,
+                inherited_through: speleo_undo_watermark,
+                undo: undo_entries,
+                redo: redo_entries,
+            },
+            recent: Some(path),
+        });
 
         tracing::info!(
             path = %path_display,
@@ -962,11 +885,6 @@ impl AppState {
                     .map(|dt| dt.with_timezone(&chrono::Utc))
             });
 
-        // All finalization commits use unwrap_or_else(PoisonError::into_inner) to ensure
-        // data is written even if a previous panic poisoned a mutex. This is acceptable
-        // during finalization because the alternative (silently skipping) leads to
-        // inconsistent state that is harder to diagnose.
-
         // [Track B] (fix M1) Swapping to a DIFFERENT project while still holding the
         // OLD project's SpeleoDB write lock must release that lock, or it stays locked
         // for every other editor until the app quits - `close_project`/quit release,
@@ -979,122 +897,46 @@ impl AppState {
         // open" guard rejects reopening the same path, so neither releases our lock.
         self.speleodb_release_held_lock_detached();
 
-        // ALL commits under ONE `project` acquisition. The delete's
-        // check-and-teardown (`delete_project`) takes this same mutex and
-        // reasons "strictly before the load, or strictly after it"; when the
-        // slot was committed in its own span and the database / gates / undo /
-        // recents in later ones, a delete of this very path landing after the
-        // slot commit was NEITHER - it matched the freshly-installed project,
-        // tore the half-built session down, and this function then went on
-        // installing its handles into an empty world and returned success over
-        // a project the backend no longer had (round 5). One guard makes the
-        // finalization the atom that argument needs. The guard is held over
-        // the recents/config write too - the delete prunes recents only after
-        // its own teardown, so the row this adds must not land between the two.
-        // Lock order is the documented one: `project` is outermost of
-        // {project, database, undo_stack}, and recents/config are leaves.
-        let mut proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        // Commit 1: Project state mutation
-        *proj_guard = Some(project.clone());
-        // A session boundary (a project committed into the slot), bumped under
-        // the guard per the `speleodb_session` rule.
-        self.bump_speleodb_session();
-        // [#473] Under the SAME acquisition that commits the project - a cancelled load
-        // never reaches this finalize section, so it cannot leave its verdict on the
-        // project the user actually opened.
-        self.set_history_discarded(history_discarded);
-        // [#576 B6-D1] The newer-version read-only state, under the same acquisition
-        // and for the same reason. The value handed to the frontend below, so the
-        // two gates cannot disagree about this load (the #270 shape).
-        self.set_newer_file_schema(newer_schema);
-        // [#576 C5] A project opens in Survey, here as in the frontend.
-        self.reset_workspace_mode();
-        // [#576 B15] Same acquisition, same reason: the stored settings this load
-        // could not read belong to the project in the slot, and refuse its saves.
-        self.set_unreadable_project_settings(unread_settings.clone());
-
-        // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one
-        // carrying a speleo_link row) opened WITHOUT a write lock is read-only.
-        // There is no lock-acquire path yet (#191), so the rule is simply: remote
-        // ⇒ edit disabled; local-only ⇒ edit enabled (default-true; the gate is a
-        // no-op off-SpeleoDB). Off the link read above, taken from the same handle
-        // before `db` is moved into the handle slot.
+        // [#576 A5] ALL commits under ONE `project` acquisition, through the commit
+        // every load, create and close shares. The delete's check-and-teardown
+        // (`delete_project`) takes this same mutex and reasons "strictly before the
+        // load, or strictly after it"; when the slot was committed in its own span and
+        // the database / gates / undo / recents in later ones, a delete of this very
+        // path landing after the slot commit was NEITHER - it matched the freshly-
+        // installed project, tore the half-built session down, and this function then
+        // went on installing its handles into an empty world and returned success over
+        // a project the backend no longer had (round 5).
+        //
+        // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one carrying
+        // a speleo_link row) opened WITHOUT a write lock is read-only; local-only =>
+        // edit enabled. Off the link read above, taken from the same handle before
+        // `db` is moved into the handle slot.
         let is_remote = speleo_link.is_some();
-        self.set_edit_enabled(!is_remote);
-        // #213: force-edit is per-session; a fresh open never starts force-editing.
-        self.set_force_editing(false);
-
-        // Commit 2: Database handle mutation
-        *self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
-        // Loaded an existing project from disk - its initial save is not deferred.
-        self.initial_save_deferred
-            .store(false, std::sync::atomic::Ordering::Relaxed);
-
-        // Commit 3: Display settings cache clear
-        self.clear_display_settings_cache();
-        self.invalidate_adjusted_cache();
-
-        // [#303] As in the non-staged load: arm the depth bound BEFORE the entries are
-        // restored under it, from the link read off this file's own handle. Late, the
-        // restore's own `enforce_depth_limit` would trim a Full-mode project's history
-        // down to the count window and no later re-arm could put it back.
-        self.sync_undo_depth_limit_for(speleo_link.as_ref());
-
-        // Commit 4: Undo/redo stack restore
-        {
-            let mut undo_stack = self
-                .undo_stack
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            // [#303] Unconditionally, and before the entries: a project with no history
-            // can still carry a watermark, and a value left over from the PREVIOUS project
-            // would otherwise floor this one's stamps at an unrelated instant.
-            undo_stack.set_inherited_through(speleo_undo_watermark);
-            if undo_entries.is_empty() && redo_entries.is_empty() {
-                undo_stack.clear();
-            } else {
-                undo_stack.load_from_persisted_with_timestamps(undo_entries, redo_entries);
-                // ...and against the project they will be replayed onto: a
-                // restored entry that cannot find its shot fails and is pushed
-                // straight back, sealing off everything under it (#413).
-                undo_stack.drop_entries_addressing_a_missing_shot(&project);
-                tracing::info!(
-                    undo = undo_stack.len(),
-                    purpose = "restore edit history",
-                    "Restored undo/redo stacks from database"
-                );
-            }
-        }
-
-        // Commit 5: Recent projects update
-        {
-            let mut recent = self
-                .recent_projects
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            recent.retain(|p| p != &path);
-            recent.insert(0, path.clone());
-            if let Ok(mut config) = self.config.lock() {
-                recent.truncate(config.general.recent_projects_max);
-                config.general.recent_projects.clone_from(&recent);
-                if let Err(e) = config.save() {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "persist recent projects list",
-                        "Failed to save config with recent projects"
-                    );
-                }
-            }
-        }
-
-        drop(proj_guard);
+        // [#303] As in the non-staged load: the depth bound the entries are restored
+        // under, from the link read off this file's own handle.
+        let policy = self.undo_policy_for(speleo_link.as_ref());
+        self.commit_open_session(SessionCommit {
+            project: Some(project.clone()),
+            database: Some(db),
+            // Loaded an existing project from disk - its initial save is not deferred.
+            initial_save_deferred: false,
+            edit_enabled: !is_remote,
+            // [#473] A cancelled load never reaches this finalize section, so it cannot
+            // leave its verdict on the project the user actually opened.
+            history_discarded,
+            // [#576 B6-D1] The value handed to the frontend below, so the two gates
+            // cannot disagree about this load (the #270 shape).
+            newer_file_schema: newer_schema,
+            unreadable_project_settings: unread_settings.clone(),
+            display_settings: Vec::new(),
+            history: SessionHistory {
+                policy,
+                inherited_through: speleo_undo_watermark,
+                undo: undo_entries,
+                redo: redo_entries,
+            },
+            recent: Some(path.clone()),
+        });
 
         progress.complete_phase(LoadingPhase::Finalizing);
 

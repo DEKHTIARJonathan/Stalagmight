@@ -107,38 +107,35 @@ impl AppState {
     /// budget; everything else goes back onto the configured entry-count window.
     ///
     /// Takes the `database` lock (via [`Self::undo_policy`]) and then `undo_stack`, so
-    /// it must not be called while either is held. Callers that already hold a link pass
-    /// it to [`Self::sync_undo_depth_limit_for`].
+    /// it must not be called while either is held. A project-slot commit arms the bound
+    /// itself, from the policy its own link resolves (`commit_open_session`, through
+    /// [`arm_undo_depth_limit`]).
     pub(crate) fn sync_undo_depth_limit(&self) {
         let policy = self.undo_policy();
-        self.apply_undo_depth_limit(policy);
-    }
-
-    /// [`Self::sync_undo_depth_limit`] over a link the caller has ALREADY read - for the
-    /// two load paths, which hold the just-opened database handle directly and have to
-    /// arm the bound BEFORE the persisted stack is restored into it.
-    ///
-    /// Takes only the `undo_stack` lock, never `database`, so it is safe at a point where
-    /// the live handle is mid-swap.
-    pub(crate) fn sync_undo_depth_limit_for(&self, link: Option<&SpeleoLink>) {
-        let policy = self.undo_policy_for(link);
-        self.apply_undo_depth_limit(policy);
+        // Same reasoning as the commit's: skipping the arm left the stack on its previous
+        // bound, and the next `enforce_depth_limit` then truncates to it.
+        let mut undo = self
+            .undo_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        arm_undo_depth_limit(&mut undo, policy);
     }
 
     /// [#469] How many persisted history rows the load paths may read for a project
     /// whose link is `link`, per stack.
     ///
-    /// The mirror of [`Self::sync_undo_depth_limit_for`], answered BEFORE the rows are
-    /// read rather than after they are in memory. A count-window project reads its own
-    /// window, because that is exactly what survives the restore's `enforce_depth_limit`;
-    /// a Full-mode linked project has no count window, so it reads the derived ceiling
-    /// [`MAX_PERSISTED_HISTORY_ROWS`], past which the byte budget would evict anyway.
+    /// The mirror of the bound the commit arms ([`arm_undo_depth_limit`]), answered
+    /// BEFORE the rows are read rather than after they are in memory. A count-window
+    /// project reads its own window, because that is exactly what survives the restore's
+    /// `enforce_depth_limit`; a Full-mode linked project has no count window, so it reads
+    /// the derived ceiling [`MAX_PERSISTED_HISTORY_ROWS`], past which the byte budget would
+    /// evict anyway.
     ///
     /// The window comes off the undo stack rather than the config because it is the
     /// stack's own `history_limit` that `use_count_limit` re-arms moments later; reading
     /// the config here would let the two disagree if a reload landed between them.
-    /// Takes only the `undo_stack` lock, so it is safe wherever
-    /// `sync_undo_depth_limit_for` is.
+    /// Takes only the `undo_stack` lock, never `database`, so it is safe at a point where
+    /// the live handle is mid-swap.
     pub(crate) fn history_load_row_cap(&self, link: Option<&SpeleoLink>) -> usize {
         if self.undo_policy_for(link).unlimited_depth() {
             return MAX_PERSISTED_HISTORY_ROWS;
@@ -149,21 +146,6 @@ impl AppState {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .history_limit();
         window.min(MAX_PERSISTED_HISTORY_ROWS)
-    }
-
-    fn apply_undo_depth_limit(&self, policy: UndoPolicy) {
-        // Same reasoning: skipping the arm left the stack on its previous bound, and the
-        // `enforce_depth_limit` at the end of a load then truncates to it - the loss the
-        // load path says no later re-arm can undo.
-        let mut undo = self
-            .undo_stack
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if policy.unlimited_depth() {
-            undo.set_byte_budget(crate::core::undo::UNDO_BYTE_BUDGET_BYTES);
-        } else {
-            undo.use_count_limit();
-        }
     }
 
     /// The global default. Recover a poisoned guard so a panic cannot replace an
@@ -228,6 +210,17 @@ impl AppState {
                 "Could not materialize the project's undo mode; this session will keep the resolved value in memory"
             );
         }
+    }
+}
+
+/// [#303] Put `stack` on the depth bound `policy` calls for: the byte budget for Full
+/// mode on a linked project, the configured entry-count window for everything else.
+/// Idempotent; trims immediately if the stack already exceeds the new bound.
+pub(super) fn arm_undo_depth_limit(stack: &mut crate::core::UndoStack, policy: UndoPolicy) {
+    if policy.unlimited_depth() {
+        stack.set_byte_budget(crate::core::undo::UNDO_BYTE_BUDGET_BYTES);
+    } else {
+        stack.use_count_limit();
     }
 }
 
@@ -588,27 +581,11 @@ mod tests {
             "each load path creates ONE budget and hands it to both stacks"
         );
 
-        // [#473] BOTH project-slot commits in project_create.rs clear the discarded-
-        // history flag. Only `create_project` has a behavioural test - the other,
-        // `do_create_project_full`, needs an `AppHandle` and so has no unit-test entry
-        // point, which is exactly the asymmetry that let the flag be forgotten in the
-        // first place. A stale `true` here puts a data-loss banner over a new project.
-        let create_src = include_str!("project_create.rs");
-        assert_eq!(
-            create_src.matches("set_history_discarded(false)").count(),
-            2,
-            "every project-slot commit in project_create.rs must clear the flag"
-        );
-        // [#473] ...and BOTH load paths write it from what their own load actually did.
-        // `a_history_that_cannot_be_read_sets_the_discarded_flag` covers `open_project`
-        // behaviourally; `do_load_project_full` needs an `AppHandle` and cannot be unit
-        // tested, so this count is what keeps it from silently losing the write.
-        assert_eq!(
-            src.matches("set_history_discarded(history_discarded)")
-                .count(),
-            2,
-            "both load paths must record whether their history survived"
-        );
+        // [#473] Whether each project-slot commit writes the discarded-history flag is
+        // pinned BEHAVIOURALLY now (#576 A5), not by counting its spelling here: every
+        // commit goes through `commit_open_session`, and `session_commit_tests.rs` runs
+        // all of them - both loads, both creates, close - over a session whose flag is
+        // set, plus both loads over a history that cannot be read.
 
         for func in ["fn open_project", "pub fn do_load_project_full"] {
             // Slice at the NEXT item in the `impl AppState` block rather than at the end

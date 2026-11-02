@@ -1,3 +1,4 @@
+use super::session_commit::SessionCommit;
 use super::AppState;
 use crate::core::CommandResult;
 use crate::models::Project;
@@ -143,41 +144,12 @@ impl AppState {
             "Project created in memory"
         );
 
-        if let Ok(mut proj) = self.project.lock() {
-            *proj = Some(project);
-            // A session boundary (a project committed into the slot), bumped under
-            // the guard per the `speleodb_session` rule.
-            self.bump_speleodb_session();
-        }
-
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.clear();
-            // [#303] A brand-new project is local: the configured entry window.
-            undo_stack.use_count_limit();
-        }
-
-        // Clear display settings cache for new project
-        self.clear_display_settings_cache();
-        self.invalidate_adjusted_cache();
-        // [Track B] (#191) A freshly-created local project is always editable;
-        // reset the gate so a previously-open read-only remote project's disabled
-        // flag can't leak in.
-        self.set_edit_enabled(true);
-        // #213: a new local project is never force-editing; clear any prior flag.
-        self.set_force_editing(false);
-        // [#473] A project created from nothing has no persisted history, so it cannot
-        // have lost any. Cleared for the same reason as the two gates above: the flag is
-        // per-project, the previous project may have set it, and a stale `true` here puts
-        // a banner reading "edit history could not be read and was discarded" over a
-        // brand-new empty project. Create is a project-slot commit like a load, and every
-        // commit must write this.
-        self.set_history_discarded(false);
-        // [#576 B6-D1] This build created it, so it is this build's to edit.
-        self.set_newer_file_schema(None);
-        // [#576 C5] A project opens in Survey, here as in the frontend.
-        self.reset_workspace_mode();
-        // [#576 B15] ...and nothing in it went unread.
-        self.set_unreadable_project_settings(Vec::new());
+        // [#576 A5] A project-slot commit like every other: each per-project cell
+        // written under one `project` acquisition (this used to set three of the
+        // gates after dropping the guard, and kept the previous project's database
+        // handle and undo watermark). A project created from nothing has no file,
+        // so no handle, nothing deferred and no Recent Projects row.
+        self.commit_open_session(SessionCommit::new_local(project, None));
 
         CommandResult::success()
     }
@@ -530,101 +502,33 @@ impl AppState {
         // === FINALIZE: Store in AppState (NON-CANCELLABLE STATE COMMIT) ===
         // Allow cancellation only before any state mutation occurs.
         check_cancelled!();
-        // All finalization commits use unwrap_or_else(PoisonError::into_inner) to ensure
-        // data is written even if a previous panic poisoned a mutex.
 
-        // ALL commits under ONE `project` acquisition, exactly as
-        // `do_load_project_full`'s finalization and for the same reason (round
-        // 4): this project carries a `file_path`, so `delete_project`'s
-        // check-and-teardown can match it - and a delete landing between the
-        // slot commit and the handle commits tore down a half-built session
-        // that this function then finished building into an empty world.
-        // (`create_project`, the in-memory sibling, commits a project with no
-        // `file_path`, which the delete's identity check can never match.)
-        let mut proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        // Commit 1: Project state mutation
-        *proj_guard = Some(project.clone());
-        // A session boundary (a project committed into the slot), bumped under
-        // the guard per the `speleodb_session` rule.
-        self.bump_speleodb_session();
-
-        // Commit 2: Database handle mutation
-        *self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = db;
-
-        // Commit 3: Clear undo stack (new project)
-        self.undo_stack
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
-
-        // [Track B] (#191) A freshly-created local project is always editable;
-        // reset the gate so a prior read-only remote project can't leak in.
-        self.set_edit_enabled(true);
-        // #213: a new local project is never force-editing; clear any prior flag.
-        self.set_force_editing(false);
-        // [#473] A project created from nothing has no persisted history, so it cannot
-        // have lost any. Cleared for the same reason as the two gates above: the flag is
-        // per-project, the previous project may have set it, and a stale `true` here puts
-        // a banner reading "edit history could not be read and was discarded" over a
-        // brand-new empty project. Create is a project-slot commit like a load, and every
-        // commit must write this.
-        self.set_history_discarded(false);
-        // [#576 B6-D1] This build created it, so it is this build's to edit.
-        self.set_newer_file_schema(None);
-        // [#576 C5] A project opens in Survey, here as in the frontend.
-        self.reset_workspace_mode();
-        // [#576 B15] ...and nothing in it went unread.
-        self.set_unreadable_project_settings(Vec::new());
-
-        // Track whether the initial save is still pending: a deferred new project
-        // has no file on disk yet, so its first import must durably persist it.
-        self.initial_save_deferred
-            .store(defer_initial_save, std::sync::atomic::Ordering::Relaxed);
-
-        // Commit 4: Display settings cache
-        if defer_initial_save {
-            let mut cache = self
-                .display_settings_cache
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            cache.clear();
-            for (key, value) in &settings_map {
-                cache.insert((*key).to_string(), value.clone());
-            }
-        } else {
-            self.clear_display_settings_cache();
-            self.invalidate_adjusted_cache();
-        }
-
-        // Commit 5: Add to recent projects only after a real file exists.
-        if !defer_initial_save {
-            let mut recent = self
-                .recent_projects
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            recent.retain(|p| p != &db_path);
-            recent.insert(0, db_path.clone());
-            if let Ok(mut config) = self.config.lock() {
-                recent.truncate(config.general.recent_projects_max);
-                config.general.recent_projects.clone_from(&recent);
-                if let Err(e) = config.save() {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "persist recent projects list",
-                        "Failed to save config with recent projects"
-                    );
-                }
-            }
-        }
-
-        drop(proj_guard);
+        // [#576 A5] Every per-project cell under ONE `project` acquisition, through the
+        // commit every load, create and close shares (round 4: this project carries a
+        // `file_path`, so `delete_project`'s check-and-teardown can match it, and a
+        // delete landing between a slot commit and the handle commits tore down a
+        // half-built session that this function then finished building into an empty
+        // world). The shared commit is also what puts a new project on the local undo
+        // window with no inherited-history watermark: File > New over a Full-mode
+        // linked project used to keep its byte budget and watermark (#576 A18(f)).
+        self.commit_open_session(SessionCommit {
+            // A deferred new project has no file on disk yet, so its first import must
+            // durably persist it.
+            initial_save_deferred: defer_initial_save,
+            // ...and no database to read its display settings from: seed the cache
+            // with the defaults just chosen.
+            display_settings: if defer_initial_save {
+                settings_map
+                    .iter()
+                    .map(|(key, value)| ((*key).to_string(), value.clone()))
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            // Recent Projects only after a real file exists.
+            recent: (!defer_initial_save).then(|| db_path.clone()),
+            ..SessionCommit::new_local(project.clone(), db)
+        });
 
         // Get loading_id before clearing token
         let loading_id = progress.loading_id();

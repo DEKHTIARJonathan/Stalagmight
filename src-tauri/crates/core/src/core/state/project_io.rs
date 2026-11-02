@@ -1,4 +1,5 @@
 use super::save_sidecars::{SaveMode, SaveRequest};
+use super::session_commit::SessionCommit;
 use super::AppState;
 use crate::core::{CommandResult, PersistStack, UndoStack};
 use crate::models::{Project, SectionId};
@@ -1087,55 +1088,14 @@ impl AppState {
     /// function's callers use `PoisonError::into_inner`, for the reason spelled out
     /// on `close_project`); the locks taken here recover it themselves.
     pub(super) fn close_open_project_locked(&self, project: &mut Option<Project>) -> CommandResult {
-        tracing::debug!("close_project: dropping project");
-        *project = None;
-        // A session boundary: the caller holds the `project` guard (it passed it
-        // in), which is the bump rule (`speleodb_session`). Covers close, delete
-        // and the project switch, which all route through here.
-        self.bump_speleodb_session();
-        // [#473] The discarded-history banner describes the OPEN project; with none
-        // open there is nothing for it to describe. Cleared here as well as on every
-        // load commit, so closing a project takes its banner with it rather than
-        // leaving it up over the welcome screen.
-        self.set_history_discarded(false);
-        // [#576 B6-D1] Nor is there a newer-version file to keep read-only.
-        self.set_newer_file_schema(None);
-        // [#576 C5] Nor a workspace: the next project opens in Survey.
-        self.reset_workspace_mode();
-        // [#576 B15] ...nor stored settings that went unread.
-        self.set_unreadable_project_settings(Vec::new());
-        tracing::debug!("close_project: project dropped");
-
-        tracing::debug!("close_project: acquiring database lock");
-        {
-            let mut db = self.database.lock().unwrap_or_else(|e| e.into_inner());
-            tracing::debug!("close_project: dropping database");
-            *db = None;
-            tracing::debug!("close_project: database dropped");
-        }
-
-        tracing::debug!("close_project: acquiring undo_stack lock");
-        {
-            let mut undo_stack = self.undo_stack.lock().unwrap_or_else(|e| e.into_inner());
-            tracing::debug!("close_project: clearing undo stack");
-            undo_stack.clear();
-            // [#303] Back onto the configured entry window: the next project to open is
-            // local until a link says otherwise.
-            undo_stack.use_count_limit();
-            tracing::debug!("close_project: undo stack cleared");
-        }
-
-        // Clear display settings cache
-        self.clear_display_settings_cache();
-        self.invalidate_adjusted_cache();
-        // [Track B] (#191) Reset the transient read-only edit gate so a previously
-        // read-only remote project can't leave the flag stuck for the next open.
-        self.set_edit_enabled(true);
-        // #213: clear force-edit so it never leaks across a close into the next open.
-        self.set_force_editing(false);
-
+        // [#576 A5] The same commit every load and create goes through, installing the
+        // empty session: every per-project cell back to its no-project value - the undo
+        // stack's depth bound AND its inherited-history watermark included (#576
+        // NF-AN3-6) - and the session generation bumped under the caller's guard (the
+        // `speleodb_session` rule). Covers close, delete and the project switch, which
+        // all route through here.
+        self.commit_open_session_into(project, SessionCommit::closed());
         tracing::info!(purpose = "release project resources", "Project closed");
-        tracing::debug!("close_project: returning success");
         CommandResult::success()
     }
 

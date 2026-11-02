@@ -1769,11 +1769,14 @@ mod tests {
             if src.contains("self.bump_speleodb_session()") {
                 bumping.push(name.clone());
             }
-            // The slot-commit spellings in this tree: a load/create commit
-            // (`= Some(project`), the rollback restore (`= Some(restored`), and
-            // the close clear (`*project = None`). Space-prefixed so a
-            // `== Some(project_id)` comparison does not read as an assignment.
-            if src.contains(" = Some(project")
+            // The slot-commit spellings in this tree: the shared project-slot
+            // commit (`*slot = project`, #576 A5 - every load, create and close),
+            // a direct load/create commit (`= Some(project`), the rollback
+            // restore (`= Some(restored`), and a direct close clear
+            // (`*project = None`). Space-prefixed so a `== Some(project_id)`
+            // comparison does not read as an assignment.
+            if src.contains("*slot = project")
+                || src.contains(" = Some(project")
                 || src.contains(" = Some(restored")
                 || src.contains("*project = None")
             {
@@ -1783,12 +1786,7 @@ mod tests {
         bumping.sort();
         assert_eq!(
             bumping,
-            vec![
-                "project_create.rs",
-                "project_io.rs",
-                "project_load.rs",
-                "speleodb_logout.rs",
-            ],
+            vec!["session_commit.rs", "speleodb_logout.rs"],
             "the bump-site inventory moved; re-derive the session-boundary \
              classification in `speleodb_session` before updating this list"
         );
@@ -1872,28 +1870,17 @@ mod tests {
         // undo stack, recents) inside one unbroken acquisition - a slot commit
         // in its own span reopens the torn-middle interleaving where the
         // delete tears down a half-built session and the loader finishes
-        // building into an empty world. `create_project` is exempt: it
-        // commits a project with no `file_path`, which the delete's identity
-        // check can never match.
-        for (file, func, database_commit, undo_commit) in [
-            (
-                "project_load.rs",
-                "fn open_project",
-                " = Some(db);",
-                "load_from_persisted_with_timestamps(",
-            ),
-            (
-                "project_load.rs",
-                "pub fn do_load_project_full",
-                " = Some(db);",
-                "load_from_persisted_with_timestamps(",
-            ),
-            (
-                "project_create.rs",
-                "fn do_create_project_full",
-                " = db;",
-                ".clear();",
-            ),
+        // building into an empty world.
+        //
+        // [#576 A5] Every installer now hands ONE `SessionCommit` to the shared
+        // commit, so the property is pinned in two halves: each installer commits
+        // through it and never writes the slot itself, and the shared commit
+        // writes slot, handle, history and recents under the one guard it is
+        // given (`session_commit_tests.rs` checks every cell behaviourally).
+        for (file, func) in [
+            ("project_load.rs", "fn open_project"),
+            ("project_load.rs", "pub fn do_load_project_full"),
+            ("project_create.rs", "fn do_create_project_full"),
         ] {
             let src = state_source(file);
             let start = src
@@ -1901,34 +1888,38 @@ mod tests {
                 .unwrap_or_else(|| panic!("{func} is present in {file}"));
             let body = &src[start..];
             let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-            let guard = body
-                .find("let mut proj_guard")
-                .unwrap_or_else(|| panic!("{func} takes the project guard by name"));
-            let slot = body
-                .find(" = Some(project")
-                .unwrap_or_else(|| panic!("{func} commits the project slot"));
-            let db_commit = body
-                .find(database_commit)
-                .unwrap_or_else(|| panic!("{func} commits the database handle"));
-            let undo = body
-                .find(undo_commit)
-                .unwrap_or_else(|| panic!("{func} commits the undo stack"));
-            let released = body
-                .find("drop(proj_guard)")
-                .unwrap_or_else(|| panic!("{func} releases the guard explicitly"));
-            assert!(
-                guard < slot && slot < db_commit && db_commit < undo && undo < released,
-                "{func} must commit slot, database and undo history inside one \
-                 project-guard span (guard at {guard}, slot {slot}, database \
-                 {db_commit}, undo {undo}, drop {released})"
-            );
             assert_eq!(
-                body.matches("drop(proj_guard)").count(),
+                body.matches("self.commit_open_session(").count(),
                 1,
-                "{func}: one release, at the end of the finalization"
+                "{func} must install its session through the shared commit, once"
+            );
+            assert!(
+                !body.contains(" = Some(project"),
+                "{func} must not commit the slot outside the shared commit"
             );
         }
+
+        let src = state_source("session_commit.rs");
+        let start = src
+            .find("fn commit_open_session_into")
+            .expect("the shared commit is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+        let slot = body.find("*slot = project").expect("commits the slot");
+        let db_commit = body.find("= database;").expect("commits the handle");
+        let undo = body
+            .find("load_from_persisted_with_timestamps(")
+            .expect("commits the history");
+        let recents = body.find(".recent_projects").expect("commits recents");
+        assert!(
+            slot < db_commit && db_commit < undo && undo < recents,
+            "the shared commit writes slot, database, history and recents in order \
+             (slot {slot}, database {db_commit}, undo {undo}, recents {recents})"
+        );
+        assert!(
+            !body.contains("drop(slot)") && !body.contains("self.project.lock()"),
+            "the shared commit holds the one guard it was given throughout"
+        );
     }
 
     #[test]

@@ -20,6 +20,7 @@ mod project_merge;
 mod raw_data;
 mod recent_projects;
 mod save_sidecars;
+mod session_commit;
 mod speleodb;
 mod speleodb_admin;
 mod speleodb_cache;
@@ -197,6 +198,14 @@ mod sdb_newer_pull_tests;
               values are the evidence a run captures"
 )]
 mod sdb_revision_gate_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              cells are the evidence a run captures"
+)]
+mod session_commit_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
