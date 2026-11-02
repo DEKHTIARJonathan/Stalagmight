@@ -144,6 +144,23 @@ test.describe('Draft shot rows', () => {
     expect(calls[0]).toMatchObject({ afterShotId: shots[2]!.id, beforeShotId: null });
   });
 
+  // #576 NF-W3UI-1: the backend mints a uuid for every shot it creates, and uuid
+  // anchors (plan pins, the distance origin) resolve through it; the mock's
+  // create_shot used to leave the new shot without one.
+  test('the committed shot carries a uuid of its own, as the backend mints one', async ({ page }) => {
+    await fillDraftRow(page, 3, '5');
+    await expect(page.getByTestId('grid-row-4')).toHaveClass(/sg-row-draft/);
+    const uuids = await page.evaluate(() => {
+      const shots = (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].shots as Array<{
+        uuid?: string | null;
+      }>;
+      return shots.map((s) => s.uuid ?? null);
+    });
+    expect(uuids).toHaveLength(4);
+    expect(uuids[3]).toEqual(expect.any(String));
+    expect(new Set(uuids).size).toBe(4);
+  });
+
   test('insert above the first shot anchors before it and marks missing cells immediately', async ({ page }) => {
     await clickGutterMenuEntry(page, 0, 'Insert shot before');
 

@@ -3533,6 +3533,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ) + 1;
             const newShot = {
               id: nextId,
+              // The real backend mints a uuid for every shot it creates, and uuid
+              // anchors resolve through it (#576 NF-W3UI-1).
+              uuid: `mock-shot-uuid-${nextId}`,
               azimuth_in: (shotData.azimuth_in as number) ?? 0,
               azimuth_out: (shotData.azimuth_out as number) ?? 0,
               length: (shotData.length as number) ?? 0,
