@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
+import { getErrorMessage } from '../utils/commandError';
 import type { SurveyGeometry } from '../types/survey';
 
 /**
@@ -152,18 +153,8 @@ export const useGlobalViewStore = create<GlobalViewStore>((set, get) => ({
         return; // Discard error, don't update state
       }
 
-      // Error - parse error message
-      let errorMessage = 'Failed to load geometry';
-      if (typeof e === 'string') {
-        try {
-          const parsed = JSON.parse(e);
-          errorMessage = parsed.message || e;
-        } catch {
-          errorMessage = e;
-        }
-      } else if (e && typeof e === 'object' && 'message' in e) {
-        errorMessage = String((e as { message: unknown }).message);
-      }
+      // The command's CommandError (or a transport failure): its display message.
+      const errorMessage = getErrorMessage(e, 'Failed to load geometry');
 
       set((state) => ({
         geometryStates: new Map(state.geometryStates).set(filePath, {

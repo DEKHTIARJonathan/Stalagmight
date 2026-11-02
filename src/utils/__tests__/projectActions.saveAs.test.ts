@@ -11,6 +11,8 @@ vi.mock('../fileDialogs', async (importOriginal) => ({
 }));
 vi.mock('../saveFeedback', () => ({
   surfaceSaveFailure: surfaceSaveFailureMock,
+  // A caught rejection's line, as the real one reads it (code, message or fallback).
+  saveFailureOf: (_e: unknown, fallback?: string) => ({ code: null, error: fallback ?? 'error' }),
 }));
 
 import { saveProjectAs } from '../projectActions';

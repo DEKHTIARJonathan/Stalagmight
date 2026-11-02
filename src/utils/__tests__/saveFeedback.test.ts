@@ -21,12 +21,6 @@ import {
 import { importReceiptSummaryParts } from '../importReceipt';
 import { invokeIpc } from '../ipc';
 import i18n from '../../i18n';
-import {
-  FS_PATH_NOT_FOUND,
-  FS_PATH_TOO_LONG,
-  FS_PERMISSION_DENIED,
-  IGNORES_UNREADABLE,
-} from '../saveErrors';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { ValidationWarning } from '../../types/ipc/ValidationWarning';
@@ -65,7 +59,7 @@ describe('surfaceSaveFailure', () => {
     useProjectStore.setState({ integritySaveBlocked: true });
     const openDialog = vi.fn();
 
-    surfaceSaveFailure("Can't save: 1 unresolved cross-reference", openDialog, useProjectStore.getState());
+    surfaceSaveFailure({ code: 'FAILED', error: "Can't save: 1 unresolved cross-reference" }, openDialog, useProjectStore.getState());
 
     // No error dialog - instead the integrity (Review & Repair) dialog opens.
     expect(openDialog).not.toHaveBeenCalled();
@@ -75,7 +69,7 @@ describe('surfaceSaveFailure', () => {
   it('shows the error dialog for a real (non-integrity) failure', () => {
     const openDialog = vi.fn();
 
-    surfaceSaveFailure('Disk full', openDialog, useProjectStore.getState());
+    surfaceSaveFailure({ code: 'FAILED', error: 'Disk full' }, openDialog, useProjectStore.getState());
 
     expect(openDialog).toHaveBeenCalledWith('error', {
       message: 'Disk full',
@@ -94,7 +88,7 @@ describe('surfaceSaveFailure', () => {
     const openDialog = vi.fn();
 
     surfaceSaveFailure(
-      `${IGNORES_UNREADABLE}: Can't save: this project's list of ignored warnings could not be read (the resolved_warnings table has no warning_code column). Saving would rewrite the file without them, so nothing was written - the file on disk is unchanged.`,
+      { code: 'IGNORES_UNREADABLE', error: `Can't save: this project's list of ignored warnings could not be read (the resolved_warnings table has no warning_code column). Saving would rewrite the file without them, so nothing was written - the file on disk is unchanged.` },
       openDialog,
       useProjectStore.getState(),
     );
@@ -102,8 +96,8 @@ describe('surfaceSaveFailure', () => {
     expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
     const [dialog, data] = openDialog.mock.calls[0] as [string, { message: string }];
     expect(dialog).toBe('error');
-    // The marker is for routing; it must never reach the user.
-    expect(data.message).not.toContain(IGNORES_UNREADABLE);
+    // The code is for routing; no marker rides the message to the user.
+    expect(data.message).not.toContain('IGNORES_UNREADABLE');
     expect(data.message).toContain('list of ignored warnings could not be read');
     expect(data.message).toContain('the file on disk is unchanged');
   });
@@ -120,7 +114,7 @@ describe('surfaceSaveFailure', () => {
   it('leaves a permission denial to the folder-access guidance dialog', () => {
     const openDialog = vi.fn();
 
-    surfaceSaveFailure(`${FS_PERMISSION_DENIED}: Failed to create save file: ...`, openDialog, useProjectStore.getState());
+    surfaceSaveFailure({ code: 'FS_PERMISSION_DENIED', error: `Failed to create save file: ...` }, openDialog, useProjectStore.getState());
 
     expect(openDialog).not.toHaveBeenCalled();
   });
@@ -129,14 +123,14 @@ describe('surfaceSaveFailure', () => {
     const openDialog = vi.fn();
 
     surfaceSaveFailure(
-      `${FS_PATH_NOT_FOUND}: Cannot save to Z:\\surveys\\cave.stalx: the folder no longer exists or the drive is not connected`,
+      { code: 'FS_PATH_NOT_FOUND', error: `Cannot save to Z:\\surveys\\cave.stalx: the folder no longer exists or the drive is not connected` },
       openDialog,
       useProjectStore.getState(),
     );
 
     const [dialog, data] = openDialog.mock.calls[0] as [string, { message: string }];
     expect(dialog).toBe('error');
-    expect(data.message).not.toContain(FS_PATH_NOT_FOUND);
+    expect(data.message).not.toContain('FS_PATH_NOT_FOUND');
     expect(data.message).toContain('the folder no longer exists or the drive is not connected');
   });
 
@@ -144,13 +138,13 @@ describe('surfaceSaveFailure', () => {
     const openDialog = vi.fn();
 
     surfaceSaveFailure(
-      `${FS_PATH_TOO_LONG}: Failed to create save file: Failed to open database`,
+      { code: 'FS_PATH_TOO_LONG', error: `Failed to create save file: Failed to open database` },
       openDialog,
       useProjectStore.getState(),
     );
 
     const [, data] = openDialog.mock.calls[0] as [string, { message: string }];
-    expect(data.message).not.toContain(FS_PATH_TOO_LONG);
+    expect(data.message).not.toContain('FS_PATH_TOO_LONG');
     expect(data.message).not.toContain('Failed to open database');
     expect(data.message).toContain('too long');
   });
@@ -205,9 +199,9 @@ describe('shouldShowAutosaveBanner (#517)', () => {
 
 describe('autosaveFailureMessage (#429)', () => {
   it('gives each destination failure its own banner line, never the raw marker', () => {
-    const gone = autosaveFailureMessage(`${FS_PATH_NOT_FOUND}: Cannot save to Z:\\cave.stalx`);
-    const tooLong = autosaveFailureMessage(`${FS_PATH_TOO_LONG}: Failed to create save file`);
-    const denied = autosaveFailureMessage(`${FS_PERMISSION_DENIED}: denied`);
+    const gone = autosaveFailureMessage({ code: 'FS_PATH_NOT_FOUND', error: `Cannot save to Z:\\cave.stalx` });
+    const tooLong = autosaveFailureMessage({ code: 'FS_PATH_TOO_LONG', error: `Failed to create save file` });
+    const denied = autosaveFailureMessage({ code: 'FS_PERMISSION_DENIED', error: `denied` });
 
     for (const line of [gone, tooLong, denied]) {
       expect(line).toBeTruthy();
@@ -216,19 +210,19 @@ describe('autosaveFailureMessage (#429)', () => {
     expect(new Set([gone, tooLong, denied]).size).toBe(3);
   });
 
-  // [#517] The banner renders this string, so the routing marker has to come
-  // off there too - autosave is where this refusal is most likely to be seen.
-  it('strips the unreadable-ignore-list marker instead of rendering it', () => {
+  // [#517] The banner renders this string - autosave is where this refusal is most
+  // likely to be seen - so it is the backend's sentence, with no marker in it.
+  it('relays the unreadable-ignore-list refusal without a marker', () => {
     const line = autosaveFailureMessage(
-      `${IGNORES_UNREADABLE}: Can't save: this project's list of ignored warnings could not be read (x).`
+      { code: 'IGNORES_UNREADABLE', error: `Can't save: this project's list of ignored warnings could not be read (x).` }
     );
 
-    expect(line).not.toContain(IGNORES_UNREADABLE);
+    expect(line).not.toContain('IGNORES_UNREADABLE');
     expect(line).toContain('list of ignored warnings could not be read');
   });
 
-  it('relays an unmarked failure as the backend wrote it', () => {
-    expect(autosaveFailureMessage('Disk full: no space left on device')).toBe(
+  it('relays an uncoded failure as the backend wrote it', () => {
+    expect(autosaveFailureMessage({ code: 'FAILED', error: 'Disk full: no space left on device' })).toBe(
       'Disk full: no space left on device'
     );
     expect(autosaveFailureMessage(null)).toBeTruthy();
@@ -545,7 +539,7 @@ describe('surfaceImportFailure', () => {
   it('command failure: closes the dialog and reports WITHOUT the navigate/fit exit', () => {
     const ui = mockUi();
 
-    surfaceImportFailure('tml-import', ui, { phase: 'command', error: 'Bad azimuth on shot 3' });
+    surfaceImportFailure('tml-import', ui, { phase: 'command', error: 'Bad azimuth on shot 3', code: 'FAILED' });
 
     expect(ui.closeDialog).toHaveBeenCalled();
     // #411 C2: the exit sequence dropped the user into the empty project the
@@ -616,7 +610,7 @@ describe('import-context lifetime', () => {
   it.each(['command', 'transport', 'empty'] as const)('is dropped by a %s failure', (phase) => {
     const failure =
       phase === 'command'
-        ? ({ phase, error: 'boom' } as const)
+        ? ({ phase, error: 'boom', code: 'FAILED' } as const)
         : phase === 'transport'
           ? ({ phase, error: new Error('boom'), format: 'TML' } as const)
           : ({ phase, message: 'nothing to import' } as const);

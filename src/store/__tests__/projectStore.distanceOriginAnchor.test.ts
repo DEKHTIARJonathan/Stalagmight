@@ -89,12 +89,13 @@ function serve(resolveTo: StationRef | null, reversed?: { section_id: number; sh
       case 'check_project_integrity':
         return { messages: [], save_blocked: false };
       default:
+        // Every mutation's outcome at once (#576 A12): a reverse's log rides
+        // `reversed_sections`, an undo/redo's `reversed_steps`.
         return {
-          success: true,
           warnings: [],
-          error: null,
+          remote_link: null,
           section_ids: [],
-          ...(reversed ? { reversed_sections: reversed } : {}),
+          ...(reversed ? { reversed_sections: reversed, reversed_steps: reversed } : {}),
         };
     }
   });

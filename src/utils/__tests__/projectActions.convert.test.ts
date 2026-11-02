@@ -19,6 +19,8 @@ vi.mock('../fileDialogs', () => ({
 }));
 vi.mock('../saveFeedback', () => ({
   surfaceSaveFailure: surfaceSaveFailureMock,
+  // A caught rejection's line, as the real one reads it (code, message or fallback).
+  saveFailureOf: (_e: unknown, fallback?: string) => ({ code: null, error: fallback ?? 'error' }),
 }));
 
 import { convertToUnmanagedStalx } from '../projectActions';
@@ -84,7 +86,7 @@ describe('convertToUnmanagedStalx ordering', () => {
   it('a failed save detaches nothing and loads nothing', async () => {
     saveProjectMock.mockImplementation(async () => {
       order.push('save');
-      return { success: false, error: 'disk full' };
+      return { success: false, error: 'disk full', code: 'FAILED', failure: { code: 'FAILED', message: 'disk full' } };
     });
 
     const converted = await convertToUnmanagedStalx();
@@ -132,7 +134,7 @@ describe('convertToUnmanagedStalx ordering', () => {
     // Routed through the save-failure router (with its own Detach Failed title
     // and skipIntegrityRouting - the unlink reject ran no integrity re-check).
     expect(surfaceSaveFailureMock).toHaveBeenCalledWith(
-      expect.stringContaining('detaching from SpeleoDB failed'),
+      expect.objectContaining({ error: expect.stringContaining('detaching from SpeleoDB failed') }),
       openDialog,
       expect.anything(), // the integrity state, unused with skipIntegrityRouting
       expect.objectContaining({ skipIntegrityRouting: true }),

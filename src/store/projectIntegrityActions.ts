@@ -1,7 +1,8 @@
 import type { StoreApi } from 'zustand';
 import i18n from '../i18n';
 import { invokeIpc } from '../utils/ipc';
-import { isEditDisabledError, READ_ONLY_EDIT_NOTICE } from '../utils/editErrors';
+import { errorCode } from '../utils/commandError';
+import { isEditGateCode, READ_ONLY_EDIT_NOTICE } from '../utils/editErrors';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import { speleoState } from './speleoStoreHandle';
 import { useUIStore } from './uiStore';
@@ -37,14 +38,14 @@ export interface ProjectIntegrityActions {
 
 /**
  * Show the friendly read-only notice, under the key executeCommand uses, when `e` is a
- * backend EDIT_DISABLED refusal; true when it was one. For the actions here that call the
- * IPC directly instead of going through executeCommand. Tauri rejects a
- * `Result<_, String>` command with the bare string.
+ * backend edit-gate refusal (`isEditGateCode`); true when it was one. For the actions
+ * here that call the IPC directly instead of going through executeCommand: their
+ * refusal arrives as the rejection's CommandError.
  */
 function showReadOnlyRefusal(e: unknown): boolean {
-  const message = typeof e === 'string' ? e : e instanceof Error ? e.message : null;
-  if (!isEditDisabledError(message)) return false;
-  useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(message), TOAST_KEYS.EDIT_DISABLED, 'warning');
+  const code = errorCode(e);
+  if (!isEditGateCode(code)) return false;
+  useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(code), TOAST_KEYS.EDIT_DISABLED, 'warning');
   return true;
 }
 
@@ -225,10 +226,10 @@ export function createProjectIntegrityActions(
       } catch (e) {
         // #576 D39(a): the backend refuses Repair when editing is blocked (a read-only
         // SpeleoDB project, a file a newer version saved, the read-only Plan/Export
-        // workspace) with the same coded EDIT_DISABLED error every other edit gets.
+        // workspace) with the same edit-gate code every other edit gets.
         // That is a read-only notice, not a failure: show the same toast, under the
         // same key, as executeCommand does, and re-throw it so the caller neither
-        // reports a repair nor shows its own "failed" toast (`isEditDisabledError`).
+        // reports a repair nor shows its own "failed" toast (`isEditGateCode`).
         if (showReadOnlyRefusal(e)) throw e;
         // Do NOT fabricate a successful no-op { fixed: 0, remaining: 0 }: a thrown
         // repair (an IPC rejection during window/app teardown, a serialization

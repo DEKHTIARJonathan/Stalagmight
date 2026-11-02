@@ -40,7 +40,7 @@ function mockRoutes(overrides: Record<string, () => Promise<unknown>> = {}) {
       speleodb_list_projects: () => Promise.resolve([ARIANE_PROJECT]),
       // The dump has no .stalx -> the backend returns the typed Adopt action.
       speleodb_open_project: () =>
-        Promise.reject({ message: 'ariane project', action: 'Adopt', status: null }),
+        Promise.reject({ message: 'ariane project', code: 'SPELEODB_ADOPT', status: null }),
       speleodb_adopt_ariane: () =>
         Promise.resolve({
           local_path: '/cache/p1/project.stalx',
@@ -168,7 +168,7 @@ describe('OpenFromSpeleoDbDialog list-failure resilience (#270)', () => {
 
   it('a flaky list fetch keeps the authenticated list phase (no login prompt)', async () => {
     mockRoutes({
-      speleodb_list_projects: () => Promise.reject({ message: 'boom', action: 'Retry', status: 503 }),
+      speleodb_list_projects: () => Promise.reject({ message: 'boom', code: 'SPELEODB_RETRY', status: 503 }),
     });
     render(<OpenFromSpeleoDbDialog />);
 
@@ -181,7 +181,7 @@ describe('OpenFromSpeleoDbDialog list-failure resilience (#270)', () => {
 
   it('the empty state says the list could not load, not that there are no projects', async () => {
     mockRoutes({
-      speleodb_list_projects: () => Promise.reject({ message: 'boom', action: 'Retry', status: 503 }),
+      speleodb_list_projects: () => Promise.reject({ message: 'boom', code: 'SPELEODB_RETRY', status: 503 }),
     });
     render(<OpenFromSpeleoDbDialog />);
 
@@ -194,7 +194,7 @@ describe('OpenFromSpeleoDbDialog list-failure resilience (#270)', () => {
     mockRoutes({
       speleodb_list_projects: () =>
         fail
-          ? Promise.reject({ message: 'boom', action: 'Retry', status: 503 })
+          ? Promise.reject({ message: 'boom', code: 'SPELEODB_RETRY', status: 503 })
           : Promise.resolve([ARIANE_PROJECT]),
     });
     render(<OpenFromSpeleoDbDialog />);
@@ -210,7 +210,7 @@ describe('OpenFromSpeleoDbDialog list-failure resilience (#270)', () => {
   it('a dead token surfacing from the list call DOES drop the session', async () => {
     mockRoutes({
       speleodb_list_projects: () =>
-        Promise.reject({ message: 'token expired', action: 'ReLogin', status: 401 }),
+        Promise.reject({ message: 'token expired', code: 'SPELEODB_RELOGIN', status: 401 }),
     });
     render(<OpenFromSpeleoDbDialog />);
 
@@ -222,7 +222,7 @@ describe('OpenFromSpeleoDbDialog list-failure resilience (#270)', () => {
 
   it('a failing session probe still routes to the login prompt', async () => {
     mockRoutes({
-      speleodb_session: () => Promise.reject({ message: 'no token', action: 'ReLogin', status: 401 }),
+      speleodb_session: () => Promise.reject({ message: 'no token', code: 'SPELEODB_RELOGIN', status: 401 }),
     });
     render(<OpenFromSpeleoDbDialog />);
 
@@ -253,7 +253,7 @@ describe('OpenFromSpeleoDbDialog list-failure resilience (#270)', () => {
 describe('OpenFromSpeleoDbDialog refused open with unpushed local edits (#270)', () => {
   const REFUSAL = {
     message: 'local copy has unpushed edits',
-    action: 'UnpushedLocalEdits',
+    code: 'SPELEODB_UNPUSHED_LOCAL_EDITS',
     status: null,
     unpushed_local: {
       project_id: 'p1',

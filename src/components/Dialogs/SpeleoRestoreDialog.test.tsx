@@ -116,7 +116,7 @@ describe('SpeleoRestoreDialog - a second restore (#270)', () => {
   // edits never pushed" line about edits the previous restore had just created.
   const REFUSAL = {
     message: 'local edits never pushed',
-    action: 'UnpushedLocalEdits',
+    code: 'SPELEODB_UNPUSHED_LOCAL_EDITS',
     unpushed_local: {
       project_id: 'p1',
       local_path: '/cache/p1.stalx',

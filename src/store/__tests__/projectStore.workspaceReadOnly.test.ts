@@ -18,9 +18,13 @@ vi.mock('../../utils/ipc', () => ({
  * SpeleoDB lock, so the notice must point at Survey - not at "Start editing", which
  * would not help.
  */
-const WORKSPACE_REFUSAL =
-  'EDIT_DISABLED: WORKSPACE_READ_ONLY: Update shot 1:1 is disabled: the Plan workspace is read-only. ' +
-  'Switch to Survey to edit.';
+/** The backend's read-only-workspace refusal (#576 C4): its code and its sentence. */
+const WORKSPACE_REFUSAL = {
+  code: 'WORKSPACE_READ_ONLY',
+  message:
+  'Update shot 1:1 is disabled: the Plan workspace is read-only. ' +
+  'Switch to Survey to edit.',
+};
 
 describe('a read-only-workspace refusal reaches the user as its own notice', () => {
   let showToast: ReturnType<typeof vi.fn>;
@@ -39,7 +43,7 @@ describe('a read-only-workspace refusal reaches the user as its own notice', () 
   });
 
   it('a survey edit refused by the read-only workspace shows the switch-to-Survey notice', async () => {
-    invokeIpcMock.mockResolvedValue({ success: false, error: WORKSPACE_REFUSAL, section_ids: [] });
+    invokeIpcMock.mockRejectedValue(WORKSPACE_REFUSAL);
 
     const result = await useProjectStore.getState().updateShot(1, 1, { length: 55 });
 
@@ -52,10 +56,9 @@ describe('a read-only-workspace refusal reaches the user as its own notice', () 
   });
 
   it('undo refused by the read-only workspace shows the same notice', async () => {
-    invokeIpcMock.mockResolvedValue({
-      success: false,
-      error: 'EDIT_DISABLED: WORKSPACE_READ_ONLY: Undo is disabled: the Export workspace is read-only.',
-      section_ids: [],
+    invokeIpcMock.mockRejectedValue({
+      code: 'WORKSPACE_READ_ONLY',
+      message: 'Undo is disabled: the Export workspace is read-only.',
     });
 
     await useProjectStore.getState().undo();
@@ -66,12 +69,12 @@ describe('a read-only-workspace refusal reaches the user as its own notice', () 
   it('a Repair refused by the read-only workspace names the workspace', async () => {
     invokeIpcMock.mockImplementation(async (command: string) => {
       if (command === 'repair_project_integrity') {
-        throw 'EDIT_DISABLED: WORKSPACE_READ_ONLY: Repair integrity is disabled: the Plan workspace is read-only.';
+        throw { code: 'WORKSPACE_READ_ONLY', message: 'Repair integrity is disabled: the Plan workspace is read-only.' };
       }
       return undefined;
     });
 
-    await expect(useProjectStore.getState().repairProjectIntegrity()).rejects.toMatch(/^EDIT_DISABLED/);
+    await expect(useProjectStore.getState().repairProjectIntegrity()).rejects.toMatchObject({ code: 'WORKSPACE_READ_ONLY' });
 
     expect(showToast).toHaveBeenCalledWith(i18n.t('editGate.workspaceReadOnlyNotice'), 'edit-disabled', 'warning');
   });

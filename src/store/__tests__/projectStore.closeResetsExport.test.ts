@@ -28,7 +28,7 @@ describe('closeProject resets the Export-mode options', () => {
   });
 
   it('restores every slice when the close succeeds', async () => {
-    invokeIpcMock.mockResolvedValue({ success: true });
+    invokeIpcMock.mockResolvedValue({ warnings: [] });
     const s = useExportStore.getState();
     s.setExportType('data');
     s.setDataFormat('tml');
@@ -43,7 +43,7 @@ describe('closeProject resets the Export-mode options', () => {
   });
 
   it('leaves them alone when the close is REFUSED - the project is still open', async () => {
-    invokeIpcMock.mockResolvedValue({ success: false, error: 'unsaved changes' });
+    invokeIpcMock.mockRejectedValue({ code: 'FAILED', message: 'unsaved changes' });
     useExportStore.getState().setDataFormat('tml');
 
     await useProjectStore.getState().closeProject();

@@ -8,7 +8,8 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { invokeIpc } from '../../utils/ipc';
-import { humanizeSpeleoError, speleoErrorAction } from '../../utils/speleoError';
+import { humanizeSpeleoError } from '../../utils/speleoError';
+import { errorCode } from '../../utils/commandError';
 import { USER_LEVELS } from '../../utils/speleoPermission';
 import { validateCoordinates } from '../../utils/gps';
 import { reverseGeocodeCountry } from '../../utils/reverseGeocodeCountry';
@@ -195,7 +196,7 @@ export default function PublishToSpeleoDbDialog() {
       closeDialog();
     } catch (e) {
       showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
-      if (speleoErrorAction(e) === 'ReLogin') {
+      if (errorCode(e) === 'SPELEODB_RELOGIN') {
         useSpeleoStore.getState().clearSession();
       }
     } finally {

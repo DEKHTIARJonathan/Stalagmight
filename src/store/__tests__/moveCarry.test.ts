@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import i18n from '../../i18n';
 import { TOAST_KEYS } from '../../utils/toastKeys';
-import type { CommandResult } from '../../types/commands';
+import { accepted, type CommandOutcome } from '../commandResult';
+import type { EditOutcome } from '../../types/ipc/EditOutcome';
 import { useUIStore } from '../uiStore';
 import {
   beginMoveCarry,
@@ -25,7 +26,7 @@ import {
  * The chokepoint wiring in projectStore is pinned by projectStore.moveCarry.test.ts.
  */
 
-const OK: CommandResult = { success: true, warnings: [], error: null, section_ids: [] };
+const OK: CommandOutcome<EditOutcome> = accepted<EditOutcome>({ warnings: [], remote_link: null });
 
 function handlers() {
   return { cancel: vi.fn(), restorePreview: vi.fn() };
@@ -131,7 +132,7 @@ describe('moveCarry registry (GHOST-2)', () => {
   });
 
   it('does not mistake an ordinary failure (or anything else) for a carry refusal', () => {
-    expect(isMoveCarryRefusal({ success: false, warnings: [], error: 'x', section_ids: [] })).toBe(false);
+    expect(isMoveCarryRefusal({ success: false, error: 'x', code: 'FAILED', failure: { code: 'FAILED', message: 'x' } })).toBe(false);
     expect(isMoveCarryRefusal(new Error('x'))).toBe(false);
     expect(isMoveCarryRefusal(null)).toBe(false);
     expect(isMoveCarryRefusal(undefined)).toBe(false);

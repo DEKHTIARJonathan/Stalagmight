@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
-import type { CommandResult } from '../../types/commands';
+import type { SaveOutcome } from '../../types/ipc/SaveOutcome';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 
@@ -11,7 +11,7 @@ vi.mock('../../utils/ipc', () => ({
 
 /**
  * #mem flash-free publication, part 1: a successful save always echoes
- * `saved_path` (Rust `CommandResult::success().with_path(...)`). If saveProject
+ * `saved_path` (Rust `SaveOutcome::saved_path`). If saveProject
  * re-spread the project on every save, an autosave to the SAME path would change
  * the project object's identity - and MapCanvas's republish `useLayoutEffect`
  * keys on that identity, so a no-op autosave would trigger a full survey rebuild
@@ -37,9 +37,10 @@ describe('projectStore.saveProject no-op identity (#mem)', () => {
     const project = { file_path: '/cave.stalx' } as never;
     useProjectStore.setState({ project, integrityIssues: [] } as never);
     invokeIpcMock.mockResolvedValue({
-      success: true,
       saved_path: '/cave.stalx',
-    } as CommandResult);
+      unlinked_copy_path: null,
+      warnings: [],
+    } satisfies SaveOutcome);
 
     // `true` = the quiet background save, and it is load-bearing here: the
     // autosave is the ONLY path that re-saves the same path every 30 s, so it is
@@ -56,9 +57,10 @@ describe('projectStore.saveProject no-op identity (#mem)', () => {
     const project = { file_path: '/cave.stalx' } as never;
     useProjectStore.setState({ project, integrityIssues: [] } as never);
     invokeIpcMock.mockResolvedValue({
-      success: true,
       saved_path: '/cave-copy.stalx',
-    } as CommandResult);
+      unlinked_copy_path: null,
+      warnings: [],
+    } satisfies SaveOutcome);
 
     await useProjectStore.getState().saveProject('/cave-copy.stalx');
 
@@ -71,9 +73,10 @@ describe('projectStore.saveProject no-op identity (#mem)', () => {
     const project = { file_path: undefined } as never;
     useProjectStore.setState({ project, integrityIssues: [] } as never);
     invokeIpcMock.mockResolvedValue({
-      success: true,
       saved_path: '/new.stalx',
-    } as CommandResult);
+      unlinked_copy_path: null,
+      warnings: [],
+    } satisfies SaveOutcome);
 
     await useProjectStore.getState().saveProject('/new.stalx');
 

@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import i18n from '../../i18n';
 import { TOAST_KEYS } from '../../utils/toastKeys';
-import type { CommandResult } from '../../types/commands';
+import type { CommandOutcome } from '../commandResult';
+import type { EditOutcome } from '../../types/ipc/EditOutcome';
+import type { BatchOutcome } from '../../types/ipc/BatchOutcome';
 import type { Project } from '../../types/project';
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
@@ -28,7 +30,8 @@ vi.mock('../../utils/ipc', () => ({
  * (R3). Read-only queries are not mutations and pass untouched.
  */
 
-const OK: CommandResult = { success: true, warnings: [], error: null, section_ids: [] };
+/** What every mocked mutation answers: an outcome carrying the fields of all of them (#576 A12). */
+const OK: EditOutcome & BatchOutcome = { warnings: [], remote_link: null, section_ids: [], reversed_sections: [] };
 
 function sent(): string[] {
   return invokeIpcMock.mock.calls.map((call) => call[0] as string);
@@ -99,7 +102,7 @@ describe('projectStore mutation chokepoints during a move carry (GHOST-2)', () =
 
   it('refuses every routed command shape the same way (batch, delete, import)', async () => {
     const store = useProjectStore.getState();
-    const attempts: Array<() => Promise<CommandResult>> = [
+    const attempts: Array<() => Promise<CommandOutcome<unknown>>> = [
       () => store.executeBatch([]),
       () => store.deleteSection(1),
       () => store.deleteShotRangeShift(1, 2, 3),
@@ -228,10 +231,10 @@ describe('projectStore mutation chokepoints during a move carry (GHOST-2)', () =
 
   it('refuses a commit that queued behind a mutation whose refresh changed the survey', async () => {
     // A table edit is already in flight when the station is picked up...
-    let release: (value: CommandResult) => void = () => {};
+    let release: (value: typeof OK) => void = () => {};
     invokeIpcMock.mockImplementationOnce(
       () =>
-        new Promise<CommandResult>((resolve) => {
+        new Promise<typeof OK>((resolve) => {
           release = resolve;
         })
     );

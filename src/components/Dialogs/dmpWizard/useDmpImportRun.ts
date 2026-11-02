@@ -17,15 +17,17 @@
 import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n from '../../../i18n';
-import type { CommandResult, ImportSectionConfig } from '../../../types/commands';
+import type { ImportSectionConfig } from '../../../types/commands';
 import type { ImportReceipt } from '../../../types/ipc/ImportReceipt';
+import type { ImportOutcome } from '../../../types/ipc/ImportOutcome';
+import type { CommandRefused } from '../../../store/commandResult';
 import type { DmpFile } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
 import { useProjectStore, projectSwitched, type ImportReceiptProvenance } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { extractFilename } from '../../../utils/path';
 import { aggregateImportReceipts } from '../../../utils/importReceipt';
-import { isEditDisabledError, READ_ONLY_EDIT_NOTICE } from '../../../utils/editErrors';
+import { isEditGateCode, READ_ONLY_EDIT_NOTICE } from '../../../utils/editErrors';
 import { NonFiniteShotError } from '../../../utils/importPayloadGuard';
 import {
   backendExistingShotUpdatesForSections,
@@ -114,13 +116,13 @@ export function importErrorMessage(e: unknown): string {
 
 /**
  * [#576 RV2-FE-D3] The inline text for a wizard import the backend refused: a read-only
- * refusal (EDIT_DISABLED - the lock lost mid-wizard, the Plan/Export workspace) reads as
- * the friendly read-only notice, not the coded string; anything else as the backend
- * said it. The store's edit path is told not to toast the same notice on top
- * (`importSections`' `readOnlyNoticeInline`).
+ * refusal (an edit-gate code - the lock lost mid-wizard, the Plan/Export workspace)
+ * reads as the friendly read-only notice; anything else as the backend said it, or
+ * `fallback` when it said nothing. The store's edit path is told not to toast the same
+ * notice on top (`importSections`' `readOnlyNoticeInline`).
  */
-function importFailureText(result: CommandResult, fallback: string): string {
-  return isEditDisabledError(result.error) ? READ_ONLY_EDIT_NOTICE(result.error) : (result.error ?? fallback);
+function importFailureText(result: CommandRefused, fallback: string): string {
+  return isEditGateCode(result.code) ? READ_ONLY_EDIT_NOTICE(result.code) : (result.error || fallback);
 }
 
 /**
@@ -199,7 +201,7 @@ export function useDmpImportRun({
   }), [dmpFile]);
 
   /** Bank what one successful `import_sections` created. */
-  const bank = useCallback((result: CommandResult) => {
+  const bank = useCallback((result: ImportOutcome) => {
     if (result.section_ids.length > 0) importedSectionIdsRef.current.push(...result.section_ids);
     if (result.import_receipt) importedReceiptsRef.current.push(result.import_receipt);
   }, []);

@@ -7,6 +7,11 @@
  * the multi-step jumps (`undo_to`/`redo_to`) but not for single steps, so its
  * two dirty bits stayed clean until the next status poll - long enough for the
  * quit guard and the push prompt to read "nothing to save / nothing to push".
+ *
+ * [#576 C4, D22] The backend now SAYS which it was: a single step that ran and
+ * failed is `HISTORY_STEP_FAILED` (step 1 of 1), and every refusal that ran no step
+ * has its own code. The real `invokeIpc` runs here (it wraps the rejection); only
+ * Tauri's `invoke` is mocked.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -14,20 +19,19 @@ import { useProjectStore } from '../projectStore';
 import { useSpeleoStore } from '../speleoStore';
 import { useUIStore } from '../uiStore';
 import { projectStateEnvelope } from '../../test/projectStateEnvelope';
+import type { CommandError } from '../../types/ipc/CommandError';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeIpcMock }));
 
-/** Undo and redo fail with `error`; every refresh round trip answers an empty project. */
-function failWith(error: string) {
+/** Undo and redo fail with `failure`; every refresh round trip answers an empty project. */
+function failWith(failure: CommandError) {
   invokeIpcMock.mockImplementation(async (command: string) => {
     switch (command) {
       case 'undo':
       case 'redo':
-        return { success: false, warnings: [], error, section_ids: [] };
+        throw failure;
       case 'get_project_state_binary':
         return projectStateEnvelope({
           project: {
@@ -73,7 +77,13 @@ describe('a failed single undo/redo (#576 NF-W2S-2)', () => {
   it.each(['undo', 'redo'] as const)(
     'marks both dirty bits when the %s step failed after it started',
     async (verb) => {
-      failWith('Failed to parse undo data');
+      failWith({
+        code: 'HISTORY_STEP_FAILED',
+        message: 'Failed to parse undo data',
+        history_step: { failed_step: 1, total_steps: 1 },
+        // The backend marked the copy (#576 A18(a)) and reports its link row.
+        remote_link: { has_unpushed_edits: true, unwound: false },
+      });
       expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
 
       const result = await useProjectStore.getState()[verb]();
@@ -85,13 +95,16 @@ describe('a failed single undo/redo (#576 NF-W2S-2)', () => {
   );
 
   it.each([
-    'Nothing to undo',
-    'Nothing to redo',
-    'Undo is unavailable after an internal error. Save your work and restart Stalagmight.',
-    'EDIT_DISABLED: Undo is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.',
-    'EDIT_DISABLED: WORKSPACE_READ_ONLY: Undo is disabled: the Plan workspace is read-only. Switch to Survey to edit.',
-  ])('marks nothing on a refusal that ran no step: %s', async (error) => {
-    failWith(error);
+    ['NOTHING_TO_UNDO', 'Nothing to undo'],
+    ['NOTHING_TO_REDO', 'Nothing to redo'],
+    ['REFUSED_AFTER_INTERNAL_ERROR', 'Undo is unavailable after an internal error. Save your work and restart Stalagmight.'],
+    ['EDIT_DISABLED', 'Undo is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.'],
+    ['WORKSPACE_READ_ONLY', 'Undo is disabled: the Plan workspace is read-only.'],
+    ['NEWER_FILE_EDIT_DISABLED', 'Undo is disabled: this project was saved by a newer version of Stalagmight.'],
+    ['EDIT_REVERIFY_DIVERGED', 'The SpeleoDB lock or server version changed - reconcile before editing.'],
+  ] as const)('marks nothing on a refusal that ran no step: %s', async (code, message) => {
+    // Nothing ran, so the link row the backend reports is unchanged (clean).
+    failWith({ code, message, remote_link: { has_unpushed_edits: false, unwound: false } });
 
     await useProjectStore.getState().undo();
 

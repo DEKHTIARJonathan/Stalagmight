@@ -1,8 +1,8 @@
 /**
  * #576 NF-W2RO-2: resolving (Ignore) or reopening a validation warning on a project
  * the backend will not let the user edit - a SpeleoDB project without the lock, a
- * newer-version file, the Plan/Export workspace - is refused with the coded
- * EDIT_DISABLED error. These two actions call the IPC directly rather than through the
+ * newer-version file, the Plan/Export workspace - is refused with an edit-gate code
+ * (EDIT_DISABLED, NEWER_FILE_EDIT_DISABLED, WORKSPACE_READ_ONLY). These two actions call the IPC directly rather than through the
  * store's edit path, and swallowed that refusal with a console.error: the Ignore just
  * did not happen (or showed a bare "Could not apply the fix."), and the reopen gave no
  * feedback at all. They now show the same friendly read-only notice, under the same
@@ -18,8 +18,12 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
 
-const WORKSPACE_REFUSAL =
-  'EDIT_DISABLED: WORKSPACE_READ_ONLY: Resolve warning is disabled in Plan and Export. Switch to Survey to edit.';
+/** The backend's read-only-workspace refusal (#576 C4): its code and its sentence. */
+const WORKSPACE_REFUSAL = {
+  code: 'WORKSPACE_READ_ONLY',
+  message:
+    'Resolve warning is disabled in Plan and Export. Switch to Survey to edit.',
+};
 
 const toasts = () => useUIStore.getState().toasts.map((t) => [t.message, t.key, t.kind]);
 
@@ -46,7 +50,7 @@ describe('a refused warning resolve/unresolve says why (NF-W2RO-2)', () => {
   });
 
   it('resolve: any other failure keeps its own message, once', async () => {
-    invokeIpcMock.mockRejectedValue('Shot not found');
+    invokeIpcMock.mockRejectedValue({ code: 'FAILED', message: 'Shot not found' });
     const ok = await useProjectStore.getState().resolveWarning(1, 2, 'distance');
 
     expect(ok).toBe(false);

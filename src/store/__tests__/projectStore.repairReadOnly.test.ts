@@ -11,14 +11,17 @@ vi.mock('../../utils/ipc', () => ({
 }));
 
 /**
- * #576 D39(a): a refused Repair is a coded rejection. It used to resolve
+ * #576 D39(a): a refused Repair is a coded rejection (code `EDIT_DISABLED`, #576 C4).
+ * It used to resolve
  * `{ fixed: 0, remaining: 0, changed: false }`, which the UI reported as
  * "Repaired 0 issues. Save to keep the fix." for a repair that never ran. The
  * store now shows the read-only notice and re-throws, so the caller reports
  * neither a repair nor a failure.
  */
-const LOCK_REFUSAL =
-  'EDIT_DISABLED: Repair integrity is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.';
+const LOCK_REFUSAL = {
+  code: 'EDIT_DISABLED',
+  message: 'Repair integrity is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.',
+};
 
 describe('a refused Repair', () => {
   let showToast: ReturnType<typeof vi.fn>;
@@ -38,7 +41,7 @@ describe('a refused Repair', () => {
 
   it('shows the read-only notice and re-throws instead of reporting a repair', async () => {
     invokeIpcMock.mockImplementation(async (command: string) => {
-      // Tauri rejects a Result<_, String> command with the bare string.
+      // Tauri rejects a Result<_, CommandError> command with the CommandError object.
       if (command === 'repair_project_integrity') throw LOCK_REFUSAL;
       return undefined;
     });

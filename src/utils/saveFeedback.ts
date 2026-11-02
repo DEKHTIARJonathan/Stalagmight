@@ -1,12 +1,9 @@
 import { useUIStore } from '../store/uiStore';
-import {
-  classifySaveError,
-  isUnreadableRefusal,
-  unreadableRefusalMessage,
-  type SaveErrorKind,
-} from './saveErrors';
+import { isUnreadableRefusal, saveErrorKind, type SaveErrorKind } from './saveErrors';
 import { trackDialogComplete } from './telemetry';
 import { getErrorMessage, invokeIpc } from './ipc';
+import { errorCode } from './commandError';
+import type { CommandErrorCode } from '../types/ipc/CommandErrorCode';
 import i18n from '../i18n';
 import { importReceiptSummaryParts, isEmptyImportReceipt } from './importReceipt';
 import { TOAST_KEYS } from './toastKeys';
@@ -23,6 +20,24 @@ import type { ProjectStore } from '../store/projectStore';
  * `useProjectStore.getState()` (or `get()` inside the store) at the call.
  */
 export type SaveFailureIntegrity = Pick<ProjectStore, 'integritySaveBlocked' | 'openIntegrityDialog'>;
+
+/**
+ * A failed save as the routers below read it (#576 C4): the code to route on (null
+ * when the failure carries none) and the line to show. A refused `saveProject`
+ * outcome (`CommandRefused`) is one as it stands; a caught rejection becomes one
+ * through `saveFailureOf`.
+ */
+export interface SaveFailure {
+  readonly code: CommandErrorCode | null;
+  readonly error: string | null | undefined;
+}
+
+/** The `SaveFailure` a caught rejection describes; `fallback` when it has no message. */
+export function saveFailureOf(e: unknown, fallback?: string): SaveFailure & { readonly error: string } {
+  return { code: errorCode(e), error: getErrorMessage(e, fallback) };
+}
+
+const NO_FAILURE: SaveFailure = { code: null, error: null };
 
 /**
  * Surface a failed (non-throwing) save to the user.
@@ -53,16 +68,18 @@ export type SaveFailureIntegrity = Pick<ProjectStore, 'integritySaveBlocked' | '
  * named one - and the refusal would never render anywhere.
  */
 export function surfaceSaveFailure(
-  error: string | null | undefined,
+  failure: SaveFailure | null | undefined,
   openDialog: (dialog: string, data?: Record<string, unknown>) => void,
   integrity: SaveFailureIntegrity,
   opts?: { skipIntegrityRouting?: boolean; title?: string },
 ): void {
+  const { code, error } = failure ?? NO_FAILURE;
+  const kind = saveErrorKind(code);
   // [#576 B6-D1] A project saved by a newer version refuses every save. That is a
   // blocked action on a read-only project (the banner already says why), so it is
   // a warning toast (docs/notifications.md) - not an error dialog, and never
   // Review & Repair, whose repairs this build may not make either.
-  if (classifySaveError(error) === 'newer-file') {
+  if (kind === 'newer-file') {
     useUIStore
       .getState()
       .showToast(i18n.t('banners.newerFile.saveRefused'), TOAST_KEYS.NEWER_FILE_READ_ONLY, 'warning');
@@ -71,7 +88,7 @@ export function surfaceSaveFailure(
   // [#576 B15] Stored settings the open could not read refuse every save, and the
   // banner already says which and why: a blocked action, so a warning toast - not
   // an error dialog, and never Review & Repair, which cannot read them either.
-  if (classifySaveError(error) === 'settings-unreadable') {
+  if (kind === 'settings-unreadable') {
     useUIStore
       .getState()
       .showToast(
@@ -81,14 +98,12 @@ export function surfaceSaveFailure(
       );
     return;
   }
-  const routesToIntegrity =
-    !opts?.skipIntegrityRouting && !isUnreadableRefusal(classifySaveError(error));
+  const routesToIntegrity = !opts?.skipIntegrityRouting && !isUnreadableRefusal(kind);
   if (routesToIntegrity && integrity.integritySaveBlocked) {
     integrity.openIntegrityDialog();
     return;
   }
   if (!error) return;
-  const kind = classifySaveError(error);
   // Already surfaced by `saveProject` through the folder-access guidance dialog.
   if (kind === 'permission') return;
   openDialog('error', {
@@ -98,10 +113,11 @@ export function surfaceSaveFailure(
 }
 
 /**
- * The line a failed save gets on a user-facing surface. A marked destination
- * failure is reworded - the backend's own text for one is SQLite's "Failed to
- * open database", which tells the user nothing about the folder being gone
- * (#429) - and everything else is relayed as the backend wrote it.
+ * The line a failed save gets on a user-facing surface. A destination failure is
+ * reworded - the backend's own text for one is SQLite's "Failed to open database",
+ * which tells the user nothing about the folder being gone (#429) - and everything
+ * else (an unreadable side table's refusal included, already a full sentence) is
+ * relayed as the backend wrote it.
  */
 function saveFailureMessage(kind: SaveErrorKind, error: string): string {
   switch (kind) {
@@ -109,10 +125,6 @@ function saveFailureMessage(kind: SaveErrorKind, error: string): string {
       return i18n.t('dialogs.saveFailure.pathNotFound');
     case 'path-too-long':
       return i18n.t('dialogs.saveFailure.pathTooLong');
-    // Already a full sentence from the backend; only its routing marker comes off.
-    case 'ignores-unreadable':
-    case 'side-table-unreadable':
-      return unreadableRefusalMessage(error);
     default:
       return error;
   }
@@ -145,26 +157,24 @@ export function shouldShowAutosaveBanner(state: {
 
 /**
  * The autosave banner's line for a failed background save (banner-class, per
- * docs/notifications.md). Same rewording as the dialog, one line shorter, and
- * it must never leak a raw marker - the banner renders this string.
+ * docs/notifications.md). Same rewording as the dialog, one line shorter; the
+ * banner renders this string.
  */
-export function autosaveFailureMessage(error?: string | null): string {
-  switch (classifySaveError(error)) {
+export function autosaveFailureMessage(failure: SaveFailure | null | undefined): string {
+  const { code, error } = failure ?? NO_FAILURE;
+  switch (saveErrorKind(code)) {
     case 'permission':
       return i18n.t('banners.autosave.permissionDenied');
     case 'path-not-found':
       return i18n.t('banners.autosave.pathNotFound');
     case 'path-too-long':
       return i18n.t('banners.autosave.pathTooLong');
-    case 'ignores-unreadable':
-    case 'side-table-unreadable':
-      return unreadableRefusalMessage(error ?? '');
     // [#576 B6-D1] Unreachable through autosave, which never runs on such a
-    // project (useAutoSave), but a marker must never reach a surface.
+    // project (useAutoSave), but a refused save still gets its own line.
     case 'newer-file':
       return i18n.t('banners.newerFile.saveRefused');
     // [#576 B15] Unreachable through autosave, which never runs while settings
-    // are unread (useAutoSave), but a marker must never reach a surface.
+    // are unread (useAutoSave), but a refused save still gets its own line.
     case 'settings-unreadable':
       return i18n.t('banners.settingsUnreadable.saveRefused');
     default:
@@ -174,7 +184,7 @@ export function autosaveFailureMessage(error?: string | null): string {
 
 /**
  * What a SUCCESSFUL save could not keep, by the code the backend stamps on
- * `CommandResult.warnings` (`save_sidecars.rs` / `project_io.rs`).
+ * `SaveOutcome.warnings` (`save_sidecars.rs` / `project_io.rs`).
  */
 const SAVE_WARNING_TEXT: Record<string, string> = {
   // The undo history could not be written and was removed from the saved file.
@@ -191,7 +201,7 @@ const SAVE_WARNING_TEXT: Record<string, string> = {
 /**
  * Tell the user what a SUCCESSFUL save went ahead without (#576 A3-D2, NF-AN2-1).
  *
- * The backend reports it on `CommandResult.warnings`, which nothing read before -
+ * The backend reports it on `SaveOutcome.warnings`, which nothing read before -
  * so a save that dropped the undo history said only "saved". Each one is a
  * warning toast (docs/notifications.md: the action succeeded with a caveat): not
  * a dialog, because there is nothing to decide, and not a banner, because it is
@@ -225,7 +235,7 @@ export function surfaceSaveWarnings(warnings: ValidationWarning[] | undefined): 
 const DEFERRED_SAVE_WARNING_CODE = 'SYSTEM';
 
 /**
- * The subset of an import's `CommandResult.warnings` that mean "the import is only
+ * The subset of an import's `ImportOutcome.warnings` that mean "the import is only
  * in memory - the save failed". Empty for a fully-persisted import, even one that
  * carries routine validation warnings. (#110)
  */
@@ -364,9 +374,9 @@ export async function finishImportWithoutOrphanSuggestions(
   dialogName: string,
   ui: ImportDialogUi,
   newlyImportedSectionIds: number[],
-  receipt?: ImportReceipt,
+  receipt?: ImportReceipt | null,
 ): Promise<void> {
-  let finalReceipt: ImportReceiptWithUnanchoredCount | undefined = receipt;
+  let finalReceipt: ImportReceiptWithUnanchoredCount | undefined = receipt ?? undefined;
   if (receipt) {
     try {
       const unanchoredCount = await invokeIpc(
@@ -393,7 +403,8 @@ export async function finishImportWithoutOrphanSuggestions(
 
 /**
  * A failed import, classified by where it failed:
- * - `command`: the backend returned `success: false` - the dialog's work is
+ * - `command`: the backend refused the import (the store's refused outcome: its
+ *   line and its code) - the dialog's work is
  *   over, so it closes (with its completion telemetry) before the error dialog.
  *   It does NOT run the rest of the exit sequence: `setView`/fit dropped the
  *   user into the empty project the import had just created, fitted the map to
@@ -407,7 +418,7 @@ export async function finishImportWithoutOrphanSuggestions(
  *   were. `format` names the source format in the fallback message.
  */
 export type ImportFailure =
-  | { phase: 'command'; error: string | null | undefined }
+  | { phase: 'command'; error: string | null | undefined; code: CommandErrorCode | null }
   | { phase: 'empty'; message: string }
   | { phase: 'transport'; error: unknown; format: string };
 
@@ -418,15 +429,12 @@ export type ImportFailure =
  * as this router would, instead of minting a second set of strings.
  */
 /**
- * The marker a file import's failure starts with when the loading overlay's Cancel
- * stopped it before anything was applied (`IMPORT_CANCELLED_CODE`, the backend's
- * import runner; #576 NF-FIX3A-2).
+ * Whether an import command's failure says the user cancelled it: the loading
+ * overlay's Cancel stopped it before anything was applied (code `IMPORT_CANCELLED`,
+ * the backend's import runner; #576 NF-FIX3A-2), so nothing was imported.
  */
-const IMPORT_CANCELLED_PREFIX = 'IMPORT_CANCELLED:';
-
-/** Whether an import command's error says the user cancelled it (nothing imported). */
-export function isImportCancelled(error: string | null | undefined): boolean {
-  return typeof error === 'string' && error.startsWith(IMPORT_CANCELLED_PREFIX);
+export function isImportCancelled(code: CommandErrorCode | null | undefined): boolean {
+  return code === 'IMPORT_CANCELLED';
 }
 
 export function importFailureMessage(failure: ImportFailure): string {
@@ -483,20 +491,16 @@ export function surfaceImportFailure(
       ui.closeDialog();
       // The user cancelled it (#576 NF-FIX3A-2): nothing was imported and nothing
       // went wrong, so a quiet note rather than an import-error dialog.
-      if (isImportCancelled(failure.error)) {
+      if (isImportCancelled(failure.code)) {
         ui.showToast(i18n.t('dialogs.importFailure.cancelled'), TOAST_KEYS.IMPORT_CANCELLED, 'info');
         return;
       }
       // Unlike 'empty', 'command' is NOT a safe class to blanket-hide the
       // report-a-bug hint for (#447 review): execute_tml_import (and its
-      // Compass/Walls/GPX siblings) return this same CommandResult::failure
-      // shape for a malformed source file (`Failed to parse TML file: ...`)
-      // AND for internal/invariant failures with no file-fixable cause -
-      // `guard_mutation`'s "read-only, acquire the lock to edit" among them
-      // (src-tauri/crates/core/src/core/state/app_state.rs `guard_mutation`).
-      // The backend attaches no error-kind/classification
-      // to distinguish them, so hiding by phase alone would hide the hint for
-      // a genuine bug too. Keep the hint here; the file case is instead
+      // Compass/Walls/GPX siblings) refuse with the same uncoded `FAILED` for a
+      // malformed source file (`Failed to parse TML file: ...`) AND for
+      // internal/invariant failures with no file-fixable cause, so hiding by
+      // phase alone would hide the hint for a genuine bug too. Keep the hint here; the file case is instead
       // caught before it ever reaches this router, at the parse step
       // (`parseForImport` in openOrImport.ts).
       ui.openDialog('error', {
@@ -525,7 +529,7 @@ export function surfaceImportFailure(
 export function completeImportToSingleView(
   dialogName: string,
   ui: ImportDialogUi,
-  receipt?: ImportReceipt,
+  receipt?: ImportReceipt | null,
 ): void {
   trackDialogComplete(dialogName);
   useUIStore.getState().setImportContext(null);
@@ -553,7 +557,7 @@ export function finalizeDeferredSaveWarnings(
   warnings: ValidationWarning[] | undefined,
   dialogName: string,
   ui: ImportDialogUi,
-  receipt?: ImportReceipt,
+  receipt?: ImportReceipt | null,
 ): boolean {
   const saveWarnings = deferredSaveWarnings(warnings);
   if (saveWarnings.length === 0) return false;

@@ -175,7 +175,7 @@ describe('useSpeleoActions - a failed push/unlock raises the persistent banner (
     });
     invokeIpcMock.mockRejectedValue({
       message: 'Network error talking to SpeleoDB: Invalid argument',
-      action: 'Retry',
+      code: 'SPELEODB_RETRY',
       status: null,
       transport: 'Unknown',
     });

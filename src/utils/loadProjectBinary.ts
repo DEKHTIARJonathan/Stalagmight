@@ -17,6 +17,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { decode as msgpackDecode } from '@msgpack/msgpack';
+import { errorCode } from './commandError';
 import type { LoadProjectFullResult } from '../types/ipc/LoadProjectFullResult';
 import type { Project } from '../types/ipc/Project';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
@@ -234,7 +235,7 @@ interface SectionHeaderBinary {
  * code that must not reach the console as an error.
  */
 function isAlreadyOpen(e: unknown): boolean {
-  return typeof e === 'object' && e !== null && (e as { code?: unknown }).code === 'ALREADY_OPEN';
+  return errorCode(e) === 'ALREADY_OPEN';
 }
 
 /**

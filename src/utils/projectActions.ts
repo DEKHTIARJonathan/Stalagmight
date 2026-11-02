@@ -18,9 +18,9 @@ import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { needsSpeleoHandBackPrompt } from './quit';
-import { surfaceSaveFailure } from './saveFeedback';
+import { saveFailureOf, surfaceSaveFailure } from './saveFeedback';
 import i18n from '../i18n';
-import { getErrorMessage, invokeIpc } from './ipc';
+import { invokeIpc } from './ipc';
 import {
   ensureExtension,
   projectSaveFilters,
@@ -29,7 +29,8 @@ import {
 } from './fileDialogs';
 import { extractFilename } from './path';
 import { resolveSavePath } from './overwriteGuard';
-import type { CommandResult } from '../types/commands';
+import type { CommandOutcome } from '../store/commandResult';
+import type { SaveOutcome } from '../types/ipc/SaveOutcome';
 
 /**
  * Open the New Project dialog, guarding a dirty open project: defer to the
@@ -70,13 +71,13 @@ export function newProjectGuarded(): void {
  *
  * A failed save is routed through `surfaceSaveFailure` (integrity blocks → Review
  * & Repair; permission denials already surfaced their own guidance dialog). The
- * guard is `!success`, NOT "has an error string": a blocked save can legitimately
- * carry a null error (the block is signaled via `integritySaveBlocked`), and must
+ * guard is `!success`, NOT "has an error string": a refused save is routed on its
+ * code, and an integrity block is signaled via `integritySaveBlocked`, so it must
  * still surface rather than be mistaken for a clean save.
  */
 export async function saveProjectAs(opts?: {
   closeAfterSave?: boolean;
-}): Promise<CommandResult | null> {
+}): Promise<CommandOutcome<SaveOutcome> | null> {
   const { openDialog } = useUIStore.getState();
   try {
     const selected = await saveDialog({ filters: projectSaveFilters() });
@@ -109,18 +110,18 @@ export async function saveProjectAs(opts?: {
 
     const result = await useProjectStore.getState().saveProject(finalPath);
     if (result && !result.success) {
-      surfaceSaveFailure(result.error, openDialog, useProjectStore.getState());
+      surfaceSaveFailure(result, openDialog, useProjectStore.getState());
     }
     return result;
   } catch (e) {
-    // store.saveProject rejects only on an IPC-transport failure (real save
-    // failures resolve as CommandResult{success:false}, handled above). Surface
+    // store.saveProject rejects only on an IPC-transport failure (a refused save
+    // resolves as the refused outcome, handled above). Surface
     // it here rather than letting it escape as an unhandled rejection - the
     // keyboard (`void saveProjectAs()`) and menu (`void handleSaveProjectAs()`)
     // call sites don't catch. Return null (not a failure result) so the
     // delegating handleSaveProject doesn't surface a second dialog and
     // saveAndClose treats it as "not saved" and keeps the project open.
-    surfaceSaveFailure(getErrorMessage(e, 'Failed to save project'), openDialog, useProjectStore.getState(), {
+    surfaceSaveFailure(saveFailureOf(e, 'Failed to save project'), openDialog, useProjectStore.getState(), {
       skipIntegrityRouting: true,
     });
     return null;
@@ -165,12 +166,12 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
     finalPath = resolved;
     const result = await useProjectStore.getState().saveProject(finalPath);
     if (!result || !result.success) {
-      surfaceSaveFailure(result?.error ?? null, openDialog, useProjectStore.getState());
+      surfaceSaveFailure(result, openDialog, useProjectStore.getState());
       return false;
     }
     wroteDetachedCopy = Boolean(result.unlinked_copy_path);
   } catch (e) {
-    surfaceSaveFailure(getErrorMessage(e, 'Failed to save a local copy'), openDialog, useProjectStore.getState(), {
+    surfaceSaveFailure(saveFailureOf(e, 'Failed to save a local copy'), openDialog, useProjectStore.getState(), {
       skipIntegrityRouting: true,
     });
     return false;
@@ -193,7 +194,7 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
     await invokeIpc('speleodb_unlink');
   } catch (e) {
     surfaceSaveFailure(
-      getErrorMessage(e, 'The local copy was saved, but detaching from SpeleoDB failed'),
+      saveFailureOf(e, 'The local copy was saved, but detaching from SpeleoDB failed'),
       openDialog,
       useProjectStore.getState(),
       { skipIntegrityRouting: true, title: i18n.t('dialogs.saveFailure.detachTitle') },

@@ -18,8 +18,8 @@ import { defaultConfig, type Config } from '../../types/config';
 import { isValidationConfigValid } from '../../utils/validation';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useEditBlockedReason, useEditingBlocked } from '../../hooks/useEditingBlocked';
-import { isEditDisabledError } from '../../utils/editErrors';
-import type { CommandResult } from '../../types/commands';
+import { isEditGateCode } from '../../utils/editErrors';
+import type { CommandRefused } from '../../store/commandResult';
 import { convertLength, convertLengthToMeters, clampPrecision } from '../../utils/formatStats';
 
 // A compiler-checked subset of SettingsCategory, so these tabs can never drift
@@ -156,12 +156,12 @@ export function ProjectSettingsDialog() {
     !saving;
 
   // A refused write keeps the dialog open; say why - unless the refusal already said so
-  // itself: a move carry (GHOST-2) and a read-only refusal (EDIT_DISABLED, which the
+  // itself: a move carry (GHOST-2) and a read-only refusal (an edit-gate code, which the
   // store's edit path shows as the friendly read-only notice, #576 NF-W2RO-1) do.
   const reportSaveFailure = useCallback(
-    (result: CommandResult) => {
+    (result: CommandRefused) => {
       setSaving(false);
-      if (isMoveCarryRefusal(result) || isEditDisabledError(result.error)) return;
+      if (isMoveCarryRefusal(result) || isEditGateCode(result.code)) return;
       showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
     },
     [showToast, t]
@@ -224,7 +224,7 @@ export function ProjectSettingsDialog() {
     // between typing and clicking Save, silently discard an already-staged
     // change (closeDialog() would still run). The backend is authoritative -
     // attempt the write whenever the draft changed, and if guard_mutation
-    // rejects it (EDIT_DISABLED), fall into the same failure path as a
+    // rejects it (an edit-gate code), fall into the same failure path as a
     // rejected name/validation save: dialog stays open, error shown, the
     // user's staged draft is untouched.
     //

@@ -1,15 +1,12 @@
 import { create } from 'zustand';
 import i18n from '../i18n';
-import { invokeIpc, type CommandResultCommand, type ForwardedInvoke, type QueuedCallArgs } from '../utils/ipc';
+import { invokeIpc, type ForwardedInvoke, type IpcResult, type MutationCommand, type QueuedCallArgs } from '../utils/ipc';
 import { trackCommand, setSource, peekProjectActionSource, clearProjectActionSource } from '../utils/telemetry';
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
-import { classifySaveError, isPermissionError, type SaveErrorKind } from '../utils/saveErrors';
-import {
-  isEditDisabledError,
-  isReverifyDivergedError,
-  READ_ONLY_EDIT_NOTICE,
-} from '../utils/editErrors';
+import { isPermissionError, saveErrorKind, type SaveErrorKind } from '../utils/saveErrors';
+import { isEditGateCode, isReverifyDivergedCode, READ_ONLY_EDIT_NOTICE } from '../utils/editErrors';
+import { commandErrorOf, getErrorMessage } from '../utils/commandError';
 import { hasEligibleClosures } from '../utils/closures';
 import { applyReverseAftermath, composeReverseTransforms, flushPlanAnchors, remapPlanPins } from '../utils/reverseAftermath';
 import {
@@ -19,10 +16,10 @@ import {
   type OriginCapture,
 } from '../utils/distanceOriginAnchor';
 import { useUIStore } from './uiStore';
-import { autosaveFailureMessage, surfaceSaveFailure, surfaceSaveWarnings } from '../utils/saveFeedback';
+import { autosaveFailureMessage, saveFailureOf, surfaceSaveFailure, surfaceSaveWarnings } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
 import { speleoState } from './speleoStoreHandle';
-import { emptyCommandResult } from './commandResult';
+import { emptyCommandResult, refusedLocally, settleCommand, type CommandOutcome } from './commandResult';
 import { useExportStore } from './exportStore';
 import { refuseMutationDuringCarry, refuseStaleCarryCommit, takeMoveCarryCommit, type MoveCarryCommit } from './moveCarry';
 import { runSerialized } from './mutationQueue';
@@ -47,7 +44,7 @@ import type {
 } from '../types/project';
 import type { ExistingShotUpdate } from '../types/ipc/ExistingShotUpdate';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
-import type { SpeleoManagedFile } from '../types/ipc/SpeleoManagedFile';
+import type { BatchOutcome, DeleteProjectOutcome, EditOutcome, HistoryOutcome, ImportOutcome, ProjectFileOutcome, ReverseOutcome, SaveOutcome, SectionCreated, ShotCreated, ValidationWarning } from '../types/ipc.generated';
 import type { Config } from '../types/config';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, TmlRootPlacement, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion } from '../types/commands';
@@ -138,47 +135,10 @@ function nextProjectTreeGeneration(): number {
 let refreshRequestCounter = 0;
 let refreshAppliedRequest = 0;
 
-
-/**
- * Parsed error from Tauri backend.
- */
-interface LoadError {
-  code: string;
-  message: string;
-  details?: string | undefined;
-  speleodbManaged?: SpeleoManagedFile | undefined;
-}
-
 interface CreateProjectOptions {
   savePath?: string;
   saveDirectory?: string;
   deferInitialSave?: boolean;
-}
-
-/**
- * Parse error from Tauri backend.
- * Tauri may serialize errors as strings or objects.
- */
-function parseLoadError(e: unknown): LoadError {
-  // Tauri serializes errors as strings - try parsing as JSON
-  if (typeof e === 'string') {
-    try {
-      return JSON.parse(e) as LoadError;
-    } catch {
-      return { code: 'UNKNOWN', message: e };
-    }
-  }
-  // Already an object
-  if (typeof e === 'object' && e !== null) {
-    const obj = e as Record<string, unknown>;
-    return {
-      code: (obj.code as string) || 'UNKNOWN',
-      message: (obj.message as string) || String(e),
-      details: obj.details as string | undefined,
-      speleodbManaged: obj.speleodbManaged as SpeleoManagedFile | undefined,
-    };
-  }
-  return { code: 'UNKNOWN', message: String(e) };
 }
 
 /**
@@ -329,7 +289,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * both pass `true`; anything the user explicitly asked for (Ctrl+S, Save As,
    * save-after-import) must not.
    */
-  saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandResult>;
+  saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandOutcome<SaveOutcome>>;
   /**
    * Persist the project after a DMP import completes (#92). Imports bypass the
    * dirty/save machinery, so the change would otherwise be lost. For a NEW
@@ -350,7 +310,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * the server mutex (fix 1); the close dialog's "Keep lock" path passes
    * `{ releaseLock: false }` to retain it.
    */
-  closeProject: (opts?: { releaseLock?: boolean }) => Promise<CommandResult>;
+  closeProject: (opts?: { releaseLock?: boolean }) => Promise<CommandOutcome<ProjectFileOutcome>>;
   refreshProjectState: () => Promise<void>;
   /**
    * Fetch closure-adjusted geometry for the adjusted display mode (lazy, cached).
@@ -386,19 +346,19 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   /** Dismiss the integrity warning without repairing. */
   dismissIntegrityIssues: () => void;
   loadRecentProjects: () => Promise<void>;
-  removeFromRecentProjects: (path: string) => Promise<CommandResult>;
-  deleteProject: (path: string) => Promise<CommandResult>;
-  mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandResult>;
+  removeFromRecentProjects: (path: string) => Promise<CommandOutcome<ProjectFileOutcome>>;
+  deleteProject: (path: string) => Promise<CommandOutcome<DeleteProjectOutcome>>;
+  mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandOutcome<ProjectFileOutcome>>;
 
-  createSection: (data: SectionData) => Promise<CommandResult>;
+  createSection: (data: SectionData) => Promise<CommandOutcome<SectionCreated>>;
   createSectionAndMerge: (
     data: SectionData,
     importStationIndex: number,
     targetStation: StationRef,
     closureStrategy: ClosureStrategy
-  ) => Promise<CommandResult>;
-  updateSection: (sectionId: SectionId, updates: SectionUpdates) => Promise<CommandResult>;
-  deleteSection: (sectionId: SectionId) => Promise<CommandResult>;
+  ) => Promise<CommandOutcome<SectionCreated>>;
+  updateSection: (sectionId: SectionId, updates: SectionUpdates) => Promise<CommandOutcome<EditOutcome>>;
+  deleteSection: (sectionId: SectionId) => Promise<CommandOutcome<EditOutcome>>;
   /**
    * Reverse a section end-to-end so the far end becomes station 0 (#24).
    * Geometry is preserved - every station keeps its world coordinate and only
@@ -406,52 +366,52 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * passage dimensions; it is opt-in because whether LRUD was recorded facing
    * along travel is a survey convention we cannot infer, so the user is asked.
    */
-  reverseSection: (sectionId: SectionId, swapLeftRight: boolean) => Promise<CommandResult>;
+  reverseSection: (sectionId: SectionId, swapLeftRight: boolean) => Promise<CommandOutcome<ReverseOutcome>>;
 
-  createShot: (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => Promise<CommandResult>;
-  updateShot: (sectionId: SectionId, shotId: ShotId, updates: ShotUpdatesPatch) => Promise<CommandResult>;
-  deleteShot: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
-  splitShotAtDistance: (sectionId: SectionId, shotId: ShotId, distance: number) => Promise<CommandResult>;
-  deleteShotAndSplit: (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
-  deleteLastShotAndSection: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
-  deleteShotRangeSplit: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
-  deleteShotRangeShift: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId) => Promise<CommandResult>;
-  setShotKind: (sectionId: SectionId, shotId: ShotId, kind: ShotKind) => Promise<CommandResult>;
+  createShot: (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => Promise<CommandOutcome<ShotCreated>>;
+  updateShot: (sectionId: SectionId, shotId: ShotId, updates: ShotUpdatesPatch) => Promise<CommandOutcome<EditOutcome>>;
+  deleteShot: (sectionId: SectionId, shotId: ShotId) => Promise<CommandOutcome<EditOutcome>>;
+  splitShotAtDistance: (sectionId: SectionId, shotId: ShotId, distance: number) => Promise<CommandOutcome<ShotCreated>>;
+  deleteShotAndSplit: (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => Promise<CommandOutcome<SectionCreated>>;
+  deleteLastShotAndSection: (sectionId: SectionId, shotId: ShotId) => Promise<CommandOutcome<EditOutcome>>;
+  deleteShotRangeSplit: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId, nameA: string, nameB: string) => Promise<CommandOutcome<SectionCreated>>;
+  deleteShotRangeShift: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId) => Promise<CommandOutcome<EditOutcome>>;
+  setShotKind: (sectionId: SectionId, shotId: ShotId, kind: ShotKind) => Promise<CommandOutcome<EditOutcome>>;
 
-  mergeStations: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
-  unmergeStations: (stationRef: StationRef) => Promise<CommandResult>;
-  unmergeStationPair: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
+  mergeStations: (stationA: StationRef, stationB: StationRef) => Promise<CommandOutcome<EditOutcome>>;
+  unmergeStations: (stationRef: StationRef) => Promise<CommandOutcome<EditOutcome>>;
+  unmergeStationPair: (stationA: StationRef, stationB: StationRef) => Promise<CommandOutcome<EditOutcome>>;
   checkMergeConnectivity: (stationA: StationRef, stationB: StationRef) => Promise<ConnectivityResult>;
-  createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandResult>;
-  removeLoopClosure: (closureId: number) => Promise<CommandResult>;
-  updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
-  moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
-  setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
-  removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
-  moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
-  moveSegment: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
-  moveStation: (stationRef: StationRef, newPosition: Coordinates) => Promise<CommandResult>;
+  createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandOutcome<EditOutcome>>;
+  removeLoopClosure: (closureId: number) => Promise<CommandOutcome<EditOutcome>>;
+  updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandOutcome<EditOutcome>>;
+  moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandOutcome<EditOutcome>>;
+  setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandOutcome<EditOutcome>>;
+  removeZeroDatum: (stationRef: StationRef) => Promise<CommandOutcome<EditOutcome>>;
+  moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandOutcome<EditOutcome>>;
+  moveSegment: (sectionId: SectionId, offset: Coordinates) => Promise<CommandOutcome<EditOutcome>>;
+  moveStation: (stationRef: StationRef, newPosition: Coordinates) => Promise<CommandOutcome<EditOutcome>>;
   getConnectedSectionIds: (sectionId: SectionId) => Promise<number[]>;
   getAnchoredSectionIds: () => Promise<number[]>;
 
-  undo: () => Promise<CommandResult>;
-  redo: () => Promise<CommandResult>;
-  undoTo: (index: number) => Promise<CommandResult>;
-  redoTo: (index: number) => Promise<CommandResult>;
+  undo: () => Promise<CommandOutcome<HistoryOutcome>>;
+  redo: () => Promise<CommandOutcome<HistoryOutcome>>;
+  undoTo: (index: number) => Promise<CommandOutcome<HistoryOutcome>>;
+  redoTo: (index: number) => Promise<CommandOutcome<HistoryOutcome>>;
   getUndoStack: () => Promise<UndoHistoryItem[]>;
   getRedoStack: () => Promise<UndoHistoryItem[]>;
   refreshUndoState: () => Promise<void>;
 
   // Batch execution - groups multiple commands into a single undo/redo unit
-  executeBatch: (commands: BatchCommand[]) => Promise<CommandResult>;
+  executeBatch: (commands: BatchCommand[]) => Promise<CommandOutcome<BatchOutcome>>;
 
   importDmp: (path: string) => Promise<DmpFile>;
   parseTml: (path: string) => Promise<TmlFile>;
-  executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean, virtualShotMode?: VirtualShotMode, selectedSections?: number[] | null, rootPlacement?: TmlRootPlacement | null) => Promise<CommandResult>;
+  executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean, virtualShotMode?: VirtualShotMode, selectedSections?: number[] | null, rootPlacement?: TmlRootPlacement | null) => Promise<CommandOutcome<ImportOutcome>>;
   parseCompass: (path: string) => Promise<CompassFile>;
-  executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
+  executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandOutcome<ImportOutcome>>;
   parseWalls: (path: string) => Promise<WallsFile>;
-  executeWallsImport: (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean, selectedSurveys?: number[] | null) => Promise<CommandResult>;
+  executeWallsImport: (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean, selectedSurveys?: number[] | null) => Promise<CommandOutcome<ImportOutcome>>;
   // Per-project settings (#57): name + validation thresholds, stored in the .stalx, and
   // the default north reference (#576 NF-W3-2; `null` = nothing recorded). All three go
   // on every call: the backend sets each to what it is given.
@@ -459,13 +419,13 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
     name: string,
     validation: Config['validation'],
     defaultAzimuthReference: AzimuthReference | null
-  ) => Promise<CommandResult>;
+  ) => Promise<CommandOutcome<EditOutcome>>;
   /** Set (or, given `null`, clear) the entrance elevation in meters (#465). */
-  setSurfaceElevation: (elevation: number | null) => Promise<CommandResult>;
+  setSurfaceElevation: (elevation: number | null) => Promise<CommandOutcome<EditOutcome>>;
   /** Rename a recent project's display name by path (project need not be open). */
-  setProjectNameForPath: (path: string, name: string) => Promise<CommandResult>;
+  setProjectNameForPath: (path: string, name: string) => Promise<CommandOutcome<EditOutcome>>;
   parseGpx: (path: string) => Promise<GpxFile>;
-  executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => Promise<CommandResult>;
+  executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => Promise<CommandOutcome<ImportOutcome>>;
   calculateFileHash: (path: string) => Promise<string>;
   checkDuplicateImport: (hash: string) => Promise<boolean>;
   checkSectionHashes: (hashes: string[]) => Promise<boolean[]>;
@@ -486,53 +446,11 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
     provenance?: ImportReceiptProvenance,
     existingShotUpdates?: ExistingShotUpdate[] | null,
     readOnlyNoticeInline?: boolean,
-  ) => Promise<CommandResult>;
+  ) => Promise<CommandOutcome<ImportOutcome>>;
   suggestImportPlacement: (
     shots: ShotData[],
     azimuthReference?: AzimuthReference | null,
   ) => Promise<PlacementSuggestion[]>;
-}
-
-/**
- * The failing step N of a multi-step undo/redo failure, or `null` for any other error.
- * Backend returns "Undo failed at step N of M: reason" (or "Redo failed...") once the
- * jump got past its index check. Steps before N landed and cannot be rolled back, and
- * step N itself can have mutated before it reported (#576 A18(a)) - so EVERY such
- * failure changed the project, N = 1 included.
- */
-function multiStepFailureStep(error: string | null): number | null {
-  if (!error) return null;
-  const match = error.match(/failed at step (\d+) of (\d+)/);
-  if (!match || !match[1]) return null;
-  return parseInt(match[1], 10);
-}
-
-/**
- * The refusals a SINGLE undo/redo makes before it runs a step: the edit gate
- * (`EDIT_DISABLED`, incl. the Plan/Export workspace and a newer file), the #202
- * re-verify divergence, the empty stack, and the refusal after an internal error
- * (#576 A11: a crash poisoned a lock, see `AppState::refuse_after_crash`). Mirrors
- * the order in `AppState::undo`/`redo` (`refuse_after_crash`, `guard_mutation`,
- * then `history_step_available`).
- */
-const SINGLE_STEP_REFUSALS: ReadonlySet<string> = new Set([
-  'Nothing to undo',
-  'Nothing to redo',
-  'Undo is unavailable after an internal error. Save your work and restart Stalagmight.',
-  'Redo is unavailable after an internal error. Save your work and restart Stalagmight.',
-]);
-
-/**
- * [#576 NF-W2S-2] Whether a failed single undo/redo got past the backend's
- * empty-stack check, i.e. ran a step - which reports its failure only after running
- * its inverse, so it can have changed the project. The backend marks the SpeleoDB
- * copy un-pushed for exactly these (#576 A18(a)); the frontend mirrors it here
- * instead of waiting for the next status poll.
- */
-function singleStepFailureRanAStep(error: string | null): boolean {
-  if (!error) return false;
-  if (isEditDisabledError(error) || isReverifyDivergedError(error)) return false;
-  return !SINGLE_STEP_REFUSALS.has(error);
 }
 
 /**
@@ -571,6 +489,14 @@ export const selectNewerFileReadOnly = (s: Pick<ProjectStore, 'newerSchemaVersio
 /** What every seam returns for a request whose project changed out from under it. */
 const PROJECT_CHANGED = 'The project changed before this action could run.';
 
+/** The four history verbs `executeUndoRedo` runs. */
+type HistoryCommand = 'undo' | 'redo' | 'undo_to' | 'redo_to';
+
+/** What a forward edit renumbered (`reverse_section`, `execute_batch`); absent on the rest. */
+function reversedSectionsOf(outcome: object): readonly ReversedSection[] | undefined {
+  return (outcome as { reversed_sections?: ReversedSection[] }).reversed_sections;
+}
+
 /** The commands that funnel through the backend's `finalize_deferred_import`. */
 const IMPORT_COMMANDS = new Set([
   'import_sections',
@@ -605,7 +531,7 @@ const IMPORT_COMMANDS = new Set([
  */
 function noteImportResolvedDeferredSave(
   command: string,
-  result: CommandResult,
+  result: { warnings?: ValidationWarning[] },
   set: (partial: Partial<ProjectStore>) => void,
 ): void {
   if (!IMPORT_COMMANDS.has(command)) return;
@@ -672,11 +598,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   /** True when the project a request was ISSUED against is no longer the open one (#24). */
   const lostProject = (key: string | null) => projectSwitched(key, get().project?.created_at ?? null);
   /** Shared helper: invoke IPC command, refresh state on success, mark dirty. */
-  const executeCommand = async <K extends CommandResultCommand>(
+  const executeCommand = async <K extends MutationCommand>(
     command: K,
     typedArgs: QueuedCallArgs<K>,
     meta: { purpose: string; fields?: Record<string, unknown>; readOnlyNoticeInline?: boolean }
-  ): Promise<CommandResult> => {
+  ): Promise<CommandOutcome<IpcResult<K>>> => {
     // Checked against the command's manifest entry at the call site (#576 C3); forwarded as is.
     const args = typedArgs as Record<string, unknown> | undefined;
     // Captured when the user ISSUES the command, not when the queue gets round to it. The two
@@ -696,16 +622,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     return runSerialized(() => executeCommandInner(command, args, meta, requestProjectKey, carryCommit));
   };
 
-  const executeCommandInner = async (
-    command: CommandResultCommand,
+  const executeCommandInner = async <K extends MutationCommand>(
+    command: K,
     args: Record<string, unknown> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown>; readOnlyNoticeInline?: boolean },
     requestProjectKey: string | null,
     carryCommit: MoveCarryCommit | null
-  ): Promise<CommandResult> => {
+  ): Promise<CommandOutcome<IpcResult<K>>> => {
     // Refuse before the IPC leaves: a command issued against a project that is no longer open
     // must not mutate whatever replaced it.
-    if (lostProject(requestProjectKey)) return emptyCommandResult(false, PROJECT_CHANGED);
+    if (lostProject(requestProjectKey)) return refusedLocally(PROJECT_CHANGED);
     try {
       // #310: anchor the gas-plan pins against the survey as it stands BEFORE this edit - a pin
       // placed a moment ago may still be sitting on the debounce. No-op for a plan with no pins.
@@ -716,12 +642,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // above ran before that window existed, and `args` were captured against the OUTGOING
       // project - whose section ids, being small per-project integers, would mostly RESOLVE in
       // whatever is now open.
-      if (lostProject(requestProjectKey)) return emptyCommandResult(false, PROJECT_CHANGED);
+      if (lostProject(requestProjectKey)) return refusedLocally(PROJECT_CHANGED);
       // GHOST-2 R3: a carry's commit that queued behind another mutation, or outlived the
       // survey it was computed against, is refused here - the last moment before IPC.
       const staleCarryCommit = refuseStaleCarryCommit(carryCommit, get().projectTreeGeneration);
       if (staleCarryCommit) return staleCarryCommit;
-      const result: CommandResult = await (invokeIpc as ForwardedInvoke)(command, args, meta);
+      // The backend's refusal arrives as the rejection's CommandError and becomes the refused
+      // outcome; any other rejection (a transport failure) is the `catch` below.
+      const result = await settleCommand((invokeIpc as ForwardedInvoke)(command, args, meta));
       if (result.success) {
         // Re-resolve those pins BEFORE the refetch: the reach-field effect keys on modified_at,
         // so a stale pin sent here would paint a route through the wrong station for a frame.
@@ -734,7 +662,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // from its anchor above, #576 D39(g); it is mirrored here only when that anchor could not be
         // taken.)
         if (!lostProject(requestProjectKey)) {
-          applyReverseAftermath(composeReverseTransforms(result.reversed_sections, get().project?.sections ?? []), origin);
+          applyReverseAftermath(composeReverseTransforms(reversedSectionsOf(result), get().project?.sections ?? []), origin);
         }
         set({ isDirty: true });
         noteImportResolvedDeferredSave(command, result, set);
@@ -756,7 +684,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // until a manual save or reload.
         await get().checkProjectIntegrity();
       } else {
-        // executeCommand used to be SILENT on a rejected CommandResult (no refresh,
+        // executeCommand used to be SILENT on a refused command (no refresh,
         // no feedback). That left optimistic UI desynced from backend truth - the
         // #191 read-only edit gate's "shots vanish on drag" bug: a committed drag
         // preview stayed rendered because the success-only refresh never fired.
@@ -770,12 +698,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // #202: a re-verify divergence (lost lock / moved tip) routes to the
         // divergence prompt instead of the plain read-only notice - the dialog is
         // the feedback, and the backend already dropped its edit gate.
-        if (isReverifyDivergedError(result.error)) {
+        if (isReverifyDivergedCode(result.code)) {
           speleoState()?.notifyReverifyDivergence();
-        } else if (isEditDisabledError(result.error)) {
+        } else if (isEditGateCode(result.code)) {
           // ...unless the caller shows it inline itself (`importSections`).
           if (!meta.readOnlyNoticeInline) {
-            useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(result.error), TOAST_KEYS.EDIT_DISABLED, 'warning');
+            useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(result.code), TOAST_KEYS.EDIT_DISABLED, 'warning');
           }
         } else {
           // Catch-all (docs/notifications.md): a failure no specific handler
@@ -794,8 +722,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       return result;
     } catch (e) {
-      // A genuine IPC/transport rejection (rare - distinct from a returned
-      // {success:false}) would otherwise skip the re-sync above and strand an
+      // A genuine IPC/transport rejection (rare - distinct from the backend's coded
+      // refusal) would otherwise skip the re-sync above and strand an
       // optimistic edit (a committed drag preview) hidden forever - the same
       // "vanishing shots" failure. Re-sync the view first (the re-render drains
       // the scheduled drag-preview restore), THEN re-throw so every caller's
@@ -806,40 +734,36 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   };
 
   /** Shared helper for undo/redo operations: invoke, toast on failure, always refresh. */
-  const executeUndoRedo = async <K extends CommandResultCommand>(
+  const executeUndoRedo = async <K extends HistoryCommand>(
     command: K,
     typedArgs: QueuedCallArgs<K>,
     meta: { purpose: string; fields?: Record<string, unknown> },
     toastId: string,
-    checkPartialFailure: boolean,
-  ): Promise<CommandResult> => {
+  ): Promise<CommandOutcome<HistoryOutcome>> => {
     // Captured at ISSUE time - see `executeCommand`, which also explains the GHOST-2 check.
     const requestProjectKey = get().project?.created_at ?? null;
     const refused = refuseMutationDuringCarry();
     if (refused) return refused;
     const args = typedArgs as Record<string, unknown> | undefined;
-    return runSerialized(() =>
-      executeUndoRedoInner(command, args, meta, toastId, checkPartialFailure, requestProjectKey)
-    );
+    return runSerialized(() => executeUndoRedoInner(command, args, meta, toastId, requestProjectKey));
   };
 
   const executeUndoRedoInner = async (
-    command: CommandResultCommand,
+    command: HistoryCommand,
     args: Record<string, unknown> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown> },
     toastId: string,
-    checkPartialFailure: boolean,
     requestProjectKey: string | null,
-  ): Promise<CommandResult> => {
-    if (lostProject(requestProjectKey)) return emptyCommandResult(false, PROJECT_CHANGED);
-    let result: CommandResult;
+  ): Promise<CommandOutcome<HistoryOutcome>> => {
+    if (lostProject(requestProjectKey)) return refusedLocally(PROJECT_CHANGED);
+    let result: CommandOutcome<HistoryOutcome>;
     // #24: undoing (or redoing) a reverse renumbers station i back to N - i, so
     // every positional StationRef the frontend holds - the gas-plan pins, the
     // distance-gradient origin - keeps its index and starts naming the OPPOSITE
     // physical station, silently and persistably. The backend reports what it
-    // renumbered on the result (undo/redo of a reverse re-reverses the same
-    // sections), one entry per reversing STEP with the shot count in force at it,
-    // so compose them and re-mirror once the refreshed state lands. Absent on
+    // renumbered on the outcome (`reversed_steps`: undo/redo of a reverse re-reverses
+    // the same sections), one entry per reversing STEP with the shot count in force at
+    // it, so compose them and re-mirror once the refreshed state lands. Empty on
     // everything else, which is the common case and costs nothing.
     let reversedSections: readonly ReversedSection[] | undefined;
     let origin: OriginCapture | null = null; // #576 D39(g), see executeCommandInner
@@ -853,25 +777,24 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // than merely tolerable: its remap and its aftermath carry the same guard and skip
       // themselves, and the refresh + integrity re-check simply re-read whatever is now open -
       // exactly what already happens today when the switch is caught one guard later.
-      if (lostProject(requestProjectKey)) return emptyCommandResult(false, PROJECT_CHANGED);
-      result = await (invokeIpc as ForwardedInvoke)(command, args, meta);
+      if (lostProject(requestProjectKey)) return refusedLocally(PROJECT_CHANGED);
+      result = await settleCommand((invokeIpc as ForwardedInvoke)(command, args, meta));
       if (result.success) {
-        reversedSections = result.reversed_sections;
+        reversedSections = result.reversed_steps;
         set({ isDirty: true });
         // #204: an undo/redo mutates the remote project too - mirror the backend
         // dirty bit into the SpeleoDB store (no-op for a local project).
         speleoState()?.markDirty();
       } else {
-        const failedStep = checkPartialFailure ? multiStepFailureStep(result.error) : null;
-        // #576 NF-W2S-2: the single-step verbs have no step number to read, but the
-        // same rule holds - past the empty-stack check the step ran, and the backend
-        // marked the copy. Without this the frontend caught up only at the next poll.
-        const singleStepRan = !checkPartialFailure && singleStepFailureRanAStep(result.error);
-        if (failedStep !== null || singleStepRan) {
-          // #576 A18(a): ANY failed jump changed the project - step 1 included, since
-          // the failing step can mutate before it reports - and the backend marks the
-          // SpeleoDB copy un-pushed for every one of them. Mirroring only N > 1 left
-          // the two dirty bits disagreeing (and both clean after a step-1 failure).
+        // `HISTORY_STEP_FAILED`: a step RAN and failed - "failed at step N of M" of a
+        // jump (`history_step`), or a single undo/redo past the empty-stack check (1 of
+        // 1, #576 NF-W2S-2). The failing step can mutate before it reports, so EVERY
+        // such failure changed the project, step 1 included (#576 A18(a)). Every other
+        // refusal (nothing to undo, the edit gate, the re-verify divergence, the
+        // refusal after an internal error) ran no step.
+        const failedStep = result.code === 'HISTORY_STEP_FAILED' ? (result.failure?.history_step?.failed_step ?? 1) : null;
+        if (failedStep !== null) {
+          // The backend marks the SpeleoDB copy un-pushed for every one of them.
           set({ isDirty: true });
           speleoState()?.markDirty();
         }
@@ -879,26 +802,26 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // A partial multi-step failure still renumbered: the steps BEFORE the
           // failing one already flipped their sections and cannot be rolled back,
           // which is why the backend attaches the entries it applied to the
-          // failure return too. Dropping them here would leave the plan pins and
-          // the distance origin mirrored onto the opposite physical stations with
-          // no error the user could connect to it.
-          reversedSections = result.reversed_sections;
+          // failure too. Dropping them here would leave the plan pins and the
+          // distance origin mirrored onto the opposite physical stations with no
+          // error the user could connect to it.
+          reversedSections = result.failure?.reversed_sections;
         }
-        // A read-only rejection (EDIT_DISABLED) gets the same friendly notice +
-        // dedup key as executeCommand, not the raw coded string - mashing Ctrl+Z
-        // on a read-only remote project shows one tidy toast, not "EDIT_DISABLED:…".
-        // A #202 re-verify divergence routes to the divergence prompt instead.
-        if (isReverifyDivergedError(result.error)) {
+        // A read-only rejection (an edit-gate code) gets the same friendly notice +
+        // dedup key as executeCommand - mashing Ctrl+Z on a read-only remote project
+        // shows one tidy toast. A #202 re-verify divergence routes to the divergence
+        // prompt instead.
+        if (isReverifyDivergedCode(result.code)) {
           speleoState()?.notifyReverifyDivergence();
-        } else if (isEditDisabledError(result.error)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(result.error), TOAST_KEYS.EDIT_DISABLED, 'warning');
+        } else if (isEditGateCode(result.code)) {
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(result.code), TOAST_KEYS.EDIT_DISABLED, 'warning');
         } else {
           useUIStore.getState().showToast(result.error ?? i18n.t('editGate.commandFailed'), toastId, 'error');
         }
       }
     } catch (e) {
-      result = emptyCommandResult(false, String(e));
-      useUIStore.getState().showToast(result.error ?? i18n.t('editGate.commandFailed'), toastId, 'error');
+      result = refusedLocally(String(e));
+      useUIStore.getState().showToast(result.error, toastId, 'error');
     } finally {
       // #310: re-resolve the plan pins before the refetch (see executeCommandInner). In the
       // `finally` because a PARTIAL multi-step undo renumbered too, and its pins need it just
@@ -1231,10 +1154,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
         return { success: true };
       } catch (e) {
-        const error = parseLoadError(e);
+        // The load's refusal is its CommandError (`code`, `details`, `speleodb_managed`);
+        // anything else (a decode failure, a transport error) has no code.
+        const error = commandErrorOf(e);
+        const code = error?.code ?? null;
+        const message = getErrorMessage(e);
 
         // Handle ALREADY_OPEN specially - not an error, just switch view
-        if (error.code === 'ALREADY_OPEN') {
+        if (code === 'ALREADY_OPEN') {
           // The same staleness guard both neighbouring branches carry (the
           // success path above, the error path below). Without it this branch
           // acted for a load that had already lost its slot: it flipped the view
@@ -1280,12 +1207,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           return { success: true };
         }
 
-        // Handle PERMISSION - folder-access guidance, not a corruption/error.
+        // Handle a permission denial - folder-access guidance, not a corruption/error.
         // Checked before CORRUPT so a denial doesn't masquerade as corruption.
-        if (error.code === 'PERMISSION') {
+        if (code === 'FS_PERMISSION_DENIED') {
           get().resetLoading();
           useUIStore.getState().openDialog('save-permission', {
-            detail: error.message,
+            detail: message,
             context: 'open',
           });
           clearProjectActionSource();
@@ -1293,11 +1220,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         }
 
         // Handle CORRUPT - open recovery dialog instead of generic error
-        if (error.code === 'CORRUPT' && error.details) {
+        if (code === 'CORRUPT' && error?.details) {
           get().resetLoading();
           useUIStore.getState().openDialog('corruption-recovery', {
             corruptPath: error.details,
-            errorMessage: error.message,
+            errorMessage: message,
           });
           clearProjectActionSource();
           return { success: false };
@@ -1306,7 +1233,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Canonical-storage refusal: this .stalx is a non-canonical copy of a
         // SpeleoDB project. Backend-enforced (recents clicks bypass the
         // routeOpenedFile guards); the prompt offers the two real ways forward.
-        if (error.code === 'SPELEODB_MANAGED' && error.speleodbManaged) {
+        if (code === 'SPELEODB_MANAGED' && error?.speleodb_managed) {
           // A SUPERSEDED load must not speak. Phase 0 refuses before the loader
           // reaches its first cancellation checkpoint, so a load the user has
           // already navigated away from really can arrive here - and resetting
@@ -1316,7 +1243,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           if (get().loading.clientOpId !== clientOpId) return { success: false };
           get().resetLoading();
           useUIStore.getState().openDialog('speleodb-managed-file', {
-            managed: error.speleodbManaged,
+            managed: error.speleodb_managed,
           });
           clearProjectActionSource();
           return { success: false };
@@ -1324,7 +1251,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
         // Only set error if this is still the current load operation
         if (get().loading.clientOpId === clientOpId) {
-          get().setLoadingError(error.message, error.details);
+          get().setLoadingError(message, error?.details);
         }
         clearProjectActionSource();
         return { success: false };
@@ -1429,11 +1356,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Create failed - drop the entry-point source (no auto-reset) so it can't
       // mis-attribute a later, unrelated project command. Mirrors loadProject.
       clearProjectActionSource();
-      const error = parseLoadError(e);
+      const message = getErrorMessage(e);
       if (get().loading.clientOpId === clientOpId) {
-        get().setLoadingError(error.message, error.details);
+        get().setLoadingError(message, commandErrorOf(e)?.details);
       }
-      return emptyCommandResult(false, error.message);
+      return emptyCommandResult(false, message);
     }
     }),
 
@@ -1445,14 +1372,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // as a cheap signal to refresh below, avoiding a get_project_state_binary on every
     // clean save / autosave.
     const hadIntegrityIssues = get().integrityIssues.length > 0;
-    const result = await invokeIpc(
-      'save_project',
-      { path, isAutosave: isAutosave === true },
-      { purpose: 'persist project changes', fields: { path, isAutosave } }
+    // A refused save is the rejection's CommandError, settled into the refused outcome
+    // (its `code` routes it below); a transport failure still rejects.
+    const result = await settleCommand(
+      invokeIpc(
+        'save_project',
+        { path, isAutosave: isAutosave === true },
+        { purpose: 'persist project changes', fields: { path, isAutosave } }
+      )
     );
     if (result.success) {
       // A detached copy was written; the OPEN project was not saved. Do not
-      // re-point file_path and do not clear isDirty (see CommandResult).
+      // re-point file_path and do not clear isDirty (see SaveOutcome).
       if (result.unlinked_copy_path) {
         useUIStore
           .getState()
@@ -1478,7 +1409,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         const project = get().project;
         // Only mint a new project object when the path ACTUALLY changed (first
         // save / Save As). A successful save always echoes `saved_path` (Rust
-        // `CommandResult::success().with_path(...)`), so an autosave to the same
+        // `SaveOutcome::saved_path`), so an autosave to the same
         // path would otherwise re-spread the project on every debounced write.
         // That changes the project's identity, and MapCanvas's republish
         // useLayoutEffect keys on it - a no-op save would trigger a full survey
@@ -1524,10 +1455,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         void get().checkProjectIntegrity();
       }
     } else {
-      const permission = isPermissionError(result.error);
+      const permission = isPermissionError(result.code);
       // An autosave failure is an ongoing condition, not a modal moment: feed
-      // the banner (docs/notifications.md). `autosaveFailureMessage` keeps the
-      // raw "FS_*:" markers out of it - the banner renders this string.
+      // the banner (docs/notifications.md). `autosaveFailureMessage` rewords the
+      // coded destination failures - the banner renders this string.
       // Gated on the project still being dirty for the same reason useAutoSave
       // gates its red status: a manual Ctrl+S that landed while this autosave was
       // in flight already put the changes on disk, and a banner saying the latest
@@ -1535,8 +1466,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // clear by saving (#429).
       if (isAutosave && get().isDirty) {
         set({
-          autosaveFailure: autosaveFailureMessage(result.error),
-          autosaveFailureKind: classifySaveError(result.error),
+          autosaveFailure: autosaveFailureMessage(result),
+          autosaveFailureKind: saveErrorKind(result.code),
         });
       }
       // A filesystem permission denial (e.g. macOS forgot folder access after
@@ -1583,7 +1514,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // a real save writes the .stalx and adds it to Recent Projects. Do that now.
     // (The backend import_sections command also resolves this as a durable
     // safety net; this gives the immediate, complete save with correct dirty state.)
-    let result: CommandResult;
+    let result: CommandOutcome<SaveOutcome>;
     try {
       result = await get().saveProject();
     } catch (e) {
@@ -1593,7 +1524,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Repair. The project stays dirty (close-guarded).
       console.error('[import] save after import failed:', e);
       set({ isDirty: true });
-      surfaceSaveFailure(e instanceof Error ? e.message : String(e), useUIStore.getState().openDialog, get(), {
+      surfaceSaveFailure(saveFailureOf(e), useUIStore.getState().openDialog, get(), {
         skipIntegrityRouting: true,
       });
       return false;
@@ -1604,7 +1535,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // the dialog, so it doesn't dismiss the error/permission guidance.
       set({ isDirty: true });
       surfaceSaveFailure(
-        result.error ?? 'Failed to save the imported project.',
+        { code: result.code, error: result.error || 'Failed to save the imported project.' },
         useUIStore.getState().openDialog,
         get(),
       );
@@ -1617,18 +1548,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // Guard against concurrent close operations (rapid Back clicks or double Discard)
     if (get().isClosing) {
       debugLog('[projectStore] closeProject ignored - already closing');
-      return Promise.resolve(emptyCommandResult(false, 'Already closing'));
+      return Promise.resolve(refusedLocally('Already closing'));
     }
 
     set({ isClosing: true });
     return runProjectSwitch(async () => {
       try {
-        const result = await invokeIpc(
-          'close_project',
-          // Default: release a held SpeleoDB lock so the close doesn't strand it
-          // (fix 1). The keep-lock close path passes { releaseLock: false }.
-          { releaseLock: opts?.releaseLock ?? true },
-          { purpose: 'close project and release resources' },
+        const result = await settleCommand(
+          invokeIpc(
+            'close_project',
+            // Default: release a held SpeleoDB lock so the close doesn't strand it
+            // (fix 1). The keep-lock close path passes { releaseLock: false }.
+            { releaseLock: opts?.releaseLock ?? true },
+            { purpose: 'close project and release resources' },
+          ),
         );
         if (result.success) {
           clearOpenProjectState(set);
@@ -1715,10 +1648,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   removeFromRecentProjects: async (path: string) => {
     try {
-      const result = await invokeIpc(
-        'remove_from_recent_projects',
-        { path },
-        { purpose: 'update recent projects list', fields: { path } }
+      const result = await settleCommand(
+        invokeIpc('remove_from_recent_projects', { path }, { purpose: 'update recent projects list', fields: { path } })
       );
       if (result.success) {
         // Refresh both the loaded list and the config after removal. The config
@@ -1730,7 +1661,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       return result;
     } catch (e) {
       console.error('Failed to remove from recent projects:', e);
-      return emptyCommandResult(false, String(e));
+      return refusedLocally(String(e));
     }
   },
 
@@ -1740,10 +1671,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // config so the project disappears from the available AND "missing" recent rows.
   deleteProject: (path: string) => runProjectSwitch(async () => {
     try {
-      const result = await invokeIpc(
-        'delete_project',
-        { path },
-        { purpose: 'permanently delete project', fields: { path } }
+      const result = await settleCommand(
+        invokeIpc('delete_project', { path }, { purpose: 'permanently delete project', fields: { path } })
       );
       // Deleting the file backing the OPEN project closes it - the backend tears
       // its own session down (project, SQLite handle, undo stack) - so the
@@ -1753,8 +1682,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // a save error.
       //
       // The backend REPORTS that teardown as `session_closed` on the delete's own
-      // result, so this is a plain read of a value we already have: no second IPC
-      // call, nothing predicted from the deleted path, and nothing that can throw
+      // answer (the outcome, or the payload of its refusal), so this is a plain read
+      // of a value we already have: no second IPC call, nothing predicted from the
+      // deleted path, and nothing that can throw
       // between the delete and the state reset. (Asking instead - calling
       // `get_project_state` and testing it for null - answered the same yes/no
       // question by making the backend clone the whole project and recompute
@@ -1771,14 +1701,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // rendering a phantom project with no backend behind it. The recents refresh
       // below stays success-only for the opposite reason: on that branch the file
       // survived, so its entry has to stay so the project is re-openable.
-      if (result.session_closed) clearOpenProjectState(set);
+      if (result.success ? result.session_closed : result.failure?.session_closed) clearOpenProjectState(set);
       if (result.success) {
         await Promise.all([get().loadRecentProjects(), get().loadConfig()]);
       }
       return result;
     } catch (e) {
       console.error('Failed to delete project:', e);
-      return emptyCommandResult(false, String(e));
+      return refusedLocally(String(e));
     }
   }),
 
@@ -2114,16 +2044,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // Undo/Redo
   undo: async () =>
-    executeUndoRedo('undo', undefined, { purpose: 'undo last action' }, TOAST_KEYS.UNDO_FAILED, false),
+    executeUndoRedo('undo', undefined, { purpose: 'undo last action' }, TOAST_KEYS.UNDO_FAILED),
 
   redo: async () =>
-    executeUndoRedo('redo', undefined, { purpose: 'redo last undone action' }, TOAST_KEYS.REDO_FAILED, false),
+    executeUndoRedo('redo', undefined, { purpose: 'redo last undone action' }, TOAST_KEYS.REDO_FAILED),
 
   undoTo: async (index: number) =>
-    executeUndoRedo('undo_to', { index }, { purpose: 'undo to history index', fields: { index } }, TOAST_KEYS.UNDO_FAILED, true),
+    executeUndoRedo('undo_to', { index }, { purpose: 'undo to history index', fields: { index } }, TOAST_KEYS.UNDO_FAILED),
 
   redoTo: async (index: number) =>
-    executeUndoRedo('redo_to', { index }, { purpose: 'redo to history index', fields: { index } }, TOAST_KEYS.REDO_FAILED, true),
+    executeUndoRedo('redo_to', { index }, { purpose: 'redo to history index', fields: { index } }, TOAST_KEYS.REDO_FAILED),
 
   getUndoStack: async () => {
     return await invokeIpc('get_undo_stack', undefined, {
@@ -2402,18 +2332,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   mergeProjects: async (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => {
     try {
-      const result = await invokeIpc(
-        'merge_projects',
-        {
-          sourcePaths,
-          outputPath,
-          outputName,
-          archiveOriginals,
-        },
-        {
-          purpose: 'merge projects into single file',
-          fields: { source_count: sourcePaths.length, outputPath },
-        }
+      const result = await settleCommand(
+        invokeIpc(
+          'merge_projects',
+          { sourcePaths, outputPath, outputName, archiveOriginals },
+          { purpose: 'merge projects into single file', fields: { source_count: sourcePaths.length, outputPath } }
+        )
       );
       if (result.success) {
         // Refresh recent projects to reflect any changes (archived files removed, new file added)
@@ -2422,7 +2346,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       return result;
     } catch (e) {
       console.error('Failed to merge projects:', e);
-      return emptyCommandResult(false, String(e));
+      return refusedLocally(String(e));
     }
   },
 };

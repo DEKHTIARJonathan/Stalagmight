@@ -3,8 +3,8 @@ import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { useShallow } from 'zustand/react/shallow';
-import { getErrorMessage } from '../utils/ipc';
-import { surfaceSaveFailure } from '../utils/saveFeedback';
+import { refusedLocally } from '../store/commandResult';
+import { saveFailureOf, surfaceSaveFailure } from '../utils/saveFeedback';
 import { openOrImport } from '../utils/openOrImport';
 import { newProjectGuarded, saveProjectAs } from '../utils/projectActions';
 import { debugLog } from '../utils/debugLog';
@@ -58,18 +58,18 @@ export function useProject() {
     try {
       const result = await saveProject();
       if (result && !result.success) {
-        surfaceSaveFailure(result.error, openDialog, useProjectStore.getState());
+        surfaceSaveFailure(result, openDialog, useProjectStore.getState());
       }
       return result;
     } catch (e) {
-      // store.saveProject rejects only on an IPC-transport failure (real save
-      // failures resolve as CommandResult{success:false}, handled above). Surface
+      // store.saveProject rejects only on an IPC-transport failure (a refused save
+      // resolves as the refused outcome, handled above). Surface
       // it here rather than letting it escape as an unhandled rejection - callers
       // like the save-status retry and the menu Save invoke this without awaiting
       // or catching (`void onSave()` / `() => onSave()`).
-      const message = getErrorMessage(e, 'Failed to save');
-      surfaceSaveFailure(message, openDialog, useProjectStore.getState());
-      return { success: false, error: message };
+      const failure = saveFailureOf(e, 'Failed to save');
+      surfaceSaveFailure(failure, openDialog, useProjectStore.getState());
+      return refusedLocally(failure.error);
     }
   }, [saveProject, handleSaveProjectAs, openDialog]);
 

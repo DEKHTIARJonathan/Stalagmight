@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { CheckIcon, CloseIcon } from '../common/icons';
-import type { CommandResult } from '../../types/commands';
+import type { CommandOutcome } from '../../store/commandResult';
+import type { EditOutcome } from '../../types/ipc/EditOutcome';
 import { useShallow } from 'zustand/react/shallow';
 
 const OVERLAY_WIDTH = 220;
@@ -44,7 +45,7 @@ export default function CommentOverlay() {
       clearCommentTarget();
       return;
     }
-    let saved: CommandResult | undefined;
+    let saved: CommandOutcome<EditOutcome> | undefined;
     if (commentTarget.type === 'station' && commentTarget.stationRef) {
       saved = await updateStationComment(commentTarget.stationRef, trimmed || null);
     } else if (commentTarget.type === 'shot' && commentTarget.sectionId !== undefined && commentTarget.shotId !== undefined) {

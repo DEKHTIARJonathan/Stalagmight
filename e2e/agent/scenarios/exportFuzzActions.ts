@@ -791,7 +791,7 @@ export async function clickAndAnswerSave(
 
 export interface ActionOutcome {
   ok: boolean;
-  /** The rejection message, or the CommandResult's error. Never named `error`. */
+  /** The rejection message, or the refused outcome's error. Never named `error`. */
   err: string | null;
 }
 
@@ -825,8 +825,8 @@ export async function callProjectAction(
     if (typeof fn !== 'function') return { ok: false, err: 'no such projectStore action: ' + action };
     try {
       const result = await fn(...rest);
-      // A CommandResult-shaped answer reports its own failure in-band; unwrap it
-      // here so the caller has ONE thing to check.
+      // A store mutation's outcome reports its own refusal in-band (\`success: false\`,
+      // #576 C4); unwrap it here so the caller has ONE thing to check.
       if (result && typeof result === 'object' && result.success === false) {
         return { ok: false, err: result.error == null ? 'command reported failure' : String(result.error) };
       }

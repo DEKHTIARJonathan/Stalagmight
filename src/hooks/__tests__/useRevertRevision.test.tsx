@@ -46,7 +46,7 @@ const RESTORED = { local_path: '/cache/p1.stalx', concurrent_session: false };
 
 const UNPUSHED_REFUSAL = {
   message: 'local edits never pushed',
-  action: 'UnpushedLocalEdits',
+  code: 'SPELEODB_UNPUSHED_LOCAL_EDITS',
   unpushed_local: {
     project_id: 'p1',
     local_path: '/cache/p1.stalx',
@@ -526,7 +526,7 @@ describe('useRevertRevision - resuming at the push', () => {
 describe('useRevertRevision - an ambiguous dump is a question, not a failure (#258)', () => {
   const AMBIGUOUS = {
     message: 'more than one Stalagmight file',
-    action: 'Ambiguous',
+    code: 'SPELEODB_AMBIGUOUS',
     dump_candidates: [
       { entry_path: 'misc/a.stalx', size_bytes: 10, modified: null },
       { entry_path: 'misc/b.stalx', size_bytes: 20, modified: null },
@@ -699,7 +699,7 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
         return { kind: 'editing' };
       }
       if (cmd === 'speleodb_release_lock_acquired_here')
-        throw { message: 'offline', action: 'Retry' };
+        throw { message: 'offline', code: 'SPELEODB_RETRY' };
       return null;
     });
 
@@ -724,7 +724,7 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
     // It reports nothing of its own: the flow proceeds and the real call stays the
     // one authoritative place a problem is surfaced.
     ipc({
-      speleodb_dump_candidates: rejects({ message: 'offline', action: 'Retry' }),
+      speleodb_dump_candidates: rejects({ message: 'offline', code: 'SPELEODB_RETRY' }),
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
       speleodb_done: ok({ kind: 'released' }),

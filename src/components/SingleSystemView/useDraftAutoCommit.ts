@@ -1,6 +1,8 @@
 import { useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
 import { useLatest } from '../../hooks/useLatest';
-import type { CommandResult } from '../../types/commands';
+import type { CommandOutcome } from '../../store/commandResult';
+import type { EditOutcome } from '../../types/ipc/EditOutcome';
+import type { ShotCreated } from '../../types/ipc/ShotCreated';
 import type { Section, SectionId, ShotData, ShotId, ShotUpdates } from '../../types/project';
 import { setSource } from '../../utils/telemetry';
 import {
@@ -21,8 +23,8 @@ interface DraftAutoCommitOptions {
     shot: ShotData,
     afterShotId?: ShotId,
     beforeShotId?: ShotId
-  ) => Promise<CommandResult>;
-  updateShot: (sectionId: SectionId, shotId: ShotId, updates: Partial<ShotUpdates>) => Promise<CommandResult>;
+  ) => Promise<CommandOutcome<ShotCreated>>;
+  updateShot: (sectionId: SectionId, shotId: ShotId, updates: Partial<ShotUpdates>) => Promise<CommandOutcome<EditOutcome>>;
   /** A fresh, never-reused draft key, for the blank end draft a committed one respawns as. */
   nextDraftKey: () => number;
 }
@@ -43,7 +45,7 @@ interface DraftAutoCommitOptions {
  * that completed the row). Those late values are not dropped with the draft
  * (#576 D39(f), "Forward as follow-up edit"): once the create lands, the fields that
  * changed since its payload are applied to the created shot - the one
- * `CommandResult.shot_id` names - with one update_shot, a second undo step.
+ * `ShotCreated.shot_id` names - with one update_shot, a second undo step.
  */
 export function useDraftAutoCommit({
   drafts,

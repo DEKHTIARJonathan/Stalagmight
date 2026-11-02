@@ -27,10 +27,12 @@ vi.mock('../../utils/telemetry', async (importOriginal) => ({
 import OrphanPlacementDialog from './OrphanPlacementDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
-import type { CommandResult, OrphanPlacementSuggestion } from '../../types/commands';
+import type { OrphanPlacementSuggestion } from '../../types/commands';
+import { accepted, type CommandOutcome } from '../../store/commandResult';
+import type { EditOutcome } from '../../types/ipc/EditOutcome';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 
-const ok = async (): Promise<CommandResult> => ({ success: true } as CommandResult);
+const ok = async (): Promise<CommandOutcome<EditOutcome>> => accepted<EditOutcome>({ warnings: [], remote_link: null });
 
 /** A minimal, valid suggestion. `matchedShots: 0` skips the shot-rewrite branch
  *  (applyOverlapTreatment returns early), keeping the test focused on the

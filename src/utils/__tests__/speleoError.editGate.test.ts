@@ -3,9 +3,9 @@
  * never its coded markers.
  *
  * Restore revision and Unwind are now refused in the read-only Plan and Export
- * workspaces with the same `EDIT_DISABLED: WORKSPACE_READ_ONLY: ...` refusal every
- * other survey change gets. Those dialogs render the error through
- * `humanizeSpeleoError`, which used to pass the raw coded string through.
+ * workspaces with the same `WORKSPACE_READ_ONLY` refusal every other survey change
+ * gets. Those dialogs render the error through `humanizeSpeleoError`, which used to
+ * pass the raw coded string through; it now routes on the code (#576 A6).
  */
 import { describe, expect, it } from 'vitest';
 
@@ -13,10 +13,8 @@ import i18n from '../../i18n';
 import { humanizeSpeleoError } from '../speleoError';
 
 const refusal = (what: string, mode: string) => ({
-  message: `EDIT_DISABLED: WORKSPACE_READ_ONLY: ${what} is disabled: the ${mode} workspace is read-only. Switch to Survey to edit.`,
-  action: 'Fatal',
-  status: null,
-  transport: null,
+  message: `${what} is disabled: the ${mode} workspace is read-only. Switch to Survey to edit.`,
+  code: 'WORKSPACE_READ_ONLY',
 });
 
 describe('humanizeSpeleoError and the edit gate (#576 RV2-R-15)', () => {
@@ -32,7 +30,7 @@ describe('humanizeSpeleoError and the edit gate (#576 RV2-R-15)', () => {
 
   it('still frames every other SpeleoDB error with its operation', () => {
     const shown = humanizeSpeleoError(
-      { message: 'Server error.', action: 'Retry', status: 503, transport: null },
+      { code: 'SPELEODB_RETRY', message: 'Server error.', status: 503 },
       'Could not restore the revision',
     );
     expect(shown).toBe('Could not restore the revision: Server error');

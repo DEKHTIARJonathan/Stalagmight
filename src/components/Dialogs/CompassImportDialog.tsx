@@ -178,7 +178,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
         // A move carry refused it (GHOST-2) and said so: keep the dialog for the retry.
         // Nothing is running then, so the footer goes back to its idle Cancel.
         if (isMoveCarryRefusal(result)) setIsImporting(false);
-        else surfaceImportFailure('compass-import', importUi, { phase: 'command', error: result.error });
+        else surfaceImportFailure('compass-import', importUi, { phase: 'command', error: result.error, code: result.code });
         return;
       }
 
@@ -215,7 +215,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
         );
         if (suggestions.length > 0) {
           setSource('dialog');
-          openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
+          openDialog('orphan-placement', { suggestions, receipt: result.import_receipt ?? undefined });
           return;
         }
         await finishImportWithoutOrphanSuggestions('compass-import', importUi, sectionIds, result.import_receipt);

@@ -32,8 +32,11 @@ import { defaultConfig } from '../../../types/config';
 import { TOAST_KEYS } from '../../../utils/toastKeys';
 import type { Project } from '../../../types/project';
 
-const LOCK_REFUSAL =
-  'EDIT_DISABLED: Set entrance elevation is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.';
+/** The backend's edit-gate refusal (#576 C4): a rejection with its code. */
+const LOCK_REFUSAL = {
+  code: 'EDIT_DISABLED',
+  message: 'Set entrance elevation is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.',
+};
 
 let closeDialog: ReturnType<typeof vi.fn>;
 
@@ -43,7 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   invokeIpcMock.mockImplementation(async (command: string) => {
     if (command === 'set_surface_elevation' || command === 'update_project_settings') {
-      return { success: false, error: LOCK_REFUSAL, section_ids: [], warnings: [] };
+      throw LOCK_REFUSAL;
     }
     return undefined;
   });

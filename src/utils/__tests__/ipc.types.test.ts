@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { invokeIpc, type QueuedCallArgs } from '../ipc';
 import { IPC_EVENTS, listenIpc } from '../ipcEvents';
-import type { BatchCommand, CommandResult } from '../../types/commands';
+import type { BatchCommand } from '../../types/commands';
+import type { EditOutcome } from '../../types/ipc/EditOutcome';
 import type { ProjectState } from '../../types/ipc/ProjectState';
 
 /**
@@ -23,7 +24,9 @@ function typeContract(): void {
   void invokeIpc('delete_section', {});
   // @ts-expect-error an argument of the wrong type
   void invokeIpc('delete_section', { sectionId: 'one' });
-  const deleted: Promise<CommandResult> = invokeIpc('delete_section', { sectionId: 1 });
+  const deleted: Promise<EditOutcome> = invokeIpc('delete_section', { sectionId: 1 });
+  // @ts-expect-error a command's success value is its own outcome: delete_section has no section_id
+  const deletedId: Promise<{ section_id: number }> = invokeIpc('delete_section', { sectionId: 1 });
   // @ts-expect-error get_project_state resolves with ProjectState | null
   const state: Promise<ProjectState> = invokeIpc('get_project_state');
   // An `Option` argument may be omitted.
@@ -38,6 +41,7 @@ function typeContract(): void {
     void id;
   });
   void deleted;
+  void deletedId;
   void state;
   void batch;
 }

@@ -1,1 +1,1 @@
-export type { GeometryShot, SurveyGeometry, SurveyGeometryError } from './ipc.generated';
+export type { GeometryShot, SurveyGeometry } from './ipc.generated';

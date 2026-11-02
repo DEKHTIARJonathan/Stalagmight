@@ -185,7 +185,7 @@ export interface StepResponse {
   /** False when the action threw (the `callStoreAction` `ok:false` case). */
   actionOk: boolean;
   actionError: string | null;
-  /** `CommandResult.success`, or null when the action returned no such field. */
+  /** The store outcome's `success`, or null when the action returned no such field. */
   commandSuccess: boolean | null;
   commandError: string | null;
   undoLen: number;

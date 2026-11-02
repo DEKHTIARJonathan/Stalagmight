@@ -36,15 +36,17 @@ import GpxPlacementDialog from '../GpxPlacementDialog';
 import GpxSelectionDialog from '../GpxSelectionDialog';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
-import type { CommandResult, CompassFile, GpxFile, WallsFile } from '../../../types/commands';
+import type { CompassFile, GpxFile, WallsFile } from '../../../types/commands';
+import { accepted, type CommandOutcome } from '../../../store/commandResult';
+import type { ImportOutcome } from '../../../types/ipc/ImportOutcome';
 
-const OK = { success: true, error: null, warnings: [], section_ids: [] } as unknown as CommandResult;
+const OK = accepted<ImportOutcome>({ section_ids: [], import_receipt: null, warnings: [], remote_link: null });
 
-let finishImport: (result: CommandResult) => void;
+let finishImport: (result: CommandOutcome<ImportOutcome>) => void;
 const heldImport = () =>
   vi.fn(
     () =>
-      new Promise<CommandResult>((resolve) => {
+      new Promise<CommandOutcome<ImportOutcome>>((resolve) => {
         finishImport = resolve;
       })
   );

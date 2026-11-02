@@ -1,8 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { trackCommand } from './telemetry';
 import { trackInvoke } from './debugLockup';
+import { IpcCommandError, toIpcError } from './commandError';
 import type { IpcCommands } from '../types/ipc/IpcCommands';
-import type { CommandResult } from '../types/ipc/CommandResult';
+import type { RemoteLinkBits } from '../types/ipc/RemoteLinkBits';
 
 const IPC_TRACE = import.meta.env.VITE_IPC_TRACE === 'true';
 
@@ -42,9 +43,16 @@ export type IpcCallArgs<K extends IpcCommandName> = WireArgs<IpcArgs<K>>;
 export type QueuedCallArgs<K extends IpcCommandName> =
   Record<string, never> extends IpcArgs<K> ? IpcCallArgs<K> | undefined : IpcCallArgs<K>;
 
-/** The commands that answer with a `CommandResult` - the ones projectStore's mutation queue runs. */
-export type CommandResultCommand = {
-  [K in IpcCommandName]: IpcResult<K> extends CommandResult ? K : never;
+/**
+ * The survey mutations projectStore's mutation queue runs: every command whose outcome
+ * carries its validation warnings and the SpeleoDB link bits (`remote_link`, #576 D22).
+ * (`repair_project_integrity` answers the link bits too, but no warnings: it is not
+ * run through the queue.)
+ */
+export type MutationCommand = {
+  [K in IpcCommandName]: IpcResult<K> extends { warnings: unknown[]; remote_link: RemoteLinkBits | null }
+    ? K
+    : never;
 }[IpcCommandName];
 
 /** Tauri plugin commands (`plugin:<name>|<command>`) are not in the manifest: untyped. */
@@ -64,8 +72,21 @@ function nowMs(): number {
 }
 
 function errorToString(err: unknown): string {
+  if (err instanceof IpcCommandError) return `${err.name} ${err.code}: ${err.message}`;
   if (err instanceof Error) return `${err.name}: ${err.message}`;
   return String(err);
+}
+
+/**
+ * The transport both implementations share: `invoke`, and a CommandError rejection
+ * re-thrown as an `IpcCommandError` (#576 C4).
+ */
+async function send(command: string, args: Record<string, unknown> | undefined): Promise<unknown> {
+  try {
+    return await trackInvoke(command, invoke<unknown>(command, args));
+  } catch (e) {
+    throw toIpcError(e);
+  }
 }
 
 /**
@@ -92,7 +113,7 @@ const invokeWithTrace: RawInvoke = async (command, args, meta) => {
   logStart(`[IPC] invoking ${command} for ${purpose}`, { command, purpose, ...fields });
 
   try {
-    const result = await trackInvoke(command, invoke<unknown>(command, args));
+    const result = await send(command, args);
     const durationMs = Math.round(nowMs() - start);
     console.debug(`[IPC] success ${command}`, { command, purpose, duration_ms: durationMs, ...fields });
     return result;
@@ -111,12 +132,16 @@ const invokeWithTrace: RawInvoke = async (command, args, meta) => {
 
 const invokeNoTrace: RawInvoke = (command, args, _meta) => {
   if (!UNTRACKED_COMMANDS.has(command)) trackCommand(command);
-  return trackInvoke(command, invoke<unknown>(command, args));
+  return send(command, args);
 };
 
 /**
  * Invoke a Tauri IPC command with optional trace logging.
  * Logs are compiled out in production unless VITE_IPC_TRACE is enabled.
+ *
+ * A command that fails rejects with an `IpcCommandError` (its `code` is what to route
+ * on, see `commandError.ts`); a plain-string rejection (Tauri could not deserialize
+ * the arguments) stays a string.
  */
 export const invokeIpc = (IPC_TRACE ? invokeWithTrace : invokeNoTrace) as InvokeIpc;
 
@@ -134,15 +159,7 @@ export type ForwardedInvoke = <K extends IpcCommandName>(
   meta?: IpcMeta
 ) => Promise<IpcResult<K>>;
 
-/** Extract error message from unknown catch value */
-export function getErrorMessage(e: unknown, fallback?: string): string {
-  if (e instanceof Error) return e.message;
-  if (typeof e === 'string') return e;
-  // [Track A] #186/D-B2: structured IPC errors (e.g. SpeleoErrorDto) reject with
-  // an object carrying a `message` string - surface it instead of "[object
-  // Object]". The typed `action` field is branched on separately (#204).
-  if (e && typeof e === 'object' && 'message' in e && typeof e.message === 'string') {
-    return e.message;
-  }
-  return fallback ?? String(e);
-}
+// Lives beside the CommandError readers (a module no test mocks, so the store reads a
+// failure's message through it even where `utils/ipc` is mocked with `invokeIpc` alone);
+// re-exported here, where every caller has always imported it from.
+export { getErrorMessage } from './commandError';

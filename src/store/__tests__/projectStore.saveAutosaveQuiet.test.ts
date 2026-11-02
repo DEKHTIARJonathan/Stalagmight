@@ -53,14 +53,14 @@ describe('saveProject autosave quieting', () => {
 
   const resolveSave = () => {
     invokeIpcMock.mockImplementation(async (command: string) =>
-      command === 'save_project' ? { success: true, saved_path: '/cave.stalx' } : undefined
+      command === 'save_project' ? { saved_path: '/cave.stalx', unlinked_copy_path: null, warnings: [] } : undefined
     );
   };
 
   const denyPermission = () => {
     invokeIpcMock.mockImplementation(async (command: string) => {
       if (command === 'save_project') {
-        return { success: false, error: 'FS_PERMISSION_DENIED: folder access denied' };
+        throw { code: 'FS_PERMISSION_DENIED', message: 'folder access denied' };
       }
       return undefined;
     });
@@ -72,8 +72,8 @@ describe('saveProject autosave quieting', () => {
     await useProjectStore.getState().saveProject('/cave.stalx', true);
 
     expect(openDialogSpy).not.toHaveBeenCalledWith('save-permission', expect.anything());
-    // The failure is not swallowed - it feeds the autosave-failure banner,
-    // without leaking the raw FS_PERMISSION_DENIED marker.
+    // The failure is not swallowed - it feeds the autosave-failure banner, in its
+    // reworded line (never the code).
     const banner = useProjectStore.getState().autosaveFailure;
     expect(banner).toBeTruthy();
     expect(banner).not.toContain('FS_PERMISSION_DENIED');
@@ -116,12 +116,11 @@ describe('saveProject autosave quieting', () => {
     expect(calls[1]?.[1]).toEqual({ path: '/cave.stalx', isAutosave: false });
   });
 
-  it('feeds the banner a destination failure without leaking the marker (#429)', async () => {
-    invokeIpcMock.mockImplementation(async (command: string) =>
-      command === 'save_project'
-        ? { success: false, error: 'FS_PATH_NOT_FOUND: Cannot save to Z:\\cave.stalx' }
-        : undefined
-    );
+  it('feeds the banner a destination failure without leaking the code (#429)', async () => {
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'save_project') throw { code: 'FS_PATH_NOT_FOUND', message: 'Cannot save to Z:\\cave.stalx' };
+      return undefined;
+    });
 
     await useProjectStore.getState().saveProject('/cave.stalx', true);
 
@@ -134,22 +133,22 @@ describe('saveProject autosave quieting', () => {
 
   // [#517] The banner's render gate hides an ordinary failure behind the
   // integrity banner, so the KIND has to reach the store - the message alone
-  // (marker already stripped) cannot tell `shouldShowAutosaveBanner` that this
-  // is the one failure Review & Repair cannot fix.
+  // cannot tell `shouldShowAutosaveBanner` that this is the one failure Review &
+  // Repair cannot fix.
   it('records the unreadable-ignore-list kind so the banner can refuse to yield', async () => {
     useProjectStore.setState({
       integritySaveBlocked: true,
       integrityIssues: [{ category: 'dangling_merge_ref', message: 'x' }],
     } as never);
-    invokeIpcMock.mockImplementation(async (command: string) =>
-      command === 'save_project'
-        ? {
-            success: false,
-            error:
-              "IGNORES_UNREADABLE: Can't save: this project's list of ignored warnings could not be read (x).",
-          }
-        : undefined
-    );
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'save_project') {
+        throw {
+          code: 'IGNORES_UNREADABLE',
+          message: "Can't save: this project's list of ignored warnings could not be read (x).",
+        };
+      }
+      return undefined;
+    });
 
     await useProjectStore.getState().saveProject('/cave.stalx', true);
 
@@ -183,7 +182,7 @@ describe('saveProject autosave quieting', () => {
     invokeIpcMock.mockImplementation(async (command: string) => {
       if (command === 'save_project') {
         useProjectStore.setState({ isDirty: false } as never);
-        return { success: false, error: 'FS_PERMISSION_DENIED: folder access denied' };
+        throw { code: 'FS_PERMISSION_DENIED', message: 'folder access denied' };
       }
       return undefined;
     });

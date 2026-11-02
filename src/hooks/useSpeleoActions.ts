@@ -13,7 +13,8 @@ import {
 } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { openExitPrompt, type PendingExit } from '../utils/quit';
-import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
+import { humanizeSpeleoError } from '../utils/speleoError';
+import { errorCode } from '../utils/commandError';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import { afterQueuedEdits } from '../utils/projectTransition';
 import { TOAST_KEYS } from '../utils/toastKeys';
@@ -178,7 +179,7 @@ export function useSpeleoActions(): SpeleoActions {
       (docs/notifications.md); the toast-and-banner pair predates the banner. */
   const humanizeError = useCallback(
     (e: unknown, prefixKey: string): string => {
-      if (speleoErrorAction(e) === 'ReLogin') clearSession();
+      if (errorCode(e) === 'SPELEODB_RELOGIN') clearSession();
       return humanizeSpeleoError(e, t(prefixKey));
     },
     [clearSession, t],

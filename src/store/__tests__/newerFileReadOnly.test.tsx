@@ -1,9 +1,9 @@
 /**
  * [#576 B6-D1] A project saved by a NEWER Stalagmight is open read-only.
  *
- * The backend refuses every edit (`guard_mutation`, `EDIT_DISABLED` then
- * `NEWER_FILE_READ_ONLY`) and every save (`NEWER_FILE_READ_ONLY` first) of such a
- * project, and reports the load's verdict as `newerSchemaVersion`. These pin the
+ * The backend refuses every edit (`guard_mutation`, code `NEWER_FILE_EDIT_DISABLED`)
+ * and every save (code `NEWER_FILE_READ_ONLY`) of such a project, and reports the
+ * load's verdict as `newerSchemaVersion`. These pin the
  * frontend half: the canonical edit gate composes the flag, a refused save is a
  * read-only notice (not an error dialog, not Review & Repair), and a refused edit
  * says which read-only it is.
@@ -14,20 +14,26 @@ import { useUIStore } from '../uiStore';
 import { useSpeleoStore } from '../speleoStore';
 import { useProjectStore, selectNewerFileReadOnly } from '../projectStore';
 import { useEditingBlocked, isEditingBlockedNow } from '../../hooks/useEditingBlocked';
-import { classifySaveError, NEWER_FILE_READ_ONLY } from '../../utils/saveErrors';
-import { surfaceSaveFailure, autosaveFailureMessage } from '../../utils/saveFeedback';
+import { saveErrorKind } from '../../utils/saveErrors';
+import { surfaceSaveFailure, autosaveFailureMessage, type SaveFailure } from '../../utils/saveFeedback';
 import { READ_ONLY_EDIT_NOTICE } from '../../utils/editErrors';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import i18n from '../../i18n';
 
-/** The backend's refusals, verbatim in shape (`project_io.rs`, `app_state.rs`). */
-const SAVE_REFUSAL =
-  `${NEWER_FILE_READ_ONLY}: Saving is disabled: this project was saved by a newer version of ` +
-  'Stalagmight (file format 19) and is open read-only. Update Stalagmight to edit it.';
-const EDIT_REFUSAL =
-  `EDIT_DISABLED: ${NEWER_FILE_READ_ONLY}: Update shot 0:1 is disabled: this project was saved ` +
-  'by a newer version of Stalagmight (file format 19) and is open read-only. Update Stalagmight ' +
-  'to edit it.';
+/** The backend's refusals, verbatim in shape (`project_io.rs`, `app_state.rs`): code + sentence. */
+const SAVE_REFUSAL: SaveFailure = {
+  code: 'NEWER_FILE_READ_ONLY',
+  error:
+    'Saving is disabled: this project was saved by a newer version of ' +
+    'Stalagmight (file format 19) and is open read-only. Update Stalagmight to edit it.',
+};
+const EDIT_REFUSAL: SaveFailure = {
+  code: 'NEWER_FILE_EDIT_DISABLED',
+  error:
+    'Update shot 0:1 is disabled: this project was saved ' +
+    'by a newer version of Stalagmight (file format 19) and is open read-only. Update Stalagmight ' +
+    'to edit it.',
+};
 
 beforeEach(() => {
   // The one fully-editable state: survey, measured geometry, a confirmed-LOCAL
@@ -72,11 +78,11 @@ describe('the canonical edit gate', () => {
 });
 
 describe('a refused save', () => {
-  it('is classified by its marker', () => {
-    expect(classifySaveError(SAVE_REFUSAL)).toBe('newer-file');
-    // The edit refusal carries the marker too, but behind EDIT_DISABLED: it is not
-    // a save failure and must not classify as one.
-    expect(classifySaveError(EDIT_REFUSAL)).toBe('other');
+  it('is classified by its code', () => {
+    expect(saveErrorKind(SAVE_REFUSAL.code)).toBe('newer-file');
+    // The edit refusal is about the same newer file, but it is an edit-gate code:
+    // not a save failure, and it must not classify as one.
+    expect(saveErrorKind(EDIT_REFUSAL.code)).toBe('other');
   });
 
   it('is a read-only warning toast - no error dialog, no Review & Repair', () => {
@@ -98,18 +104,18 @@ describe('a refused save', () => {
     showToast.mockRestore();
   });
 
-  it('never shows its marker on the autosave surface', () => {
+  it('never shows its code on the autosave surface', () => {
     const message = autosaveFailureMessage(SAVE_REFUSAL);
-    expect(message).not.toContain(NEWER_FILE_READ_ONLY);
+    expect(message).not.toContain('NEWER_FILE_READ_ONLY');
     expect(message).toBe(i18n.t('banners.newerFile.saveRefused'));
   });
 });
 
 describe('a refused edit', () => {
   it('says the project is from a newer version, not "take the write lock"', () => {
-    expect(READ_ONLY_EDIT_NOTICE(EDIT_REFUSAL)).toBe(i18n.t('editGate.newerFileNotice'));
+    expect(READ_ONLY_EDIT_NOTICE(EDIT_REFUSAL.code)).toBe(i18n.t('editGate.newerFileNotice'));
     // The SpeleoDB read-only keeps its own line.
-    expect(READ_ONLY_EDIT_NOTICE('EDIT_DISABLED: Update shot is disabled: no lock')).toBe(
+    expect(READ_ONLY_EDIT_NOTICE('EDIT_DISABLED')).toBe(
       i18n.t('editGate.readOnlyNotice')
     );
     expect(READ_ONLY_EDIT_NOTICE()).toBe(i18n.t('editGate.readOnlyNotice'));

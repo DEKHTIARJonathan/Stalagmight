@@ -9,7 +9,7 @@
  * is in flight, and on a large survey that round trip is long. Decided ("Forward
  * as follow-up edit"): the fields that changed since the payload are applied to
  * the created shot with one update_shot once the create lands; the created shot
- * is the one `CommandResult.shot_id` names.
+ * is the one `ShotCreated.shot_id` names.
  *
  * Full-component tier, as dataTableDraftSaveFailure.test.tsx: the real DataTable
  * and grid, `createShot` / `updateShot` replaced on the project store.
@@ -36,7 +36,8 @@ import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { defaultConfig } from '../../../types/config';
 import type { Config } from '../../../types/config';
-import type { CommandResult } from '../../../types/commands';
+import { accepted, type CommandOutcome } from '../../../store/commandResult';
+import type { ShotCreated } from '../../../types/ipc/ShotCreated';
 import type { Section, Shot } from '../../../types/project';
 
 class NoopResizeObserver {
@@ -79,13 +80,8 @@ const section: Section = {
   gauge_neighbour_uuid: null,
 };
 
-const created = (shotId: number): CommandResult => ({
-  success: true,
-  warnings: [],
-  error: null,
-  section_ids: [],
-  shot_id: shotId,
-});
+const created = (shotId: number): CommandOutcome<ShotCreated> =>
+  accepted<ShotCreated>({ shot_id: shotId, warnings: [], remote_link: null });
 
 /** The end draft sits below the three shots. */
 const DRAFT_ROW = 3;
@@ -114,7 +110,7 @@ async function completeDraft() {
 
 let createShot: ReturnType<typeof vi.fn>;
 let updateShot: ReturnType<typeof vi.fn>;
-let resolveCreate: (result: CommandResult) => void;
+let resolveCreate: (result: CommandOutcome<ShotCreated>) => void;
 
 beforeEach(() => {
   vi.stubGlobal('ResizeObserver', NoopResizeObserver);
@@ -125,7 +121,7 @@ beforeEach(() => {
   // A create that is still in flight until the test resolves it.
   createShot = vi.fn(
     () =>
-      new Promise<CommandResult>((resolve) => {
+      new Promise<CommandOutcome<ShotCreated>>((resolve) => {
         resolveCreate = resolve;
       })
   );

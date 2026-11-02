@@ -363,8 +363,8 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         trackDialogComplete('tml-import');
         // A cancelled import is not a failure (#576 RV4-FE-MISC4): the same
         // keep/discard question, with the cancelled wording the router's toast
-        // uses - never the backend's machine marker in an error box.
-        if (failure.phase === 'command' && isImportCancelled(failure.error)) {
+        // uses - never the backend's own line in an error box.
+        if (failure.phase === 'command' && isImportCancelled(failure.code)) {
           setResidue({
             kind: 'cancel',
             message: t('dialogs.importFailure.cancelled'),
@@ -402,7 +402,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         // A move carry refused it (GHOST-2) and said so: keep the dialog for the retry.
         // Nothing is running then, so the footer goes back to its idle Cancel.
         if (isMoveCarryRefusal(result)) setIsImporting(false);
-        else reportFailure({ phase: 'command', error: result.error });
+        else reportFailure({ phase: 'command', error: result.error, code: result.code });
         return;
       }
 
@@ -439,7 +439,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         );
         if (suggestions.length > 0) {
           setSource('dialog');
-          openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });
+          openDialog('orphan-placement', { suggestions, receipt: result.import_receipt ?? undefined });
           return;
         }
         await finishImportWithoutOrphanSuggestions('tml-import', importUi, sectionIds, result.import_receipt);

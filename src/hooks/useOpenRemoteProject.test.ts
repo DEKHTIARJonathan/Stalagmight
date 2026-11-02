@@ -161,7 +161,7 @@ describe('useOpenRemoteProject (#218)', () => {
           return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
         return Promise.reject({
           message: 'more than one',
-          action: 'Ambiguous',
+          code: 'SPELEODB_AMBIGUOUS',
           status: null,
           dump_candidates: candidates,
         });
@@ -195,10 +195,10 @@ describe('useOpenRemoteProject (#218)', () => {
     invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'speleodb_open_project') {
         if (args?.entryPath === 'misc/ariane.tml')
-          return Promise.reject({ message: 'ariane', action: 'Adopt', status: null });
+          return Promise.reject({ message: 'ariane', code: 'SPELEODB_ADOPT', status: null });
         return Promise.reject({
           message: 'more than one',
-          action: 'Ambiguous',
+          code: 'SPELEODB_AMBIGUOUS',
           status: null,
           dump_candidates: candidates,
         });
@@ -234,7 +234,7 @@ describe('useOpenRemoteProject (#218)', () => {
           });
         return Promise.reject({
           message: 'more than one Ariane file',
-          action: 'Ambiguous',
+          code: 'SPELEODB_AMBIGUOUS',
           status: null,
           dump_candidates: candidates,
           dump_candidate_kind: 'ariane',
@@ -274,7 +274,7 @@ describe('useOpenRemoteProject (#218)', () => {
         adoptCalls += 1;
         return Promise.reject({
           message: 'more than one Stalagmight file',
-          action: 'Ambiguous',
+          code: 'SPELEODB_AMBIGUOUS',
           status: null,
           dump_candidates: candidates,
           dump_candidate_kind: 'stalx',
@@ -308,7 +308,7 @@ describe('useOpenRemoteProject (#218)', () => {
       if (cmd === 'speleodb_adopt_ariane')
         return Promise.reject({
           message: 'more than one Stalagmight file',
-          action: 'Ambiguous',
+          code: 'SPELEODB_AMBIGUOUS',
           status: null,
           dump_candidates: candidates,
           dump_candidate_kind: 'stalx',
@@ -342,7 +342,7 @@ describe('useOpenRemoteProject (#218)', () => {
           return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
         return Promise.reject({
           message: 'more than one',
-          action: 'Ambiguous',
+          code: 'SPELEODB_AMBIGUOUS',
           status: null,
           dump_candidates: candidates,
         });
@@ -370,7 +370,7 @@ describe('useOpenRemoteProject (#218)', () => {
       if (cmd === 'speleodb_open_project')
         return Promise.reject({
           message: 'more than one',
-          action: 'Ambiguous',
+          code: 'SPELEODB_AMBIGUOUS',
           status: null,
           dump_candidates: [],
         });
@@ -384,7 +384,7 @@ describe('useOpenRemoteProject (#218)', () => {
   it('routes an Ariane (.tml-only) project to adopt', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_open_project')
-        return Promise.reject({ message: 'ariane', action: 'Adopt', status: null });
+        return Promise.reject({ message: 'ariane', code: 'SPELEODB_ADOPT', status: null });
       return Promise.resolve(null);
     });
     const outcome = await hook().openRemote(SUMMARY);
@@ -512,7 +512,7 @@ describe('useOpenRemoteProject (#218)', () => {
   it('reports an open error and flags a re-login on a dead token', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_open_project')
-        return Promise.reject({ message: 'unauthorized', action: 'ReLogin', status: 401 });
+        return Promise.reject({ message: 'unauthorized', code: 'SPELEODB_RELOGIN', status: 401 });
       return Promise.resolve(null);
     });
     const outcome = await hook().openRemote(SUMMARY);
@@ -530,7 +530,7 @@ describe('useOpenRemoteProject (#218)', () => {
       if (cmd === 'speleodb_open_project')
         return Promise.reject({
           message: 'refused',
-          action: 'UnpushedLocalEdits',
+          code: 'SPELEODB_UNPUSHED_LOCAL_EDITS',
           status: null,
           unpushed_local: {
             project_id: 'p1',
@@ -558,7 +558,7 @@ describe('useOpenRemoteProject (#218)', () => {
     useUIStore.setState({ openDialog: openDialogMock });
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_open_project')
-        return Promise.reject({ message: 'boom', action: 'None', status: 500 });
+        return Promise.reject({ message: 'boom', code: 'FAILED', status: 500 });
       return Promise.resolve(null);
     });
     const outcome = await hook().openRemote(SUMMARY);
@@ -634,7 +634,7 @@ describe('useOpenRemoteProject (#218)', () => {
       if (cmd === 'speleodb_open_project')
         return Promise.reject({
           message: 'refused',
-          action: 'UnpushedLocalEdits',
+          code: 'SPELEODB_UNPUSHED_LOCAL_EDITS',
           status: null,
           unpushed_local: {
             project_id: 'p1',
@@ -902,7 +902,7 @@ describe('useOpenRemoteProject (#218)', () => {
         cmd === 'speleodb_open_project'
           ? Promise.reject({
               message: 'refused',
-              action: 'UnpushedLocalEdits',
+              code: 'SPELEODB_UNPUSHED_LOCAL_EDITS',
               status: null,
               unpushed_local: {
                 project_id: 'p1',
@@ -1051,7 +1051,7 @@ describe('useOpenRemoteProject (#218)', () => {
     const arianeThenAdopts = () => {
       invokeIpcMock.mockImplementation((cmd: string) => {
         if (cmd === 'speleodb_open_project')
-          return Promise.reject({ message: 'ariane', action: 'Adopt', status: null });
+          return Promise.reject({ message: 'ariane', code: 'SPELEODB_ADOPT', status: null });
         if (cmd === 'speleodb_adopt_ariane')
           return Promise.resolve({
             local_path: '/cache/p1.stalx',
@@ -1615,7 +1615,7 @@ describe('useOpenRemoteProject (#218)', () => {
     const arianeRefusal = () => {
       invokeIpcMock.mockImplementation((cmd: string) => {
         if (cmd === 'speleodb_open_project_discarding_local')
-          return Promise.reject({ message: 'ariane', action: 'Adopt' });
+          return Promise.reject({ message: 'ariane', code: 'SPELEODB_ADOPT' });
         if (cmd === 'speleodb_adopt_ariane')
           return Promise.resolve({
             local_path: '/cache/p1.stalx',
@@ -1674,12 +1674,12 @@ describe('useOpenRemoteProject (#218)', () => {
         if (args?.entryPath)
           return Promise.reject({
             message: 'your session has expired',
-            action: 'ReLogin',
+            code: 'SPELEODB_RELOGIN',
             status: 401,
           });
         return Promise.reject({
           message: 'more than one',
-          action: 'Ambiguous',
+          code: 'SPELEODB_AMBIGUOUS',
           status: null,
           dump_candidates: CANDIDATES,
           dump_candidate_kind: kind,
@@ -1740,7 +1740,7 @@ describe('useOpenRemoteProject (#218)', () => {
         useSpeleoStore.getState().clearSession();
         return Promise.reject({
           message: 'more than one',
-          action: 'Ambiguous',
+          code: 'SPELEODB_AMBIGUOUS',
           status: null,
           dump_candidates: CANDIDATES,
           dump_candidate_kind: 'stalx',
@@ -1764,7 +1764,7 @@ describe('useOpenRemoteProject (#218)', () => {
         useSpeleoStore.setState({ session: { ...session(), loggedIn: false } });
         return Promise.reject({
           message: 'more than one',
-          action: 'Ambiguous',
+          code: 'SPELEODB_AMBIGUOUS',
           status: null,
           dump_candidates: CANDIDATES,
           dump_candidate_kind: 'stalx',
@@ -1786,7 +1786,7 @@ describe('useOpenRemoteProject (#218)', () => {
           return Promise.reject({ message: 'that file is corrupt', action: null, status: 500 });
         return Promise.reject({
           message: 'more than one',
-          action: 'Ambiguous',
+          code: 'SPELEODB_AMBIGUOUS',
           status: null,
           dump_candidates: CANDIDATES,
         });

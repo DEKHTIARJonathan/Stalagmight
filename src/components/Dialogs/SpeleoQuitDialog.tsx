@@ -98,7 +98,7 @@ export default function SpeleoQuitDialog() {
     try {
       const result = await saveProject();
       if (!result?.success) {
-        surfaceSaveFailure(result?.error ?? null, openDialog, useProjectStore.getState());
+        surfaceSaveFailure(result, openDialog, useProjectStore.getState());
         return false;
       }
       return true;

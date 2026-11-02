@@ -279,7 +279,7 @@ describe('speleoStore', () => {
       useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
       invokeIpcMock.mockRejectedValue({
         message: 'Logged out, but the stored SpeleoDB credential could not be removed',
-        action: 'Fatal',
+        code: 'SPELEODB_FATAL',
         status: null,
       });
 
@@ -426,7 +426,7 @@ describe('speleoStore', () => {
     });
 
     it('surfaces an unexpected server_error, and clears it on the next clean poll (fix 12)', () => {
-      const err = { message: 'No Project matches the given query.', action: 'Fatal' as const, status: 404, transport: null, unpushed_local: null, dump_candidates: null, dump_candidate_kind: null };
+      const err = { code: 'SPELEODB_FATAL' as const, message: 'No Project matches the given query.', action: 'Fatal' as const, status: 404, transport: null, unpushed_local: null, dump_candidates: null, dump_candidate_kind: null };
       useSpeleoStore.getState().seedFromStatus(status({ server_error: err }));
       expect(useSpeleoStore.getState().link?.serverError).toEqual(err);
       useSpeleoStore.getState().seedFromStatus(status({ server_error: null }));

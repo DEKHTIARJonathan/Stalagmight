@@ -61,6 +61,7 @@ import { invokeIpc } from '../../../utils/ipc';
 import { beginMoveCarry, refuseMutationDuringCarry } from '../../../store/moveCarry';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
+import { refusedBy } from '../../../store/commandResult';
 import type {
   CommandResult,
   CompassFile,
@@ -255,13 +256,12 @@ const ESCAPE_GUARDED = CASES.filter((c) => c.name !== 'GpxPlacementDialog');
 
 const CANCELLED_TOAST = 'Import cancelled. Nothing was imported.';
 
+/** The store's refused outcome for a cancelled import: the backend's IMPORT_CANCELLED (#576 C4). */
 const cancelledResult = (format: string): CommandResult =>
-  ({
-    success: false,
-    error: `IMPORT_CANCELLED: the ${format} import was cancelled; nothing was imported`,
-    warnings: [],
-    section_ids: [],
-  }) as CommandResult;
+  refusedBy({
+    code: 'IMPORT_CANCELLED',
+    message: `the ${format} import was cancelled; nothing was imported`,
+  }) as unknown as CommandResult;
 
 const okResult = (sectionIds: number[]): CommandResult =>
   ({ success: true, error: null, warnings: [], section_ids: sectionIds }) as CommandResult;
@@ -437,6 +437,7 @@ describe('TmlImportDialog cancelled on the empty project it created (#411 C2)', 
     // The 'cancel' prompt carries no error block; 'failed' would quote the raw text.
     expect(screen.queryByTestId('tml-import-residue-error')).toBeNull();
     expect(screen.queryByText(/IMPORT_CANCELLED/)).toBeNull();
+    expect(screen.queryByText(/import was cancelled; nothing was imported/)).toBeNull();
     expect(closeDialog).not.toHaveBeenCalled();
     expect(showToast).not.toHaveBeenCalled();
   });

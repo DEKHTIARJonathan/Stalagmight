@@ -19,7 +19,10 @@ import { useSpeleoStore } from '../../../store/speleoStore';
 import { defaultConfig } from '../../../types/config';
 import type { AzimuthReference } from '../../../types/ipc/AzimuthReference';
 import type { Project } from '../../../types/project';
-import type { CommandResult } from '../../../types/commands';
+import { accepted, type CommandOutcome } from '../../../store/commandResult';
+import type { EditOutcome } from '../../../types/ipc/EditOutcome';
+
+const EDITED = (): CommandOutcome<EditOutcome> => accepted<EditOutcome>({ warnings: [], remote_link: null });
 
 // jsdom does not implement scrollIntoView; the Select component calls it on open.
 Element.prototype.scrollIntoView = vi.fn();
@@ -48,12 +51,12 @@ async function choose(north: string) {
 const save = () => userEvent.click(screen.getByTestId('project-settings-save'));
 
 beforeEach(() => {
-  updateProjectSettings = vi.fn(async (): Promise<CommandResult> => ({ success: true, error: null }) as CommandResult);
+  updateProjectSettings = vi.fn(async (): Promise<CommandOutcome<EditOutcome>> => EDITED());
   closeDialog = vi.fn();
   useProjectStore.setState({
     config: defaultConfig,
     updateProjectSettings,
-    setSurfaceElevation: vi.fn(async () => ({ success: true, error: null }) as CommandResult),
+    setSurfaceElevation: vi.fn(async () => EDITED()),
     newerSchemaVersion: null,
     unreadableProjectSettings: [],
   });

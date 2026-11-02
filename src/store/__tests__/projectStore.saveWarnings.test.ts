@@ -140,16 +140,16 @@ describe('saveProject surfaces what a successful save went without', () => {
 
 /**
  * [#576 A3-D2] The SpeleoDB link and the undo-history markers now STOP a save they
- * cannot read, with markers of their own. Like the ignore list's refusal (#517),
+ * cannot read, with codes of their own. Like the ignore list's refusal (#517),
  * Review & Repair cannot fix either, so the refusal must reach the error dialog
- * even on a project whose integrity check is also unhappy - and without its
- * routing marker on screen.
+ * even on a project whose integrity check is also unhappy - with the backend's
+ * sentence on screen.
  */
 describe('a refused save over an unreadable side table', () => {
   it.each([
     'SPELEODB_LINK_UNREADABLE',
     'UNDO_MARKERS_UNREADABLE',
-  ])('%s opens the error dialog with the sentence, never Review & Repair', (marker) => {
+  ] as const)('%s opens the error dialog with the sentence, never Review & Repair', (code) => {
     const openDialog = vi.fn();
     const openIntegrityDialog = vi.fn();
     useProjectStore.setState({ integritySaveBlocked: true, openIntegrityDialog } as never);
@@ -157,7 +157,7 @@ describe('a refused save over an unreadable side table', () => {
       "Can't save: this project's SpeleoDB link could not be read (x). Saving would rewrite " +
       'the file without it, so nothing was written - the file on disk is unchanged.';
 
-    surfaceSaveFailure(`${marker}: ${sentence}`, openDialog, useProjectStore.getState());
+    surfaceSaveFailure({ code, error: sentence }, openDialog, useProjectStore.getState());
 
     expect(openIntegrityDialog).not.toHaveBeenCalled();
     expect(openDialog).toHaveBeenCalledWith('error', expect.objectContaining({ message: sentence }));

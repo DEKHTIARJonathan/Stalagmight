@@ -24,7 +24,9 @@ vi.mock('../../../utils/telemetry', async (importOriginal) => ({
 import OrphanPlacementDialog from '../OrphanPlacementDialog';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
-import type { CommandResult, OrphanPlacementSuggestion } from '../../../types/commands';
+import type { OrphanPlacementSuggestion } from '../../../types/commands';
+import { accepted, type CommandOutcome } from '../../../store/commandResult';
+import type { EditOutcome } from '../../../types/ipc/EditOutcome';
 import type { Project, Shot } from '../../../types/project';
 
 const f32 = (v: number) => Math.fround(v);
@@ -95,7 +97,7 @@ const SUGGESTION: OrphanPlacementSuggestion = {
 let updateShot: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
-  const ok = async (): Promise<CommandResult> => ({ success: true }) as CommandResult;
+  const ok = async (): Promise<CommandOutcome<EditOutcome>> => accepted<EditOutcome>({ warnings: [], remote_link: null });
   updateShot = vi.fn(ok);
   useProjectStore.setState({
     project: PROJECT,

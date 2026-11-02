@@ -49,6 +49,7 @@ import { invokeIpc } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { refusedBy } from '../../store/commandResult';
 import type { CommandResult, TmlFile, TmlShot, ValidationWarning } from '../../types/commands';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 import type { Project } from '../../types/project';
@@ -313,16 +314,14 @@ describe('TmlImportDialog failure handling (#411 C2)', () => {
    * #576 RV4-FE-MISC4: a CANCELLED import into the project created for it is not a
    * failure. The residue prompt printed the backend's machine marker verbatim
    * ("IMPORT_CANCELLED: ...") in its error box; it now asks the same keep/discard
-   * question with the cancelled wording the other import dialogs' toast uses.
+   * question with the cancelled wording the other import dialogs' toast uses - routed
+   * on the refusal's code (#576 A6), never on its sentence.
    */
   it('words a cancelled import as cancelled in the residue prompt, never the raw marker', async () => {
     openEmptyImportProject();
-    executeTmlImport.mockResolvedValue({
-      success: false,
-      error: 'IMPORT_CANCELLED: the TML import was cancelled; nothing was imported',
-      warnings: [],
-      section_ids: [],
-    } as unknown as CommandResult);
+    executeTmlImport.mockResolvedValue(
+      refusedBy({ code: 'IMPORT_CANCELLED', message: 'the TML import was cancelled; nothing was imported' }),
+    );
     render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
 
     await clickImport();
@@ -330,6 +329,7 @@ describe('TmlImportDialog failure handling (#411 C2)', () => {
     const prompt = await screen.findByTestId('tml-import-residue-dialog');
     console.log('[MISC4] residue prompt text:', prompt.textContent);
     expect(prompt).not.toHaveTextContent('IMPORT_CANCELLED');
+    expect(prompt).not.toHaveTextContent('the TML import was cancelled; nothing was imported');
     expect(screen.queryByTestId('tml-import-residue-error')).toBeNull();
     expect(screen.getByTestId('tml-import-residue-cancelled')).toHaveTextContent(
       'Import cancelled. Nothing was imported.',

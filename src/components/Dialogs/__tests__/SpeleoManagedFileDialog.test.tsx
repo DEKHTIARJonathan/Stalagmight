@@ -272,7 +272,7 @@ describe('SpeleoManagedFileDialog', () => {
   it('keeps the prompt open with the reason when the strip fails', async () => {
     invokeIpcMock.mockImplementation((cmd: string) =>
       cmd === 'speleodb_remove_link_at'
-        ? Promise.reject({ message: 'file is locked', action: 'None', status: null })
+        ? Promise.reject({ message: 'file is locked', code: 'FAILED', status: null })
         : Promise.resolve(undefined),
     );
     render(<SpeleoManagedFileDialog />);
@@ -307,7 +307,7 @@ describe('SpeleoManagedFileDialog', () => {
     expect(screen.getByTestId('speleodb-managed-file-dialog')).toBeInTheDocument();
 
     // ...so the failure still has somewhere to land.
-    rejectStrip({ message: 'file is locked', action: 'None', status: null });
+    rejectStrip({ message: 'file is locked', code: 'FAILED', status: null });
     await waitFor(() =>
       expect(screen.getByTestId('speleodb-managed-file-error')).toBeInTheDocument(),
     );

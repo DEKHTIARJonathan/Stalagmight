@@ -70,7 +70,8 @@ beforeEach(() => {
     ipcOrder.push(cmd);
     if (cmd === 'import_sections') {
       if (importAnswer instanceof Error) throw importAnswer;
-      if (importAnswer) return importAnswer;
+      // A refusal is the backend's CommandError rejection (#576 C4).
+      if (importAnswer) throw importAnswer;
       const configs = (args?.sections as unknown[] | undefined) ?? [];
       return { success: true, section_ids: configs.map(() => nextSectionId++), import_receipt: receipt(), warnings: [] };
     }
@@ -99,7 +100,7 @@ failOnRefreshErrors();
  */
 describe('DMP wizard: a failure while the wizard starts is shown (#576 NF-AN4-N1)', () => {
   it('shows the backend refusal of the zero-datum import', async () => {
-    importAnswer = { success: false, error: 'Anchor refused (test)', section_ids: [], warnings: [] };
+    importAnswer = { code: 'FAILED', message: 'Anchor refused (test)' };
     renderWizard(undefined, { selected: [0, 1], zeroDatumConfig: zeroDatumOn0() });
 
     await waitFor(() => expect(screen.getByTestId('wizard-error')).toHaveTextContent('Anchor refused (test)'));

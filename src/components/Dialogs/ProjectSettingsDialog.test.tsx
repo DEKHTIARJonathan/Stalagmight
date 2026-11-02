@@ -13,7 +13,10 @@ import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { defaultConfig } from '../../types/config';
 import type { Project } from '../../types/project';
-import type { CommandResult } from '../../types/commands';
+import { accepted, refusedBy, type CommandOutcome } from '../../store/commandResult';
+import type { EditOutcome } from '../../types/ipc/EditOutcome';
+
+const EDITED = (): CommandOutcome<EditOutcome> => accepted<EditOutcome>({ warnings: [], remote_link: null });
 import { beginMoveCarry, refuseMutationDuringCarry } from '../../store/moveCarry';
 
 let updateProjectSettings: ReturnType<typeof vi.fn>;
@@ -31,8 +34,8 @@ function baseProject(overrides: Partial<Project> = {}): Project {
 }
 
 beforeEach(() => {
-  updateProjectSettings = vi.fn(async (): Promise<CommandResult> => ({ success: true, error: null }) as CommandResult);
-  setSurfaceElevation = vi.fn(async (): Promise<CommandResult> => ({ success: true, error: null }) as CommandResult);
+  updateProjectSettings = vi.fn(async (): Promise<CommandOutcome<EditOutcome>> => EDITED());
+  setSurfaceElevation = vi.fn(async (): Promise<CommandOutcome<EditOutcome>> => EDITED());
   closeDialog = vi.fn();
   useProjectStore.setState({
     project: baseProject(),
@@ -143,8 +146,11 @@ describe('ProjectSettingsDialog entrance elevation (#465)', () => {
 
   it('a changed draft is attempted even when editingBlocked flips true before Save; on EDIT_DISABLED it keeps the dialog open and the staged draft, and leaves the notice to the edit path', async () => {
     setSurfaceElevation = vi.fn(
-      async (): Promise<CommandResult> =>
-        ({ success: false, error: 'EDIT_DISABLED: Set entrance elevation is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.' }) as CommandResult,
+      async (): Promise<CommandOutcome<EditOutcome>> =>
+        refusedBy({
+          code: 'EDIT_DISABLED',
+          message: 'Set entrance elevation is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.',
+        }),
     );
     useProjectStore.setState({ setSurfaceElevation });
     const showToast = vi.fn();
@@ -171,7 +177,7 @@ describe('ProjectSettingsDialog entrance elevation (#465)', () => {
     beginMoveCarry(0, { cancel: vi.fn(), restorePreview: vi.fn() });
     const refusal = refuseMutationDuringCarry();
     expect(refusal).not.toBeNull();
-    setSurfaceElevation = vi.fn(async (): Promise<CommandResult> => refusal!);
+    setSurfaceElevation = vi.fn(async (): Promise<CommandOutcome<EditOutcome>> => refusal!);
     useProjectStore.setState({ setSurfaceElevation });
     const showToast = vi.fn();
     useUIStore.setState({ showToast });

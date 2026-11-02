@@ -17,8 +17,9 @@ import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import { useSpeleoStore } from '../speleoStore';
 import { useAutoSave } from '../../hooks/useAutoSave';
-import { surfaceSaveFailure, autosaveFailureMessage } from '../../utils/saveFeedback';
-import { classifySaveError, PROJECT_SETTINGS_UNREADABLE } from '../../utils/saveErrors';
+import { surfaceSaveFailure, autosaveFailureMessage, type SaveFailure } from '../../utils/saveFeedback';
+import { saveErrorKind } from '../../utils/saveErrors';
+import { accepted, refusedBy } from '../commandResult';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import i18n from '../../i18n';
 import type { DisplaySettings } from '../../types/loading';
@@ -79,11 +80,14 @@ const mockLoad = (unreadableProjectSettings: string[], path: string) =>
     displaySettings,
   });
 
-const REFUSAL =
-  `${PROJECT_SETTINGS_UNREADABLE}: Can't save: this project's stored entrance elevation could ` +
+const REFUSAL_MESSAGE =
+  "Can't save: this project's stored entrance elevation could " +
   'not be read when it was opened. Saving would replace it with defaults, so nothing was ' +
   'written - the file on disk is unchanged. Export still works; close and reopen the project ' +
   'to try again.';
+const REFUSAL: SaveFailure = { code: 'PROJECT_SETTINGS_UNREADABLE', error: REFUSAL_MESSAGE };
+/** What the store's saveProject answers for that refusal (#576 C4). */
+const REFUSED_SAVE = refusedBy({ code: 'PROJECT_SETTINGS_UNREADABLE', message: REFUSAL_MESSAGE });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -148,7 +152,7 @@ describe('a save refused over unread settings', () => {
     useUIStore.setState({ showToast } as never);
     useProjectStore.setState({ integritySaveBlocked: true, openIntegrityDialog } as never);
 
-    expect(classifySaveError(REFUSAL)).toBe('settings-unreadable');
+    expect(saveErrorKind(REFUSAL.code)).toBe('settings-unreadable');
     surfaceSaveFailure(REFUSAL, openDialog, useProjectStore.getState());
 
     expect(openDialog).not.toHaveBeenCalled();
@@ -158,7 +162,7 @@ describe('a save refused over unread settings', () => {
       TOAST_KEYS.SETTINGS_UNREADABLE,
       'warning',
     );
-    expect(autosaveFailureMessage(REFUSAL)).not.toContain(PROJECT_SETTINGS_UNREADABLE);
+    expect(autosaveFailureMessage(REFUSAL)).not.toContain('PROJECT_SETTINGS_UNREADABLE');
     useProjectStore.setState({ integritySaveBlocked: false } as never);
   });
 });
@@ -171,7 +175,7 @@ describe('autosave while stored settings are unread', () => {
 
   it('never attempts a save the backend will refuse', async () => {
     vi.useFakeTimers();
-    const save = vi.fn().mockResolvedValue({ success: false, error: REFUSAL, warnings: [], section_ids: [] });
+    const save = vi.fn().mockResolvedValue(REFUSED_SAVE);
     useProjectStore.setState({
       project: { file_path: '/mock/CaveB.stalx' } as never,
       config: { general: { auto_save: true, auto_save_interval_seconds: 1 } } as never,
@@ -196,7 +200,7 @@ describe('autosave while stored settings are unread', () => {
   // either one deleted.
   it('arm time: an edit does not even start the countdown (the footer stays idle)', async () => {
     vi.useFakeTimers();
-    const save = vi.fn().mockResolvedValue({ success: true, warnings: [], section_ids: [] });
+    const save = vi.fn().mockResolvedValue(accepted({ saved_path: null, unlinked_copy_path: null, warnings: [] }));
     useProjectStore.setState({
       project: { file_path: '/mock/CaveB.stalx' } as never,
       config: { general: { auto_save: true, auto_save_interval_seconds: 1 } } as never,
@@ -219,7 +223,7 @@ describe('autosave while stored settings are unread', () => {
 
   it('fire time: a countdown armed before the settings turned unreadable sends nothing', async () => {
     vi.useFakeTimers();
-    const save = vi.fn().mockResolvedValue({ success: false, error: REFUSAL, warnings: [], section_ids: [] });
+    const save = vi.fn().mockResolvedValue(REFUSED_SAVE);
     useProjectStore.setState({
       project: { file_path: '/mock/CaveB.stalx' } as never,
       config: { general: { auto_save: true, auto_save_interval_seconds: 1 } } as never,

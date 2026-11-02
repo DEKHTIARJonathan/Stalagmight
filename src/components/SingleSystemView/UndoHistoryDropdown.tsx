@@ -13,7 +13,9 @@ import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { getErrorMessage } from '../../utils/ipc';
 import { setSource } from '../../utils/telemetry';
 import { formatDate, formatRelativeTime, formatNumber } from '../../i18n/format';
-import type { CommandResult, UndoHistoryItem, PreviewData } from '../../types/commands';
+import type { UndoHistoryItem, PreviewData } from '../../types/commands';
+import type { CommandOutcome } from '../../store/commandResult';
+import type { HistoryOutcome } from '../../types/ipc/HistoryOutcome';
 import {
   CircleIcon,
   DashedLineIcon,
@@ -292,7 +294,7 @@ export default function UndoHistoryDropdown({
   const isActionInProgressRef = useRef(false);
   // Queue entries include action and context for better error messages
   interface QueuedAction {
-    action: () => Promise<CommandResult>;
+    action: () => Promise<CommandOutcome<HistoryOutcome>>;
     context: {
       description: string;
       commandType: string;
@@ -447,7 +449,7 @@ export default function UndoHistoryDropdown({
       isActionInProgressRef.current = true;
       setIsActionInProgress(true);
 
-      let result: CommandResult | undefined;
+      let result: CommandOutcome<HistoryOutcome> | undefined;
       try {
         result = await nextAction();
       } catch (error) {
@@ -471,7 +473,7 @@ export default function UndoHistoryDropdown({
         return;
       }
 
-      // Primary error path: check CommandResult.success (fail closed: treat missing result as error)
+      // Primary error path: check the outcome's `success` (fail closed: treat missing result as error)
       if (!result?.success) {
         console.error(`${mode} action failed:`, result?.error);
         const errorReason = result?.error ?? t('undo.errors.unknownError');
@@ -535,7 +537,7 @@ export default function UndoHistoryDropdown({
 
   // Enqueue an action and start processing if idle
   const enqueueAction = useCallback((
-    action: () => Promise<CommandResult>,
+    action: () => Promise<CommandOutcome<HistoryOutcome>>,
     context: { description: string; commandType: string; timestamp: string | null }
   ) => {
     // Immediately dismiss detail preview popup

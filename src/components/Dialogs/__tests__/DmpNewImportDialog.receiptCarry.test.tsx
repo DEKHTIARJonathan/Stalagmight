@@ -256,7 +256,7 @@ describe('DMP wizard receipt carry across manual placement', () => {
   it('shows a failed segment import on the reopened manual-placing screen', async () => {
     invokeIpcMock.mockImplementation(async (cmd: string) => {
       if (cmd === 'import_sections') {
-        return { success: false, error: 'Segment refused (test)', section_ids: [], warnings: [] };
+        throw { code: 'FAILED', message: 'Segment refused (test)' };
       }
       return null;
     });

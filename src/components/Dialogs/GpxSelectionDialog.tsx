@@ -139,7 +139,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
       if (!result.success) {
         // A move carry refused it (GHOST-2) and said so: keep the dialog for the retry.
         if (isMoveCarryRefusal(result)) setIsImporting(false);
-        else surfaceImportFailure('gpx-selection', importUi, { phase: 'command', error: result.error });
+        else surfaceImportFailure('gpx-selection', importUi, { phase: 'command', error: result.error, code: result.code });
         return;
       }
 

@@ -9,6 +9,8 @@ import { render, screen } from '@testing-library/react';
 import DeleteProjectDialog from './DeleteProjectDialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { accepted } from '../../store/commandResult';
+import type { DeleteProjectOutcome } from '../../types/ipc/DeleteProjectOutcome';
 
 beforeEach(() => {
   useUIStore.setState({
@@ -16,7 +18,7 @@ beforeEach(() => {
     dialogData: { path: '/tmp/cave.stalx', name: 'My Cave' },
   });
   useProjectStore.setState({
-    deleteProject: vi.fn(async () => ({ success: true, warnings: [], error: null, section_ids: [] })),
+    deleteProject: vi.fn(async () => accepted<DeleteProjectOutcome>({ session_closed: false, warnings: [] })),
   });
 });
 

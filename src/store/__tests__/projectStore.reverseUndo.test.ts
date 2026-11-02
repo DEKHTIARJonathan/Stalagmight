@@ -15,12 +15,13 @@
  *
  * What the reverse log still drives is the clearing of the refs that have no
  * "same place" (selection, merge staging, comment pickup): `executeUndoRedo`
- * reads the sections the backend reports as renumbered
- * (`CommandResult.reversed_sections`, populated for a forward reverse and for the
- * undo/redo that re-reverses it). These tests drive the real store action with
- * the IPC mocked, so deleting that wiring fails here.
+ * reads the sections the backend reports as renumbered (`reversed_sections` on a
+ * forward reverse's outcome, `reversed_steps` on the undo/redo that re-reverses it,
+ * and `reversed_sections` on a failed jump's CommandError, #576 A12). These tests
+ * drive the real store action - and the real `invokeIpc`, with Tauri's `invoke`
+ * mocked - so deleting that wiring fails here.
  *
- * From `undo_to`/`redo_to` the field is an ORDERED PER-STEP LOG - one entry per
+ * From `undo_to`/`redo_to` the log is an ORDERED PER-STEP LOG - one entry per
  * reversing step, repeats intact, each carrying the shot count in force at ITS
  * step - so the store composes the entries into one transform per section and
  * applies it once. The Playwright IPC mock stubs undo/redo as no-ops that never
@@ -33,14 +34,14 @@ import { useGasPlanStore } from '../gasPlanStore';
 import { useUIStore } from '../uiStore';
 import { useSpeleoStore } from '../speleoStore';
 import type { ReversedSection } from '../../types/ipc/ReversedSection';
+import type { CommandError } from '../../types/ipc/CommandError';
+import type { HistoryOutcome } from '../../types/ipc/HistoryOutcome';
 import type { Station } from '../../types/project';
 import { projectStateEnvelope } from '../../test/projectStateEnvelope';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeIpcMock }));
 
 const SECTION = 4;
 
@@ -101,29 +102,37 @@ function projectWith(stations: Station[]) {
 /**
  * Point every read-only refresh IPC at a project whose stations are `stations`,
  * and have undo/redo report `reversedSections` as renumbered. Omit it for an
- * operation that reversed nothing: the field is then absent from the wire, which
- * is what the backend does for every other command. `error` turns the undo into
- * a FAILED one that still reports what it managed to apply.
+ * operation that reversed nothing: the log is then empty (an outcome's
+ * `reversed_steps`) or absent (a failure's `reversed_sections`), which is what the
+ * backend does for every other step. `failedAt` ([N, M]) turns the undo into a
+ * FAILED one - "failed at step N of M", `HISTORY_STEP_FAILED` - that still reports
+ * what it managed to apply, and the link bits the backend's dirty flip left
+ * (#576 A18(a), D22).
  */
 function serveState(
   stations: Station[],
   reversedSections?: ReversedSection[],
-  error?: string
+  failedAt?: [number, number]
 ) {
   invokeIpcMock.mockImplementation(async (command: string) => {
     switch (command) {
       case 'undo':
       case 'redo':
       case 'undo_to':
+        if (failedAt) {
+          throw {
+            code: 'HISTORY_STEP_FAILED',
+            message: `Undo failed at step ${failedAt[0]} of ${failedAt[1]}: boom`,
+            history_step: { failed_step: failedAt[0], total_steps: failedAt[1] },
+            ...(reversedSections === undefined ? {} : { reversed_sections: reversedSections }),
+            remote_link: { has_unpushed_edits: true, unwound: false },
+          } satisfies CommandError;
+        }
         return {
-          success: error === undefined,
+          reversed_steps: reversedSections ?? [],
           warnings: [],
-          error: error ?? null,
-          section_ids: [],
-          ...(reversedSections === undefined
-            ? {}
-            : { reversed_sections: reversedSections }),
-        };
+          remote_link: null,
+        } satisfies HistoryOutcome;
       case 'get_project_state_binary':
         return projectStateEnvelope({
           project: projectWith(stations),
@@ -272,12 +281,12 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
   it('re-resolves after a PARTIALLY failed undo_to too, and clears what it renumbered', async () => {
     // The earlier steps flipped their sections and cannot be rolled back, so the
     // backend attaches them to the failure return. Ignoring the field on
-    // `success === false` would leave the selection on the opposite physical
+    // a failure would leave the selection on the opposite physical
     // station; the origin's anchor is re-resolved in the seam's `finally`.
     useUIStore.setState({ distanceGradientOrigin: ref(1) });
     useUIStore.getState().setSelection({ type: 'station', stationRef: ref(1) });
 
-    serveState(line(FORWARD), [reversed(3)], 'Undo failed at step 2 of 3: boom');
+    serveState(line(FORWARD), [reversed(3)], [2, 3]);
     withOriginAnchor(ref(2));
     const result = await useProjectStore.getState().undoTo(2);
 
@@ -293,7 +302,7 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     // pinned by the dirty-bit test below - but it reports no renumbering.)
     useUIStore.setState({ distanceGradientOrigin: ref(3) });
 
-    serveState(line(REVERSED), [reversed(3)], 'Undo failed at step 1 of 3: boom');
+    serveState(line(REVERSED), [reversed(3)], [1, 3]);
     await useProjectStore.getState().undoTo(2);
 
     expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(3));
@@ -307,7 +316,7 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     useProjectStore.setState({ isDirty: false });
     expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
 
-    serveState(line(FORWARD), undefined, 'Undo failed at step 1 of 3: boom');
+    serveState(line(FORWARD), undefined, [1, 3]);
     const result = await useProjectStore.getState().undoTo(2);
 
     expect(result.success).toBe(false);

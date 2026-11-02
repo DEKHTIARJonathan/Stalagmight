@@ -241,7 +241,8 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
         return { success: true, section_ids: ids, import_receipt: receipt(), warnings: [] };
       }
       if (cmd === 'execute_batch') {
-        if (!batchResult.success) return { ...batchResult, warnings: [] };
+        // A refusal is the backend's CommandError rejection (#576 C4).
+        if (!batchResult.success) throw { code: 'FAILED', message: batchResult.error ?? '' };
         for (const command of commands) {
           if (command.type === 'delete_section') {
             projectSectionIds = projectSectionIds.filter((id) => id !== command.section_id);
@@ -249,7 +250,10 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
         }
         return { success: true, warnings: [] };
       }
-      if (cmd === 'save_project') return { ...saveResult, warnings: [] };
+      if (cmd === 'save_project') {
+        if (!saveResult.success) throw { code: 'FAILED', message: saveResult.error ?? '' };
+        return { saved_path: null, unlinked_copy_path: null, warnings: [] };
+      }
       return null;
     });
     useUIStore.setState({
@@ -819,16 +823,17 @@ describe('DMP wizard: a failed removal is reported in the confirmation (#576 NF-
   beforeEach(() => {
     ipcOrder = [];
     importResult = null;
-    batchAnswer = { success: false, error: 'Batch refused (test)', warnings: [] };
+    // Refusals, as the backend's CommandError rejections (#576 C4).
+    batchAnswer = { code: 'FAILED', message: 'Batch refused (test)' };
     invokeIpcMock.mockReset();
     invokeIpcMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
       ipcOrder.push(cmd);
       if (cmd === 'import_sections') {
-        if (importResult) return importResult;
+        if (importResult) throw importResult;
         const configs = (args?.sections as unknown[] | undefined) ?? [];
         return { success: true, section_ids: configs.map(() => 20), import_receipt: receipt(), warnings: [] };
       }
-      if (cmd === 'execute_batch') return batchAnswer;
+      if (cmd === 'execute_batch') throw batchAnswer;
       return null;
     });
     useUIStore.setState({ activeDialog: null, dialogData: {}, placementMode: null, importContext: null, toasts: [] });
@@ -857,7 +862,7 @@ describe('DMP wizard: a failed removal is reported in the confirmation (#576 NF-
   });
 
   it('Continue editing returns to the late-import failure and its Retry, not to the removal', async () => {
-    importResult = { success: false, error: 'Late refused (test)', section_ids: [], warnings: [] };
+    importResult = { code: 'FAILED', message: 'Late refused (test)' };
     renderWizard(placedOnly({ importedSectionIds: [7] }), { selected: [0] });
 
     await waitFor(() => expect(screen.getByTestId('wizard-placing')).toHaveTextContent('Late refused (test)'));
@@ -976,7 +981,7 @@ describe('DMP wizard: imports land in the run project, a read-only refusal reads
     invokeIpcMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
       ipcOrder.push(cmd);
       if (cmd === 'import_sections') {
-        if (importResult) return importResult;
+        if (importResult) throw importResult;
         const configs = (args?.sections as unknown[] | undefined) ?? [];
         return { success: true, section_ids: configs.map(() => nextSectionId++), import_receipt: receipt(), warnings: [] };
       }
@@ -1008,10 +1013,8 @@ describe('DMP wizard: imports land in the run project, a read-only refusal reads
 
   it('shows a read-only refusal as the friendly notice, inline and nowhere else', async () => {
     importResult = {
-      success: false,
-      error: 'EDIT_DISABLED: WORKSPACE_READ_ONLY: Import sections is disabled in Plan and Export.',
-      section_ids: [],
-      warnings: [],
+      code: 'WORKSPACE_READ_ONLY',
+      message: 'Import sections is disabled in Plan and Export.',
     };
     renderWizard(placedOnly(), { selected: [0] });
 
@@ -1019,6 +1022,7 @@ describe('DMP wizard: imports land in the run project, a read-only refusal reads
       expect(screen.getByTestId('wizard-placing')).toHaveTextContent(i18n.t('editGate.workspaceReadOnlyNotice')),
     );
     expect(screen.getByTestId('wizard-placing')).not.toHaveTextContent('EDIT_DISABLED');
+    expect(screen.getByTestId('wizard-placing')).not.toHaveTextContent('Import sections is disabled in Plan and Export.');
     expect(useUIStore.getState().toasts.map((t) => t.message), 'the same notice toasted on top').toEqual([]);
   });
 });

@@ -132,7 +132,7 @@ describe('SpeleoUnpushedLocalDialog (#270)', () => {
       cmd === 'speleodb_open_project_discarding_local'
         ? Promise.reject({
             message: 'more than one',
-            action: 'Ambiguous',
+            code: 'SPELEODB_AMBIGUOUS',
             status: null,
             dump_candidates: [
               { entry_path: 'a.stalx', size_bytes: 1, modified: null },
@@ -158,7 +158,7 @@ describe('SpeleoUnpushedLocalDialog (#270)', () => {
   it('keeps the prompt open and shows why when the discarding open fails', async () => {
     invokeIpcMock.mockImplementation((cmd: string) =>
       cmd === 'speleodb_open_project_discarding_local'
-        ? Promise.reject({ message: 'server exploded', action: 'None', status: 500 })
+        ? Promise.reject({ message: 'server exploded', code: 'FAILED', status: 500 })
         : Promise.resolve(undefined),
     );
     render(<SpeleoUnpushedLocalDialog />);
@@ -203,7 +203,7 @@ describe('SpeleoUnpushedLocalDialog (#270)', () => {
     expect(screen.getByTestId('speleodb-unpushed-local-dialog')).toBeInTheDocument();
 
     // ...so the failure still has somewhere to land.
-    rejectOpen({ message: 'server exploded', action: 'None', status: 500 });
+    rejectOpen({ message: 'server exploded', code: 'FAILED', status: 500 });
     await waitFor(() =>
       expect(screen.getByTestId('speleodb-unpushed-local-error')).toBeInTheDocument(),
     );
@@ -216,7 +216,7 @@ describe('SpeleoUnpushedLocalDialog (#270)', () => {
     useSpeleoStore.setState({ clearSession });
     invokeIpcMock.mockImplementation((cmd: string) =>
       cmd === 'speleodb_open_project_discarding_local'
-        ? Promise.reject({ message: 'unauthorized', action: 'ReLogin', status: 401 })
+        ? Promise.reject({ message: 'unauthorized', code: 'SPELEODB_RELOGIN', status: 401 })
         : Promise.resolve(undefined),
     );
     render(<SpeleoUnpushedLocalDialog />);
@@ -261,11 +261,11 @@ describe('SpeleoUnpushedLocalDialog (#270)', () => {
     // back to a dialog that could not be closed.
     invokeIpcMock.mockImplementation(async (cmd: string) => {
       if (cmd === 'speleodb_open_project_discarding_local')
-        return Promise.reject({ message: 'ariane', action: 'Adopt', status: null });
+        return Promise.reject({ message: 'ariane', code: 'SPELEODB_ADOPT', status: null });
       if (cmd === 'speleodb_adopt_ariane')
         return Promise.reject({
           message: 'more than one',
-          action: 'Ambiguous',
+          code: 'SPELEODB_AMBIGUOUS',
           status: null,
           dump_candidates: [
             { entry_path: 'a/ariane.tml', size_bytes: 1, modified: null },

@@ -12,8 +12,8 @@ import { invokeIpc } from '../utils/ipc';
 import { presentImportReceipt } from '../utils/saveFeedback';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import { afterQueuedEdits } from '../utils/projectTransition';
+import { errorCode } from '../utils/commandError';
 import {
-  speleoErrorAction,
   humanizeSpeleoError,
   unpushedLocalEdits,
   dumpCandidates,
@@ -510,7 +510,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       } catch (e) {
         // #214: an Ariane (.tml-only) project routes here (backend returns the typed
         // Adopt action, not a hard error). Signal the caller to offer adoption.
-        if (speleoErrorAction(e) === 'Adopt') return { status: 'adopt' };
+        if (errorCode(e) === 'SPELEODB_ADOPT') return { status: 'adopt' };
         // #270: re-opening would have overwritten a cached .stalx that still holds
         // edits the server has never seen, so the backend refused. Raise the binary
         // keep-local / take-remote prompt HERE rather than at each call site, so both
@@ -553,7 +553,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         return {
           status: 'error',
           message: humanizeSpeleoError(e, t('speleodb.errors.openFailed')),
-          reLogin: speleoErrorAction(e) === 'ReLogin',
+          reLogin: errorCode(e) === 'SPELEODB_RELOGIN',
         };
       }
       // The link the entry check read is now as old as the download, and the poll
@@ -696,7 +696,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // classify happens before any replace, so nothing has been destroyed yet -
         // but the confirmation carries forward, so the adopt it leads to does not
         // re-ask.
-        if (speleoErrorAction(e) === 'Adopt') return { status: 'adopt', discardLocal: true };
+        if (errorCode(e) === 'SPELEODB_ADOPT') return { status: 'adopt', discardLocal: true };
         // [#258] This is the ONLY route that reaches an ambiguous dump with un-pushed
         // local edits: the guard runs before the download, so a protected open is
         // refused before anything is ever classified. Without the picker here, a user
@@ -717,7 +717,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         return {
           status: 'error',
           message: humanizeSpeleoError(e, t('speleodb.errors.openFailed')),
-          reLogin: speleoErrorAction(e) === 'ReLogin',
+          reLogin: errorCode(e) === 'SPELEODB_RELOGIN',
         };
       }
       // Same download, same window, same re-read - this verb is `openRemote`'s pull
@@ -830,7 +830,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         return {
           status: 'error',
           message: humanizeSpeleoError(e, t('speleodb.errors.adoptFailed')),
-          reLogin: speleoErrorAction(e) === 'ReLogin',
+          reLogin: errorCode(e) === 'SPELEODB_RELOGIN',
         };
       }
       /**

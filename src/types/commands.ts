@@ -1,9 +1,8 @@
 // Command and IPC payload types generated from Rust.
 
-import type { Command } from './ipc.generated';
+import type { Command, ValidationWarning } from './ipc.generated';
 
 export type {
-  CommandResult,
   IntegrityRepairResult,
   IntegrityCheckResult,
   ValidationWarning,
@@ -63,6 +62,20 @@ export type {
   SegmentGeometry,
   SegmentSectionGeometry,
 } from './ipc.generated';
+
+/**
+ * The outcome of an action the frontend reports itself, with no per-command backend
+ * outcome behind it: the settings writes (`projectConfigActions.ts`) and project
+ * creation (`emptyCommandResult`). It used to be the backend's one result type for
+ * every command; since #576 A12 each command answers with its own outcome and the
+ * store mutations with `CommandOutcome<T>` (`src/store/commandResult.ts`).
+ */
+export interface CommandResult {
+  success: boolean;
+  warnings: ValidationWarning[];
+  error: string | null;
+  section_ids: number[];
+}
 
 // Batch command types for execute_batch IPC: the generated `Command` (#576 C3),
 // narrowed to the variants the frontend batches. Field names and types come from

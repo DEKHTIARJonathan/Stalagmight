@@ -4,7 +4,8 @@ import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
 import { invokeIpc } from '../../utils/ipc';
-import { speleoErrorAction, humanizeSpeleoError } from '../../utils/speleoError';
+import { humanizeSpeleoError } from '../../utils/speleoError';
+import { errorCode } from '../../utils/commandError';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoAdoptConfirm } from './SpeleoAdoptConfirm';
@@ -79,7 +80,7 @@ export default function OpenFromSpeleoDbDialog() {
       } catch (e) {
         if (cancelled) return;
         // A dead token surfaces here - drop the session and prompt a re-login.
-        if (speleoErrorAction(e) === 'ReLogin') clearSession();
+        if (errorCode(e) === 'SPELEODB_RELOGIN') clearSession();
         setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
         setPhase('logged-out');
         return;
@@ -100,7 +101,7 @@ export default function OpenFromSpeleoDbDialog() {
         if (cancelled) return;
         setListFailed(true);
         setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
-        if (speleoErrorAction(e) === 'ReLogin') {
+        if (errorCode(e) === 'SPELEODB_RELOGIN') {
           clearSession();
           setPhase('logged-out');
         } else {
@@ -126,7 +127,7 @@ export default function OpenFromSpeleoDbDialog() {
       await refreshProjects();
     } catch (e) {
       setListFailed(true);
-      if (speleoErrorAction(e) === 'ReLogin') {
+      if (errorCode(e) === 'SPELEODB_RELOGIN') {
         clearSession();
         setPhase('logged-out');
       }

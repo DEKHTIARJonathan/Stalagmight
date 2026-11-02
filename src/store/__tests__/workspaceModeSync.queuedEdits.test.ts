@@ -46,9 +46,8 @@ beforeEach(() => {
     }
     if (command === 'update_shot') {
       order.push(`update_shot:${String(args?.shotId)}@${backendMode}`);
-      return backendMode === 'survey'
-        ? { success: true, section_ids: [] }
-        : { success: false, error: 'EDIT_DISABLED: WORKSPACE_READ_ONLY: refused', section_ids: [] };
+      if (backendMode !== 'survey') throw { code: 'WORKSPACE_READ_ONLY', message: 'refused' };
+      return { warnings: [], remote_link: null };
     }
     return undefined;
   });

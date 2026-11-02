@@ -18,7 +18,8 @@
  *   and the `projectTreeGeneration` the ghost was computed against.
  * - `refuseMutationDuringCarry` (R1) is the check every survey-mutation route runs
  *   at ISSUE time: with a carry in flight it cancels the carry, toasts once, and
- *   hands back a failed `CommandResult` instead of letting the command reach IPC.
+ *   hands back a refused outcome (`CommandRefused`, no backend code) instead of
+ *   letting the command reach IPC.
  * - `cancelMoveCarry` (R2/R4) cancels through the same routine Escape runs.
  * - `commitMoveCarry` ends the carry as ITS OWN commit and marks the one command
  *   that commit issues, so the chokepoint lets it through (R1) but re-checks the
@@ -32,7 +33,7 @@
 import i18n from '../i18n';
 import { useUIStore } from './uiStore';
 import { TOAST_KEYS } from '../utils/toastKeys';
-import type { CommandResult } from '../types/commands';
+import { refusedLocally, type CommandOutcome, type CommandRefused } from './commandResult';
 
 /** Why a carry was cancelled. Only some reasons tell the user (see `CANCEL_TOAST`). */
 export type MoveCarryCancelReason =
@@ -84,8 +85,8 @@ const CANCEL_TOAST: Partial<Record<MoveCarryCancelReason, string>> = {
 // carry" apart and leave the notice to this module: one event, one notice.
 const refusals = new WeakSet<object>();
 
-function refusal(messageKey: string): CommandResult {
-  const result: CommandResult = { success: false, warnings: [], error: i18n.t(messageKey), section_ids: [] };
+function refusal(messageKey: string): CommandRefused {
+  const result = refusedLocally(i18n.t(messageKey));
   refusals.add(result);
   return result;
 }
@@ -147,7 +148,7 @@ export function cancelMoveCarry(reason: MoveCarryCancelReason): boolean {
  * a carry in flight the carry is cancelled (as Escape would) and the user is told
  * neither change happened, so they can retry the one they meant.
  */
-export function refuseMutationDuringCarry(): CommandResult | null {
+export function refuseMutationDuringCarry(): CommandRefused | null {
   if (!cancelMoveCarry('otherMutation')) return null;
   return refusal('map.move.cancelledOtherChange');
 }
@@ -159,7 +160,10 @@ export function refuseMutationDuringCarry(): CommandResult | null {
  * re-checked right before IPC (R3). A carry that is no longer in flight - cancelled
  * while a snap-merge dialog was being confirmed - sends nothing.
  */
-export function commitMoveCarry(token: number | null, send: () => Promise<CommandResult>): Promise<CommandResult> {
+export function commitMoveCarry<T>(
+  token: number | null,
+  send: () => Promise<CommandOutcome<T>>,
+): Promise<CommandOutcome<T>> {
   const carry = live;
   if (!carry || carry.token !== token) return Promise.resolve(refusal('map.move.cancelled'));
   live = null;
@@ -184,7 +188,7 @@ export function takeMoveCarryCommit(): MoveCarryCommit | null {
  * no longer matches the geometry the ghost was computed against. It is refused
  * with nothing sent and the hidden features restored.
  */
-export function refuseStaleCarryCommit(commit: MoveCarryCommit | null, generation: number): CommandResult | null {
+export function refuseStaleCarryCommit(commit: MoveCarryCommit | null, generation: number): CommandRefused | null {
   if (!commit || commit.generation === generation) return null;
   commit.restorePreview();
   toast('map.move.cancelledSurveyChanged');

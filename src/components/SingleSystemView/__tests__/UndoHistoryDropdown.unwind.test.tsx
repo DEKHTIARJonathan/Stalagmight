@@ -21,6 +21,8 @@ import UndoHistoryDropdown from '../UndoHistoryDropdown';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
+import { accepted } from '../../../store/commandResult';
+import type { HistoryOutcome } from '../../../types/ipc/HistoryOutcome';
 
 const originalGetRedoStack = useProjectStore.getState().getRedoStack;
 const originalUndo = useProjectStore.getState().undo;
@@ -341,12 +343,9 @@ describe('UndoHistoryDropdown - the Unwind entry (#303)', () => {
         .mockResolvedValueOnce([localRedo])
         .mockResolvedValueOnce([localRedo])
         .mockResolvedValue([]);
-      const redo = vi.fn(async () => ({
-        success: true,
-        warnings: [],
-        error: null,
-        section_ids: [],
-      }));
+      const redo = vi.fn(async () =>
+        accepted<HistoryOutcome>({ reversed_steps: [], warnings: [], remote_link: null }),
+      );
       useProjectStore.setState({ getRedoStack, redo });
       invokeIpcMock.mockImplementation((cmd: string) => {
         if (cmd === 'speleodb_rewind_target')
