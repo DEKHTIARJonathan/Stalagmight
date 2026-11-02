@@ -157,10 +157,9 @@ function registeredRustCommands(): string[] {
  * `switch (table)` inside the `get_raw_table` case) are excluded: they are
  * masked out before the case-label scan runs.
  *
- * Deliberately scopes to only the FIRST `switch (cmd)` block in the file.
- * The file also defines a second, unused legacy helper
- * (`setupTauriMocksWithProject`) with its own tiny `switch (cmd)` that no
- * spec calls into; it is not "the mock" this tripwire is about.
+ * Scopes to the FIRST `switch (cmd)` block in the file, which is the only one
+ * (pinned below: the unused second installer that had its own tiny dispatcher
+ * was deleted, #576 RV5-PI-7).
  */
 function parseMockedCommands(source: string): string[] {
   const switchMatch = /switch\s*\(\s*cmd\s*\)\s*\{/.exec(source);
@@ -406,5 +405,22 @@ describe('mock contract tripwire (#275)', () => {
     );
 
     expect(stale, 'these allowlist entries no longer need an exemption; remove them').toEqual([]);
+  });
+});
+
+// [#576 RV5-PI-7] The mock has ONE dispatcher. A second, uncalled installer with
+// its own `switch (cmd)` answered unannotated, non-wire shapes (save_project
+// without warnings; get_project / load_project, which are not commands) that no
+// MockReply check covered, and would have been a silent second mock for any spec
+// that reached for it.
+describe('the mock has one installer (#576 RV5-PI-7)', () => {
+  it('carries no second, unchecked dispatcher', () => {
+    const dispatchers = (mockTsSource.match(/switch\s*\(\s*cmd\s*\)/g) ?? []).length;
+    console.log(
+      `[RV5-PI-7] setupTauriMocksWithProject in the mock: ${mockTsSource.includes('setupTauriMocksWithProject')}; ` +
+        `switch (cmd) dispatchers in tauri-ipc.ts: ${dispatchers}`,
+    );
+    expect(mockTsSource).not.toContain('setupTauriMocksWithProject');
+    expect(dispatchers).toBe(1);
   });
 });
