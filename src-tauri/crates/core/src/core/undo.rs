@@ -14,6 +14,8 @@ mod budget;
 pub mod history_view;
 mod persistence;
 #[cfg(test)]
+pub(crate) use persistence::ENTRIES_COMPRESSED;
+#[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::panic)]
 mod window_tests;
 

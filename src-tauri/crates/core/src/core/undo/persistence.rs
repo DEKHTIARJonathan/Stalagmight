@@ -11,6 +11,14 @@ use crate::persistence::{compress_history_json, StoredHistoryRow};
 /// the entry records one, and the in-session id it was recorded with.
 type ShotTarget<'a> = (SectionId, Option<&'a str>, ShotId);
 
+#[cfg(test)]
+thread_local! {
+    /// How many entries [`UndoStack::stored_rows_to_persist`] has compressed on
+    /// this thread - what a test reads to tell a cached row from a fresh one.
+    pub(crate) static ENTRIES_COMPRESSED: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
 impl UndoStack {
     /// [#303] Every row a save must write for one stack, in stack order and in the
     /// tuple shape `Database::replace_history_stacks_with_timestamps` takes per stack.
@@ -55,6 +63,8 @@ impl UndoStack {
                 let (command, undo_data) = slot
                     .stored
                     .get_or_init(|| {
+                        #[cfg(test)]
+                        ENTRIES_COMPRESSED.with(|n| n.set(n.get() + 1));
                         Self::serialize_entry(&slot.entry).map(|(command, undo_data)| {
                             (
                                 Arc::from(compress_history_json(&command)),

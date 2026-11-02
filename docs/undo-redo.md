@@ -586,6 +586,15 @@ since #576 B20. A 20-entry window was not "fine": a delete-heavy session's whole
 snapshots are megabytes each, and a synthetic 20,000-shot project with 20 whole-project
 steps took 8.7 s per save, every autosave included (release build); capped, 1.0 s.
 
+A save does not re-COMPRESS the window, though (#576 B20-D2). Each stack position keeps
+its entry's gzipped rows once a save has computed them (`UndoStack::stored_rows_to_persist`,
+written by `Database::replace_history_stacks_stored`, the same bytes the JSON path stores),
+so a save compresses only the entries that are new since the last one: on that project an
+idle autosave went from 0.78 s to 0.21 s and a save after one more step from 0.92 s to
+0.67 s (release build, same machine, back to back). The cache cannot describe a different entry: it moves with the
+entry, an entry popped for undo or redo leaves it behind (entries are only ever changed off
+the stack), and any mutable access to a stacked entry drops it.
+
 ## Hybrid mode for SpeleoDB projects (#303)
 
 A SpeleoDB-linked project is a binary `.stalx` committed to a git repo, so what its undo

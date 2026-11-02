@@ -657,12 +657,12 @@ pub(super) fn unread_settings_refusal(keys: &[String]) -> Option<CommandResult> 
 /// each production file up to its first one.)
 pub(super) fn replace_history_rows(
     db: &Database,
-    undo_rows: Vec<(String, String, Option<String>)>,
-    redo_rows: Vec<(String, String, Option<String>)>,
+    undo_rows: Vec<crate::persistence::StoredHistoryRow>,
+    redo_rows: Vec<crate::persistence::StoredHistoryRow>,
 ) -> anyhow::Result<()> {
     #[cfg(test)]
     fault::check_write("undo_stack")?;
-    db.replace_history_stacks_with_timestamps(undo_rows, redo_rows)
+    db.replace_history_stacks_stored(&undo_rows, &redo_rows)
 }
 
 /// How a side-table write that did not fail went.

@@ -967,7 +967,7 @@ impl AppState {
         // `undo_policy()`: `self.database` still points at the pre-save handle when the
         // normal save calls this, so asking the AppState would consult the wrong file.
         let (undo_rows, redo_rows) = self.history_rows_to_persist(db, undo_stack);
-        match db.replace_history_stacks_with_timestamps(undo_rows, redo_rows) {
+        match db.replace_history_stacks_stored(&undo_rows, &redo_rows) {
             Ok(()) => true,
             Err(e) => {
                 tracing::warn!(
@@ -985,8 +985,8 @@ impl AppState {
         db: &Database,
         undo_stack: &UndoStack,
     ) -> (
-        Vec<(String, String, Option<String>)>,
-        Vec<(String, String, Option<String>)>,
+        Vec<crate::persistence::StoredHistoryRow>,
+        Vec<crate::persistence::StoredHistoryRow>,
     ) {
         let count_limit = {
             let policy = self.undo_policy_for(db.load_speleo_link().ok().flatten().as_ref());
@@ -1004,8 +1004,10 @@ impl AppState {
 
         // Every save writes the WHOLE (windowed) stack, because the pipeline above
         // built a fresh temp file and renamed it over the target: the reopened `db`
-        // has no undo tables to add to. See `UndoStack::rows_to_persist`.
-        let undo_rows = undo_stack.rows_to_persist(PersistStack::Undo, count_limit);
+        // has no undo tables to add to. See `UndoStack::rows_to_persist`. [#576 B20]
+        // It does not have to COMPRESS them all: each entry's gzipped rows are kept
+        // after the first save, so only entries new since then are compressed.
+        let undo_rows = undo_stack.stored_rows_to_persist(PersistStack::Undo, count_limit);
 
         // [#303] Redo is persisted in EVERY mode, including Full, where that means a
         // save can write up to 2x `UNDO_BYTE_BUDGET_BYTES` - the budget is applied to
@@ -1023,7 +1025,7 @@ impl AppState {
         // None of the redo half reaches the server either way: `redo_stack` is
         // unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES`, so this is local-only cost
         // for a local-only feature.
-        let redo_rows = undo_stack.rows_to_persist(PersistStack::Redo, count_limit);
+        let redo_rows = undo_stack.stored_rows_to_persist(PersistStack::Redo, count_limit);
         (undo_rows, redo_rows)
     }
 
