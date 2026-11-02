@@ -162,7 +162,8 @@ export default class GlobalSurveyLayer {
     const xy = pointLikeToXY(point);
     // Camera key so the hit index reprojects only when the camera moved, not on
     // every hover (a single large system would otherwise re-project all of its
-    // endpoints per mousemove). Mirrors SurveyLayer.cameraSnapshot's key.
+    // endpoints per mousemove). Mirrors the survey map's cameraSnapshot key
+    // (Map/surveyLayer/surveyHitTester.ts).
     const c = this.map.getCenter();
     const cv = this.map.getCanvas();
     const cameraKey = `${this.map.getZoom()}|${c.lng}|${c.lat}|${this.map.getBearing()}|${this.map.getPitch()}|${cv.width}|${cv.height}`;

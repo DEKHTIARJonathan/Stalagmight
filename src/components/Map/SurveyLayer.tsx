@@ -35,7 +35,7 @@ import { DragGhostController } from './surveyLayer/dragGhostController';
 import { DragPreviewController } from './surveyLayer/dragPreviewController';
 import type { GhostRenderData } from './surveyLayer/customRender/surveyGhostLayer';
 import { buildGhostRenderData } from './surveyLayer/dragGhostData';
-import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
+import { SurveyHitTester } from './surveyLayer/surveyHitTester';
 import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
 import { SurveyCustomController, buildCustomDimState } from './surveyLayer/customRender/controller';
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
@@ -132,6 +132,8 @@ export type { GhostSectionData } from './surveyLayer/displayColor';
 export default class SurveyLayer {
   private map: MaplibreMap;
   private callbacks: SurveyLayerCallbacks;
+  /** Candidate-section + nearest-feature hit-testing; see surveyLayer/surveyHitTester.ts. */
+  private readonly hits: SurveyHitTester;
   private semanticTargetPreference = new SemanticTargetPreference({ geometry: () => this.enumerateGeometry(), project: (lngLat) => this.map.project(lngLat), visibility: () => ({ stations: this.stationsVisible, shots: this.shotsVisible }), callbacks: () => this.callbacks });
 
   // Config storage with fallback defaults for when config is null (initial load)
@@ -317,6 +319,14 @@ export default class SurveyLayer {
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
     this.callbacks = callbacks;
+    this.hits = new SurveyHitTester(map, {
+      geoIndex: () => this.geoIndex,
+      stationsVisible: () => this.stationsVisible,
+      shotsVisible: () => this.shotsVisible,
+      visibleKinds: () => this.visibleKinds(),
+      stationHitReach: () => this.getStationHitReach(),
+      shotHitReach: () => this.getShotHitReach(),
+    });
     this.interactHide = new InteractOverlayHideController(map, AUX_IDS.interactSourceId, [
       AUX_IDS.interactShotsLayerId,
       AUX_IDS.interactShotsMeasuredLayerId,
@@ -904,79 +914,12 @@ export default class SurveyLayer {
     this.callbacks.onContextMenu?.(null, e);
   };
 
-  /**
-   * Candidate sections under a point/box, from the SoA geometry index
-   * (#customRender / #mem). Candidate discovery no longer depends on stock-layer
-   * residency: the endgame renders the survey via the custom WebGL layer, which
-   * hides the stock shots/stations layers (visibility:none), and MapLibre returns
-   * nothing from hidden layers. So instead of `queryRenderedFeatures` we ask the
-   * geometry index for sections whose world-space bounds, projected to screen,
-   * intersect the probe box padded by the type's hit reach. That padded-box query
-   * is a SUPERSET of the sections whose geometry can be within tolerance; the SoA
-   * resolver (`resolveStationAt` / `resolveShotAt`) then trims it to the exact
-   * pick. Per-type padding preserves the two old queries' semantics (shot vs
-   * station reach differ); the pad is the FULL reach
-   * because we test the true geometry, not a thin rendered mark. See
-   * `hitProbe.ts` (`padProbeBox`) and `geometryIndex.ts`
-   * (`sectionsIntersectingBox`), both unit tested.
-   *
-   * A type is gated by the USER visibility flags (`stationsVisible` /
-   * `shotsVisible`, set by setStationsVisibility / setShotsVisibility): a
-   * user-hidden type yields no candidates, exactly as the old query returned
-   * nothing for a hidden layer, so clicks fall through to the hidden-feature
-   * toast in `handleEmptyClick`. These flags are NOT raw layer visibility: the
-   * custom renderer hiding the stock layers (visibility:none) leaves the survey
-   * fully interactive, while a user "hide stations/shots" toggle still suppresses
-   * hits.
-   */
+  /** Candidate sections under a point / box, gated by the user visibility toggles
+   *  (see SurveyHitTester.hitCandidateSections). */
   private hitCandidateSections(
     geometry: maplibregl.PointLike | [maplibregl.PointLike, maplibregl.PointLike],
   ): { stationSections: Set<number>; shotSections: Set<number> } {
-    let stationSections = new Set<number>();
-    let shotSections = new Set<number>();
-    if (!this.geoIndex || !hasLiveStyle(this.map)) return { stationSections, shotSections };
-    const project = this.projector();
-    // One camera snapshot for both probes: the geometry index reuses its
-    // projected per-section AABBs across probes of the same camera, so a static
-    // hover reprojects the 14k+ sections once, not once per probe (#customRender).
-    const camera = this.cameraSnapshot();
-    if (this.shotsVisible) {
-      const [[minX, minY], [maxX, maxY]] = padProbeBox(
-        geometry as ProbeGeometry,
-        this.getShotHitReach(),
-      );
-      shotSections = this.geoIndex.sectionsIntersectingBox(project, minX, minY, maxX, maxY, camera);
-    }
-    if (this.stationsVisible) {
-      const [[minX, minY], [maxX, maxY]] = padProbeBox(
-        geometry as ProbeGeometry,
-        this.getStationHitReach(),
-      );
-      stationSections = this.geoIndex.sectionsIntersectingBox(project, minX, minY, maxX, maxY, camera);
-    }
-    return { stationSections, shotSections };
-  }
-
-  /** Cheap camera snapshot keying the geometry index's projected-AABB cache.
-   *  Keyed by the EXACT center (plus zoom / bearing / pitch / canvas size), so
-   *  the key changes on ANY camera move; axisAligned (no bearing/pitch) enables
-   *  the 2-corner reprojection fast path. The center must stay full-precision:
-   *  quantizing it to pixel bins let two centers in one bin differ by ~1px (Web
-   *  Mercator amplifies the latitude error away from the equator), exceeding the
-   *  probe's 0.5px margin, so a feature near the hit-radius boundary then missed
-   *  hover/click until the camera crossed a bin. */
-  private cameraSnapshot(): { key: string; axisAligned: boolean } {
-    const c = this.map.getCenter();
-    const cv = this.map.getCanvas();
-    const bearing = this.map.getBearing();
-    const pitch = this.map.getPitch();
-    const key = `${this.map.getZoom()}|${c.lng}|${c.lat}|${bearing}|${pitch}|${cv.width}|${cv.height}`;
-    return { key, axisAligned: bearing === 0 && pitch === 0 };
-  }
-
-  /** Screen projection closure for the geometry resolver. */
-  private projector(): (c: [number, number]) => { x: number; y: number } {
-    return (c) => this.map.project(c);
+    return this.hits.hitCandidateSections(geometry);
   }
 
   /** Nearest visible station among candidate sections, within maxDistance px. */
@@ -986,10 +929,7 @@ export default class SurveyLayer {
     sections: Set<number>,
     maxDistance: number,
   ): ReturnType<SurveyGeometryIndex['nearestStation']> {
-    if (sections.size === 0 || !this.geoIndex) return null;
-    return this.geoIndex.nearestStation(this.projector(), x, y, sections, maxDistance, {
-      visibleKinds: this.visibleKinds(),
-    });
+    return this.hits.resolveStationAt(x, y, sections, maxDistance);
   }
 
   /** Nearest visible shot among candidate sections, within maxDistance px. */
@@ -999,10 +939,7 @@ export default class SurveyLayer {
     sections: Set<number>,
     maxDistance: number,
   ): ReturnType<SurveyGeometryIndex['nearestShot']> {
-    if (sections.size === 0 || !this.geoIndex) return null;
-    return this.geoIndex.nearestShot(this.projector(), x, y, sections, maxDistance, {
-      visibleKinds: this.visibleKinds(),
-    });
+    return this.hits.resolveShotAt(x, y, sections, maxDistance);
   }
 
   /** Prefer one exact co-located feature for the next development-harness click. */
@@ -1434,60 +1371,25 @@ export default class SurveyLayer {
     this.refreshInteractOverlay();
   }
 
-  /**
-   * Query the nearest station to a screen point. The padded visible-layer query
-   * (MapLibre's spatial index) gates the candidate sections; the SoA resolver
-   * picks the exact station with a circular `threshold` (the old post-check
-   * for corner candidates is inherent in the resolver's maxDistance) (#mem).
-   */
+  /** Nearest station to a screen point within a circular `threshold` px, or null
+   *  (see SurveyHitTester.queryNearestStation). */
   queryNearestStation(
     screenX: number,
     screenY: number,
     threshold: number
   ): StationRef | null {
-    const bbox: [[number, number], [number, number]] = [
-      [screenX - threshold, screenY - threshold],
-      [screenX + threshold, screenY + threshold],
-    ];
-    const { stationSections } = this.hitCandidateSections(bbox);
-    const nearest = this.resolveStationAt(screenX, screenY, stationSections, threshold);
-    return nearest ? nearest.ref : null;
+    return this.hits.queryNearestStation(screenX, screenY, threshold);
   }
 
-  /**
-   * Nearest shot to a screen point, plus the fractional position `t` ∈ [0,1]
-   * along that shot's line (#26 ruler snap-to-shot). The caller interpolates the
-   * 3D coords at `t` from the active stations (the 2D shot geometry has no z).
-   * Returns null when no shot is within `threshold` pixels (circular - the
-   * old corner post-check is inherent in the resolver's maxDistance).
-   *
-   * The SoA resolver computes `t` and the snap point from the TRUE shot
-   * endpoints (#mem), which also fixes the previously-documented edge case
-   * where tile-clipped rendered geometry skewed `t` for long shots.
-   */
+  /** Nearest shot to a screen point plus the fraction `t` along it and the snap
+   *  point (#26 ruler snap-to-shot), or null when none is within `threshold` px
+   *  (see SurveyHitTester.queryNearestShotPoint). */
   queryNearestShotPoint(
     screenX: number,
     screenY: number,
     threshold: number
   ): { section_id: number; shot_id: number; t: number; lng: number; lat: number } | null {
-    const bbox: [[number, number], [number, number]] = [
-      [screenX - threshold, screenY - threshold],
-      [screenX + threshold, screenY + threshold],
-    ];
-    const { shotSections } = this.hitCandidateSections(bbox);
-    const nearest = this.resolveShotAt(screenX, screenY, shotSections, threshold);
-    if (!nearest) return null;
-
-    const lng = nearest.from[0] + nearest.t * (nearest.to[0] - nearest.from[0]);
-    const lat = nearest.from[1] + nearest.t * (nearest.to[1] - nearest.from[1]);
-
-    return {
-      section_id: nearest.sectionId,
-      shot_id: nearest.shotId,
-      t: nearest.t,
-      lng,
-      lat,
-    };
+    return this.hits.queryNearestShotPoint(screenX, screenY, threshold);
   }
 
   /**
