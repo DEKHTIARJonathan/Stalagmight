@@ -28,19 +28,6 @@ const local = (opts: { unpushed: boolean; open?: boolean }) => ({
   state_unknown: false,
 });
 
-/**
- * A row the backend found but could NOT read. The listing fails open per row, so it
- * reports `has_unpushed_edits: false` - byte-identical to a clean row - and only
- * `state_unknown` tells them apart.
- */
-const unreadable = () => ({
-  has_local_copy: false,
-  has_unpushed_edits: false,
-  last_edit_at: null,
-  is_open: false,
-  state_unknown: true,
-});
-
 /** Route the mock by command; `localStates` is the reply (or a thrown failure). */
 const wireIpc = (localStates: Record<string, unknown> | Error) => {
   invokeIpcMock.mockImplementation((command: string) => {
