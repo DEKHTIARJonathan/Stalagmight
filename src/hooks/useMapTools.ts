@@ -432,7 +432,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
       }
     },
-    [checkMergeConnectivity, clearMergeStations, openDialog, setMergeStationB, showToast]
+    [checkMergeConnectivity, clearMergeStations, openDialog, setMergeStationB, showToast, t]
   );
 
   // Handle station click based on active tool

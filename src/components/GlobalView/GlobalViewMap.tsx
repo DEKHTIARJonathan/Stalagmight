@@ -389,7 +389,10 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
-    const bounds = calculateBounds();
+    // Through the ref like the load handler below: this effect runs once, on
+    // mount (its cleanup tears the map down), so it must not depend on
+    // calculateBounds. At mount the ref already holds the current one.
+    const bounds = calculateBoundsRef.current();
     const defaultCenter = bounds.getCenter();
 
     // Try to restore persisted map state

@@ -680,7 +680,8 @@ function MapCanvas({ onReloadMap }: MapCanvasProps) {
       // No stock fallback: surface a subsystem-specific toast (renderFatalMessage).
       onRenderFatal: (reason: string) => showToast(renderFatalMessage(reason), TOAST_KEYS.RENDER_FATAL, 'error'),
     }),
-    [baseToolCallbacks, noteMapInteraction, showToast],
+    // The three refs come from useMoveDrag's useRef: stable, listed for the linter only.
+    [baseToolCallbacks, noteMapInteraction, showToast, t, moveDragRef, segmentDragTokenRef, segmentPickupTokenRef],
   );
 
   // Initialize map
