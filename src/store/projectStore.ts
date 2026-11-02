@@ -483,7 +483,9 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * client-side (`applyAllOverlapTreatments`). It is LAST rather than in the
    * command's own third position deliberately: appending leaves every existing
    * call's argument positions untouched. Optional and defaulted to `null`, which
-   * the backend reads as "no updates".
+   * the backend reads as "no updates". `readOnlyNoticeInline`: the caller shows a
+   * read-only refusal inline itself (the DMP wizard, #576 RV2-FE-D3), so the edit path
+   * does not toast the same notice on top.
    */
   importSections: (
     sections: ImportSectionConfig[],
@@ -492,6 +494,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
     virtualShotMode?: VirtualShotMode,
     provenance?: ImportReceiptProvenance,
     existingShotUpdates?: ExistingShotUpdate[] | null,
+    readOnlyNoticeInline?: boolean,
   ) => Promise<CommandResult>;
   suggestImportPlacement: (
     shots: ShotData[],
@@ -651,7 +654,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   const executeCommand = async (
     command: string,
     args: Record<string, unknown> | undefined,
-    meta: { purpose: string; fields?: Record<string, unknown> }
+    meta: { purpose: string; fields?: Record<string, unknown>; readOnlyNoticeInline?: boolean }
   ): Promise<CommandResult> => {
     // Captured when the user ISSUES the command, not when the queue gets round to it. The two
     // differ once a mutation can wait behind another: project load/create/close do not go
@@ -673,7 +676,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   const executeCommandInner = async (
     command: string,
     args: Record<string, unknown> | undefined,
-    meta: { purpose: string; fields?: Record<string, unknown> },
+    meta: { purpose: string; fields?: Record<string, unknown>; readOnlyNoticeInline?: boolean },
     requestProjectKey: string | null,
     carryCommit: MoveCarryCommit | null
   ): Promise<CommandResult> => {
@@ -746,7 +749,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (isReverifyDivergedError(result.error)) {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(result.error), TOAST_KEYS.EDIT_DISABLED, 'warning');
+          // ...unless the caller shows it inline itself (`importSections`).
+          if (!meta.readOnlyNoticeInline) {
+            useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(result.error), TOAST_KEYS.EDIT_DISABLED, 'warning');
+          }
         } else {
           // Catch-all (docs/notifications.md): a failure no specific handler
           // claims must not die silently. Dialogs own their inline errors and
@@ -2315,6 +2321,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     virtualShotMode?: VirtualShotMode,
     provenance?: ImportReceiptProvenance,
     existingShotUpdates?: ExistingShotUpdate[] | null,
+    readOnlyNoticeInline?: boolean,
   ) => {
     const s = peekProjectActionSource();
     if (s) setSource(s);
@@ -2337,7 +2344,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           sectionsFound: provenance?.sectionsFound ?? null,
           sourceWarnings: provenance?.sourceWarnings ?? null,
         },
-        { purpose: 'apply imported sections', fields: { section_count: sections.length } }
+        { purpose: 'apply imported sections', fields: { section_count: sections.length }, readOnlyNoticeInline: readOnlyNoticeInline === true }
       );
     } finally {
       // Terminal flow: the project is already open, so there's no

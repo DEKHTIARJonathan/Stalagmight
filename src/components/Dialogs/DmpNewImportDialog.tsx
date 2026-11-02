@@ -98,6 +98,7 @@ import { blankEditableShot } from '../common/editableShot';
 import { aggregateImportReceipts } from '../../utils/importReceipt';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { isEditDisabledError, READ_ONLY_EDIT_NOTICE } from '../../utils/editErrors';
 
 interface DmpNewImportDialogProps {
   dmpFile: DmpFile;
@@ -820,6 +821,28 @@ export function buildBatchImport(
  * suggestions sorted by score, records virtual connections on confirm,
  * then batch-places everything when suggestions are exhausted.
  */
+/**
+ * [#576 RV2-FE-D3] The inline text for a wizard import the backend refused: a read-only
+ * refusal (EDIT_DISABLED - the lock lost mid-wizard, the Plan/Export workspace) reads as
+ * the friendly read-only notice, not the coded string; anything else as the backend
+ * said it. The store's edit path is told not to toast the same notice on top
+ * (`importSections`' `readOnlyNoticeInline`).
+ */
+function importFailureText(result: CommandResult, fallback: string): string {
+  return isEditDisabledError(result.error) ? READ_ONLY_EDIT_NOTICE(result.error) : (result.error ?? fallback);
+}
+
+/**
+ * [#576 RV2-FE-D1] Whether the project this run imports into (`runKey`, its
+ * `created_at`) has been replaced by another. Checked before EVERY import, not only the
+ * withdrawal: the store's own staleness guard captures the project when the import is
+ * called, which is already the replacement once the run (its saved state rides
+ * `dialogData`, which a project switch does not clear) has outlived a switch.
+ */
+function runProjectReplaced(runKey: string | null): boolean {
+  return projectSwitched(runKey, useProjectStore.getState().project?.created_at ?? null);
+}
+
 export default function DmpNewImportDialog({
   dmpFile,
   selectionConfig,
@@ -1993,6 +2016,10 @@ export default function DmpNewImportDialog({
           // refuses during a move carry, serializes behind other edits, refreshes,
           // marks dirty (local and SpeleoDB), resolves a deferred first save and
           // re-checks integrity - the wizard used to replicate only some of that.
+          if (runProjectReplaced(importProjectKeyRef.current)) {
+            setError(t('dialogs.dmpNewImport.importWrongProject'));
+            return;
+          }
           const result = await importSections(
             configs,
             selectionConfig.fileHash,
@@ -2000,10 +2027,11 @@ export default function DmpNewImportDialog({
             'AllReferences',
             dmpProvenance(),
             earlyExistingShotUpdates.length > 0 ? earlyExistingShotUpdates : null,
+            true,
           );
 
           if (!result.success) {
-            setError(result.error ?? 'Import failed');
+            setError(importFailureText(result, 'Import failed'));
             return;
           }
 
@@ -2062,7 +2090,7 @@ export default function DmpNewImportDialog({
       transitionToPlacingInFlightRef.current = false;
       suggestionActionInFlightRef.current = false;
     }
-  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, importSections, reportEmptySections, resolvedTheme]);
+  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, importSections, reportEmptySections, resolvedTheme, t]);
 
   // On mount: import zero datum section and fire suggest_all_import_placements
   useEffect(() => {
@@ -2088,10 +2116,16 @@ export default function DmpNewImportDialog({
         // `init()` is called with no catch). That was merely a stuck spinner
         // until the exits started refusing to open mid-import - now it would
         // TRAP the user in a wizard with Cancel and Back both disabled.
+        if (runProjectReplaced(importProjectKeyRef.current)) {
+          setIsImporting(false);
+          setError(t('dialogs.dmpNewImport.importWrongProject'));
+          return;
+        }
         let result: CommandResult;
         try {
           result = await importSections(
             [config], selectionConfig.fileHash, selectionConfig.sectionHashes, 'AllReferences', dmpProvenance(),
+            null, true,
           );
         } catch (e) {
           setError(importErrorMessage(e));
@@ -2101,7 +2135,7 @@ export default function DmpNewImportDialog({
         }
 
         if (!result.success) {
-          setError(result.error ?? 'Failed to import zero datum section');
+          setError(importFailureText(result, 'Failed to import zero datum section'));
           return;
         }
 
@@ -2236,7 +2270,11 @@ export default function DmpNewImportDialog({
             existingShotUpdatesRef.current,
             emittedSet,
           );
-          // Store edit path, as the early import (#576 D6).
+          // Store edit path, as the early import (#576 D6), and its run check (D1).
+          if (runProjectReplaced(importProjectKeyRef.current)) {
+            setError(t('dialogs.dmpNewImport.importWrongProject'));
+            return;
+          }
           const result = await importSections(
             configs,
             selectionConfig.fileHash,
@@ -2244,10 +2282,11 @@ export default function DmpNewImportDialog({
             'AllReferences',
             dmpProvenance(),
             lateExistingShotUpdates.length > 0 ? lateExistingShotUpdates : null,
+            true,
           );
 
           if (!result.success) {
-            setError(result.error ?? 'Late import failed');
+            setError(importFailureText(result, 'Late import failed'));
             return;
           }
 
@@ -3071,6 +3110,11 @@ export default function DmpNewImportDialog({
         return true;
       }
 
+      // The run's own project, as every wizard import (#576 RV2-FE-D1).
+      if (runProjectReplaced(importProjectKeyRef.current)) {
+        setError(t('dialogs.dmpNewImport.importWrongProject'));
+        return false;
+      }
       const pendingSetForUpdates = new Set(segmentDmpIndices);
       const segmentExistingShotUpdates = backendExistingShotUpdatesForSections(
         existingShotUpdatesRef.current,
@@ -3086,7 +3130,7 @@ export default function DmpNewImportDialog({
       }, { purpose: 'import placed segment sections' });
 
       if (!result.success) {
-        setError(result.error ?? 'Segment import failed');
+        setError(importFailureText(result, 'Segment import failed'));
         return false;
       }
 
@@ -3115,7 +3159,7 @@ export default function DmpNewImportDialog({
 
       return true;
     },
-    [dmpFile, refreshProjectState, reportEmptySections, selectionConfig, zeroDatumConfig?.sectionIndex, resolvedTheme],
+    [dmpFile, refreshProjectState, reportEmptySections, selectionConfig, zeroDatumConfig?.sectionIndex, resolvedTheme, t],
   );
 
   /**

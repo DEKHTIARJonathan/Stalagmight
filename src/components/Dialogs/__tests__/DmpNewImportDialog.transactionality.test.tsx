@@ -55,6 +55,7 @@ vi.mock('../../../utils/ipc', () => ({
   getErrorMessage: (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback),
 }));
 
+import i18n from '../../../i18n';
 import DmpNewImportDialog, { type SavedManualPlacingState } from '../DmpNewImportDialog';
 import type { ZeroDatumConfigResult } from '../ZeroDatumConfigDialog';
 import { convertToEditableShots } from '../../../utils/shotConversion';
@@ -834,5 +835,89 @@ describe('DMP wizard: wizard imports run through the store edit path (#576 D6)',
       integrityRechecked: afterImport.includes('check_project_integrity'),
       dirty: useProjectStore.getState().isDirty,
     }).toEqual({ databaseOpen: true, integrityRechecked: true, dirty: true });
+  });
+});
+
+/**
+ * #576 RV2-FE-D1 / RV2-FE-D3: the wizard's own run identity, and a read-only refusal.
+ *
+ * D1: the store's edit path refuses an import whose project changed between the call
+ * and the IPC - but it captures the project at the CALL, so a run whose project changed
+ * before that (the saved state outlives a project switch: nothing clears `dialogData`)
+ * imported into whatever was open. Only the withdrawal checked the run's own project
+ * key. Every import now does.
+ *
+ * D3: a read-only refusal of a wizard import (the lock lost mid-wizard, the Plan/Export
+ * workspace) showed the raw coded EDIT_DISABLED string inline, AND the store's friendly
+ * read-only toast. One message now: the friendly one, inline, where the wizard shows
+ * its errors.
+ */
+describe('DMP wizard: imports land in the run project, a read-only refusal reads once (#576 RV2-FE-D1/D3)', () => {
+  const placedOnly = (overrides: Partial<SavedManualPlacingState> = {}) =>
+    savedState({
+      segmentQueue: [],
+      directPlacements: [
+        {
+          anchorSectionIndex: 0,
+          anchorStationIndex: 0,
+          placement: { type: 'manual', align_station_index: 0, offset: { x: 0, y: 0, z: 0 } },
+        },
+      ],
+      ...overrides,
+    });
+  let importResult: Record<string, unknown> | null;
+
+  beforeEach(() => {
+    ipcOrder = [];
+    nextSectionId = 7;
+    importResult = null;
+    invokeIpcMock.mockReset();
+    invokeIpcMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      ipcOrder.push(cmd);
+      if (cmd === 'import_sections') {
+        if (importResult) return importResult;
+        const configs = (args?.sections as unknown[] | undefined) ?? [];
+        return { success: true, section_ids: configs.map(() => nextSectionId++), import_receipt: receipt(), warnings: [] };
+      }
+      return null;
+    });
+    useUIStore.setState({ activeDialog: null, dialogData: {}, placementMode: null, importContext: null, toasts: [] });
+    useProjectStore.setState({ project: { created_at: 'project-A' } as Project });
+  });
+
+  it('refuses the late import once another project is open', async () => {
+    useProjectStore.setState({ project: { created_at: 'project-B' } as Project });
+    const onComplete = vi.fn();
+    renderWizard(placedOnly({ projectKey: 'project-A' }), { onComplete, selected: [0] });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('wizard-placing')).toHaveTextContent('dialogs.dmpNewImport.importWrongProject'),
+    );
+    expect(ipcOrder, 'imported into the project that replaced the run').not.toContain('import_sections');
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('still imports into the project the run belongs to', async () => {
+    const onComplete = vi.fn();
+    renderWizard(placedOnly({ projectKey: 'project-A' }), { onComplete, selected: [0] });
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(ipcOrder).toContain('import_sections');
+  });
+
+  it('shows a read-only refusal as the friendly notice, inline and nowhere else', async () => {
+    importResult = {
+      success: false,
+      error: 'EDIT_DISABLED: WORKSPACE_READ_ONLY: Import sections is disabled in Plan and Export.',
+      section_ids: [],
+      warnings: [],
+    };
+    renderWizard(placedOnly(), { selected: [0] });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('wizard-placing')).toHaveTextContent(i18n.t('editGate.workspaceReadOnlyNotice')),
+    );
+    expect(screen.getByTestId('wizard-placing')).not.toHaveTextContent('EDIT_DISABLED');
+    expect(useUIStore.getState().toasts.map((t) => t.message), 'the same notice toasted on top').toEqual([]);
   });
 });
