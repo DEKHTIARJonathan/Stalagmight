@@ -60,7 +60,7 @@ const ADOPT_STAGING_PREFIX: &str = "adopt-staging-";
 
 /// [#576 NF-W4C-3-EDIT] Lifts an adoption's hold on the edit gate (see
 /// `AppState::speleodb_shut_gate_for_adoption`) when the adoption returns.
-struct AdoptionEditGate<'a>(&'a AppState);
+pub(super) struct AdoptionEditGate<'a>(pub(super) &'a AppState);
 
 impl Drop for AdoptionEditGate<'_> {
     fn drop(&mut self) {
