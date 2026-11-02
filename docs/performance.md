@@ -166,6 +166,42 @@ fires an `UpdateShot` per cell: that would multiply the reconcile by the edit
 count and should batch the edits (the `Batch` command already finalizes once)
 or debounce the reconcile.
 
+## Placement Suggestions - the Crossing Check
+
+`suggest_orphan_placements` (models `placement_suggest.rs`) scores every way an
+imported section could continue an existing one, then rejects a candidate whose
+placed trace would cross the existing trace too closely. That crossing check is
+exact: since #576 A2 a uniform grid (`CrossingPrefilter`) hands each placed
+import segment only the existing segments within a proven rounding margin, which
+took two straight 2,000-shot sections from 370 s to well under a second.
+
+The worst case left is a scene where almost every candidate survives the scoring:
+long, dead-straight, constant-depth sections, where every shot matches every
+other. Then each surviving start index needs one crossing check over the whole
+placed import, so the cost is candidates x import length. Release probe
+(`placement_suggest_timing_probe`, 2026-11, loaded machine, runs vary +/-20%):
+
+| Scene | Time | Suggestions |
+|---|---|---|
+| spec-scale random: existing 200x50, import 20x50 | 112 ms | 3 |
+| spec-scale straight: existing 200x50, import 20x50 | 638 ms | 400 |
+| long straight: existing 1x2000, import 1x2000 | 446 ms | 10 |
+| long straight: existing 5x2000, import 2x2000 | 6,725 ms | 40 |
+
+Profile of that last scene (`perf record -g`, release with line tables, #576
+NF-W4U-3): 58% in `placement_crossing_clearance_ok` (the per-segment grid walk,
+inlined), 15% `floor` (cell coordinates, including the low-corner dedupe), 10%
+`CrossingPrefilter::cell_range`, 9% in the exact segment test
+(`pair_crosses_too_close` + `segment_intersection_params`). The work is the
+grid walk itself, once per placed segment per candidate; there is no single hot
+spot an exact local change removes. Replacing the matched-run `contains` with a
+sorted binary search was measured and made no difference beyond the noise.
+What would cut it is algorithmic - reusing crossing results between candidates
+that place the import at nearby translations, or bounding how many collinear
+candidates are checked at all - and both need a proof that the answer stays the
+same before they can replace the exact per-candidate check. Real surveys rarely
+look like this scene: a random 2,000-shot pair takes about a millisecond.
+
 ## Profiling Guide
 
 ### Build for profiling
