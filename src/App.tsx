@@ -4,6 +4,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore, selectNewerFileReadOnly } from './store/projectStore';
 import { LoadRepairsBanner } from './components/common/LoadRepairsBanner';
+import { InternalErrorBanner } from './components/common/InternalErrorBanner';
+import { useInternalErrorEvent } from './hooks/useInternalErrorEvent';
 import { SETTABLE_UNREADABLE_SETTINGS } from './store/unreadableSettings';
 import { isMoveCarryRefusal } from './store/moveCarry';
 import { useUIStore } from './store/uiStore';
@@ -140,6 +142,9 @@ function App() {
 
   // Event-driven network status orchestrator (tile transport events + offline polling)
   useNetworkStatus();
+
+  // [#576 A11] The backend's one-shot internal-error notice, for InternalErrorBanner
+  useInternalErrorEvent();
 
   // Whole-UI zoom via Ctrl+= / Ctrl+- / Ctrl+0 (persisted)
   useUiScale();
@@ -603,6 +608,11 @@ function App() {
 
   return (
     <div className="h-full bg-background text-text-primary flex flex-col relative" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+      {/* [#576 A11] Internal-error banner: the backend recovered from a crash and the
+          user must save and restart. First, as the most severe ongoing condition, and
+          shown with or without a project open (see the component). */}
+      <InternalErrorBanner />
+
       {/* Integrity warning banner (corruption found on load/save) */}
       {integrityIssues.length > 0 && (integritySaveBlocked || !integrityDismissed) && !loading.isLoading && (
         <div

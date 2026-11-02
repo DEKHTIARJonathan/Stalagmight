@@ -2572,6 +2572,10 @@
       "saveNow": "Save now",
       "dismiss": "Dismiss"
     },
+    "internalError": {
+      "lead": "Internal error - save your work and restart Stalagmight.",
+      "detail": "The app recovered and saving still works, but undo, redo and SpeleoDB pushes may be refused until you restart."
+    },
     "historyDiscarded": {
       "lead": "Edit history could not be read and was discarded.",
       "detail": "Your survey data is unaffected. The next save replaces the unreadable history.",
