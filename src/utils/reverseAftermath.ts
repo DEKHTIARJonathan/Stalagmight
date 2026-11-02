@@ -5,30 +5,25 @@
  * stored `StationKey` (merges, loop closures, zero datums, station offsets and
  * comments). What it cannot reach is the frontend's own POSITIONAL references -
  * `StationRef { section_id, station_index }` held in UI selection, the merge
- * tool's staging, the move-comment pickup and the distance-gradient origin.
+ * tool's staging and the move-comment pickup.
  *
  * Those are the dangerous kind of stale: a reverse renumbers station `i` to
  * `N - i`, so every one of them stays *in range* and simply starts naming a
  * different physical station. Nothing errors. The merge tool would merge the
- * wrong end; the distance ramp would silently re-root from the far end while
- * still looking correct.
+ * wrong end. Selection, merge staging, the move-comment pickup and the comment
+ * popover are therefore cleared, matching what every other structural mutation
+ * does (ConfirmDialog, BulkDeleteDialog, DeleteShotChoice).
  *
- * The distance-gradient origin is mirrored (the user's chosen root stays on the
- * physical station they picked); selection, merge staging, the move-comment
- * pickup and the comment popover are cleared, matching what every other
- * structural mutation does (ConfirmDialog, BulkDeleteDialog, DeleteShotChoice).
+ * The GAS PLAN's pins used to be mirrored here and no longer are (#310), and nor
+ * is the distance-gradient origin (#576 D39(g)). Mirroring only ever answered a
+ * reverse; a delete or an insert renumbers just as silently and had no answer at
+ * all. Both now hold backend ANCHORS - a station named by the shots either side
+ * of it - re-resolved around every mutation (`flushPlanAnchors` / `remapPlanPins`
+ * below, and `utils/distanceOriginAnchor.ts`), which is reverse-proof by
+ * construction and covers the other edits for free.
  *
- * The GAS PLAN's pins used to be mirrored here too and no longer are (#310).
- * Mirroring only ever answered a reverse; a delete or an insert renumbers just
- * as silently and had no answer at all. The pins now hold backend ANCHORS -
- * a station named by the shots either side of it - and are re-resolved from
- * them around every mutation (`flushPlanAnchors` / `remapPlanPins` below), which
- * is reverse-proof by construction and covers the other edits for free.
- *
- * The same mirror has to run again whenever an undo or redo flips the numbering
- * BACK - otherwise Ctrl+Z restores the old numbering while the origin stays
- * mirrored onto the opposite physical station. The backend answers "which
- * sections, against which shot count"
+ * The clears have to run again whenever an undo or redo flips the numbering
+ * BACK. The backend answers "which sections, against which shot count"
  * outright on `CommandResult.reversed_sections`, because the geometry cannot: a
  * reverse keeps every world coordinate, so a section that was reversed AND moved
  * in one action matches neither arrangement afterwards.
@@ -81,15 +76,6 @@ export function singleReverseTransform(shotCount: number): ReverseTransform {
 /** True when the composed transform is `i -> i`: the numbering ended where it started. */
 export function isIdentityTransform(transform: ReverseTransform): boolean {
   return transform.sign === 1 && transform.shift === 0;
-}
-
-/** True when `transforms` actually renumbered `sectionId`; an identity entry did not. */
-function flipsSection(
-  transforms: Map<SectionId, ReverseTransform>,
-  sectionId: SectionId
-): boolean {
-  const transform = transforms.get(sectionId);
-  return transform !== undefined && !isIdentityTransform(transform);
 }
 
 /**
@@ -213,18 +199,11 @@ export function composeReverseTransforms(
 export function applyReverseAftermath(transforms: Map<SectionId, ReverseTransform>): void {
   if (Array.from(transforms.values()).every(isIdentityTransform)) return;
 
-  // The gas plan is deliberately absent here (#310): its pins and its saved-plan baseline are
-  // re-resolved from backend anchors by `remapPlanPins`, which the same seam already awaited
-  // before this ran. Mirroring them a second time would apply the shift twice.
+  // The gas plan (#310) and the distance-gradient origin (#576 D39(g)) are deliberately absent
+  // here: both are re-resolved from backend anchors (`remapPlanPins`, `remapDistanceOrigin`),
+  // which the same seam already awaited before this ran. Mirroring them as well would apply the
+  // shift twice.
   const ui = useUIStore.getState();
-  const origin = ui.distanceGradientOrigin;
-  if (origin !== null && flipsSection(transforms, origin.section_id)) {
-    // Same reasoning as the plan pins: the penetration ramp is rooted on a
-    // station the user chose, and its only other reset is a project switch, so
-    // without this the ramp silently re-roots from the opposite end of the
-    // section while the origin ring and the DetailPanel badge agree with it.
-    ui.setDistanceGradientOrigin(mirrorRef(origin, transforms));
-  }
 
   // Cleared instead - there is no "same place" for a highlight, and a
   // half-staged merge (or a picked-up comment) that silently retargets the far

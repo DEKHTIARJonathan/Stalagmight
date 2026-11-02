@@ -2383,7 +2383,8 @@
       "aria": "Distance scale from {{min}} (near) to {{max}} (far)",
       "fromEntrance": "from entrance",
       "fromStation": "from {{id}}",
-      "computing": "Distance: computing…"
+      "computing": "Distance: computing…",
+      "originRemoved": "The distance origin's station was deleted, so distances are measured from the entrance again."
     },
     "gasLegend": {
       "title": "Gas reach",

@@ -28,6 +28,8 @@ export const TOAST_KEYS = {
 
   // Map
   STATIONS_HIDDEN: 'stations-hidden',
+  /** The distance-gradient origin's station was deleted; the ramp is back on the entrance (#576 D39(g)). */
+  DISTANCE_ORIGIN_RESET: 'distance-origin-reset',
   SHOTS_HIDDEN: 'shots-hidden',
   RENDER_FATAL: 'render-fatal',
   MERGE_CHECK: 'merge-check',
