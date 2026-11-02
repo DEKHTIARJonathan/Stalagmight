@@ -1679,7 +1679,9 @@ function MapCanvas({ onReloadMap }: MapCanvasProps) {
                 ? '…'
                 : measureAlongLine?.alongLine != null
                   ? `${formatFixed(measureAlongLine.alongLine, undefined, precision.length)}${t('common.units.meters')}`
-                  : t('map.measure.noPath')}
+                  : measureAlongLine?.failed
+                    ? t('map.measure.pathFailed')
+                    : t('map.measure.noPath')}
           </span>
           <span className="mx-2">|</span>
           <span className="font-medium">{t('map.measure.depthDiff')}:</span>{' '}

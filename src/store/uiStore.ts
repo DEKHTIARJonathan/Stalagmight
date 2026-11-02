@@ -227,6 +227,12 @@ export interface MeasureAlongLine {
   pathShots: PathShot[];
   /** Stations traversed on the path (tinted alongside the shots). */
   pathStations: StationRef[];
+  /**
+   * The query itself failed (it rejected), as opposed to answering that the
+   * endpoints are not connected (`alongLine` null, no flag): the readout says
+   * "Couldn't compute the path" rather than "No connected path" (#576 C7-MSG).
+   */
+  failed?: true;
 }
 
 /** Live shot-snap candidate while the measure tool hovers a shot (not a station).

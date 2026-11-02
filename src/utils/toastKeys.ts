@@ -30,6 +30,8 @@ export const TOAST_KEYS = {
   STATIONS_HIDDEN: 'stations-hidden',
   /** The distance-gradient origin's station was deleted; the ramp is back on the entrance (#576 D39(g)). */
   DISTANCE_ORIGIN_RESET: 'distance-origin-reset',
+  /** The distance-gradient field could not be computed (it rejected); once per failure burst (#576 C7-MSG). */
+  DISTANCE_GRADIENT_FAILED: 'distance-gradient-failed',
   SHOTS_HIDDEN: 'shots-hidden',
   RENDER_FATAL: 'render-fatal',
   /** The map's WebGL context was lost and not restored; carries "Reload map" (#576 D38-LOST). */

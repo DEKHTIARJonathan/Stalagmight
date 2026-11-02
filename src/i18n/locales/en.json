@@ -2417,7 +2417,8 @@
       "fromEntrance": "from entrance",
       "fromStation": "from {{id}}",
       "computing": "Distance: computing…",
-      "originRemoved": "The distance origin's station was deleted, so distances are measured from the entrance again."
+      "originRemoved": "The distance origin's station was deleted, so distances are measured from the entrance again.",
+      "computeFailed": "Couldn't compute distances; the map shows its usual colors."
     },
     "gasLegend": {
       "title": "Gas reach",
@@ -2451,6 +2452,7 @@
       "direct": "Direct",
       "alongLine": "Along line",
       "noPath": "No connected path",
+      "pathFailed": "Couldn't compute the path",
       "depthDiff": "Depth diff"
     },
     "move": {

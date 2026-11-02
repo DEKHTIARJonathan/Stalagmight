@@ -6,7 +6,10 @@ import type { GpsOrigin } from '../../types/config';
 import type { ProjectStore } from '../../store/projectStore';
 import type { UIStoreState } from '../../store/uiSelectKeys';
 import { selectComputeGate, useGasPlanStore } from '../../store/gasPlanStore';
+import { useUIStore } from '../../store/uiStore';
 import { invokeIpc } from '../../utils/ipc';
+import { TOAST_KEYS } from '../../utils/toastKeys';
+import i18n from '../../i18n';
 import { buildDistanceFeatureState, overlayApplyAction } from '../../utils/distanceGradient';
 import { buildGasReachFeatureState } from '../../utils/gasReach';
 import { segmentColor, routeLegSegmentIndices } from '../../utils/segmentColors';
@@ -89,6 +92,10 @@ export function useAnalyticalOverlays({
   // inputs indefinitely. Reset on the next successful field (see the fetch effects).
   const [distanceFieldFailed, setDistanceFieldFailed] = useState(false);
   const [gasFieldFailed, setGasFieldFailed] = useState(false);
+  // A failed distance field is told once per failure BURST (#576 C7-MSG): every
+  // edit refetches, and a broken computation fails each time. Re-armed by a
+  // successful field, or by the overlay being switched off.
+  const distanceFailureToldRef = useRef(false);
 
   // Distance-gradient overlay (#34): fetch the per-station distance field when the
   // overlay is on and the origin or project data changes. Distances use MEASURED
@@ -101,21 +108,42 @@ export function useAnalyticalOverlays({
   // Settings changes the whole field. It has to be in the deps or the ramp keeps
   // showing the pre-toggle routing until some unrelated edit bumps modified_at.
   useEffect(() => {
-    if (!showDistanceGradient) return undefined;
+    if (!showDistanceGradient) {
+      distanceFailureToldRef.current = false;
+      return undefined;
+    }
     let cancelled = false;
     invokeIpc<DistanceField>(
       'get_station_distances_from',
       { from: distanceGradientOrigin ?? null },
       { purpose: 'distance gradient field', fields: { origin: distanceGradientOrigin ?? 'entrance' } }
     )
-      .then((field) => { if (!cancelled) { setDistanceField(field); setDistanceFieldFailed(false); } })
+      .then((field) => {
+        if (!cancelled) {
+          setDistanceField(field);
+          setDistanceFieldFailed(false);
+          distanceFailureToldRef.current = false;
+        }
+      })
       .catch((e) => {
         console.warn('[distance-gradient] field fetch failed', e);
         // Clear on failure (#34): drop any stale field + flag the failure so the
         // apply effect restores base colors instead of holding the old ramp
         // against the new origin/geometry. Guard on the cancel token so a
         // superseded fetch never clears a newer in-flight one.
-        if (!cancelled) { setDistanceField(null); setDistanceFieldFailed(true); }
+        if (cancelled) return;
+        setDistanceField(null);
+        setDistanceFieldFailed(true);
+        // The ramp silently dropping back to section colours read as "the
+        // overlay is off" (#576 C7-MSG): say why, once for this failure.
+        if (!distanceFailureToldRef.current) {
+          distanceFailureToldRef.current = true;
+          useUIStore.getState().showToast(
+            i18n.t('map.distanceLegend.computeFailed'),
+            TOAST_KEYS.DISTANCE_GRADIENT_FAILED,
+            'error'
+          );
+        }
       });
     return () => { cancelled = true; };
   }, [

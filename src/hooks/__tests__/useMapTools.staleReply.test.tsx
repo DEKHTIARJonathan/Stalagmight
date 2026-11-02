@@ -14,7 +14,9 @@
  *   2. endpoint reference identity - activeTool + measureStart/measureEnd (:274)
  *   3. project identity - created_at|modified_at|file_path (:275)
  * The `catch` path (:281-286) re-checks ONLY the id prong (:282) before
- * painting the disconnect shape and logging a `console.warn`.
+ * painting the FAILED shape (#576 C7-MSG: `failed: true`, so the readout says
+ * the path could not be computed rather than that there is none) and logging a
+ * `console.warn`.
  *
  * Each test below holds the IPC promise pending with a manually-controlled
  * deferred (never a timer), mutates exactly the state one prong reads, then
@@ -141,6 +143,9 @@ const RESULT_B_SHAPE = {
   pathStations: RESULT_B.path_stations,
 };
 const DISCONNECTED_SHAPE = { alongLine: null, pathShots: [], pathStations: [] };
+/** A query that REJECTED: no path either, but flagged, so the readout can say
+ *  "Couldn't compute the path" instead of "No connected path" (#576 C7-MSG). */
+const FAILED_SHAPE = { ...DISCONNECTED_SHAPE, failed: true };
 
 /** Settle a deferred (resolve or reject) and flush past its continuation:
  *  first await the deferred's OWN promise (proving the hook's `await
@@ -340,7 +345,7 @@ describe('requestAlongLine stale-reply guard (#365)', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it('paints the disconnected shape on a live rejection (catch-path, current contract)', async () => {
+  it('paints the failed shape, not the disconnected one, on a live rejection (#576 C7-MSG)', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const d = deferred<AlongLineResult | null>();
     invokeIpcMock.mockReturnValueOnce(d.promise);
@@ -356,8 +361,26 @@ describe('requestAlongLine stale-reply guard (#365)', () => {
 
     await settle(d, () => d.reject(new Error('along-line query failed')));
 
-    expect(useUIStore.getState().measureAlongLine).toEqual(DISCONNECTED_SHAPE);
+    // toStrictEqual: `failed` must be present, not merely absent-and-equal.
+    expect(useUIStore.getState().measureAlongLine).toStrictEqual(FAILED_SHAPE);
     expect(useUIStore.getState().measureAlongLinePending).toBe(false);
     expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('paints the disconnected shape, unflagged, for a disconnected ANSWER (null)', async () => {
+    const d = deferred<AlongLineResult | null>();
+    invokeIpcMock.mockReturnValueOnce(d.promise);
+    const { result } = renderHook(() => useMapTools());
+
+    act(() => {
+      result.current.onStationClick?.({ section_id: 1, station_index: 0 }, clickEvent);
+    });
+    act(() => {
+      result.current.onStationClick?.({ section_id: 1, station_index: 1 }, clickEvent);
+    });
+
+    await settle(d, () => d.resolve(null));
+
+    expect(useUIStore.getState().measureAlongLine).toStrictEqual(DISCONNECTED_SHAPE);
   });
 });

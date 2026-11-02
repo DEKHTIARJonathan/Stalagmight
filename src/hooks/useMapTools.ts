@@ -339,7 +339,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       } catch (e) {
         if (requestId === measureRequestIdRef.current) {
           console.warn('Along-line distance query failed:', getErrorMessage(e, 'unknown error'));
-          setMeasureAlongLine({ alongLine: null, pathShots: [], pathStations: [] });
+          // Flagged, so the readout says the path could not be computed instead
+          // of claiming there is none (#576 C7-MSG).
+          setMeasureAlongLine({ alongLine: null, pathShots: [], pathStations: [], failed: true });
         }
       }
     },
