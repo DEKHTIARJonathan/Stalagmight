@@ -413,6 +413,8 @@ export default class SurveyLayer {
         : null);
     this.updateWhileStyleless = null;
     if (args) this.flushUpdateSync(...args);
+    // The closure filter a carry cancelled during the loss could not put back.
+    this.drag.replayAfterContextRestore();
     // Closure dimming is a paint property the lost window could not write.
     this.updateClosureOpacity();
     // So are the rest of the stock layers' style state: the restored style is the

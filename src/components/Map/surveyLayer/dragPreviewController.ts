@@ -55,6 +55,15 @@ export class DragPreviewController {
   // instead of rebuilding GeoJSON on every frame
   dragPreviewActive = false;
   private dragSavedFilters = new Map<string, maplibregl.FilterSpecification | undefined>();
+  /**
+   * Saved filters a carry ended while the WebGL context was lost could not put
+   * back. MapLibre serializes the style at the loss - the carry's exclusion
+   * filter with it - and re-applies that on restore, so they are re-applied by
+   * {@link replayAfterContextRestore} (#576 RV4-FE-SL1). Without this the
+   * formerly carried sections' closures stayed hidden, and every later carry
+   * saved the stale exclusion as the layer's "real" filter.
+   */
+  private filtersAwaitingRestore = new Map<string, maplibregl.FilterSpecification | undefined>();
   // Unified drag-preview source (#mem drag fixes): ONE GeoJSON source holding
   // every moving GEOMETRY feature for the active drag - stations (points), shots
   // (lines), loop-closure indicator lines - rebuilt from captured originals each
@@ -645,8 +654,15 @@ export class DragPreviewController {
     // Restore the saved auxiliary filters (only loop closures now - the survey
     // geometry + labels are custom-rendered and their drag exclusion is dropped
     // synchronously below, so they land at the new position at once).
+    // While the context is lost there is no style to write; keep the originals
+    // for the restore (an earlier lost carry's original wins: it is the real one).
+    const live = hasLiveStyle(this.map);
     for (const [layerId, saved] of this.dragSavedFilters) {
-      if (hasLiveStyle(this.map) && this.map.getLayer(layerId)) this.map.setFilter(layerId, saved ?? null);
+      if (live) {
+        if (this.map.getLayer(layerId)) this.map.setFilter(layerId, saved ?? null);
+      } else if (!this.filtersAwaitingRestore.has(layerId)) {
+        this.filtersAwaitingRestore.set(layerId, saved);
+      }
     }
     this.clearDragOverlayFollow();
 
@@ -656,5 +672,23 @@ export class DragPreviewController {
     // Drop the custom-render exclusion and rebuild full buffers so the moved
     // features reappear at their committed positions (mirrors the filter restore).
     this.setDragExclusion(null);
+  }
+
+  /**
+   * After a WebGL context restore (SurveyLayer.replayAfterContextRestore): put
+   * back the filters a carry ended during the loss could not restore. A carry
+   * picked up during the loss and still in flight saved nothing (no style to
+   * read), so it adopts them and restores them at its own drop instead.
+   */
+  replayAfterContextRestore(): void {
+    if (this.filtersAwaitingRestore.size === 0 || !hasLiveStyle(this.map)) return;
+    for (const [layerId, saved] of this.filtersAwaitingRestore) {
+      if (this.dragPreviewActive) {
+        if (!this.dragSavedFilters.has(layerId)) this.dragSavedFilters.set(layerId, saved);
+      } else if (this.map.getLayer(layerId)) {
+        this.map.setFilter(layerId, saved ?? null);
+      }
+    }
+    this.filtersAwaitingRestore.clear();
   }
 }

@@ -52,6 +52,10 @@ interface FakeStyle {
   layout: Map<string, string | undefined>;
   /** `${layerId}|${property}` -> the last value set. */
   paint: Map<string, unknown>;
+  /** layerId -> the filter `setFilter` last set (serialized with the style, as MapLibre does). */
+  filters: Map<string, unknown>;
+  /** sourceId -> the data the last `setData` pushed (a GeoJSON source serializes its data). */
+  data: Map<string, unknown>;
 }
 
 export interface FakeSurveyMap {
@@ -76,6 +80,10 @@ export interface FakeSurveyMap {
   /** The errors of `addLayer` calls refused because their `beforeId` was not on the
    *  map - MapLibre fires an ErrorEvent and does NOT add the layer. */
   rejectedAdds(): string[];
+  /** The filter a layer has on the live style (undefined when none or no style). */
+  filter(layerId: string): unknown;
+  /** The data the last `setData` pushed into a source on the live style. */
+  sourceData(sourceId: string): unknown;
 }
 
 export function makeFakeSurveyMap(): FakeSurveyMap {
@@ -87,12 +95,19 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
   const rejected: string[] = [];
   let serialized: FakeStyle | null = null;
 
-  const newStyle = (): FakeStyle => ({ layers: [], sources: new Set(), layout: new Map(), paint: new Map() });
+  const newStyle = (): FakeStyle => ({
+    layers: [],
+    sources: new Set(),
+    layout: new Map(),
+    paint: new Map(),
+    filters: new Map(),
+    data: new Map(),
+  });
 
   const styleApi = (s: FakeStyle) => ({
     getLayer: (id: string) => (s.layers.includes(id) ? { id } : undefined),
     getSource: (id: string) =>
-      s.sources.has(id) ? { type: 'geojson', setData: () => {} } : undefined,
+      s.sources.has(id) ? { type: 'geojson', setData: (d: unknown) => void s.data.set(id, d) } : undefined,
   });
 
   type StyleRef = ReturnType<typeof styleApi> & { _s: FakeStyle };
@@ -143,6 +158,14 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
     },
     setPaintProperty(id: string, name: string, value: unknown) {
       target.style!._s.paint.set(`${id}|${name}`, value);
+    },
+    getFilter(id: string) {
+      return target.style!._s.filters.get(id);
+    },
+    setFilter(id: string, filter: unknown) {
+      const f = target.style!._s.filters;
+      if (filter === null || filter === undefined) f.delete(id);
+      else f.set(id, filter);
     },
     on(type: string, fn: Listener) {
       const set = listeners.get(type) ?? new Set();
@@ -205,6 +228,8 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
         sources: new Set(s.sources),
         layout: new Map(s.layout),
         paint: new Map(s.paint),
+        filters: new Map(s.filters),
+        data: new Map(s.data),
       };
       custom.clear();
       target.style = null;
@@ -217,5 +242,7 @@ export function makeFakeSurveyMap(): FakeSurveyMap {
     customLayers: () => [...custom],
     paint: (layerId, property) => target.style?._s.paint.get(`${layerId}|${property}`),
     rejectedAdds: () => [...rejected],
+    filter: (layerId) => target.style?._s.filters.get(layerId),
+    sourceData: (sourceId) => target.style?._s.data.get(sourceId),
   };
 }
