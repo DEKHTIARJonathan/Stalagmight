@@ -1099,9 +1099,10 @@ impl AppState {
     /// [`close_project`](Self::close_project) with the guard held, by contrast,
     /// would self-deadlock on its own first acquisition.
     ///
-    /// The caller owns the poison recovery for the `project` lock (both of this
-    /// function's callers use `PoisonError::into_inner`, for the reason spelled out
-    /// on `close_project`); the locks taken here recover it themselves.
+    /// The caller holds the `project` guard, taken through `RecoveringMutex::lock`
+    /// like every lock (#576 A11), so a poisoned `project` cell is already
+    /// recovered by the time it gets here; the locks taken here recover theirs
+    /// themselves.
     pub(super) fn close_open_project_locked(
         &self,
         commands: &CommandsHeld<'_>,
