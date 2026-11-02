@@ -114,7 +114,6 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
       // Search for "zoom"
       await page.locator('[data-testid="shortcuts-search"]').fill('zoom');
-      await page.waitForTimeout(100);
 
       // Zoom-related actions should be visible
       await expect(page.locator('[data-testid="shortcut-row-zoom"]')).toBeVisible();
@@ -132,7 +131,6 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
       // Search for "Ctrl+Z" (undo binding)
       await page.locator('[data-testid="shortcuts-search"]').fill('Ctrl+Z');
-      await page.waitForTimeout(100);
 
       // Undo action (which has Ctrl+Z) should be visible
       await expect(page.locator('[data-testid="shortcut-row-undo"]')).toBeVisible();
@@ -147,11 +145,11 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
       // Search for something specific
       await page.locator('[data-testid="shortcuts-search"]').fill('undo');
-      await page.waitForTimeout(100);
+      // The filter applied (so the clear below has something to undo).
+      await expect(page.locator('[data-testid="shortcut-row-select"]')).not.toBeVisible();
 
       // Clear search
       await page.locator('[data-testid="shortcuts-search"]').fill('');
-      await page.waitForTimeout(100);
 
       // All categories and actions should be visible again
       await expect(page.locator('[data-testid="shortcut-category-tools"]')).toBeVisible();
@@ -284,8 +282,9 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await page.keyboard.press('K');
       await waitForRecording(page, 'shortcut-primary-merge', false);
 
-      // Clear any previous error
-      await page.waitForTimeout(100);
+      // The first assignment raised no error, so the one asserted below comes
+      // from the second.
+      await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
 
       // Try to assign same key to secondary slot
       const secondaryRecorder = page.locator('[data-testid="shortcut-secondary-merge"]');
@@ -496,8 +495,8 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await expect.poll(activeTool).toBe('select');
 
       await page.keyboard.press('M');
-      // A settle, not a poll: this proves the tool does NOT change, and a poll
-      // would accept the pre-update value.
+      // settle: proves the tool does NOT change, and a poll would accept the
+      // pre-update value.
       await page.waitForTimeout(100);
       expect(await activeTool()).toBe('select'); // Should stay as select
     });

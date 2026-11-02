@@ -215,7 +215,10 @@ whose output decides what gets deleted.
   (300ms x2), `settings-dialog` (x3), `zoom-tool` (a shared helper),
   `toolbar-tool-groups` (25ms), plus `helpers/app.ts` (100ms in the shared
   `placeAllSections` poll loop, hit by every import-flow test). Line numbers move;
-  re-grep rather than trusting a list.
+  re-grep rather than trusting a list. **Done in #576 (E14):** the positive
+  waits became condition waits, the deliberate negative-space settles carry a
+  `// settle: <reason>` comment, `placeAllSections` (no callers since March) was
+  deleted, and `pnpm lint:e2e-no-sleep` now fails on an unannotated sleep.
 
 **Re-measure on CI after Phase A before cutting anything** - download the
 `smoke-timing` artifact and diff the hook total. Remember the ~1.9x parallelism

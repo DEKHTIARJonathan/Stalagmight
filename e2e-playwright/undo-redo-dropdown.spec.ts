@@ -701,7 +701,7 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Hover should not open dropdown on disabled button
       await undoButton.hover({ force: true });
-      // Give a (buggy) dropdown time to open before asserting it didn't.
+      // settle: give a (buggy) dropdown time to open before asserting it didn't.
       await page.waitForTimeout(400);
 
       // Dropdown should not appear
@@ -822,6 +822,8 @@ test.describe('Undo/Redo Dropdown - Empty State', () => {
 
     // Hover to try opening dropdown
     await undoButton.hover();
+    // settle: past the hover-open delay, so a dropdown that wrongly opens for an
+    // empty stack has had its chance before the assertion below.
     await page.waitForTimeout(400);
 
     // Dropdown should not appear with empty stack

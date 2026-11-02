@@ -42,6 +42,14 @@ jobs:
         run: |
           pnpm lint:e2e-parallel:test
           pnpm lint:e2e-parallel
+      # No unannotated hard sleeps (#576 E14): every page.waitForTimeout needs a
+      # `// settle: <reason>` comment above it (the negative-space waits that a
+      # poll cannot express); everything else waits for its condition. Same
+      # placement reasoning as the step above; sub-second, before the browser.
+      - name: Check e2e-playwright for unannotated sleeps
+        run: |
+          pnpm lint:e2e-no-sleep:test
+          pnpm lint:e2e-no-sleep
       # `check` path-ignores `e2e-playwright/**`, and root `tsconfig.json` includes
       # only `src`, so without this the specs and the IPC mock are type-checked by
       # nothing. This is the job that runs on `e2e-playwright/**` changes, so the

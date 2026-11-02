@@ -395,7 +395,8 @@ test.describe('Section zoom margin', () => {
     ).toBe(sectionId);
 
     // ...but the camera must not have moved (no zoom-to-section on single click).
-    // Allow any erroneous animation a moment to start, then assert unchanged.
+    // settle: allow any erroneous animation a moment to start, then assert the
+    // camera is unchanged - a poll would pass before it began.
     await page.waitForTimeout(400);
     const after = await page.evaluate(() => {
       const m = (window as unknown as {
@@ -517,7 +518,8 @@ test.describe('Section zoom margin', () => {
         return m ? !m.isMoving() : false;
       });
     const settle = async () => {
-      // Ride past the post-action re-fit delay (180ms here + 100ms in MapCanvas).
+      // settle: ride past the post-action re-fit delay (180ms here + 100ms in
+      // MapCanvas); the assertions after it check that no re-fit moved the camera.
       await page.waitForTimeout(400);
       await expect.poll(mapIdle, { timeout: 15000 }).toBe(true);
     };

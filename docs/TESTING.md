@@ -77,7 +77,10 @@ work:
   nightly.
 - **Do not sleep.** A hard `page.waitForTimeout()` is the single biggest flake
   source. Use the shared waiters in `e2e-playwright/helpers/app.ts`, or
-  web-first assertions / `expect.poll`.
+  web-first assertions / `expect.poll` / `toPass`. The one exception is a wait
+  that proves something does NOT happen (a poll would pass on its first,
+  pre-update read): mark it with a `// settle: <why>` comment directly above
+  the call. `pnpm lint:e2e-no-sleep` (smoke job) fails on any other sleep.
 - Retries are configured in `playwright.config.ts` (2 in CI, 1 locally), so one
   blip does not abort a push. `PW_RETRIES=0` to fail fast while hunting a flake.
 

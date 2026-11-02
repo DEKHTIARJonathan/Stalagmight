@@ -239,8 +239,12 @@ test.describe('Back Button Navigation', () => {
       }
     });
 
-    // Wait for grid to render
-    await page.waitForTimeout(500);
+    // The grid overlay is actually on the map before the project is closed
+    // (GridOverlay adds the 'grid-lines' layer once showGrid is set).
+    await page.waitForFunction(() => {
+      const map = (window as { __stalagmight_map__?: { getLayer?: (id: string) => unknown } }).__stalagmight_map__;
+      return Boolean(map?.getLayer?.('grid-lines'));
+    });
 
     // Close the project via the hamburger menu
     await clickBack(page);

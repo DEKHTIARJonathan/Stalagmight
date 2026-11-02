@@ -226,15 +226,21 @@ test.describe('Data table fullscreen mode', () => {
     // or not fullscreen blocked anything.
     expect(await getActiveTool(page)).toBe('select');
     await page.keyboard.press('m');
+    // settle: proves the shortcut is dead (the tool does NOT change); a poll
+    // would accept the pre-update value.
     await page.waitForTimeout(300);
     expect(await getActiveTool(page)).toBe('select');
 
     // Ctrl+I (import) and Ctrl+E (export) are dead: no dialog appears and
     // the mode stays active.
     await page.keyboard.press('Control+i');
+    // settle: proves no import dialog opens; its absence is true on the first
+    // read whether or not the shortcut fired.
     await page.waitForTimeout(300);
     await expect(page.getByTestId('dmp-selection-dialog')).toHaveCount(0);
     await page.keyboard.press('Control+e');
+    // settle: proves no export dialog opens; its absence is true on the first
+    // read whether or not the shortcut fired.
     await page.waitForTimeout(300);
     await expect(page.getByTestId('export-dialog')).toHaveCount(0);
     await expect(page.getByTestId('data-table')).toHaveAttribute('data-fullscreen', 'true');

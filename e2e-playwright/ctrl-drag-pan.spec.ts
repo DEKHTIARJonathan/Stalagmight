@@ -548,9 +548,9 @@ test.describe('Ctrl+Drag Panning', () => {
         // by the drag itself, so a cursor assertion here passed even with both recovery
         // listeners deleted; `data-ctrl-held` is the belief the listeners correct.
         //
-        // A settle rather than a poll, because this proves a state does NOT change and a
-        // poll would accept the pre-update value. No pointer event may intervene: both
-        // recovery listeners are exactly what the rest of the test exercises.
+        // settle: this proves a state does NOT change and a poll would accept the
+        // pre-update value. No pointer event may intervene: both recovery
+        // listeners are exactly what the rest of the test exercises.
         await page.waitForTimeout(100);
         await expect(canvas).toHaveAttribute('data-ctrl-held', 'true');
 

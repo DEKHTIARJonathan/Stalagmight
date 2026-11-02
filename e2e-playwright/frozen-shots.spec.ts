@@ -71,8 +71,11 @@ async function injectFrozenShots(
     },
     frozenShots,
   );
-  // Wait for React to re-render with new frozen state
-  await page.waitForTimeout(300);
+  // Wait for the re-render itself: every frozen row of the shown section carries
+  // the frozen tint (the injected shots all belong to it).
+  for (const { shot_index } of frozenShots) {
+    await expect(page.getByTestId(`grid-row-${shot_index}`)).toHaveClass(/sg-row-frozen/);
+  }
 }
 
 /** Open the DataTable via keyboard shortcut. */
@@ -139,6 +142,8 @@ test.describe('Frozen Shots', () => {
 
     // Frozen row: double-clicking the length cell must NOT open the editor
     await page.getByTestId('grid-cell-0-length').dblclick();
+    // settle: proves the editor does NOT open; a poll for its absence would pass
+    // on the first read, before a buggy dblclick handler had rendered it.
     await page.waitForTimeout(300);
     await expect(editor).toHaveCount(0);
   });

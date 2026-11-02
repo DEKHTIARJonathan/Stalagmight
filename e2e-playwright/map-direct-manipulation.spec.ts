@@ -459,8 +459,8 @@ test.describe('Map direct manipulation (#409)', () => {
 
     await page.keyboard.press('p');
     await page.keyboard.press('z');
-    // A settle rather than a poll: this proves the tool does NOT change, and a
-    // poll would accept the pre-update value.
+    // settle: this proves the tool does NOT change, and a poll would accept the
+    // pre-update value.
     await page.waitForTimeout(200);
     await expect(mapCanvas).toHaveAttribute('data-active-tool', 'select');
   });

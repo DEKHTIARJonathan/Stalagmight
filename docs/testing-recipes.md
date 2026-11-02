@@ -792,7 +792,12 @@ fixture is what wires up E2E coverage collection.
 
 ### Waiters
 
-Use these instead of `waitForTimeout`. All from `helpers/app.ts`:
+Use these instead of `waitForTimeout` (`pnpm lint:e2e-no-sleep` rejects a bare
+one; a deliberate negative-space settle - "give a buggy handler time, then
+assert nothing changed" - carries a `// settle: <why>` comment directly above
+the call). To retry an action rather than a read, use
+`expect(async () => { ... }).toPass()`, not a sleep loop. All from
+`helpers/app.ts`:
 
 | Helper | Waits for |
 |--------|-----------|
@@ -807,7 +812,7 @@ Use these instead of `waitForTimeout`. All from `helpers/app.ts`:
 `helpers/app.ts` also has seeding helpers (`createSectionViaStore`,
 `seedProjectWithSections`), menu navigation (`openAppMenu`,
 `openSettingsFromMenu`, `openDebugFromMenu`), the DMP wizard drivers
-(`openDmpSelectionDialog`, `proceedToDmpImportWizard`, `placeAllSections`), and
+(`openDmpSelectionDialog`, `proceedToDmpImportWizard`), and
 canvas readback (`getDrawnGeometry`, `getStationScreenPositions`,
 `readCanvasPixel`, `countCanvasInk`). Read the file before writing a new
 one-off helper.

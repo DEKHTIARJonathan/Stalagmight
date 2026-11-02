@@ -221,8 +221,11 @@ test.describe('ID=0 Bug Fixes', () => {
     const dxInput = page.getByTestId('dx-input');
     await dxInput.fill('5');
 
-    // Wait for debounced preview
-    await page.waitForTimeout(300);
+    // The debounced preview has dispatched its move_section to the backend.
+    await expect.poll(() => page.evaluate(() =>
+      (((window as unknown as { __MOCK_MOVE_CALLS__?: Array<{ command: string }> }).__MOCK_MOVE_CALLS__) ?? [])
+        .filter((c) => c.command === 'move_section').length,
+    )).toBeGreaterThan(0);
 
     // Click Apply button
     const applyButton = dialog.locator('button:has-text("Apply")');
@@ -258,8 +261,11 @@ test.describe('ID=0 Bug Fixes', () => {
     const dxInput = page.getByTestId('dx-input');
     await dxInput.fill('5');
 
-    // Wait for debounced preview
-    await page.waitForTimeout(300);
+    // The debounced preview has dispatched its move_section to the backend.
+    await expect.poll(() => page.evaluate(() =>
+      (((window as unknown as { __MOCK_MOVE_CALLS__?: Array<{ command: string }> }).__MOCK_MOVE_CALLS__) ?? [])
+        .filter((c) => c.command === 'move_section').length,
+    )).toBeGreaterThan(0);
 
     // Click Cancel button
     const cancelButton = dialog.locator('button:has-text("Cancel")');
@@ -414,16 +420,11 @@ test.describe('ID=0 Edge Cases', () => {
     // The test ID is attached directly to the trigger button.
     await directionSelect.click();
 
-    // Wait for dropdown and click the "Out" option
-    // Use data-testid if available, otherwise scope carefully
-    await page.waitForTimeout(100); // Wait for dropdown to render
-    const outOption = page.locator('[data-testid="direction-option-out"], [role="option"]:has-text("Out")').first();
-    if (await outOption.isVisible().catch(() => false)) {
-      await outOption.click();
-    } else {
-      // Fallback: find dropdown content and click Out within it
-      await page.locator('button:text-is("Out")').click();
-    }
+    // Wait for the dropdown, then click the "Out" option (Select derives each
+    // option's test ID from its own: `<testId>-option-<value>`).
+    const outOption = page.getByTestId('section-direction-select-option-out');
+    await expect(outOption).toBeVisible();
+    await outOption.click();
 
     // Save within the dialog
     await dialog.getByRole('button', { name: 'Save' }).click();

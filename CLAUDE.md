@@ -83,6 +83,7 @@ git status --porcelain src-tauri/bindings                 # must print nothing a
 cargo test --locked --manifest-path src-tauri/vendor/compass_data/Cargo.toml   # workspace-excluded vendored crate; no telemetry feature/env
 # --- smoke job (e2e-smoke.yml) ---
 pnpm lint:e2e-parallel:test && pnpm lint:e2e-parallel     # Playwright parallel-safety
+pnpm lint:e2e-no-sleep:test && pnpm lint:e2e-no-sleep     # no unannotated waitForTimeout in Playwright specs
 pnpm typecheck:playwright                                 # e2e-playwright specs + IPC mock
 pnpm test:mock-contract                                   # IPC mock <-> generate_handler! contract
 pnpm test:pw-timing                                       # timing reporter self-test (a report, not a time budget)

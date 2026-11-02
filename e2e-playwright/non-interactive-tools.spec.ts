@@ -157,6 +157,8 @@ test.describe('Non-interactive tools', () => {
         sawContextMenu = true;
         break;
       }
+      // settle: a 5 x 50 ms sampling window for a menu that must NEVER open; a
+      // poll would stop at the first (pre-update) read.
       await page.waitForTimeout(50);
     }
     expect(sawContextMenu).toBe(false);

@@ -145,6 +145,8 @@ test.describe('Data table column preferences', () => {
     // comparing a sorted snapshot against the config's own unsorted order, and the
     // station default `['_x','_y','_lat','_long']` is unsorted, so this fired on every
     // open until DataTable's init sorted both hidden lists.
+    // settle: the spurious persist this guards against is debounced, so only a
+    // wait past that debounce can show that it did NOT fire.
     await page.waitForTimeout(900);
     expect(await getViewCalls(page)).toHaveLength(0);
   });
@@ -432,6 +434,8 @@ test.describe('Data table column preferences', () => {
 
     // Fitting is idempotent: a second double-click leaves the width alone.
     await page.getByTestId('grid-col-resize-depth_in').dblclick();
+    // settle: proves the width does NOT change; a poll would accept the
+    // pre-update width.
     await page.waitForTimeout(200);
     expect(await headerWidth('depth_in')).toBe(fitted);
 
@@ -440,6 +444,8 @@ test.describe('Data table column preferences', () => {
     const widths: number[] = [];
     for (let i = 0; i < 3; i++) {
       await page.getByTestId('grid-col-resize-length').dblclick();
+      // settle: each re-fit must leave the width where it was, which only a
+      // read after the fit would have landed can show.
       await page.waitForTimeout(200);
       widths.push(await headerWidth('length'));
     }
