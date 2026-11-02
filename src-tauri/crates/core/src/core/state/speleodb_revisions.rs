@@ -580,6 +580,25 @@ impl AppState {
                 "finish or discard force-editing before viewing or restoring a revision".to_owned(),
             )));
         }
+        // [#576 RV2-R-15] Restore and Unwind replace the survey, so the read-only Plan
+        // and Export workspaces refuse them like every other survey change (C5's
+        // `guard_workspace`), with the same coded notice - and before the lock check,
+        // so the user is told to switch to Survey rather than to take a lock. View is a
+        // read-only peek and stays allowed in every workspace.
+        if restore {
+            let what = if keep_undo_history {
+                "Unwind"
+            } else {
+                "Restore revision"
+            };
+            if let Err(refusal) = self.guard_workspace(what) {
+                // The coded refusal verbatim (not wrapped in an error's own prefix), so
+                // the frontend recognises it as the edit gate and shows its notice.
+                let mut dto = local_dto(SpeleoDbError::Io(String::new()));
+                dto.message = refusal.error.unwrap_or_default();
+                return Err(dto);
+            }
+        }
         // Restore (editable) additionally requires the write lock genuinely held (with
         // force-editing already excluded above, edit_enabled here means a real lock).
         // View is a read-only peek and needs no lock.

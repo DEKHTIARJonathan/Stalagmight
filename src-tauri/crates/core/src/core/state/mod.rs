@@ -166,6 +166,14 @@ mod sdb_endpoint_tests;
 mod sdb_lock_rule_tests;
 #[cfg(test)]
 #[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod sdb_revision_gate_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,

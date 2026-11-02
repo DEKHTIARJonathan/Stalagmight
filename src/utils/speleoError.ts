@@ -8,6 +8,7 @@ import type {
 import i18n from '../i18n';
 import type { DumpPickerKind } from '../store/speleoStore';
 import { useSpeleoStore } from '../store/speleoStore';
+import { isEditDisabledError, READ_ONLY_EDIT_NOTICE } from './editErrors';
 import { getErrorMessage } from './ipc';
 
 /**
@@ -69,8 +70,13 @@ function transportMessage(cause: TransportCause): string {
 export function humanizeSpeleoError(e: unknown, contextPrefix?: string): string {
   const cause = transportCause(e);
   if (cause) return transportMessage(cause);
+  const raw = getErrorMessage(e);
+  // [#576 RV2-R-15] An edit-gate refusal (e.g. Restore revision / Unwind in the
+  // read-only Plan or Export workspace) carries the backend's coded markers; a marker
+  // must never reach a surface, so it gets the same notice a refused edit gets.
+  if (isEditDisabledError(raw)) return READ_ONLY_EDIT_NOTICE(raw);
   // Strip a trailing period so "…credentials." reads cleanly after our prefix.
-  const msg = getErrorMessage(e).replace(/\.\s*$/, '');
+  const msg = raw.replace(/\.\s*$/, '');
   if (!contextPrefix) return msg;
   return `${contextPrefix}: ${msg}`;
 }
