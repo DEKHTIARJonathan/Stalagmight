@@ -23,6 +23,9 @@ const sentModes = () =>
 /** Let the chained sends drain. */
 const settle = () => sendWorkspaceMode(useUIStore.getState().appMode);
 
+/** Run every queued microtask (and promise continuation) once, without waiting on a send. */
+const flushMicrotasks = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 describe('workspace mode sync', () => {
   let stop: () => void;
 
@@ -37,10 +40,21 @@ describe('workspace mode sync', () => {
   });
 
   it('sends the current mode at start, then every change, in order', async () => {
+    // The first send stays in flight until released, so the order is not just
+    // the order of the calls: a later send must WAIT for it (#576 RV2-FE-G2 -
+    // with an instantly resolving invoke, unchained sends passed this test too).
+    let releaseFirst: () => void = () => {};
+    invokeIpcMock.mockImplementationOnce(
+      () => new Promise<null>((resolve) => { releaseFirst = () => resolve(null); }),
+    );
     stop = startWorkspaceModeSync();
     useUIStore.getState().setAppMode('plan');
     useUIStore.getState().setAppMode('export');
     useUIStore.getState().setAppMode('survey');
+    await flushMicrotasks();
+
+    expect(sentModes(), 'a later mode was sent before the first send settled').toEqual(['survey']);
+    releaseFirst();
     await settle();
 
     // The trailing 'survey' is `settle`'s own send.
