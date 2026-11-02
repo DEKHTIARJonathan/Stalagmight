@@ -5,6 +5,7 @@ use std::rc::Rc;
 use anyhow::{bail, Result};
 
 use crate::parsers::encoding::{cp1252_replacement_warning, read_cp1252, Cp1252Text};
+use crate::parsers::linked_files::{is_dos_device_name, outside_root};
 
 use super::{
     apply_units_options, is_walls_separator, parse_srv_contents, split_first_token, ParsedSurvey,
@@ -71,13 +72,6 @@ pub(crate) struct WpjEntry {
 /// deeper is refused rather than walked, as the `#Units` Save stack is
 /// bounded (`units.rs`).
 pub(crate) const MAX_BOOK_DEPTH: usize = 256;
-
-/// The longest folder a `.PATH` may resolve to. No file system opens a longer
-/// path (Windows' extended-length limit is 32,767 UTF-16 units, Linux's is
-/// 4,096 bytes), so such a survey could only ever be reported missing; the
-/// bound keeps a crafted chain of `.PATH` lines from growing every open
-/// book's copy of its folder (#576 B12).
-const MAX_RESOLVED_DIR_BYTES: usize = 32 * 1024;
 
 /// One link of a chain a book passes down to everything under it (#576 B12):
 /// the value this level set and the chain its parent had. Children share
@@ -224,29 +218,27 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                                 ));
                                 Err(label.clone())
                             }
-                            Ok(dir) => {
-                                // Defense-in-depth: an absolute local `.PATH` is
-                                // honored verbatim (genuine Walls does), but if it
-                                // escapes the project root the importer is reading
-                                // outside the `.wpj`'s own tree - tell the user
-                                // rather than doing it silently. (The read is NOT
-                                // blocked: an explicit absolute path is the
-                                // author's deliberate choice.)
-                                if dir.is_absolute() && !dir.starts_with(&ctx.root) {
-                                    warnings.push(format!(
-                                        "survey '{label}' resolves through an absolute .PATH \
-                                         outside the project directory ({})",
-                                        dir.display()
-                                    ));
+                            Ok(dir) => match resolve_survey(&entry, dir) {
+                                Some(file_path) if file_path.exists() => {
+                                    // Defense-in-depth: an absolute local `.PATH`
+                                    // is honored (genuine Walls does), but a file
+                                    // read from outside the `.wpj`'s own tree -
+                                    // through it, or through a symlink inside the
+                                    // project (#576 RV3-R-10) - is said out loud.
+                                    // (The read is NOT blocked: an explicit path
+                                    // is the author's deliberate choice.)
+                                    if let Some(real) = outside_root(&file_path, &ctx.root) {
+                                        warnings.push(format!(
+                                            "survey '{label}' is read from outside the \
+                                             project directory ({})",
+                                            real.display()
+                                        ));
+                                    }
+                                    Ok(file_path)
                                 }
-                                match resolve_survey(&entry, dir) {
-                                    Some(file_path) if file_path.exists() => Ok(file_path),
-                                    other => Err(other.map_or_else(
-                                        || label.clone(),
-                                        |p| p.display().to_string(),
-                                    )),
-                                }
-                            }
+                                other => Err(other
+                                    .map_or_else(|| label.clone(), |p| p.display().to_string())),
+                            },
                         };
                         match found {
                             Ok(file_path) => match read_cp1252(&file_path) {
@@ -464,6 +456,11 @@ pub(crate) fn resolve_survey(entry: &WpjEntry, dir: &Path) -> Option<PathBuf> {
     if name.contains('/') || name.contains('\\') || name.contains(':') {
         return None;
     }
+    // Nor a DOS device (`CON`, `NUL`): `NUL.SRV` opens the device on Windows,
+    // so it is never looked up (#576 RV2-R-10).
+    if is_dos_device_name(name) {
+        return None;
+    }
     // Only a `.SRV` suffix (case-insensitive) marks the name as already
     // extended; any OTHER trailing extension still gets `.SRV` appended
     // (dewalls/survex: a `.NAME FOO.OLD` resolves to `FOO.OLD.SRV`).
@@ -490,62 +487,14 @@ fn replaces_base(path: &str) -> bool {
     normalized.starts_with("//") || Path::new(&normalized).is_absolute() || normalized.contains(':')
 }
 
-/// Resolve a `.PATH` against a parent directory, by the rules the Compass
-/// `.MAK` reader follows for its linked files (#576 SEC-1, decision "same as
-/// .MAK"). Backslashes are separators. An absolute local path REPLACES the
-/// base (genuine Walls honors it - `Walls32 prjhier.cpp` `GetPathPrefix`
-/// uses an absolute `.PATH` as the prefix); the caller warns when it leaves
-/// the project. A relative path concatenates, with `..` clamped at `root`
-/// (the `.wpj`'s own directory) so a crafted `.PATH ../../../../` can't walk
-/// the resolution dir out of the project tree.
-///
-/// Refused, from the text alone and before anything touches the file system:
-/// a network (UNC) or device-namespace path (`\\server\share`, `\\?\C:\...`,
-/// `\\.\COM1` - on Windows even asking whether `\\server\share\x` exists hands
-/// the user's credentials to that server); a drive letter that is not part
-/// of an absolute path on this system (`D:\Caves` on macOS/Linux, `D:Caves`
-/// anywhere), which would otherwise resolve against the process's working
-/// directory; and a folder longer than any file system opens.
-pub(crate) fn resolve_path(
-    parent: &Path,
-    root: &Path,
-    path: &str,
-) -> Result<PathBuf, &'static str> {
-    let normalized = path.replace('\\', "/");
-    // `\\server\share`, `\\?\C:\...` and `\\.\COM1` all start with two separators.
-    if normalized.starts_with("//") {
-        return Err("network (UNC) and device paths are never read");
-    }
-    let candidate = Path::new(&normalized);
-    let dir = if candidate.is_absolute() {
-        candidate.to_path_buf()
-    } else if normalized.contains(':') {
-        return Err("its drive letter cannot be resolved on this system");
-    } else {
-        let mut dir = parent.to_path_buf();
-        for part in normalized.split('/') {
-            match part {
-                "" | "." => {}
-                // Never pop above the project root (traversal guard). When
-                // `dir` already sits at/above `root` - e.g. a parent set an
-                // absolute `.PATH` so `dir` is a different tree - `starts_with`
-                // is false and we leave it alone (that absolute base is the
-                // user's explicit dir).
-                ".." => {
-                    if dir != root && dir.starts_with(root) {
-                        dir.pop();
-                    }
-                }
-                other => dir.push(other),
-            }
-        }
-        dir
-    };
-    if dir.as_os_str().len() > MAX_RESOLVED_DIR_BYTES {
-        return Err("its folder path is longer than any file system allows");
-    }
-    Ok(dir)
-}
+// Resolve a `.PATH` against a parent directory: the rules the Compass `.MAK`
+// reader follows for its linked files (#576 SEC-1, decision "same as .MAK"),
+// kept in ONE place (RV3-R-18). An absolute local path REPLACES the base
+// (genuine Walls honors it - `Walls32 prjhier.cpp` `GetPathPrefix` uses an
+// absolute `.PATH` as the prefix), normalized; a relative one concatenates
+// with `..` clamped at `root` (the `.wpj`'s own directory); network, device
+// and unresolvable drive-letter paths are refused from the text.
+pub(crate) use crate::parsers::linked_files::resolve_link as resolve_path;
 
 /// Parse a `.REF` line: `northing easting zone conv elev flags latDMS lonDMS
 /// datumIdx "datum"`.

@@ -1768,10 +1768,121 @@ fn absolute_path_escaping_root_warns_but_still_reads() {
         parsed
             .warnings
             .iter()
-            .any(|w| w.contains("absolute .PATH outside the project directory")),
+            .any(|w| w.contains("is read from outside the project directory")),
         "an absolute .PATH escaping the root must warn: {:?}",
         parsed.warnings
     );
+}
+
+/// One survey `S` under `.PATH {path}` in a project at `proj`, imported.
+fn parse_one_survey_under_path(proj: &Path, path: &str) -> ParsedWalls {
+    let wpj = format!(
+        ";WALLS Project File\n\
+         .BOOK Root\n.NAME ROOT\n.STATUS 8\n\
+         .PATH {path}\n\
+         .SURVEY S\n.NAME S\n.STATUS 8\n\
+         .ENDBOOK\n"
+    );
+    let wpj_path = proj.join("T.wpj");
+    std::fs::write(&wpj_path, wpj).unwrap();
+    parse_walls(&wpj_path).unwrap()
+}
+
+const ONE_SHOT_SRV: &str = "#UNITS meters order=DAV\nA B 10 90 0\n";
+
+/// #576 RV3-R-10: an absolute `.PATH` that climbs out of the project with
+/// `..` is outside it. The check compared the text as written
+/// (`<proj>/../elsewhere` "starts with" `<proj>`), so it read outside the
+/// project with no warning.
+#[test]
+fn an_absolute_path_climbing_out_with_dotdot_warns() {
+    let proj = temp_dir("dotdot_proj");
+    let outside = temp_dir("dotdot_outside");
+    std::fs::write(outside.join("S.SRV"), ONE_SHOT_SRV).unwrap();
+    let path = format!(
+        "{}/../{}",
+        proj.display(),
+        outside.file_name().unwrap().to_string_lossy()
+    );
+    let parsed = parse_one_survey_under_path(&proj, &path);
+    println!(".PATH {path}: warnings {:?}", parsed.warnings);
+    assert!(parsed
+        .surveys
+        .iter()
+        .any(|s| s.resolved && !s.vectors.is_empty()));
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("survey 'S'") && w.contains("outside the project directory")),
+        "{:?}",
+        parsed.warnings
+    );
+}
+
+/// #576 RV3-R-10: a relative `.PATH` through a folder inside the project that
+/// is a symlink to one outside it reads from outside too, so it warns.
+#[cfg(unix)]
+#[test]
+fn a_relative_path_through_a_symlinked_folder_warns() {
+    let proj = temp_dir("symlink_proj");
+    let outside = temp_dir("symlink_outside");
+    std::fs::write(outside.join("S.SRV"), ONE_SHOT_SRV).unwrap();
+    std::os::unix::fs::symlink(&*outside, proj.join("linked")).unwrap();
+    let parsed = parse_one_survey_under_path(&proj, "linked");
+    println!(".PATH linked (symlink): warnings {:?}", parsed.warnings);
+    assert!(parsed
+        .surveys
+        .iter()
+        .any(|s| s.resolved && !s.vectors.is_empty()));
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("survey 'S'") && w.contains("outside the project directory")),
+        "{:?}",
+        parsed.warnings
+    );
+}
+
+/// #576 RV2-R-10 (the `.MAK` rule, shared): a `.PATH` naming a Windows DOS
+/// device is refused from its text, and a `.NAME` that is one is never looked
+/// up. Real files of those names exist here, so only the text can refuse them.
+#[test]
+fn dos_device_names_are_never_looked_up() {
+    let proj = temp_dir("device_path");
+    std::fs::create_dir_all(proj.join("CON")).unwrap();
+    std::fs::write(proj.join("CON").join("S.SRV"), ONE_SHOT_SRV).unwrap();
+    let parsed = parse_one_survey_under_path(&proj, "CON");
+    println!(".PATH CON: warnings {:?}", parsed.warnings);
+    assert!(parsed.surveys.iter().all(|s| !s.resolved));
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("survey 'S' was skipped") && w.contains("device")),
+        "{:?}",
+        parsed.warnings
+    );
+
+    let proj = temp_dir("device_name");
+    std::fs::write(proj.join("nul.SRV"), ONE_SHOT_SRV).unwrap();
+    let wpj = ";WALLS Project File\n\
+               .BOOK Root\n.NAME ROOT\n.STATUS 8\n\
+               .SURVEY S\n.NAME nul\n.STATUS 8\n\
+               .ENDBOOK\n";
+    let wpj_path = proj.join("T.wpj");
+    std::fs::write(&wpj_path, wpj).unwrap();
+    let parsed = parse_walls(&wpj_path).unwrap();
+    println!(
+        ".NAME nul: resolved {:?}",
+        parsed
+            .surveys
+            .iter()
+            .map(|s| s.resolved)
+            .collect::<Vec<_>>()
+    );
+    assert!(parsed.surveys.iter().all(|s| !s.resolved));
 }
 
 // ----- multiple-#Fix anchoring (one zero datum per component) ----------
@@ -3229,7 +3340,7 @@ fn a_refused_path_covers_its_relative_children_only() {
         parsed
             .warnings
             .iter()
-            .any(|w| w.contains("survey 'T' resolves through an absolute .PATH outside")),
+            .any(|w| w.contains("survey 'T' is read from outside the project directory")),
         "{:?}",
         parsed.warnings
     );

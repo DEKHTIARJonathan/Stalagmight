@@ -35,8 +35,11 @@ use crate::models::azimuth_reference::{AzimuthReference, CorrectionSource};
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
 use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
-use crate::parsers::encoding::{cp1252_replacement_warning, read_cp1252, Cp1252Text};
+use crate::parsers::encoding::{
+    cp1252_replacement_warning, describe_byte_limit, read_cp1252, Cp1252Text, FileFamily,
+};
 use crate::parsers::geo::{non_empty, FEET_TO_METERS};
+use crate::parsers::linked_files::{outside_root, resolve_link};
 
 /// Distances/LRUD at or above this are Compass "missing data" sentinels.
 const MISSING_VALUE_THRESHOLD: f64 = 990.0;
@@ -234,8 +237,11 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
     let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let linked = project.survey_files.len();
     let mut skipped: Vec<String> = Vec::new();
+    let mut budget = LinkBudget::new(MAX_LINKED_BYTES);
     let loaded = project
-        .load_survey_files_with(|file| read_linked_dat(&folder, file, &mut warnings, &mut skipped))
+        .load_survey_files_with(|file| {
+            read_linked_dat(&folder, file, &mut budget, &mut warnings, &mut skipped)
+        })
         .map_err(|e| anyhow!("Failed to load Compass survey files: {e}"))?;
     // A skipped file costs only its own surveys; with nothing read at all
     // there is nothing to import.
@@ -378,73 +384,95 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
     })
 }
 
-/// Where a `.DAT` linked by a `.MAK` lives, by the Walls importer's rules
-/// (`walls::wpj::resolve_path`, #576 B8): backslashes are separators, a
-/// relative link resolves inside the `.MAK`'s `folder` with `..` clamped
-/// there, and an absolute local path is honoured - flagged `true` when it
-/// lies outside the folder, so the caller can say so. A network (UNC) or
-/// device-namespace path is refused before anything touches it: on Windows
-/// even asking whether `\\server\share\x` exists hands the user's
-/// credentials to that server. So is a drive letter that is not part of an
-/// absolute path here, which would otherwise resolve against the process's
-/// working directory.
-fn resolve_linked_path(folder: &Path, link: &Path) -> Result<(PathBuf, bool), &'static str> {
-    let normalized = link.to_string_lossy().replace('\\', "/");
-    // `\\server\share`, `\\?\C:\...` and `\\.\COM1` all start with two
-    // separators.
-    if normalized.starts_with("//") {
-        return Err("network (UNC) and device paths are never read");
-    }
-    let candidate = Path::new(&normalized);
-    if candidate.is_absolute() {
-        return Ok((candidate.to_path_buf(), !candidate.starts_with(folder)));
-    }
-    if normalized.contains(':') {
-        return Err("its drive letter cannot be resolved on this system");
-    }
-    let mut resolved = folder.to_path_buf();
-    for part in normalized.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                if resolved != folder && resolved.starts_with(folder) {
-                    resolved.pop();
-                }
-            }
-            other => resolved.push(other),
+/// The most bytes the `.DAT` files one `.MAK` links may add up to (#576
+/// RV2-R-12). Each file has its own ceiling ([`FileFamily::SurveyText`]);
+/// this bounds a project that lists many of them. Four of those ceilings, far
+/// above any real project.
+const MAX_LINKED_BYTES: u64 = 4 * FileFamily::SurveyText.byte_limit();
+
+/// What the `.DAT` files a `.MAK` links have used up so far (#576 RV2-R-12).
+struct LinkBudget {
+    /// Every file read so far, as resolved on disk, so a further listing of
+    /// one is skipped instead of read, held and imported once more.
+    read: HashSet<PathBuf>,
+    /// Their sizes, added up against `limit`.
+    bytes: u64,
+    limit: u64,
+}
+
+impl LinkBudget {
+    fn new(limit: u64) -> Self {
+        Self {
+            read: HashSet::new(),
+            bytes: 0,
+            limit,
         }
     }
-    Ok((resolved, false))
 }
 
 /// Read one `.DAT` a `.MAK` links, for `Project::load_survey_files_with`:
-/// its text, or `None` - with the reason in `skipped` and `warnings` - when it
-/// is refused, missing or unreadable. The rest of the project still imports
-/// (#576 B8, decision B8-D2: the Walls importer's rule).
+/// its text, or `None` - with the reason in `warnings` - when it is refused,
+/// missing, unreadable, already read, or over the project's `budget`. The
+/// rest of the project still imports (#576 B8, decision B8-D2: the Walls
+/// importer's rule); a refused, missing or unreadable one is also listed in
+/// `skipped`.
+///
+/// Where it lives follows the Walls `.PATH` rules ([`resolve_link`], #576
+/// B8-D1 and RV3-R-18): backslashes are separators, a relative link resolves
+/// inside the `.MAK`'s `folder` with `..` clamped there, an absolute local
+/// path is honoured, and network, device-namespace, DOS device and
+/// unresolvable drive-letter links are refused from their text before
+/// anything touches them. A file read from outside the folder - by an
+/// absolute link or through a symlink - is said out loud.
 fn read_linked_dat(
     folder: &Path,
     link: &Path,
+    budget: &mut LinkBudget,
     warnings: &mut Vec<String>,
     skipped: &mut Vec<String>,
 ) -> Option<String> {
     let shown = link.display();
-    let reason = match resolve_linked_path(folder, link) {
+    let reason = match resolve_link(folder, folder, &link.to_string_lossy()) {
         Err(reason) => format!("'{shown}' was skipped: {reason}. Its surveys were not imported."),
-        Ok((resolved, outside)) => {
-            if outside {
+        Ok(resolved) if !resolved.exists() => format!(
+            "'{shown}' was not found (looked for {}); it was skipped and its surveys were not \
+             imported.",
+            resolved.display()
+        ),
+        Ok(resolved) => {
+            let identity = std::fs::canonicalize(&resolved).unwrap_or_else(|_| resolved.clone());
+            if budget.read.contains(&identity) {
                 warnings.push(format!(
-                    "'{shown}' is outside the .MAK's folder (an absolute path); it was read \
-                     from there."
+                    "'{shown}' is listed more than once in the .MAK; the file was read once, and \
+                     this listing (with any fixed stations it declares) was skipped so its \
+                     surveys are not imported twice."
                 ));
+                return None;
             }
-            if resolved.exists() {
+            let size = std::fs::metadata(&resolved).map_or(0, |m| m.len());
+            if budget.bytes.saturating_add(size) > budget.limit {
+                format!(
+                    "'{shown}' was skipped: with it, the files this .MAK links would add up to \
+                     more than the {} limit for one project. Its surveys were not imported.",
+                    describe_byte_limit(budget.limit)
+                )
+            } else {
                 match read_cp1252(&resolved) {
                     Ok(Cp1252Text { text, replaced }) => {
+                        if let Some(real) = outside_root(&resolved, folder) {
+                            warnings.push(format!(
+                                "'{shown}' is outside the .MAK's folder (it is {}); it was read \
+                                 from there.",
+                                real.display()
+                            ));
+                        }
                         warnings.extend(cp1252_replacement_warning(
                             Some(link),
                             "Compass",
                             replaced,
                         ));
+                        budget.read.insert(identity);
+                        budget.bytes = budget.bytes.saturating_add(size);
                         return Some(text);
                     }
                     Err(e) => format!(
@@ -452,12 +480,6 @@ fn read_linked_dat(
                          were not imported."
                     ),
                 }
-            } else {
-                format!(
-                    "'{shown}' was not found (looked for {}); it was skipped and its surveys \
-                     were not imported.",
-                    resolved.display()
-                )
             }
         }
     };
@@ -2719,7 +2741,23 @@ mod tests {
         // and emits one warning per divergence so the user knows the
         // preview only reflects file 0.  Geometry is resolved per-file
         // through `SurveyWithState.state` regardless of these warnings.
-        let parsed = parse_compass(&fixture("multi_zone.mak")).unwrap();
+        //
+        // The project is the one in `multi_zone.mak`, but with two DISTINCT
+        // `.DAT`s: that fixture lists one `.DAT` twice, and a second listing
+        // of a file is now skipped (#576 RV2-R-12).
+        let dir = tempfile::tempdir().unwrap();
+        for (name, survey) in [("a.dat", "A"), ("b.dat", "B")] {
+            std::fs::write(
+                dir.path().join(name),
+                synthetic_survey_record("Synthetic Cave", survey, "7 10 1979"),
+            )
+            .unwrap();
+        }
+        let mak = "&North American 1983;\r\n$13;\r\n@500000.000,4000000.000,1000.000,13,0.000;\r\n\
+                   !E;\r\n#a.dat;\r\n\r\n\
+                   &WGS 1984;\r\n$14;\r\n@500000.000,4000000.000,1000.000,14,0.000;\r\n\
+                   !A;\r\n#b.dat;\r\n";
+        let parsed = parse_mak_text(dir.path(), mak.as_bytes()).unwrap();
         // Project-wide fields take file 0 values for preview.
         assert_eq!(parsed.datum, Some(Datum::NorthAmerican1983));
         assert_eq!(parsed.utm_zone, Some(13));
@@ -4235,6 +4273,192 @@ mod tests {
                 parsed.warnings
             );
         }
+    }
+
+    /// #576 RV2-R-9 / RV3-R-10: an absolute link that climbs out of the
+    /// `.MAK`'s folder with `..` is still outside it. The check compared the
+    /// link as written (`<folder>/../outside.dat` "starts with" `<folder>`), so
+    /// the file was read with no warning.
+    #[test]
+    fn an_absolute_link_climbing_out_with_dotdot_is_read_with_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            dir.path().join("outside.dat"),
+            synthetic_survey_record("Synthetic Cave", "OUT", "7 10 1979"),
+        )
+        .unwrap();
+        let link = format!("{}/../outside.dat", project.display());
+        let parsed = parse_mak_text(&project, synthetic_mak(&[&link]).as_bytes()).unwrap();
+        println!(
+            "link {link}: surveys {:?}, warnings {:?}",
+            survey_names(&parsed),
+            parsed.warnings
+        );
+        assert_eq!(survey_names(&parsed), ["OUT"], "absolute links are read");
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.contains(&link) && w.contains("outside the .MAK's folder")),
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    /// #576 RV2-R-9: a link inside the folder that is a symlink to a file
+    /// outside it is read from outside, so it is said out loud too.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_in_the_folder_pointing_out_is_read_with_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let outside = dir.path().join("outside.dat");
+        std::fs::write(
+            &outside,
+            synthetic_survey_record("Synthetic Cave", "OUT", "7 10 1979"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("link.dat")).unwrap();
+        let parsed = parse_mak_text(&project, synthetic_mak(&["link.dat"]).as_bytes()).unwrap();
+        println!(
+            "symlinked link: surveys {:?}, warnings {:?}",
+            survey_names(&parsed),
+            parsed.warnings
+        );
+        assert_eq!(survey_names(&parsed), ["OUT"]);
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.starts_with("'link.dat' is outside the .MAK's folder")),
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    /// #576 RV2-R-10: a Windows DOS device name - with or without an
+    /// extension, in any case - is refused from the link's text, before
+    /// anything asks whether it exists (on Windows that opens the device).
+    /// Files of those names exist here, so only the text can refuse them; a
+    /// name that merely starts like one is an ordinary file.
+    #[test]
+    fn dos_device_names_are_refused_from_the_text() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        let devices = [
+            "NUL.dat",
+            "con",
+            "Com1.txt",
+            "sub\\LPT9.dat",
+            "aux .dat",
+            "PRN.",
+        ];
+        for (i, name) in devices.iter().enumerate() {
+            std::fs::write(
+                dir.path().join(name.replace('\\', "/")),
+                synthetic_survey_record("Synthetic Cave", &format!("D{i}"), "7 10 1979"),
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            dir.path().join("COM10.dat"),
+            synthetic_survey_record("Synthetic Cave", "C10", "7 10 1979"),
+        )
+        .unwrap();
+        let mut links = vec!["COM10.dat"];
+        links.extend(devices);
+        let parsed = parse_mak_text(dir.path(), synthetic_mak(&links).as_bytes()).unwrap();
+        println!(
+            "device-name links: surveys {:?}, warnings {:?}",
+            survey_names(&parsed),
+            parsed.warnings
+        );
+        assert_eq!(survey_names(&parsed), ["C10"]);
+        for link in devices {
+            assert!(
+                parsed.warnings.iter().any(
+                    |w| w.starts_with(&format!("'{link}' was skipped")) && w.contains("device")
+                ),
+                "{link}: {:?}",
+                parsed.warnings
+            );
+        }
+    }
+
+    /// #576 RV2-R-12: a `.MAK` listing the same `.DAT` again (under any
+    /// spelling) read and held it once per listing, importing its surveys
+    /// twice. It is read once; each further listing is skipped with a warning.
+    #[test]
+    fn a_file_linked_twice_is_read_once() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.dat"), synthetic_dat("Synthetic Cave")).unwrap();
+        let parsed = parse_mak_text(
+            dir.path(),
+            synthetic_mak(&["a.dat", "a.dat", "./sub/../a.dat"]).as_bytes(),
+        )
+        .unwrap();
+        println!(
+            "a.dat linked three times: surveys {:?}, warnings {:?}",
+            survey_names(&parsed),
+            parsed.warnings
+        );
+        assert_eq!(survey_names(&parsed), ["A"]);
+        assert_eq!(
+            parsed
+                .warnings
+                .iter()
+                .filter(|w| w.contains("is listed more than once"))
+                .count(),
+            2,
+            "{:?}",
+            parsed.warnings
+        );
+    }
+
+    /// #576 RV2-R-12: the files one `.MAK` links are capped in TOTAL, not only
+    /// one by one. A link that would take the project past the limit is
+    /// skipped and named; the ones before it are read. (The real limit is
+    /// 512 MB; the budget here is two files' worth.)
+    #[test]
+    fn the_linked_files_share_one_byte_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut size = 0;
+        for name in ["a.dat", "b.dat", "c.dat"] {
+            let record = synthetic_survey_record("Synthetic Cave", name, "7 10 1979");
+            size = record.len() as u64;
+            std::fs::write(dir.path().join(name), record).unwrap();
+        }
+        assert_eq!(MAX_LINKED_BYTES, 512 * 1024 * 1024);
+        let mut budget = LinkBudget::new(2 * size + 1);
+        let mut warnings = Vec::new();
+        let mut skipped = Vec::new();
+        let read: Vec<bool> = ["a.dat", "b.dat", "c.dat"]
+            .iter()
+            .map(|link| {
+                read_linked_dat(
+                    dir.path(),
+                    Path::new(link),
+                    &mut budget,
+                    &mut warnings,
+                    &mut skipped,
+                )
+                .is_some()
+            })
+            .collect();
+        println!(
+            "read {read:?} with a {} byte budget: {warnings:?}",
+            2 * size + 1
+        );
+        assert_eq!(read, [true, true, false]);
+        assert!(
+            skipped.len() == 1
+                && skipped[0].starts_with("'c.dat' was skipped")
+                && skipped[0].contains("limit for one project"),
+            "{skipped:?}"
+        );
     }
 
     /// A named pipe at `path`, made with the system's `mkfifo`.
