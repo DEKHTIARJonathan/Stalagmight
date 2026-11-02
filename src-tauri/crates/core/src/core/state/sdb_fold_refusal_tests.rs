@@ -73,7 +73,7 @@ fn a_refused_pre_push_flush_says_why_the_save_refused() {
     let state = AppState::new().expect("state");
     assert!(state.open_project(path).success);
     let save = state.save_project(None);
-    let reason = save.error.clone().expect("fixture: the save refuses");
+    let reason = save.error.expect("fixture: the save refuses");
 
     let err = state
         .speleodb_flush_before_push()
