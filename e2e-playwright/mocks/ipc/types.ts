@@ -5,6 +5,8 @@
  * and the first answer that is not `ctx.unhandled` is the result. A family owns its
  * commands and the state only they use, and reaches the core only through `ctx`.
  */
+import type { buildMockShot } from './shots';
+
 export interface MockIpcContext {
   /** What a family returns for a command it does not handle. */
   readonly unhandled: object;
@@ -12,6 +14,8 @@ export interface MockIpcContext {
   currentProject(): { sections: unknown[] } | null;
   /** The whole mock dispatcher (overrides, guards, core and families), as the app calls it. */
   invoke(cmd: string, args?: Record<string, unknown>): unknown;
+  /** The mock's one shot builder (`./shots.ts`), so a family lands shots exactly as the core does. */
+  buildShot: typeof buildMockShot;
 }
 
 export type MockCommandHandler = (cmd: string, args?: Record<string, unknown>) => unknown;

@@ -90,6 +90,15 @@ test('foreign-host-port fires on 0.0.0.0 and on a concatenated port (#576 NF-FIX
   assert.deepEqual(ids("await page.goto('http://0.0.0.0:1420/');"), []);
 });
 
+test('foreign-host-port fires on the IPv6 loopback and all-interfaces hosts (#576 NF-W4M-5)', () => {
+  assert.deepEqual(ids("await page.goto('http://[::1]:5173/');"), ['foreign-host-port']);
+  assert.deepEqual(ids('await page.goto(`http://[::1]:${port}/`);'), ['foreign-host-port']);
+  assert.deepEqual(ids("await page.goto('http://[::1]:' + port);"), ['foreign-host-port']);
+  assert.deepEqual(ids("const ws = new WebSocket('ws://[::]:5173/');"), ['foreign-host-port']);
+  assert.deepEqual(ids("await page.goto('http://[::1]:1420/');"), []);
+  assert.deepEqual(ids("await page.goto('http://[::]:1420/');"), []);
+});
+
 test('serial fires on both spellings', () => {
   assert.deepEqual(ids('test.describe.serial("x", () => {});'), ['serial']);
   assert.deepEqual(ids("test.describe.configure({ mode: 'serial' });"), ['serial']);

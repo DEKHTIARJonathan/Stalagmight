@@ -686,11 +686,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
       // A path containing "imperial" yields an Imperial-unit file, so a spec can
       // drive the "converted from feet" branch of the dialog and the receipt.
-      // The real parser converts ft->m BEFORE returning the preview (see
-      // apply_unit_conversion in parsers/tml.rs: shot length/depth/depth_in and
-      // LRUD scale by 0.3048; start_depth and first_start_absolute_elevation
-      // deliberately mirror master and stay unscaled), so the imperial fixture's
-      // canonical numbers are FEET and the parse output below is metric.
+      // The real parser converts ft->m BEFORE returning the preview
+      // (`apply_unit_conversion`, src-tauri/crates/parsers/src/parsers/tml/mod.rs):
+      // shot length, depth and LRUD, depth_in unless it is the -1 "same as
+      // previous" sentinel, every section's start_depth and the file's
+      // first_start_absolute_elevation all scale by 0.3048 - so the imperial
+      // fixture's canonical numbers are FEET and the parse output below is
+      // metric. This mock scales the shot fields only: its elevation is 0 either
+      // way, and start_depth is read only for a sentinel depth_in, which no shot
+      // that survives the import carries here (only the Closure row has one, and
+      // the preview and the import both skip Closure rows).
       const buildMockTmlFile = (path: string | null | undefined): TmlWire<TmlFile> => {
         const imperial = (path ?? '').toLowerCase().includes('imperial');
         const scale = imperial ? 0.3048 : 1;
@@ -800,6 +805,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         unhandled: UNHANDLED,
         currentProject: () => currentProject,
         invoke: (cmd, args) => mockHandler(cmd, args),
+        buildShot,
       };
       const familyHandlers = families.map((family) => family(familyContext));
 

@@ -35,6 +35,11 @@
 // (cargo-deny-action, a linter action) cannot slip past by not running `run:`.
 // The reverse direction is checked for names only: a `pnpm <script>` in the
 // checklist that package.json does not define (a renamed script) fails too.
+// A JOB can call a reusable workflow instead of running steps (`jobs.<id>.uses:
+// ./.github/workflows/x.yml`, #576 NF-W4M-5): its steps run as part of the
+// caller, so a local one is read and checked like a listed workflow (each file
+// once, so a cycle ends), its steps classified under its own path. A reusable
+// workflow from another repository cannot be read, so calling one fails.
 //
 // WHAT IT DOES NOT CHECK - the hand-written comments, ordering, or commands the
 // checklist adds on top of CI (e.g. the touched-specs Playwright line). The
@@ -63,7 +68,8 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 // most contributors cannot build (its commands live in e2e/agent/os/README.md).
 // Nor does telemetry-worker.yml: a path-filtered type-check of the standalone
 // Cloudflare worker, outside the root install (its command is in
-// docs/telemetry.md).
+// docs/telemetry.md). Local reusable workflows these call from a job
+// (pick-runner.yml) are followed, not listed here.
 export const WORKFLOWS = [
   '.github/workflows/ci.yml',
   '.github/workflows/e2e-smoke.yml',
@@ -89,6 +95,11 @@ export const PLUMBING_STEPS = [
   { workflow: '.github/workflows/ci.yml', step: 'sccache zero-stats (self-hosted only)', why: 'cache observability' },
   { workflow: '.github/workflows/ci.yml', step: 'sccache stats (self-hosted only)', why: 'cache observability' },
   { workflow: '.github/workflows/e2e-smoke.yml', step: 'Resolve Playwright version', why: 'browser-cache key' },
+  {
+    workflow: '.github/workflows/pick-runner.yml',
+    step: 'Choose runner - hekatrine when online & idle, else cloud',
+    why: 'runner routing for ci.yml (called as a job-level reusable workflow); it gates nothing',
+  },
 ];
 
 // Pure-shell gate steps, each paired with the checklist command that stands
@@ -231,6 +242,35 @@ export function extractSteps(yamlText) {
   }
   flush();
   return steps;
+}
+
+// Returns [{job, uses, line}] for every job that calls a reusable workflow
+// (`jobs.<id>.uses:` - a job key, at the indent `extractSteps` reads job keys
+// at), the one kind of job with no steps of its own. A step's `uses:` is an
+// action, not this, and is left to `extractSteps`.
+export function extractJobUses(yamlText) {
+  const lines = yamlText.split(/\r?\n/);
+  const calls = [];
+  let inJobs = false;
+  let job = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim() || line.trimStart().startsWith('#')) continue;
+    const ind = indentOf(line);
+    if (ind === 0) {
+      inJobs = /^jobs:\s*$/.test(line);
+      job = null;
+      continue;
+    }
+    if (!inJobs) continue;
+    if (ind === 2) {
+      job = /^\s{2}([\w-]+):\s*$/.exec(line)?.[1] ?? null;
+      continue;
+    }
+    const m = job !== null && ind === 4 ? /^\s{4}uses:\s*(.+)$/.exec(line) : null;
+    if (m) calls.push({ job, uses: unquote(m[1].replace(/\s+#.*$/, '').trim()), line: i + 1 });
+  }
+  return calls;
 }
 
 function unquote(s) {
@@ -407,7 +447,12 @@ export function checkDrift(read, opts = {}) {
   const usedActionGates = new Set();
   let gates = 0;
 
-  for (const wf of workflows) {
+  // The listed workflows, then every local reusable workflow one of their jobs
+  // calls (#576 NF-W4M-5), each read once.
+  const queue = [...workflows];
+  const queued = new Set(queue);
+  for (let qi = 0; qi < queue.length; qi++) {
+    const wf = queue[qi];
     let text;
     try {
       text = read(wf);
@@ -415,9 +460,21 @@ export function checkDrift(read, opts = {}) {
       problems.push(`${wf} unreadable: ${e.message}`);
       continue;
     }
+    const calls = extractJobUses(text);
+    for (const call of calls) {
+      const local = /^\.\/(\.github\/workflows\/[^@\s]+\.ya?ml)$/.exec(call.uses);
+      if (!local) {
+        problems.push(`${wf} (${call.job}) calls the reusable workflow "${call.uses}", which this gate cannot read to compare with the checklist - it follows only local ones (./.github/workflows/...)`);
+        continue;
+      }
+      if (!queued.has(local[1])) {
+        queued.add(local[1]);
+        queue.push(local[1]);
+      }
+    }
     const steps = extractSteps(text);
     if (steps.length === 0) {
-      problems.push(`${wf}: no run steps found - the step parser no longer understands this file`);
+      if (calls.length === 0) problems.push(`${wf}: no run steps found - the step parser no longer understands this file`);
       continue;
     }
     for (const step of steps) {
@@ -475,13 +532,13 @@ export function checkDrift(read, opts = {}) {
       problems.push(`the checklist runs "pnpm ${t[1]}", which package.json does not define (renamed or removed?)`);
     }
   }
-  return { problems, gates };
+  return { problems, gates, workflowsRead: queue.length };
 }
 
 export function main(read = (rel) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8')) {
-  const { problems, gates } = checkDrift(read);
+  const { problems, gates, workflowsRead } = checkDrift(read);
   if (problems.length === 0) {
-    console.log(`✓ pre-push checklist: all ${gates} CI gate commands in ${WORKFLOWS.length} workflows are in ${CHECKLIST_FILE}.`);
+    console.log(`✓ pre-push checklist: all ${gates} CI gate commands in ${workflowsRead} workflows (${WORKFLOWS.length} listed, the rest called from them) are in ${CHECKLIST_FILE}.`);
     return 0;
   }
   console.error(`\n✗ pre-push checklist drift - ${problems.length} problem(s):\n`);

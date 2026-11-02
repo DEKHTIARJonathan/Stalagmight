@@ -69,9 +69,10 @@ function appliedCorrection(reference: AzimuthReference | null | undefined): numb
 /**
  * Plan length of a shot: `horizontal_length_from_slope`, including its guard
  * for a tape so long the squares overflow (it scales into [0, 1] first, so the
- * length stays finite).
+ * length stays finite). Exported for the warning-resolution ghost
+ * (`resolutionPreview.ts`), which projects the same tape the same way.
  */
-function horizontalLength(length: number, dz: number): number {
+export function horizontalLength(length: number, dz: number): number {
   const lenSq = length * length - dz * dz;
   if (Number.isFinite(lenSq) || !(Number.isFinite(length) && Number.isFinite(dz))) {
     return lenSq <= 0 ? 0 : Math.sqrt(lenSq);

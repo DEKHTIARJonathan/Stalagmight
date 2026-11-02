@@ -97,27 +97,17 @@ export const compassImportCommands: MockCommandFamily = (ctx) => {
             date: survey.date,
             color: '#3b82f6',
             direction: 'in',
-            shots: legs.map((leg, index) => ({
-              // Same id stride and stable-uuid idiom as the core's sections: the
-              // real backend never produces a uuid-less shot.
-              id: sectionId * 100000 + index,
-              uuid: `mock-shot-uuid-${sectionId * 100000 + index}`,
-              azimuth_in: leg.azimuth,
-              azimuth_out: leg.azimuth,
-              length: leg.length,
-              depth_in: leg.depthIn,
-              depth_out: leg.depthOut,
-              pitch_in: null,
-              pitch_out: null,
-              left: null,
-              right: null,
-              up: null,
-              down: null,
-              comment: null,
-              kind: 'Normal',
-              marker_index: null,
-              temperature: null,
-            })),
+            // The core's shot builder (uuid included - the real backend never
+            // produces a uuid-less shot), at the same id stride as its sections.
+            shots: legs.map((leg, index) =>
+              ctx.buildShot(sectionId * 100000 + index, {
+                azimuth_in: leg.azimuth,
+                azimuth_out: leg.azimuth,
+                length: leg.length,
+                depth_in: leg.depthIn,
+                depth_out: leg.depthOut,
+              })
+            ),
           });
           sectionIds.push(sectionId);
           shotCount += legs.length;

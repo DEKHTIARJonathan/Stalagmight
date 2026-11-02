@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
-  checkDrift, extractSteps, splitCommands, normalize, scriptIndex, parseChecklist, REPO_ROOT,
+  checkDrift, extractSteps, extractJobUses, splitCommands, normalize, scriptIndex, parseChecklist, REPO_ROOT,
   PLUMBING_STEPS, SHELL_GATE_STEPS, PLUMBING_ACTIONS, ACTION_GATE_STEPS, isShellGlue,
 } from './check-prepush-checklist.mjs';
 
@@ -285,6 +285,75 @@ test('no checklist heading, no code block, or an empty block each fail', () => {
 test('a missing workflow file or one the parser reads no steps from fails', () => {
   assert.match(run({ 'CLAUDE.md': checklist(['pnpm lint:foo']) }).problems[0], /unreadable/);
   assert.match(run({ [WF]: 'name: x\n', 'CLAUDE.md': checklist(['pnpm lint:foo']) }).problems[0], /no run steps found/);
+});
+
+// --- job-level reusable workflows (#576 NF-W4M-5) ------------------------------------------------
+
+// A job that runs no steps of its own: it CALLS another workflow, whose steps run
+// as part of this one (`jobs.<id>.uses:`, how ci.yml calls pick-runner.yml).
+const REUSABLE = '.github/workflows/reusable.yml';
+const caller = (uses) => `name: Caller
+on:
+  pull_request:
+jobs:
+  pick:
+    uses: ${uses}
+    with:
+      mode: fast
+  check:
+    needs: pick
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: pnpm lint:foo
+`;
+const reusable = (extraJobs = '') => `name: Reusable
+on:
+  workflow_call:
+jobs:
+  inner:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pnpm typecheck:agent
+${extraJobs}`;
+
+test('a gate in a local reusable workflow a job calls is required too', () => {
+  const tree = { [WF]: caller('./.github/workflows/reusable.yml'), [REUSABLE]: reusable() };
+  const r = run({ ...tree, 'CLAUDE.md': checklist(['pnpm lint:foo']) });
+  assert.equal(r.problems.length, 1, r.problems.join('\n'));
+  assert.match(r.problems[0], /missing from the checklist: pnpm typecheck:agent .*reusable\.yml/);
+  const ok = run({ ...tree, 'CLAUDE.md': checklist(['pnpm lint:foo', 'pnpm typecheck:agent']) });
+  assert.deepEqual(ok.problems, []);
+  assert.equal(ok.gates, 2);
+});
+
+test('a reusable workflow called back (a cycle) is read once, and its steps classify under its own path', () => {
+  const back = '  again:\n    uses: ./.github/workflows/fixture.yml\n';
+  const tree = { [WF]: caller('./.github/workflows/reusable.yml'), [REUSABLE]: reusable(back) };
+  const r = run({ ...tree, 'CLAUDE.md': checklist(['pnpm lint:foo', 'pnpm typecheck:agent']) });
+  assert.deepEqual(r.problems, []);
+  assert.equal(r.gates, 2);
+  // A classification row names the reusable file, not the caller.
+  const shell = '      - name: Route\n        run: echo routed';
+  const routed = { [WF]: caller('./.github/workflows/reusable.yml'), [REUSABLE]: reusable().replace('      - run: pnpm typecheck:agent', shell) };
+  assert.match(run({ ...routed, 'CLAUDE.md': checklist(['pnpm lint:foo']) }).problems[0] ?? '', /reusable\.yml \(inner\) step "Route" runs no recognised gate command/);
+  const rows = [{ workflow: REUSABLE, step: 'Route', why: 'x' }];
+  assert.deepEqual(run({ ...routed, 'CLAUDE.md': checklist(['pnpm lint:foo']) }, { plumbingSteps: rows }).problems, []);
+});
+
+test('a reusable workflow from another repository, or a missing local one, fails', () => {
+  const remote = run({ [WF]: caller('octo/ci/.github/workflows/x.yml@v1'), 'CLAUDE.md': checklist(['pnpm lint:foo']) });
+  assert.equal(remote.problems.length, 1, remote.problems.join('\n'));
+  assert.match(remote.problems[0], /calls the reusable workflow "octo\/ci\/\.github\/workflows\/x\.yml@v1", which this gate cannot read/);
+  const gone = run({ [WF]: caller('./.github/workflows/gone.yml'), 'CLAUDE.md': checklist(['pnpm lint:foo']) });
+  assert.equal(gone.problems.length, 1, gone.problems.join('\n'));
+  assert.match(gone.problems[0], /\.github\/workflows\/gone\.yml unreadable/);
+});
+
+test('extractJobUses reads job-level uses only, not a step-level one', () => {
+  assert.deepEqual(extractJobUses(caller('"./.github/workflows/reusable.yml" # pinned')), [
+    { job: 'pick', uses: './.github/workflows/reusable.yml', line: 6 },
+  ]);
 });
 
 // --- parser units -----------------------------------------------------------------------------
