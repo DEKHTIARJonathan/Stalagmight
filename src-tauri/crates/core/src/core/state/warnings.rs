@@ -362,10 +362,16 @@ impl AppState {
     /// pushes it - otherwise it is silently dropped on the next pull. The low-level
     /// [`Self::save_resolved_warning`] accessor stays ungated for the load-time backfill
     /// and tests.
+    ///
+    /// [#576 RV5-1] Between commands, under `command_lock`: a save carries the
+    /// ignores from the open file into a fresh temp file and renames it over the
+    /// open one, so an ignore written through the open handle in between was
+    /// lost with `Ok` returned. Never call it while holding `command_lock`.
     pub fn save_resolved_warning_gated(
         &self,
         warning: &crate::persistence::ResolvedWarning,
     ) -> Result<(), String> {
+        let _between_commands = self.hold_commands();
         self.guard_mutation("Resolve warning")
             .map_err(|f| f.error.unwrap_or_default())?;
         self.save_resolved_warning(warning)
@@ -377,7 +383,8 @@ impl AppState {
 
     /// User-facing **unresolve** (the `unresolve_warning` command's persistence step):
     /// the gated + dirtying counterpart of [`Self::delete_resolved_warning`], for the
-    /// same reason as [`Self::save_resolved_warning_gated`].
+    /// same reason as [`Self::save_resolved_warning_gated`], and under
+    /// `command_lock` like it (#576 RV5-1).
     pub fn delete_resolved_warning_gated(
         &self,
         section_id: u32,
@@ -385,6 +392,7 @@ impl AppState {
         warning_code: &str,
         shot_uuid: Option<&str>,
     ) -> Result<(), String> {
+        let _between_commands = self.hold_commands();
         self.guard_mutation("Unresolve warning")
             .map_err(|f| f.error.unwrap_or_default())?;
         self.delete_resolved_warning(section_id, shot_id, warning_code, shot_uuid)

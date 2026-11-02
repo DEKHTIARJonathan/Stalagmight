@@ -63,7 +63,10 @@ Commands now run **concurrently**, which makes two rules explicit:
 
 - **Mutations stay serialized.** Every project mutation (`execute`, undo/redo, the
   imports, repair, settings, save, the project-slot commits) takes `command_lock`
-  for its whole span, as before - see [undo-redo.md](undo-redo.md#lock-ordering). The
+  for its whole span, as before - see [undo-redo.md](undo-redo.md#lock-ordering). So
+  does a write into a side table a save carries (a display setting, an Ignore or
+  Un-ignore): the save rebuilds the file from a snapshot of those tables and renames
+  it over the open one, so a write landing in between was lost (#576 RV5-1). The
   frontend additionally issues its edits one at a time through its mutation queue
   (`store/mutationQueue.ts`), so they apply in the order the user made them.
 - **A read of the project is a settled read.** A command mutates the project and

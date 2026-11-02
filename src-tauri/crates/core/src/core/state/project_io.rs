@@ -157,6 +157,15 @@ fn classify_save_failure(target: &Path, err: &anyhow::Error) -> SaveFailureKind 
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// [#576 RV5-1] Test seam: run once on the saving thread when the temp file is
+    /// complete and closed and before it is renamed over the destination, so a
+    /// test can land another write in exactly that window.
+    pub(super) static AFTER_TEMP_WRITTEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Build a save-failure `CommandResult`, tagging it with the marker that tells
 /// the frontend which remediation to show, and logging the full error chain -
 /// the one place every failing save passes through, so a failure that only ever
@@ -703,6 +712,11 @@ impl AppState {
 
         // Close the temp database before renaming
         drop(db);
+
+        #[cfg(test)]
+        if let Some(hook) = AFTER_TEMP_WRITTEN.with(|hook| hook.borrow_mut().take()) {
+            hook();
+        }
 
         if mode == SaveMode::DetachedCopy {
             // The destination is provably NOT the live file (refused above), so

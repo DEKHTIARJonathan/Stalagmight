@@ -19,7 +19,16 @@ impl AppState {
     }
 
     /// Save a display setting to database or in-memory cache
+    ///
+    /// [#576 RV5-1] Between commands, under `command_lock`. A save snapshots the
+    /// display settings from the open file (or this cache), writes a fresh temp
+    /// file and renames it over the open one, all under `command_lock`; a setting
+    /// written through the open handle in between went into the file the rename
+    /// replaced (and one written to the cache was cleared by the save), lost with
+    /// `Ok` returned. Holding the lock puts the write wholly before or after the
+    /// save. Never call it while holding `command_lock`.
     pub fn save_display_setting(&self, key: &str, value: &str) -> Result<()> {
+        let _between_commands = self.hold_commands();
         // Try database first
         let db_guard = self.database.lock();
         if let Some(db) = db_guard.as_ref() {

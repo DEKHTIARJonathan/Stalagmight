@@ -469,6 +469,16 @@ mod session_commit_tests;
 mod shot_uuid_tests;
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod side_table_write_during_save_tests;
+#[cfg(test)]
+#[expect(
     clippy::print_stdout,
     reason = "test module: the printed keys are the evidence a run captures"
 )]
