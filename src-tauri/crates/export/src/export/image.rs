@@ -48,6 +48,9 @@ use usvg::{Options, Tree};
 use super::atomic::write_atomic_bytes;
 use crate::models::{Project, StationRef};
 
+mod label_index;
+use label_index::{LabelBox, PlacedLabels, ShotEnds};
+
 /// Output image format.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "lowercase")]
@@ -1250,7 +1253,10 @@ pub fn generate_svg_string_with_stations(
     // stars, then appended to by pen-distance labels (Pass 3) and station
     // labels (Pass 4) so all three mutually dodge. Only seeded when at least
     // one label pass will read it (skip the filter + allocation otherwise).
-    let mut placed: Vec<(f64, f64, f64, f64)> = Vec::new();
+    //
+    // A grid, not a list (#576 B22): every candidate used to be tested
+    // against every box placed so far, quadratic in the label count.
+    let mut placed = PlacedLabels::new(px(PEN_LABEL_PX) * 4.0);
     if options.show_penetration_labels
         || options.show_station_labels
         || options.show_section_names
@@ -1261,7 +1267,7 @@ pub fn generate_svg_string_with_stations(
         let star_r = px(STAR_OUTER_PX);
         for &i in &zero_datum_indices {
             let s = &stations[i];
-            placed.push((
+            placed.insert((
                 s.coordinates.x - star_r,
                 -s.coordinates.y - star_r,
                 star_r * 2.0,
@@ -1269,6 +1275,18 @@ pub fn generate_svg_string_with_stations(
             ));
         }
     }
+
+    // Which drawn shots leave each point, for the passes that aim a label
+    // into the open wedge at a station. Indexed once (#576 B22) instead of
+    // scanning every shot of the survey per labelled station.
+    let shot_ends = if options.show_penetration_labels
+        || options.show_station_labels
+        || options.show_station_comments
+    {
+        ShotEnds::new(project, &stations, &station_index)
+    } else {
+        ShotEnds::default()
+    };
 
     // Pass 3: penetration-distance labels at each thick segment's deepest
     // station. Only attempted when the project has at least one zero datum
@@ -1347,32 +1365,11 @@ pub fn generate_svg_string_with_stations(
                 // itself. Fallback placements rotate around the primary
                 // in 45° steps and are only reached when another label
                 // (or the zero-datum star) is already occupying the spot.
-                let primary = label_open_space_angle(si, &stations, project, &station_index);
-                let mut chosen: Option<(f64, f64, (f64, f64, f64, f64))> = None;
-                let mut candidate_angles: Vec<f64> = Vec::with_capacity(9);
-                candidate_angles.push(primary);
-                for k in 1..=4 {
-                    candidate_angles.push(primary + (k as f64) * quarter_turn);
-                    candidate_angles.push(primary - (k as f64) * quarter_turn);
-                }
-                for angle in candidate_angles {
-                    let lx = sx + offset * angle.cos();
-                    let ly = sy + offset * angle.sin();
-                    let bb = (lx - text_w * 0.5, ly - text_h * 0.5, text_w, text_h);
-                    let overlap = placed.iter().any(|p| {
-                        bb.0 < p.0 + p.2
-                            && bb.0 + bb.2 > p.0
-                            && bb.1 < p.1 + p.3
-                            && bb.1 + bb.3 > p.1
-                    });
-                    if !overlap {
-                        chosen = Some((lx, ly, bb));
-                        break;
-                    }
-                }
-                if let Some((lx, ly, bb)) = chosen {
+                let primary = shot_ends.open_space_angle(stations[si].coordinates);
+                let offsets = radial_offsets(primary, quarter_turn, offset);
+                if let Some((lx, ly, bb)) = place_near(sx, sy, &offsets, text_w, text_h, &placed) {
                     let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
-                    placed.push(bb);
+                    placed.insert(bb);
                 }
                 // If every candidate collided, drop the label rather
                 // than stack it on top of another - better to lose one
@@ -1477,13 +1474,13 @@ pub fn generate_svg_string_with_stations(
                     let text = stations[si].station_ref.station_index.to_string();
                     let text_w = char_w * text.chars().count() as f64;
                     let text_h = label_size;
-                    let primary = label_open_space_angle(si, &stations, project, &station_index);
+                    let primary = shot_ends.open_space_angle(stations[si].coordinates);
                     let offsets = radial_offsets(primary, quarter_turn, offset);
                     if let Some((lx, ly, bb)) =
                         place_near(sx, sy, &offsets, text_w, text_h, &placed)
                     {
                         let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
-                        placed.push(bb);
+                        placed.insert(bb);
                     }
                 }
                 svg.push_str("</g>\n");
@@ -1507,7 +1504,7 @@ pub fn generate_svg_string_with_stations(
                 let sy = -stations[i].coordinates.y;
                 let text_w = char_w * text.chars().count() as f64;
                 let text_h = label_size;
-                let primary = label_open_space_angle(i, &stations, project, &station_index);
+                let primary = shot_ends.open_space_angle(stations[i].coordinates);
                 let offsets = radial_offsets(primary, quarter_turn, offset);
                 if let Some((lx, ly, bb)) = place_near(sx, sy, &offsets, text_w, text_h, &placed) {
                     if !opened {
@@ -1524,7 +1521,7 @@ pub fn generate_svg_string_with_stations(
                         r#"<text x="{lx:.2}" y="{ly:.2}">{t}</text>"#,
                         t = escape_xml_text(&text),
                     );
-                    placed.push(bb);
+                    placed.insert(bb);
                 }
             }
             if opened {
@@ -1595,7 +1592,7 @@ pub fn generate_svg_string_with_stations(
                     r#"<text x="{lx:.2}" y="{ly:.2}">{t}</text>"#,
                     t = escape_xml_text(&text),
                 );
-                placed.push(bb);
+                placed.insert(bb);
             }
         }
         if opened {
@@ -1682,7 +1679,7 @@ pub fn generate_svg_string_with_stations(
                         opened = true;
                     }
                     let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
-                    placed.push(bb);
+                    placed.insert(bb);
                 }
             }
         }
@@ -1736,7 +1733,7 @@ pub fn generate_svg_string_with_stations(
                         r#"<text x="{lx:.2}" y="{ly:.2}">{t}</text>"#,
                         t = escape_xml_text(&text),
                     );
-                    placed.push(bb);
+                    placed.insert(bb);
                 }
             }
         }
@@ -1810,105 +1807,26 @@ fn trim_polyline_end(points: &mut Vec<(f64, f64)>, from_start: bool, mut dist: f
     }
 }
 
-/// Return the angle (in screen coordinates - y axis flipped, same frame the
-/// SVG itself uses) that points into the largest empty wedge between the
-/// *drawn* (non-reference) shot directions incident to `station_idx`.
-///
-/// Used to pick a label-placement direction that is guaranteed not to
-/// overlap any line at the labelled station, no matter how the
-/// surrounding passages bend. Stations physically colocated with
-/// `station_idx` (via station_merges or aligned closures, detected here
-/// by coordinate equality) contribute their incident shots too - merged
-/// stations are the same point, so a shot leaving the merged twin still
-/// leaves *this* station.
-///
-/// If no drawn shot touches the station, returns `FRAC_PI_2` (screen
-/// down) as an arbitrary but deterministic fallback.
-fn label_open_space_angle(
-    station_idx: usize,
-    stations: &[crate::models::Station],
-    project: &Project,
-    station_index: &HashMap<StationRef, usize>,
-) -> f64 {
-    let si_pos = stations[station_idx].coordinates;
-    let eps = 1e-6_f64;
-    let mut dirs: Vec<f64> = Vec::new();
-    let push_dir = |dirs: &mut Vec<f64>, sx: f64, sy: f64, ox: f64, oy: f64| {
-        let dx = ox - sx;
-        // Screen y is flipped relative to world y.
-        let dy = -(oy - sy);
-        if dx.abs() > eps || dy.abs() > eps {
-            dirs.push(dy.atan2(dx));
-        }
-    };
-    for section in &project.sections {
-        for (i, shot) in section.shots.iter().enumerate() {
-            if shot.kind.is_virtual() {
-                continue;
-            }
-            let from_ref = StationRef::new(section.id, i as u32);
-            let to_ref = StationRef::new(section.id, (i + 1) as u32);
-            let (Some(&fi), Some(&ti)) = (station_index.get(&from_ref), station_index.get(&to_ref))
-            else {
-                continue;
-            };
-            let from_pos = stations[fi].coordinates;
-            let to_pos = stations[ti].coordinates;
-            if (from_pos.x - si_pos.x).abs() < eps && (from_pos.y - si_pos.y).abs() < eps {
-                push_dir(&mut dirs, si_pos.x, si_pos.y, to_pos.x, to_pos.y);
-            }
-            if (to_pos.x - si_pos.x).abs() < eps && (to_pos.y - si_pos.y).abs() < eps {
-                push_dir(&mut dirs, si_pos.x, si_pos.y, from_pos.x, from_pos.y);
-            }
-        }
-    }
-    if dirs.is_empty() {
-        return std::f64::consts::FRAC_PI_2;
-    }
-    dirs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let two_pi = std::f64::consts::TAU;
-    let n = dirs.len();
-    let mut best_gap = -1.0_f64;
-    let mut best_mid = 0.0_f64;
-    for i in 0..n {
-        let a = dirs[i];
-        let b = if i + 1 < n {
-            dirs[i + 1]
-        } else {
-            dirs[0] + two_pi
-        };
-        let gap = b - a;
-        if gap > best_gap {
-            best_gap = gap;
-            best_mid = a + gap * 0.5;
-        }
-    }
-    best_mid
-}
-
 /// Returns the first candidate `(x, y)` in `offsets` (each a `(dx, dy)`
 /// relative to `(hub_x, hub_y)`) whose text bounding box doesn't collide
 /// with `placed`, along with that box. `None` if every candidate collided -
 /// callers drop the label rather than stack it on top of another. Shared by
 /// every label pass that dodges collisions from a single anchor point
-/// (station labels/comments, section names, shot data/comments); Pass 3
-/// (penetration labels) predates this helper and keeps its own inline copy.
+/// (penetration labels, station labels/comments, section names, shot
+/// data/comments).
 fn place_near(
     hub_x: f64,
     hub_y: f64,
     offsets: &[(f64, f64)],
     text_w: f64,
     text_h: f64,
-    placed: &[(f64, f64, f64, f64)],
-) -> Option<(f64, f64, (f64, f64, f64, f64))> {
+    placed: &PlacedLabels,
+) -> Option<(f64, f64, LabelBox)> {
     for &(dx, dy) in offsets {
         let lx = hub_x + dx;
         let ly = hub_y + dy;
         let bb = (lx - text_w * 0.5, ly - text_h * 0.5, text_w, text_h);
-        let overlap = placed.iter().any(|p| {
-            bb.0 < p.0 + p.2 && bb.0 + bb.2 > p.0 && bb.1 < p.1 + p.3 && bb.1 + bb.3 > p.1
-        });
-        if !overlap {
+        if !placed.overlaps(bb) {
             return Some((lx, ly, bb));
         }
     }
