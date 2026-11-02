@@ -33,6 +33,15 @@ pub use stalagmight_telemetry::telemetry;
 #[cfg(test)]
 pub use stalagmight_core::test_helpers;
 pub mod tile_attribution;
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod entry_point_tests;
 pub use stalagmight_core::tile_providers;
 pub use stalagmight_persistence::tilemap_cache;
 /// Linux-only WebKit memory-pressure wiring (see the module docs and the
@@ -59,13 +68,15 @@ use stalagmight_tiles::{
 // emission, at the call site in the tile protocol handler below.
 pub use stalagmight_core::tile_stats::{TileFetchStats, TileFetchStatsSnapshot};
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// How long the app-exit handler waits for a best-effort SpeleoDB lock release
 /// before exiting anyway (fix M2). Long enough for a healthy round trip, short
 /// enough that a hung / unreachable server can't noticeably freeze quit; the
 /// server-side mutex times out on its own if the release doesn't land.
 const EXIT_LOCK_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 
+// The mobile entry point is `run()` itself (#576 NF-W4T-2): the attribute sat on
+// the constant above, which a mobile build would have tried to export instead.
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Export the WebKit memory-pressure environment as the FIRST thing `run()`
     // does, while the process is still genuinely single-threaded: the `set_var`
