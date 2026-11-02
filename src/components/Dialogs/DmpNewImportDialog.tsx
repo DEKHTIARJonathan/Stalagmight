@@ -298,6 +298,7 @@ export function buildBatchImport(
   alreadyImported?: Map<number, number>,
   deferImportConnectedTo?: Set<number>,
   resolvedTheme = 'dark',
+  discarded?: ReadonlySet<number>,
 ): {
   configs: BackendImportSectionConfig[];
   unreachable: number[];
@@ -314,6 +315,17 @@ export function buildBatchImport(
   const deferredImportSet = deferImportConnectedTo && deferImportConnectedTo.size > 0
     ? collectImportConnectedComponents(deferImportConnectedTo, adjacency)
     : new Set<number>();
+  // What reachability may not pass through: the deferred groups, and the sections the
+  // user DISCARDED in the wizard (#576 DMP-DISCARD, decided: "A discarded section is
+  // never imported by a later placement in the same run"). A discard used to be only a
+  // filter on the late import's re-queue, so once a later placement connected to a
+  // discarded section - placing the section whose one link led to it - the rebuilt
+  // batch reached it and imported it. A discarded section is never an anchor, never
+  // reached, and so never emitted; it stays in `unreachable`, where the late import
+  // drops it again rather than re-queueing it.
+  const blocked = discarded && discarded.size > 0
+    ? new Set<number>([...deferredImportSet, ...discarded])
+    : deferredImportSet;
 
   // Direct placement map: section index → ImportPlacement (for manual_placing phase)
   const directPlacementMap = new Map<number, ImportPlacement>();
@@ -327,19 +339,19 @@ export function buildBatchImport(
   const anchored = new Set<number>();
   if (zeroDatumIndex != null) anchored.add(zeroDatumIndex);
   for (const c of allConnections) {
-    if (c.targetType === 'existing' && !deferredImportSet.has(c.importSectionIndex)) {
+    if (c.targetType === 'existing' && !blocked.has(c.importSectionIndex)) {
       anchored.add(c.importSectionIndex);
     }
   }
   // Direct placements also anchor their sections
   for (const dp of directPlacements ?? []) {
-    if (!deferredImportSet.has(dp.anchorSectionIndex)) {
+    if (!blocked.has(dp.anchorSectionIndex)) {
       anchored.add(dp.anchorSectionIndex);
     }
   }
 
   // BFS from anchored sections
-  let reachableOrder = bfsReachable(anchored, adjacency, deferredImportSet);
+  let reachableOrder = bfsReachable(anchored, adjacency, blocked);
   let reachableSet = new Set(reachableOrder);
 
   // Find disconnected components with confirmed connections but no anchor.
@@ -361,7 +373,7 @@ export function buildBatchImport(
           const node = queue.shift()!;
           component.push(node);
           for (const edge of adjacency.get(node) ?? []) {
-            if (!deferredImportSet.has(edge.neighbor) && !visited.has(edge.neighbor) && !reachableSet.has(edge.neighbor)) {
+            if (!blocked.has(edge.neighbor) && !visited.has(edge.neighbor) && !reachableSet.has(edge.neighbor)) {
               visited.add(edge.neighbor);
               queue.push(edge.neighbor);
             }
@@ -376,7 +388,7 @@ export function buildBatchImport(
             s.targetType === 'existing' &&
             s.existingSectionId != null &&
             componentSet.has(s.importSectionIndex) &&
-            !deferredImportSet.has(s.importSectionIndex)
+            !blocked.has(s.importSectionIndex)
           ) {
             if (!bestExisting || s.score > bestExisting.score) {
               bestExisting = s;
@@ -402,7 +414,7 @@ export function buildBatchImport(
       if (anchored.size > reachableSet.size) {
         // Rebuild adjacency with new connections
         const newAdjacency = buildAdjacency(allConnections);
-        reachableOrder = bfsReachable(anchored, newAdjacency, deferredImportSet);
+        reachableOrder = bfsReachable(anchored, newAdjacency, blocked);
         reachableSet = new Set(reachableOrder);
       }
     }
@@ -1879,6 +1891,7 @@ export default function DmpNewImportDialog({
           undefined,
           skippedIndicesRef.current,
           resolvedTheme,
+          discardedIndicesRef.current,
         );
         reportEmptySections(batch.emptySections);
         return { ...batch, ...(existingShotUpdates ? { existingShotUpdates } : {}) };
@@ -2055,6 +2068,7 @@ export default function DmpNewImportDialog({
           earlyImported,
           undefined,
           resolvedTheme,
+          discardedIndicesRef.current,
         );
         reportEmptySections(batch.emptySections);
         return batch;
@@ -2733,6 +2747,7 @@ export default function DmpNewImportDialog({
           earlyImported,
           undefined,
           resolvedTheme,
+          discardedIndicesRef.current,
         );
         reportEmptySections(batch.emptySections);
         return batch;

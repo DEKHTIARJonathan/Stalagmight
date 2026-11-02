@@ -120,10 +120,50 @@ describe('DMP wizard: a second late import (#576 NF-DMPS-2)', () => {
     await waitFor(() => expect(onComplete).toHaveBeenCalled());
 
     // A (late import #1) and B (the dropped segment) each reached the backend
-    // once. (What late import #2 does with C - discarded, but now reachable
-    // through B's connection - is a separate question, not pinned here.)
+    // once. (What late import #2 does with C is pinned by the next case.)
     const sent = batches.flat();
     expect(sent.filter((name) => name === 'B')).toHaveLength(1);
     expect(sent.filter((name) => name === 'A')).toHaveLength(1);
+  });
+
+  /**
+   * #576 DMP-DISCARD / NF-W5L-1, decided: "A discarded section is never imported by a
+   * later placement in the same run". C was discarded, but placing B (whose one
+   * connection leads to C) made C reachable again, and late import #2 - rebuilt from
+   * every placement so far - imported it.
+   */
+  it('never imports the section the user discarded, even once a placement reaches it', async () => {
+    const first = renderWizard(
+      savedState({
+        directPlacements: [
+          {
+            anchorSectionIndex: 0,
+            anchorStationIndex: 0,
+            placement: { type: 'from_existing', import_station: 0, existing_station: { section_id: 3, station_index: 0 } },
+          },
+        ],
+        connections: [
+          { importSectionIndex: 1, importStationIndex: 0, targetType: 'importing', targetImportIndex: 2, targetImportStationIndex: 0 },
+        ],
+        discardedIndices: [2],
+        segmentQueue: [],
+      }),
+      { selected: [0, 1, 2] },
+    );
+    await waitFor(() => expect(useUIStore.getState().placementMode).not.toBeNull());
+    await act(async () => {
+      useUIStore.getState().confirmPlacement()!.onComplete!({
+        position: { x: 1, y: 2, z: 0 },
+        snappedToStation: null,
+      });
+    });
+    await waitFor(() => expect(useUIStore.getState().activeDialog).toBe('dmp-import-new'));
+    first.unmount();
+    const onComplete = vi.fn();
+    renderReopenedWizard({ onComplete });
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+
+    console.log('[DMP-DISCARD] import_sections batches:', JSON.stringify(batches));
+    expect(batches.flat()).not.toContain('C');
   });
 });
