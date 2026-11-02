@@ -11,7 +11,6 @@ import { selectActiveSurveyData } from '../../store/geometrySelectors';
 import { surveyDataFromLegacy } from '../../types/survey-data';
 import { hasLiveStyle } from './mapUtils';
 import { mapCursorFor } from './mapCursor';
-import { buildGhostFeatures } from './surveyLayer/ghostFeatures';
 import {
   normalizeDepthRange,
   resolveShotDisplayColor,
@@ -91,6 +90,12 @@ import {
   updateGhostHitboxLayers,
   updateGhostVisualLayers,
 } from './surveyLayer/auxiliaryLayers';
+import {
+  applyClosureOpacity,
+  applyGasRoute,
+  applyGhostSection,
+  publishLoopClosures,
+} from './surveyLayer/auxiliaryData';
 
 /** Whether replacing dim set `prev` with `next` changes nothing. */
 function sameOrBothEmpty(next: ReadonlySet<number>, prev: ReadonlySet<number>): boolean {
@@ -1405,41 +1410,7 @@ export default class SurveyLayer {
    */
   setGasRoute(legs: RouteLeg[], colors: string[] = []): void {
     this.gasRouteLegs = legs.map((leg, i) => ({ ...leg, color: colors[i] ?? '#22d3ee' }));
-    this.applyGasRoute();
-  }
-
-  /** Build one LineString per route leg (with `isJump` flagged) from `cachedStations` and push them
-   *  to the gas-route source. No-op without a live style or the source. */
-  private applyGasRoute(): void {
-    if (!this.map || !hasLiveStyle(this.map)) return;
-    const source = this.map.getSource(AUX_IDS.sourceId + '-gas-route');
-    if (!source || source.type !== 'geojson') return;
-    const geojsonSource = source as maplibregl.GeoJSONSource;
-    // Index the stations once (keyed by section:index) so the per-leg endpoint lookups are O(1) -
-    // the route can be long and this re-runs after every setData() rebuild, so a linear scan per
-    // endpoint would be quadratic on large surveys.
-    const coordByRef = new Map<string, [number, number]>();
-    for (const s of this.cachedStations) {
-      coordByRef.set(
-        `${s.station_ref.section_id}:${s.station_ref.station_index}`,
-        metersToMapCoords(s.coordinates.x, s.coordinates.y, this.gpsOrigin) as [number, number],
-      );
-    }
-    const coordFor = (ref: StationRef): [number, number] | null =>
-      coordByRef.get(`${ref.section_id}:${ref.station_index}`) ?? null;
-    const features = this.gasRouteLegs.flatMap((leg) => {
-      const from = coordFor(leg.from);
-      const to = coordFor(leg.to);
-      if (!from || !to) return [];
-      return [
-        {
-          type: 'Feature' as const,
-          geometry: { type: 'LineString' as const, coordinates: [from, to] },
-          properties: { isJump: leg.is_jump, segmentColor: leg.color },
-        },
-      ];
-    });
-    geojsonSource.setData({ type: 'FeatureCollection', features });
+    applyGasRoute(this.map, this.gasRouteLegs, this.cachedStations, this.gpsOrigin);
   }
 
   /**
@@ -2062,49 +2033,9 @@ export default class SurveyLayer {
     this.customLabels?.setDimming(dim);
   }
 
-  /**
-   * Loop-closure line opacity: 0.25 for a closure either move-tool rule dims - both
-   * endpoints in anchored sections (Move Segment), or either endpoint immovable
-   * (Move Station / Move Shot) - and 0.8 otherwise. ONE write from both sets: the
-   * two rules used to write this paint property separately, so whichever ran last
-   * erased the other's dimming - e.g. leaving Move Segment for Move Station cleared
-   * the anchored set a render after the immovable set landed, and its plain 0.8
-   * undimmed the immovable closures (#576 NF-MAP-4).
-   */
+  /** The one combined loop-closure dim write (see applyClosureOpacity, #576 NF-MAP-4). */
   private updateClosureOpacity(): void {
-    // No style during a lost WebGL context; replayAfterContextRestore re-applies.
-    if (!hasLiveStyle(this.map)) return;
-    const dimRules: maplibregl.ExpressionSpecification[] = [];
-    if (this.anchoredSectionIds.size > 0) {
-      const idsArray = [...this.anchoredSectionIds];
-      // Both endpoints must be anchored to gray out the closure line
-      dimRules.push(['all',
-        ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
-        ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
-      ] as maplibregl.ExpressionSpecification);
-    }
-    if (this.immovableStationFeatureIds.size > 0) {
-      // Station key strings matching the closure feature "sectionId:stationIndex" format
-      const immovableKeyStrings: string[] = [];
-      for (const fid of this.immovableStationFeatureIds) {
-        const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
-        const stationIndex = fid % FEATURE_ID_STRIDE;
-        immovableKeyStrings.push(`${sectionId}:${stationIndex}`);
-      }
-      // Dim closure if either endpoint is immovable
-      dimRules.push(['any',
-        ['in', ['get', 'stationA'], ['literal', immovableKeyStrings]],
-        ['in', ['get', 'stationB'], ['literal', immovableKeyStrings]],
-      ] as maplibregl.ExpressionSpecification);
-    }
-    if (dimRules.length === 0) {
-      this.map.setPaintProperty(AUX_IDS.loopClosuresLayerId, 'line-opacity', 0.8);
-      return;
-    }
-    const dimmed = dimRules.length === 1 ? dimRules[0]! : (['any', ...dimRules] as maplibregl.ExpressionSpecification);
-    this.map.setPaintProperty(AUX_IDS.loopClosuresLayerId, 'line-opacity', [
-      'case', dimmed, 0.25, 0.8,
-    ] as maplibregl.ExpressionSpecification);
+    applyClosureOpacity(this.map, this.anchoredSectionIds, this.immovableStationFeatureIds);
   }
 
   /**
@@ -2784,35 +2715,7 @@ export default class SurveyLayer {
    * Pass null to clear the ghost section.
    */
   setGhostSection(data: GhostSectionData | null) {
-    const { shotFeatures, stationFeatures, mergeStationFeatures } = buildGhostFeatures(
-      data,
-      this.gpsOrigin
-    );
-
-    // Update sources
-    const ghostShotsSource = this.map.getSource(AUX_IDS.sourceId + '-ghost-shots');
-    if (ghostShotsSource && 'setData' in ghostShotsSource) {
-      (ghostShotsSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features: shotFeatures,
-      });
-    }
-
-    const ghostStationsSource = this.map.getSource(AUX_IDS.sourceId + '-ghost-stations');
-    if (ghostStationsSource && 'setData' in ghostStationsSource) {
-      (ghostStationsSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features: stationFeatures,
-      });
-    }
-
-    const ghostMergeSource = this.map.getSource(AUX_IDS.sourceId + '-ghost-merge');
-    if (ghostMergeSource && 'setData' in ghostMergeSource) {
-      (ghostMergeSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features: mergeStationFeatures,
-      });
-    }
+    applyGhostSection(this.map, data, this.gpsOrigin);
   }
 
   /**
@@ -3061,7 +2964,7 @@ export default class SurveyLayer {
     // ride their own small GeoJSON source (not part of the custom buffers).
     this.syncCustomRender(surveyData);
     this.syncCustomMeasurePath();
-    this.publishLoopClosures();
+    publishLoopClosures(this.map, this.cachedLoopClosures, this.geoIndex);
 
     // Delete straggler: a selected / hovered / snapped feature this flush removed
     // must drop from the interact overlay now (its custom geometry already vanished
@@ -3092,7 +2995,7 @@ export default class SurveyLayer {
     if (this.dragCommitPending) this.clearDragOverlayFollow();
     this.updateVisualState();
     // Gas route highlight (#233): re-push the route (coords come from cachedStations).
-    if (this.gasRouteLegs.length > 0) this.applyGasRoute();
+    if (this.gasRouteLegs.length > 0) applyGasRoute(this.map, this.gasRouteLegs, this.cachedStations, this.gpsOrigin);
 
     // Fire the one-shot callback (drag commit restores its filters in the same
     // synchronous block that installed the geometry, so there is no paint gap).
@@ -3101,35 +3004,6 @@ export default class SurveyLayer {
       this.onNextUpdateCallback = null;
       cb();
     }
-  }
-
-  /** Publish the loop-closure indicator lines to their GeoJSON source from the
-   *  cached closures + the geometry index. The custom renderer draws everything
-   *  else; loop closures stay a small stock GeoJSON overlay, like the gas route. */
-  private publishLoopClosures(): void {
-    const source = this.map.getSource(AUX_IDS.sourceId + '-loop-closures');
-    if (!source || source.type !== 'geojson' || !this.geoIndex) return;
-    const features: GeoJSON.Feature[] = [];
-    for (const lc of this.cachedLoopClosures ?? []) {
-      const a = this.geoIndex.stationCoords(lc.station_a);
-      const b = this.geoIndex.stationCoords(lc.station_b);
-      if (!a || !b) continue;
-      features.push({
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: [a, b] },
-        properties: {
-          stationA: `${lc.station_a.section_id}:${lc.station_a.station_index}`,
-          stationB: `${lc.station_b.section_id}:${lc.station_b.station_index}`,
-          sectionIdA: lc.station_a.section_id,
-          sectionIdB: lc.station_b.section_id,
-          errorPercentage: lc.error_percentage,
-          misclosureDistance: lc.misclosure_distance,
-          pathLength: lc.path_length,
-          color: getErrorColor(lc.error_percentage),
-        },
-      });
-    }
-    (source as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features });
   }
 
   /**
