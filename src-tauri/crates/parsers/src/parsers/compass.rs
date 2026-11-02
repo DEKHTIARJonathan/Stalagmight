@@ -3723,13 +3723,6 @@ mod tests {
         );
     }
 
-    /// #576 B3: a survey that closes a loop on itself (A1 -> A2 -> A3 -> A1)
-    /// is one chain whose last station repeats its first. That repeat is the
-    /// same physical station, so it needs a closure; the Compass converter
-    /// skipped every station of the chain owning the canonical occurrence and
-    /// emitted none, so the misclosure was never reported or distributed. The
-    /// Walls converter had the same bug, fixed and pinned by
-    /// `contiguous_self_loop_emits_closure`.
     /// #576 NF-W2C-1: three surveys share J and E3 - two independent loops, so
     /// exactly two closures. The spanning tree merges Main's J onto Side's J
     /// and Loop's E3 onto Side's E3. Closures were decided per occurrence
@@ -3805,6 +3798,13 @@ mod tests {
         assert_eq!(pairs, ["1:3->0:3", "2:2->0:2"]);
     }
 
+    /// #576 B3: a survey that closes a loop on itself (A1 -> A2 -> A3 -> A1)
+    /// is one chain whose last station repeats its first. That repeat is the
+    /// same physical station, so it needs a closure; the Compass converter
+    /// skipped every station of the chain owning the canonical occurrence and
+    /// emitted none, so the misclosure was never reported or distributed. The
+    /// Walls converter had the same bug, fixed and pinned by
+    /// `contiguous_self_loop_emits_closure`.
     #[test]
     fn a_loop_inside_one_survey_gets_a_closure() {
         let (configs, closures, warnings) = convert_text(
