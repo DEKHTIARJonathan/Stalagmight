@@ -5,10 +5,13 @@ import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function SplitSectionDialog() {
-  const { closeDialog, dialogData, setSelection } = useUIStore();
-  const { deleteShotAndSplit } = useProjectStore();
+  const { closeDialog, dialogData, setSelection } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData, setSelection: s.setSelection })),
+  );
+  const deleteShotAndSplit = useProjectStore((s) => s.deleteShotAndSplit);
 
   const sectionId = dialogData.sectionId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;

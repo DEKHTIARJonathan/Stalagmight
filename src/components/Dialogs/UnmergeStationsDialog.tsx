@@ -8,6 +8,7 @@ import { EntityBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { useShallow } from 'zustand/react/shallow';
 
 function stationRefKey(ref: StationRef): string {
   return `${ref.section_id}:${ref.station_index}`;
@@ -18,8 +19,17 @@ function sameStationRef(a: StationRef, b: StationRef): boolean {
 }
 
 export default function UnmergeStationsDialog() {
-  const { closeDialog, dialogData } = useUIStore();
-  const { project, stations, unmergeStations, unmergeStationPair } = useProjectStore();
+  const { closeDialog, dialogData } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
+  );
+  const { project, stations, unmergeStations, unmergeStationPair } = useProjectStore(
+    useShallow((s) => ({
+      project: s.project,
+      stations: s.stations,
+      unmergeStations: s.unmergeStations,
+      unmergeStationPair: s.unmergeStationPair,
+    })),
+  );
 
   const stationRef = dialogData.stationRef as StationRef | undefined;
   const mergedStationsFromDialog = dialogData.mergedStations as StationRef[] | undefined;

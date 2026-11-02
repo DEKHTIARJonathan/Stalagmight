@@ -7,10 +7,25 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { DeleteShotImpact, SectionRelationships } from '../../types/commands';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function ConfirmDialog() {
-  const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore();
-  const { deleteShot, deleteSection, deleteLastShotAndSection, deleteShotAndSplit } = useProjectStore();
+  const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      dialogData: s.dialogData,
+      clearSelection: s.clearSelection,
+      setSelection: s.setSelection,
+    })),
+  );
+  const { deleteShot, deleteSection, deleteLastShotAndSection, deleteShotAndSplit } = useProjectStore(
+    useShallow((s) => ({
+      deleteShot: s.deleteShot,
+      deleteSection: s.deleteSection,
+      deleteLastShotAndSection: s.deleteLastShotAndSection,
+      deleteShotAndSplit: s.deleteShotAndSplit,
+    })),
+  );
 
   const type = dialogData.type as 'station' | 'shot' | 'section' | 'last-shot' | undefined;
   const message = dialogData.message as string | undefined;

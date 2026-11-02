@@ -331,7 +331,16 @@ export function useKeyboardShortcuts() {
     showStations: s.showStations,
     showToast: s.showToast,
   })));
-  const { undo, redo, saveProject, project, stations, config } = useProjectStore();
+  const { undo, redo, saveProject, project, stations, config } = useProjectStore(
+    useShallow((s) => ({
+      undo: s.undo,
+      redo: s.redo,
+      saveProject: s.saveProject,
+      project: s.project,
+      stations: s.stations,
+      config: s.config,
+    })),
+  );
 
   // Ref for shortcut map - uses ref to avoid stale closures in event handlers
   // Initialize with defaults to handle first render before useEffect runs

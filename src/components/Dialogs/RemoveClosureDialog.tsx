@@ -8,6 +8,7 @@ import { EntityBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { useShallow } from 'zustand/react/shallow';
 
 interface ClosureChoice {
   closureId: number;
@@ -19,8 +20,12 @@ function sameStationRef(a: StationRef, b: StationRef): boolean {
 }
 
 export default function RemoveClosureDialog() {
-  const { closeDialog, dialogData } = useUIStore();
-  const { project, stations, removeLoopClosure } = useProjectStore();
+  const { closeDialog, dialogData } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
+  );
+  const { project, stations, removeLoopClosure } = useProjectStore(
+    useShallow((s) => ({ project: s.project, stations: s.stations, removeLoopClosure: s.removeLoopClosure })),
+  );
 
   const anchorStation = dialogData.anchorStation as StationRef | undefined;
   const closuresFromDialog = dialogData.closures as ClosureChoice[] | undefined;

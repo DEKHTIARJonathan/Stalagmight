@@ -28,6 +28,7 @@ import {
   TargetIcon,
   TrashIcon,
 } from '../common/icons';
+import { useShallow } from 'zustand/react/shallow';
 
 /**
  * True when `relatedTarget` is a DOM node contained by `container`. WebKit
@@ -347,8 +348,19 @@ export default function UndoHistoryDropdown({
   const showChainStep = canOfferChainStep && chainTarget !== null;
   const isForward = chainDirection === 'forward';
 
-  const { getUndoStack, getRedoStack, undoTo, redoTo, undo, redo, canUndo, canRedo } = useProjectStore();
-  const { openDialog } = useUIStore();
+  const { getUndoStack, getRedoStack, undoTo, redoTo, undo, redo, canUndo, canRedo } = useProjectStore(
+    useShallow((s) => ({
+      getUndoStack: s.getUndoStack,
+      getRedoStack: s.getRedoStack,
+      undoTo: s.undoTo,
+      redoTo: s.redoTo,
+      undo: s.undo,
+      redo: s.redo,
+      canUndo: s.canUndo,
+      canRedo: s.canRedo,
+    })),
+  );
+  const openDialog = useUIStore((s) => s.openDialog);
 
   // Clear preview/hover state without closing the dropdown (reusable helper)
   const clearPreviewState = useCallback(() => {

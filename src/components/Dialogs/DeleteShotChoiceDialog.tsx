@@ -7,10 +7,18 @@ import { DialogWrapper } from './DialogWrapper';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import type { DeleteShotImpact } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function DeleteShotChoiceDialog() {
-  const { closeDialog, dialogData, openDialog, clearSelection } = useUIStore();
-  const { deleteShot } = useProjectStore();
+  const { closeDialog, dialogData, openDialog, clearSelection } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      dialogData: s.dialogData,
+      openDialog: s.openDialog,
+      clearSelection: s.clearSelection,
+    })),
+  );
+  const deleteShot = useProjectStore((s) => s.deleteShot);
 
   const sectionId = dialogData.sectionId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;

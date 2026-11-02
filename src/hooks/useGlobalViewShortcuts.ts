@@ -28,6 +28,7 @@ import { defaultConfig } from '../types/config';
 import type { ShortcutsConfig } from '../types/config';
 import type { ProjectMetadata } from '../types/project';
 import type { GlobalViewMapHandle } from '../components/GlobalView/GlobalViewMap';
+import { useShallow } from 'zustand/react/shallow';
 
 /**
  * File actions available in the global view. Shared with SingleSystemView via
@@ -97,8 +98,14 @@ export function useGlobalViewShortcuts({
   handleProjectOpen,
   handleRemoveFromRecent,
 }: UseGlobalViewShortcutsOptions): void {
-  const { clearSelection, selectSystem, setSelectedSystems } = useGlobalViewStore();
-  const { config } = useProjectStore();
+  const { clearSelection, selectSystem, setSelectedSystems } = useGlobalViewStore(
+    useShallow((s) => ({
+      clearSelection: s.clearSelection,
+      selectSystem: s.selectSystem,
+      setSelectedSystems: s.setSelectedSystems,
+    })),
+  );
+  const config = useProjectStore((s) => s.config);
 
   // File shortcut map - config-aware, updated when config changes
   const fileShortcutMapRef = useRef(buildFileShortcutMap(defaultConfig.shortcuts));

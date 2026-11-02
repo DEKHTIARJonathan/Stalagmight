@@ -13,6 +13,7 @@ import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { trackDialogComplete, setProjectActionSource } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useShallow } from 'zustand/react/shallow';
 
 /**
  * MergeProjectsDialog allows users to merge multiple projects into a single new project.
@@ -20,8 +21,12 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
  */
 export default function MergeProjectsDialog() {
   const { t } = useTranslation();
-  const { closeDialog, dialogData, showToast } = useUIStore();
-  const { mergeProjects, loadProject } = useProjectStore();
+  const { closeDialog, dialogData, showToast } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData, showToast: s.showToast })),
+  );
+  const { mergeProjects, loadProject } = useProjectStore(
+    useShallow((s) => ({ mergeProjects: s.mergeProjects, loadProject: s.loadProject })),
+  );
   const precision = useDecimalPrecision();
 
   const selectedProjects = dialogData.selectedProjects as ProjectMetadata[] | undefined;

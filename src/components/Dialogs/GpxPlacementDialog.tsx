@@ -15,6 +15,7 @@ import type { GpxFile, GpxSectionPlacement } from '../../types/commands';
 import { sectionColorPalette } from '../../utils/colors';
 import { extractFilename } from '../../utils/path';
 import { setSource } from '../../utils/telemetry';
+import { useShallow } from 'zustand/react/shallow';
 
 /**
  * Step 2 dialog for GPX import.
@@ -24,9 +25,25 @@ import { setSource } from '../../utils/telemetry';
  * Waypoints are always auto-placed as zero datums and don't appear here.
  */
 export default function GpxPlacementDialog() {
-  const { executeGpxImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
-  const { closeDialog, openDialog, dialogData, setView, triggerFitToBounds, resolvedTheme, showToast } =
-    useUIStore();
+  const { executeGpxImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore(
+    useShallow((s) => ({
+      executeGpxImport: s.executeGpxImport,
+      startLoading: s.startLoading,
+      setLoadingProgress: s.setLoadingProgress,
+      resetLoading: s.resetLoading,
+    })),
+  );
+  const { closeDialog, openDialog, dialogData, setView, triggerFitToBounds, resolvedTheme, showToast } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      openDialog: s.openDialog,
+      dialogData: s.dialogData,
+      setView: s.setView,
+      triggerFitToBounds: s.triggerFitToBounds,
+      resolvedTheme: s.resolvedTheme,
+      showToast: s.showToast,
+    })),
+  );
 
   const gpxFile = dialogData.gpxFile as GpxFile;
   const filePath = dialogData.filePath as string;

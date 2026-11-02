@@ -17,6 +17,7 @@ import { ImportProgress } from './ImportProgress';
 import type { CompassFile, CompassSurveySummary, InvalidShotCounts } from '../../types/commands';
 import { setSource } from '../../utils/telemetry';
 import { importButtonLabel } from '../../utils/importButtonLabel';
+import { useShallow } from 'zustand/react/shallow';
 
 interface CompassImportDialogProps {
   compassFile: CompassFile;
@@ -77,8 +78,32 @@ function surveyLandingShotCount(
 
 export default function CompassImportDialog({ compassFile, filePath }: CompassImportDialogProps) {
   const { t } = useTranslation();
-  const { executeCompassImport, calculateFileHash, checkDuplicateImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
-  const { closeDialog, openDialog, setView, triggerFitToBounds, showToast } = useUIStore();
+  const {
+    executeCompassImport,
+    calculateFileHash,
+    checkDuplicateImport,
+    startLoading,
+    setLoadingProgress,
+    resetLoading,
+  } = useProjectStore(
+    useShallow((s) => ({
+      executeCompassImport: s.executeCompassImport,
+      calculateFileHash: s.calculateFileHash,
+      checkDuplicateImport: s.checkDuplicateImport,
+      startLoading: s.startLoading,
+      setLoadingProgress: s.setLoadingProgress,
+      resetLoading: s.resetLoading,
+    })),
+  );
+  const { closeDialog, openDialog, setView, triggerFitToBounds, showToast } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      openDialog: s.openDialog,
+      setView: s.setView,
+      triggerFitToBounds: s.triggerFitToBounds,
+      showToast: s.showToast,
+    })),
+  );
 
   const [isImporting, setIsImporting] = useState(false);
   const [fileHash, setFileHash] = useState<string | null>(null);

@@ -6,10 +6,20 @@ import { holdAutosave } from '../../utils/autosaveHold';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function UnsavedChangesDialog() {
-  const { closeDialog, setView, openDialog, dialogData } = useUIStore();
-  const { closeProject, loadProject } = useProjectStore();
+  const { closeDialog, setView, openDialog, dialogData } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      setView: s.setView,
+      openDialog: s.openDialog,
+      dialogData: s.dialogData,
+    })),
+  );
+  const { closeProject, loadProject } = useProjectStore(
+    useShallow((s) => ({ closeProject: s.closeProject, loadProject: s.loadProject })),
+  );
   const { handleSaveProject } = useProject();
 
   // Set by handleOpenProject when discarding the current project to open another

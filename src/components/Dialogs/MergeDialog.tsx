@@ -10,10 +10,19 @@ import { DialogWrapper } from './DialogWrapper';
 import type { StationRef } from '../../types/project';
 import { formatStationId } from '../../utils/formatters';
 import type { BatchCommand } from '../../types/commands';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function MergeDialog() {
-  const { closeDialog, dialogData, clearMergeStations } = useUIStore();
-  const { mergeStations, executeBatch, project } = useProjectStore();
+  const { closeDialog, dialogData, clearMergeStations } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      dialogData: s.dialogData,
+      clearMergeStations: s.clearMergeStations,
+    })),
+  );
+  const { mergeStations, executeBatch, project } = useProjectStore(
+    useShallow((s) => ({ mergeStations: s.mergeStations, executeBatch: s.executeBatch, project: s.project })),
+  );
 
   const stationA = dialogData.stationA as StationRef | undefined;
   const stationB = dialogData.stationB as StationRef | undefined;

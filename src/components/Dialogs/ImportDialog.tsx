@@ -50,6 +50,7 @@ import { getNumberFormatLocale } from '../../i18n/format';
 import { nextShotKind } from '../../utils/shotKind';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useShallow } from 'zustand/react/shallow';
 
 /** Grid height to assume before the first measurement, and under jsdom (which
  *  has no ResizeObserver). Tall enough that virtualization renders rows. */
@@ -73,9 +74,24 @@ interface SavedFormState {
 
 export default function ImportDialog() {
   const { t } = useTranslation();
-  const { closeDialog, openDialog, startPlacementMode, dialogData, resolvedTheme, showToast } =
-    useUIStore();
-  const { createSection, createSectionAndMerge, moveSection, project } = useProjectStore();
+  const { closeDialog, openDialog, startPlacementMode, dialogData, resolvedTheme, showToast } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      openDialog: s.openDialog,
+      startPlacementMode: s.startPlacementMode,
+      dialogData: s.dialogData,
+      resolvedTheme: s.resolvedTheme,
+      showToast: s.showToast,
+    })),
+  );
+  const { createSection, createSectionAndMerge, moveSection, project } = useProjectStore(
+    useShallow((s) => ({
+      createSection: s.createSection,
+      createSectionAndMerge: s.createSectionAndMerge,
+      moveSection: s.moveSection,
+      project: s.project,
+    })),
+  );
   const precision = useDecimalPrecision();
   const editingBlocked = useEditingBlocked();
   const gridLabels = useGridLabels('dataTable.shotNoun');

@@ -157,7 +157,16 @@ export default function ContextMenu() {
   // A remote SpeleoDB project without the lock is read-only (T2a) - treat it like
   // closure-adjusted for the right-click edit items.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
-  const { project, stations, setShotKind, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore();
+  const { project, stations, setShotKind, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore(
+    useShallow((s) => ({
+      project: s.project,
+      stations: s.stations,
+      setShotKind: s.setShotKind,
+      unmergeStations: s.unmergeStations,
+      unmergeStationPair: s.unmergeStationPair,
+      removeLoopClosure: s.removeLoopClosure,
+    })),
+  );
 
   const menuRef = useRef<HTMLDivElement>(null);
 

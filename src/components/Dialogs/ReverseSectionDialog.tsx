@@ -6,6 +6,7 @@ import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { useShallow } from 'zustand/react/shallow';
 
 
 /**
@@ -18,8 +19,12 @@ import { DialogWrapper } from './DialogWrapper';
  * travel is a survey convention - so it is an explicit, unticked choice here.
  */
 export default function ReverseSectionDialog() {
-  const { closeDialog, dialogData } = useUIStore();
-  const { reverseSection, executeBatch, project } = useProjectStore();
+  const { closeDialog, dialogData } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
+  );
+  const { reverseSection, executeBatch, project } = useProjectStore(
+    useShallow((s) => ({ reverseSection: s.reverseSection, executeBatch: s.executeBatch, project: s.project })),
+  );
 
   const sectionIds = (dialogData.sectionIds as number[] | undefined) ?? [];
   const [swapLeftRight, setSwapLeftRight] = useState(false);

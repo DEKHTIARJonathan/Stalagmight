@@ -39,6 +39,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import { AboutMapImagery } from './AboutMapImagery';
 import { configPatches } from '../../utils/configPatches';
+import { useShallow } from 'zustand/react/shallow';
 
 /**
  * Deep comparison of two config objects to detect changed field paths.
@@ -365,11 +366,13 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
 
 export default function SettingsDialog() {
   const { t } = useTranslation();
-  const { closeDialog } = useUIStore();
+  const closeDialog = useUIStore((s) => s.closeDialog);
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   const setThemePreview = useUIStore((s) => s.setThemePreview);
   const setSyntacticHighlightPreview = useUIStore((s) => s.setSyntacticHighlightPreview);
-  const { config, updateConfig, patchConfig } = useProjectStore();
+  const { config, updateConfig, patchConfig } = useProjectStore(
+    useShallow((s) => ({ config: s.config, updateConfig: s.updateConfig, patchConfig: s.patchConfig })),
+  );
 
   // Staged SpeleoDB account action (A2): applied on Save alongside the config.
   const pendingAuth = useSpeleoStore((s) => s.pendingAuth);

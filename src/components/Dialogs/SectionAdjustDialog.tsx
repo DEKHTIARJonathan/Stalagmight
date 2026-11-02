@@ -7,6 +7,7 @@ import { EntityBlob } from '../common/EntityBlob';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import type { SectionId } from '../../types/project';
+import { useShallow } from 'zustand/react/shallow';
 
 // A string the user can be partway through typing into a signed-decimal field:
 // '', '-', '.', '-.', '5', '-2.5', '.5'. Lets a controlled input hold these
@@ -25,8 +26,16 @@ function offsetValue(raw: string): number {
  * Provides live preview as values change.
  */
 export default function SectionAdjustDialog() {
-  const { closeDialog, dialogData } = useUIStore();
-  const { project, moveSection, getConnectedSectionIds } = useProjectStore();
+  const { closeDialog, dialogData } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
+  );
+  const { project, moveSection, getConnectedSectionIds } = useProjectStore(
+    useShallow((s) => ({
+      project: s.project,
+      moveSection: s.moveSection,
+      getConnectedSectionIds: s.getConnectedSectionIds,
+    })),
+  );
 
   const sectionId = dialogData.sectionId as SectionId | undefined;
   const section = project?.sections.find((s) => s.id === sectionId);

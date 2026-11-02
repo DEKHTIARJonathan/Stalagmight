@@ -16,13 +16,13 @@ vi.mock('../../../utils/ipc', () => ({ invokeIpc }));
 
 const closeDialog = vi.fn();
 vi.mock('../../../store/uiStore', () => ({
-  useUIStore: () => ({
+  useUIStore: (sel: (s: unknown) => unknown) => sel({
     closeDialog,
     dialogData: { corruptPath: '/survey/CaveA.stalx', errorMessage: 'Database integrity check failed.' },
   }),
 }));
 vi.mock('../../../store/projectStore', () => ({
-  useProjectStore: () => ({ loadProject: vi.fn() }),
+  useProjectStore: (sel: (s: unknown) => unknown) => sel({ loadProject: vi.fn() }),
 }));
 vi.mock('../../../utils/telemetry', () => ({
   trackDialogComplete: vi.fn(),

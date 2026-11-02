@@ -10,9 +10,10 @@
  *
  * `useUIStore` is mocked here as a bare hook return value (not `.setState` on
  * the real store, unlike the sibling `ErrorDialog.test.tsx`) because
- * `NewProjectForImportDialog` only ever calls `useUIStore()` as a hook - it
- * never reaches for `useUIStore.getState()` - so a hook-shaped mock is a
- * faithful stand-in for every code path this suite exercises.
+ * `NewProjectForImportDialog` only ever calls `useUIStore` as a hook (with a
+ * selector, which the mock applies) - it never reaches for
+ * `useUIStore.getState()` - so a hook-shaped mock is a faithful stand-in for
+ * every code path this suite exercises.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -54,12 +55,12 @@ const openDialog = vi.fn();
 const setImportContext = vi.fn();
 
 vi.mock('../../../store/uiStore', () => ({
-  useUIStore: () => ({ closeDialog, dialogData, openDialog, setImportContext }),
+  useUIStore: (sel: (s: unknown) => unknown) => sel({ closeDialog, dialogData, openDialog, setImportContext }),
 }));
 
 const createProject = vi.fn();
 vi.mock('../../../store/projectStore', () => ({
-  useProjectStore: () => ({ createProject }),
+  useProjectStore: (sel: (s: unknown) => unknown) => sel({ createProject }),
 }));
 
 vi.mock('../DialogWrapper', () => ({

@@ -12,10 +12,15 @@ import { DialogWrapper } from './DialogWrapper';
 import type { StationRef, ShotData, ShotKind } from '../../types/project';
 import { SHOT_KIND_CYCLE, SHOT_KIND_MENU_LABEL } from '../../utils/shotKind';
 import { reverseTargetShot, type TargetShotLike } from '../../utils/overlapHelpers';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function DrawShotDialog() {
-  const { closeDialog, dialogData, setSelection } = useUIStore();
-  const { createShot, project, stations } = useProjectStore();
+  const { closeDialog, dialogData, setSelection } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData, setSelection: s.setSelection })),
+  );
+  const { createShot, project, stations } = useProjectStore(
+    useShallow((s) => ({ createShot: s.createShot, project: s.project, stations: s.stations })),
+  );
 
   const fromStation = dialogData.fromStation as StationRef | undefined;
   const allowZeroLength = dialogData.allowZeroLength as boolean | undefined;

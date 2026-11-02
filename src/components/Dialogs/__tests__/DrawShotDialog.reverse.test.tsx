@@ -54,11 +54,11 @@ const stations = [
 ];
 
 vi.mock('../../../store/uiStore', () => ({
-  useUIStore: () => ({ closeDialog, dialogData, setSelection }),
+  useUIStore: (sel: (s: unknown) => unknown) => sel({ closeDialog, dialogData, setSelection }),
 }));
 
 vi.mock('../../../store/projectStore', () => ({
-  useProjectStore: () => ({ createShot, project, stations }),
+  useProjectStore: (sel: (s: unknown) => unknown) => sel({ createShot, project, stations }),
 }));
 
 vi.mock('../../../utils/telemetry', () => ({ trackDialogComplete: vi.fn() }));

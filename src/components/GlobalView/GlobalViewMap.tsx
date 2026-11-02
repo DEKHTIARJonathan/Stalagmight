@@ -17,6 +17,7 @@ import { testIdPart } from '../../utils/testId';
 import { MapAttribution } from '../Map/MapAttribution';
 import { createSurveyMap, SATELLITE_SOURCE_ID } from '../Map/createSurveyMap';
 import { useContextLossToast } from '../Map/useContextLossToast';
+import { useShallow } from 'zustand/react/shallow';
 
 /** Local storage key for persisting map position/zoom. */
 const MAP_STATE_STORAGE_KEY = 'globalViewMapState';
@@ -195,7 +196,15 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
     selectSystem,
     toggleSystemSelection,
     cancelPendingLoads,
-  } = useGlobalViewStore();
+  } = useGlobalViewStore(
+    useShallow((s) => ({
+      loadGeometryBatch: s.loadGeometryBatch,
+      selectedSystemIds: s.selectedSystemIds,
+      selectSystem: s.selectSystem,
+      toggleSystemSelection: s.toggleSystemSelection,
+      cancelPendingLoads: s.cancelPendingLoads,
+    })),
+  );
 
   // View mode state (persisted in localStorage)
   const [viewMode, setViewMode] = useViewMode();

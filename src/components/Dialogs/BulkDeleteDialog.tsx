@@ -9,6 +9,7 @@ import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import type { DeleteShotRangeImpact } from '../../types/commands';
 import type { StationRef } from '../../types/project';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
+import { useShallow } from 'zustand/react/shallow';
 
 /**
  * Confirm + impact dialog for deleting a contiguous range of shots (#95).
@@ -20,8 +21,17 @@ import { setSource, trackDialogComplete } from '../../utils/telemetry';
  * (Whole-section selections route to the section-delete confirm instead.)
  */
 export default function BulkDeleteDialog() {
-  const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore();
-  const { deleteShotRangeSplit, deleteShotRangeShift } = useProjectStore();
+  const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      dialogData: s.dialogData,
+      clearSelection: s.clearSelection,
+      setSelection: s.setSelection,
+    })),
+  );
+  const { deleteShotRangeSplit, deleteShotRangeShift } = useProjectStore(
+    useShallow((s) => ({ deleteShotRangeSplit: s.deleteShotRangeSplit, deleteShotRangeShift: s.deleteShotRangeShift })),
+  );
 
   const sectionId = dialogData.sectionId as number | undefined;
   const startShotId = dialogData.startShotId as number | undefined;

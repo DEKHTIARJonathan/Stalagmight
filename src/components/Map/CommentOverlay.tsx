@@ -4,6 +4,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { CheckIcon, CloseIcon } from '../common/icons';
 import type { CommandResult } from '../../types/commands';
+import { useShallow } from 'zustand/react/shallow';
 
 const OVERLAY_WIDTH = 220;
 const OVERLAY_MARGIN = 8;
@@ -12,7 +13,9 @@ export default function CommentOverlay() {
   const { t } = useTranslation();
   const commentTarget = useUIStore((s) => s.commentTarget);
   const clearCommentTarget = useUIStore((s) => s.clearCommentTarget);
-  const { updateStationComment, updateShot } = useProjectStore();
+  const { updateStationComment, updateShot } = useProjectStore(
+    useShallow((s) => ({ updateStationComment: s.updateStationComment, updateShot: s.updateShot })),
+  );
 
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);

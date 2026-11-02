@@ -328,6 +328,70 @@ await test('no-render-ref-write: src only (the e2e trees render no React)', asyn
   assert.deepEqual(await refHits(PW, code), []);
 });
 
+// --- stalagmight/require-store-selector (#576 D2) --------------------------------
+
+const STORE_RULE = 'stalagmight/require-store-selector';
+const storeHits = async (rel, code) => ruleHits(await lint(rel, code), STORE_RULE);
+
+await test('require-store-selector: a no-selector store hook call is an error', async () => {
+  const hits = await storeHits(SRC, `
+    import { useProjectStore } from '../../store/projectStore';
+    export function Probe() {
+      const { project } = useProjectStore();
+      return <span>{project?.name}</span>;
+    }
+  `);
+  assert.equal(hits.length, 1, JSON.stringify(hits));
+  assert.equal(hits[0].severity, 2);
+  assert.match(hits[0].message, /useProjectStore\(\)` subscribes to the whole store/);
+});
+
+await test('require-store-selector: identity selectors (bare, block-bodied, under useShallow) and useStore(store) are errors', async () => {
+  const hits = await storeHits(SRC, `
+    import { useStore } from 'zustand';
+    import { useShallow } from 'zustand/react/shallow';
+    import { useUIStore, uiStore } from '../../store/uiStore';
+    export function useAll() {
+      const a = useUIStore((s) => s);
+      const b = useUIStore(function (state) { return state; });
+      const c = useUIStore(useShallow((s) => s));
+      const d = useStore(uiStore);
+      return [a, b, c, d];
+    }
+  `);
+  assert.deepEqual(hits.map((h) => h.line), [6, 7, 8, 9], JSON.stringify(hits));
+  assert.ok(hits.every((h) => h.severity === 2));
+});
+
+await test('require-store-selector: real selectors, shallow picks and non-hook store calls are clean', async () => {
+  const hits = await storeHits(SRC, `
+    import { useStore } from 'zustand';
+    import { useShallow } from 'zustand/react/shallow';
+    import { useUIStore, uiStore } from '../../store/uiStore';
+    import { useProjectStore } from '../../store/projectStore';
+    export function Probe() {
+      const project = useProjectStore((s) => s.project);
+      const { a, b } = useUIStore(useShallow((s) => ({ a: s.view, b: s.closeDialog })));
+      const view = useStore(uiStore, (s) => s.view);
+      const snapshot = useProjectStore.getState();
+      useProjectStore.setState({ isDirty: false });
+      const stop = useUIStore.subscribe(() => {});
+      stop();
+      return <span>{project?.name}{a}{String(b)}{view}{String(snapshot.isDirty)}</span>;
+    }
+  `);
+  assert.deepEqual(hits, []);
+});
+
+await test('require-store-selector: covers src tests too, not the e2e trees', async () => {
+  const code = `
+    import { useProjectStore } from '../src/store/projectStore';
+    export function useProbe() { return useProjectStore(); }
+  `;
+  assert.equal((await storeHits('src/components/__tests__/Fixture.test.tsx', code)).length, 1);
+  assert.deepEqual(await storeHits(PW, code), []);
+});
+
 if (failures.length > 0) {
   console.error(`\n✗ check-eslint fixtures: ${failures.length} failed, ${passed} passed\n`);
   for (const f of failures) console.error(`  ${f}`);

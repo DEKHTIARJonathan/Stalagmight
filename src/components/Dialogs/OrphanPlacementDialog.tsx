@@ -25,6 +25,7 @@ import {
   interpolateShots,
   type TargetShotLike,
 } from '../../utils/overlapHelpers';
+import { useShallow } from 'zustand/react/shallow';
 
 interface OrphanPlacementDialogProps {
   suggestions: OrphanPlacementSuggestion[];
@@ -97,8 +98,24 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     existing_data: t('dialogs.orphanPlacement.overlapModes.existing_data'),
     keep_both: t('dialogs.orphanPlacement.overlapModes.keep_both'),
   };
-  const { mergeStations, updateShot, setShotKind, refreshProjectState, project } = useProjectStore();
-  const { closeDialog, setView, triggerFitToBounds, openDialog, showToast } = useUIStore();
+  const { mergeStations, updateShot, setShotKind, refreshProjectState, project } = useProjectStore(
+    useShallow((s) => ({
+      mergeStations: s.mergeStations,
+      updateShot: s.updateShot,
+      setShotKind: s.setShotKind,
+      refreshProjectState: s.refreshProjectState,
+      project: s.project,
+    })),
+  );
+  const { closeDialog, setView, triggerFitToBounds, openDialog, showToast } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      setView: s.setView,
+      triggerFitToBounds: s.triggerFitToBounds,
+      openDialog: s.openDialog,
+      showToast: s.showToast,
+    })),
+  );
 
   const [processing, setProcessing] = useState(false);
   const [currentEndIndex, setCurrentEndIndex] = useState(0);

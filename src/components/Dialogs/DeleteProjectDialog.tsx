@@ -5,6 +5,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useShallow } from 'zustand/react/shallow';
 
 /**
  * Destructive confirm for permanently deleting a project from disk (#118).
@@ -20,8 +21,10 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
  * irreversible.
  */
 export default function DeleteProjectDialog() {
-  const { closeDialog, dialogData, showToast } = useUIStore();
-  const { deleteProject } = useProjectStore();
+  const { closeDialog, dialogData, showToast } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData, showToast: s.showToast })),
+  );
+  const deleteProject = useProjectStore((s) => s.deleteProject);
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

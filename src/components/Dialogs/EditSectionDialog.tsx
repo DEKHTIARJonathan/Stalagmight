@@ -20,11 +20,31 @@ import { defaultConfig } from '../../types/config';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function EditSectionDialog() {
   const { t } = useTranslation();
-  const { closeDialog, dialogData, openDialog, showToast } = useUIStore();
-  const { updateSection, createShot, updateShot, deleteShot, project, isShotFrozen } = useProjectStore();
+  const { closeDialog, dialogData, openDialog, showToast } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      dialogData: s.dialogData,
+      openDialog: s.openDialog,
+      showToast: s.showToast,
+    })),
+  );
+  // `frozenShots` is picked but not destructured: isShotFrozen reads it through
+  // get(), so a change to the frozen set must still re-render this dialog.
+  const { updateSection, createShot, updateShot, deleteShot, project, isShotFrozen } = useProjectStore(
+    useShallow((s) => ({
+      updateSection: s.updateSection,
+      createShot: s.createShot,
+      updateShot: s.updateShot,
+      deleteShot: s.deleteShot,
+      project: s.project,
+      isShotFrozen: s.isShotFrozen,
+      frozenShots: s.frozenShots,
+    })),
+  );
 
   const sectionId = dialogData.sectionId as number | undefined;
   const section = project?.sections.find((s) => s.id === sectionId);

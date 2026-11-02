@@ -15,6 +15,7 @@ import {
   surfaceImportFailure,
 } from '../../utils/saveFeedback';
 import { importButtonLabel } from '../../utils/importButtonLabel';
+import { useShallow } from 'zustand/react/shallow';
 
 interface GpxSelectionDialogProps {
   gpxFile: GpxFile;
@@ -23,8 +24,32 @@ interface GpxSelectionDialogProps {
 
 export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDialogProps) {
   const { t } = useTranslation();
-  const { calculateFileHash, checkDuplicateImport, executeGpxImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
-  const { closeDialog, openDialog, setView, triggerFitToBounds, showToast } = useUIStore();
+  const {
+    calculateFileHash,
+    checkDuplicateImport,
+    executeGpxImport,
+    startLoading,
+    setLoadingProgress,
+    resetLoading,
+  } = useProjectStore(
+    useShallow((s) => ({
+      calculateFileHash: s.calculateFileHash,
+      checkDuplicateImport: s.checkDuplicateImport,
+      executeGpxImport: s.executeGpxImport,
+      startLoading: s.startLoading,
+      setLoadingProgress: s.setLoadingProgress,
+      resetLoading: s.resetLoading,
+    })),
+  );
+  const { closeDialog, openDialog, setView, triggerFitToBounds, showToast } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      openDialog: s.openDialog,
+      setView: s.setView,
+      triggerFitToBounds: s.triggerFitToBounds,
+      showToast: s.showToast,
+    })),
+  );
 
   const [importWaypoints, setImportWaypoints] = useState(gpxFile.waypoints.length > 0);
   const [importTracks, setImportTracks] = useState(gpxFile.tracks.length > 0);

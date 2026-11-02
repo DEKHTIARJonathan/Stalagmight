@@ -31,7 +31,7 @@ export default function GridOverlay({ map, gpsOrigin, styleEpoch = 0 }: GridOver
   const gridSpacing = useUIStore((s) => s.gridSpacing);
   // Subscribe to resolvedTheme so gridColor re-reads the CSS variable on theme change
   useUIStore((s) => s.resolvedTheme);
-  const { stations } = useProjectStore();
+  const stations = useProjectStore((s) => s.stations);
 
   const gridColor = getThemeColor('--cc-grid-default');
 

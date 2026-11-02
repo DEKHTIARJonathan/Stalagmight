@@ -9,10 +9,10 @@ import { DialogWrapper } from './DialogWrapper';
 import { ensureExtension, projectSaveFilters, saveDialog, PROJECT_EXTENSION } from '../../utils/fileDialogs';
 
 export default function NewProjectDialog() {
-  const { closeDialog } = useUIStore();
-  const { setView } = useUIStore();
+  const closeDialog = useUIStore((s) => s.closeDialog);
+  const setView = useUIStore((s) => s.setView);
   const openDialog = useUIStore((s) => s.openDialog);
-  const { createProject } = useProjectStore();
+  const createProject = useProjectStore((s) => s.createProject);
   // Only offer the follow-up SpeleoDB publish when signed in.
   const loggedIn = useSpeleoStore((s) => s.session?.loggedIn ?? false);
 

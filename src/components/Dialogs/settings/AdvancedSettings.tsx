@@ -177,7 +177,7 @@ export function AdvancedSettings({
   panelIdBase,
 }: SettingsCategoryProps) {
   const { t } = useTranslation();
-  const { setConfig } = useProjectStore();
+  const setConfig = useProjectStore((s) => s.setConfig);
   const [isReloading, setIsReloading] = useState(false);
   const [reloadMessage, setReloadMessage] = useState<string | null>(null);
   const mountedRef = useRef(true);

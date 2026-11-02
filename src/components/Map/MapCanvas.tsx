@@ -203,7 +203,39 @@ function MapCanvas({ onReloadMap }: MapCanvasProps) {
   const pressClientRef = useRef<{ x: number; y: number } | null>(null);
   const { t } = useTranslation();
 
-  const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, warnings, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
+  const {
+    project,
+    stations,
+    surveyData,
+    stationsAdjusted,
+    surveyDataAdjusted,
+    adjustedLoading,
+    loadAdjustedGeometry,
+    config,
+    warnings,
+    moveStation,
+    moveSegment,
+    getConnectedSectionIds,
+    getAnchoredSectionIds,
+    executeBatch,
+  } = useProjectStore(
+    useShallow((s) => ({
+      project: s.project,
+      stations: s.stations,
+      surveyData: s.surveyData,
+      stationsAdjusted: s.stationsAdjusted,
+      surveyDataAdjusted: s.surveyDataAdjusted,
+      adjustedLoading: s.adjustedLoading,
+      loadAdjustedGeometry: s.loadAdjustedGeometry,
+      config: s.config,
+      warnings: s.warnings,
+      moveStation: s.moveStation,
+      moveSegment: s.moveSegment,
+      getConnectedSectionIds: s.getConnectedSectionIds,
+      getAnchoredSectionIds: s.getAnchoredSectionIds,
+      executeBatch: s.executeBatch,
+    })),
+  );
   const logMapInteractions = config?.debug?.map?.log_hit_detection ?? false;
 
   // Geometry display mode (measured vs read-only closure-adjusted).

@@ -47,6 +47,7 @@ import { formatNumber } from '../../i18n/format';
 import { debugLog } from '../../utils/debugLog';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { formatPhaseLabel } from '../../utils/loadingPhaseLabel';
+import { useShallow } from 'zustand/react/shallow';
 
 type ViewTab = 'map' | 'list';
 
@@ -83,10 +84,28 @@ export default function GlobalView() {
     handleOpenOrImport,
   } = useProject();
 
-  const { loading, loadRecentProjects, loadProject, resetLoading, cancelLoading, removeFromRecentProjects, config } = useProjectStore();
+  const {
+    loading,
+    loadRecentProjects,
+    loadProject,
+    resetLoading,
+    cancelLoading,
+    removeFromRecentProjects,
+    config,
+  } = useProjectStore(
+    useShallow((s) => ({
+      loading: s.loading,
+      loadRecentProjects: s.loadRecentProjects,
+      loadProject: s.loadProject,
+      resetLoading: s.resetLoading,
+      cancelLoading: s.cancelLoading,
+      removeFromRecentProjects: s.removeFromRecentProjects,
+      config: s.config,
+    })),
+  );
 
   // Note: useLoadingProgress() is called in App.tsx (always mounted) to avoid duplicate listeners
-  const { openDialog } = useUIStore();
+  const openDialog = useUIStore((s) => s.openDialog);
   const showToast = useUIStore((s) => s.showToast);
   const syntacticLevel = useUIStore((s) => s.syntacticLevel);
   // Toolbar buttons show icons at the 'toolbar_only' level and up (menu items
@@ -192,7 +211,13 @@ export default function GlobalView() {
   // Note: Context menu escape is handled in the main keyboard handler below
 
   // Access global view store for lazy loading and selection
-  const { geometryData, geometryStates, selectedSystemIds } = useGlobalViewStore();
+  const { geometryData, geometryStates, selectedSystemIds } = useGlobalViewStore(
+    useShallow((s) => ({
+      geometryData: s.geometryData,
+      geometryStates: s.geometryStates,
+      selectedSystemIds: s.selectedSystemIds,
+    })),
+  );
 
   // Sync store selection to local state when map Ctrl+click changes store
   // This ensures keyboard shortcuts work with map multi-selection

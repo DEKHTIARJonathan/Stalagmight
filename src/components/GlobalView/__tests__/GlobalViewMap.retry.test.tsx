@@ -154,6 +154,7 @@ import GlobalViewMap from '../GlobalViewMap';
 import { useGlobalViewStore } from '../../../store/globalViewStore';
 import type { ProjectMetadata } from '../../../types/project';
 import { testIdPart } from '../../../utils/testId';
+import { useShallow } from 'zustand/react/shallow';
 
 const GOOD = '/caves/CaveA.stalx';
 const BROKEN = '/caves/CaveB.stalx';
@@ -182,7 +183,9 @@ let harnessProjects: () => ProjectMetadata[] = twoSystems;
 /** Subscribes to the store the way GlobalView does and can reload the recent list. */
 let reloadRecentList: () => void = () => {};
 function Harness() {
-  const { geometryData, geometryStates } = useGlobalViewStore();
+  const { geometryData, geometryStates } = useGlobalViewStore(
+    useShallow((s) => ({ geometryData: s.geometryData, geometryStates: s.geometryStates })),
+  );
   const [generation, setGeneration] = useState(0);
   reloadRecentList = () => setGeneration((g) => g + 1);
   // A reload yields a NEW array with the same entries, as loadRecentProjects does.

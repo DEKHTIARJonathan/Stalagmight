@@ -9,6 +9,7 @@ import { DialogWrapper } from './DialogWrapper';
 import type { BackupInfo } from '../../types/ipc/BackupInfo';
 import { trackDialogComplete, setProjectActionSource } from '../../utils/telemetry';
 import { recoveryBackupItemTestId } from '../../utils/testId';
+import { useShallow } from 'zustand/react/shallow';
 
 type Step = 'choose' | 'repairing' | 'listing-backups' | 'pick-backup' | 'restoring' | 'salvaging' | 'result';
 
@@ -39,8 +40,10 @@ interface ResultInfo {
 }
 
 export default function CorruptionRecoveryDialog() {
-  const { closeDialog, dialogData } = useUIStore();
-  const { loadProject } = useProjectStore();
+  const { closeDialog, dialogData } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
+  );
+  const loadProject = useProjectStore((s) => s.loadProject);
 
   const filePath = dialogData.corruptPath as string;
   const errorMessage = (dialogData.errorMessage as string) ?? 'Database integrity check failed.';

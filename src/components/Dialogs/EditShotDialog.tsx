@@ -6,10 +6,22 @@ import { normalizeAzimuth } from '../../utils/azimuth';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function EditShotDialog() {
-  const { closeDialog, dialogData } = useUIStore();
-  const { updateShot, project, isShotFrozen } = useProjectStore();
+  const { closeDialog, dialogData } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
+  );
+  // `frozenShots` is picked but not destructured: isShotFrozen reads it through
+  // get(), so a change to the frozen set must still re-render this dialog.
+  const { updateShot, project, isShotFrozen } = useProjectStore(
+    useShallow((s) => ({
+      updateShot: s.updateShot,
+      project: s.project,
+      isShotFrozen: s.isShotFrozen,
+      frozenShots: s.frozenShots,
+    })),
+  );
 
   const sectionId = dialogData.sectionId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;

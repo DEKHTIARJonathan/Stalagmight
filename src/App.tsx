@@ -48,7 +48,17 @@ import { ZERO_DATUM_CARRY_KEY, readCarriedZeroDatumConfig, carryZeroDatumConfig 
 
 function App() {
   const { t } = useTranslation();
-  const { project, stations, loading, loadConfig, config, isDirty, setConfig } = useProjectStore();
+  const { project, stations, loading, loadConfig, config, isDirty, setConfig } = useProjectStore(
+    useShallow((s) => ({
+      project: s.project,
+      stations: s.stations,
+      loading: s.loading,
+      loadConfig: s.loadConfig,
+      config: s.config,
+      isDirty: s.isDirty,
+      setConfig: s.setConfig,
+    })),
+  );
   const integrityIssues = useProjectStore((s) => s.integrityIssues);
   // #576 D39(a): why Repair (a survey mutation) is unavailable right now, if it is.
   const repairBlocked = useEditBlockedReason();

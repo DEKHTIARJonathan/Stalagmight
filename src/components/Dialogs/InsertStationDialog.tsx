@@ -7,6 +7,7 @@ import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { useShallow } from 'zustand/react/shallow';
 
 /** Clamp a 0..1 fraction; `projectParamOnSegment` already clamps, this is belt
  *  and braces against a NaN or an out-of-range value reaching the arithmetic. */
@@ -28,8 +29,10 @@ function formatPercent(pct: number): string {
 }
 
 export default function InsertStationDialog() {
-  const { closeDialog, dialogData, setSelection } = useUIStore();
-  const { splitShotAtDistance } = useProjectStore();
+  const { closeDialog, dialogData, setSelection } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData, setSelection: s.setSelection })),
+  );
+  const splitShotAtDistance = useProjectStore((s) => s.splitShotAtDistance);
 
   const sectionId = dialogData.sectionId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;

@@ -5,6 +5,7 @@ import { isMac } from '../../utils/shortcuts';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { useShallow } from 'zustand/react/shallow';
 
 /** The Full Disk Access pane - step 1 of the written remediation below. The
  *  scheme is granted explicitly in `src-tauri/capabilities/default.json`
@@ -24,7 +25,9 @@ const MACOS_PRIVACY_SETTINGS_URL =
  * exists for the user who needs their hand held to the right pane.
  */
 export default function SavePermissionDialog() {
-  const { closeDialog, dialogData } = useUIStore();
+  const { closeDialog, dialogData } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
+  );
   const mac = isMac();
   const context = dialogData.context === 'open' ? 'open' : 'save';
 

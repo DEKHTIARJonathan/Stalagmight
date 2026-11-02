@@ -13,7 +13,7 @@ import type { ExportImageOptions } from '../../types/commands';
  * than the Export-mode `exportStore` (that store is panel + center only).
  */
 export default function ExportDialog() {
-  const { closeDialog } = useUIStore();
+  const closeDialog = useUIStore((s) => s.closeDialog);
   const [exportType, setExportType] = useState<ExportType>('data');
   const [dataFormat, setDataFormat] = useState<DataFormat>('csv');
   const [imageOptions, setImageOptions] = useState<ExportImageOptions>(DEFAULT_IMAGE_OPTIONS);

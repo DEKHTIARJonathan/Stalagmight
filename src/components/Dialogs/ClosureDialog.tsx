@@ -13,11 +13,20 @@ import { formatFixed, formatPercent } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import type { StationRef, ClosureStrategy } from '../../types/project';
 import type { ClosurePreview, BatchCommand } from '../../types/commands';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function ClosureDialog() {
   const precision = useDecimalPrecision();
-  const { closeDialog, dialogData, clearMergeStations } = useUIStore();
-  const { createLoopClosure, executeBatch, project } = useProjectStore();
+  const { closeDialog, dialogData, clearMergeStations } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      dialogData: s.dialogData,
+      clearMergeStations: s.clearMergeStations,
+    })),
+  );
+  const { createLoopClosure, executeBatch, project } = useProjectStore(
+    useShallow((s) => ({ createLoopClosure: s.createLoopClosure, executeBatch: s.executeBatch, project: s.project })),
+  );
 
   const stationA = dialogData.stationA as StationRef | undefined;
   const stationB = dialogData.stationB as StationRef | undefined;

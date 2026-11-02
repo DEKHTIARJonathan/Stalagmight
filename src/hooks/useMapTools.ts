@@ -201,7 +201,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   // Gas origin-pick on map click belongs to the Plan workspace mode (former showGasPlan).
   const showGasPlan = appMode === 'plan';
 
-  const { stations, project, checkMergeConnectivity } = useProjectStore();
+  const { stations, project, checkMergeConnectivity } = useProjectStore(
+    useShallow((s) => ({ stations: s.stations, project: s.project, checkMergeConnectivity: s.checkMergeConnectivity })),
+  );
   // Coordinate lookups for read-only inspection (the measure tool) follow the
   // active geometry so distances match what's drawn; editing/comment paths below
   // keep using the measured `stations`.

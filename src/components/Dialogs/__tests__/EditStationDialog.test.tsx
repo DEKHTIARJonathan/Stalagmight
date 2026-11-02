@@ -37,11 +37,10 @@ function station(gps: Gps) {
 }
 
 vi.mock('../../../store/uiStore', () => ({
-  useUIStore: () => ({ closeDialog, dialogData }),
+  useUIStore: (sel: (s: unknown) => unknown) => sel({ closeDialog, dialogData }),
 }));
 
-// Called both as `useProjectStore()` (the dialog) and with a selector
-// (`useDecimalPrecision` reads `config`).
+// Called with a selector by the dialog and by `useDecimalPrecision` (reads `config`).
 vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel?: (s: unknown) => unknown) => (sel ? sel(storeState) : storeState),
 }));

@@ -17,6 +17,7 @@ import {
   suggestOrphanPlacementsAfterImport,
   surfaceImportFailure,
 } from '../../utils/saveFeedback';
+import { useShallow } from 'zustand/react/shallow';
 
 interface WallsImportDialogProps {
   wallsFile: WallsFile;
@@ -25,8 +26,32 @@ interface WallsImportDialogProps {
 
 export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDialogProps) {
   const { t } = useTranslation();
-  const { executeWallsImport, calculateFileHash, checkDuplicateImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
-  const { closeDialog, openDialog, setView, triggerFitToBounds, showToast } = useUIStore();
+  const {
+    executeWallsImport,
+    calculateFileHash,
+    checkDuplicateImport,
+    startLoading,
+    setLoadingProgress,
+    resetLoading,
+  } = useProjectStore(
+    useShallow((s) => ({
+      executeWallsImport: s.executeWallsImport,
+      calculateFileHash: s.calculateFileHash,
+      checkDuplicateImport: s.checkDuplicateImport,
+      startLoading: s.startLoading,
+      setLoadingProgress: s.setLoadingProgress,
+      resetLoading: s.resetLoading,
+    })),
+  );
+  const { closeDialog, openDialog, setView, triggerFitToBounds, showToast } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      openDialog: s.openDialog,
+      setView: s.setView,
+      triggerFitToBounds: s.triggerFitToBounds,
+      showToast: s.showToast,
+    })),
+  );
 
   const [isImporting, setIsImporting] = useState(false);
   const [fileHash, setFileHash] = useState<string | null>(null);

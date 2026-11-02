@@ -3,9 +3,12 @@ import { useUIStore } from '../../store/uiStore';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function ErrorDialog() {
-  const { closeDialog, dialogData } = useUIStore();
+  const { closeDialog, dialogData } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
+  );
 
   const handleClose = useCallback(() => {
     trackDialogComplete('error');

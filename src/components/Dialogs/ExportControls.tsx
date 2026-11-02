@@ -18,6 +18,7 @@ import { exportSaveFilters } from '../../utils/fileDialogs';
 import { resolveSavePath } from '../../utils/overwriteGuard';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { ChevronRightIcon } from '../common/icons';
+import { useShallow } from 'zustand/react/shallow';
 
 /** Phase label mapping for export phases (matches backend LoadingPhase) */
 const EXPORT_PHASE_LABELS: Record<string, string> = {
@@ -66,8 +67,16 @@ export default function ExportControls({
   onComplete,
   onExportingChange,
 }: ExportControlsProps) {
-  const { project, exportCsv, exportJson, exportTml, exportImage, getAnchoredSectionIds } =
-    useProjectStore();
+  const { project, exportCsv, exportJson, exportTml, exportImage, getAnchoredSectionIds } = useProjectStore(
+    useShallow((s) => ({
+      project: s.project,
+      exportCsv: s.exportCsv,
+      exportJson: s.exportJson,
+      exportTml: s.exportTml,
+      exportImage: s.exportImage,
+      getAnchoredSectionIds: s.getAnchoredSectionIds,
+    })),
+  );
   const showToast = useUIStore((s) => s.showToast);
   const { t } = useTranslation();
 

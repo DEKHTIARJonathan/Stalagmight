@@ -8,11 +8,14 @@ import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { isPermissionError } from '../../utils/saveErrors';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function OverwriteConfirmDialog() {
   const { t } = useTranslation();
-  const { closeDialog, dialogData, openDialog: showDialog } = useUIStore();
-  const { saveProject } = useProjectStore();
+  const { closeDialog, dialogData, openDialog: showDialog } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData, openDialog: s.openDialog })),
+  );
+  const saveProject = useProjectStore((s) => s.saveProject);
   const { handleCloseProject } = useProject();
   const [isLoading, setIsLoading] = useState(false);
 

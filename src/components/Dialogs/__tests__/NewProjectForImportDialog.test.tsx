@@ -24,12 +24,12 @@ const openDialog = vi.fn();
 const setImportContext = vi.fn();
 
 vi.mock('../../../store/uiStore', () => ({
-  useUIStore: () => ({ closeDialog, dialogData, openDialog, setImportContext }),
+  useUIStore: (sel: (s: unknown) => unknown) => sel({ closeDialog, dialogData, openDialog, setImportContext }),
 }));
 
 const createProject = vi.fn();
 vi.mock('../../../store/projectStore', () => ({
-  useProjectStore: () => ({ createProject }),
+  useProjectStore: (sel: (s: unknown) => unknown) => sel({ createProject }),
 }));
 
 vi.mock('../DialogWrapper', () => ({

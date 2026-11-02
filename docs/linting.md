@@ -182,6 +182,21 @@ debt to pay down file by file, not a reason to keep the gate off those trees.
   is allowed. Added in #576 (D17), which migrated the 42 writes it found.
   `exhaustive-deps` does not know a `useLatest` ref is stable, so it asks for
   it in dependency arrays; listing it is harmless (the object never changes).
+- **`stalagmight/require-store-selector`** - error, `src/` (tests included),
+  zero tolerance. A zustand store hook called without a selector
+  (`useProjectStore()`) subscribes its component to the whole store, so every
+  `set()` re-renders it: a dirty-flag flip, a loading tick, the undo
+  availability after each edit. Also flagged: an identity selector
+  (`(s) => s`, bare or under `useShallow`) and `useStore(store)` with no
+  selector. Select the fields the component reads -
+  `useProjectStore((s) => s.project)`, or
+  `useShallow((s) => ({ a: s.a, b: s.b }))` for several. Store actions are
+  stable, so selecting them costs nothing; a getter action that reads state
+  through `get()` while rendering (`isShotFrozen`) needs the state it reads
+  picked too, or the component stops re-rendering when it changes. Added in
+  #576 (D2), which converted the 87 calls it found (the app root, the map
+  canvas and the side panels among them); the render-count proof is
+  `src/hooks/__tests__/storeSelectorRenders.test.tsx`.
 
 `linterOptions.reportUnusedDisableDirectives` is `error`, so a directive that
 suppresses nothing, or names a rule that is not loaded (`react/...`,

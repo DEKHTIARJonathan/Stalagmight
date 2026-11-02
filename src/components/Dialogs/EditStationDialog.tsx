@@ -20,12 +20,23 @@ import {
 import type { GpsCoordinates } from '../../types/project';
 import { MAX_DEPTH_REFERENCE_M } from '../../utils/gpsBounds';
 import type { StationRef } from '../../types/project';
+import { useShallow } from 'zustand/react/shallow';
 
 export default function EditStationDialog() {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { closeDialog, dialogData } = useUIStore();
-  const { stations, project, setZeroDatum, removeZeroDatum, updateStationComment } = useProjectStore();
+  const { closeDialog, dialogData } = useUIStore(
+    useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
+  );
+  const { stations, project, setZeroDatum, removeZeroDatum, updateStationComment } = useProjectStore(
+    useShallow((s) => ({
+      stations: s.stations,
+      project: s.project,
+      setZeroDatum: s.setZeroDatum,
+      removeZeroDatum: s.removeZeroDatum,
+      updateStationComment: s.updateStationComment,
+    })),
+  );
 
   const stationRef = dialogData.stationRef as StationRef | undefined;
   const forceEnableZeroDatum = dialogData.forceEnableZeroDatum === true;

@@ -36,6 +36,7 @@ import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import type { VirtualShotMode } from '../../types/project';
 import { computeTmlImportStats } from '../../utils/tmlImportStats';
 import { computeTmlPreviewLayout, isOfferableCoordinate } from '../../utils/tmlPreviewLayout';
+import { useShallow } from 'zustand/react/shallow';
 
 interface TmlImportDialogProps {
   tmlFile: TmlFile;
@@ -93,8 +94,25 @@ function discardTarget(): DiscardTarget {
 
 export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogProps) {
   const { t } = useTranslation();
-  const { executeTmlImport, calculateFileHash, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
-  const { closeDialog, openDialog, setView, triggerFitToBounds, setImportContext, showToast } = useUIStore();
+  const { executeTmlImport, calculateFileHash, startLoading, setLoadingProgress, resetLoading } = useProjectStore(
+    useShallow((s) => ({
+      executeTmlImport: s.executeTmlImport,
+      calculateFileHash: s.calculateFileHash,
+      startLoading: s.startLoading,
+      setLoadingProgress: s.setLoadingProgress,
+      resetLoading: s.resetLoading,
+    })),
+  );
+  const { closeDialog, openDialog, setView, triggerFitToBounds, setImportContext, showToast } = useUIStore(
+    useShallow((s) => ({
+      closeDialog: s.closeDialog,
+      openDialog: s.openDialog,
+      setView: s.setView,
+      triggerFitToBounds: s.triggerFitToBounds,
+      setImportContext: s.setImportContext,
+      showToast: s.showToast,
+    })),
+  );
 
   const [isImporting, setIsImporting] = useState(false);
   const [isDiscarding, setIsDiscarding] = useState(false);

@@ -18,6 +18,9 @@
 //     landed, so they are frozen in the baseline rather than fixed in one go.
 //   - stalagmight/no-render-ref-write (error, src/ only; scripts/eslint/): no
 //     `ref.current = ...` while a component or hook renders - use useLatest.
+//   - stalagmight/require-store-selector (error, src/ only, zero tolerance): no
+//     zustand store hook call without a selector (`useProjectStore()`), which
+//     re-renders its component on every store update.
 //   - in the test-automation trees, no-explicit-any and no-unused-vars are
 //     warnings, ratcheted the same way: the recommended set found ~260 there
 //     when it landed (236 `any` across 22 Playwright specs, 25 unused names).
@@ -61,6 +64,7 @@ export default [
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'warn',
       'stalagmight/no-render-ref-write': 'error',
+      'stalagmight/require-store-selector': 'error',
     },
   },
   {
