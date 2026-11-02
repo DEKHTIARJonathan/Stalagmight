@@ -54,6 +54,8 @@ import {
   computeUnreachableSegments,
   computeSegmentLayout,
 } from '../../utils/segmentContext';
+import { azimuthReferenceFor } from '../../utils/stationWalk';
+import { buildFromExistingContext } from './dmpWizard/fromExistingContext';
 import { sectionColorPalette } from '../../utils/colors';
 import { debugLog } from '../../utils/debugLog';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
@@ -2175,6 +2177,9 @@ export default function DmpNewImportDialog({
       targetSection,
       importStationIndex: selectedMergePair?.importStation ?? currentSuggestion.importStationIndex,
       targetStationIndex: selectedMergePair?.existingStation ?? currentSuggestion.existingStationIndex,
+      // The reference the backend walks the target with (#576 D15); the context
+      // offset below walks it with the same one.
+      targetAzimuthReference: azimuthReferenceFor(targetSection.azimuth_reference, currentProject.default_azimuth_reference),
     };
   }, [currentSuggestion, selectedMergePair]);
 
@@ -2214,7 +2219,7 @@ export default function DmpNewImportDialog({
         let targetStations: Array<{ x: number; y: number }> = [];
         if (mergePreviewConfig) {
           targetStations = computeStationsFromShots(
-            mergePreviewConfig.targetSection.shots
+            mergePreviewConfig.targetSection.shots, mergePreviewConfig.targetAzimuthReference
           );
         } else if (dmpMergePreviewConfig) {
           targetStations = computeStationsFromDmpShots(
@@ -2466,6 +2471,7 @@ export default function DmpNewImportDialog({
   // Project sections and merges for "From Existing" dropdown + preview
   const projectSections = useProjectStore((s) => s.project?.sections ?? []);
   const projectMerges = useProjectStore((s) => s.project?.station_merges ?? []);
+  const projectDefault = useProjectStore((s) => s.project?.default_azimuth_reference);
 
   // Get target section stations for "From Existing" mode
   const fromExistingTargetSection = useMemo(() => {
@@ -2513,94 +2519,11 @@ export default function DmpNewImportDialog({
   const fromExistingContextSections = useMemo((): ContextSectionGeometry[] | null => {
     if (segmentPlacementMode !== 'fromExisting' || fromExistingSectionId == null) return null;
     if (!segmentAnchor || !segmentPreviewSections || segmentPreviewSections.length === 0) return null;
-
-    // Build adjacency from project station_merges
-    const mergeAdj = new Map<number, Array<{ neighborId: number; thisIdx: number; neighborIdx: number }>>();
-    for (const m of projectMerges) {
-      const a = m.station_a;
-      const b = m.station_b;
-      if (!mergeAdj.has(a.section_id)) mergeAdj.set(a.section_id, []);
-      if (!mergeAdj.has(b.section_id)) mergeAdj.set(b.section_id, []);
-      mergeAdj.get(a.section_id)!.push({ neighborId: b.section_id, thisIdx: a.station_index, neighborIdx: b.station_index });
-      mergeAdj.get(b.section_id)!.push({ neighborId: a.section_id, thisIdx: b.station_index, neighborIdx: a.station_index });
-    }
-
-    // BFS from target section through merges to discover connected segment
-    const visited = new Set<number>();
-    const queue: Array<{ sectionId: number; offsetX: number; offsetY: number }> = [];
-    visited.add(fromExistingSectionId);
-    queue.push({ sectionId: fromExistingSectionId, offsetX: 0, offsetY: 0 });
-
-    const entries: Array<{ sectionId: number; stations: Array<{ x: number; y: number }>; offsetX: number; offsetY: number }> = [];
-
-    while (queue.length > 0) {
-      const { sectionId, offsetX, offsetY } = queue.shift()!;
-      const section = projectSections.find((s) => s.id === sectionId);
-      if (!section) continue;
-
-      const stnPositions = computeStationsFromShots(section.shots);
-      entries.push({ sectionId, stations: stnPositions, offsetX, offsetY });
-
-      for (const edge of mergeAdj.get(sectionId) ?? []) {
-        if (visited.has(edge.neighborId)) continue;
-        visited.add(edge.neighborId);
-
-        const neighborSection = projectSections.find((s) => s.id === edge.neighborId);
-        if (!neighborSection) continue;
-
-        const neighborStns = computeStationsFromShots(neighborSection.shots);
-        const thisPos = stnPositions[edge.thisIdx];
-        const neighborPos = neighborStns[edge.neighborIdx];
-        if (!thisPos || !neighborPos) continue;
-
-        queue.push({
-          sectionId: edge.neighborId,
-          offsetX: offsetX + thisPos.x - neighborPos.x,
-          offsetY: offsetY + thisPos.y - neighborPos.y,
-        });
-      }
-    }
-
-    // Align target segment to import segment: target station → import anchor station
-    const targetEntry = entries.find((e) => e.sectionId === fromExistingSectionId);
-    if (!targetEntry) return null;
-    const targetStn = targetEntry.stations[fromExistingStationIdx];
-    if (!targetStn) return null;
-
-    const anchorEntry = segmentPreviewSections.find((e) => e.sectionIndex === segmentAnchor.sectionIndex);
-    if (!anchorEntry) return null;
-    const anchorStns = computeStationsFromDmpShots(
-      anchorEntry.section.shots.filter((s) => s.shot_type === 'Standard'),
-    );
-    // `anchorStns` comes from the effective (emitted) section - so must the index.
-    const anchorStn = anchorStns[emittedAnchorStation(segmentAnchor)];
-    if (!anchorStn) return null;
-
-    const gx = (anchorEntry.offsetX + anchorStn.x) - (targetEntry.offsetX + targetStn.x);
-    const gy = (anchorEntry.offsetY + anchorStn.y) - (targetEntry.offsetY + targetStn.y);
-
-    // Build ContextSectionGeometry for each section in the target segment
-    const result: ContextSectionGeometry[] = [];
-    for (const entry of entries) {
-      const shots: Array<{ from: [number, number]; to: [number, number] }> = [];
-      for (let i = 0; i < entry.stations.length - 1; i++) {
-        const from = entry.stations[i]!;
-        const to = entry.stations[i + 1]!;
-        shots.push({
-          from: [from.x + entry.offsetX + gx, from.y + entry.offsetY + gy],
-          to: [to.x + entry.offsetX + gx, to.y + entry.offsetY + gy],
-        });
-      }
-      if (shots.length > 0) {
-        result.push({
-          color: entry.sectionId === fromExistingSectionId ? '#95a5a6' : '#6b7280',
-          shots,
-        });
-      }
-    }
-
-    return result.length > 0 ? result : null;
-  }, [segmentPlacementMode, fromExistingSectionId, fromExistingStationIdx, projectSections, projectMerges, segmentAnchor, segmentPreviewSections, emittedAnchorStation]);
+    return buildFromExistingContext({
+      fromExistingSectionId, fromExistingStationIdx, projectSections, projectMerges, projectDefault,
+      anchorSectionIndex: segmentAnchor.sectionIndex, emittedAnchorStation: emittedAnchorStation(segmentAnchor), segmentPreviewSections,
+    });
+  }, [segmentPlacementMode, fromExistingSectionId, fromExistingStationIdx, projectSections, projectMerges, projectDefault, segmentAnchor, segmentPreviewSections, emittedAnchorStation]);
 
   // Current segment's skipped suggestion (if any section in the segment had one)
   const segmentSkippedSuggestion = useMemo(() => {
@@ -2915,6 +2838,7 @@ export default function DmpNewImportDialog({
         },
         () => reopen(false),
         payload.additionalSections.length > 0 ? payload.additionalSections : undefined,
+        DMP_AZIMUTH_REFERENCE,
       );
 
       showToast(

@@ -1,6 +1,9 @@
 import { useMemo } from 'react';
-import type { SectionData, Coordinates, ShotData } from '../../types/project';
+import type { SectionData } from '../../types/project';
+import type { AzimuthReference } from '../../types/ipc/AzimuthReference';
 import { getThemeColor } from '../../utils/themeColors';
+import { azimuthReferenceFor, walkStations, type WalkedStation } from '../../utils/stationWalk';
+import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type AdditionalPlacementSection } from '../../store/uiStore';
 
 interface PlacementOverlayProps {
@@ -18,34 +21,12 @@ interface PlacementOverlayProps {
   additionalSections?: AdditionalPlacementSection[] | undefined;
   /** Callback to cancel placement (shown as button on touch devices) */
   onCancel?: () => void;
-}
-
-/**
- * Calculate relative station positions from shot data.
- * Returns coordinates for each station (0 to shots.length inclusive).
- */
-function calculateStationPositions(shots: ShotData[]): Coordinates[] {
-  const stations: Coordinates[] = [{ x: 0, y: 0, z: 0 }];
-
-  for (const shot of shots) {
-    const prev = stations[stations.length - 1];
-    if (!prev) continue;
-
-    // Calculate direction from azimuth (degrees to radians, math convention)
-    const azimuthRad = ((90 - shot.azimuth_in) * Math.PI) / 180;
-    const length = shot.length;
-
-    // Calculate depth change
-    const depthChange = shot.depth_out - shot.depth_in;
-
-    stations.push({
-      x: prev.x + Math.cos(azimuthRad) * length,
-      y: prev.y + Math.sin(azimuthRad) * length,
-      z: prev.z + depthChange,
-    });
-  }
-
-  return stations;
+  /**
+   * The north reference the section(s) being placed WILL be recorded with, if
+   * the import sets one (a DMP import: magnetic, no correction). Omitted, the
+   * section records none and the backend walks it with the project default.
+   */
+  azimuthReference?: AzimuthReference | null | undefined;
 }
 
 /**
@@ -60,11 +41,17 @@ export default function PlacementOverlay({
   pixelsPerMeter,
   additionalSections,
   onCancel,
+  azimuthReference,
 }: PlacementOverlayProps) {
-  // Calculate station positions relative to first station
+  // Walked the way the backend will place the section (#576 D15): the shared
+  // walk, with the reference it will be recorded with, else the project default.
+  // This preview used to keep its own walk - `azimuth_in` alone, the slope
+  // length, no reference - so the section landed off where it was aimed.
+  const projectDefault = useProjectStore((s) => s.project?.default_azimuth_reference);
+  const reference = azimuthReferenceFor(azimuthReference, projectDefault);
   const stationPositions = useMemo(
-    () => calculateStationPositions(sectionData.shots),
-    [sectionData.shots]
+    () => walkStations(sectionData.shots, reference),
+    [sectionData.shots, reference]
   );
 
   // Clamp align station index to valid range
@@ -79,7 +66,7 @@ export default function PlacementOverlay({
   const scale = pixelsPerMeter;
 
   // Transform station to screen coordinates, centered on cursor
-  const toScreen = (station: Coordinates): { x: number; y: number } => {
+  const toScreen = (station: WalkedStation): { x: number; y: number } => {
     const relX = (station.x - anchorStation.x) * scale;
     const relY = -(station.y - anchorStation.y) * scale; // Flip Y for screen coordinates
     return {
@@ -143,9 +130,10 @@ export default function PlacementOverlay({
 
       {/* Additional sections (segment context) */}
       {additionalSections?.map((addSection, secIdx) => {
-        const addPositions = calculateStationPositions(addSection.sectionData.shots);
+        // A segment's sections come from one import, recorded with one reference.
+        const addPositions = walkStations(addSection.sectionData.shots, reference);
         // Transform with offset relative to primary section's anchor station
-        const toScreenAdd = (station: Coordinates): { x: number; y: number } => {
+        const toScreenAdd = (station: WalkedStation): { x: number; y: number } => {
           const relX = (station.x + addSection.offsetX - anchorStation.x) * scale;
           const relY = -(station.y + addSection.offsetY - anchorStation.y) * scale;
           return {

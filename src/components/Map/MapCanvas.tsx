@@ -1606,6 +1606,7 @@ function MapCanvas({ onReloadMap }: MapCanvasProps) {
           pixelsPerMeter={pixelsPerMeter}
           additionalSections={placementMode.additionalSections}
           onCancel={handlePlacementCancel}
+          azimuthReference={placementMode.azimuthReference}
         />
       )}
 

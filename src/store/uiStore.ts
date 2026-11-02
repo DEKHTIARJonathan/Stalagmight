@@ -7,6 +7,7 @@ import {
 } from '../components/SingleSystemView/layoutConstants';
 import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackPanelMode, trackSelect, trackSelectAdd, clearProjectActionSource, isPersistSuppressed } from '../utils/telemetry';
 import type { Coordinates, DistanceField, PathShot, SectionId, ShotId, StationRef, SectionData } from '../types/project';
+import type { AzimuthReference } from '../types/ipc/AzimuthReference';
 
 export interface CommentTarget {
   type: 'station' | 'shot';
@@ -294,6 +295,12 @@ export interface PlacementModeState {
   onCancel?: () => void;
   /** Additional sections to render alongside primary (for segment placement) */
   additionalSections?: AdditionalPlacementSection[];
+  /**
+   * The north reference the placed section(s) WILL be recorded with, when the
+   * import sets one (a DMP import: magnetic, no correction). Absent, the section
+   * records none and the preview walks it with the project default (#576 D15).
+   */
+  azimuthReference?: AzimuthReference | null;
 }
 
 export interface Selection {
@@ -786,6 +793,7 @@ interface UIStore {
     onComplete?: (result: PlacementResult) => void,
     onCancel?: () => void,
     additionalSections?: AdditionalPlacementSection[],
+    azimuthReference?: AzimuthReference | null,
   ) => void;
   updatePlacementCursor: (position: Coordinates | null) => void;
   updatePlacementSnap: (stationRef: StationRef | null) => void;
@@ -2116,7 +2124,7 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Placement mode state
   placementMode: null,
-  startPlacementMode: (sectionData, alignStationIndex, onComplete, onCancel, additionalSections) => {
+  startPlacementMode: (sectionData, alignStationIndex, onComplete, onCancel, additionalSections, azimuthReference) => {
     // Placement mode bypasses the setView() cleanup funnel, so leave the gas sub-mode
     // (#38) here too - its overlay/panel must not outlive entry into placement
     // (idempotent no-op when gas is off).
@@ -2148,6 +2156,7 @@ export const useUIStore = create<UIStore>((set) => ({
         ...(onComplete !== undefined && { onComplete }),
         ...(onCancel !== undefined && { onCancel }),
         ...(additionalSections !== undefined && { additionalSections }),
+        ...(azimuthReference != null && { azimuthReference }),
       },
       // Placement and the ruler readout both occupy top-center (#26 reset).
       ...MEASURE_CLEARED,
