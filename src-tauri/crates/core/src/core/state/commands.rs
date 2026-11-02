@@ -232,6 +232,17 @@ impl AppState {
         }
     }
 
+    /// [#576 RV4-R-NITS C-4] The test seam in `execute` (see
+    /// `AppState::park_after_mutation`): park once, if a test asked.
+    #[cfg(test)]
+    fn park_after_mutation_if_asked(&self) {
+        let park = self.park_after_mutation.lock().take();
+        if let Some(park) = park {
+            let _ = park.reached.send(());
+            let _ = park.resume.recv();
+        }
+    }
+
     /// The open project's frame-defining datum station, or `None` with no project
     /// and none with no resolvable datum. Read BEFORE a command runs; handed back
     /// to [`Self::renormalize_frame_if_changed`] after it.
@@ -820,6 +831,9 @@ impl AppState {
                 }
             }
         }
+
+        #[cfg(test)]
+        self.park_after_mutation_if_asked();
 
         // [#576 A4] The shared forward epilogue, in its one order: the orphan
         // conversion, the frame renormalisation and the reconcile, then the undo

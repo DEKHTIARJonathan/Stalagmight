@@ -62,6 +62,16 @@ fn adjusted_config_hash(ca: &ClosureAdjustmentConfig) -> u64 {
     h.finish()
 }
 
+/// [#576 RV4-R-NITS C-4] What a parked `execute` signals on and waits for (see
+/// `AppState::park_after_mutation`).
+#[cfg(test)]
+pub(super) struct ParkAfterMutation {
+    /// Sent once the command has mutated and before it pushes its undo entry.
+    pub(super) reached: std::sync::mpsc::Sender<()>,
+    /// Received before it goes on.
+    pub(super) resume: std::sync::mpsc::Receiver<()>,
+}
+
 /// Application state managed by Tauri
 pub struct AppState {
     /// Current project (if any)
@@ -250,6 +260,11 @@ pub struct AppState {
     /// cleared when the adoption returns. Transient, never persisted; an atomic,
     /// so it is no lock cell.
     pub(super) speleodb_adoption_gate: AtomicU64,
+    /// [#576 RV4-R-NITS C-4] Test seam: park the next `execute` once, between its
+    /// mutation and its undo push, so a test can run a slot commit in exactly that
+    /// window (`lifecycle_park_tests.rs`).
+    #[cfg(test)]
+    pub(super) park_after_mutation: RecoveringMutex<Option<ParkAfterMutation>>,
     /// Serializes SpeleoDB lock-acquisition spans against lock releases that run
     /// detached from the session that captured them (the delete's captured
     /// release, the stranded-claim janitor). Start Editing holds this across
@@ -365,6 +380,12 @@ impl AppState {
             speleodb_session_generation: AtomicU64::new(0),
             speleodb_finished_here: AtomicU64::new(0),
             speleodb_adoption_gate: AtomicU64::new(0),
+            #[cfg(test)]
+            park_after_mutation: RecoveringMutex::with_monitor(
+                "park_after_mutation",
+                None,
+                &poison,
+            ),
             speleodb_lock_ops: RecoveringMutex::with_monitor("speleodb_lock_ops", (), &poison),
             poison,
         })

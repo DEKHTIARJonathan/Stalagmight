@@ -79,6 +79,7 @@ fn every_cell(state: &AppState) -> Vec<&dyn LockCell> {
         speleodb_session_generation: _,
         speleodb_finished_here: _,
         speleodb_adoption_gate: _,
+        park_after_mutation,
         speleodb_lock_ops,
         poison: _,
     } = state;
@@ -99,6 +100,7 @@ fn every_cell(state: &AppState) -> Vec<&dyn LockCell> {
         unrecognised_shot_kinds,
         unreadable_project_settings,
         adjusted_cache,
+        park_after_mutation,
         speleodb_lock_ops,
     ]
 }

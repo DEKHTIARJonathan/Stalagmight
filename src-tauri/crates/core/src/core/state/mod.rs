@@ -143,6 +143,16 @@ mod issue_555_tests;
 mod lifecycle_lock_tests;
 #[cfg(test)]
 #[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              counts are the evidence a run captures"
+)]
+mod lifecycle_park_tests;
+#[cfg(test)]
+#[expect(
     clippy::expect_used,
     clippy::panic,
     clippy::print_stdout,
