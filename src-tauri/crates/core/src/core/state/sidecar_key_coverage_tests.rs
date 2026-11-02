@@ -55,7 +55,7 @@ fn every_project_settings_key_is_saved_by_the_core_save_or_consumed_on_load() {
     println!("keys the core save writes: {written_by_save:?}");
     println!("keys the schema/migrations/load write: {elsewhere:?}");
 
-    let mut saved_sorted = written_by_save.clone();
+    let mut saved_sorted = written_by_save;
     saved_sorted.sort();
     saved_sorted.dedup();
     let mut core: Vec<String> = CORE_SAVED_KEYS.iter().map(|k| (*k).to_owned()).collect();

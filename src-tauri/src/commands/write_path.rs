@@ -204,7 +204,7 @@ fn system_dirs() -> Vec<PathBuf> {
             "ProgramW6432",
         ]
         .iter()
-        .filter_map(|var| std::env::var_os(var))
+        .filter_map(std::env::var_os)
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .collect()

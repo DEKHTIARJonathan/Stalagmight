@@ -74,7 +74,7 @@ fn a_settings_patch_keeps_what_the_backend_recorded_since_the_snapshot() {
         live.appearance.theme, live.panels.data_table_open, on_disk.panels.data_table_open
     );
     assert_eq!(
-        serde_json::to_value(&live.appearance.theme).expect("theme"),
+        serde_json::to_value(live.appearance.theme).expect("theme"),
         serde_json::json!(theme),
         "the changed setting is saved"
     );
