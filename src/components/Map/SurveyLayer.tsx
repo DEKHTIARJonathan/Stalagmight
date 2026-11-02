@@ -41,12 +41,12 @@ import { SurveyCustomController, buildCustomDimState } from './surveyLayer/custo
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
 import { MeasurePathController } from './surveyLayer/customRender/measurePathController';
 import { syncMeasurePath } from './surveyLayer/measurePathSync';
+import { trackMoveEndNav, trackZoomEndNav } from './surveyLayer/navTelemetry';
 import type { SurveyData } from '../../types/survey-data';
 import type { ProjectWarning } from '../../types/commands';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
 import type { DistanceFeatureState } from '../../utils/distanceGradient';
 import type { GasReachFeatureState } from '../../utils/gasReach';
-import { trackNav } from '../../utils/telemetry';
 import { FEATURE_ID_STRIDE, sectionIdFromKey } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
 import { watchDevicePixelRatio } from '../../utils/dprWatcher';
@@ -770,30 +770,10 @@ export default class SurveyLayer {
     this.resyncCustomRenderFromStore();
   }
 
-  /** Track user-initiated zoom (scroll wheel, pinch, double-click). Skip programmatic zooms. */
-  private handleZoomEndTelemetry = (e: maplibregl.MapLibreEvent): void => {
-    const orig = e.originalEvent;
-    if (!orig) return; // programmatic - already tracked by trigger functions
-    if (orig instanceof WheelEvent) {
-      trackNav('zoom', 'mouse');
-    } else if (typeof TouchEvent !== 'undefined' && orig instanceof TouchEvent) {
-      trackNav('zoom', 'touch');
-    } else if (orig instanceof MouseEvent) {
-      trackNav('zoom', 'dblclick');
-    }
-  };
-
-  /** Track user-initiated pan (click-drag, touch-drag). Skip programmatic pans and zoom-induced moves. */
-  private handleMoveEndTelemetry = (e: maplibregl.MapLibreEvent): void => {
-    const orig = e.originalEvent;
-    if (!orig) return; // programmatic - already tracked by trigger functions
-    if (orig instanceof WheelEvent) return; // zoom gesture - tracked by zoomend
-    if (orig instanceof MouseEvent) {
-      trackNav('pan', 'mouse');
-    } else if (typeof TouchEvent !== 'undefined' && orig instanceof TouchEvent) {
-      trackNav('pan', 'touch');
-    }
-  };
+  /** Track user-initiated zoom / pan for telemetry (see surveyLayer/navTelemetry.ts).
+   *  Per-instance arrows, so destroy() unregisters exactly this layer's listeners. */
+  private handleZoomEndTelemetry = (e: maplibregl.MapLibreEvent): void => trackZoomEndNav(e);
+  private handleMoveEndTelemetry = (e: maplibregl.MapLibreEvent): void => trackMoveEndNav(e);
 
   /**
    * UNIFIED click handler - gates candidates via the visible layers and resolves priority.
