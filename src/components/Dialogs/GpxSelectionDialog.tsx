@@ -7,6 +7,7 @@ import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { ImportProgress } from './ImportProgress';
+import { ImportCancelButton } from './ImportCancelButton';
 import type { GpxFile } from '../../types/commands';
 import { setSource } from '../../utils/telemetry';
 import {
@@ -157,8 +158,15 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
     }
   };
 
+  // Escape / the close button do nothing while the waypoints-only import runs:
+  // closing would orphan its result. The footer Cancel stops it instead (RV4-FE-MISC1).
   return (
-    <DialogWrapper title={t('dialogs.gpxSelection.title')} onClose={closeDialog} size="lg" data-testid="gpx-selection-dialog">
+    <DialogWrapper
+      title={t('dialogs.gpxSelection.title')}
+      onClose={isImporting ? () => {} : closeDialog}
+      size="lg"
+      data-testid="gpx-selection-dialog"
+    >
       <div className="space-y-4">
         {/* Header info */}
         <div className="space-y-1">
@@ -370,7 +378,11 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
 
         {/* Footer */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} data-testid="gpx-selection-cancel">{t('dialogs.gpxSelection.cancel')}</Button>
+          {isImporting ? (
+            <ImportCancelButton data-testid="gpx-selection-cancel">{t('dialogs.gpxSelection.cancel')}</ImportCancelButton>
+          ) : (
+            <Button onClick={closeDialog} data-testid="gpx-selection-cancel">{t('dialogs.gpxSelection.cancel')}</Button>
+          )}
           {waypointsOnly ? (
             <Button
               data-primary-action=""

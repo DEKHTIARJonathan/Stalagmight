@@ -409,12 +409,12 @@ const HELPERS = `
    * The wizard BUSY markers, the TML import's progress marker, plus the wizard
    * being MOUNTED-BUT-HIDDEN.
    *
-   * \`tml-import-progress\` is here because there is nothing to do while it is
-   * up: \`tml-import-cancel\` is \`disabled={isImporting}\` and \`handleCancel\`
-   * early-returns anyway, so a TML import cannot be abandoned once started. A
-   * progress marker that OUTLASTS the settle cap is a hang, and the digest then
-   * reports a screen whose controls are all disabled, which is what the WEDGE
-   * oracle is for.
+   * \`tml-import-progress\` is here because the walk does not act while it is
+   * up. \`tml-import-cancel\` stays live during an import (#576 RV4-FE-MISC1: it
+   * asks the backend to stop it, \`ImportCancelButton\`), but that mid-import
+   * cancel is not fuzzed: the walk waits for the import to settle. A progress
+   * marker that OUTLASTS the settle cap is a hang, which is what the WEDGE oracle
+   * is for.
    * \`wizard-no-suggestions\` is here for the same reason and is worth spelling
    * out, because it LOOKS like a screen and is not one. It renders while
    * \`phase === 'suggesting'\` with no current suggestion, which happens only in

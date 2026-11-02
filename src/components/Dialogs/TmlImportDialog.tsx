@@ -19,6 +19,7 @@ import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import { ImportProgress } from './ImportProgress';
+import { ImportCancelButton } from './ImportCancelButton';
 import { WizardMapPanel } from './WizardMapPanel';
 import { WizardScrollBody } from './WizardScrollBody';
 import { WIZARD_MAP_PANEL_MAX_WIDTH } from '../SingleSystemView/layoutConstants';
@@ -399,7 +400,9 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
 
       if (!result.success) {
         // A move carry refused it (GHOST-2) and said so: keep the dialog for the retry.
-        if (!isMoveCarryRefusal(result)) reportFailure({ phase: 'command', error: result.error });
+        // Nothing is running then, so the footer goes back to its idle Cancel.
+        if (isMoveCarryRefusal(result)) setIsImporting(false);
+        else reportFailure({ phase: 'command', error: result.error });
         return;
       }
 
@@ -756,9 +759,15 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           is what keeps the primary action reachable however long the section
           list gets. */}
         <div className="flex justify-end gap-2 px-4 py-4 border-t border-border bg-panel">
-          <Button onClick={handleCancel} disabled={isImporting} data-testid="tml-import-cancel">
-            {t('dialogs.tmlImport.cancel')}
-          </Button>
+          {/* While the import runs, Cancel asks the backend to stop it
+              (RV4-FE-MISC1); Escape stays a no-op (`handleCancel`). */}
+          {isImporting ? (
+            <ImportCancelButton data-testid="tml-import-cancel">{t('dialogs.tmlImport.cancel')}</ImportCancelButton>
+          ) : (
+            <Button onClick={handleCancel} data-testid="tml-import-cancel">
+              {t('dialogs.tmlImport.cancel')}
+            </Button>
+          )}
           <Button
             data-primary-action=""
             data-testid="tml-import-confirm"

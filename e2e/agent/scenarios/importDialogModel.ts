@@ -141,13 +141,11 @@ export const IN_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
  * real GTK chooser and hang the webview. The path is typed instead
  * (`project-save-path-input`), which is the same code path minus the picker.
  *
- * `tml-import-cancel` is in the list but there is no mid-import cancel to
- * fuzz: it is `disabled={isImporting}` and `handleCancel` early-returns while
- * an import is running (`TmlImportDialog.tsx`), so a TML import cannot be
- * abandoned once started. The bridge's settle loop waits for
- * `tml-import-progress` to clear for exactly that reason - there is nothing
- * actionable during that window, and a window that OUTLASTS the settle cap is
- * a hang, which the WEDGE oracle then reports.
+ * `tml-import-cancel` is in the list, but its mid-import form is not fuzzed.
+ * While an import runs it asks the backend to stop it (#576 RV4-FE-MISC1,
+ * `ImportCancelButton`); the bridge's settle loop waits for
+ * `tml-import-progress` to clear instead of acting in that window, and a window
+ * that OUTLASTS the settle cap is a hang, which the WEDGE oracle then reports.
  */
 export const TESTID_INVENTORY: readonly string[] = [
   // --- entry points ---------------------------------------------------------

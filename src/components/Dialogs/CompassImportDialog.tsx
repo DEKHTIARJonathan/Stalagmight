@@ -14,6 +14,7 @@ import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { ImportProgress } from './ImportProgress';
+import { ImportCancelButton } from './ImportCancelButton';
 import type { CompassFile, CompassSurveySummary, InvalidShotCounts } from '../../types/commands';
 import { setSource } from '../../utils/telemetry';
 import { importButtonLabel } from '../../utils/importButtonLabel';
@@ -175,7 +176,9 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
 
       if (!result.success) {
         // A move carry refused it (GHOST-2) and said so: keep the dialog for the retry.
-        if (!isMoveCarryRefusal(result)) surfaceImportFailure('compass-import', importUi, { phase: 'command', error: result.error });
+        // Nothing is running then, so the footer goes back to its idle Cancel.
+        if (isMoveCarryRefusal(result)) setIsImporting(false);
+        else surfaceImportFailure('compass-import', importUi, { phase: 'command', error: result.error });
         return;
       }
 
@@ -227,8 +230,15 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
     }
   }, [executeCompassImport, filePath, fileHash, includeExcluded, applyCorrections, commentsOnStations, compassFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
 
+  // Escape / the close button do nothing while the import runs: closing would
+  // orphan its result. The footer Cancel stops it instead (RV4-FE-MISC1).
   return (
-    <DialogWrapper title={t('dialogs.compassImport.title')} onClose={closeDialog} size="lg" data-testid="compass-import-dialog">
+    <DialogWrapper
+      title={t('dialogs.compassImport.title')}
+      onClose={isImporting ? () => {} : closeDialog}
+      size="lg"
+      data-testid="compass-import-dialog"
+    >
       <div className="space-y-4">
         {/* Header info */}
         <div className="space-y-1">
@@ -366,7 +376,11 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
             TmlImportDialog's idiom; see its comment for the assumptions this
             relies on, incl. DialogWrapper's default `p-4` body padding). */}
         <div className="sticky -bottom-4 -mx-4 -mb-4 flex justify-end gap-2 px-4 py-4 border-t border-border bg-panel">
-          <Button onClick={closeDialog} data-testid="compass-import-cancel">{t('dialogs.compassImport.cancel')}</Button>
+          {isImporting ? (
+            <ImportCancelButton data-testid="compass-import-cancel">{t('dialogs.compassImport.cancel')}</ImportCancelButton>
+          ) : (
+            <Button onClick={closeDialog} data-testid="compass-import-cancel">{t('dialogs.compassImport.cancel')}</Button>
+          )}
           <Button
             data-primary-action=""
             data-testid="compass-import-confirm"

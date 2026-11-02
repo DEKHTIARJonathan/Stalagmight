@@ -12,6 +12,7 @@ import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import { ImportProgress } from './ImportProgress';
+import { ImportCancelButton } from './ImportCancelButton';
 import type { GpxFile, GpxSectionPlacement } from '../../types/commands';
 import { sectionColorPalette } from '../../utils/colors';
 import { extractFilename } from '../../utils/path';
@@ -269,9 +270,14 @@ export default function GpxPlacementDialog() {
             {t('common.actions.back')}
           </Button>
           <div className="flex gap-2">
-            <Button onClick={closeDialog} disabled={isImporting} data-testid="gpx-placement-cancel">
-              {t('common.actions.cancel')}
-            </Button>
+            {/* While the import runs, Cancel asks the backend to stop it (RV4-FE-MISC1). */}
+            {isImporting ? (
+              <ImportCancelButton data-testid="gpx-placement-cancel">{t('common.actions.cancel')}</ImportCancelButton>
+            ) : (
+              <Button onClick={closeDialog} data-testid="gpx-placement-cancel">
+                {t('common.actions.cancel')}
+              </Button>
+            )}
             <Button
               data-primary-action=""
               data-testid="gpx-import-confirm"

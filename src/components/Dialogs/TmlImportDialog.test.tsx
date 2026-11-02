@@ -9,8 +9,10 @@
  * utils/__tests__/saveFeedback.test.ts; this guards the dialog wiring + ordering.
  *
  * Plus the #411 repairs: a terminal failure never navigates, the empty project a
- * cancelled/failed import leaves behind is acknowledged, Cancel is dead while the
- * import runs, and the preview counts what will actually import.
+ * cancelled/failed import leaves behind is acknowledged, and the preview counts
+ * what will actually import. Cancel WHILE the import runs (it asks the backend to
+ * stop it) is covered for all five import dialogs in
+ * __tests__/importCancel.test.tsx.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -377,20 +379,6 @@ describe('TmlImportDialog failure handling (#411 C2)', () => {
     );
     expect(screen.queryByTestId('tml-import-residue-dialog')).toBeNull();
     expect(importContext()).toBeNull();
-  });
-
-  it('disables Cancel while the import is in flight', async () => {
-    executeTmlImport.mockReturnValue(new Promise(() => {})); // never settles
-    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
-
-    const cancel = (await screen.findByTestId('tml-import-cancel')) as HTMLButtonElement;
-    expect(cancel.disabled).toBe(false);
-
-    await clickImport();
-
-    await waitFor(() => expect(cancel.disabled).toBe(true));
-    await userEvent.click(cancel);
-    expect(closeDialog).not.toHaveBeenCalled();
   });
 });
 
