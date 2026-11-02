@@ -437,7 +437,8 @@ impl AppState {
     /// the FULL violation set (the same set the banner counts), so the reported
     /// numbers match what the user sees. `remaining > 0` means some issues are
     /// detect-only and need manual attention (a drifted aligned loop closure to
-    /// recompute/remove; non-finite shot geometry to correct).
+    /// recompute/remove; non-finite shot geometry to correct; a GPS tie point with
+    /// impossible values, `invalid_zero_datum`, to fix or remove).
     ///
     /// `Err` carries the coded refusal when editing is blocked (`guard_mutation`:
     /// a newer-version file, a read-only SpeleoDB project, a read-only Plan/Export

@@ -21,7 +21,7 @@ Entries are **moved** between stacks, never recreated. The same `UndoData` serve
 
 ### UndoStack
 
-Two `VecDeque<UndoEntry>` stacks (undo + redo) behind a `Mutex`, with a configurable `history_limit` (default 100, FIFO-trimmed on push) - and, for that count window, at most `COUNT_WINDOW_MEMORY_BYTES` (256 MiB) of estimated size per stack, oldest evicted first and the newest always kept (#576 B20: 100 whole-project snapshot pairs held several GB on a large survey). A separate `command_lock: Mutex<()>` on `AppState` serializes all execute/undo/redo calls to prevent interleaving.
+Two stacks of entries (undo + redo; each slot also caches its compressed persisted rows) behind a `Mutex`, with a configurable `history_limit` (default 100, FIFO-trimmed on push) - and, for that count window, at most `COUNT_WINDOW_MEMORY_BYTES` (256 MiB) of estimated size per stack, oldest evicted first and the newest always kept (#576 B20: 100 whole-project snapshot pairs held several GB on a large survey). A separate `command_lock: Mutex<()>` on `AppState` serializes all execute/undo/redo calls to prevent interleaving.
 
 ## Two-Phase Undo Data Capture
 

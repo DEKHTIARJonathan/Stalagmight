@@ -944,7 +944,8 @@ impl AppState {
         // [#303] A Full-mode SpeleoDB-linked project persists its WHOLE history (bounded
         // by the byte budget, not by a count) because that history is what rides in the
         // next commit and gives undo its cross-commit reach. Everything else - local
-        // projects, Disabled mode - keeps the `undo_persist_limit` window unchanged.
+        // projects, Disabled mode - keeps the `undo_persist_limit` window, byte-capped
+        // by `UNDO_BYTE_BUDGET_BYTES` (#576 B20).
         //
         // The link is read from the LOCAL `db` handle rather than through
         // `undo_policy()`: `self.database` still points at the pre-save handle when the
