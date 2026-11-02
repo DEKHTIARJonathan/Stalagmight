@@ -166,6 +166,37 @@ fires an `UpdateShot` per cell: that would multiply the reconcile by the edit
 count and should batch the edits (the `Batch` command already finalizes once)
 or debounce the reconcile.
 
+## The Refresh After an Edit
+
+After every successful edit the frontend re-reads the project: the state, the
+warnings list and the integrity check (`projectStore.executeCommand`). Three things
+keep that off the critical path (#576 C2, A9):
+
+- **Off the main thread.** Every command runs on the blocking pool
+  (docs/architecture.md, "Where commands run"), so the window keeps painting while
+  the backend works; before, each of these reads ran inline on the main thread.
+- **No copies.** The project is held copy-on-write (`core/state/project_slot.rs`);
+  a read takes an O(1) snapshot instead of deep-cloning the survey. Each of the three
+  reads used to clone it.
+- **Binary state.** The refresh fetches `get_project_state_binary`, the load's
+  msgpack + typed-array envelope (`core/load_binary.rs` `encode_refresh`, decoded by
+  `utils/loadProjectBinary.ts`), instead of the JSON `get_project_state`, which stays
+  for the agent harness and tests.
+
+Release probes (`src-tauri/src/commands/refresh_probe_tests.rs`, `#[ignore]`d; run
+with `--release -- --ignored --nocapture --test-threads=1`), synthetic 75,000 shots
+in 750 sections, medians of 7 on a loaded machine (2026-11):
+
+| Step | Before | After |
+|---|---|---|
+| whole-project copies per edit cycle | 3 (about 7 ms each) | 0 |
+| warnings list | 16.4 ms | 4.6 ms |
+| integrity check | 25.9 ms | 13.3 ms |
+| state refresh payload | JSON: 180.6 ms, 36.5 MB, then `JSON.parse` | binary: 74.0 ms, 7.2 MB |
+
+The rest of the state refresh is the measured coordinate walk, penetration and the
+frozen-shot pass, which both forms pay.
+
 ## Placement Suggestions - the Crossing Check
 
 `suggest_orphan_placements` (models `placement_suggest.rs`) scores every way an

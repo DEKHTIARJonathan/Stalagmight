@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -42,10 +42,18 @@ export default function EditStationDialog() {
   const forceEnableZeroDatum = dialogData.forceEnableZeroDatum === true;
   const focusGpsInput = dialogData.focusGpsInput === true;
 
-  const station = stations.find(
-    (s) =>
-      s.station_ref.section_id === stationRef?.section_id &&
-      s.station_ref.station_index === stationRef?.station_index
+  // Memoized on the store's array: the binary decoder's lazy station view (after a
+  // load and every refresh, #576 A9-D2) builds a NEW Station object on every read,
+  // and the form re-initializes whenever `station` changes - looked up per render,
+  // that reset the user's own toggle and comment on their next keystroke.
+  const station = useMemo(
+    () =>
+      stations.find(
+        (s) =>
+          s.station_ref.section_id === stationRef?.section_id &&
+          s.station_ref.station_index === stationRef?.station_index
+      ),
+    [stations, stationRef?.section_id, stationRef?.station_index]
   );
 
   const section = project?.sections.find(

@@ -34,6 +34,7 @@ import { useUIStore } from '../uiStore';
 import { useSpeleoStore } from '../speleoStore';
 import type { ReversedSection } from '../../types/ipc/ReversedSection';
 import type { Station } from '../../types/project';
+import { projectStateEnvelope } from '../../test/projectStateEnvelope';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 
@@ -123,13 +124,13 @@ function serveState(
             ? {}
             : { reversed_sections: reversedSections }),
         };
-      case 'get_project_state':
-        return {
+      case 'get_project_state_binary':
+        return projectStateEnvelope({
           project: projectWith(stations),
           stations,
           stats: null,
           frozen_shots: [],
-        };
+        });
       case 'can_undo':
       case 'can_redo':
         return false;
@@ -340,8 +341,8 @@ describe('frontend mutation ordering (#24)', () => {
     });
     let call = 0;
     invokeIpcMock.mockImplementation(async (command: string) => {
-      if (command === 'get_project_state') {
-        return { project: projectWith(stations), stations, stats: null, frozen_shots: [] };
+      if (command === 'get_project_state_binary') {
+        return projectStateEnvelope({ project: projectWith(stations), stations, stats: null, frozen_shots: [] });
       }
       if (command === 'can_undo' || command === 'can_redo') return false;
       if (command === 'get_project_warnings') return [];
@@ -393,13 +394,13 @@ describe('frontend mutation ordering (#24)', () => {
     // `refreshProjectState` would put project A back and mask the boundary entirely.
     let openProjectCreatedAt = '2026-01-01T00:00:00Z';
     invokeIpcMock.mockImplementation(async (command: string, args?: unknown) => {
-      if (command === 'get_project_state') {
-        return {
+      if (command === 'get_project_state_binary') {
+        return projectStateEnvelope({
           project: { ...projectWith(stations), created_at: openProjectCreatedAt },
           stations,
           stats: null,
           frozen_shots: [],
-        };
+        });
       }
       if (command === 'can_undo' || command === 'can_redo') return false;
       if (command === 'get_project_warnings') return [];
@@ -473,13 +474,13 @@ describe('a project that opens during the anchor flush cancels the mutation (#31
           return [{ id: 'endpoint' }];
         case 'plan_refs_for_anchors':
           return [ref(3)];
-        case 'get_project_state':
-          return {
+        case 'get_project_state_binary':
+          return projectStateEnvelope({
             project: { ...projectWith(stations), created_at: openProject.createdAt },
             stations,
             stats: null,
             frozen_shots: [],
-          };
+          });
         case 'can_undo':
         case 'can_redo':
           return false;

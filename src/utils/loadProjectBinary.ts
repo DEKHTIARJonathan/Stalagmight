@@ -1,5 +1,7 @@
 /**
- * Decoder for the `load_project_full_binary` IPC response.
+ * Decoder for the `load_project_full_binary` IPC response, and for
+ * `get_project_state_binary`, the state refresh after an edit, which answers
+ * with the same envelope (#576 A9-D2).
  *
  * The Rust side serializes `LoadProjectFullResult` with a layout that
  * keeps small/sparse metadata in an msgpack envelope and packs the bulk
@@ -43,6 +45,7 @@ import {
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../types/survey-data';
 import { recordPerfTiming } from './memoryProbe';
+import { invokeIpc } from './ipc';
 
 /**
  * Extended result type that carries both the legacy LoadProjectFullResult
@@ -255,12 +258,90 @@ export async function loadProjectFullBinary(path: string): Promise<LoadProjectFu
     throw e;
   }
   const tInvokeDone = performance.now();
-  recordPerfTiming('binary IPC roundtrip', tInvokeDone - tInvoke);
+  recordPerfTiming(LOAD_TIMINGS.roundtrip, tInvokeDone - tInvoke);
 
+  const result = decodeBinaryAnswer('load_project_full_binary', raw, LOAD_TIMINGS);
+  // The load answers with a project or rejects; it never answers with no bytes.
+  if (result === null) throw new Error('load_project_full_binary returned no data');
+  return result;
+}
+
+/** What a state refresh takes from the envelope: the open project's state, and
+ *  none of the load-only fields (`loadingId`, the read-only verdicts, warnings,
+ *  display settings) - those describe a load, and the refresh leaves what the load
+ *  set. */
+export type ProjectStateBinary = Pick<
+  LoadProjectFullResultWithSoa,
+  'project' | 'stations' | 'surveyData' | 'stats' | 'frozen_shots'
+>;
+
+/**
+ * [#576 A9-D2] The state refresh after an edit: `get_project_state_binary`, the
+ * load's envelope for the open project, decoded exactly as a load is - so the
+ * sections come back with lazy `shots` getters and `surveyData` comes straight
+ * from the typed arrays. The JSON `get_project_state` it replaces is ~50 MB at
+ * 75,000 shots to build, `JSON.parse` and walk again into `surveyData`.
+ *
+ * Resolves null when no project is open (the backend answers with no bytes);
+ * rejects when the IPC does, or on an answer this build cannot decode.
+ *
+ * Through `invokeIpc`, as the JSON refresh was: it hands the transport's answer
+ * back untouched (an ArrayBuffer here), and keeps the refresh in the command
+ * telemetry and the in-flight IPC tracking. The load calls `invoke` directly
+ * only because it counts its own telemetry once the load has committed.
+ */
+export async function fetchProjectStateBinary(): Promise<ProjectStateBinary | null> {
+  const tInvoke = performance.now();
+  const raw = await invokeIpc('get_project_state_binary', undefined, {
+    purpose: 'refresh project state in UI',
+  });
+  recordPerfTiming(REFRESH_TIMINGS.roundtrip, performance.now() - tInvoke);
+
+  const result = decodeBinaryAnswer('get_project_state_binary', raw, REFRESH_TIMINGS);
+  if (result === null) return null;
+  const { project, stations, surveyData, stats, frozen_shots } = result;
+  return { project, stations, surveyData, stats, frozen_shots };
+}
+
+/** The perf-panel rows one binary IPC records under. The load and the refresh
+ *  keep separate rows: the panel keeps only the latest entry per label, so a
+ *  refresh after every edit would otherwise overwrite what the load measured. */
+interface DecodeTimingLabels {
+  roundtrip: string;
+  decode: string;
+  materialize: string;
+  payloadSize: string;
+}
+
+const LOAD_TIMINGS: DecodeTimingLabels = {
+  roundtrip: 'binary IPC roundtrip',
+  decode: 'msgpack decode',
+  materialize: 'binary->JS materialize',
+  payloadSize: 'binary payload size (KB)',
+};
+
+const REFRESH_TIMINGS: DecodeTimingLabels = {
+  roundtrip: 'refresh binary IPC roundtrip',
+  decode: 'refresh msgpack decode',
+  materialize: 'refresh binary->JS materialize',
+  payloadSize: 'refresh binary payload size (KB)',
+};
+
+/**
+ * The decode the load and the refresh share: the raw IPC answer to bytes, the
+ * msgpack envelope, the wire-version fence, then `buildResult`. Null when the
+ * answer holds no bytes, which is how `get_project_state_binary` says that no
+ * project is open. `command` names the IPC in the errors.
+ */
+function decodeBinaryAnswer(
+  command: string,
+  raw: unknown,
+  timings: DecodeTimingLabels,
+): LoadProjectFullResultWithSoa | null {
   // Tauri 2 on Linux delivers Raw responses as ArrayBuffer through the
   // URI scheme protocol fast path. Older configurations or platforms might
   // hand back Uint8Array or a JSON-array fallback - handle all three so
-  // the load works even if the IPC path changes shape.
+  // the decode works even if the IPC path changes shape.
   let bytes: Uint8Array;
   if (raw instanceof Uint8Array) {
     bytes = raw;
@@ -268,29 +349,30 @@ export async function loadProjectFullBinary(path: string): Promise<LoadProjectFu
     bytes = new Uint8Array(raw);
   } else if (Array.isArray(raw)) {
     // Slow fallback - Tauri's eval-based callback path. Should not happen
-    // for `load_project_full_binary` on Linux/Windows but keep the
-    // conversion correct in case the platform changes.
+    // on Linux/Windows but keep the conversion correct in case the platform
+    // changes.
     bytes = new Uint8Array(raw as number[]);
   } else {
-    throw new Error(`load_project_full_binary returned unexpected type: ${typeof raw}`);
+    throw new Error(`${command} returned unexpected type: ${typeof raw}`);
   }
+  if (bytes.byteLength === 0) return null;
 
   const tDecodeStart = performance.now();
   const envelope = msgpackDecode(bytes) as BinaryEnvelope;
   const tDecodeDone = performance.now();
-  recordPerfTiming('msgpack decode', tDecodeDone - tDecodeStart);
+  recordPerfTiming(timings.decode, tDecodeDone - tDecodeStart);
 
   if (envelope.version !== EXPECTED_VERSION) {
     throw new Error(
-      `load_project_full_binary version mismatch: expected ${EXPECTED_VERSION}, got ${envelope.version}. ` +
+      `${command} version mismatch: expected ${EXPECTED_VERSION}, got ${envelope.version}. ` +
       `Rebuild backend or frontend so the binary wire format matches.`
     );
   }
 
   const tBuildStart = performance.now();
-  const result = buildResult(envelope, bytes.byteLength);
+  const result = buildResult(envelope, bytes.byteLength, timings.payloadSize);
   const tBuildDone = performance.now();
-  recordPerfTiming('binary->JS materialize', tBuildDone - tBuildStart);
+  recordPerfTiming(timings.materialize, tBuildDone - tBuildStart);
 
   return result;
 }
@@ -300,9 +382,14 @@ export async function loadProjectFullBinary(path: string): Promise<LoadProjectFu
  * result shape. Exported for the load-path laziness regression test, which
  * drives this exact function so it exercises the real lazy-getter installation
  * rather than a hand-rolled stand-in. Production callers go through
- * `loadProjectFullBinary`.
+ * `loadProjectFullBinary` and `fetchProjectStateBinary`; `payloadSizeLabel` is
+ * the perf row the wire size goes to (the load's by default).
  */
-export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullResultWithSoa {
+export function buildResult(
+  env: BinaryEnvelope,
+  totalBytes: number,
+  payloadSizeLabel: string = LOAD_TIMINGS.payloadSize,
+): LoadProjectFullResultWithSoa {
   // Build typed-array views over the bulk byte buffers. These views don't
   // copy; they just point into the underlying ArrayBuffers.
   const shotsF32 = bytesToFloat32(env.shots_floats);
@@ -494,7 +581,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   const stations = lazyStationArray(surveyData);
 
   // For visibility in the perf panel, also record the wire size.
-  recordPerfTiming('binary payload size (KB)', totalBytes / 1024);
+  recordPerfTiming(payloadSizeLabel, totalBytes / 1024);
 
   return {
     loadingId: env.loading_id,

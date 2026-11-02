@@ -389,16 +389,13 @@ export function lazyStationArray(data: SurveyData): Station[] {
 
 /**
  * Construct `SurveyData` from the legacy `Project.sections[].shots[]` +
- * `Station[]` shape that `refreshProjectState` still returns (it pulls
- * via JSON IPC, not the binary `load_project_full_binary` route).
+ * `Station[]` shape.
  *
- * This is the migration-window converter - once the JSON IPC is also
- * binary-ized (out of scope for Phase A), this stops being needed.
- *
- * For the binary IPC path, see `buildSurveyData` inside
- * `utils/loadProjectBinary.ts` which builds `SurveyData` directly from
- * the wire bytes without going through legacy objects (faster, but
- * specific to that input shape).
+ * The load and, since #576 A9-D2, the state refresh both decode the binary
+ * envelope, whose `buildSurveyData` (in `utils/loadProjectBinary.ts`) builds
+ * `SurveyData` straight from the wire bytes. What still calls this is the
+ * fallback for a store with no `surveyData` (the adjusted-geometry fetch, the
+ * map layer's flush) and the tests that build fixtures from legacy shapes.
  */
 export function surveyDataFromLegacy(
   sections: import('./ipc/Section').Section[],

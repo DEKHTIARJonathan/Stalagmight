@@ -178,9 +178,11 @@ test.describe('DMP Import Dialog', () => {
     });
     // #576 NF-FIX3B-2: the backend mints a uuid for every shot it imports, and uuid
     // anchors (plan pins, the distance origin) resolve through it; the mock's
-    // import_sections used to build its shots without one.
+    // import_sections used to build its shots without one. Read off the mock backend's
+    // project: the store refreshes through the binary envelope, which carries no uuid
+    // (#576 A9-D2).
     const uuids = await page.evaluate(() => {
-      const sections = (window as any).__E2E_TEST__.projectStore.getState().project.sections as Array<{
+      const sections = (window as any).__E2E_MOCKS__.getCurrentProject().sections as Array<{
         shots: Array<{ uuid?: string | null }>;
       }>;
       return sections.map((section) => section.shots.map((shot) => shot.uuid ?? null));

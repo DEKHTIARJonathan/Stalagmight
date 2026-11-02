@@ -155,7 +155,10 @@ test.describe('Dialog Coverage - Edit Shot', () => {
     expect(updatedShot.azimuth_out).toBe(340);
     expect(updatedShot.length).toBe(12.5);
     expect(updatedShot.pitch_in).toBe(5);
-    expect(updatedShot.left).toBe(1.2);
+    // The refresh carries shot floats as f32, as the load does (load_binary.rs,
+    // #576 A9-D2): 1.2 comes back as 1.2000000476837158. The values above are exact
+    // in f32.
+    expect(updatedShot.left).toBeCloseTo(1.2, 5);
     expect(updatedShot.comment).toBe('notes');
   });
 

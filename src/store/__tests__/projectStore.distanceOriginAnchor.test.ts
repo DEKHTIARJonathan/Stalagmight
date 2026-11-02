@@ -23,6 +23,7 @@ import { useGasPlanStore } from '../gasPlanStore';
 import { useUIStore } from '../uiStore';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { applySpeleoTreeReplacement } from '../../utils/speleoTreeReplacement';
+import { projectStateEnvelope } from '../../test/projectStateEnvelope';
 import type { StationRef } from '../../types/project';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -78,8 +79,8 @@ function serve(resolveTo: StationRef | null, reversed?: { section_id: number; sh
       case 'plan_refs_for_anchors':
         anchorCalls.push(command);
         return [resolveTo];
-      case 'get_project_state':
-        return { project: project(), stations: [], stats: null, frozen_shots: [] };
+      case 'get_project_state_binary':
+        return projectStateEnvelope({ project: project(), stations: [], stats: null, frozen_shots: [] });
       case 'can_undo':
       case 'can_redo':
         return false;

@@ -321,6 +321,269 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         }
       };
 
+      // The binary envelope `core/load_binary.rs` encodes, packed from the JSON state this
+      // mock builds: `load_project_full_binary` packs the `load_project_full` fixture and
+      // `get_project_state_binary` (#576 A9-D2) the `get_project_state` answer, so every
+      // mocked edit reaches the refresh exactly as it reached the JSON one. Shots and
+      // stations go into Uint8Array byte buffers; `extras` carries the load-only fields.
+      // Returns an ArrayBuffer, as Tauri delivers the backend's raw `Response` (the
+      // decoder's `instanceof ArrayBuffer` branch). The msgpack UMD was injected by the
+      // wrapping setupTauriMocks before this script ran, so `window.MessagePack` is there.
+      type MockEnvelopeState = {
+        project: {
+          id?: number; name?: string; location?: string | null;
+          created_at?: string; modified_at?: string; file_path?: string | null;
+          next_section_id?: number; next_closure_id?: number;
+          sections: Array<{
+            id: number; name?: string | null; surveyor?: string | null;
+            date?: string | null; color?: string; direction?: string; quality?: number;
+            // The section's north reference (#438); undefined until an
+            // importer declares one.
+            azimuth_reference?: unknown | null;
+            shots?: Array<{
+              id: number; azimuth_in?: number; azimuth_out?: number;
+              length?: number; depth_in?: number; depth_out?: number;
+              pitch_in?: number | null; pitch_out?: number | null;
+              left?: number | null; right?: number | null;
+              up?: number | null; down?: number | null;
+              temperature?: number | null;
+              comment?: string | null;
+              kind?: string;
+              marker_index?: number | null;
+            }>;
+          }>;
+          station_merges?: unknown[]; zero_datums?: unknown[];
+          loop_closures?: unknown[]; section_offsets?: Record<string, [number, number]>;
+          // Present once `update_project_settings` has stored per-project
+          // thresholds on the mock project (#57).
+          validation?: Record<string, number>;
+          // Entrance elevation (#431); undefined until an import sets it.
+          surface_elevation?: number | null;
+          // The project-level north reference (#438); undefined until one
+          // is declared.
+          default_azimuth_reference?: unknown | null;
+        };
+        stations: Array<{
+          station_ref: { section_id: number; station_index: number };
+          coordinates?: { x: number; y: number; z: number };
+          is_zero_datum?: boolean;
+          gps_coordinates?: unknown | null;
+          merged_with?: unknown[];
+          closures_with?: unknown[];
+          comment?: string | null;
+        }>;
+        stats: Record<string, unknown> | null;
+        frozen_shots?: unknown[];
+      };
+      const packStateEnvelope = (
+        state: MockEnvelopeState,
+        extras: {
+          loading_id: number; is_remote: boolean; newer_schema_version: number | null;
+          speleo_link_unreadable: boolean; unreadable_project_settings: string[];
+          load_repairs: Record<string, number>; warnings: unknown[];
+          display_settings: Record<string, unknown>;
+        },
+      ): ArrayBuffer => {
+        const totalShots = state.project.sections.reduce(
+          (n, s) => n + (s.shots?.length ?? 0),
+          0,
+        );
+        const SHOT_FLOAT_STRIDE = 48;
+        const SHOT_UINT_STRIDE = 12;
+        const shotsFloats = new Uint8Array(totalShots * SHOT_FLOAT_STRIDE);
+        const shotsUints = new Uint8Array(totalShots * SHOT_UINT_STRIDE);
+        const shotsFlags = new Uint8Array(totalShots);
+        const shotsFloatsView = new DataView(shotsFloats.buffer);
+        const shotsUintsView = new DataView(shotsUints.buffer);
+        const sectionsMeta: Array<Record<string, unknown>> = [];
+        const shotComments: Array<[number, string]> = [];
+        let shotCursor = 0;
+
+        for (const section of state.project.sections) {
+          const shot_offset = shotCursor;
+          const shot_count = section.shots?.length ?? 0;
+          for (const shot of section.shots ?? []) {
+            const fOff = shotCursor * SHOT_FLOAT_STRIDE;
+            const nullToNaN = (v: number | null | undefined): number =>
+              v === null || v === undefined ? NaN : v;
+            shotsFloatsView.setFloat32(fOff + 0,  shot.azimuth_in ?? 0, true);
+            shotsFloatsView.setFloat32(fOff + 4,  shot.azimuth_out ?? 0, true);
+            shotsFloatsView.setFloat32(fOff + 8,  shot.length ?? 0, true);
+            shotsFloatsView.setFloat32(fOff + 12, shot.depth_in ?? 0, true);
+            shotsFloatsView.setFloat32(fOff + 16, shot.depth_out ?? 0, true);
+            shotsFloatsView.setFloat32(fOff + 20, nullToNaN(shot.pitch_in), true);
+            shotsFloatsView.setFloat32(fOff + 24, nullToNaN(shot.pitch_out), true);
+            shotsFloatsView.setFloat32(fOff + 28, nullToNaN(shot.left), true);
+            shotsFloatsView.setFloat32(fOff + 32, nullToNaN(shot.right), true);
+            shotsFloatsView.setFloat32(fOff + 36, nullToNaN(shot.up), true);
+            shotsFloatsView.setFloat32(fOff + 40, nullToNaN(shot.down), true);
+            shotsFloatsView.setFloat32(fOff + 44, nullToNaN(shot.temperature), true);
+            const uOff = shotCursor * SHOT_UINT_STRIDE;
+            shotsUintsView.setUint32(uOff + 0, section.id >>> 0, true);
+            shotsUintsView.setUint32(uOff + 4, shot.id >>> 0, true);
+            shotsUintsView.setUint32(
+              uOff + 8,
+              shot.marker_index === null || shot.marker_index === undefined
+                ? 0xffffffff
+                : shot.marker_index >>> 0,
+              true,
+            );
+            // Binary wire v3: bits 0-1 carry the ShotKind discriminant (#27).
+            shotsFlags[shotCursor] =
+              shot.kind === 'Jump' ? 1 : shot.kind === 'Reference' ? 2 : 0;
+            if (shot.comment) shotComments.push([shotCursor, shot.comment]);
+            shotCursor++;
+          }
+          sectionsMeta.push({
+            id: section.id,
+            name: section.name ?? null,
+            surveyor: section.surveyor ?? null,
+            date: section.date ?? null,
+            color: section.color ?? '#888888',
+            // `SurveyDirection` is "in" | "out", and `In` is the backend's default; the
+            // old 'Forward' here was no direction at all, so the section dialogs showed
+            // none once the refresh came through this packer (#576 A9-D2).
+            direction: section.direction ?? 'in',
+            quality: section.quality ?? 1.0,
+            shot_offset,
+            shot_count,
+            // The band this section's shot ids actually live in - a flat
+            // cursor here would advertise an id the backend could never mint.
+            next_shot_id: mockShotId(section.id as number, shot_count),
+            // This section's own north reference (#438); `null` inherits the
+            // project default above, which is what a section that declares
+            // nothing carries on disk.
+            azimuth_reference: section.azimuth_reference ?? null,
+          });
+        }
+
+        const STATION_FLOAT_STRIDE = 24;
+        const STATION_UINT_STRIDE = 8;
+        const totalStations = state.stations.length;
+        const stationsFloats = new Uint8Array(totalStations * STATION_FLOAT_STRIDE);
+        const stationsUints = new Uint8Array(totalStations * STATION_UINT_STRIDE);
+        const stationsFlags = new Uint8Array(totalStations);
+        const stationsFloatsView = new DataView(stationsFloats.buffer);
+        const stationsUintsView = new DataView(stationsUints.buffer);
+        const stationGps: Array<[number, unknown]> = [];
+        const stationMergedWith: Array<[number, unknown[]]> = [];
+        const stationClosuresWith: Array<[number, unknown[]]> = [];
+        const stationCommentsArr: Array<[number, string]> = [];
+
+        state.stations.forEach((station, idx) => {
+          const fOff = idx * STATION_FLOAT_STRIDE;
+          stationsFloatsView.setFloat64(fOff + 0,  station.coordinates?.x ?? 0, true);
+          stationsFloatsView.setFloat64(fOff + 8,  station.coordinates?.y ?? 0, true);
+          stationsFloatsView.setFloat64(fOff + 16, station.coordinates?.z ?? 0, true);
+          const uOff = idx * STATION_UINT_STRIDE;
+          stationsUintsView.setUint32(uOff + 0, station.station_ref.section_id >>> 0, true);
+          stationsUintsView.setUint32(uOff + 4, station.station_ref.station_index >>> 0, true);
+          stationsFlags[idx] = station.is_zero_datum ? 1 : 0;
+          if (station.gps_coordinates) stationGps.push([idx, station.gps_coordinates]);
+          if (station.merged_with?.length) stationMergedWith.push([idx, station.merged_with]);
+          if (station.closures_with?.length) stationClosuresWith.push([idx, station.closures_with]);
+          if (station.comment) stationCommentsArr.push([idx, station.comment]);
+        });
+
+        const envelope = {
+          // Must match `core/load_binary.rs::BINARY_FORMAT_VERSION` and
+          // `EXPECTED_VERSION` in `src/utils/loadProjectBinary.ts`; the
+          // binaryFormatVersion tripwire pins the other two to each other.
+          // Bumped from 3 to 4 when Ariane collaboration mode was removed:
+          // the header no longer carries a `collab` field; 4 to 5 for the
+          // #438 north references (a project-level default plus one per
+          // section header).
+          version: 5,
+          loading_id: extras.loading_id,
+          is_remote: extras.is_remote,
+          newer_schema_version: extras.newer_schema_version,
+          speleo_link_unreadable: extras.speleo_link_unreadable,
+          unreadable_project_settings: extras.unreadable_project_settings,
+          load_repairs: extras.load_repairs,
+          project_header: {
+            name: state.project.name ?? 'Test Project',
+            location: state.project.location ?? null,
+            created_at: state.project.created_at ?? new Date().toISOString(),
+            modified_at: state.project.modified_at ?? new Date().toISOString(),
+            file_path: state.project.file_path ?? null,
+            next_section_id: state.project.next_section_id
+              ?? (sectionsMeta.length + 1),
+            next_closure_id: state.project.next_closure_id ?? 1,
+            sections: sectionsMeta,
+            station_merges: state.project.station_merges ?? [],
+            zero_datums: state.project.zero_datums ?? [],
+            loop_closures: state.project.loop_closures ?? [],
+            section_offsets: sectionOffsetPairs(state.project.section_offsets),
+            // The mock has no `station_offsets` state: no mocked command ever
+            // writes one, so there is nothing for a reverse to mirror either
+            // (the backend's `for_each_station_ref` does mirror them). Give
+            // one a home here and `reverse_section` must mirror it too.
+            station_offsets: [],
+            station_comments_map: [],
+            imported_file_hashes: [],
+            imported_section_hashes: [],
+            // Per-project validation thresholds (#57), sourced like every
+            // sibling above: whatever `update_project_settings` last stored
+            // on the mock project, else `ValidationConfig::default()` - what
+            // a project that never customised its thresholds carries on
+            // disk. Rust always sends this; omitting it made every mocked
+            // load resolve `project.validation` as `undefined`, which the UI
+            // quietly papers over with the GLOBAL config instead
+            // (`ShotTableEditor` prefers the project's own thresholds), so
+            // per-project thresholds stopped applying with nothing red.
+            validation: state.project.validation ?? {
+              warn_shot_length_min: 0.3,
+              warn_shot_length_max: 50.0,
+              warn_depth_change_per_shot_max: 10.0,
+              warn_azimuth_deviation_max: 30.0,
+              azimuth_diff_threshold: 20.0,
+              pitch_diff_threshold: 10.0,
+              inclination_depth_diff_threshold: 15.0,
+            },
+            // Entrance elevation (#431), same provenance as `validation`
+            // above: whatever the mock project currently carries, else
+            // `null` (unknown) - what a project that never imported one
+            // has on disk.
+            surface_elevation: state.project.surface_elevation ?? null,
+            // The project-level north reference (#438), same provenance as
+            // the two above. `null` is "nothing recorded", which is what a
+            // project that never declared one carries - and what every
+            // section that declares none inherits.
+            default_azimuth_reference:
+              state.project.default_azimuth_reference ?? null,
+          },
+          shot_count: totalShots,
+          shots_floats: shotsFloats,
+          shots_uints: shotsUints,
+          shots_flags: shotsFlags,
+          shot_comments: shotComments,
+          station_count: totalStations,
+          stations_floats: stationsFloats,
+          stations_uints: stationsUints,
+          stations_flags: stationsFlags,
+          station_gps: stationGps,
+          station_merged_with: stationMergedWith,
+          station_closures_with: stationClosuresWith,
+          station_comments: stationCommentsArr,
+          stats: state.stats,
+          warnings: extras.warnings,
+          display_settings: extras.display_settings,
+          frozen_shots: state.frozen_shots ?? [],
+        };
+
+        const MessagePack = (window as unknown as {
+          MessagePack?: { encode: (v: unknown) => Uint8Array };
+        }).MessagePack;
+        if (!MessagePack) {
+          throw new Error(
+            'binary envelope mock: window.MessagePack missing - setupTauriMocks must inject the msgpack UMD',
+          );
+        }
+        // `slice()` copies exactly the encoded bytes: `encode` may hand back a view into a
+        // larger buffer.
+        return MessagePack.encode(envelope).slice().buffer;
+      };
+
       // Geometry loading mock control
       // Paths listed here will fail geometry loading (throw error instead of returning data)
       const geometryErrorPaths = new Set<string>();
@@ -1210,172 +1473,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'load_project_full_binary': {
-            // Mirror the binary IPC wire format that the Rust backend
-            // emits from `src-tauri/src/core/load_binary.rs::encode`:
-            // build the same JSON fixture the legacy `load_project_full`
-            // case produces, pack shots / stations into Uint8Array byte
-            // buffers, msgpack-encode the BinaryEnvelope, and return
-            // bytes as a number array (the frontend's `Array.isArray`
-            // fallback in loadProjectBinary.ts converts that to a real
-            // Uint8Array). The msgpack UMD was injected by the wrapping
-            // setupTauriMocks before this script ran, so
-            // `window.MessagePack.encode` is available synchronously.
-            const jsonResult = mockHandler('load_project_full', args) as {
+            // Mirror the binary IPC wire format that the Rust backend emits from
+            // `src-tauri/src/core/load_binary.rs::encode`: the same JSON fixture the legacy
+            // `load_project_full` case produces, packed by `packStateEnvelope`.
+            const jsonResult = mockHandler('load_project_full', args) as MockEnvelopeState & {
               loadingId: number;
-              project: {
-                id?: number; name?: string; location?: string | null;
-                created_at?: string; modified_at?: string; file_path?: string | null;
-                next_section_id?: number; next_closure_id?: number;
-                sections: Array<{
-                  id: number; name?: string | null; surveyor?: string | null;
-                  date?: string | null; color?: string; direction?: string; quality?: number;
-                  // The section's north reference (#438); undefined until an
-                  // importer declares one.
-                  azimuth_reference?: unknown | null;
-                  shots?: Array<{
-                    id: number; azimuth_in?: number; azimuth_out?: number;
-                    length?: number; depth_in?: number; depth_out?: number;
-                    pitch_in?: number | null; pitch_out?: number | null;
-                    left?: number | null; right?: number | null;
-                    up?: number | null; down?: number | null;
-                    temperature?: number | null;
-                    comment?: string | null;
-                    kind?: string;
-                    marker_index?: number | null;
-                  }>;
-                }>;
-                station_merges?: unknown[]; zero_datums?: unknown[];
-                loop_closures?: unknown[]; section_offsets?: Record<string, [number, number]>;
-                // Present once `update_project_settings` has stored per-project
-                // thresholds on the mock project (#57).
-                validation?: Record<string, number>;
-                // Entrance elevation (#431); undefined until an import sets it.
-                surface_elevation?: number | null;
-                // The project-level north reference (#438); undefined until one
-                // is declared.
-                default_azimuth_reference?: unknown | null;
-              };
-              stations: Array<{
-                station_ref: { section_id: number; station_index: number };
-                coordinates?: { x: number; y: number; z: number };
-                is_zero_datum?: boolean;
-                gps_coordinates?: unknown | null;
-                merged_with?: unknown[];
-                closures_with?: unknown[];
-                comment?: string | null;
-              }>;
-              stats: Record<string, unknown>;
               warnings: unknown[];
               displaySettings: Record<string, unknown>;
             };
-
-            const totalShots = jsonResult.project.sections.reduce(
-              (n, s) => n + (s.shots?.length ?? 0),
-              0,
-            );
-            const SHOT_FLOAT_STRIDE = 48;
-            const SHOT_UINT_STRIDE = 12;
-            const shotsFloats = new Uint8Array(totalShots * SHOT_FLOAT_STRIDE);
-            const shotsUints = new Uint8Array(totalShots * SHOT_UINT_STRIDE);
-            const shotsFlags = new Uint8Array(totalShots);
-            const shotsFloatsView = new DataView(shotsFloats.buffer);
-            const shotsUintsView = new DataView(shotsUints.buffer);
-            const sectionsMeta: Array<Record<string, unknown>> = [];
-            const shotComments: Array<[number, string]> = [];
-            let shotCursor = 0;
-
-            for (const section of jsonResult.project.sections) {
-              const shot_offset = shotCursor;
-              const shot_count = section.shots?.length ?? 0;
-              for (const shot of section.shots ?? []) {
-                const fOff = shotCursor * SHOT_FLOAT_STRIDE;
-                const nullToNaN = (v: number | null | undefined): number =>
-                  v === null || v === undefined ? NaN : v;
-                shotsFloatsView.setFloat32(fOff + 0,  shot.azimuth_in ?? 0, true);
-                shotsFloatsView.setFloat32(fOff + 4,  shot.azimuth_out ?? 0, true);
-                shotsFloatsView.setFloat32(fOff + 8,  shot.length ?? 0, true);
-                shotsFloatsView.setFloat32(fOff + 12, shot.depth_in ?? 0, true);
-                shotsFloatsView.setFloat32(fOff + 16, shot.depth_out ?? 0, true);
-                shotsFloatsView.setFloat32(fOff + 20, nullToNaN(shot.pitch_in), true);
-                shotsFloatsView.setFloat32(fOff + 24, nullToNaN(shot.pitch_out), true);
-                shotsFloatsView.setFloat32(fOff + 28, nullToNaN(shot.left), true);
-                shotsFloatsView.setFloat32(fOff + 32, nullToNaN(shot.right), true);
-                shotsFloatsView.setFloat32(fOff + 36, nullToNaN(shot.up), true);
-                shotsFloatsView.setFloat32(fOff + 40, nullToNaN(shot.down), true);
-                shotsFloatsView.setFloat32(fOff + 44, nullToNaN(shot.temperature), true);
-                const uOff = shotCursor * SHOT_UINT_STRIDE;
-                shotsUintsView.setUint32(uOff + 0, section.id >>> 0, true);
-                shotsUintsView.setUint32(uOff + 4, shot.id >>> 0, true);
-                shotsUintsView.setUint32(
-                  uOff + 8,
-                  shot.marker_index === null || shot.marker_index === undefined
-                    ? 0xffffffff
-                    : shot.marker_index >>> 0,
-                  true,
-                );
-                // Binary wire v3: bits 0-1 carry the ShotKind discriminant (#27).
-                shotsFlags[shotCursor] =
-                  shot.kind === 'Jump' ? 1 : shot.kind === 'Reference' ? 2 : 0;
-                if (shot.comment) shotComments.push([shotCursor, shot.comment]);
-                shotCursor++;
-              }
-              sectionsMeta.push({
-                id: section.id,
-                name: section.name ?? null,
-                surveyor: section.surveyor ?? null,
-                date: section.date ?? null,
-                color: section.color ?? '#888888',
-                direction: section.direction ?? 'Forward',
-                quality: section.quality ?? 1.0,
-                shot_offset,
-                shot_count,
-                // The band this section's shot ids actually live in - a flat
-                // cursor here would advertise an id the backend could never mint.
-                next_shot_id: mockShotId(section.id as number, shot_count),
-                // This section's own north reference (#438); `null` inherits the
-                // project default above, which is what a section that declares
-                // nothing carries on disk.
-                azimuth_reference: section.azimuth_reference ?? null,
-              });
-            }
-
-            const STATION_FLOAT_STRIDE = 24;
-            const STATION_UINT_STRIDE = 8;
-            const totalStations = jsonResult.stations.length;
-            const stationsFloats = new Uint8Array(totalStations * STATION_FLOAT_STRIDE);
-            const stationsUints = new Uint8Array(totalStations * STATION_UINT_STRIDE);
-            const stationsFlags = new Uint8Array(totalStations);
-            const stationsFloatsView = new DataView(stationsFloats.buffer);
-            const stationsUintsView = new DataView(stationsUints.buffer);
-            const stationGps: Array<[number, unknown]> = [];
-            const stationMergedWith: Array<[number, unknown[]]> = [];
-            const stationClosuresWith: Array<[number, unknown[]]> = [];
-            const stationCommentsArr: Array<[number, string]> = [];
-
-            jsonResult.stations.forEach((station, idx) => {
-              const fOff = idx * STATION_FLOAT_STRIDE;
-              stationsFloatsView.setFloat64(fOff + 0,  station.coordinates?.x ?? 0, true);
-              stationsFloatsView.setFloat64(fOff + 8,  station.coordinates?.y ?? 0, true);
-              stationsFloatsView.setFloat64(fOff + 16, station.coordinates?.z ?? 0, true);
-              const uOff = idx * STATION_UINT_STRIDE;
-              stationsUintsView.setUint32(uOff + 0, station.station_ref.section_id >>> 0, true);
-              stationsUintsView.setUint32(uOff + 4, station.station_ref.station_index >>> 0, true);
-              stationsFlags[idx] = station.is_zero_datum ? 1 : 0;
-              if (station.gps_coordinates) stationGps.push([idx, station.gps_coordinates]);
-              if (station.merged_with?.length) stationMergedWith.push([idx, station.merged_with]);
-              if (station.closures_with?.length) stationClosuresWith.push([idx, station.closures_with]);
-              if (station.comment) stationCommentsArr.push([idx, station.comment]);
-            });
-
-            const envelope = {
-              // Must match `core/load_binary.rs::BINARY_FORMAT_VERSION` and
-              // `EXPECTED_VERSION` in `src/utils/loadProjectBinary.ts`; the
-              // binaryFormatVersion tripwire pins the other two to each other.
-              // Bumped from 3 to 4 when Ariane collaboration mode was removed:
-              // the header no longer carries a `collab` field; 4 to 5 for the
-              // #438 north references (a project-level default plus one per
-              // section header).
-              version: 5,
+            const bytes = packStateEnvelope(jsonResult, {
               loading_id: jsonResult.loadingId,
               // Added to the envelope at v3 alongside the ShotKind bits
               // (`load_binary.rs`): the decoder reads it unvalidated, so omitting
@@ -1392,94 +1498,34 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               unreadable_project_settings: mockUnreadableSettings,
               // `BinaryEnvelope::load_repairs` (#576 B35(h)).
               load_repairs: mockLoadRepairs,
-              project_header: {
-                name: jsonResult.project.name ?? 'Test Project',
-                location: jsonResult.project.location ?? null,
-                created_at: jsonResult.project.created_at ?? new Date().toISOString(),
-                modified_at: jsonResult.project.modified_at ?? new Date().toISOString(),
-                file_path: jsonResult.project.file_path ?? null,
-                next_section_id: jsonResult.project.next_section_id
-                  ?? (sectionsMeta.length + 1),
-                next_closure_id: jsonResult.project.next_closure_id ?? 1,
-                sections: sectionsMeta,
-                station_merges: jsonResult.project.station_merges ?? [],
-                zero_datums: jsonResult.project.zero_datums ?? [],
-                loop_closures: jsonResult.project.loop_closures ?? [],
-                section_offsets: sectionOffsetPairs(jsonResult.project.section_offsets),
-                // The mock has no `station_offsets` state: no mocked command ever
-                // writes one, so there is nothing for a reverse to mirror either
-                // (the backend's `for_each_station_ref` does mirror them). Give
-                // one a home here and `reverse_section` must mirror it too.
-                station_offsets: [],
-                station_comments_map: [],
-                imported_file_hashes: [],
-                imported_section_hashes: [],
-                // Per-project validation thresholds (#57), sourced like every
-                // sibling above: whatever `update_project_settings` last stored
-                // on the mock project, else `ValidationConfig::default()` - what
-                // a project that never customised its thresholds carries on
-                // disk. Rust always sends this; omitting it made every mocked
-                // load resolve `project.validation` as `undefined`, which the UI
-                // quietly papers over with the GLOBAL config instead
-                // (`ShotTableEditor` prefers the project's own thresholds), so
-                // per-project thresholds stopped applying with nothing red.
-                validation: jsonResult.project.validation ?? {
-                  warn_shot_length_min: 0.3,
-                  warn_shot_length_max: 50.0,
-                  warn_depth_change_per_shot_max: 10.0,
-                  warn_azimuth_deviation_max: 30.0,
-                  azimuth_diff_threshold: 20.0,
-                  pitch_diff_threshold: 10.0,
-                  inclination_depth_diff_threshold: 15.0,
-                },
-                // Entrance elevation (#431), same provenance as `validation`
-                // above: whatever the mock project currently carries, else
-                // `null` (unknown) - what a project that never imported one
-                // has on disk.
-                surface_elevation: jsonResult.project.surface_elevation ?? null,
-                // The project-level north reference (#438), same provenance as
-                // the two above. `null` is "nothing recorded", which is what a
-                // project that never declared one carries - and what every
-                // section that declares none inherits.
-                default_azimuth_reference:
-                  jsonResult.project.default_azimuth_reference ?? null,
-              },
-              shot_count: totalShots,
-              shots_floats: shotsFloats,
-              shots_uints: shotsUints,
-              shots_flags: shotsFlags,
-              shot_comments: shotComments,
-              station_count: totalStations,
-              stations_floats: stationsFloats,
-              stations_uints: stationsUints,
-              stations_flags: stationsFlags,
-              station_gps: stationGps,
-              station_merged_with: stationMergedWith,
-              station_closures_with: stationClosuresWith,
-              station_comments: stationCommentsArr,
-              stats: jsonResult.stats,
               warnings: jsonResult.warnings,
               display_settings: jsonResult.displaySettings,
-              frozen_shots: [],
-            };
-
-            const MessagePack = (window as unknown as {
-              MessagePack?: { encode: (v: unknown) => Uint8Array };
-            }).MessagePack;
-            if (!MessagePack) {
-              throw new Error(
-                'load_project_full_binary mock: window.MessagePack missing - setupTauriMocks must inject the msgpack UMD',
-              );
-            }
+            });
             // The backend commits the same verdict as the open project's state.
             openProjectNewerSchema = mockNewerSchema;
             mockWorkspaceMode = 'survey'; // #576 C5: a project opens in Survey
             openProjectSpeleoLinkUnreadable = mockSpeleoLinkUnreadable;
-            const bytes = MessagePack.encode(envelope);
-            // An ArrayBuffer, as Tauri delivers the backend's raw `Response` (the
-            // decoder's `instanceof ArrayBuffer` branch). `slice()` copies exactly the
-            // encoded bytes: `encode` may hand back a view into a larger buffer.
-            return bytes.slice().buffer satisfies MockReply<'load_project_full_binary'>;
+            return bytes satisfies MockReply<'load_project_full_binary'>;
+          }
+
+          case 'get_project_state_binary': {
+            // [#576 A9-D2] The refresh after an edit: this mock's own `get_project_state`
+            // answer (an override of it included) in the load's envelope, with the
+            // load-only fields at the no-news values `encode_refresh` sends. No bytes when
+            // no project is open, as the backend answers.
+            // shape not checked: mockHandler returns unknown; the get_project_state case checks this value
+            const state = mockHandler('get_project_state', args) as MockEnvelopeState | null;
+            if (!state?.project) return new ArrayBuffer(0) satisfies MockReply<'get_project_state_binary'>;
+            return packStateEnvelope(state, {
+              loading_id: 0,
+              is_remote: false,
+              newer_schema_version: null,
+              speleo_link_unreadable: false,
+              unreadable_project_settings: [],
+              load_repairs: { shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0 },
+              warnings: [],
+              display_settings: {},
+            }) satisfies MockReply<'get_project_state_binary'>;
           }
 
           case 'save_project': {

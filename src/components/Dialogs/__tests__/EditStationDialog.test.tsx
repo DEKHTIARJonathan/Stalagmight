@@ -49,6 +49,7 @@ vi.mock('../DialogWrapper', () => ({
 }));
 
 import EditStationDialog from '../EditStationDialog';
+import { lazyStationArray, surveyDataFromLegacy } from '../../../types/survey-data';
 
 /** Put one station (section 1, index 0) in the store. A new object each time,
  *  as a store refresh produces. */
@@ -150,5 +151,36 @@ describe('EditStationDialog GPS field with a stored value (#576 R4 F8, F9)', () 
         { latitude: 20.5, longitude: -87.3, depth_reference: -3 },
       );
     });
+  });
+});
+
+/**
+ * #576 A9-D2: the store's `stations` is the binary decoder's lazy view after a load
+ * and, now, after every refresh. Each index read of that view builds a NEW Station
+ * object, so a station looked up on every render is a new object on every render.
+ * The form must still keep what the user sets.
+ */
+describe('EditStationDialog over the lazy station array (#576 A9-D2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    for (const key of Object.keys(dialogData)) delete dialogData[key];
+    dialogData.stationRef = { section_id: 1, station_index: 0 };
+  });
+
+  it('keeps the zero-datum toggle and the comment the user set', () => {
+    setStation(null);
+    const section = { id: 1, name: 'CaveA Section', color: '#fff', direction: 'in', quality: 1, next_shot_id: 1, shots: [] };
+    const data = surveyDataFromLegacy([section] as never, storeState.stations as never);
+    Object.assign(storeState, { stations: lazyStationArray(data) });
+    render(<EditStationDialog />);
+
+    const toggle = screen.getByTestId('station-zero-datum-input');
+    fireEvent.click(toggle);
+    expect(toggle).toBeChecked();
+    expect(screen.getByTestId('station-gps-input')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('station-comment-input'), { target: { value: 'sump' } });
+    expect(screen.getByTestId('station-comment-input')).toHaveValue('sump');
+    expect(toggle).toBeChecked();
   });
 });

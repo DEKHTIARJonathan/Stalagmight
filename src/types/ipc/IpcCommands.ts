@@ -155,6 +155,7 @@ export interface IpcCommands {
   get_memory_stats: { args: Record<string, never>; result: MemoryStats; error: string };
   get_network_status: { args: Record<string, never>; result: boolean; error: never };
   get_project_state: { args: Record<string, never>; result: ProjectState | null; error: never };
+  get_project_state_binary: { args: Record<string, never>; result: ArrayBuffer; error: string };
   get_project_warnings: { args: Record<string, never>; result: Array<ProjectWarning>; error: never };
   get_raw_table: { args: { table: string; limit: number; offset: number }; result: RawTableData; error: string };
   get_raw_table_names: { args: Record<string, never>; result: Array<string>; error: string };
@@ -339,6 +340,7 @@ export const IPC_COMMAND_NAMES = [
   "get_memory_stats",
   "get_network_status",
   "get_project_state",
+  "get_project_state_binary",
   "get_project_warnings",
   "get_raw_table",
   "get_raw_table_names",

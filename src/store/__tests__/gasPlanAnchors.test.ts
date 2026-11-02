@@ -30,6 +30,7 @@ import {
   useGasPlanStore,
 } from '../gasPlanStore';
 import { useProjectStore } from '../projectStore';
+import { projectStateEnvelope } from '../../test/projectStateEnvelope';
 import { divePlanSnapshotOf } from '../../utils/divePlan';
 import type { StationRef } from '../../types/project';
 
@@ -391,26 +392,28 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
     useProjectStore.setState({ project: null });
   });
 
-  /** Only the fields `refreshProjectState` reads; the survey itself lives in `order`. */
-  const projectState = () => ({
-    project: {
-      created_at: '2026-01-01T00:00:00Z',
-      modified_at: '2026-01-01T00:00:01Z',
-      sections: [],
-      zero_datums: [],
-      loop_closures: [],
-    },
-    stations: [],
-    stats: null,
-    frozen_shots: [],
-  });
+  /** Only the fields `refreshProjectState` reads, as its binary answer; the survey itself
+   *  lives in `order`. */
+  const projectState = () =>
+    projectStateEnvelope({
+      project: {
+        created_at: '2026-01-01T00:00:00Z',
+        modified_at: '2026-01-01T00:00:01Z',
+        sections: [],
+        zero_datums: [],
+        loop_closures: [],
+      },
+      stations: [],
+      stats: null,
+      frozen_shots: [],
+    });
 
   /** The backend applies the edit (b goes away) when the mutation command arrives. */
   function serveDeleteOfB(calls: string[]) {
     invokeIpcMock.mockImplementation(async (command: string) => {
       calls.push(command);
       switch (command) {
-        case 'get_project_state':
+        case 'get_project_state_binary':
           return projectState();
         case 'can_undo':
         case 'can_redo':
@@ -465,13 +468,13 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
     // And the refetch the reach-field effect keys on ran after the mutation, so the corrected
     // pins were in place before it could paint anything.
     expect(calls).toContain('delete_shot');
-    expect(calls.indexOf('delete_shot')).toBeLessThan(calls.lastIndexOf('get_project_state'));
+    expect(calls.indexOf('delete_shot')).toBeLessThan(calls.lastIndexOf('get_project_state_binary'));
   });
 
   it('an undo re-resolves too (the numbering flips back)', async () => {
     invokeIpcMock.mockImplementation(async (command: string) => {
       switch (command) {
-        case 'get_project_state':
+        case 'get_project_state_binary':
           return projectState();
         case 'can_undo':
         case 'can_redo':

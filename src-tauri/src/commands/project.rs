@@ -118,24 +118,15 @@ pub async fn close_project<R: Runtime>(
 }
 
 /// Get the full project state for the frontend
+///
+/// The JSON form, kept for the agent harness and tests, which read the project
+/// as data. The app's own refresh after an edit uses
+/// [`get_project_state_binary`].
 #[tauri::command]
 pub async fn get_project_state<R: Runtime>(app: tauri::AppHandle<R>) -> Option<ProjectState> {
     pool::run_infallible(app, |state| {
         let project = state.settled_snapshot()?;
-        let stations = project.compute_station_coordinates();
-        let mut stats = project.stats();
-
-        // Calculate penetration distance with computed stations. Reference ties are
-        // not swimmable, so they leave the route unless opted back in (#27 q13).
-        let include_reference_legs = state.get_config().gas.include_reference_legs;
-        stats.penetration_distance =
-            project.calculate_penetration_with(&stations, include_reference_legs);
-
-        // Depth is the absolute station range, not a per-section delta walk (#481).
-        let (min_depth, max_depth) = Project::depth_range(&stations);
-        stats.min_depth = min_depth;
-        stats.max_depth = max_depth;
-
+        let (stations, stats) = measured_state(state, &project);
         let frozen_shots = project.compute_frozen_shots();
 
         Some(ProjectState {
@@ -146,6 +137,45 @@ pub async fn get_project_state<R: Runtime>(app: tauri::AppHandle<R>) -> Option<P
         })
     })
     .await
+}
+
+/// [#576 A9-D2] [`get_project_state`] in the load's binary layout
+/// (`core::load_binary`, decoded by the frontend's `loadProjectBinary.ts`):
+/// the refresh the frontend issues after every edit. At 75,000 shots the JSON
+/// form is ~50 MB to build and to `JSON.parse`; this is the typed-array envelope
+/// the load already uses. An empty response means no project is open.
+#[tauri::command]
+pub async fn get_project_state_binary<R: Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<tauri::ipc::Response, String> {
+    pool::run(app, |state| {
+        let Some(project) = state.settled_snapshot() else {
+            return Ok(tauri::ipc::Response::new(Vec::new()));
+        };
+        let (stations, stats) = measured_state(state, &project);
+        crate::core::load_binary::encode_refresh(&project, stations, stats)
+            .map(tauri::ipc::Response::new)
+            .map_err(|e| format!("Could not encode the project state: {e}"))
+    })
+    .await
+}
+
+/// The measured stations and the stats a state read sends with the project.
+fn measured_state(state: &AppState, project: &Project) -> (Vec<Station>, ProjectStats) {
+    let stations = project.compute_station_coordinates();
+    let mut stats = project.stats();
+
+    // Calculate penetration distance with computed stations. Reference ties are
+    // not swimmable, so they leave the route unless opted back in (#27 q13).
+    let include_reference_legs = state.get_config().gas.include_reference_legs;
+    stats.penetration_distance =
+        project.calculate_penetration_with(&stations, include_reference_legs);
+
+    // Depth is the absolute station range, not a per-section delta walk (#481).
+    let (min_depth, max_depth) = Project::depth_range(&stations);
+    stats.min_depth = min_depth;
+    stats.max_depth = max_depth;
+    (stations, stats)
 }
 
 /// Per-station along-cave distance from a chosen origin station, or from the

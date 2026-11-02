@@ -1438,6 +1438,20 @@
       }
     },
     {
+      "name": "get_project_state_binary",
+      "module": "project",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "tauri::ipc::Response",
+        "ts": "ArrayBuffer"
+      },
+      "error": {
+        "rust": "String",
+        "ts": "string"
+      }
+    },
+    {
       "name": "get_project_warnings",
       "module": "validation",
       "async": true,

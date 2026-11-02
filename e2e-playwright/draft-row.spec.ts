@@ -146,12 +146,14 @@ test.describe('Draft shot rows', () => {
 
   // #576 NF-W3UI-1: the backend mints a uuid for every shot it creates, and uuid
   // anchors (plan pins, the distance origin) resolve through it; the mock's
-  // create_shot used to leave the new shot without one.
+  // create_shot used to leave the new shot without one. Read off the mock backend's
+  // project: the store refreshes through the binary envelope, which carries no uuid
+  // (#576 A9-D2).
   test('the committed shot carries a uuid of its own, as the backend mints one', async ({ page }) => {
     await fillDraftRow(page, 3, '5');
     await expect(page.getByTestId('grid-row-4')).toHaveClass(/sg-row-draft/);
     const uuids = await page.evaluate(() => {
-      const shots = (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].shots as Array<{
+      const shots = (window as any).__E2E_MOCKS__.getCurrentProject().sections[0].shots as Array<{
         uuid?: string | null;
       }>;
       return shots.map((s) => s.uuid ?? null);

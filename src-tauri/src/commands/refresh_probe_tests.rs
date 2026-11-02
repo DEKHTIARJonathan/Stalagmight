@@ -157,3 +157,47 @@ fn refresh_cycle_probe() {
         );
     }
 }
+
+/// [#576 A9-D2] The post-edit refresh payload: the JSON `get_project_state` (the
+/// command, then the `serde_json` serialization Tauri runs on its answer) against
+/// `get_project_state_binary` (the command, encoding included). Bytes are what
+/// crosses to the webview, where the JSON form is then `JSON.parse`d whole.
+#[test]
+#[ignore = "timing probe; run in release with --ignored --nocapture"]
+fn refresh_payload_probe() {
+    use tauri::ipc::{InvokeResponseBody, IpcResponse};
+    for (sections, shots) in [(100_u32, 100_usize), (750, 100)] {
+        let app = tauri::test::mock_app();
+        app.manage(synthetic(sections, shots));
+        let mut json_ms = Vec::new();
+        let mut binary_ms = Vec::new();
+        let (mut json_bytes, mut binary_bytes) = (0, 0);
+        for _ in 0..7 {
+            let t = Instant::now();
+            let state = run(project::get_project_state(h(&app))).unwrap();
+            let json = serde_json::to_string(&state).unwrap();
+            json_ms.push(ms(t.elapsed()));
+            json_bytes = json.len();
+            drop((state, json));
+
+            let t = Instant::now();
+            let response = run(project::get_project_state_binary(h(&app))).unwrap();
+            let body = response.body().unwrap();
+            binary_ms.push(ms(t.elapsed()));
+            binary_bytes = match body {
+                InvokeResponseBody::Raw(bytes) => bytes.len(),
+                InvokeResponseBody::Json(text) => text.len(),
+            };
+        }
+        println!(
+            "{} shots / {} sections, medians of 7: JSON get_project_state {:.1} ms, {:.1} MB; \
+             binary get_project_state_binary {:.1} ms, {:.1} MB",
+            sections as usize * shots,
+            sections,
+            median(json_ms),
+            json_bytes as f64 / 1e6,
+            median(binary_ms),
+            binary_bytes as f64 / 1e6,
+        );
+    }
+}

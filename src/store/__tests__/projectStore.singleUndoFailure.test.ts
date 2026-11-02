@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useProjectStore } from '../projectStore';
 import { useSpeleoStore } from '../speleoStore';
 import { useUIStore } from '../uiStore';
+import { projectStateEnvelope } from '../../test/projectStateEnvelope';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 
@@ -27,8 +28,8 @@ function failWith(error: string) {
       case 'undo':
       case 'redo':
         return { success: false, warnings: [], error, section_ids: [] };
-      case 'get_project_state':
-        return {
+      case 'get_project_state_binary':
+        return projectStateEnvelope({
           project: {
             name: 'CaveA',
             location: null,
@@ -47,7 +48,7 @@ function failWith(error: string) {
           stations: [],
           stats: null,
           frozen_shots: [],
-        };
+        });
       case 'can_undo':
       case 'can_redo':
         return false;

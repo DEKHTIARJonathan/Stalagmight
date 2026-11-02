@@ -395,6 +395,7 @@ pub fn run() {
             commands::project::history_discarded,
             commands::project::set_workspace_mode,
             commands::project::get_project_state,
+            commands::project::get_project_state_binary,
             commands::project::get_adjusted_stations,
             commands::project::get_station_distances_from,
             commands::project::get_along_line_distance,

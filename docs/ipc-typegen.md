@@ -192,13 +192,14 @@ The two live examples, one of each:
   and empty stated the same fact.
 - `Station::closures_with` (`crates/models/src/station.rs`) kept it and became
   `Option<Vec<ClosureRef>>` + `#[ts(optional)]`. That skip is paid per station on
-  every `get_project_state` refresh - and the msgpack `load_project_full_binary`
-  route does NOT cover it: the binary encoder is the LOAD path only (taken
-  unconditionally, no station-count threshold), while `refreshProjectState`
-  re-fetches `get_project_state` as JSON after mutations, and
-  `get_adjusted_stations` returns a bare `Vec<Station>` as JSON too. On the
-  89k-station projects `core::load_binary` cites, that is the payload the skip
-  protects. Reads go through `Station::closures()` / `closures_mut()`.
+  every JSON `get_project_state` and on `get_adjusted_stations`, which returns a
+  bare `Vec<Station>` as JSON. The load and, since #576 A9-D2, the post-edit
+  `refreshProjectState` go through the binary envelope instead
+  (`load_project_full_binary` / `get_project_state_binary`), which carries
+  `closures_with` as a sparse list; the JSON `get_project_state` remains for the
+  agent harness and tests. On the 89k-station projects `core::load_binary` cites,
+  the adjusted view's JSON is the payload the skip protects. Reads go through
+  `Station::closures()` / `closures_mut()`.
 
   Its predicate is `closures_absent_or_empty`, not `Option::is_none`: because
   `closures_mut()` hands out a `&mut Vec`, an empty `Some` is reachable without a

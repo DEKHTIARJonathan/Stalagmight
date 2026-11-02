@@ -1434,7 +1434,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // non-finite geometry in memory before persisting, which mutates the backend
     // project - so afterward the frontend's mirror can be stale. Those heals only
     // ever fire on a project the integrity check already flags, so capture that here
-    // as a cheap signal to refresh below, avoiding a get_project_state on every
+    // as a cheap signal to refresh below, avoiding a get_project_state_binary on every
     // clean save / autosave.
     const hadIntegrityIssues = get().integrityIssues.length > 0;
     const result = await invokeIpc(
@@ -1501,7 +1501,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // dropped orphan section offsets, sanitized non-finite geometry), the
       // frontend's shots/stations are now stale vs the saved file - refresh so the
       // rendered state matches. Gated on hadIntegrityIssues so a clean save/autosave
-      // skips the extra get_project_state fetch and re-render.
+      // skips the extra get_project_state_binary fetch and re-render.
       if (hadIntegrityIssues) {
         await get().refreshProjectState();
       }
@@ -1640,21 +1640,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   refreshProjectState: async () => {
     try {
-      debugLog('[projectStore] refreshProjectState: invoking get_project_state...');
-      const state = await invokeIpc('get_project_state', undefined, {
-        purpose: 'refresh project state in UI',
-      });
-      debugLog('[projectStore] refreshProjectState: got state, sections:', state?.project?.sections?.length);
+      debugLog('[projectStore] refreshProjectState: invoking get_project_state_binary...');
+      // [#576 A9-D2] The load's binary envelope, decoded by the load's decoder: the
+      // SoA `surveyData` comes straight from the typed arrays and the sections carry
+      // lazy `shots`, exactly as after a load. Null when no project is open.
+      const { fetchProjectStateBinary } = await import('../utils/loadProjectBinary');
+      const state = await fetchProjectStateBinary();
+      debugLog('[projectStore] refreshProjectState: got state, sections:', state?.project.sections.length);
       if (state) {
-        // Build the SoA layout alongside the legacy shapes for the
-        // duration of the Phase-A migration. After Phase A.6 this is
-        // the only shape stored; project loses .sections[i].shots.
-        const surveyData = surveyDataFromLegacy(state.project.sections, state.stations);
         set({
           project: state.project,
           projectTreeGeneration: nextProjectTreeGeneration(),
           stations: state.stations,
-          surveyData,
+          surveyData: state.surveyData,
           // Any edit changes measured geometry → the cached adjusted view is stale.
           // Drop it; the map re-fetches lazily if the adjusted mode is active.
           stationsAdjusted: null,

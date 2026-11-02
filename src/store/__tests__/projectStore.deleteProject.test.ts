@@ -40,6 +40,8 @@ describe('projectStore.deleteProject', () => {
     // when a project IS open. `get_project_state` clones the project and recomputes
     // coordinates/stats/penetration, which is far too much work for one bit.
     expect(invokeIpcMock).not.toHaveBeenCalledWith('get_project_state', undefined, expect.any(Object));
+    // ...nor its binary form, which is what the state refresh calls (#576 A9-D2).
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('get_project_state_binary', undefined, expect.any(Object));
   });
 
   it('does not refresh recents when the delete fails', async () => {
