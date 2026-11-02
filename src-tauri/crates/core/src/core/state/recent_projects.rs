@@ -588,12 +588,22 @@ impl AppState {
     /// be the open project. Used by the recent-projects metadata panel: a
     /// targeted DB update, plus keeping the open project's in-memory name in
     /// sync if it happens to be the same file.
+    ///
+    /// [#576 RV5-5] Under `command_lock`, like every other mutation of the open
+    /// project: the name is written through a second connection to the file, and a
+    /// save running concurrently on the pool replaces that file with one written
+    /// from the old in-memory name (the rename then reported success over a file
+    /// that kept the old name), or replaced it before the write (which SQLite then
+    /// refused). Held for a closed file too: deciding which one this is needs the
+    /// `project` lock, which sits below `command_lock`, and the span is one small
+    /// write.
     pub fn set_project_name_for_path(&self, path: PathBuf, name: String) -> CommandResult {
         let trimmed = name.trim();
         if trimmed.is_empty() {
             return CommandResult::failure("Project name cannot be empty".to_string());
         }
 
+        let _commands = self.hold_commands();
         let db = match Database::open_existing(&path) {
             Ok(db) => db,
             Err(e) => return CommandResult::failure(format!("Failed to open project: {e}")),
