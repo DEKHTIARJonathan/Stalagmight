@@ -24,6 +24,14 @@ pub(crate) fn get_config_impl(state: &AppState) -> Config {
 /// The [`ConfigSaveReport`] is the whole answer, not decoration: a save that wrote
 /// every setting can still have failed to evict the API key from the OS keyring it
 /// was just told to stop using, and `Ok(())` reported that as unqualified success.
+///
+/// [#576 NF-W4M-1] Why this whole-config write stays beside [`patch_config`]: every
+/// frontend writer sends only what it changed through `patch_config` (D27-32(c)), so a
+/// write can no longer revert what the backend recorded since the writer's snapshot.
+/// That diff needs a snapshot to diff against, and the one caller left is the store's
+/// `updateConfig` when it has NONE (the config has not loaded): then the given config
+/// is all there is to send. It is the same write the load path's normalizer runs
+/// (`AppState::update_config`), so it carries no separate behaviour to keep in step.
 #[tauri::command]
 pub fn update_config(state: State<AppState>, config: Config) -> Result<ConfigSaveReport, String> {
     update_config_impl(state.inner(), config)
