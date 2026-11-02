@@ -28,14 +28,19 @@ use stalagmight_lib::config::{
     ThemeMode, TokenFallback, UnitsConfig, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
-    Command, CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult,
-    IntegrityRepairResult, ReversedSection, SpeleoDoneReport, SpeleoPublishReport,
-    SpeleoPushReport, ValidationWarning, WarningSeverity,
+    Command, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
+    ReversedSection, SpeleoDoneReport, SpeleoPublishReport, SpeleoPushReport, ValidationWarning,
+    WarningSeverity,
 };
+use stalagmight_lib::core::command_error::{CommandError, CommandErrorCode, HistoryStepFailure};
 use stalagmight_lib::core::events::InternalErrorNotice;
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
     OpenFileFlags, SpeleoManagedFile,
+};
+use stalagmight_lib::core::outcome::{
+    BatchOutcome, DeleteProjectOutcome, EditOutcome, HistoryOutcome, ImportOutcome,
+    ProjectFileOutcome, RemoteLinkBits, ReverseOutcome, SaveOutcome, SectionCreated, ShotCreated,
 };
 use stalagmight_lib::core::state::VirtualShotMode;
 use stalagmight_lib::core::WorkspaceMode;
@@ -165,8 +170,23 @@ fn main() {
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/types/ipc");
     fs::create_dir_all(&out_dir).expect("Failed to create ipc types directory");
 
+    // [#576 C4/A6] The one error every fallible command rejects with
+    export::<CommandError>(&out_dir);
+    export::<CommandErrorCode>(&out_dir);
+    export::<HistoryStepFailure>(&out_dir);
+    // [#576 A12/D22] The per-command success values that replaced CommandResult
+    export::<RemoteLinkBits>(&out_dir);
+    export::<EditOutcome>(&out_dir);
+    export::<SectionCreated>(&out_dir);
+    export::<ShotCreated>(&out_dir);
+    export::<ReverseOutcome>(&out_dir);
+    export::<BatchOutcome>(&out_dir);
+    export::<HistoryOutcome>(&out_dir);
+    export::<ImportOutcome>(&out_dir);
+    export::<SaveOutcome>(&out_dir);
+    export::<DeleteProjectOutcome>(&out_dir);
+    export::<ProjectFileOutcome>(&out_dir);
     // Core command/result types
-    export::<CommandResult>(&out_dir);
     export::<ReversedSection>(&out_dir);
     export::<ImportReceipt>(&out_dir);
     export::<CommentHolder>(&out_dir);

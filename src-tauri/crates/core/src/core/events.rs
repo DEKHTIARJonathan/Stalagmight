@@ -83,7 +83,7 @@ pub struct InternalErrorNotice {
 pub struct SpeleoPrePushSave;
 impl IpcEvent for SpeleoPrePushSave {
     const NAME: &'static str = "speleodb-pre-push-save";
-    type Payload = crate::core::CommandResult;
+    type Payload = crate::core::ProjectFileOutcome;
 }
 
 /// `E`'s payload as the JSON value an [`EventSink`] takes, typed by `E`.

@@ -25,7 +25,7 @@
 
 use tauri::{AppHandle, Manager, Runtime};
 
-use crate::core::{AppState, CommandResult};
+use crate::core::{AppState, CommandError, CommandResult, MutationOutcome};
 
 /// How a command's answer says its body panicked on the pool.
 pub(crate) trait PanicReply {
@@ -44,6 +44,13 @@ impl<T> PanicReply for Result<T, String> {
     }
 }
 
+/// [#576 C4] The one error envelope: a crashed body is `INTERNAL_ERROR`.
+impl<T> PanicReply for Result<T, CommandError> {
+    fn panicked(message: String) -> Self {
+        Err(CommandError::internal(message))
+    }
+}
+
 /// Run `f` against the app's [`AppState`] on the blocking pool.
 pub(crate) async fn run<R, T>(
     app: AppHandle<R>,
@@ -56,6 +63,41 @@ where
     match spawn(move || f(app.state::<AppState>().inner())).await {
         Ok(answer) => answer,
         Err(crash) => T::panicked(crash_message(&crash)),
+    }
+}
+
+/// [#576 D22] [`run`] for a SURVEY MUTATION: its answer - success or failure -
+/// carries the open project's SpeleoDB link bits ([`AppState::remote_link_bits`]),
+/// read on the pool right after `f` returns.
+///
+/// The one writer of `remote_link`. The frontend applies the bits in one place
+/// (`invokeIpc`), which replaced the hand-written copies of the backend's dirty
+/// bookkeeping that each editing path used to keep - and get wrong when one was
+/// missing or one too many (#303, #576 A18(a)). A command that mutates the survey
+/// answers through here; `commands::app_contract_tests` checks that every
+/// command whose answer carries the bits does.
+pub(crate) async fn run_mutation<R, T>(
+    app: AppHandle<R>,
+    f: impl FnOnce(&AppState) -> Result<T, CommandError> + Send + 'static,
+) -> Result<T, CommandError>
+where
+    R: Runtime,
+    T: MutationOutcome + Send + 'static,
+{
+    let answer = spawn(move || {
+        let state = app.state::<AppState>().inner();
+        let mut answer = f(state);
+        let link = state.remote_link_bits();
+        match &mut answer {
+            Ok(outcome) => outcome.set_remote_link(link),
+            Err(err) => err.payload.remote_link = link,
+        }
+        answer
+    })
+    .await;
+    match answer {
+        Ok(answer) => answer,
+        Err(crash) => Err(CommandError::internal(crash_message(&crash))),
     }
 }
 

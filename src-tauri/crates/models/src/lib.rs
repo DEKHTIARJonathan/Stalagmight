@@ -3,6 +3,7 @@ pub mod app_dirs;
 pub mod azimuth_reference;
 #[cfg(test)]
 mod azimuth_reference_tests;
+pub mod command_error;
 pub mod comment_split;
 pub mod config;
 pub mod dive_plan;
@@ -34,6 +35,7 @@ pub mod warning;
 
 pub use angle::*;
 pub use azimuth_reference::*;
+pub use command_error::*;
 pub use dive_plan::*;
 pub use geo::*;
 pub use id_stride::*;

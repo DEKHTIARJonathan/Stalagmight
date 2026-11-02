@@ -367,12 +367,28 @@ pub fn decorate_receipt(
     receipt.cap_warnings();
 }
 
-/// Result of command execution
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+/// Result of command execution - the accumulator the `AppState` methods build
+/// their answer in.
+///
+/// [#576 A12/C4] No longer an IPC type: every command converts it at the
+/// boundary with [`CommandResult::into_outcome`] into its own success value
+/// (`EditOutcome`, `SaveOutcome`, ... in [`crate::core::outcome`]) or a
+/// [`crate::core::CommandError`]. The field docs below that speak of "the wire"
+/// describe what those outcome types carry.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommandResult {
     pub success: bool,
     pub warnings: Vec<ValidationWarning>,
+    /// The failure's display message (`None` on success). Never carries a code
+    /// marker: the classification is [`Self::code`].
     pub error: Option<String>,
+    /// [#576 C4] What kind of failure this is, for the frontend to route on;
+    /// `None` on success, and on a failure nothing classified (`FAILED`).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub code: Option<crate::models::CommandErrorCode>,
+    /// [#576 C4] `HISTORY_STEP_FAILED`: which step of an undo/redo jump failed.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub history_step: Option<crate::core::command_error::HistoryStepFailure>,
     /// ID of the created section (for CreateSection command)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub section_id: Option<u32>,
@@ -527,6 +543,9 @@ pub struct IntegrityRepairResult {
     pub fixed: u32,
     pub remaining: u32,
     pub changed: bool,
+    /// [#576 D22] The open project's SpeleoDB link bits after the repair; `null`
+    /// for a local project. Filled by the IPC helper, `None` from the core.
+    pub remote_link: Option<crate::core::outcome::RemoteLinkBits>,
 }
 
 /// Result of a structural-integrity check. `messages` is the human-readable
@@ -587,32 +606,17 @@ impl CommandResult {
     pub fn success() -> Self {
         Self {
             success: true,
-            warnings: Vec::new(),
-            error: None,
-            section_id: None,
-            section_ids: Vec::new(),
-            shot_id: None,
-            saved_path: None,
-            session_closed: None,
-            unlinked_copy_path: None,
-            reversed_sections: None,
-            import_receipt: None,
+            ..Self::default()
         }
     }
 
+    /// An unclassified failure (`FAILED` at the boundary). A producer that knows
+    /// what kind of failure it is uses [`Self::refused`] instead.
     pub fn failure(error: String) -> Self {
         Self {
             success: false,
-            warnings: Vec::new(),
             error: Some(error),
-            section_id: None,
-            section_ids: Vec::new(),
-            shot_id: None,
-            saved_path: None,
-            session_closed: None,
-            unlinked_copy_path: None,
-            reversed_sections: None,
-            import_receipt: None,
+            ..Self::default()
         }
     }
 
@@ -1352,74 +1356,6 @@ mod tests {
         assert!(failure.section_id.is_none());
         assert!(failure.section_ids.is_empty());
         assert!(failure.shot_id.is_none());
-    }
-
-    /// #441: a field the TYPE says is always there must always be on the wire.
-    ///
-    /// ts-rs 7 can only emit `foo?:` for an `Option<T>` (`optional` is rejected on
-    /// any other type), so `skip_serializing_if` on a `Vec` produces a REQUIRED
-    /// `Array<_>` that the wire sometimes omits - and `tsc` cannot see a single
-    /// bare `result.section_ids.length` after that. This test pins BOTH halves of
-    /// the rule: the key is present iff the declaration lacks `?`.
-    ///
-    /// Turns red if `section_ids` regains `skip_serializing_if` (key vanishes from
-    /// an empty result) or is retyped `Option<Vec<_>>` (declaration gains the `?`).
-    #[test]
-    fn omitted_fields_are_exactly_the_ones_declared_optional() {
-        use ts_rs::TS;
-
-        let empty = serde_json::to_value(CommandResult::success()).unwrap();
-        let empty = empty.as_object().unwrap();
-
-        assert_eq!(
-            empty.get("section_ids"),
-            Some(&serde_json::json!([])),
-            "section_ids generates as a required Array<number>, so an empty result \
-             must still carry the key (#441); got {empty:?}"
-        );
-
-        for absent in [
-            "section_id",
-            "shot_id",
-            "saved_path",
-            "session_closed",
-            "unlinked_copy_path",
-            "reversed_sections",
-            "import_receipt",
-        ] {
-            assert!(
-                !empty.contains_key(absent),
-                "`{absent}` is declared optional, so it must be ABSENT (not null) \
-                 when unset; got {empty:?}"
-            );
-        }
-
-        // The populated case must round-trip intact, not just be present: the
-        // empty-case assertion above would still pass if the field serialized as
-        // a constant `[]`.
-        let populated = CommandResult::success().with_section_ids(vec![4, 7, 9]);
-        let json = serde_json::to_string(&populated).unwrap();
-        assert!(
-            json.contains("\"section_ids\":[4,7,9]"),
-            "created section ids must reach the wire verbatim: {json}"
-        );
-        let back: CommandResult = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            back.section_ids,
-            vec![4, 7, 9],
-            "section_ids must survive the round-trip"
-        );
-
-        let decl = CommandResult::decl();
-        assert!(
-            decl.contains("section_ids: Array<number>"),
-            "section_ids must stay a required array to match the wire above: {decl}"
-        );
-        assert!(
-            decl.contains("reversed_sections?:"),
-            "reversed_sections is omitted from the wire, so its declaration must \
-             carry the `?`: {decl}"
-        );
     }
 
     #[test]

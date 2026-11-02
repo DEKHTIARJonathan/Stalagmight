@@ -492,6 +492,7 @@ impl AppState {
                     fixed: 0,
                     remaining: 0,
                     changed: false,
+                    remote_link: None,
                 });
             };
             // The frame-defining datum station before the repair. Repair never runs
@@ -570,6 +571,7 @@ impl AppState {
             fixed: before.saturating_sub(after).max(demoted) as u32,
             remaining: after as u32,
             changed,
+            remote_link: None,
         })
     }
 

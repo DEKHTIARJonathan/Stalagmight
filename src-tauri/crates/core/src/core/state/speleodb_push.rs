@@ -26,7 +26,7 @@ use super::speleodb::local_dto;
 use super::speleodb_cache::LocalEditsPolicy;
 use super::AppState;
 use crate::core::events::IpcEvent as _;
-use crate::core::{CommandResult, SpeleoDoneReport, SpeleoPushReport, ValidationWarning};
+use crate::core::{SpeleoDoneReport, SpeleoPushReport, ValidationWarning};
 use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
 use crate::speleodb::sync::{self, PushPlan, ReconcileVerdict};
@@ -277,10 +277,7 @@ impl AppState {
         let Some(sink) = self.get_event_sink() else {
             return;
         };
-        let outcome = CommandResult {
-            warnings,
-            ..CommandResult::success()
-        };
+        let outcome = crate::core::ProjectFileOutcome { warnings };
         match crate::core::events::payload::<crate::core::events::SpeleoPrePushSave>(&outcome) {
             Ok(value) => sink.emit(crate::core::events::SpeleoPrePushSave::NAME, value),
             Err(e) => tracing::warn!(

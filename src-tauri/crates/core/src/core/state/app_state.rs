@@ -709,6 +709,24 @@ impl AppState {
         self.speleodb_forget_unwind_position();
     }
 
+    /// [#576 D22] The open project's SpeleoDB link bits - the dirty bit and the
+    /// Unwind pointer, exactly the two `speleodb_link_status` reports - read from
+    /// local state only (no network, no lock held across the two reads).
+    ///
+    /// The IPC layer attaches this to every survey mutation's answer
+    /// (`pool::run_mutation`), so the frontend learns what [`Self::mark_remote_dirty`]
+    /// / [`Self::mark_remote_forward_edit`] did from the backend itself instead of
+    /// re-deriving it at every editing call site. `None` for a local project (no
+    /// link row) and when the link cannot be read - the frontend then leaves its
+    /// state alone, and the next status poll reports what is known.
+    pub fn remote_link_bits(&self) -> Option<crate::core::outcome::RemoteLinkBits> {
+        let link = self.speleodb_open_link().ok()?;
+        Some(crate::core::outcome::RemoteLinkBits {
+            has_unpushed_edits: link.has_unpushed_edits,
+            unwound: self.speleodb_unwound_from().is_some(),
+        })
+    }
+
     /// Cancel any active loading operation (idempotent - safe to call anytime)
     pub fn cancel_loading(&self) {
         {
