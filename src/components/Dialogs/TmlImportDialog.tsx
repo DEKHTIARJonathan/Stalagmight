@@ -12,13 +12,11 @@ import {
   surfaceImportFailure,
   type ImportFailure,
 } from '../../utils/saveFeedback';
-import { formatPhaseLabel } from '../../utils/loadingPhaseLabel';
 import { extractFilename } from '../../utils/path';
-import { clamp } from '../../utils/clamp';
-import { formatNumber } from '../../i18n/format';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
+import { ImportProgress } from './ImportProgress';
 import { WizardMapPanel } from './WizardMapPanel';
 import { WizardScrollBody } from './WizardScrollBody';
 import { WIZARD_MAP_PANEL_MAX_WIDTH } from '../SingleSystemView/layoutConstants';
@@ -95,7 +93,6 @@ function discardTarget(): DiscardTarget {
 export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogProps) {
   const { t } = useTranslation();
   const { executeTmlImport, calculateFileHash, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
-  const loading = useProjectStore((state) => state.loading);
   const { closeDialog, openDialog, setView, triggerFitToBounds, setImportContext, showToast } = useUIStore();
 
   const [isImporting, setIsImporting] = useState(false);
@@ -286,12 +283,6 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   // coordinates do not parse - which is a reason to hold the Import button, not
   // to send "you decide".
   const rootPlacement = placementPayload(placement, fileAnchor);
-
-  // `clamp` passes NaN through, and an unseeded/garbled progress event would
-  // then render as "NaN%" and an invalid bar width.
-  const overallProgress = Number.isFinite(loading.overallProgress)
-    ? Math.round(clamp(loading.overallProgress, 0, 100))
-    : 0;
 
   // Escape / backdrop must not silently drop the option choices the user made.
   // The placement choice counts only once it diverges from the default this
@@ -719,27 +710,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         {/* In-dialog progress: by import time the view is 'single', so the
             GlobalView overlay that renders these phases is not mounted and a
             large file would otherwise show only a busy button (#411 C3). */}
-        {isImporting && (
-          <div className="space-y-1" data-testid="tml-import-progress">
-            <div className="flex justify-between text-xs text-text-secondary">
-              <span data-testid="tml-import-progress-phase">
-                {formatPhaseLabel(t, loading.phase, loading.phaseIndex, loading.phaseCount)}
-              </span>
-              <span>{formatNumber(overallProgress)}%</span>
-            </div>
-            <div className="h-1.5 bg-border rounded-full overflow-hidden">
-              <div
-                className="h-full bg-accent transition-all duration-300"
-                style={{ width: `${overallProgress}%` }}
-                role="progressbar"
-                aria-label={t('loading.overall.aria')}
-                aria-valuenow={overallProgress}
-                aria-valuemin={0}
-                aria-valuemax={100}
-              />
-            </div>
-          </div>
-        )}
+        {isImporting && <ImportProgress testIdPrefix="tml-import" />}
 
       </div>
       </div>

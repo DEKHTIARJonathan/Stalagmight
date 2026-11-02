@@ -10,6 +10,7 @@ import {
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
+import { ImportProgress } from './ImportProgress';
 import type { GpxFile, GpxSectionPlacement } from '../../types/commands';
 import { sectionColorPalette } from '../../utils/colors';
 import { extractFilename } from '../../utils/path';
@@ -224,6 +225,10 @@ export default function GpxPlacementDialog() {
             No track or route sections to configure.
           </div>
         )}
+
+        {/* In-dialog progress (#576 NF-W3P-1): an import into an open project runs in
+            Single System View, where GlobalView's loading overlay is not mounted. */}
+        {isImporting && <ImportProgress testIdPrefix="gpx-import" />}
 
         {/* Footer */}
         <div className="flex justify-between pt-4 border-t border-border">

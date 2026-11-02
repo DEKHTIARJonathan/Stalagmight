@@ -6,6 +6,7 @@ import { useUIStore } from '../../store/uiStore';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { ImportProgress } from './ImportProgress';
 import type { GpxFile } from '../../types/commands';
 import { setSource } from '../../utils/telemetry';
 import {
@@ -22,7 +23,7 @@ interface GpxSelectionDialogProps {
 
 export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDialogProps) {
   const { t } = useTranslation();
-  const { calculateFileHash, checkDuplicateImport, executeGpxImport } = useProjectStore();
+  const { calculateFileHash, checkDuplicateImport, executeGpxImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
   const { closeDialog, openDialog, setView, triggerFitToBounds, showToast } = useUIStore();
 
   const [importWaypoints, setImportWaypoints] = useState(gpxFile.waypoints.length > 0);
@@ -91,6 +92,11 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
 
   const handleImportWaypointsOnly = async () => {
     setIsImporting(true);
+    // Open the loading state as the placement route does (#576 RV3-FE-15): the backend
+    // reports the import's phases for every GPX import, and they are only listened to
+    // while a load is in progress.
+    startLoading(gpxFile.name || fileName, filePath);
+    setLoadingProgress({ phase: 'import_parsing' });
     const importUi = { closeDialog, setView, triggerFitToBounds, openDialog, showToast };
     try {
       const result = await executeGpxImport(
@@ -102,6 +108,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
         [],
         depthInverted
       );
+      resetLoading();
 
       if (!result.success) {
         // A move carry refused it (GHOST-2) and said so: keep the dialog for the retry.
@@ -119,6 +126,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
 
       completeImportToSingleView('gpx-selection', importUi, result.import_receipt);
     } catch (e) {
+      resetLoading();
       setIsImporting(false);
       surfaceImportFailure('gpx-selection', importUi, { phase: 'transport', error: e, format: 'GPX' });
     }
@@ -330,6 +338,10 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
             {t('dialogs.gpxSelection.duplicateWarning')}
           </div>
         )}
+
+        {/* In-dialog progress (#576 NF-W3P-1): an import into an open project runs in
+            Single System View, where GlobalView's loading overlay is not mounted. */}
+        {isImporting && <ImportProgress testIdPrefix="gpx-import" />}
 
         {/* Footer */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">

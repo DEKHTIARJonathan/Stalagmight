@@ -13,6 +13,7 @@ import {
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { ImportProgress } from './ImportProgress';
 import type { CompassFile, CompassSurveySummary, InvalidShotCounts, OrphanPlacementSuggestion } from '../../types/commands';
 import { setSource } from '../../utils/telemetry';
 import { importButtonLabel } from '../../utils/importButtonLabel';
@@ -336,6 +337,10 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
           />
           {t('dialogs.compassImport.options.includeExcluded')}
         </label>
+
+        {/* In-dialog progress (#576 NF-W3P-1): an import into an open project runs in
+            Single System View, where GlobalView's loading overlay is not mounted. */}
+        {isImporting && <ImportProgress testIdPrefix="compass-import" />}
 
         {/* Footer - sticky at the bottom of the scrolling body (mirrors
             TmlImportDialog's idiom; see its comment for the assumptions this
