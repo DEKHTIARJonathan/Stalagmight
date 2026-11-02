@@ -7,7 +7,7 @@
  * not act on, before.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 // SectionPreview and the map panel pull maplibre-gl (WebGL) at module load,
 // which jsdom cannot execute. Nothing here asserts on anything drawn.
@@ -41,7 +41,7 @@ vi.mock('../../../utils/ipc', () => ({
     e instanceof Error ? e.message : typeof e === 'string' ? e : (fallback ?? String(e)),
 }));
 
-import { receipt, renderWizard, zeroDatumOn0 } from './dmpWizardHarness';
+import { receipt, renderWizard, savedState, zeroDatumOn0 } from './dmpWizardHarness';
 import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
 
@@ -103,5 +103,25 @@ describe('DMP wizard: a failure while the wizard starts is shown (#576 NF-AN4-N1
     renderWizard(undefined, { selected: [0, 1], zeroDatumConfig: zeroDatumOn0() });
 
     await waitFor(() => expect(screen.getByTestId('wizard-error')).toHaveTextContent('disk unplugged (test)'));
+  });
+});
+
+/**
+ * NF-AN4-N3. "Skip segment" set the placement mode to 'origin', which the radio
+ * group never renders and the Place gate rejects - so the next segment came up
+ * with no option selected. Every other route into a segment selects one.
+ */
+describe('DMP wizard: Skip segment leaves a placement option selected (#576 NF-AN4-N3)', () => {
+  it('selects manual placement on the segment it moves to', async () => {
+    renderWizard(
+      savedState({ segmentQueue: [[0], [1]], segmentAnchor: { sectionIndex: 0, stationIndex: 0 } }),
+      { selected: [0, 1] },
+    );
+
+    fireEvent.click(screen.getByTestId('segment-skip-button'));
+
+    await waitFor(() => expect(screen.getByTestId('wizard-manual-placing')).toHaveTextContent('B'));
+    expect(screen.getByTestId('segment-mode-manual-input')).toBeChecked();
+    expect(screen.getByTestId('segment-place-on-map-button')).toBeEnabled();
   });
 });

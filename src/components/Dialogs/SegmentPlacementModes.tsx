@@ -15,7 +15,8 @@ import type { Section } from '../../types/project';
 import type { SectionEditState } from '../../utils/batchImportHelpers';
 import type { SkippedSuggestionPlacement } from './DmpNewImportDialog';
 
-export type SegmentPlacementMode = 'suggestion' | 'origin' | 'fromExisting' | 'manual' | 'discard';
+/** One per radio below - a mode with no radio would leave none selected (#576 NF-AN4-N3). */
+export type SegmentPlacementMode = 'suggestion' | 'fromExisting' | 'manual' | 'discard';
 
 export interface SegmentAnchor {
   sectionIndex: number;

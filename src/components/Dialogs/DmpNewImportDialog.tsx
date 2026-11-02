@@ -2692,7 +2692,9 @@ export default function DmpNewImportDialog({
       const nextSeg = next[0]!;
       commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(nextSeg), stationIndex: 0 });
       const hasSuggestion = nextSeg.some(idx => skippedSuggestionsRef.current.has(idx));
-      setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'origin');
+      // 'manual' like every other way into a segment: the radio group has no
+      // 'origin' option, so it used to come up with nothing selected (#576 NF-AN4-N3).
+      setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
       setFromExistingSectionId(null);
       setFromExistingStationIdx(0);
       return next;
