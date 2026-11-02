@@ -81,6 +81,16 @@ import { HoverFrame } from './surveyLayer/hoverFrame';
 import { watchGlContextLoss } from './surveyLayer/glContextRecovery';
 import type { SemanticMapTarget } from './surveyLayer/semanticTarget';
 import { SemanticTargetPreference } from './surveyLayer/semanticTargetPreference';
+import {
+  AUX_IDS,
+  addAuxiliaryLayers,
+  addAuxiliarySources,
+  applyAuxiliaryThemeColors,
+  removeAuxiliaryLayers,
+  updateGhostDebugVisualization,
+  updateGhostHitboxLayers,
+  updateGhostVisualLayers,
+} from './surveyLayer/auxiliaryLayers';
 
 /** Whether replacing dim set `prev` with `next` changes nothing. */
 function sameOrBothEmpty(next: ReadonlySet<number>, prev: ReadonlySet<number>): boolean {
@@ -137,36 +147,6 @@ export type { GhostSectionData } from './surveyLayer/displayColor';
 
 export default class SurveyLayer {
   private map: MaplibreMap;
-  private sourceId = 'survey-data';
-  // Stable ids kept only as z-order fallback anchors for the custom measure-path
-  // layer's beforeId (the stock layers themselves are gone).
-  private stationsLayerId = 'survey-stations';
-  private loopClosuresLayerId = 'survey-loop-closures';
-  private ghostShotsLayerId = 'survey-ghost-shots';
-  private ghostStationsLayerId = 'survey-ghost-stations';
-  private ghostMergeLayerId = 'survey-ghost-merge';
-  private stationsHighlightLayerId = 'survey-stations-highlight';
-  // Interact overlay (#mem): a tiny GeoJSON source holding ONLY the currently
-  // hovered / selected / snapped shot(s)/station(s) as individual features.
-  // With merged bulk features, per-item hover/selection can no longer use
-  // per-feature feature-state; instead these few features are redrawn above
-  // the bulk layers with the same resolved paint values, so pixels match.
-  private interactSourceId = 'survey-interact';
-  private interactShotsLayerId = 'survey-interact-shots';
-  private interactShotsMeasuredLayerId = 'survey-interact-shots-measured';
-  private interactStationsLayerId = 'survey-interact-stations';
-  // NOTE: the former dedicated survey-shots-hitbox / survey-stations-hitbox
-  // layers were removed (#mem budget). Each was a full unfiltered duplicate
-  // vertex bucket of its bulk source (~75k line segments / ~90k points) built
-  // solely to gate hit-testing. The candidate-section gate now queries the
-  // VISIBLE shots/stations layers with a padded probe box that reproduces the
-  // old hit tolerance exactly - see hitCandidateSections().
-  // Gas route highlight (#233): the picked penetration route drawn over the survey - one line
-  // layer, swum legs at full opacity and jump legs faded via a data-driven line-opacity (#243).
-  private gasRouteLayerId = 'survey-gas-route';
-
-  private ghostStationsHitboxLayerId = 'survey-ghost-stations-hitbox';
-  private ghostShotsHitboxLayerId = 'survey-ghost-shots-hitbox';
   private callbacks: SurveyLayerCallbacks;
   private semanticTargetPreference = new SemanticTargetPreference({ geometry: () => this.enumerateGeometry(), project: (lngLat) => this.map.project(lngLat), visibility: () => ({ stations: this.stationsVisible, shots: this.shotsVisible }), callbacks: () => this.callbacks });
 
@@ -410,14 +390,20 @@ export default class SurveyLayer {
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
     this.callbacks = callbacks;
-    this.interactHide = new InteractOverlayHideController(map, this.interactSourceId, [
-      this.interactShotsLayerId,
-      this.interactShotsMeasuredLayerId,
-      this.interactStationsLayerId,
-      this.stationsHighlightLayerId,
+    this.interactHide = new InteractOverlayHideController(map, AUX_IDS.interactSourceId, [
+      AUX_IDS.interactShotsLayerId,
+      AUX_IDS.interactShotsMeasuredLayerId,
+      AUX_IDS.interactStationsLayerId,
+      AUX_IDS.stationsHighlightLayerId,
     ], () => hasLiveStyle(map));
-    this.initializeSources();
-    this.initializeLayers();
+    addAuxiliarySources(this.map);
+    addAuxiliaryLayers(this.map, {
+      shotHitArea: this.getShotHitArea(),
+      stationHitArea: this.getStationHitArea(),
+      shotWidth: this.getShotWidth(),
+      stationRadius: this.getStationRadius(),
+      themeColors: this.themeColors,
+    });
     this.initializeEventHandlers();
     this.customRender = new SurveyCustomController(map, undefined, {
       resync: () => this.resyncCustomRenderFromStore(),
@@ -507,12 +493,12 @@ export default class SurveyLayer {
   // Config setter - triggers layer updates when config changes
   public setConfig(config: Config): void {
     this.config = config;
-    this.updateHitboxLayers();
-    this.updateGhostVisualLayers();
+    updateGhostHitboxLayers(this.map, this.getStationHitArea(), this.getShotHitArea());
+    updateGhostVisualLayers(this.map, this.getStationRadius(), this.getShotWidth());
     // Overlay features carry config-derived widths/radii - force a rebuild.
     this.lastInteractKey = null;
     this.updateVisualState();
-    this.updateDebugVisualization();
+    updateGhostDebugVisualization(this.map, this.config?.debug?.map?.show_hitboxes ?? false);
   }
 
   /**
@@ -619,271 +605,6 @@ export default class SurveyLayer {
 
   private getShotSelectionWidth(): number {
     return this.config?.map?.shot?.selection_width ?? SurveyLayer.DEFAULTS.shot.selection_width;
-  }
-
-  private initializeSources() {
-    // Custom-only renderer: survey geometry + labels + measured-path tint are
-    // drawn by the custom WebGL layers (SurveyCustomController /
-    // SurveyLabelController / MeasurePathController) straight from the SoA
-    // SurveyData - there are no stock bulk vector-tile sources for shots /
-    // stations / shot-gradients / labels anymore. Only the small GeoJSON
-    // auxiliaries (loop closures, gas route, merge ghosts, interact overlay)
-    // live here.
-
-    // Loop closures line source
-    this.map.addSource(this.sourceId + '-loop-closures', {
-      type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-    });
-
-    // Gas route highlight line source (#233): one LineString per route leg, `isJump` flagged.
-    this.map.addSource(this.sourceId + '-gas-route', {
-      type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-    });
-
-    // Ghost section sources for merge preview
-    this.map.addSource(this.sourceId + '-ghost-shots', {
-      type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-    });
-
-    this.map.addSource(this.sourceId + '-ghost-stations', {
-      type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-    });
-
-    this.map.addSource(this.sourceId + '-ghost-merge', {
-      type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-    });
-
-    // Interact overlay source (#mem): holds only the handful of currently
-    // hovered / selected / snapped features as individual GeoJSON features
-    // (see refreshInteractOverlay). Bounded by interaction state, not survey
-    // size, so its retained cost is negligible.
-    this.map.addSource(this.interactSourceId, {
-      type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-    });
-  }
-
-  private initializeLayers() {
-    // === HIT-TEST GATING ===
-    // The dedicated survey-shots-hitbox / survey-stations-hitbox layers were
-    // removed (#mem budget): each was a full unfiltered duplicate vertex bucket
-    // of its bulk source. Hit-testing now queries the VISIBLE shots/stations
-    // layers with a padded probe box (see hitCandidateSections). The ghost
-    // hitbox layers below stay - they live on the tiny ghost sources and drive
-    // the merge-preview debug visualization only.
-    //
-    // Layer order (bottom to top):
-    // 1. survey-ghost-shots-hitbox (debug only)
-    // 2. survey-ghost-stations-hitbox (debug only)
-    // Then visual layers follow...
-
-    // Ghost shot hitbox layer (for debug visualization only - NOT interactive)
-    this.map.addLayer({
-      id: this.ghostShotsHitboxLayerId,
-      type: 'line',
-      source: this.sourceId + '-ghost-shots',
-      layout: {
-        'line-cap': 'round',
-      },
-      paint: {
-        'line-width': this.getShotHitArea(),
-        'line-color': 'rgba(255, 255, 0, 0.3)', // Visible when debug enabled
-        'line-opacity': 0, // Hidden by default, shown via updateDebugVisualization
-      },
-    });
-
-    // Ghost station hitbox layer (for debug visualization only - NOT interactive)
-    this.map.addLayer({
-      id: this.ghostStationsHitboxLayerId,
-      type: 'circle',
-      source: this.sourceId + '-ghost-stations',
-      paint: {
-        'circle-radius': this.getStationHitArea(),
-        'circle-color': 'rgba(255, 255, 0, 0.3)', // Visible when debug enabled
-        'circle-opacity': 0, // Hidden by default, shown via updateDebugVisualization
-        'circle-stroke-width': 0,
-      },
-    });
-
-    // === VISUAL LAYERS ===
-
-    // Ghost section shots layer (dashed, semi-transparent) - rendered first so it's behind everything
-    // Uses config-based line width, updated via updateGhostVisualLayers()
-    this.map.addLayer({
-      id: this.ghostShotsLayerId,
-      type: 'line',
-      source: this.sourceId + '-ghost-shots',
-      paint: {
-        'line-color': ['get', 'color'],
-        'line-width': this.getShotWidth(),
-        'line-opacity': 0.5,
-        'line-dasharray': [4, 2],
-      },
-    });
-
-    // Ghost section stations layer (semi-transparent)
-    // Uses config-based radius, updated via updateGhostVisualLayers()
-    this.map.addLayer({
-      id: this.ghostStationsLayerId,
-      type: 'circle',
-      source: this.sourceId + '-ghost-stations',
-      paint: {
-        'circle-radius': this.getStationRadius(),
-        'circle-color': ['get', 'color'],
-        'circle-stroke-width': 1,
-        'circle-stroke-color': this.themeColors.strokeColor,
-        'circle-opacity': 0.5,
-      },
-    });
-
-    // Ghost merge station highlight layer
-    this.map.addLayer({
-      id: this.ghostMergeLayerId,
-      type: 'circle',
-      source: this.sourceId + '-ghost-merge',
-      paint: {
-        'circle-radius': 8,
-        'circle-color': this.themeColors.selectHighlight,
-        'circle-stroke-width': 2,
-        'circle-stroke-color': this.themeColors.strokeColor,
-        'circle-opacity': 0.8,
-      },
-    });
-
-    // Loop closures layer (dashed lines with color based on error severity)
-    this.map.addLayer({
-      id: this.loopClosuresLayerId,
-      type: 'line',
-      source: this.sourceId + '-loop-closures',
-      paint: {
-        // Color based on error percentage: green (<1%), yellow (1-3%), orange (3-5%), red (>5%)
-        'line-color': ['get', 'color'],
-        'line-width': 3,
-        'line-opacity': 0.8,
-        'line-dasharray': [6, 4], // Dashed line pattern for loop closures
-      },
-    });
-
-    // === OVERLAY LAYERS (above the custom-rendered survey geometry) ===
-    // Custom-only renderer: survey shots / stations / shot-gradients / labels /
-    // comments / measured-path tint are drawn by the custom WebGL layers (added
-    // by their controllers), NOT stock MapLibre layers. What remains here are the
-    // small auxiliary overlays that sit ABOVE the custom geometry:
-    //   - snap-station highlight + interact hover/selection overlay (interact source),
-    //   - gas-route highlight.
-    // The custom geometry layer inserts itself before `survey-interact-shots`
-    // (see SurveyCustomController.enable), so it lands above loop closures /
-    // ghosts and below every overlay added below. The custom label layer draws on
-    // top of everything; the custom measure-path layer inserts before
-    // `survey-interact-shots-measured` (see syncCustomMeasurePath).
-
-    // Station highlight layer for snapped/active stations (interact source).
-    // Snapped stations are pushed to the interact overlay as individual
-    // `kind: 'snap'` features (setSnappedStation / setHighlightedStations).
-    this.map.addLayer({
-      id: this.stationsHighlightLayerId,
-      type: 'circle',
-      source: this.interactSourceId,
-      filter: ['==', ['get', 'kind'], 'snap'],
-      paint: {
-        'circle-radius': this.getStationRadius() + 3, // Snapped state: radius + 3
-        'circle-color': this.themeColors.snapColor,
-        'circle-stroke-width': 4,
-        'circle-stroke-color': this.themeColors.snapColor,
-        // Disable default 300ms paint transitions - snap indicator must appear/disappear instantly
-        'circle-opacity-transition': { duration: 0, delay: 0 },
-        'circle-stroke-opacity-transition': { duration: 0, delay: 0 },
-      },
-    });
-
-    // Gas route highlight (#233): the picked route drawn over the survey. Jump legs are
-    // faded rather than dashed (#243) - the same half-opacity treatment reference shots
-    // get - and unlike `line-dasharray`, `line-opacity` IS data-driven, so one layer
-    // covers both leg kinds.
-    this.map.addLayer({
-      id: this.gasRouteLayerId,
-      type: 'line',
-      source: this.sourceId + '-gas-route',
-      paint: {
-        'line-color': ['coalesce', ['get', 'segmentColor'], '#22d3ee'],
-        'line-width': 4,
-        'line-opacity': ['case', ['==', ['get', 'isJump'], true], 0.45, 0.9],
-      },
-    });
-
-    // === INTERACT OVERLAY LAYERS (#mem) ===
-    // Individual hover/selection highlights, drawn from the tiny interact source,
-    // stacked bottom-to-top: interact-shots (hover/select shot), then the measured
-    // hover tint, then interact-stations, then the snap highlight. They are added
-    // with explicit beforeIds so this relative order holds and the custom geometry
-    // layer (inserted before interact-shots) sits beneath all of them. Colors are
-    // resolved per feature at overlay-build time or via the same ramp expressions
-    // in overlay modes.
-    this.map.addLayer({
-      id: this.interactStationsLayerId,
-      type: 'circle',
-      source: this.interactSourceId,
-      filter: ['==', ['get', 'kind'], 'station'],
-      paint: {
-        'circle-radius': ['get', 'radius'],
-        'circle-color': ['get', 'color'],
-        'circle-opacity': ['get', 'opacity'],
-        'circle-stroke-width': ['get', 'strokeWidth'],
-        'circle-stroke-color': ['get', 'strokeColor'],
-        'circle-stroke-opacity': ['get', 'opacity'],
-      },
-    }, this.stationsHighlightLayerId);
-
-    this.map.addLayer({
-      id: this.interactShotsMeasuredLayerId,
-      type: 'line',
-      source: this.interactSourceId,
-      filter: ['==', ['get', 'kind'], 'shotMeasured'],
-      layout: {
-        'line-cap': 'round',
-        'line-join': 'round',
-      },
-      paint: {
-        'line-color': ['get', 'color'],
-        'line-width': ['get', 'width'],
-        'line-opacity': ['get', 'opacity'],
-      },
-    }, this.interactStationsLayerId);
-
-    this.map.addLayer({
-      id: this.interactShotsLayerId,
-      type: 'line',
-      source: this.interactSourceId,
-      filter: ['==', ['get', 'kind'], 'shot'],
-      paint: {
-        'line-color': ['get', 'color'],
-        'line-width': ['get', 'width'],
-        'line-opacity': ['get', 'opacity'],
-      },
-    }, this.interactShotsMeasuredLayerId);
   }
 
   private initializeEventHandlers() {
@@ -1144,7 +865,7 @@ export default class SurveyLayer {
   // Evented.fire), so registering this listener would otherwise silence the map's
   // default logging for ALL errors.
   private handleMapError = (evt: MapErrorEventLike): void => {
-    if (shouldSuppressMapError(evt, this.sourceId)) return;
+    if (shouldSuppressMapError(evt, AUX_IDS.sourceId)) return;
     console.error(evt?.error ?? evt);
   };
 
@@ -1177,7 +898,7 @@ export default class SurveyLayer {
       // Debug logging - only on click, NOT hover (prevents console spam)
       if (this.config?.debug?.map?.log_hit_detection) {
         console.log('[HitDetection] Station click', {
-          layer: this.stationsLayerId,
+          layer: AUX_IDS.stationsLayerId,
           featureId: `${ref.section_id}:${ref.station_index}`,
           coordinates: e.lngLat,
           candidateSections: stationSections.size,
@@ -1229,7 +950,7 @@ export default class SurveyLayer {
       // Debug logging - only on contextmenu, NOT hover (prevents console spam)
       if (this.config?.debug?.map?.log_hit_detection) {
         console.log('[HitDetection] Station context menu', {
-          layer: this.stationsLayerId,
+          layer: AUX_IDS.stationsLayerId,
           featureId: `${ref.section_id}:${ref.station_index}`,
           coordinates: e.lngLat,
           candidateSections: stationSections.size,
@@ -1487,7 +1208,7 @@ export default class SurveyLayer {
    */
   private refreshInteractOverlay(): void {
     if (!hasLiveStyle(this.map)) return;
-    const source = this.map.getSource(this.interactSourceId);
+    const source = this.map.getSource(AUX_IDS.interactSourceId);
     if (!source || source.type !== 'geojson') return;
 
     const key = [
@@ -1691,7 +1412,7 @@ export default class SurveyLayer {
    *  to the gas-route source. No-op without a live style or the source. */
   private applyGasRoute(): void {
     if (!this.map || !hasLiveStyle(this.map)) return;
-    const source = this.map.getSource(this.sourceId + '-gas-route');
+    const source = this.map.getSource(AUX_IDS.sourceId + '-gas-route');
     if (!source || source.type !== 'geojson') return;
     const geojsonSource = source as maplibregl.GeoJSONSource;
     // Index the stations once (keyed by section:index) so the per-leg endpoint lookups are O(1) -
@@ -1748,11 +1469,11 @@ export default class SurveyLayer {
             ['get', 'gasReach'] as ExpressionSpecification,
           )
         : colorProp;
-    if (this.map.getLayer(this.interactShotsLayerId)) {
-      this.map.setPaintProperty(this.interactShotsLayerId, 'line-color', shotColor);
+    if (this.map.getLayer(AUX_IDS.interactShotsLayerId)) {
+      this.map.setPaintProperty(AUX_IDS.interactShotsLayerId, 'line-color', shotColor);
     }
-    if (this.map.getLayer(this.interactStationsLayerId)) {
-      this.map.setPaintProperty(this.interactStationsLayerId, 'circle-color', shotColor);
+    if (this.map.getLayer(AUX_IDS.interactStationsLayerId)) {
+      this.map.setPaintProperty(AUX_IDS.interactStationsLayerId, 'circle-color', shotColor);
     }
   }
 
@@ -1857,8 +1578,8 @@ export default class SurveyLayer {
       // covered by it; still below the interact hover/selection overlay. Added
       // after the geometry layer, so `before survey-interact-shots` lands it just
       // above the geometry. Fallback keeps it placed if that layer is absent.
-      this.interactShotsLayerId,
-      this.interactShotsMeasuredLayerId,
+      AUX_IDS.interactShotsLayerId,
+      AUX_IDS.interactShotsMeasuredLayerId,
     ]);
   }
 
@@ -1883,81 +1604,6 @@ export default class SurveyLayer {
       aaPx: dpr,
       color: [r / 255, g / 255, b / 255, a / 255],
     };
-  }
-
-  // Update ghost hitbox layer sizes from config. The main shots/stations hit
-  // areas are no longer layer paint (the dedicated hitbox layers were removed,
-  // #mem budget); they are read live per query in hitCandidateSections via
-  // getShot/StationHitReach(), so config changes take effect with no layer edit.
-  private updateHitboxLayers(): void {
-    if (!this.map) return;
-
-    const stationHitArea = this.getStationHitArea();
-    const shotHitArea = this.getShotHitArea();
-
-    if (this.map.getLayer(this.ghostStationsHitboxLayerId)) {
-      this.map.setPaintProperty(this.ghostStationsHitboxLayerId, 'circle-radius', stationHitArea);
-    }
-    if (this.map.getLayer(this.ghostShotsHitboxLayerId)) {
-      this.map.setPaintProperty(this.ghostShotsHitboxLayerId, 'line-width', shotHitArea);
-    }
-  }
-
-  // Update ghost visual layer sizes from config (merge preview layers)
-  private updateGhostVisualLayers(): void {
-    if (!this.map) return;
-
-    const baseRadius = this.getStationRadius();
-    const baseWidth = this.getShotWidth();
-
-    // Update ghost visual layers to match config (guard layer existence)
-    if (this.map.getLayer(this.ghostStationsLayerId)) {
-      this.map.setPaintProperty(this.ghostStationsLayerId, 'circle-radius', baseRadius);
-    }
-    if (this.map.getLayer(this.ghostShotsLayerId)) {
-      this.map.setPaintProperty(this.ghostShotsLayerId, 'line-width', baseWidth);
-    }
-  }
-
-  // Update debug visualization based on config.
-  // The main shots/stations hitbox layers were removed (#mem budget), so the
-  // show_hitboxes debug toggle no longer paints a visible outline for the main
-  // hit areas (hit-testing is a padded query on the visible layers now). The
-  // ghost hitbox layers still honor it for merge-preview debugging.
-  private updateDebugVisualization(): void {
-    if (!this.map) return;
-
-    const showHitboxes = this.config?.debug?.map?.show_hitboxes ?? false;
-    const debugColor = 'rgba(255, 0, 0, 0.3)'; // Semi-transparent red for debug
-    const opaqueColor = '#000000'; // OPAQUE color for normal mode (opacity controls visibility)
-
-    // Ghost hitbox layers - debug visualization only (NOT used for hit detection)
-    // Keep at opacity 0 when debug off to avoid unnecessary rendering work
-    if (this.map.getLayer(this.ghostStationsHitboxLayerId)) {
-      this.map.setPaintProperty(
-        this.ghostStationsHitboxLayerId,
-        'circle-color',
-        showHitboxes ? debugColor : opaqueColor
-      );
-      this.map.setPaintProperty(
-        this.ghostStationsHitboxLayerId,
-        'circle-opacity',
-        showHitboxes ? 1 : 0 // 0 when off - not used for hit detection
-      );
-    }
-
-    if (this.map.getLayer(this.ghostShotsHitboxLayerId)) {
-      this.map.setPaintProperty(
-        this.ghostShotsHitboxLayerId,
-        'line-color',
-        showHitboxes ? debugColor : opaqueColor
-      );
-      this.map.setPaintProperty(
-        this.ghostShotsHitboxLayerId,
-        'line-opacity',
-        showHitboxes ? 1 : 0 // 0 when off - not used for hit detection
-      );
-    }
   }
 
   // Set selected station (called from outside to sync with uiStore)
@@ -2221,10 +1867,10 @@ export default class SurveyLayer {
       this.clearStationHover();
     }
     this.customRender?.setStationsVisible(visible);
-    this.map.setLayoutProperty(this.loopClosuresLayerId, 'visibility', visibility);
+    this.map.setLayoutProperty(AUX_IDS.loopClosuresLayerId, 'visibility', visibility);
     // Interact overlay tracks the stations layer: a hover/selection highlight
     // must not surface a hidden station (#mem).
-    this.map.setLayoutProperty(this.interactStationsLayerId, 'visibility', visibility);
+    this.map.setLayoutProperty(AUX_IDS.interactStationsLayerId, 'visibility', visibility);
     // Note: stationsHighlightLayerId intentionally NOT hidden - it shows only
     // snapped/origin stations even when the main stations layer is hidden.
     // Drop/restore the measured-path station discs with the stations toggle.
@@ -2243,8 +1889,8 @@ export default class SurveyLayer {
     }
     this.customRender?.setShotsVisible(visible);
     // Interact overlay tracks the shots layers (#mem).
-    this.map.setLayoutProperty(this.interactShotsLayerId, 'visibility', visibility);
-    this.map.setLayoutProperty(this.interactShotsMeasuredLayerId, 'visibility', visibility);
+    this.map.setLayoutProperty(AUX_IDS.interactShotsLayerId, 'visibility', visibility);
+    this.map.setLayoutProperty(AUX_IDS.interactShotsMeasuredLayerId, 'visibility', visibility);
     // Keep the interact overlay's colors + features in step.
     this.applyOverlayPaint();
     // Drop/restore the measured-path shot lines with the shots toggle.
@@ -2452,11 +2098,11 @@ export default class SurveyLayer {
       ] as maplibregl.ExpressionSpecification);
     }
     if (dimRules.length === 0) {
-      this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', 0.8);
+      this.map.setPaintProperty(AUX_IDS.loopClosuresLayerId, 'line-opacity', 0.8);
       return;
     }
     const dimmed = dimRules.length === 1 ? dimRules[0]! : (['any', ...dimRules] as maplibregl.ExpressionSpecification);
-    this.map.setPaintProperty(this.loopClosuresLayerId, 'line-opacity', [
+    this.map.setPaintProperty(AUX_IDS.loopClosuresLayerId, 'line-opacity', [
       'case', dimmed, 0.25, 0.8,
     ] as maplibregl.ExpressionSpecification);
   }
@@ -2658,13 +2304,13 @@ export default class SurveyLayer {
     // dragged and a stationary section are hidden during the drag and reappear
     // with correct geometry on commit. (The survey geometry + labels are hidden in
     // the custom layers via the drag exclusion in installDragPreview.)
-    const existingClosureFilter = this.map.getFilter(this.loopClosuresLayerId);
-    this.dragSavedFilters.set(this.loopClosuresLayerId, existingClosureFilter ?? undefined);
+    const existingClosureFilter = this.map.getFilter(AUX_IDS.loopClosuresLayerId);
+    this.dragSavedFilters.set(AUX_IDS.loopClosuresLayerId, existingClosureFilter ?? undefined);
     const eitherEndpointExclusion: maplibregl.FilterSpecification = ['!', ['any',
       ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
       ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
     ]] as unknown as maplibregl.FilterSpecification;
-    this.map.setFilter(this.loopClosuresLayerId, (existingClosureFilter && typeof existingClosureFilter === 'object')
+    this.map.setFilter(AUX_IDS.loopClosuresLayerId, (existingClosureFilter && typeof existingClosureFilter === 'object')
       ? (['all', existingClosureFilter, eitherEndpointExclusion] as unknown as maplibregl.FilterSpecification)
       : eitherEndpointExclusion);
 
@@ -2939,12 +2585,12 @@ export default class SurveyLayer {
       const closureExclusion: maplibregl.FilterSpecification = ['!',
         ['any', ...closureExclusions],
       ] as unknown as maplibregl.FilterSpecification;
-      const existingClosureFilter = this.map.getFilter(this.loopClosuresLayerId);
-      this.dragSavedFilters.set(this.loopClosuresLayerId, existingClosureFilter ?? undefined);
+      const existingClosureFilter = this.map.getFilter(AUX_IDS.loopClosuresLayerId);
+      this.dragSavedFilters.set(AUX_IDS.loopClosuresLayerId, existingClosureFilter ?? undefined);
       const composedClosure: maplibregl.FilterSpecification = (existingClosureFilter && typeof existingClosureFilter === 'object')
         ? (['all', existingClosureFilter, closureExclusion] as unknown as maplibregl.FilterSpecification)
         : closureExclusion;
-      this.map.setFilter(this.loopClosuresLayerId, composedClosure);
+      this.map.setFilter(AUX_IDS.loopClosuresLayerId, composedClosure);
     }
 
     // Hide the moving originals from the custom layer. installDragPreview applies
@@ -3144,7 +2790,7 @@ export default class SurveyLayer {
     );
 
     // Update sources
-    const ghostShotsSource = this.map.getSource(this.sourceId + '-ghost-shots');
+    const ghostShotsSource = this.map.getSource(AUX_IDS.sourceId + '-ghost-shots');
     if (ghostShotsSource && 'setData' in ghostShotsSource) {
       (ghostShotsSource as maplibregl.GeoJSONSource).setData({
         type: 'FeatureCollection',
@@ -3152,7 +2798,7 @@ export default class SurveyLayer {
       });
     }
 
-    const ghostStationsSource = this.map.getSource(this.sourceId + '-ghost-stations');
+    const ghostStationsSource = this.map.getSource(AUX_IDS.sourceId + '-ghost-stations');
     if (ghostStationsSource && 'setData' in ghostStationsSource) {
       (ghostStationsSource as maplibregl.GeoJSONSource).setData({
         type: 'FeatureCollection',
@@ -3160,7 +2806,7 @@ export default class SurveyLayer {
       });
     }
 
-    const ghostMergeSource = this.map.getSource(this.sourceId + '-ghost-merge');
+    const ghostMergeSource = this.map.getSource(AUX_IDS.sourceId + '-ghost-merge');
     if (ghostMergeSource && 'setData' in ghostMergeSource) {
       (ghostMergeSource as maplibregl.GeoJSONSource).setData({
         type: 'FeatureCollection',
@@ -3461,7 +3107,7 @@ export default class SurveyLayer {
    *  cached closures + the geometry index. The custom renderer draws everything
    *  else; loop closures stay a small stock GeoJSON overlay, like the gas route. */
   private publishLoopClosures(): void {
-    const source = this.map.getSource(this.sourceId + '-loop-closures');
+    const source = this.map.getSource(AUX_IDS.sourceId + '-loop-closures');
     if (!source || source.type !== 'geojson' || !this.geoIndex) return;
     const features: GeoJSON.Feature[] = [];
     for (const lc of this.cachedLoopClosures ?? []) {
@@ -3510,20 +3156,7 @@ export default class SurveyLayer {
     this.refreshInteractOverlay();
 
     // Update the kept auxiliary layers' constant theme colors.
-    // Ghost station stroke
-    if (this.map.getLayer(this.ghostStationsLayerId)) {
-      this.map.setPaintProperty(this.ghostStationsLayerId, 'circle-stroke-color', colors.strokeColor);
-    }
-    // Ghost merge station
-    if (this.map.getLayer(this.ghostMergeLayerId)) {
-      this.map.setPaintProperty(this.ghostMergeLayerId, 'circle-color', colors.selectHighlight);
-      this.map.setPaintProperty(this.ghostMergeLayerId, 'circle-stroke-color', colors.strokeColor);
-    }
-    // Station highlight (snap color)
-    if (this.map.getLayer(this.stationsHighlightLayerId)) {
-      this.map.setPaintProperty(this.stationsHighlightLayerId, 'circle-color', colors.snapColor);
-      this.map.setPaintProperty(this.stationsHighlightLayerId, 'circle-stroke-color', colors.snapColor);
-    }
+    applyAuxiliaryThemeColors(this.map, colors);
 
     // Rebuild the survey from cache so the custom renderer + labels + measured-path
     // tint (which embed theme colors) repaint with the new theme.
@@ -3655,63 +3288,7 @@ export default class SurveyLayer {
       // The custom survey geometry / labels / measured-path layers are removed by
       // their controllers' destroy() calls above; only the auxiliary GeoJSON
       // overlays are owned here.
-      if (this.map.getLayer(this.stationsHighlightLayerId)) {
-        this.map.removeLayer(this.stationsHighlightLayerId);
-      }
-      if (this.map.getLayer(this.gasRouteLayerId)) {
-        this.map.removeLayer(this.gasRouteLayerId);
-      }
-      // Interact overlay layers (#mem)
-      if (this.map.getLayer(this.interactShotsLayerId)) {
-        this.map.removeLayer(this.interactShotsLayerId);
-      }
-      if (this.map.getLayer(this.interactShotsMeasuredLayerId)) {
-        this.map.removeLayer(this.interactShotsMeasuredLayerId);
-      }
-      if (this.map.getLayer(this.interactStationsLayerId)) {
-        this.map.removeLayer(this.interactStationsLayerId);
-      }
-      if (this.map.getLayer(this.loopClosuresLayerId)) {
-        this.map.removeLayer(this.loopClosuresLayerId);
-      }
-      // Remove ghost section layers
-      if (this.map.getLayer(this.ghostShotsLayerId)) {
-        this.map.removeLayer(this.ghostShotsLayerId);
-      }
-      if (this.map.getLayer(this.ghostStationsLayerId)) {
-        this.map.removeLayer(this.ghostStationsLayerId);
-      }
-      if (this.map.getLayer(this.ghostMergeLayerId)) {
-        this.map.removeLayer(this.ghostMergeLayerId);
-      }
-      // Remove ghost hitbox layers (the main hitbox layers were removed, #mem)
-      if (this.map.getLayer(this.ghostStationsHitboxLayerId)) {
-        this.map.removeLayer(this.ghostStationsHitboxLayerId);
-      }
-      if (this.map.getLayer(this.ghostShotsHitboxLayerId)) {
-        this.map.removeLayer(this.ghostShotsHitboxLayerId);
-      }
-
-      // Remove all sources after layers are removed
-      if (this.map.getSource(this.sourceId + '-loop-closures')) {
-        this.map.removeSource(this.sourceId + '-loop-closures');
-      }
-      if (this.map.getSource(this.sourceId + '-gas-route')) {
-        this.map.removeSource(this.sourceId + '-gas-route');
-      }
-      // Remove ghost section sources
-      if (this.map.getSource(this.sourceId + '-ghost-shots')) {
-        this.map.removeSource(this.sourceId + '-ghost-shots');
-      }
-      if (this.map.getSource(this.sourceId + '-ghost-stations')) {
-        this.map.removeSource(this.sourceId + '-ghost-stations');
-      }
-      if (this.map.getSource(this.sourceId + '-ghost-merge')) {
-        this.map.removeSource(this.sourceId + '-ghost-merge');
-      }
-      if (this.map.getSource(this.interactSourceId)) {
-        this.map.removeSource(this.interactSourceId);
-      }
+      removeAuxiliaryLayers(this.map);
     } catch {
       // Map already destroyed during unmount, cleanup not needed
     }
