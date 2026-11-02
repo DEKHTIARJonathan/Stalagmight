@@ -2578,6 +2578,12 @@
       "partial": "Fixed {{fixed}} {{issueWord}}; {{remaining}} {{needWord}} manual attention (recompute or remove drifted loop closures, fix non-finite shots). Save to keep the fix.",
       "full": "Repaired {{fixed}} {{issueWord}}. Save to keep the fix.",
       "failed": "Repair failed - nothing was changed. Please try again."
+    },
+    "blocked": {
+      "newerFile": "Update Stalagmight to repair",
+      "lock": "Acquire the lock to repair",
+      "workspace": "Switch to Survey to repair",
+      "closures": "Switch to the Raw Data View to repair"
     }
   },
   "debugDialog": {

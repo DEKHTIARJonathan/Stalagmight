@@ -58,3 +58,42 @@ export function isEditingBlockedNow(): boolean {
     selectNewerFileReadOnly(useProjectStore.getState())
   );
 }
+
+/**
+ * WHICH term of the gate blocks editing, so a disabled control can say what would
+ * enable it (#576 D39(a)); null exactly when editing is not blocked. When several
+ * apply, the one that cannot be lifted from the current screen comes first: a file
+ * from a newer Stalagmight (no in-app remedy), then a remote project without the
+ * write lock, then the Plan/Export workspace, then the Closures Computed View.
+ */
+export type EditBlockedReason = 'newerFile' | 'lock' | 'workspace' | 'closures';
+
+function editBlockedReasonOf(
+  ui: Parameters<typeof isMapReadOnly>[0],
+  speleoReadOnly: boolean,
+  newerFileReadOnly: boolean
+): EditBlockedReason | null {
+  if (newerFileReadOnly) return 'newerFile';
+  if (speleoReadOnly) return 'lock';
+  if (!isMapReadOnly(ui)) return null;
+  // The map's own read-only term: the Plan/Export workspace, else the Closures Computed View.
+  return ui.appMode === 'survey' ? 'closures' : 'workspace';
+}
+
+/** React-hook form of the reason; every store hook is called unconditionally (#275). */
+export function useEditBlockedReason(): EditBlockedReason | null {
+  const appMode = useUIStore((s) => s.appMode);
+  const geometryMode = useUIStore((s) => s.geometryMode);
+  const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
+  const newerFileReadOnly = useProjectStore(selectNewerFileReadOnly);
+  return editBlockedReasonOf({ appMode, geometryMode }, speleoReadOnly, newerFileReadOnly);
+}
+
+/** Imperative twin of {@link useEditBlockedReason}, for a re-check at commit time. */
+export function editBlockedReasonNow(): EditBlockedReason | null {
+  return editBlockedReasonOf(
+    useUIStore.getState(),
+    selectSpeleoReadOnly(useSpeleoStore.getState()),
+    selectNewerFileReadOnly(useProjectStore.getState())
+  );
+}

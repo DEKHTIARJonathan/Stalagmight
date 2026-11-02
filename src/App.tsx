@@ -12,6 +12,7 @@ import { useGasPlanStore, selectIsPlanDirty } from './store/gasPlanStore';
 import { useShallow } from 'zustand/react/shallow';
 import { invokeIpc, getErrorMessage } from './utils/ipc';
 import { isEditDisabledError } from './utils/editErrors';
+import { useEditBlockedReason, editBlockedReasonNow } from './hooks/useEditingBlocked';
 import {
   surfaceSaveFailure,
   shouldShowAutosaveBanner,
@@ -47,6 +48,8 @@ function App() {
   const { t } = useTranslation();
   const { project, stations, loading, loadConfig, config, isDirty, setConfig } = useProjectStore();
   const integrityIssues = useProjectStore((s) => s.integrityIssues);
+  // #576 D39(a): why Repair (a survey mutation) is unavailable right now, if it is.
+  const repairBlocked = useEditBlockedReason();
   const integrityDismissed = useProjectStore((s) => s.integrityDismissed);
   const integritySaveBlocked = useProjectStore((s) => s.integritySaveBlocked);
   const checkProjectIntegrity = useProjectStore((s) => s.checkProjectIntegrity);
@@ -545,6 +548,16 @@ function App() {
   }, []);
 
   const handleRepairIntegrity = async () => {
+    // #576 D39(a): Repair mutates the survey, so the read-only contract applies. The
+    // button is disabled while editing is blocked; re-checked here for a dialog left
+    // open across a mode switch.
+    const blocked = editBlockedReasonNow();
+    if (blocked !== null) {
+      useUIStore
+        .getState()
+        .showToast(t(`integrityRepair.blocked.${blocked}`), TOAST_KEYS.EDIT_DISABLED, 'warning');
+      return;
+    }
     setRepairingIntegrity(true);
     try {
       const { fixed, remaining } = await repairProjectIntegrity();
@@ -818,6 +831,15 @@ function App() {
               </ul>
             </div>
             <div className="px-4 py-3 border-t border-border flex justify-end gap-2">
+              {repairBlocked !== null && (
+                <span
+                  id="integrity-repair-blocked"
+                  className="mr-auto self-center text-xs text-text-secondary"
+                  data-testid="integrity-dialog-repair-blocked"
+                >
+                  {t(`integrityRepair.blocked.${repairBlocked}`)}
+                </span>
+              )}
               <button
                 onClick={() => closeIntegrityDialog()}
                 disabled={repairingIntegrity}
@@ -828,7 +850,9 @@ function App() {
               </button>
               <button
                 onClick={handleRepairIntegrity}
-                disabled={repairingIntegrity}
+                disabled={repairingIntegrity || repairBlocked !== null}
+                title={repairBlocked !== null ? t(`integrityRepair.blocked.${repairBlocked}`) : undefined}
+                aria-describedby={repairBlocked !== null ? 'integrity-repair-blocked' : undefined}
                 className="px-3 py-1.5 rounded bg-accent text-white text-sm disabled:opacity-50"
                 data-testid="integrity-dialog-repair"
               >
