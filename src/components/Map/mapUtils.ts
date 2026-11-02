@@ -14,7 +14,7 @@ export function hasLiveStyle(map: maplibregl.Map | null): boolean {
  * Anchor candidates, bottom-most first, for an overlay that must draw beneath
  * the survey: pass the first one `getLayer` resolves as `beforeId`.
  *
- * `initializeLayers` adds the ghost shot hitbox first, so it is the bottom of
+ * `addAuxiliaryLayers` adds the ghost shot hitbox first, so it is the bottom of
  * the survey stack; the rest are live fallbacks, not decoration, since an
  * unresolved anchor means MapLibre appends the overlay ON TOP of everything.
  * `survey-custom-render` (the WebGL geometry) is last because anchoring there

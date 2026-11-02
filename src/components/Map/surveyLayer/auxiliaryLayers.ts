@@ -144,7 +144,7 @@ export function addAuxiliaryLayers(map: MaplibreMap, style: AuxiliaryLayerStyle)
     paint: {
       'line-width': style.shotHitArea,
       'line-color': 'rgba(255, 255, 0, 0.3)', // Visible when debug enabled
-      'line-opacity': 0, // Hidden by default, shown via updateDebugVisualization
+      'line-opacity': 0, // Hidden by default, shown via updateGhostDebugVisualization
     },
   });
 
@@ -156,7 +156,7 @@ export function addAuxiliaryLayers(map: MaplibreMap, style: AuxiliaryLayerStyle)
     paint: {
       'circle-radius': style.stationHitArea,
       'circle-color': 'rgba(255, 255, 0, 0.3)', // Visible when debug enabled
-      'circle-opacity': 0, // Hidden by default, shown via updateDebugVisualization
+      'circle-opacity': 0, // Hidden by default, shown via updateGhostDebugVisualization
       'circle-stroke-width': 0,
     },
   });

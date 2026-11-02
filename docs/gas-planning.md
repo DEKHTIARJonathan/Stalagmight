@@ -272,7 +272,7 @@ endpoints included - both ends of a tie are surveyed stations the diver passes
 through. `route_avg_depth_m` is distance-weighted over the swum legs.
 
 None of this is the length of the highlight on screen: the engine measures 3-D
-swum distance on measured coordinates, while `SurveyLayer.applyGasRoute` draws
+swum distance on measured coordinates, while `applyGasRoute` (surveyLayer/auxiliaryData.ts, entered through `SurveyLayer.setGasRoute`) draws
 through the displayed geometry - in Plan, the closure-adjusted 2-D plan view.
 
 The Profile tab ([#299](https://github.com/Stalagmight/Stalagmight/issues/299))
