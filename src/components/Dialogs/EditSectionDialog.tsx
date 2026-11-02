@@ -17,6 +17,8 @@ import { EDITABLE_AZIMUTH_AVG_KEY } from '../common/editableShotColumns';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import type { Section, Shot, ShotData, ShotId } from '../../types/project';
 import type { DeleteShotImpact } from '../../types/commands';
+import type { ShotUpdates } from '../../types/ipc/ShotUpdates';
+import { changedShotFields } from '../../utils/shotUpdatesDiff';
 import { defaultConfig } from '../../types/config';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
@@ -406,23 +408,7 @@ export default function EditSectionDialog() {
       for (const shot of shots.filter(s => !s.isNew && !s.isDeleted)) {
         const original = originalShots.find(o => o.id === shot.id);
         if (original && hasChanges(original, shot)) {
-          const result = await updateShot(sectionId, shot.id, {
-            azimuth_in: shot.azimuth_in,
-            azimuth_out: shot.azimuth_out,
-            length: shot.length,
-            depth_in: shot.depth_in,
-            depth_out: shot.depth_out,
-            pitch_in: shot.pitch_in,
-            pitch_out: shot.pitch_out,
-            left: shot.left,
-            right: shot.right,
-            up: shot.up,
-            down: shot.down,
-            comment: shot.comment,
-            kind: shot.kind ?? 'Normal',
-            marker_index: original.marker_index ?? null,
-            temperature: original.temperature ?? null,
-          });
+          const result = await updateShot(sectionId, shot.id, editedShotUpdates(original, shot));
           if (!result.success) {
             setError(result.error ?? t('editSection.updateShotFailed'));
             return;
@@ -730,6 +716,31 @@ export function isEditSectionDirty(state: EditSectionDirtyState, section: Sectio
       return original !== undefined && hasChanges(original, s);
     })
   );
+}
+
+/**
+ * [#576 F32-EDIT] The update for one edited row: only the fields that differ from
+ * the saved shot. The store holds every reading rounded through an f32 (the binary
+ * envelope), so re-sending an untouched field would write that rounding over the
+ * backend's exact value. Marker index and temperature have no column here and are
+ * never sent.
+ */
+export function editedShotUpdates(original: Shot, current: EditableShot): Partial<ShotUpdates> {
+  return changedShotFields(original, {
+    azimuth_in: current.azimuth_in,
+    azimuth_out: current.azimuth_out,
+    length: current.length,
+    depth_in: current.depth_in,
+    depth_out: current.depth_out,
+    pitch_in: current.pitch_in,
+    pitch_out: current.pitch_out,
+    left: current.left,
+    right: current.right,
+    up: current.up,
+    down: current.down,
+    comment: current.comment,
+    kind: current.kind ?? 'Normal',
+  });
 }
 
 function hasChanges(original: Shot, current: EditableShot): boolean {

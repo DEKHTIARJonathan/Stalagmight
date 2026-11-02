@@ -25,6 +25,7 @@ import {
   interpolateShots,
   type TargetShotLike,
 } from '../../utils/overlapHelpers';
+import { changedShotFields } from '../../utils/shotUpdatesDiff';
 import { useShallow } from 'zustand/react/shallow';
 
 interface OrphanPlacementDialogProps {
@@ -424,39 +425,31 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
           ? reverseTargetShot(orphanShot)
           : orphanShot;
 
-        if (mode === 'interpolate') {
-          const interp = interpolateShots(
-            { ...targetShot, comment: targetShot.comment ?? null, kind: targetShot.kind },
-            orphanAsTarget,
-          );
-          await updateShot(suggestion.targetSectionId, targetShot.id, {
-            azimuth_in: interp.azimuth_in,
-            azimuth_out: interp.azimuth_out,
-            length: interp.length,
-            depth_in: interp.depth_in,
-            depth_out: interp.depth_out,
-            pitch_in: interp.pitch_in,
-            pitch_out: interp.pitch_out,
-            left: interp.left,
-            right: interp.right,
-            up: interp.up,
-            down: interp.down,
-          });
-        } else {
-          // import_data: use orphan's values on the target
-          await updateShot(suggestion.targetSectionId, targetShot.id, {
-            azimuth_in: orphanAsTarget.azimuth_in,
-            azimuth_out: orphanAsTarget.azimuth_out,
-            length: orphanAsTarget.length,
-            depth_in: orphanAsTarget.depth_in,
-            depth_out: orphanAsTarget.depth_out,
-            pitch_in: orphanAsTarget.pitch_in,
-            pitch_out: orphanAsTarget.pitch_out,
-            left: orphanAsTarget.left,
-            right: orphanAsTarget.right,
-            up: orphanAsTarget.up,
-            down: orphanAsTarget.down,
-          });
+        // interpolate: the blend of both; import_data: the orphan's values.
+        const source: TargetShotLike =
+          mode === 'interpolate'
+            ? interpolateShots(
+                { ...targetShot, comment: targetShot.comment ?? null, kind: targetShot.kind },
+                orphanAsTarget,
+              )
+            : orphanAsTarget;
+        // [#576 F32-EDIT] Only the readings that change: an unchanged one re-sent
+        // from the store would write its f32 rounding over the backend's exact value.
+        const updates = changedShotFields(targetShot, {
+          azimuth_in: source.azimuth_in,
+          azimuth_out: source.azimuth_out,
+          length: source.length,
+          depth_in: source.depth_in,
+          depth_out: source.depth_out,
+          pitch_in: source.pitch_in,
+          pitch_out: source.pitch_out,
+          left: source.left,
+          right: source.right,
+          up: source.up,
+          down: source.down,
+        });
+        if (Object.keys(updates).length > 0) {
+          await updateShot(suggestion.targetSectionId, targetShot.id, updates);
         }
       }
     }

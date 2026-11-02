@@ -13,6 +13,7 @@ import type { EditableShot } from '../components/common/ShotTableEditor';
 import { isEmittedShot } from '../components/common/emittedShots';
 import { convertToEditableShots } from './shotConversion';
 import { useProjectStore } from '../store/projectStore';
+import { changedShotFields } from './shotUpdatesDiff';
 import type { SectionEditState, ConfirmedOverlapInfo } from './batchImportHelpers';
 import {
   computeActionableIds,
@@ -422,6 +423,18 @@ export function applyAllOverlapTreatments(
             };
           }
           // existing_data: target keeps its own values - no update needed
+
+          // [#576 F32-EDIT] Only the readings that change: the project's shots hold
+          // their values rounded through an f32 (the binary envelope), so an
+          // unchanged one re-sent from here would write that rounding over the
+          // backend's exact value.
+          if (updates) {
+            updates = changedShotFields(existingShot, updates) as Record<string, number | null>;
+            if (Object.keys(updates).length === 0) {
+              treatedShots.add(treatKey);
+              updates = null;
+            }
+          }
 
           if (updates) {
             if (import.meta.env.DEV) {

@@ -8,6 +8,8 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { useShallow } from 'zustand/react/shallow';
+import type { Shot } from '../../types/project';
+import type { ShotUpdates } from '../../types/ipc/ShotUpdates';
 
 export default function EditShotDialog() {
   const { t } = useTranslation();
@@ -99,23 +101,21 @@ export default function EditShotDialog() {
     setError(null);
 
     try {
-      const result = await updateShot(sectionId, shotId, {
-        azimuth_in: normalizeAzimuth(parseFloat(azimuthIn)),
-        azimuth_out: normalizeAzimuth(parseFloat(azimuthOut)),
-        length: parseFloat(length),
-        depth_in: parseFloat(depthIn),
-        depth_out: parseFloat(depthOut),
-        pitch_in: pitchIn ? parseFloat(pitchIn) : null,
-        pitch_out: pitchOut ? parseFloat(pitchOut) : null,
-        left: left ? parseFloat(left) : null,
-        right: right ? parseFloat(right) : null,
-        up: up ? parseFloat(up) : null,
-        down: down ? parseFloat(down) : null,
-        comment: comment.trim() || null,
-        kind: shot?.kind ?? 'Normal',
-        marker_index: shot?.marker_index ?? null,
-        temperature: shot?.temperature ?? null,
-      });
+      // [#576 F32-EDIT] Only the fields whose text the user changed: the store holds
+      // every reading rounded through an f32 (the binary envelope), so re-sending an
+      // untouched one would write that rounding over the backend's exact value.
+      const updates = shot
+        ? changedShotFormFields(shot, {
+            azimuthIn, azimuthOut, length, depthIn, depthOut, pitchIn, pitchOut,
+            left, right, up, down, comment,
+          })
+        : {};
+      if (Object.keys(updates).length === 0) {
+        trackDialogComplete('edit-shot');
+        closeDialog();
+        return;
+      }
+      const result = await updateShot(sectionId, shotId, updates);
 
       if (result.success) {
         trackDialogComplete('edit-shot');
@@ -357,4 +357,44 @@ export default function EditShotDialog() {
       </div>
     </DialogWrapper>
   );
+}
+
+/** The form's text fields, as typed. */
+interface ShotForm {
+  azimuthIn: string;
+  azimuthOut: string;
+  length: string;
+  depthIn: string;
+  depthOut: string;
+  pitchIn: string;
+  pitchOut: string;
+  left: string;
+  right: string;
+  up: string;
+  down: string;
+  comment: string;
+}
+
+/**
+ * The update for the fields whose text differs from what the form was seeded
+ * with (`shot`'s own values - the comparison `isDirty` makes). Kind, marker index
+ * and temperature have no input here and are never sent.
+ */
+function changedShotFormFields(shot: Shot, form: ShotForm): Partial<ShotUpdates> {
+  const updates: Partial<ShotUpdates> = {};
+  const seeded = (v: number | null | undefined) => v?.toString() ?? '';
+  const optional = (v: string) => (v ? parseFloat(v) : null);
+  if (form.azimuthIn !== seeded(shot.azimuth_in)) updates.azimuth_in = normalizeAzimuth(parseFloat(form.azimuthIn));
+  if (form.azimuthOut !== seeded(shot.azimuth_out)) updates.azimuth_out = normalizeAzimuth(parseFloat(form.azimuthOut));
+  if (form.length !== seeded(shot.length)) updates.length = parseFloat(form.length);
+  if (form.depthIn !== seeded(shot.depth_in)) updates.depth_in = parseFloat(form.depthIn);
+  if (form.depthOut !== seeded(shot.depth_out)) updates.depth_out = parseFloat(form.depthOut);
+  if (form.pitchIn !== seeded(shot.pitch_in)) updates.pitch_in = optional(form.pitchIn);
+  if (form.pitchOut !== seeded(shot.pitch_out)) updates.pitch_out = optional(form.pitchOut);
+  if (form.left !== seeded(shot.left)) updates.left = optional(form.left);
+  if (form.right !== seeded(shot.right)) updates.right = optional(form.right);
+  if (form.up !== seeded(shot.up)) updates.up = optional(form.up);
+  if (form.down !== seeded(shot.down)) updates.down = optional(form.down);
+  if (form.comment !== (shot.comment ?? '')) updates.comment = form.comment.trim() || null;
+  return updates;
 }
