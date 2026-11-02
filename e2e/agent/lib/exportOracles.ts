@@ -85,9 +85,9 @@ export type ExportRoute = 'modal' | 'panel' | 'store';
  *   upperTmlu           `names_for_path` lowercases before comparing to "tml"
  *                       (`export/tml.rs:254-264`), so `.TMLU` must take the
  *                       SHORT element names and the plain-XML writer
- *   doubleExtension     `a.tml.txt` - `ensureExtension` REPLACES the last
- *                       extension rather than appending, so the DOM routes
- *                       write `a.tml.tml` and the store route writes the
+ *   doubleExtension     `a.tml.txt` - `.txt` is not a KNOWN extension, so
+ *                       `ensureExtension` APPENDS (#576 D35): the DOM routes
+ *                       write `a.tml.txt.tml`, and the store route writes the
  *                       literal `.txt`, which `write_output`'s `_` arm accepts
  *   noExtension         `names_for_path` falls to SHORT; `write_output` falls
  *                       to plain `fs::write` even for a "tml" export
@@ -187,8 +187,9 @@ export function naturalExtension(format: ExportFormat): string {
     case 'tmlu':
       return 'tmlu';
     case 'diveProfile':
-      // `ProfileChart.onExport` does `ensureExtension(path, '.xml')`
-      // (src/components/SingleSystemView/ProfileChart.tsx:245).
+      // `ProfileChart.onExport` does `resolveSavePath(path, 'xml')`
+      // (src/components/SingleSystemView/ProfileChart.tsx), which forces the
+      // extension through `ensureExtension`.
       return 'xml';
     case 'preview':
       return 'svg';
@@ -211,8 +212,8 @@ const KNOWN_FILE_EXTENSIONS_MIRROR: readonly string[] = [
  * `ensureExtension` in `src/utils/fileDialogs.ts`, transcribed.
  *
  * The behaviour that matters and is easy to misremember (#576 D35): a trailing
- * extension that names a KNOWN file type is REPLACED (`/a/b.txt` stays put, but
- * `/a/b.svg` becomes `/a/b.csv`), anything else is APPENDED to (`/a/b.txt` ->
+ * extension that names a KNOWN file type is REPLACED (`/a/b.svg` becomes
+ * `/a/b.csv`), anything else is kept and APPENDED to (`/a/b.txt` ->
  * `/a/b.txt.csv`, `CaveA 1.5` -> `CaveA 1.5.csv`), and only the last dot of the
  * FILE NAME counts - not a directory's (`/a.b/c` gains `.csv`) and not a leading
  * one (`/x/.hidden` -> `/x/.hidden.csv`). A bare trailing dot is dropped. A

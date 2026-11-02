@@ -104,7 +104,7 @@ describe('naturalExtension', () => {
     expect(naturalExtension('png')).toBe('png');
     expect(naturalExtension('svg')).toBe('svg');
     expect(naturalExtension('pdf')).toBe('pdf');
-    // ProfileChart.onExport does ensureExtension(path, '.xml').
+    // ProfileChart.onExport does resolveSavePath(path, 'xml') (ensureExtension underneath).
     expect(naturalExtension('diveProfile')).toBe('xml');
     expect(naturalExtension('preview')).toBe('svg');
   });

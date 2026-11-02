@@ -992,10 +992,11 @@ verbatim, which is the only way the backend's own guards are reached. Each route
 is asserted against its own contract rather than forced to agree move for move.
 
 Ten destination-path shapes, each aimed at a rule somewhere in the stack:
-`NAME.TMLU` (the exporter lowercases before comparing), `a.tml.txt` (the
-extension is replaced, not appended), no extension, a trailing dot, a name
-carrying U+202E, a ~200-character name, `%`/`"`/space, and the two that name a
-file the open project owns - its `.stalx` and the `.plnx` dive-plan sibling.
+`NAME.TMLU` (the exporter lowercases before comparing), `a.tml.txt` (`.txt`
+is no known extension, so the app appends: `a.tml.txt.tml`), no extension, a
+trailing dot, a name carrying U+202E, a ~200-character name, `%`/`"`/space,
+and the two that name a file the open project owns - its `.stalx` and the
+`.plnx` dive-plan sibling.
 
 | Env var | Effect |
 |---|---|
