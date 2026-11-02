@@ -491,10 +491,14 @@ impl AppState {
         //    active database + `project.file_path` to it.
         let save = self.save_project(Some(dest.to_path_buf()));
         if !save.success {
-            return Err(SpeleoDbError::Io(format!(
-                "failed to write project into the SpeleoDB cache: {}",
-                save.error.unwrap_or_else(|| "unknown error".to_owned())
-            )));
+            // The save's own refusal, shown as written (as `speleodb_flush_before_push`
+            // does): wrapped in `Io` it read "filesystem error: failed to write project
+            // into the SpeleoDB cache: <marker>", hiding a coded save refusal (such as
+            // the unread-settings marker) behind a disk-error prefix (#576 RV4-R-NITS
+            // S-9).
+            return Err(SpeleoDbError::Refused(save.error.unwrap_or_else(|| {
+                "the project could not be written into the SpeleoDB cache".to_owned()
+            })));
         }
         let db_guard = self.database.lock();
         let db = db_guard.as_ref().ok_or_else(|| {

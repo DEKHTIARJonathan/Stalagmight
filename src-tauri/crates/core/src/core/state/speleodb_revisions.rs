@@ -583,13 +583,9 @@ impl AppState {
             } else {
                 "Restore revision"
             };
-            if let Err(refusal) = self.guard_workspace(what) {
-                // The coded refusal verbatim (not wrapped in an error's own prefix), so
-                // the frontend recognises it as the edit gate and shows its notice.
-                let mut dto = local_dto(SpeleoDbError::Io(String::new()));
-                dto.message = refusal.error.unwrap_or_default();
-                return Err(dto);
-            }
+            // The coded refusal verbatim (not wrapped in an error's own prefix), so
+            // the frontend recognises it as the edit gate and shows its notice.
+            self.speleodb_guard_workspace(what)?;
         }
         // Restore (editable) additionally requires the write lock genuinely held (with
         // force-editing already excluded above, edit_enabled here means a real lock).
