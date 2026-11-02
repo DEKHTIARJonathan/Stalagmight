@@ -154,8 +154,10 @@ Three workflows gate `master`:
   (`src-tauri/bindings/` must match what the tests just wrote) and the vendored
   `compass_data` tests. Each tripwire runs its own `:test` fixture first, so the
   rule itself is pinned. The order is lints first (fmt, clippy, the release
-  check), then the pnpm gates, then the Rust tests; the Rust test steps run
-  even after a lint failure (`if: !cancelled()`), so one run reports both.
+  check), then the pnpm gates, then the Rust tests; every step after clippy
+  runs even after a lint failure (`if: !cancelled()`; the node steps also
+  need a successful `pnpm install`), so one run reports the lints, tsc, the
+  pnpm gates, Vitest and the Rust tests, and the job still fails.
 - **`e2e-smoke.yml` (`smoke`)** - in order, all before the browser install so a
   cheap failure never pays for Chromium: the parallel-safety scanner
   (`pnpm lint:e2e-parallel`) and the no-unannotated-sleep gate
