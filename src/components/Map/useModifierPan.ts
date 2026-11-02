@@ -168,11 +168,14 @@ export function useModifierPan({
     // (useMapTools) never ran under any tool.
     let customPanOrigin: { x: number; y: number } | null = null;
     let customPanClaimed = false;
+    // The map whose cursor the claim set to `panning`, for the cleanup below.
+    let claimedMap: NonNullable<typeof map.current> | null = null;
 
     /** Take the gesture over: suppress it, flag it, and show the pan cursor. */
     const claimCustomPan = (e: MouseEvent, isCtrlLeftPan: boolean) => {
       if (!map.current) return;
       customPanClaimed = true;
+      claimedMap = map.current;
       customPanActiveRef.current = true;
       ctrlPanActiveRef.current = isCtrlLeftPan;
       if (isCtrlLeftPan) {
@@ -401,8 +404,8 @@ export function useModifierPan({
       // registration starts with no claim, so the release that ends the gesture
       // would never undo `panning`, the cursor owner's highest-precedence input,
       // and the canvas would stay `grabbing` (#576 RV4-FE-MH1).
-      if (customPanClaimed && map.current) {
-        mapCursorFor(map.current).set({ panning: false });
+      if (customPanClaimed && claimedMap) {
+        mapCursorFor(claimedMap).set({ panning: false });
       }
     };
     // `mapLibreDragPan` decides whether a Ctrl+left press is claimed outright or
