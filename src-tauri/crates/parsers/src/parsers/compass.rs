@@ -845,44 +845,74 @@ impl Lrud {
 /// that LEAVES the station: the next shot in the chain, or - for a chain that
 /// starts there, such as a branch - the first row of the survey that ends
 /// there. A section measured at a station no shot of the survey leaves has
-/// nowhere to go and is counted for the receipt.
+/// nowhere to go and is counted for the receipt; so is one measured where a
+/// shot does leave, when every such shot took another row's section at that
+/// station instead (#576 RV2-R-NITS).
 struct ToStationLruds<'a> {
-    /// The first kept row ending at each station that measured a section.
-    by_station: HashMap<&'a str, Lrud>,
+    /// The first kept row ending at each station that measured a section, as
+    /// an index into the survey's kept shots.
+    by_station: HashMap<&'a str, usize>,
     /// Sections measured at a station no kept shot leaves.
     stranded: usize,
+    /// Sections measured at a station a kept shot leaves that no shot
+    /// carries.
+    superseded: usize,
 }
 
 impl<'a> ToStationLruds<'a> {
-    fn new(shots: &[&'a Shot]) -> Self {
+    /// `chains` is how the survey's kept `shots` split into sections.
+    fn new(shots: &[&'a Shot], chains: &[Vec<usize>]) -> Self {
         let starts: HashSet<&str> = shots.iter().map(|s| s.from.as_str()).collect();
-        let mut by_station: HashMap<&'a str, Lrud> = HashMap::new();
+        let mut by_station: HashMap<&'a str, usize> = HashMap::new();
         let mut stranded = 0;
-        for shot in shots {
-            let lrud = Lrud::of(shot);
-            if lrud.is_empty() {
+        // Rows whose section some shot could carry.
+        let mut placeable: Vec<usize> = Vec::new();
+        for (row, shot) in shots.iter().enumerate() {
+            if Lrud::of(shot).is_empty() {
                 continue;
             }
             if starts.contains(shot.to.as_str()) {
-                by_station.entry(shot.to.as_str()).or_insert(lrud);
+                by_station.entry(shot.to.as_str()).or_insert(row);
+                placeable.push(row);
             } else {
                 stranded += 1;
             }
         }
-        Self {
+        let mut lruds = Self {
             by_station,
             stranded,
+            superseded: 0,
+        };
+        let mut carried = vec![false; shots.len()];
+        for chain in chains {
+            for pos in 0..chain.len() {
+                if let Some(row) = lruds.source(shots, chain, pos) {
+                    carried[row] = true;
+                }
+            }
         }
+        lruds.superseded = placeable.iter().filter(|&&row| !carried[row]).count();
+        lruds
     }
 
-    /// The section at `station`, for a shot leaving it; `previous` is the row
-    /// ahead of that shot in its chain (which ends at `station`), if any.
-    fn at(&self, station: &str, previous: Option<&Shot>) -> Lrud {
-        previous
-            .map(Lrud::of)
-            .filter(|lrud| !lrud.is_empty())
-            .or_else(|| self.by_station.get(station).copied())
-            .unwrap_or_default()
+    /// The kept row whose section the shot at `chain[pos]` carries: the row
+    /// ahead of it in its chain (which ends at the shot's From station) when
+    /// that row measured one, else the first row ending at that station.
+    fn source(&self, shots: &[&Shot], chain: &[usize], pos: usize) -> Option<usize> {
+        pos.checked_sub(1)
+            .map(|p| chain[p])
+            .filter(|&row| !Lrud::of(shots[row]).is_empty())
+            .or_else(|| {
+                self.by_station
+                    .get(shots[chain[pos]].from.as_str())
+                    .copied()
+            })
+    }
+
+    /// The section the shot at `chain[pos]` carries.
+    fn at(&self, shots: &[&Shot], chain: &[usize], pos: usize) -> Lrud {
+        self.source(shots, chain, pos)
+            .map_or_else(Lrud::default, |row| Lrud::of(shots[row]))
     }
 }
 
@@ -895,9 +925,28 @@ fn end_of_chain_lrud_note(survey: &str, stranded: usize) -> Option<String> {
         1 => "1 end-of-chain cross-section had no shot to attach to and was dropped".to_string(),
         n => format!("{n} end-of-chain cross-sections had no shot to attach to and were dropped"),
     };
-    Some(format!(
-        "Survey '{survey}': {counted} (the survey records LRUDs at each shot's To station)."
-    ))
+    Some(to_station_lrud_line(survey, &counted))
+}
+
+/// The receipt line for `superseded` To-station cross-sections of one survey
+/// that lost to another row's section at the same station (#576
+/// RV2-R-NITS), or `None` when there were none.
+fn superseded_lrud_note(survey: &str, superseded: usize) -> Option<String> {
+    let counted = match superseded {
+        0 => return None,
+        1 => "1 cross-section was superseded by another measured at the same station and was \
+              dropped"
+            .to_string(),
+        n => format!(
+            "{n} cross-sections were superseded by others measured at the same stations and \
+             were dropped"
+        ),
+    };
+    Some(to_station_lrud_line(survey, &counted))
+}
+
+fn to_station_lrud_line(survey: &str, counted: &str) -> String {
+    format!("Survey '{survey}': {counted} (the survey records LRUDs at each shot's To station).")
 }
 
 /// Slope length (m) of a shot with the survey's length correction applied; 0.0
@@ -1646,17 +1695,16 @@ pub fn convert_compass_to_import_configs(
     }
     let mut chains: Vec<PendingChain> = Vec::new();
     for kept_survey in &kept {
+        let split = split_into_chains(&kept_survey.shots, |s| (s.from.as_str(), s.to.as_str()));
         let to_station_lruds = kept_survey
             .ctx
             .lrud_on_to
-            .then(|| ToStationLruds::new(&kept_survey.shots));
+            .then(|| ToStationLruds::new(&kept_survey.shots, &split));
         if let Some(lruds) = &to_station_lruds {
-            warnings.extend(end_of_chain_lrud_note(
-                &kept_survey.survey.name,
-                lruds.stranded,
-            ));
+            let survey = &kept_survey.survey.name;
+            warnings.extend(end_of_chain_lrud_note(survey, lruds.stranded));
+            warnings.extend(superseded_lrud_note(survey, lruds.superseded));
         }
-        let split = split_into_chains(&kept_survey.shots, |s| (s.from.as_str(), s.to.as_str()));
         let multi = split.len() > 1;
         for (chain_idx, chain) in split.iter().enumerate() {
             if chain.is_empty() {
@@ -1673,10 +1721,7 @@ pub fn convert_compass_to_import_configs(
                 let shot = kept_survey.shots[idx];
                 let flags = parse_flags(shot.flags.as_ref());
                 let lrud = match &to_station_lruds {
-                    Some(lruds) => lruds.at(
-                        &shot.from,
-                        pos.checked_sub(1).map(|p| kept_survey.shots[chain[p]]),
-                    ),
+                    Some(lruds) => lruds.at(&kept_survey.shots, chain, pos),
                     None => Lrud::of(shot),
                 };
                 shots_data.push(shot_to_shot_data(
@@ -4384,3 +4429,8 @@ mod tests {
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod graph_tests;
+
+// #576 RV2-R-NITS: To-station cross-sections superseded at a station.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod lrud_tests;
