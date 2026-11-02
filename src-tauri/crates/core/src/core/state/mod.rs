@@ -75,6 +75,16 @@ mod fuzz_shrink_tests;
 #[cfg(test)]
 mod fuzz_undo_tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, one panics ON \
+              PURPOSE to poison a mutex, and the printed answers are the evidence a run \
+              captures"
+)]
+mod geometry_query_tests;
+#[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
 mod import_pipeline_tests;
 #[cfg(test)]

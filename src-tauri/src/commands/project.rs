@@ -132,20 +132,23 @@ pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
 ///
 /// Async + `spawn_blocking` (mirrors `get_adjusted_stations`): the adjusted-coord
 /// solve is memoized in `AppState`, and we keep the heavy work off the UI thread.
+///
+/// [#576 C7] `null` means no project is open; a field that could not be computed (a
+/// panic in the task, an unreadable project) REJECTS, so the overlay drops its ramp
+/// instead of holding the previous one as if a recompute were still in flight.
 #[tauri::command]
 pub async fn get_station_distances_from(
     app_handle: tauri::AppHandle,
     from: Option<StationRef>,
-) -> Option<DistanceField> {
-    tauri::async_runtime::spawn_blocking(move || {
+) -> Result<Option<DistanceField>, String> {
+    let joined = tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         // AppState::distance_field takes one reconciled snapshot so topology and
         // adjusted coords are consistent (no two-read skew).
-        state.inner().distance_field(from.as_ref())
+        state.inner().distance_field_checked(from.as_ref())
     })
-    .await
-    .ok()
-    .flatten()
+    .await;
+    settle_blocking("the distance field", joined)
 }
 
 /// Along-cave-line distance between two ruler endpoints (#26): the shortest path
@@ -153,19 +156,21 @@ pub async fn get_station_distances_from(
 /// closures zero-cost), plus the ordered shots traversed so the frontend can
 /// tint them. Each endpoint is a station or an exact point on a shot. Returns
 /// `along_line: null` when the endpoints are in different connected components.
+///
+/// [#576 C7] `null` means no project is open; a measurement that could not be
+/// computed REJECTS rather than reading as "no path".
 #[tauri::command]
 pub async fn get_along_line_distance(
     app_handle: tauri::AppHandle,
     a: RulerEndpoint,
     b: RulerEndpoint,
-) -> Option<AlongLineResult> {
-    tauri::async_runtime::spawn_blocking(move || {
+) -> Result<Option<AlongLineResult>, String> {
+    let joined = tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
-        state.inner().along_line_between(a, b)
+        state.inner().along_line_between_checked(a, b)
     })
-    .await
-    .ok()
-    .flatten()
+    .await;
+    settle_blocking("the along-line distance", joined)
 }
 
 /// Get closure-adjusted station coordinates for the current project.
@@ -180,14 +185,35 @@ pub async fn get_along_line_distance(
 ///
 /// Returns the measured coordinates verbatim when there are no eligible
 /// closures, and an empty vec when no project is open.
+///
+/// [#576 C7] A solve that could not run - a panic in the task, an unreadable
+/// project - REJECTS. It used to resolve to an empty vec, which the frontend took
+/// as a successful (blank) adjusted view, so its fallback to the measured view
+/// with the "couldn't compute" notice never ran and the user was left in a
+/// read-only view with nothing drawn.
 #[tauri::command]
-pub async fn get_adjusted_stations(app_handle: tauri::AppHandle) -> Vec<Station> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn get_adjusted_stations(app_handle: tauri::AppHandle) -> Result<Vec<Station>, String> {
+    let joined = tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
-        state.inner().get_adjusted_stations().unwrap_or_default()
+        state.inner().adjusted_stations_checked()
     })
-    .await
-    .unwrap_or_default()
+    .await;
+    settle_blocking("the closure-adjusted solve", joined).map(Option::unwrap_or_default)
+}
+
+/// [#576 C7] A blocking query's outcome as the frontend receives it: the query's own
+/// answer, or - when the task panicked or was cancelled (`joined` is `Err`) - a
+/// rejection naming `what` failed. Never an empty answer standing in for a failure.
+pub(crate) fn settle_blocking<T, E: std::fmt::Display>(
+    what: &str,
+    joined: Result<Result<T, String>, E>,
+) -> Result<T, String> {
+    match joined {
+        Ok(answer) => answer.map_err(|reason| format!("Could not compute {what}: {reason}")),
+        Err(crash) => Err(format!(
+            "Could not compute {what}: the computation failed ({crash})"
+        )),
+    }
 }
 
 /// Get list of recent projects

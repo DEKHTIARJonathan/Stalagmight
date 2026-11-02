@@ -576,25 +576,35 @@ impl AppState {
     /// `modified_at` + closure-adjustment config and cleared on every
     /// command/undo/redo, so repeatedly toggling to the adjusted display view is
     /// cheap while any edit forces a fresh re-solve from intact measured data.
-    /// Returns `None` if no project is open.
+    /// Returns `None` if no project is open - and also when the project cannot be
+    /// read; the IPC boundary uses [`Self::adjusted_stations_checked`], which tells
+    /// the two apart.
     pub fn get_adjusted_stations(&self) -> Option<Vec<Station>> {
+        self.adjusted_stations_checked().ok().flatten()
+    }
+
+    /// [#576 C7] [`Self::get_adjusted_stations`] for the IPC boundary: `Ok(None)` ONLY
+    /// when no project is open, and an `Err` when the open project cannot be read (a
+    /// poisoned project or command lock - an earlier operation panicked while holding
+    /// it). An empty answer there used to reach the frontend as a successful, empty
+    /// adjusted view, so its documented fallback to the measured view never ran.
+    pub fn adjusted_stations_checked(&self) -> Result<Option<Vec<Station>>, String> {
         let config = self.get_config();
         let config_hash = adjusted_config_hash(&config.closure_adjustment);
 
         // Cheap project-version read under a short lock.
         let version = {
-            let guard = self.project.lock().ok()?;
-            guard
-                .as_ref()?
-                .modified_at
-                .timestamp_nanos_opt()
-                .unwrap_or(0)
+            let guard = self.project.lock().map_err(|_| project_unreadable())?;
+            let Some(project) = guard.as_ref() else {
+                return Ok(None);
+            };
+            project.modified_at.timestamp_nanos_opt().unwrap_or(0)
         };
 
         if let Ok(cache) = self.adjusted_cache.lock() {
             if let Some(entry) = cache.as_ref() {
                 if entry.version == version && entry.config_hash == config_hash {
-                    return Some(entry.stations.clone());
+                    return Ok(Some(entry.stations.clone()));
                 }
             }
         }
@@ -610,13 +620,16 @@ impl AppState {
         // clone so the cache key matches exactly the data solved, and hand the
         // clone to the by-value solver so it isn't cloned a second time.
         let (project, generation) = {
-            let _cmd_guard = self.command_lock.lock().ok()?;
+            let _cmd_guard = self.command_lock.lock().map_err(|_| project_unreadable())?;
             // Capture the invalidation generation alongside the (reconciled) clone,
             // under command_lock, so it reflects exactly the data being solved.
             let generation = self
                 .adjusted_cache_generation
                 .load(std::sync::atomic::Ordering::SeqCst);
-            (self.get_project_state()?, generation)
+            let Some(project) = self.project_state_checked()? else {
+                return Ok(None);
+            };
+            (project, generation)
         };
         let solved_version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
         let stations = project.into_adjusted_station_coordinates(&config.closure_adjustment);
@@ -638,7 +651,16 @@ impl AppState {
                 });
             }
         }
-        Some(stations)
+        Ok(Some(stations))
+    }
+
+    /// [#576 C7] The open project, cloned: `Ok(None)` when none is open, `Err` when the
+    /// project mutex is poisoned. `get_project_state` answers `None` for both.
+    fn project_state_checked(&self) -> Result<Option<Project>, String> {
+        self.project
+            .lock()
+            .map(|guard| guard.clone())
+            .map_err(|_| project_unreadable())
     }
 
     /// Per-station distance field for the distance-gradient overlay (#34),
@@ -648,7 +670,18 @@ impl AppState {
     /// state reads), and reuses the memoized adjusted-stations cache read-only
     /// when it matches that snapshot (keeps re-root instant in the adjusted view).
     pub fn distance_field(&self, from: Option<&StationRef>) -> Option<DistanceField> {
-        let project = self.get_project_state()?;
+        self.distance_field_checked(from).ok().flatten()
+    }
+
+    /// [#576 C7] [`Self::distance_field`] for the IPC boundary: `Ok(None)` only when no
+    /// project is open, `Err` when it cannot be read - a broken read is not "no field".
+    pub fn distance_field_checked(
+        &self,
+        from: Option<&StationRef>,
+    ) -> Result<Option<DistanceField>, String> {
+        let Some(project) = self.project_state_checked()? else {
+            return Ok(None);
+        };
         // Distance uses MEASURED geometry (surveyed shot lengths via the plain
         // coordinate walk) - instant. The closure-adjusted solve is intentionally
         // NOT used: it dominated the latency (~2s release / ~40s debug on a 6k-
@@ -659,7 +692,11 @@ impl AppState {
         // Reference ties are not swimmable, so they leave the route unless the
         // user opts them back in (#27 q13).
         let include_reference = self.get_config().gas.include_reference_legs;
-        Some(project.distance_field_from_with(&stations, from, include_reference))
+        Ok(Some(project.distance_field_from_with(
+            &stations,
+            from,
+            include_reference,
+        )))
     }
 
     /// Single-diver open-circuit gas reachability field (#38). Like [`distance_field`], the
@@ -702,7 +739,20 @@ impl AppState {
         a: RulerEndpoint,
         b: RulerEndpoint,
     ) -> Option<AlongLineResult> {
-        let project = self.get_project_state()?;
+        self.along_line_between_checked(a, b).ok().flatten()
+    }
+
+    /// [#576 C7] [`Self::along_line_between`] for the IPC boundary: `Ok(None)` only when
+    /// no project is open, `Err` when the project (or its adjusted solve) cannot be read.
+    /// The measured fallback stays for an adjusted view that is merely absent.
+    pub fn along_line_between_checked(
+        &self,
+        a: RulerEndpoint,
+        b: RulerEndpoint,
+    ) -> Result<Option<AlongLineResult>, String> {
+        let Some(project) = self.project_state_checked()? else {
+            return Ok(None);
+        };
         // `project` (topology) and `stations` (adjusted coords) are two independent
         // locked reads, so a concurrent edit between them could yield a slightly
         // skewed snapshot. That's safe here - `along_line_between` looks everything
@@ -710,11 +760,17 @@ impl AppState {
         // via those resolved indices, so a mismatch drops an edge at worst (never
         // panics) and the ruler re-queries. We deliberately avoid a single
         // command-locked snapshot to keep reusing the adjusted-stations cache.
-        let stations = self
-            .get_adjusted_stations()
-            .unwrap_or_else(|| project.compute_station_coordinates());
+        let stations = match self.adjusted_stations_checked()? {
+            Some(stations) => stations,
+            None => project.compute_station_coordinates(),
+        };
         let include_reference = self.get_config().gas.include_reference_legs;
-        Some(project.along_line_between_with(&stations, a, b, include_reference))
+        Ok(Some(project.along_line_between_with(
+            &stations,
+            a,
+            b,
+            include_reference,
+        )))
     }
 
     /// Drop any cached closure-adjusted coordinates. Called from every
@@ -1171,6 +1227,14 @@ impl AppState {
     pub(super) fn newer_file_refusal(&self) -> Option<String> {
         self.newer_file_schema().map(newer_file_reason)
     }
+}
+
+/// [#576 C7] Why a geometry query found the open project unreadable: a lock it needs
+/// is poisoned, i.e. an earlier operation panicked while holding it.
+fn project_unreadable() -> String {
+    "the open project could not be read (an earlier operation failed while changing it); \
+     reopen the project"
+        .to_owned()
 }
 
 /// [#576 B6-D1] Why a project saved by a newer Stalagmight cannot be written here.

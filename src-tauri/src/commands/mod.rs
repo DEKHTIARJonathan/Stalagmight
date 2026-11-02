@@ -37,6 +37,12 @@ mod app_contract_tests;
 mod command_tests;
 #[cfg(test)]
 #[expect(
+    clippy::print_stdout,
+    reason = "test module: the printed values are the evidence a run captures"
+)]
+mod geometry_query_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::print_stdout,
