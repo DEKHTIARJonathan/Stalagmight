@@ -157,6 +157,18 @@ impl AppState {
         }
     }
 
+    /// [`Self::hold_commands`] for the command paths that have always REFUSED a
+    /// poisoned lock instead of recovering it (the imports answer "Failed to acquire
+    /// command lock"): `None` when it is poisoned. [#576 NF-W4C-3] Lets such a path
+    /// split into a locking entry point and a `&CommandsHeld` body without changing
+    /// what its callers see.
+    pub(super) fn try_hold_commands(&self) -> Option<CommandsHeld<'_>> {
+        self.command_lock
+            .lock()
+            .ok()
+            .map(|guard| CommandsHeld { _guard: guard })
+    }
+
     /// Install `commit` as the open session, under one `project` acquisition taken
     /// inside the caller's `command_lock`.
     pub(super) fn commit_open_session(&self, commands: &CommandsHeld<'_>, commit: SessionCommit) {

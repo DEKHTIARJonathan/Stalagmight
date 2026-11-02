@@ -17,11 +17,12 @@
 
 use std::path::Path;
 
+use super::session_commit::CommandsHeld;
 use super::speleodb::{local_dto, lock_held_by_me, type_says_managed, validate_project_id, DumpAt};
 use super::speleodb_cache::{stamp_pulled_file, InheritedUndo, LocalEditsPolicy};
 use super::speleodb_revisions::validate_hexsha;
 use super::{AppState, VirtualShotMode};
-use crate::core::command::{Command, CommandResult, ImportReceipt};
+use crate::core::command::{CommandResult, ImportReceipt};
 use crate::models::{ImportClosure, ImportSectionConfig};
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
@@ -1286,14 +1287,6 @@ impl AppState {
         let tml_scratch = dest.with_file_name("adopt-source.tml");
         dump.extract_entry_to(&tml_entry, &tml_scratch)
             .map_err(local_dto)?;
-        let adopt =
-            self.adopt_import_and_save(&tml_scratch, &tml_entry, &dest, project_name.clone());
-        // Best-effort scratch cleanup regardless of import outcome.
-        let _ = std::fs::remove_file(&tml_scratch);
-        // [#411] What the conversion actually did, carried to the return below rather
-        // than dropped here: the call site was the last place it existed, so a pulled
-        // Ariane project lost its excluded shots and every parse anomaly in silence.
-        let import_receipt = adopt?;
 
         // BASE = the commit this project was actually built from, which is the one
         // already resolved above and downloaded by hash - NOT a second lookup here.
@@ -1312,7 +1305,7 @@ impl AppState {
         // divergence prompt, which is the outcome the user can act on.
         let PullDating { base: base_sha, .. } = pull_dating(adopt_at, latest_commit_sha);
 
-        // Stamp the hand-off link onto the project this call just built, through the
+        // Stamp the hand-off link onto the project this call builds, through the
         // LIVE handle rather than a second connection over the same file: the
         // hand-over below reads it straight back (`speleodb_done` decides whether to
         // push at all from `has_unpushed_edits`), so the two must be the same view.
@@ -1332,25 +1325,34 @@ impl AppState {
         // epoch for, and adoption was minting fresh rows with it.
         //
         // The conversion IS the edit and it happened just now, so `now` is both true and
-        // the value that works: the push below starts after this line, so
-        // `last_edit_at <= push_start` and a landed push clears the bit.
+        // the value that works: the link is built at the stamp and the push below starts
+        // after it, so `last_edit_at <= push_start` and a landed push clears the bit.
         //
-        // [#303] Adoption builds the `.stalx` from an imported `.tml`, so there is
-        // normally no prior link to carry an undo policy from - but the file can be a
-        // re-adopt over an existing cache copy, and that copy's override is still the
-        // project's answer. Read it off the SAME live handle before the upsert
-        // overwrites the row; no link yet initializes from the global default once.
-        let adopted_undo_mode = self.speleodb_open_link().ok().and_then(|l| l.undo_mode);
-        let stamped = self.speleodb_set_open_link(&crate::models::SpeleoLink {
-            endpoint: endpoint.clone(),
-            project_id: project_id.clone(),
-            project_name,
-            base_commit_sha: base_sha,
-            has_unpushed_edits: true,
-            last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
-            last_verify_at: None,
-            undo_mode: Some(self.effective_undo_mode(adopted_undo_mode)),
-        });
+        // [#576 NF-W4C-3] Built here, STAMPED inside `adopt_import_and_save`, as the
+        // last step of the one `command_lock` span that builds, saves, promotes and
+        // reopens the copy - see that function for what a separate stamp let in.
+        let adopt = self.adopt_import_and_save(
+            &tml_scratch,
+            &tml_entry,
+            &dest,
+            project_name.clone(),
+            |undo_mode| crate::models::SpeleoLink {
+                endpoint: endpoint.clone(),
+                project_id: project_id.clone(),
+                project_name,
+                base_commit_sha: base_sha,
+                has_unpushed_edits: true,
+                last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
+                last_verify_at: None,
+                undo_mode: Some(undo_mode),
+            },
+        );
+        // Best-effort scratch cleanup regardless of import outcome.
+        let _ = std::fs::remove_file(&tml_scratch);
+        // [#411] What the conversion actually did, carried to the return below rather
+        // than dropped here: the call site was the last place it existed, so a pulled
+        // Ariane project lost its excluded shots and every parse anomaly in silence.
+        let (import_receipt, stamped) = adopt?;
         if let Err(e) = &stamped {
             tracing::warn!(
                 error = %e,
@@ -1859,9 +1861,60 @@ impl AppState {
         }
     }
 
+    /// The adoption's whole LOCAL half: build the `ariane.tml` at `tml_path` into a
+    /// fresh project, save and promote it over `dest`, reopen it there
+    /// ([`Self::adopt_build_and_promote`]), and stamp the hand-off link `make_link`
+    /// builds onto it. `make_link` gets the undo mode the new link materializes.
+    ///
+    /// [#576 NF-W4C-3] ALL of it in ONE `command_lock` span, failure paths included
+    /// (the abandon's close and reopen of the project it replaced). Each step used to
+    /// take the lock on its own - the create's commit, the import, the save, the
+    /// close, the reopen - and the stamp took only `database`, so a command (a
+    /// frontend edit, an autosave) could run between two of them against the
+    /// half-built project: an edit whose small section/shot ids resolved landed in the
+    /// adopted copy and was saved into it, and an autosave between the reopen and the
+    /// stamp copied the absent link and renamed a fresh file over the live one, so the
+    /// stamp went into the replaced file. The steps run through their `_held`
+    /// variants, which take the caller's proof instead of the lock. Nothing in the
+    /// span makes a network call - the dump was downloaded before it, the hand-over
+    /// runs after it - and nothing in it takes `speleodb_lock_ops`, which sits above
+    /// `command_lock` (docs/undo-redo.md, Lock Ordering).
+    ///
+    /// Returns the import receipt and the stamp's own result: a stamp that fails
+    /// still leaves a finished conversion, which the caller reports rather than
+    /// refuses.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the SpeleoErrorDto every adoption step returns (its siblings carry the same \
+                  warning); boxing the error type is a repo-wide change outside NF-W4C-3"
+    )]
+    pub(super) fn adopt_import_and_save(
+        &self,
+        tml_path: &Path,
+        entry_name: &str,
+        dest: &Path,
+        project_name: String,
+        make_link: impl FnOnce(crate::models::UndoMode) -> crate::models::SpeleoLink,
+    ) -> Result<(Option<ImportReceipt>, Result<(), SpeleoDbError>), SpeleoErrorDto> {
+        let commands = self.hold_commands();
+        let receipt =
+            self.adopt_build_and_promote(&commands, tml_path, entry_name, dest, project_name)?;
+        // [#303] Adoption builds the `.stalx` from an imported `.tml`, so there is
+        // normally no prior link to carry an undo policy from - but the file can be a
+        // re-adopt over an existing cache copy, and that copy's override is still the
+        // project's answer. Read it off the SAME live handle before the upsert
+        // overwrites the row; no link yet initializes from the global default once.
+        let adopted_undo_mode = self.speleodb_open_link().ok().and_then(|l| l.undo_mode);
+        let stamped =
+            self.speleodb_set_open_link(&make_link(self.effective_undo_mode(adopted_undo_mode)));
+        drop(commands);
+        Ok((receipt, stamped))
+    }
+
     /// Import an extracted `ariane.tml` into a fresh project and save it as a new
-    /// `.stalx` at `dest`. Split out of [`Self::speleodb_adopt_ariane`] so the pure
-    /// create → import → save pipeline is separable from the network/link steps.
+    /// `.stalx` at `dest`, reopened there. Split out of [`Self::speleodb_adopt_ariane`]
+    /// so the pure create → import → save pipeline is separable from the network/link
+    /// steps.
     ///
     /// Reuses the existing importer defaults (`include_excluded = false`,
     /// `comments_on_stations = true`) - the same settings the collab `.tml`
@@ -1887,8 +1940,9 @@ impl AppState {
     /// command - each edit, each auto-save - landed on that stub. The previously open
     /// project is reopened behind it where there was one, which is the same undo the
     /// cache replace performs when its extract fails.
-    fn adopt_import_and_save(
+    fn adopt_build_and_promote(
         &self,
+        commands: &CommandsHeld<'_>,
         tml_path: &Path,
         entry_name: &str,
         dest: &Path,
@@ -1909,22 +1963,23 @@ impl AppState {
             sweep_own_staging(dir);
         }
 
-        let receipt = match self.adopt_build_into(tml_path, entry_name, &staged, project_name) {
-            Ok(receipt) => receipt,
-            Err(e) => {
-                self.adopt_abandon_staging(&staged, previous.as_deref());
-                return Err(e);
-            }
-        };
+        let receipt =
+            match self.adopt_build_into(commands, tml_path, entry_name, &staged, project_name) {
+                Ok(receipt) => receipt,
+                Err(e) => {
+                    self.adopt_abandon_staging(commands, &staged, previous.as_deref());
+                    return Err(e);
+                }
+            };
 
         // Close before the rename: `Database::open_existing` holds a 256 MB mmap over
         // the staging file, and on Windows SQLite opens without `FILE_SHARE_DELETE`,
         // so renaming a live handle is the hazard `close_project_if_open_at` exists
         // for. This is the same close, at the same point in the same sequence.
-        self.close_project();
+        self.close_project_held(commands);
         if let Err(e) = std::fs::rename(&staged, dest) {
             // `rename` is atomic, so a failure leaves `dest` exactly as it was.
-            self.adopt_abandon_staging(&staged, previous.as_deref());
+            self.adopt_abandon_staging(commands, &staged, previous.as_deref());
             return Err(local_dto(SpeleoDbError::Io(format!(
                 "could not put the adopted project in place: {e}"
             ))));
@@ -1935,7 +1990,7 @@ impl AppState {
         // renders the sidecar from the in-memory survey. The legacy open is the right
         // one here for the reason its doc gives - this is a reopen of a canonical cache
         // path, the same case the failed-replace recovery uses it for.
-        let reopened = self.open_project(dest.to_path_buf());
+        let reopened = self.open_project_held(commands, dest.to_path_buf());
         if !reopened.success {
             // The rename already consumed the staging file, so there is nothing to
             // clean up - but the close above still has to be undone. Without this the
@@ -1944,7 +1999,7 @@ impl AppState {
             // old project and still sending it edits: exactly the hazard the abandon
             // path exists to prevent, reintroduced by the one exit that skipped it.
             if let Some(previous) = previous.as_deref() {
-                let restored = self.open_project(previous.to_path_buf());
+                let restored = self.open_project_held(commands, previous.to_path_buf());
                 if !restored.success {
                     tracing::warn!(
                         error = ?restored.error,
@@ -1963,7 +2018,7 @@ impl AppState {
     }
 
     /// Create → import → save the `ariane.tml` at `tml_path` into a project saved at
-    /// `staged`. The pure pipeline half of [`Self::adopt_import_and_save`], split out
+    /// `staged`. The pure pipeline half of [`Self::adopt_build_and_promote`], split out
     /// so its caller has ONE failure path to clean up after rather than four.
     ///
     /// Returns the import receipt, which travels back to the frontend on
@@ -1973,13 +2028,21 @@ impl AppState {
     /// this reads is a scratch copy beside the cache.
     fn adopt_build_into(
         &self,
+        commands: &CommandsHeld<'_>,
         tml_path: &Path,
         entry_name: &str,
         staged: &Path,
         project_name: String,
     ) -> Result<Option<ImportReceipt>, SpeleoErrorDto> {
-        self.do_create_project_full(project_name, None, None, Some(staged.to_path_buf()), true)
-            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        self.do_create_project_full_held(
+            commands,
+            project_name,
+            None,
+            None,
+            Some(staged.to_path_buf()),
+            true,
+        )
+        .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
 
         let tml = crate::parsers::tml::parse_tml(tml_path)
             .map_err(|e| local_dto(SpeleoDbError::Parse(e.to_string())))?;
@@ -1992,7 +2055,8 @@ impl AppState {
         // Entrance elevation (#431), same no-data convention as execute_tml_import.
         let surface_elevation =
             crate::models::ariane_elevation_or_absent(tml.first_start_absolute_elevation);
-        let mut imported = self.execute_tml_import_sections(
+        let mut imported = self.execute_tml_import_sections_held(
+            commands,
             sections,
             closures,
             None,
@@ -2016,9 +2080,16 @@ impl AppState {
             warnings,
         );
 
-        let saved = self.execute(Command::SaveProject {
-            path: Some(staged.to_path_buf()),
-        });
+        // [#576 NF-W4C-3] What `execute(SaveProject)` runs under its lock, run here
+        // under the adoption's span (`execute` would take the lock again and
+        // self-deadlock). Of `execute`'s guards a save trips none: it is a lifecycle
+        // pass-through, so the read-only gate and the lock re-verify skip it; it is
+        // never a no-op reverse or comment move; it pushes no undo entry, takes no
+        // integrity snapshot, and its epilogue has no step (no orphan conversion, no
+        // reframe or reconcile, no dirty flip). The one step with an effect -
+        // dropping the closure-adjusted cache - is kept.
+        self.invalidate_adjusted_cache();
+        let saved = self.save_project(Some(staged.to_path_buf()));
         if !saved.success {
             return Err(local_dto(SpeleoDbError::Io(format!(
                 "could not save the adopted project: {}",
@@ -2039,10 +2110,15 @@ impl AppState {
     ///
     /// Best-effort throughout: this runs on a path that is ALREADY returning an error,
     /// and the caller's error is the one worth reporting.
-    fn adopt_abandon_staging(&self, staged: &Path, previous: Option<&Path>) {
+    fn adopt_abandon_staging(
+        &self,
+        commands: &CommandsHeld<'_>,
+        staged: &Path,
+        previous: Option<&Path>,
+    ) {
         // Closing is what releases the handle the remove needs on Windows. Harmless
         // when the create never got as far as committing anything.
-        self.close_project();
+        self.close_project_held(commands);
         if let Err(e) = std::fs::remove_file(staged) {
             if e.kind() != std::io::ErrorKind::NotFound {
                 tracing::warn!(
@@ -2054,7 +2130,7 @@ impl AppState {
             }
         }
         let Some(previous) = previous else { return };
-        let reopened = self.open_project(previous.to_path_buf());
+        let reopened = self.open_project_held(commands, previous.to_path_buf());
         if reopened.success {
             tracing::info!(
                 path = %previous.display(),
@@ -2866,6 +2942,21 @@ mod tests {
         );
     }
 
+    /// The link an adoption stamps, for the conversion tests below. They fail before
+    /// the stamp, so what it says does not matter.
+    fn adopted_link(undo_mode: crate::models::UndoMode) -> crate::models::SpeleoLink {
+        crate::models::SpeleoLink {
+            endpoint: "http://speleodb.invalid/".to_owned(),
+            project_id: GUARDED.to_owned(),
+            project_name: "Adopted".to_owned(),
+            base_commit_sha: None,
+            has_unpushed_edits: true,
+            last_edit_at: None,
+            last_verify_at: None,
+            undo_mode: Some(undo_mode),
+        }
+    }
+
     /// Adoption used to delete the cache `.stalx` and rebuild in place, so the copy
     /// being replaced was destroyed before anything that could fail had run. A `.tml`
     /// that would not parse then cost the user the cached project as well as the
@@ -2893,8 +2984,13 @@ mod tests {
         std::fs::write(&not_a_tml, b"<nope/>").expect("seed the source");
 
         let state = AppState::new().expect("state");
-        let failed =
-            state.adopt_import_and_save(&not_a_tml, "ariane.tml", &dest, "Adopted".to_owned());
+        let failed = state.adopt_import_and_save(
+            &not_a_tml,
+            "ariane.tml",
+            &dest,
+            "Adopted".to_owned(),
+            adopted_link,
+        );
 
         assert!(
             failed.is_err(),
@@ -2953,8 +3049,13 @@ mod tests {
         );
 
         let dest = temp.path().join("project.stalx");
-        let failed =
-            state.adopt_import_and_save(&not_a_tml, "ariane.tml", &dest, "Adopted".to_owned());
+        let failed = state.adopt_import_and_save(
+            &not_a_tml,
+            "ariane.tml",
+            &dest,
+            "Adopted".to_owned(),
+            adopted_link,
+        );
 
         assert!(
             failed.is_err(),

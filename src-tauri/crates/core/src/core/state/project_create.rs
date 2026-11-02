@@ -1,4 +1,4 @@
-use super::session_commit::SessionCommit;
+use super::session_commit::{CommandsHeld, SessionCommit};
 use super::AppState;
 use crate::core::CommandResult;
 use crate::models::Project;
@@ -351,8 +351,16 @@ impl AppState {
     ///   this takes precedence over `save_directory`.
     /// * `defer_initial_save` - When true, reserve `project.file_path` but do not
     ///   create/write the project file yet. First save/autosave will create it.
-    pub fn do_create_project_full(
+    ///
+    /// The body of [`Self::do_create_project_full`] and
+    /// [`Self::do_create_project_full_held`] [#576 NF-W4C-3]: `held` is a
+    /// `command_lock` span the caller already holds, and `None` takes the lock around
+    /// the commit only, as the create always has. First in this impl because the
+    /// source tripwire that pins the create's shared commit (`speleodb_session`
+    /// tests) reads the first full-create definition in this file.
+    fn do_create_project_full_with(
         &self,
+        held: Option<&CommandsHeld<'_>>,
         name: String,
         project_location: Option<String>,
         save_directory: Option<PathBuf>,
@@ -526,30 +534,38 @@ impl AppState {
         // window with no inherited-history watermark: File > New over a Full-mode
         // linked project used to keep its byte budget and watermark (#576 A18(f)).
         // [#576 A1] Under `command_lock`, so the commit cannot land inside an edit of
-        // the previous project and inherit its undo entry.
-        let commands = self.hold_commands();
-        self.commit_open_session(
-            &commands,
-            SessionCommit {
-                // A deferred new project has no file on disk yet, so its first import must
-                // durably persist it.
-                initial_save_deferred: defer_initial_save,
-                // ...and no database to read its display settings from: seed the cache
-                // with the defaults just chosen.
-                display_settings: if defer_initial_save {
-                    settings_map
-                        .iter()
-                        .map(|(key, value)| ((*key).to_string(), value.clone()))
-                        .collect()
-                } else {
-                    Vec::new()
+        // the previous project and inherit its undo entry - or under the caller's span
+        // when it already holds one [#576 NF-W4C-3].
+        {
+            let own_commands;
+            let commands = if let Some(commands) = held {
+                commands
+            } else {
+                own_commands = self.hold_commands();
+                &own_commands
+            };
+            self.commit_open_session(
+                commands,
+                SessionCommit {
+                    // A deferred new project has no file on disk yet, so its first import must
+                    // durably persist it.
+                    initial_save_deferred: defer_initial_save,
+                    // ...and no database to read its display settings from: seed the cache
+                    // with the defaults just chosen.
+                    display_settings: if defer_initial_save {
+                        settings_map
+                            .iter()
+                            .map(|(key, value)| ((*key).to_string(), value.clone()))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    },
+                    // Recent Projects only after a real file exists.
+                    recent: (!defer_initial_save).then(|| db_path.clone()),
+                    ..SessionCommit::new_local(project.clone(), db)
                 },
-                // Recent Projects only after a real file exists.
-                recent: (!defer_initial_save).then(|| db_path.clone()),
-                ..SessionCommit::new_local(project.clone(), db)
-            },
-        );
-        drop(commands);
+            );
+        }
 
         // Get loading_id before clearing token
         let loading_id = progress.loading_id();
@@ -569,6 +585,61 @@ impl AppState {
             project,
             display_settings,
         })
+    }
+
+    /// Create a new project with full progress reporting (see
+    /// `do_create_project_full_with` above for the phases and arguments), taking
+    /// `command_lock` for its commit only - File > New.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the LoadError every create path returns; this only delegates to the body \
+                  above, and boxing the error type is a repo-wide change outside NF-W4C-3"
+    )]
+    pub fn do_create_project_full(
+        &self,
+        name: String,
+        project_location: Option<String>,
+        save_directory: Option<PathBuf>,
+        save_path: Option<PathBuf>,
+        defer_initial_save: bool,
+    ) -> Result<crate::core::loading::CreateProjectFullResult, crate::core::loading::LoadError>
+    {
+        self.do_create_project_full_with(
+            None,
+            name,
+            project_location,
+            save_directory,
+            save_path,
+            defer_initial_save,
+        )
+    }
+
+    /// [`Self::do_create_project_full`] inside a `command_lock` span the caller
+    /// already holds [#576 NF-W4C-3] - the Ariane adoption's, whose create is the
+    /// first step of that one span.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the LoadError every create path returns; this only delegates to the body \
+                  above, and boxing the error type is a repo-wide change outside NF-W4C-3"
+    )]
+    pub(super) fn do_create_project_full_held(
+        &self,
+        commands: &CommandsHeld<'_>,
+        name: String,
+        project_location: Option<String>,
+        save_directory: Option<PathBuf>,
+        save_path: Option<PathBuf>,
+        defer_initial_save: bool,
+    ) -> Result<crate::core::loading::CreateProjectFullResult, crate::core::loading::LoadError>
+    {
+        self.do_create_project_full_with(
+            Some(commands),
+            name,
+            project_location,
+            save_directory,
+            save_path,
+            defer_initial_save,
+        )
     }
 }
 

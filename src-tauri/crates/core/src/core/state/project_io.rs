@@ -1061,9 +1061,16 @@ impl AppState {
         // [#576 A1] `command_lock` first: a close landing inside an edit or an undo
         // would leave that command's entry on the emptied session's stacks.
         let commands = self.hold_commands();
+        self.close_project_held(&commands)
+    }
+
+    /// [`close_project`](Self::close_project) inside a `command_lock` span the caller
+    /// already holds [#576 NF-W4C-3] - the Ariane adoption's, whose close before the
+    /// promote and whose failure-path closes are steps of that one span.
+    pub(super) fn close_project_held(&self, commands: &CommandsHeld<'_>) -> CommandResult {
         tracing::debug!("close_project: acquiring project lock");
         let mut proj = self.project.lock().unwrap_or_else(|e| e.into_inner());
-        self.close_open_project_locked(&commands, &mut proj)
+        self.close_open_project_locked(commands, &mut proj)
     }
 
     /// [`close_project`](Self::close_project)'s teardown, with the `project` guard

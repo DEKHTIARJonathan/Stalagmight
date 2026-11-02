@@ -1,4 +1,5 @@
 use super::command_epilogue::EpilogueSteps;
+use super::session_commit::CommandsHeld;
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
@@ -308,8 +309,64 @@ impl AppState {
         )
     }
 
+    /// [`Self::execute_tml_import_sections`] inside a `command_lock` span the caller
+    /// already holds [#576 NF-W4C-3]: the same gate, validation, import, epilogue and
+    /// receipt, minus the lock (taking it again would self-deadlock). The Ariane
+    /// adoption imports through it, so its create, import, save, reopen and link stamp
+    /// are one span no command can land inside.
+    pub(super) fn execute_tml_import_sections_held(
+        &self,
+        commands: &CommandsHeld<'_>,
+        sections: Vec<crate::models::ImportSectionConfig>,
+        closures: Vec<crate::models::ImportClosure>,
+        file_hash: Option<String>,
+        section_hashes: Vec<String>,
+        existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
+        mode: VirtualShotMode,
+        surface_elevation: Option<f64>,
+    ) -> CommandResult {
+        self.execute_import_sections_locked(
+            commands,
+            sections,
+            closures,
+            file_hash,
+            section_hashes,
+            existing_shot_updates,
+            mode,
+            surface_elevation,
+        )
+    }
+
     fn execute_import_sections_inner(
         &self,
+        sections: Vec<crate::models::ImportSectionConfig>,
+        closures: Vec<crate::models::ImportClosure>,
+        file_hash: Option<String>,
+        section_hashes: Vec<String>,
+        existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
+        mode: VirtualShotMode,
+        surface_elevation: Option<f64>,
+    ) -> CommandResult {
+        // Serialize command execution to prevent concurrent interleaving
+        let Some(commands) = self.try_hold_commands() else {
+            return CommandResult::failure("Failed to acquire command lock".to_string());
+        };
+        self.execute_import_sections_locked(
+            &commands,
+            sections,
+            closures,
+            file_hash,
+            section_hashes,
+            existing_shot_updates,
+            mode,
+            surface_elevation,
+        )
+    }
+
+    /// The import itself, inside the `command_lock` span `_commands` proves.
+    fn execute_import_sections_locked(
+        &self,
+        _commands: &CommandsHeld<'_>,
         mut sections: Vec<crate::models::ImportSectionConfig>,
         closures: Vec<crate::models::ImportClosure>,
         file_hash: Option<String>,
@@ -321,10 +378,6 @@ impl AppState {
         use crate::models::{ImportPlacement, StationRef};
         use std::collections::{HashMap, HashSet};
 
-        // Serialize command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
         // Read-only edit gate (#191, D-B6): a TML import mutates the project, so
         // it is gated on a read-only remote project. (Empty-import early return
         // below is a no-op, but gating first keeps the chokepoint uniform.)

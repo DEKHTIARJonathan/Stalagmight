@@ -778,8 +778,10 @@ BEFORE taking it (they take it themselves). Done's local halves - the pre-push
 flush, render and snapshot, and the link and history writes after the upload
 concluded - hold it as well, never across a network call (#576 B35(d)), and so does
 every other write of the open file's SpeleoDB link outside `execute` (#576 NF-W4C-1/2):
-Publish's relocation save and link stamp (one span), Start Editing's commit, the
-metadata PATCH's name fold, Publish's BASE recovery and unlink's link delete. An
+Publish's relocation save and link stamp (one span), the Ariane adoption's create,
+import, save, promote, reopen and link stamp (one span, #576 NF-W4C-3), Start
+Editing's commit, the metadata PATCH's name fold, Publish's BASE recovery and
+unlink's link delete. An
 autosave copies the link at its start and renames a fresh file over the live one, so a
 link write that took only `database` could land in the replaced file. Below it,
 the mutation paths avoid holding two

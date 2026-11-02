@@ -1,4 +1,4 @@
-use super::session_commit::{SessionCommit, SessionHistory};
+use super::session_commit::{CommandsHeld, SessionCommit, SessionHistory};
 use super::AppState;
 use crate::core::CommandResult;
 use crate::persistence::Database;
@@ -16,7 +16,14 @@ impl AppState {
     /// strand the shell on a project the backend no longer has open. If this is
     /// ever exposed over IPC, the guard question returns; a tripwire test pins
     /// the non-exposure (`the_legacy_open_project_is_not_exposed_over_ipc`).
-    pub(super) fn open_project(&self, path: PathBuf) -> CommandResult {
+    ///
+    /// The body of [`Self::open_project`] and [`Self::open_project_held`] [#576
+    /// NF-W4C-3]: `held` is a `command_lock` span the caller already holds, and `None`
+    /// takes the lock around the commit only, after the file read, as the open always
+    /// has. First in this impl because the source tripwires that pin the open's
+    /// history cap and its shared commit (`undo_policy`, `speleodb_session` tests)
+    /// read the first open-project definition in this file.
+    fn open_project_with(&self, held: Option<&CommandsHeld<'_>>, path: PathBuf) -> CommandResult {
         tracing::info!(
             path = ?path,
             purpose = "resume editing",
@@ -281,35 +288,43 @@ impl AppState {
         // the `database` lock this commit is mid-swap on.
         let policy = self.undo_policy_for(speleo_link.as_ref());
         // [#576 A1] Under `command_lock`, taken only now that the file has been read,
-        // so the commit cannot land inside an edit of the previous project.
-        let commands = self.hold_commands();
-        self.commit_open_session(
-            &commands,
-            SessionCommit {
-                project: Some(project),
-                database: Some(db),
-                // Opened an existing project from disk - its initial save is not deferred.
-                initial_save_deferred: false,
-                // [Track B] (#191) Read-only edit gate: remote => edit disabled, local-only
-                // => enabled (see do_load_project_full). Off the link read above, which came
-                // from the same handle before `db` moves.
-                edit_enabled: speleo_link.is_none(),
-                history_discarded,
-                // [#576 B6-D1] The read-only state of a file a newer build saved.
-                newer_file_schema: newer_schema,
-                unreadable_project_settings: unread_settings,
-                // Settings will be loaded from the DB by the frontend.
-                display_settings: Vec::new(),
-                history: SessionHistory {
-                    policy,
-                    inherited_through: speleo_undo_watermark,
-                    undo: undo_entries,
-                    redo: redo_entries,
+        // so the commit cannot land inside an edit of the previous project - or under
+        // the caller's span when it already holds one [#576 NF-W4C-3].
+        {
+            let own_commands;
+            let commands = if let Some(commands) = held {
+                commands
+            } else {
+                own_commands = self.hold_commands();
+                &own_commands
+            };
+            self.commit_open_session(
+                commands,
+                SessionCommit {
+                    project: Some(project),
+                    database: Some(db),
+                    // Opened an existing project from disk - its initial save is not deferred.
+                    initial_save_deferred: false,
+                    // [Track B] (#191) Read-only edit gate: remote => edit disabled, local-only
+                    // => enabled (see do_load_project_full). Off the link read above, which came
+                    // from the same handle before `db` moves.
+                    edit_enabled: speleo_link.is_none(),
+                    history_discarded,
+                    // [#576 B6-D1] The read-only state of a file a newer build saved.
+                    newer_file_schema: newer_schema,
+                    unreadable_project_settings: unread_settings,
+                    // Settings will be loaded from the DB by the frontend.
+                    display_settings: Vec::new(),
+                    history: SessionHistory {
+                        policy,
+                        inherited_through: speleo_undo_watermark,
+                        undo: undo_entries,
+                        redo: redo_entries,
+                    },
+                    recent: Some(path),
                 },
-                recent: Some(path),
-            },
-        );
-        drop(commands);
+            );
+        }
 
         tracing::info!(
             path = %path_display,
@@ -317,6 +332,24 @@ impl AppState {
             "Project opened"
         );
         CommandResult::success()
+    }
+
+    /// The legacy open (see `open_project_with` above for what it does and does not
+    /// guard), taking `command_lock` for its commit only.
+    pub(super) fn open_project(&self, path: PathBuf) -> CommandResult {
+        self.open_project_with(None, path)
+    }
+
+    /// [`Self::open_project`] inside a `command_lock` span the caller already holds
+    /// [#576 NF-W4C-3] - the Ariane adoption's, whose reopen at the cache path (and
+    /// whose failure-path reopen of the project it replaced) are steps of that one
+    /// span. The file read runs inside the span too, which is the point there.
+    pub(super) fn open_project_held(
+        &self,
+        commands: &CommandsHeld<'_>,
+        path: PathBuf,
+    ) -> CommandResult {
+        self.open_project_with(Some(commands), path)
     }
 
     /// Load a project with full progress reporting.
