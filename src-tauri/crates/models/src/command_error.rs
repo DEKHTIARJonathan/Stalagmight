@@ -21,7 +21,11 @@ use ts_rs::TS;
 /// `command_error::tests::every_code_serializes_as_its_wire_name`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[ts(rename_all = "SCREAMING_SNAKE_CASE")]
+#[ts(
+    export,
+    export_to = "../../bindings/",
+    rename_all = "SCREAMING_SNAKE_CASE"
+)]
 pub enum CommandErrorCode {
     // --- Unclassified ----------------------------------------------------------
     /// No more specific code: the message says what went wrong, as is.

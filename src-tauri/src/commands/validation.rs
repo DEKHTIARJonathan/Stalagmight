@@ -2,7 +2,9 @@ use chrono::Utc;
 use tauri::{AppHandle, Runtime};
 
 use crate::commands::pool;
-use crate::core::{AppState, IntegrityCheckResult, IntegrityRepairResult};
+use crate::core::{
+    AppState, CommandError, EditOutcome, IntegrityCheckResult, IntegrityRepairResult,
+};
 use crate::models::{warning_is_ignorable, SectionId, ShotId};
 use crate::persistence::ResolvedWarning;
 
@@ -54,8 +56,22 @@ pub async fn check_project_integrity<R: Runtime>(app: AppHandle<R>) -> Integrity
 #[tauri::command]
 pub async fn repair_project_integrity<R: Runtime>(
     app: AppHandle<R>,
-) -> Result<IntegrityRepairResult, String> {
-    pool::run(app, AppState::repair_open_project_integrity).await
+) -> Result<IntegrityRepairResult, CommandError> {
+    pool::run_mutation(app, |state| {
+        state
+            .repair_open_project_integrity()
+            .map_err(CommandError::from)
+    })
+    .await
+}
+
+/// An ignore-list edit's answer: it reports no validation warnings of its own
+/// (`remote_link` is filled by `pool::run_mutation`).
+fn ignore_list_edited() -> EditOutcome {
+    EditOutcome {
+        warnings: Vec::new(),
+        remote_link: None,
+    }
 }
 
 /// Resolve a warning (mark it as acknowledged)
@@ -66,8 +82,8 @@ pub async fn resolve_warning<R: Runtime>(
     shot_id: ShotId,
     warning_code: String,
     comment: Option<String>,
-) -> Result<(), String> {
-    pool::run(app, move |state| {
+) -> Result<EditOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
         // Errors are not ignorable (issue #57): refuse to persist a suppression for
         // any error-severity warning (over-anchoring, invalid pitch/azimuth, zero/
         // negative length, length-below-depth, negative LRUD). One predicate -
@@ -80,7 +96,7 @@ pub async fn resolve_warning<R: Runtime>(
                 purpose = "reject ignore of a non-ignorable (error) warning",
                 "Ignoring of error-severity warnings is not allowed; not persisting"
             );
-            return Ok(());
+            return Ok(ignore_list_edited());
         }
 
         // Policy (issue #57): UUID-keyed suppression is the only supported model for
@@ -96,7 +112,9 @@ pub async fn resolve_warning<R: Runtime>(
                 purpose = "reject ignore without stable shot identity",
                 "Refusing to resolve warning: no shot UUID"
             );
-            return Err("Could not ignore this warning: the shot no longer exists.".to_string());
+            return Err(CommandError::failed(
+                "Could not ignore this warning: the shot no longer exists.",
+            ));
         };
         tracing::info!(
             section_id = section_id,
@@ -128,21 +146,24 @@ pub async fn resolve_warning<R: Runtime>(
             resolved_comment: comment,
             shot_uuid,
         };
-        state.save_resolved_warning_gated(&warning).map_err(|e| {
-            // A read-only rejection (EDIT_DISABLED) is expected control flow on a remote
-            // project opened without the lock, not a persistence failure worth an error log.
-            if !e.starts_with(crate::core::command::EDIT_DISABLED_CODE) {
-                tracing::error!(
-                    section_id = warning.section_id,
-                    shot_id = warning.shot_id,
-                    warning_code = %warning.warning_code,
-                    purpose = "acknowledge validation warning",
-                    reason = %e,
-                    "Failed to resolve warning"
-                );
-            }
-            e
-        })
+        state
+            .save_resolved_warning_gated(&warning)
+            .map(|()| ignore_list_edited())
+            .map_err(|e| {
+                // A read-only rejection (EDIT_DISABLED) is expected control flow on a remote
+                // project opened without the lock, not a persistence failure worth an error log.
+                if !e.starts_with(crate::core::command::EDIT_DISABLED_CODE) {
+                    tracing::error!(
+                        section_id = warning.section_id,
+                        shot_id = warning.shot_id,
+                        warning_code = %warning.warning_code,
+                        purpose = "acknowledge validation warning",
+                        reason = %e,
+                        "Failed to resolve warning"
+                    );
+                }
+                CommandError::from(e)
+            })
     })
     .await
 }
@@ -154,8 +175,8 @@ pub async fn unresolve_warning<R: Runtime>(
     section_id: SectionId,
     shot_id: ShotId,
     warning_code: String,
-) -> Result<(), String> {
-    pool::run(app, move |state| {
+) -> Result<EditOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
         let shot_uuid = state.shot_uuid_for(section_id, shot_id);
         tracing::info!(
             section_id = section_id,
@@ -166,6 +187,7 @@ pub async fn unresolve_warning<R: Runtime>(
         );
         state
             .delete_resolved_warning_gated(section_id, shot_id, &warning_code, shot_uuid.as_deref())
+            .map(|()| ignore_list_edited())
             .map_err(|e| {
                 // A read-only rejection (EDIT_DISABLED) is expected control flow, not a
                 // persistence failure worth an error log.
@@ -179,7 +201,7 @@ pub async fn unresolve_warning<R: Runtime>(
                         "Failed to unresolve warning"
                     );
                 }
-                e
+                CommandError::from(e)
             })
     })
     .await

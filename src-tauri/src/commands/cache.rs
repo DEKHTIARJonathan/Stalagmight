@@ -10,7 +10,7 @@ use tauri::{Manager, Runtime, State};
 use ts_rs::TS;
 
 use crate::commands::pool;
-use crate::core::AppState;
+use crate::core::{AppState, CommandError};
 
 /// Statistics for a single tile provider
 #[derive(Debug, Clone, Serialize, TS)]
@@ -44,7 +44,9 @@ pub struct CacheStats {
 /// Returns an error if the cache lock is poisoned.
 /// If the cache is disabled, returns zero stats (not an error).
 #[tauri::command]
-pub async fn get_cache_stats<R: Runtime>(app: tauri::AppHandle<R>) -> Result<CacheStats, String> {
+pub async fn get_cache_stats<R: Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<CacheStats, CommandError> {
     pool::run(app, |state| {
         let tile_cache = state.tile_cache();
 
@@ -89,7 +91,7 @@ pub async fn get_cache_stats<R: Runtime>(app: tauri::AppHandle<R>) -> Result<Cac
 pub async fn clear_tile_cache<R: Runtime>(
     app: tauri::AppHandle<R>,
     provider: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     pool::run(app, move |state| {
         let tile_cache = state.tile_cache();
 
@@ -106,13 +108,17 @@ pub async fn clear_tile_cache<R: Runtime>(
                 purpose = "refresh cached map tiles",
                 "Clearing tile cache for provider"
             );
-            cache.clear_provider(&p).map_err(|e| e.to_string())
+            cache
+                .clear_provider(&p)
+                .map_err(|e| CommandError::failed(e.to_string()))
         } else {
             tracing::info!(
                 purpose = "free disk space or refresh cached tiles",
                 "Clearing all tile cache"
             );
-            cache.clear_all().map_err(|e| e.to_string())
+            cache
+                .clear_all()
+                .map_err(|e| CommandError::failed(e.to_string()))
         }
     })
     .await
@@ -131,8 +137,10 @@ pub async fn fetch_tile(
     z: u32,
     y: u32,
     x: u32,
-) -> Result<Vec<u8>, String> {
-    fetch_tile_impl(Some(&app), state.inner(), provider, z, y, x).await
+) -> Result<Vec<u8>, CommandError> {
+    fetch_tile_impl(Some(&app), state.inner(), provider, z, y, x)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// `app` carries the telemetry collector, and is `None` only where there is no
@@ -211,12 +219,12 @@ pub async fn get_tile_providers() -> Vec<crate::tile_providers::TileProviderInfo
 #[tauri::command]
 pub async fn get_tile_attribution(
     provider: String,
-) -> Result<crate::tile_attribution::TileAttribution, String> {
+) -> Result<crate::tile_attribution::TileAttribution, CommandError> {
     tauri::async_runtime::spawn_blocking(move || {
         crate::tile_attribution::get_attribution(&provider)
     })
     .await
-    .map_err(|e| format!("Attribution task failed: {e}"))
+    .map_err(|e| CommandError::failed(format!("Attribution task failed: {e}")))
 }
 
 /// Tile fetch statistics returned by the get_tile_fetch_stats command.

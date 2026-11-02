@@ -148,6 +148,30 @@ impl From<&str> for CommandError {
     }
 }
 
+/// A refused open / create: its code, message and load payloads, as they were.
+impl From<crate::core::loading::LoadError> for CommandError {
+    fn from(err: crate::core::loading::LoadError) -> Self {
+        let mut out = Self::new(err.code, err.message);
+        out.payload.details = err.details;
+        out.payload.speleodb_managed = err.speleodb_managed;
+        out
+    }
+}
+
+/// A SpeleoDB failure: its code (one per `SpeleoDbAction`, which is not carried)
+/// and its message and payloads, as they were.
+impl From<crate::speleodb::SpeleoErrorDto> for CommandError {
+    fn from(err: crate::speleodb::SpeleoErrorDto) -> Self {
+        let mut out = Self::new(err.code, err.message);
+        out.payload.status = err.status;
+        out.payload.transport = err.transport;
+        out.payload.unpushed_local = err.unpushed_local;
+        out.payload.dump_candidates = err.dump_candidates;
+        out.payload.dump_candidate_kind = err.dump_candidate_kind;
+        out
+    }
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {

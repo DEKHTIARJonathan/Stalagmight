@@ -19,8 +19,8 @@
         "ts": "RepairResult"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -41,8 +41,8 @@
         "ts": "string"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -105,8 +105,8 @@
         "ts": "boolean"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -134,8 +134,8 @@
         "ts": "ConnectivityResult"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -170,8 +170,8 @@
         "ts": "Array<boolean>"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -192,8 +192,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -210,12 +210,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "ProjectFileOutcome",
+        "ts": "ProjectFileOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -285,8 +285,8 @@
         "ts": "GasReachField | null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -307,8 +307,8 @@
         "ts": "number"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -339,12 +339,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -393,8 +393,8 @@
         "ts": "CreateProjectFullResult"
       },
       "error": {
-        "rust": "LoadError",
-        "ts": "unknown"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -446,12 +446,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "SectionCreated",
+        "ts": "SectionCreated"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -524,12 +524,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "SectionCreated",
+        "ts": "SectionCreated"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -567,12 +567,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "ShotCreated",
+        "ts": "ShotCreated"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -593,8 +593,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -615,8 +615,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -640,12 +640,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -662,12 +662,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "DeleteProjectOutcome",
+        "ts": "DeleteProjectOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -684,12 +684,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -713,12 +713,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -756,12 +756,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "SectionCreated",
+        "ts": "SectionCreated"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -792,12 +792,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -842,12 +842,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "SectionCreated",
+        "ts": "SectionCreated"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -864,12 +864,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "BatchOutcome",
+        "ts": "BatchOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -914,12 +914,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "ImportOutcome",
+        "ts": "ImportOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -978,12 +978,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "ImportOutcome",
+        "ts": "ImportOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1042,12 +1042,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "ImportOutcome",
+        "ts": "ImportOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1092,12 +1092,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "ImportOutcome",
+        "ts": "ImportOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1118,8 +1118,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1154,8 +1154,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1183,8 +1183,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1205,8 +1205,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1227,8 +1227,8 @@
         "ts": "SalvagedData"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1249,8 +1249,8 @@
         "ts": "Array<string>"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1292,8 +1292,8 @@
         "ts": "Array<number>"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1306,8 +1306,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1320,8 +1320,8 @@
         "ts": "Array<Station>"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1349,8 +1349,8 @@
         "ts": "AlongLineResult | null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1363,8 +1363,8 @@
         "ts": "Array<number>"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1377,8 +1377,8 @@
         "ts": "CacheStats"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1419,8 +1419,8 @@
         "ts": "MemoryStats"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1461,8 +1461,8 @@
         "ts": "ArrayBuffer"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1511,8 +1511,8 @@
         "ts": "RawTableData"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1525,8 +1525,8 @@
         "ts": "Array<string>"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1597,8 +1597,8 @@
         "ts": "Array<number>"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1619,8 +1619,8 @@
         "ts": "SectionRelationships"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1641,8 +1641,8 @@
         "ts": "SegmentGeometry"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1663,8 +1663,8 @@
         "ts": "DistanceField | null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1685,8 +1685,8 @@
         "ts": "SurveyGeometry"
       },
       "error": {
-        "rust": "SurveyGeometryError",
-        "ts": "SurveyGeometryError"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1707,8 +1707,8 @@
         "ts": "TileAttribution"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1785,8 +1785,8 @@
         "ts": "DmpFile"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1859,12 +1859,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "ImportOutcome",
+        "ts": "ImportOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1913,8 +1913,8 @@
         "ts": "Array<DivePlanMeta>"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1963,8 +1963,8 @@
         "ts": "DivePlan"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1985,8 +1985,8 @@
         "ts": "LoadProjectFullResult"
       },
       "error": {
-        "rust": "LoadError",
-        "ts": "unknown"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2007,8 +2007,8 @@
         "ts": "ArrayBuffer"
       },
       "error": {
-        "rust": "LoadError",
-        "ts": "unknown"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2046,12 +2046,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "ProjectFileOutcome",
+        "ts": "ProjectFileOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2075,12 +2075,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2111,12 +2111,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2140,12 +2140,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2169,12 +2169,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2198,12 +2198,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2224,8 +2224,8 @@
         "ts": "CompassFile"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2246,8 +2246,8 @@
         "ts": "GpxFile"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2268,8 +2268,8 @@
         "ts": "TmlFile"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2290,8 +2290,8 @@
         "ts": "WallsFile"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2334,8 +2334,8 @@
         "ts": "Array<unknown | null>"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2356,8 +2356,8 @@
         "ts": "Array<StationRef | null>"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2385,8 +2385,8 @@
         "ts": "DeleteShotImpact"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2421,8 +2421,8 @@
         "ts": "DeleteShotRangeImpact"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2443,8 +2443,8 @@
         "ts": "string"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2482,12 +2482,12 @@
       "async": true,
       "args": [],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "HistoryOutcome",
+        "ts": "HistoryOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2504,12 +2504,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "HistoryOutcome",
+        "ts": "HistoryOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2540,12 +2540,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "ProjectFileOutcome",
+        "ts": "ProjectFileOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2562,12 +2562,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2584,12 +2584,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2610,8 +2610,8 @@
         "ts": "string"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2624,8 +2624,8 @@
         "ts": "IntegrityRepairResult"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2663,12 +2663,12 @@
         }
       ],
       "result": {
-        "rust": "()",
-        "ts": "null"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2696,8 +2696,8 @@
         "ts": "string"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2721,12 +2721,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "ReverseOutcome",
+        "ts": "ReverseOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2790,8 +2790,8 @@
         "ts": "DivePlanMeta"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2815,12 +2815,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "SaveOutcome",
+        "ts": "SaveOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2844,12 +2844,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2880,12 +2880,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2909,12 +2909,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2931,12 +2931,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2957,8 +2957,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3004,12 +3004,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3037,8 +3037,8 @@
         "ts": "SpeleoCollaborators"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3066,8 +3066,8 @@
         "ts": "SpeleoCollaborators"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3116,8 +3116,8 @@
         "ts": "SpeleoAdoptResult"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3130,8 +3130,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3159,8 +3159,8 @@
         "ts": "StartEditingResult | null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3188,8 +3188,8 @@
         "ts": "SpeleoDoneReport"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3217,8 +3217,8 @@
         "ts": "Array<SpeleoDumpCandidate> | null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3231,8 +3231,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3245,8 +3245,8 @@
         "ts": "SpeleoProjectMetadata"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3267,8 +3267,8 @@
         "ts": "Array<SpeleoRevision>"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3281,8 +3281,8 @@
         "ts": "SpeleoLinkStatus"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3295,8 +3295,8 @@
         "ts": "SpeleoCollaborators"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3309,8 +3309,8 @@
         "ts": "Array<SpeleoProjectSummary>"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3323,8 +3323,8 @@
         "ts": "Array<SpeleoTeamOption>"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3345,8 +3345,8 @@
         "ts": "Record<string, SpeleoLocalProjectState>"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3388,8 +3388,8 @@
         "ts": "SpeleoLoginResult"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3402,8 +3402,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3459,8 +3459,8 @@
         "ts": "SpeleoOpenResult"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3502,8 +3502,8 @@
         "ts": "SpeleoOpenResult"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3524,8 +3524,8 @@
         "ts": "SpeleoProjectMetadata"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3546,8 +3546,8 @@
         "ts": "SpeleoPublishReport"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3575,8 +3575,8 @@
         "ts": "SpeleoPushReport"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3589,8 +3589,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3603,8 +3603,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3625,8 +3625,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3639,8 +3639,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3661,8 +3661,8 @@
         "ts": "SpeleoCollaborators"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3690,8 +3690,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3712,8 +3712,8 @@
         "ts": "SpeleoCollaborators"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3790,8 +3790,8 @@
         "ts": "SpeleoOpenResult"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3804,8 +3804,8 @@
         "ts": "SpeleoSessionStatus"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3818,8 +3818,8 @@
         "ts": "SpeleoRewindTarget | null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3840,8 +3840,8 @@
         "ts": "Array<SpeleoUserSuggestion>"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3854,8 +3854,8 @@
         "ts": "SpeleoSessionStatus"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3883,8 +3883,8 @@
         "ts": "SpeleoCollaborators"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3905,8 +3905,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3934,8 +3934,8 @@
         "ts": "SpeleoCollaborators"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3956,8 +3956,8 @@
         "ts": "SpeleoSessionStatus"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3978,8 +3978,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4000,8 +4000,8 @@
         "ts": "StartEditingResult"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4014,8 +4014,8 @@
         "ts": "string"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4028,8 +4028,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4042,8 +4042,8 @@
         "ts": "SpeleoUnwindTarget | null"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4056,8 +4056,8 @@
         "ts": "UpdateResult"
       },
       "error": {
-        "rust": "SpeleoErrorDto",
-        "ts": "SpeleoErrorDto"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4088,12 +4088,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "ShotCreated",
+        "ts": "ShotCreated"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4114,8 +4114,8 @@
         "ts": "Array<CrossSectionSuggestion>"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4143,8 +4143,8 @@
         "ts": "Array<PlacementSuggestion>"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4165,8 +4165,8 @@
         "ts": "Array<OrphanPlacementSuggestion>"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4230,8 +4230,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4240,12 +4240,12 @@
       "async": true,
       "args": [],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "HistoryOutcome",
+        "ts": "HistoryOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4262,12 +4262,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "HistoryOutcome",
+        "ts": "HistoryOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4291,12 +4291,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4313,12 +4313,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4349,12 +4349,12 @@
         }
       ],
       "result": {
-        "rust": "()",
-        "ts": "null"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4708,12 +4708,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4737,12 +4737,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4773,12 +4773,12 @@
         }
       ],
       "result": {
-        "rust": "CommandResult",
-        "ts": "CommandResult"
+        "rust": "EditOutcome",
+        "ts": "EditOutcome"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     }
   ]

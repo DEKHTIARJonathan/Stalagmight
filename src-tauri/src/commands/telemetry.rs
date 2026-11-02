@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::commands::pool;
+use crate::core::CommandError;
 use crate::telemetry::TelemetryCollector;
 
 /// Receive a batch of event counts from the frontend.
@@ -11,7 +12,7 @@ pub async fn track_events<R: Runtime>(
     app: AppHandle<R>,
     events: HashMap<String, u64>,
     project_seq: u32,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     pool::run_stateless(move || {
         app.state::<TelemetryCollector>()
             .track_batch(&events, project_seq);
@@ -26,7 +27,7 @@ pub async fn track_events<R: Runtime>(
 /// open project bucket (#576 B17). The next launch's background drain sends
 /// what this writes.
 #[tauri::command]
-pub async fn flush_telemetry<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+pub async fn flush_telemetry<R: Runtime>(app: AppHandle<R>) -> Result<(), CommandError> {
     pool::run_stateless(move || {
         app.state::<TelemetryCollector>().buffer_pending();
         Ok(())
@@ -46,7 +47,7 @@ pub async fn is_telemetry_available() -> bool {
 pub async fn set_telemetry_enabled<R: Runtime>(
     app: AppHandle<R>,
     enabled: bool,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     pool::run_stateless(move || {
         app.state::<TelemetryCollector>().set_enabled(enabled);
         Ok(())

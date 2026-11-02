@@ -13,9 +13,7 @@ use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryIt
 use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
 use stalagmight_lib::commands::project::ProjectState;
 use stalagmight_lib::commands::section::{SegmentGeometry, SegmentSectionGeometry};
-use stalagmight_lib::commands::survey_geometry::{
-    GeometryShot, SurveyGeometry, SurveyGeometryError,
-};
+use stalagmight_lib::commands::survey_geometry::{GeometryShot, SurveyGeometry};
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
     ConfigPatch, ConfigSaveReport, DebugConfig, DecimalPrecision, DepthGradientConfig,
@@ -347,7 +345,6 @@ fn main() {
     // Survey geometry
     export::<GeometryShot>(&out_dir);
     export::<SurveyGeometry>(&out_dir);
-    export::<SurveyGeometryError>(&out_dir);
 
     // Memory probe (debug)
     export::<ProcessMemory>(&out_dir);
@@ -435,6 +432,8 @@ fn main() {
     export::<SpeleoRewindTarget>(&out_dir);
     export::<stalagmight_lib::models::UndoMode>(&out_dir);
     export::<SpeleoSessionStatus>(&out_dir);
+    // [#576 C4] No command rejects with these any more (they reject with
+    // CommandError), but `SpeleoLinkStatus::server_error` still carries the DTO.
     export::<SpeleoDbAction>(&out_dir);
     export::<SpeleoErrorDto>(&out_dir);
     // #270: why a transport call never reached the server, so the FE can render a
@@ -477,7 +476,20 @@ fn main() {
     export::<SpeleoUserSuggestion>(&out_dir);
 
     let export_list = [
-        "CommandResult",
+        "CommandError",
+        "CommandErrorCode",
+        "HistoryStepFailure",
+        "RemoteLinkBits",
+        "EditOutcome",
+        "SectionCreated",
+        "ShotCreated",
+        "ReverseOutcome",
+        "BatchOutcome",
+        "HistoryOutcome",
+        "ImportOutcome",
+        "SaveOutcome",
+        "DeleteProjectOutcome",
+        "ProjectFileOutcome",
         "ReversedSection",
         "ImportReceipt",
         "CommentHolder",
@@ -605,7 +617,6 @@ fn main() {
         "SegmentSectionGeometry",
         "GeometryShot",
         "SurveyGeometry",
-        "SurveyGeometryError",
         "ProcessMemory",
         "MemoryStats",
         "RingLogEntry",

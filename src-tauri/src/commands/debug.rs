@@ -7,6 +7,7 @@
 //! builds so the invoke-handler/telemetry-registry contract is build-invariant.
 
 use crate::commands::pool;
+use crate::core::CommandError;
 
 /// Trigger a deliberate backend panic on a background thread so the agent
 /// harness can self-test its crash oracle ("harness doctor"). The panic is
@@ -15,10 +16,12 @@ use crate::commands::pool;
 /// (a no-op) unless `STALAGMIGHT_TEST_HOOKS=1`; in a release build without the
 /// `e2e` feature it returns `Err` unconditionally (the panic is compiled out).
 #[tauri::command]
-pub async fn debug_trigger_panic(delay_ms: Option<u64>) -> Result<(), String> {
+pub async fn debug_trigger_panic(delay_ms: Option<u64>) -> Result<(), CommandError> {
     pool::run_stateless(move || {
         if std::env::var("STALAGMIGHT_TEST_HOOKS").as_deref() != Ok("1") {
-            return Err("test hooks disabled (set STALAGMIGHT_TEST_HOOKS=1)".to_string());
+            return Err(CommandError::failed(
+                "test hooks disabled (set STALAGMIGHT_TEST_HOOKS=1)",
+            ));
         }
         #[cfg(any(debug_assertions, feature = "e2e"))]
         {
@@ -32,7 +35,9 @@ pub async fn debug_trigger_panic(delay_ms: Option<u64>) -> Result<(), String> {
         #[cfg(not(any(debug_assertions, feature = "e2e")))]
         {
             let _ = delay_ms;
-            Err("debug_trigger_panic is compiled out of release builds".to_string())
+            Err(CommandError::failed(
+                "debug_trigger_panic is compiled out of release builds",
+            ))
         }
     })
     .await

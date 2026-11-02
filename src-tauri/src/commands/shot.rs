@@ -1,7 +1,7 @@
 use tauri::{AppHandle, Runtime};
 
 use crate::commands::pool;
-use crate::core::{Command, CommandResult};
+use crate::core::{Command, CommandError, EditOutcome, SectionCreated, ShotCreated};
 use crate::models::{
     DeleteShotImpact, DeleteShotRangeImpact, SectionId, ShotData, ShotId, ShotKind, ShotUpdates,
 };
@@ -14,8 +14,8 @@ pub async fn create_shot<R: Runtime>(
     shot: ShotData,
     after_shot_id: Option<ShotId>,
     before_shot_id: Option<ShotId>,
-) -> CommandResult {
-    pool::run(app, move |state| {
+) -> Result<ShotCreated, CommandError> {
+    pool::run_mutation(app, move |state| {
         let mut shot = shot;
         // Identity is not the caller's to name (#423). `ShotData::uuid` exists so a
         // uuid can travel with its own shot through the transforms that rebuild
@@ -49,12 +49,14 @@ pub async fn create_shot<R: Runtime>(
         // identities our own parser legitimately adopted. That leaves
         // `import_sections` as the one door that may carry identities.
         shot.uuid = None;
-        state.execute(Command::CreateShot {
-            section_id,
-            shot,
-            after_shot_id,
-            before_shot_id,
-        })
+        state
+            .execute(Command::CreateShot {
+                section_id,
+                shot,
+                after_shot_id,
+                before_shot_id,
+            })
+            .into_outcome::<ShotCreated>()
     })
     .await
 }
@@ -66,13 +68,15 @@ pub async fn update_shot<R: Runtime>(
     section_id: SectionId,
     shot_id: ShotId,
     updates: ShotUpdates,
-) -> CommandResult {
-    pool::run(app, move |state| {
-        state.execute(Command::UpdateShot {
-            section_id,
-            shot_id,
-            updates,
-        })
+) -> Result<EditOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute(Command::UpdateShot {
+                section_id,
+                shot_id,
+                updates,
+            })
+            .into_outcome::<EditOutcome>()
     })
     .await
 }
@@ -83,12 +87,14 @@ pub async fn preview_delete_shot<R: Runtime>(
     app: AppHandle<R>,
     section_id: SectionId,
     shot_id: ShotId,
-) -> Result<DeleteShotImpact, String> {
+) -> Result<DeleteShotImpact, CommandError> {
     pool::run(app, move |state| {
         let project = state
             .settled_snapshot()
             .ok_or_else(|| "No project open".to_string())?;
-        project.preview_delete_shot(section_id, shot_id)
+        project
+            .preview_delete_shot(section_id, shot_id)
+            .map_err(CommandError::from)
     })
     .await
 }
@@ -99,12 +105,14 @@ pub async fn delete_shot<R: Runtime>(
     app: AppHandle<R>,
     section_id: SectionId,
     shot_id: ShotId,
-) -> CommandResult {
-    pool::run(app, move |state| {
-        state.execute(Command::DeleteShot {
-            section_id,
-            shot_id,
-        })
+) -> Result<EditOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute(Command::DeleteShot {
+                section_id,
+                shot_id,
+            })
+            .into_outcome::<EditOutcome>()
     })
     .await
 }
@@ -117,9 +125,11 @@ pub async fn delete_shot_and_split<R: Runtime>(
     shot_id: ShotId,
     name_a: String,
     name_b: String,
-) -> CommandResult {
-    pool::run(app, move |state| {
-        state.execute_delete_shot_and_split(section_id, shot_id, name_a, name_b)
+) -> Result<SectionCreated, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute_delete_shot_and_split(section_id, shot_id, name_a, name_b)
+            .into_outcome::<SectionCreated>()
     })
     .await
 }
@@ -131,9 +141,11 @@ pub async fn split_shot_at_distance<R: Runtime>(
     section_id: SectionId,
     shot_id: ShotId,
     distance: f64,
-) -> CommandResult {
-    pool::run(app, move |state| {
-        state.execute_split_shot_at_distance(section_id, shot_id, distance)
+) -> Result<ShotCreated, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute_split_shot_at_distance(section_id, shot_id, distance)
+            .into_outcome::<ShotCreated>()
     })
     .await
 }
@@ -144,9 +156,11 @@ pub async fn delete_last_shot_and_section<R: Runtime>(
     app: AppHandle<R>,
     section_id: SectionId,
     shot_id: ShotId,
-) -> CommandResult {
-    pool::run(app, move |state| {
-        state.execute_delete_last_shot_and_section(section_id, shot_id)
+) -> Result<EditOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute_delete_last_shot_and_section(section_id, shot_id)
+            .into_outcome::<EditOutcome>()
     })
     .await
 }
@@ -158,12 +172,14 @@ pub async fn preview_delete_shot_range<R: Runtime>(
     section_id: SectionId,
     start_shot_id: ShotId,
     end_shot_id: ShotId,
-) -> Result<DeleteShotRangeImpact, String> {
+) -> Result<DeleteShotRangeImpact, CommandError> {
     pool::run(app, move |state| {
         let project = state
             .settled_snapshot()
             .ok_or_else(|| "No project open".to_string())?;
-        project.preview_delete_shot_range(section_id, start_shot_id, end_shot_id)
+        project
+            .preview_delete_shot_range(section_id, start_shot_id, end_shot_id)
+            .map_err(CommandError::from)
     })
     .await
 }
@@ -177,15 +193,11 @@ pub async fn delete_shot_range_split<R: Runtime>(
     end_shot_id: ShotId,
     name_a: String,
     name_b: String,
-) -> CommandResult {
-    pool::run(app, move |state| {
-        state.execute_delete_shot_range_split(
-            section_id,
-            start_shot_id,
-            end_shot_id,
-            name_a,
-            name_b,
-        )
+) -> Result<SectionCreated, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute_delete_shot_range_split(section_id, start_shot_id, end_shot_id, name_a, name_b)
+            .into_outcome::<SectionCreated>()
     })
     .await
 }
@@ -197,9 +209,11 @@ pub async fn delete_shot_range_shift<R: Runtime>(
     section_id: SectionId,
     start_shot_id: ShotId,
     end_shot_id: ShotId,
-) -> CommandResult {
-    pool::run(app, move |state| {
-        state.execute_delete_shot_range_shift(section_id, start_shot_id, end_shot_id)
+) -> Result<EditOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute_delete_shot_range_shift(section_id, start_shot_id, end_shot_id)
+            .into_outcome::<EditOutcome>()
     })
     .await
 }
@@ -211,13 +225,15 @@ pub async fn set_shot_kind<R: Runtime>(
     section_id: SectionId,
     shot_id: ShotId,
     kind: ShotKind,
-) -> CommandResult {
-    pool::run(app, move |state| {
-        state.execute(Command::SetShotKind {
-            section_id,
-            shot_id,
-            kind,
-        })
+) -> Result<EditOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute(Command::SetShotKind {
+                section_id,
+                shot_id,
+                kind,
+            })
+            .into_outcome::<EditOutcome>()
     })
     .await
 }

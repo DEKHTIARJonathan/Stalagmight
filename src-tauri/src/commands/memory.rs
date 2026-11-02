@@ -7,17 +7,19 @@
 //!
 //! Used by the in-app debug memory panel to diagnose WebProcess bloat.
 
+use crate::core::CommandError;
+
 // The payload types live in the models crate, whose ts-rs export tests write
 // into `src-tauri/bindings/` (#576 RV5-RL-1); re-exported under the old path
 // for `gen_ipc_types` and the probes below.
 pub use crate::models::process_memory::{MemoryStats, ProcessMemory};
 
 #[tauri::command]
-pub async fn get_memory_stats() -> Result<MemoryStats, String> {
+pub async fn get_memory_stats() -> Result<MemoryStats, CommandError> {
     crate::commands::pool::run_stateless(|| {
         #[cfg(target_os = "linux")]
         {
-            linux::collect().map_err(|e| e.to_string())
+            linux::collect().map_err(|e| CommandError::failed(e.to_string()))
         }
         #[cfg(not(target_os = "linux"))]
         {

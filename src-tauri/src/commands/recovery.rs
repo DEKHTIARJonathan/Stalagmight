@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::commands::pool;
 use crate::commands::write_path::{check_write_path, WriteTarget};
+use crate::core::CommandError;
 use crate::persistence::{BackupInfo, Database, RepairResult, SalvagedData};
 
 /// Attempt to repair a corrupt database file.
@@ -9,7 +10,7 @@ use crate::persistence::{BackupInfo, Database, RepairResult, SalvagedData};
 /// Creates a numbered backup before attempting repair via REINDEX + VACUUM.
 /// Returns the backup path and whether the repair restored integrity.
 #[tauri::command]
-pub async fn attempt_repair(path: PathBuf) -> Result<RepairResult, String> {
+pub async fn attempt_repair(path: PathBuf) -> Result<RepairResult, CommandError> {
     pool::run_stateless(move || {
         tracing::info!(path = ?path, "IPC: attempt_repair");
         // [#576 C11-D1] The repair rewrites the file in place.
@@ -32,7 +33,7 @@ pub async fn attempt_repair(path: PathBuf) -> Result<RepairResult, String> {
             }
             Err(e) => {
                 tracing::error!(error = %e, "Repair failed");
-                Err(format!("Repair failed: {e}"))
+                Err(CommandError::failed(format!("Repair failed: {e}")))
             }
         }
     })
@@ -64,7 +65,7 @@ pub async fn list_backups(path: PathBuf) -> Vec<BackupInfo> {
 pub async fn restore_from_backup(
     project_path: PathBuf,
     backup_path: PathBuf,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     pool::run_stateless(move || {
         tracing::info!(project = ?project_path, backup = ?backup_path, "IPC: restore_from_backup");
         // [#576 C11-D1] The restore replaces the project file.
@@ -98,11 +99,12 @@ pub async fn restore_from_backup(
 ///
 /// Reads each table independently, collecting recoverable data and errors.
 #[tauri::command]
-pub async fn export_salvageable_data(path: PathBuf) -> Result<SalvagedData, String> {
+pub async fn export_salvageable_data(path: PathBuf) -> Result<SalvagedData, CommandError> {
     pool::run_stateless(move || {
         tracing::info!(path = ?path, "IPC: export_salvageable_data");
 
-        Database::export_salvageable(&path).map_err(|e| format!("Salvage failed: {e}"))
+        Database::export_salvageable(&path)
+            .map_err(|e| CommandError::failed(format!("Salvage failed: {e}")))
     })
     .await
 }

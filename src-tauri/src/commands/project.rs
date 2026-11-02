@@ -5,7 +5,10 @@ use ts_rs::TS;
 use crate::commands::pool;
 use crate::commands::write_path::{check_write_path, load_upgrade_refusal, WriteTarget};
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
-use crate::core::{AppState, Command, CommandResult};
+use crate::core::{
+    AppState, Command, CommandError, CommandResult, DeleteProjectOutcome, EditOutcome,
+    ProjectFileOutcome, SaveOutcome,
+};
 use crate::models::{
     AlongLineResult, DistanceField, FrozenShotRef, Project, ProjectMetadata, ProjectStats,
     RulerEndpoint, Station, StationRef,
@@ -21,9 +24,11 @@ pub async fn update_project_settings<R: Runtime>(
     name: String,
     validation: crate::config::ValidationConfig,
     default_azimuth_reference: Option<crate::models::AzimuthReference>,
-) -> CommandResult {
-    pool::run(app, move |state| {
-        state.update_project_settings(name, validation, default_azimuth_reference)
+) -> Result<EditOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .update_project_settings(name, validation, default_azimuth_reference)
+            .into_outcome::<EditOutcome>()
     })
     .await
 }
@@ -36,8 +41,13 @@ pub async fn update_project_settings<R: Runtime>(
 pub async fn set_surface_elevation<R: Runtime>(
     app: tauri::AppHandle<R>,
     elevation: Option<f64>,
-) -> CommandResult {
-    pool::run(app, move |state| state.set_surface_elevation(elevation)).await
+) -> Result<EditOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .set_surface_elevation(elevation)
+            .into_outcome::<EditOutcome>()
+    })
+    .await
 }
 
 /// Save the current project.
@@ -52,7 +62,7 @@ pub async fn save_project<R: Runtime>(
     app: tauri::AppHandle<R>,
     path: Option<PathBuf>,
     is_autosave: Option<bool>,
-) -> CommandResult {
+) -> Result<SaveOutcome, CommandError> {
     pool::run(app, move |state| {
         tracing::info!(
             trigger = if is_autosave.unwrap_or(false) {
@@ -64,7 +74,7 @@ pub async fn save_project<R: Runtime>(
             purpose = "persist edits safely",
             "Save requested"
         );
-        save_project_impl(state, path)
+        save_project_impl(state, path).into_outcome::<SaveOutcome>()
     })
     .await
 }
@@ -98,7 +108,7 @@ fn check_project_target(path: &std::path::Path) -> Result<(), String> {
 pub async fn close_project<R: Runtime>(
     app: tauri::AppHandle<R>,
     release_lock: Option<bool>,
-) -> CommandResult {
+) -> Result<ProjectFileOutcome, CommandError> {
     pool::run(app, move |state| {
         // Release a held SpeleoDB lock BEFORE the close tears down the database (the
         // link row lives there). Best-effort + gated so the keep-lock path can opt out.
@@ -112,7 +122,9 @@ pub async fn close_project<R: Runtime>(
             // holding a lock, and would hand this one back on the next status poll.
             state.speleodb_keep_open_lock_deliberately();
         }
-        state.execute(Command::CloseProject)
+        state
+            .execute(Command::CloseProject)
+            .into_outcome::<ProjectFileOutcome>()
     })
     .await
 }
@@ -150,7 +162,7 @@ pub async fn get_project_state<R: Runtime>(app: tauri::AppHandle<R>) -> Option<P
 #[tauri::command]
 pub async fn get_project_state_binary<R: Runtime>(
     app: tauri::AppHandle<R>,
-) -> Result<tauri::ipc::Response, String> {
+) -> Result<tauri::ipc::Response, CommandError> {
     pool::run(app, |state| {
         let Some(project) = state.settled_snapshot() else {
             return Ok(tauri::ipc::Response::new(Vec::new()));
@@ -158,7 +170,7 @@ pub async fn get_project_state_binary<R: Runtime>(
         let (stations, stats) = measured_state(state, &project);
         crate::core::load_binary::encode_refresh(&project, stations, stats)
             .map(tauri::ipc::Response::new)
-            .map_err(|e| format!("Could not encode the project state: {e}"))
+            .map_err(|e| CommandError::failed(format!("Could not encode the project state: {e}")))
     })
     .await
 }
@@ -198,7 +210,7 @@ fn measured_state(state: &AppState, project: &Project) -> (Vec<Station>, Project
 pub async fn get_station_distances_from(
     app_handle: tauri::AppHandle,
     from: Option<StationRef>,
-) -> Result<Option<DistanceField>, String> {
+) -> Result<Option<DistanceField>, CommandError> {
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         // AppState::distance_field takes one reconciled snapshot so topology and
@@ -206,7 +218,7 @@ pub async fn get_station_distances_from(
         state.inner().distance_field_checked(from.as_ref())
     })
     .await;
-    settle_blocking("the distance field", joined)
+    settle_blocking("the distance field", joined).map_err(CommandError::from)
 }
 
 /// Along-cave-line distance between two ruler endpoints (#26): the shortest path
@@ -222,13 +234,13 @@ pub async fn get_along_line_distance(
     app_handle: tauri::AppHandle,
     a: RulerEndpoint,
     b: RulerEndpoint,
-) -> Result<Option<AlongLineResult>, String> {
+) -> Result<Option<AlongLineResult>, CommandError> {
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         state.inner().along_line_between_checked(a, b)
     })
     .await;
-    settle_blocking("the along-line distance", joined)
+    settle_blocking("the along-line distance", joined).map_err(CommandError::from)
 }
 
 /// Get closure-adjusted station coordinates for the current project.
@@ -250,13 +262,17 @@ pub async fn get_along_line_distance(
 /// with the "couldn't compute" notice never ran and the user was left in a
 /// read-only view with nothing drawn.
 #[tauri::command]
-pub async fn get_adjusted_stations(app_handle: tauri::AppHandle) -> Result<Vec<Station>, String> {
+pub async fn get_adjusted_stations(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<Station>, CommandError> {
     let joined = tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         state.inner().adjusted_stations_checked()
     })
     .await;
-    settle_blocking("the closure-adjusted solve", joined).map(Option::unwrap_or_default)
+    settle_blocking("the closure-adjusted solve", joined)
+        .map(Option::unwrap_or_default)
+        .map_err(CommandError::from)
 }
 
 /// [#576 C7] A blocking query's outcome as the frontend receives it: the query's own
@@ -285,20 +301,30 @@ pub async fn list_recent_projects<R: Runtime>(app: tauri::AppHandle<R>) -> Vec<P
 pub async fn remove_from_recent_projects<R: Runtime>(
     app: tauri::AppHandle<R>,
     path: PathBuf,
-) -> CommandResult {
-    pool::run(app, move |state| state.remove_from_recent_projects(path)).await
+) -> Result<ProjectFileOutcome, CommandError> {
+    pool::run(app, move |state| {
+        state
+            .remove_from_recent_projects(path)
+            .into_outcome::<ProjectFileOutcome>()
+    })
+    .await
 }
 
 /// Permanently delete a project's files from disk and drop it from the recent
 /// list. The destructive counterpart to `remove_from_recent_projects`; see
 /// [`AppState::delete_project`] for the OS-trash / permanent-delete semantics.
 #[tauri::command]
-pub async fn delete_project<R: Runtime>(app: tauri::AppHandle<R>, path: PathBuf) -> CommandResult {
+pub async fn delete_project<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    path: PathBuf,
+) -> Result<DeleteProjectOutcome, CommandError> {
     pool::run(app, move |state| {
         if let Err(why) = check_project_target(&path) {
-            return CommandResult::failure(why);
+            return Err(CommandError::failed(why));
         }
-        state.delete_project(path)
+        state
+            .delete_project(path)
+            .into_outcome::<DeleteProjectOutcome>()
     })
     .await
 }
@@ -309,12 +335,14 @@ pub async fn set_project_name_for_path<R: Runtime>(
     app: tauri::AppHandle<R>,
     path: PathBuf,
     name: String,
-) -> CommandResult {
-    pool::run(app, move |state| {
+) -> Result<EditOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
         if let Err(why) = check_project_target(&path) {
-            return CommandResult::failure(why);
+            return Err(CommandError::failed(why));
         }
-        state.set_project_name_for_path(path, name)
+        state
+            .set_project_name_for_path(path, name)
+            .into_outcome::<EditOutcome>()
     })
     .await
 }
@@ -329,7 +357,7 @@ pub async fn merge_projects<R: Runtime>(
     output_path: PathBuf,
     output_name: String,
     archive_originals: bool,
-) -> CommandResult {
+) -> Result<ProjectFileOutcome, CommandError> {
     pool::run(app, move |state| {
         // The new file, and - when they are to be moved into the archive - the sources.
         let moved: &[PathBuf] = if archive_originals {
@@ -341,15 +369,17 @@ pub async fn merge_projects<R: Runtime>(
             std::iter::once(with_stalx_extension(output_path.clone())).chain(moved.iter().cloned());
         for target in targets {
             if let Err(why) = check_project_target(&target) {
-                return CommandResult::failure(why);
+                return Err(CommandError::failed(why));
             }
         }
-        state.execute(Command::MergeProjects {
-            source_paths,
-            output_path,
-            output_name,
-            archive_originals,
-        })
+        state
+            .execute(Command::MergeProjects {
+                source_paths,
+                output_path,
+                output_name,
+                archive_originals,
+            })
+            .into_outcome::<ProjectFileOutcome>()
     })
     .await
 }
@@ -392,7 +422,7 @@ fn serialize_project_snapshot<S: serde::Serializer>(
 pub async fn load_project_full(
     app_handle: tauri::AppHandle,
     path: PathBuf,
-) -> Result<LoadProjectFullResult, LoadError> {
+) -> Result<LoadProjectFullResult, CommandError> {
     // [perf-debug] Log when the Rust handler is about to return so we can
     // subtract that from the JS-side IPC wait time and isolate IPC
     // transport + JS JSON.parse. The "load_project_full handler returning"
@@ -419,7 +449,7 @@ pub async fn load_project_full(
         ok = mapped.is_ok(),
         "load_project_full handler returning (serialize+transport+JSON.parse begins now)"
     );
-    mapped
+    mapped.map_err(CommandError::from)
 }
 
 /// Binary variant of `load_project_full` that returns a msgpack-encoded
@@ -434,7 +464,7 @@ pub async fn load_project_full(
 pub async fn load_project_full_binary(
     app_handle: tauri::AppHandle,
     path: PathBuf,
-) -> Result<tauri::ipc::Response, LoadError> {
+) -> Result<tauri::ipc::Response, CommandError> {
     let t_start = std::time::Instant::now();
     // [#576 RV4-R-M3-OPEN] Opens anywhere; only the in-place upgrade of an
     // older-format file (and its backup copy) is refused where nothing may be written.
@@ -449,8 +479,8 @@ pub async fn load_project_full_binary(
 
     let load_result = match result {
         Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Err(e),
-        Err(join_err) => return Err(LoadError::internal(join_err.to_string())),
+        Ok(Err(e)) => return Err(e.into()),
+        Err(join_err) => return Err(LoadError::internal(join_err.to_string()).into()),
     };
 
     let encode_start = std::time::Instant::now();
@@ -578,7 +608,7 @@ pub async fn create_project_full(
     save_directory: Option<PathBuf>,
     save_path: Option<PathBuf>,
     defer_initial_save: Option<bool>,
-) -> Result<CreateProjectFullResult, LoadError> {
+) -> Result<CreateProjectFullResult, CommandError> {
     // Use AppHandle to access state inside spawn_blocking
     // (State<'_, T> cannot be moved due to lifetime constraints)
     let result: Result<Result<CreateProjectFullResult, LoadError>, _> =
@@ -605,10 +635,10 @@ pub async fn create_project_full(
 
     match result {
         Ok(Ok(create_result)) => Ok(create_result),
-        Ok(Err(load_error)) => Err(load_error),
+        Ok(Err(load_error)) => Err(load_error.into()),
         Err(join_error) => {
             // Task panicked or was cancelled
-            Err(LoadError::internal(join_error.to_string()))
+            Err(LoadError::internal(join_error.to_string()).into())
         }
     }
 }

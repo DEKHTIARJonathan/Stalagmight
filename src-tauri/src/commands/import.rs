@@ -9,7 +9,7 @@ use crate::commands::import_runner::{
 };
 use crate::commands::pool;
 use crate::core::state::{AppState, VirtualShotMode};
-use crate::core::CommandResult;
+use crate::core::{CommandError, CommandResult, ImportOutcome};
 use crate::models::placement_suggest::{
     suggest_all_placements, suggest_placements, CrossSectionSuggestion, ExistingSection,
     ImportSectionForSuggestion, OrphanPlacementSuggestion, PlacementSuggestion,
@@ -23,7 +23,7 @@ use crate::parsers::DmpFile;
 
 /// Import a DMP file and return parsed data
 #[tauri::command]
-pub async fn import_dmp(path: PathBuf) -> Result<DmpFile, String> {
+pub async fn import_dmp(path: PathBuf) -> Result<DmpFile, CommandError> {
     pool::run_stateless(move || {
         tracing::info!(
             path = ?path,
@@ -39,7 +39,7 @@ pub async fn import_dmp(path: PathBuf) -> Result<DmpFile, String> {
                 "Failed to parse DMP file for import preview"
             );
         }
-        result.map_err(|e| e.to_string())
+        result.map_err(|e| CommandError::failed(e.to_string()))
     })
     .await
 }
@@ -50,7 +50,7 @@ pub async fn import_dmp(path: PathBuf) -> Result<DmpFile, String> {
 /// RV3-R-11): a whole-file `fs::read` here blocked on a FIFO swapped in after
 /// the parse, and read a file grown past its family's ceiling in full.
 #[tauri::command]
-pub async fn calculate_file_hash(path: PathBuf) -> Result<String, String> {
+pub async fn calculate_file_hash(path: PathBuf) -> Result<String, CommandError> {
     pool::run_stateless(move || {
         tracing::debug!(
             path = ?path,
@@ -86,7 +86,7 @@ pub async fn calculate_file_hash(path: PathBuf) -> Result<String, String> {
 pub async fn check_duplicate_import<R: Runtime>(
     app: AppHandle<R>,
     hash: String,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     pool::run(app, move |state| {
         tracing::debug!(
             hash = %hash,
@@ -95,7 +95,7 @@ pub async fn check_duplicate_import<R: Runtime>(
         );
         state
             .settled_read(|| state.check_duplicate_import(&hash))
-            .map_err(|e| e.to_string())
+            .map_err(|e| CommandError::failed(e.to_string()))
     })
     .await
 }
@@ -106,7 +106,7 @@ pub async fn check_duplicate_import<R: Runtime>(
 pub async fn check_section_hashes<R: Runtime>(
     app: AppHandle<R>,
     hashes: Vec<String>,
-) -> Result<Vec<bool>, String> {
+) -> Result<Vec<bool>, CommandError> {
     pool::run(app, move |state| {
         tracing::debug!(
             count = hashes.len(),
@@ -115,7 +115,7 @@ pub async fn check_section_hashes<R: Runtime>(
         );
         state
             .settled_read(|| state.check_section_hashes(&hashes))
-            .map_err(|e| e.to_string())
+            .map_err(|e| CommandError::failed(e.to_string()))
     })
     .await
 }
@@ -256,8 +256,8 @@ pub async fn import_sections<R: Runtime>(
     source_file_name: Option<String>,
     sections_found: Option<u32>,
     source_warnings: Option<Vec<String>>,
-) -> CommandResult {
-    pool::run(app, move |state| {
+) -> Result<ImportOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
         let updates = existing_shot_updates.unwrap_or_default();
         tracing::info!(
             section_count = sections.len(),
@@ -283,7 +283,7 @@ pub async fn import_sections<R: Runtime>(
         }
         lead_receipt_with_source_warnings(&mut result, source_warnings.unwrap_or_default());
 
-        finalize_deferred_import(state, result)
+        finalize_deferred_import(state, result).into_outcome::<ImportOutcome>()
     })
     .await
 }
@@ -311,7 +311,7 @@ fn lead_receipt_with_source_warnings(result: &mut CommandResult, source_warnings
 
 /// Parse a TML/TMLU file and return preview data for the import dialog.
 #[tauri::command]
-pub async fn parse_tml(path: PathBuf) -> Result<TmlFile, String> {
+pub async fn parse_tml(path: PathBuf) -> Result<TmlFile, CommandError> {
     pool::run_stateless(move || {
         tracing::info!(
             path = ?path,
@@ -327,7 +327,7 @@ pub async fn parse_tml(path: PathBuf) -> Result<TmlFile, String> {
                 "Failed to parse TML/TMLU file for import preview"
             );
         }
-        result.map_err(|e| e.to_string())
+        result.map_err(|e| CommandError::failed(e.to_string()))
     })
     .await
 }
@@ -353,9 +353,9 @@ pub async fn execute_tml_import<R: Runtime>(
     virtual_shot_mode: Option<VirtualShotMode>,
     selected_sections: Option<Vec<u32>>,
     root_placement: Option<TmlRootPlacement>,
-) -> CommandResult {
+) -> Result<ImportOutcome, CommandError> {
     let sink = tauri_sink(app.clone());
-    pool::run(app, move |state| {
+    pool::run_mutation(app, move |state| {
         let opts = TmlImportOptions {
             include_excluded,
             comments_on_stations,
@@ -377,6 +377,7 @@ pub async fn execute_tml_import<R: Runtime>(
             crate::parsers::tml::parse_tml,
             |tml| convert_tml(tml, &opts),
         )
+        .into_outcome::<ImportOutcome>()
     })
     .await
 }
@@ -414,7 +415,7 @@ fn convert_tml(tml: &TmlFile, opts: &TmlImportOptions) -> anyhow::Result<Convert
 
 /// Parse a Compass `.DAT`/`.MAK` file and return preview data for the import dialog.
 #[tauri::command]
-pub async fn parse_compass(path: PathBuf) -> Result<CompassFile, String> {
+pub async fn parse_compass(path: PathBuf) -> Result<CompassFile, CommandError> {
     pool::run_stateless(move || {
         tracing::info!(
             path = ?path,
@@ -434,7 +435,7 @@ pub async fn parse_compass(path: PathBuf) -> Result<CompassFile, String> {
                 reason = %e,
                 "Failed to parse Compass file for import preview"
             );
-            e.to_string()
+            CommandError::failed(e.to_string())
         })
     })
     .await
@@ -450,9 +451,9 @@ pub async fn execute_compass_import<R: Runtime>(
     include_excluded: bool,
     apply_corrections: bool,
     comments_on_stations: bool,
-) -> CommandResult {
+) -> Result<ImportOutcome, CommandError> {
     let sink = tauri_sink(app.clone());
-    pool::run(app, move |state| {
+    pool::run_mutation(app, move |state| {
         let opts = CompassImportOptions {
             include_excluded,
             apply_corrections,
@@ -470,6 +471,7 @@ pub async fn execute_compass_import<R: Runtime>(
             crate::parsers::compass::parse_compass,
             |parsed| convert_compass(parsed, &opts),
         )
+        .into_outcome::<ImportOutcome>()
     })
     .await
 }
@@ -501,7 +503,7 @@ fn convert_compass(
 
 /// Parse a GPX file and return preview data for the import dialog.
 #[tauri::command]
-pub async fn parse_gpx(path: PathBuf) -> Result<GpxFile, String> {
+pub async fn parse_gpx(path: PathBuf) -> Result<GpxFile, CommandError> {
     pool::run_stateless(move || {
         tracing::info!(
             path = ?path,
@@ -517,7 +519,7 @@ pub async fn parse_gpx(path: PathBuf) -> Result<GpxFile, String> {
                 "Failed to parse GPX file for import preview"
             );
         }
-        result.map_err(|e| e.to_string())
+        result.map_err(|e| CommandError::failed(e.to_string()))
     })
     .await
 }
@@ -539,9 +541,9 @@ pub async fn execute_gpx_import<R: Runtime>(
     import_routes: bool,
     section_placements: Vec<GpxSectionPlacement>,
     depth_inverted: bool,
-) -> CommandResult {
+) -> Result<ImportOutcome, CommandError> {
     let sink = tauri_sink(app.clone());
-    pool::run(app, move |state| {
+    pool::run_mutation(app, move |state| {
         let selection = GpxSelection {
             import_waypoints,
             import_tracks,
@@ -573,6 +575,7 @@ pub async fn execute_gpx_import<R: Runtime>(
             crate::parsers::gpx::parse_gpx,
             |gpx| convert_gpx(gpx, &selection, &section_placements),
         )
+        .into_outcome::<ImportOutcome>()
     })
     .await
 }
@@ -627,7 +630,7 @@ pub async fn suggest_import_placement<R: Runtime>(
     // falls back to the project default, which is only right when the importer
     // declared nothing.
     azimuth_reference: Option<AzimuthReference>,
-) -> Result<Vec<PlacementSuggestion>, String> {
+) -> Result<Vec<PlacementSuggestion>, CommandError> {
     pool::run(app, move |state| {
         let project = state.settled_snapshot().ok_or("No project open")?;
 
@@ -667,7 +670,7 @@ pub async fn suggest_import_placement<R: Runtime>(
 pub async fn suggest_all_import_placements<R: Runtime>(
     app: AppHandle<R>,
     import_sections: Vec<ImportSectionForSuggestion>,
-) -> Result<Vec<CrossSectionSuggestion>, String> {
+) -> Result<Vec<CrossSectionSuggestion>, CommandError> {
     pool::run(app, move |state| {
         // One snapshot for both reads (#576 NF-AN6-4: the fallback used to take a
         // second whole-project copy of its own).
@@ -721,7 +724,7 @@ pub async fn suggest_all_import_placements<R: Runtime>(
 pub async fn suggest_orphan_placements<R: Runtime>(
     app: AppHandle<R>,
     newly_imported_section_ids: Vec<u32>,
-) -> Result<Vec<OrphanPlacementSuggestion>, String> {
+) -> Result<Vec<OrphanPlacementSuggestion>, CommandError> {
     pool::run(app, move |state| {
         let project = state.settled_snapshot().ok_or("No project open")?;
         let config = state.get_config();
@@ -739,7 +742,7 @@ pub async fn suggest_orphan_placements<R: Runtime>(
 pub async fn count_unanchored_sections<R: Runtime>(
     app: AppHandle<R>,
     newly_imported_section_ids: Vec<u32>,
-) -> Result<u32, String> {
+) -> Result<u32, CommandError> {
     pool::run(app, move |state| {
         let project = state.settled_snapshot().ok_or("No project open")?;
         Ok(project.count_unanchored_sections(&newly_imported_section_ids))
@@ -749,7 +752,7 @@ pub async fn count_unanchored_sections<R: Runtime>(
 
 /// Parse a Walls `.WPJ`/`.SRV` file and return preview data for the import dialog.
 #[tauri::command]
-pub async fn parse_walls(path: PathBuf) -> Result<WallsFile, String> {
+pub async fn parse_walls(path: PathBuf) -> Result<WallsFile, CommandError> {
     pool::run_stateless(move || {
         tracing::info!(
             path = ?path,
@@ -769,7 +772,7 @@ pub async fn parse_walls(path: PathBuf) -> Result<WallsFile, String> {
                 reason = %e,
                 "Failed to parse Walls file for import preview"
             );
-            e.to_string()
+            CommandError::failed(e.to_string())
         })
     })
     .await
@@ -785,9 +788,9 @@ pub async fn execute_walls_import<R: Runtime>(
     comments_on_stations: bool,
     include_splays: bool,
     selected_surveys: Option<Vec<u32>>,
-) -> CommandResult {
+) -> Result<ImportOutcome, CommandError> {
     let sink = tauri_sink(app.clone());
-    pool::run(app, move |state| {
+    pool::run_mutation(app, move |state| {
         let opts = WallsImportOptions {
             comments_on_stations,
             include_splays,
@@ -808,6 +811,7 @@ pub async fn execute_walls_import<R: Runtime>(
             crate::parsers::walls::parse_walls,
             |parsed| convert_walls(parsed, &opts),
         )
+        .into_outcome::<ImportOutcome>()
     })
     .await
 }

@@ -54,9 +54,6 @@ const NUMBER_TYPES: &[&str] = &[
 const OPAQUE_TYPES: &[(&str, &str)] = &[
     // Deliberately opaque to the frontend (models::dive_plan): store it, hand it back.
     ("StoredAnchor", "unknown"),
-    // The load/create rejection. Not generated yet; the frontend parses it by hand
-    // (projectStore `parseLoadError`) until the command-error migration types it.
-    ("LoadError", "unknown"),
 ];
 
 #[derive(Serialize)]

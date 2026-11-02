@@ -508,7 +508,7 @@ impl AppState {
                     .map(|rest| rest.trim_start_matches(':').trim())
                 {
                     early_return_err!(LoadError::with_details(
-                        crate::persistence::PRE_RELEASE_FILE_CODE,
+                        crate::models::CommandErrorCode::PreReleaseFile,
                         message,
                         path.display().to_string()
                     ));
@@ -521,7 +521,7 @@ impl AppState {
                     .map(|rest| rest.trim_start_matches(':').trim())
                 {
                     early_return_err!(LoadError::with_details(
-                        crate::persistence::UPGRADE_REFUSED_CODE,
+                        crate::models::CommandErrorCode::UpgradeRefused,
                         message,
                         path.display().to_string()
                     ));
@@ -531,7 +531,10 @@ impl AppState {
                 if msg.contains("integrity check failed") || msg.contains("corrupted") {
                     early_return_err!(LoadError::corrupt(msg, &path.display().to_string()));
                 }
-                early_return_err!(LoadError::new("DATABASE", msg));
+                early_return_err!(LoadError::new(
+                    crate::models::CommandErrorCode::Database,
+                    msg
+                ));
             }
         };
         // [#576 B6-D1] A file a NEWER build saved opens read-only, and is never
@@ -546,7 +549,10 @@ impl AppState {
             None => db,
             Some(_) => match db.into_read_only(&path) {
                 Ok(db) => db,
-                Err(e) => early_return_err!(LoadError::new("DATABASE", e.to_string())),
+                Err(e) => early_return_err!(LoadError::new(
+                    crate::models::CommandErrorCode::Database,
+                    e.to_string()
+                )),
             },
         };
         check_cancelled!();
@@ -557,7 +563,10 @@ impl AppState {
         let (mut project, load_report) = match db.load_project_with_report() {
             Ok(loaded) => loaded,
             Err(e) => {
-                early_return_err!(LoadError::new("DATABASE", e.to_string()));
+                early_return_err!(LoadError::new(
+                    crate::models::CommandErrorCode::Database,
+                    e.to_string()
+                ));
             }
         };
         project.file_path = Some(path.clone());

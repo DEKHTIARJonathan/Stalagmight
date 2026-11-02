@@ -970,6 +970,11 @@ pub enum PushResult {
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub struct SpeleoErrorDto {
+    /// [#576 C4] The routing code the IPC boundary sends for this failure, one per
+    /// [`SpeleoDbAction`] (`contract::code_for_action`). A command's rejection is
+    /// the [`crate::models::CommandErrorCode`]-carrying `CommandError` built from
+    /// this DTO; `action` stays for the backend's own branches.
+    pub code: crate::models::CommandErrorCode,
     pub message: String,
     pub action: SpeleoDbAction,
     pub status: Option<u16>,
@@ -1120,6 +1125,7 @@ mod tests {
         // guard checks the field SHAPE, not an incidental word in the display
         // text - the real invariant is that no field name/value is the token.)
         let error = serde_json::to_string(&SpeleoErrorDto {
+            code: crate::models::CommandErrorCode::SpeleodbRelogin,
             message: "SpeleoDB returned HTTP 401: not authenticated".to_owned(),
             action: SpeleoDbAction::ReLogin,
             status: Some(401),

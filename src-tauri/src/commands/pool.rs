@@ -14,7 +14,8 @@
 //! twin of its body (#576 C9).
 //!
 //! A panic in a body becomes the command's failure where its answer has one
-//! ([`PanicReply`]: `CommandResult`, `Result<_, String>`); an answer with no
+//! ([`PanicReply`]: `Result<_, CommandError>` - `INTERNAL_ERROR` - and the
+//! settings commands' `Result<_, String>`); an answer with no
 //! failure shape (`bool`, a list, `()`) re-raises it on the async task
 //! ([`run_infallible`]), so that IPC call never resolves - what a panicking
 //! `async` command does - instead of the panic unwinding through the handler.
@@ -25,17 +26,11 @@
 
 use tauri::{AppHandle, Manager, Runtime};
 
-use crate::core::{AppState, CommandError, CommandResult, MutationOutcome};
+use crate::core::{AppState, CommandError, MutationOutcome};
 
 /// How a command's answer says its body panicked on the pool.
 pub(crate) trait PanicReply {
     fn panicked(message: String) -> Self;
-}
-
-impl PanicReply for CommandResult {
-    fn panicked(message: String) -> Self {
-        CommandResult::failure(message)
-    }
 }
 
 impl<T> PanicReply for Result<T, String> {

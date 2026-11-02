@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use ts_rs::TS;
 
 use crate::core::events::{self, EventSink, IpcEvent, LoadingProgressEvent};
+use crate::models::CommandErrorCode;
 
 // ============================================================================
 // LoadError
@@ -40,10 +41,13 @@ pub struct SpeleoManagedFile {
 }
 
 /// Error type for load/create operations with guaranteed valid JSON in Display impl.
+///
+/// [#576 C4] No longer an IPC type: the load commands convert it into a
+/// [`crate::core::CommandError`] (`From<LoadError>`), which carries the same code.
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadError {
-    pub code: String,
+    pub code: CommandErrorCode,
     pub message: String,
     pub details: Option<String>,
     /// Set only by [`Self::speleodb_managed`]. The manual `Display` fallback
@@ -56,9 +60,9 @@ pub struct LoadError {
 
 impl LoadError {
     /// Create a new LoadError with the given code and message.
-    pub fn new(code: &str, message: impl Into<String>) -> Self {
+    pub fn new(code: CommandErrorCode, message: impl Into<String>) -> Self {
         Self {
-            code: code.into(),
+            code,
             message: message.into(),
             details: None,
             speleodb_managed: None,
@@ -67,12 +71,12 @@ impl LoadError {
 
     /// Create a new LoadError with details.
     pub fn with_details(
-        code: &str,
+        code: CommandErrorCode,
         message: impl Into<String>,
         details: impl Into<String>,
     ) -> Self {
         Self {
-            code: code.into(),
+            code,
             message: message.into(),
             details: Some(details.into()),
             speleodb_managed: None,
@@ -81,35 +85,38 @@ impl LoadError {
 
     /// Error when a project is already open.
     pub fn already_open() -> Self {
-        Self::new("ALREADY_OPEN", "Project already open")
+        Self::new(CommandErrorCode::AlreadyOpen, "Project already open")
     }
 
     /// Error when the operation was cancelled.
     pub fn cancelled() -> Self {
-        Self::new("CANCELLED", "Operation cancelled")
+        Self::new(CommandErrorCode::Cancelled, "Operation cancelled")
     }
 
     /// Error when a file is not found.
     pub fn not_found(path: &str) -> Self {
-        Self::new("NOT_FOUND", format!("File not found: {path}"))
+        Self::new(
+            CommandErrorCode::NotFound,
+            format!("File not found: {path}"),
+        )
     }
 
     /// Internal error with a message.
     pub fn internal(message: impl Into<String>) -> Self {
-        Self::new("INTERNAL", message)
+        Self::new(CommandErrorCode::InternalError, message)
     }
 
     /// Error when the database file is corrupted.
     /// The `path` is stored in `details` so the frontend can offer recovery options.
     pub fn corrupt(message: impl Into<String>, path: &str) -> Self {
-        Self::with_details("CORRUPT", message, path)
+        Self::with_details(CommandErrorCode::Corrupt, message, path)
     }
 
     /// Error when the OS denied filesystem access to the file - e.g. macOS
     /// forgot a previously-granted folder permission after an OS/app update.
     /// The `path` rides in `details` so the frontend can name the file.
     pub fn permission(message: impl Into<String>, path: &str) -> Self {
-        Self::with_details("PERMISSION", message, path)
+        Self::with_details(CommandErrorCode::FsPermissionDenied, message, path)
     }
 
     /// The open was refused: this file is a non-canonical copy of a SpeleoDB
@@ -117,7 +124,7 @@ impl LoadError {
     /// prompt instead of a dead-end error.
     pub fn speleodb_managed(managed: SpeleoManagedFile) -> Self {
         let mut err = Self::new(
-            "SPELEODB_MANAGED",
+            CommandErrorCode::SpeleodbManaged,
             format!(
                 "\"{}\" is managed by SpeleoDB (project \"{}\")",
                 managed.path, managed.project_name
@@ -342,7 +349,7 @@ impl std::fmt::Display for LoadError {
             write!(f, "{json}")
         } else {
             // Fallback: manually construct valid JSON with fully escaped strings
-            let escaped_code = escape_json_string(&self.code);
+            let escaped_code = escape_json_string(self.code.as_str());
             let escaped_msg = escape_json_string(&self.message);
             match &self.details {
                 Some(details) => {
@@ -993,7 +1000,7 @@ mod tests {
 
     #[test]
     fn test_load_error_display_produces_valid_json() {
-        let error = LoadError::new("TEST_ERROR", "Test message");
+        let error = LoadError::new(CommandErrorCode::Failed, "Test message");
         let display = error.to_string();
 
         // Should be valid JSON
@@ -1005,7 +1012,7 @@ mod tests {
 
     #[test]
     fn test_load_error_display_escapes_quotes() {
-        let error = LoadError::new("TEST", r#"Message with "quotes""#);
+        let error = LoadError::new(CommandErrorCode::Failed, r#"Message with "quotes""#);
         let display = error.to_string();
 
         // Should be valid JSON even with quotes in message
@@ -1016,7 +1023,7 @@ mod tests {
 
     #[test]
     fn test_load_error_display_escapes_control_chars() {
-        let error = LoadError::new("TEST", "Line1\nLine2\tTabbed");
+        let error = LoadError::new(CommandErrorCode::Failed, "Line1\nLine2\tTabbed");
         let display = error.to_string();
 
         // Should be valid JSON even with control characters

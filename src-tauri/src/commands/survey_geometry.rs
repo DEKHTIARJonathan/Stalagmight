@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::core::CommandError;
 use crate::models::{GpsCoordinates, Project, SectionId, ShotKind, StationRef};
 use crate::persistence::Database;
 
@@ -41,8 +42,9 @@ pub struct SurveyGeometry {
     pub origin: [f64; 2],
 }
 
-/// Error response for survey geometry command.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+/// Why the survey geometry could not be computed. Internal since #576 C4: the
+/// command rejects with a [`CommandError`] (`FAILED`) carrying this message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurveyGeometryError {
     pub message: String,
 }
@@ -85,17 +87,14 @@ pub fn local_to_gps(
 ///
 /// # Returns
 /// - `Ok(SurveyGeometry)` with shots and origin
-/// - `Err(SurveyGeometryError)` if file doesn't exist or has no GPS reference
+/// - `Err(CommandError)` (`FAILED`) if file doesn't exist or has no GPS reference
 #[tauri::command]
-pub async fn get_survey_geometry_for_file(
-    path: PathBuf,
-) -> Result<SurveyGeometry, SurveyGeometryError> {
+pub async fn get_survey_geometry_for_file(path: PathBuf) -> Result<SurveyGeometry, CommandError> {
     // Use spawn_blocking for UI responsiveness
     tauri::async_runtime::spawn_blocking(move || get_survey_geometry_for_file_impl(&path))
         .await
-        .map_err(|e| SurveyGeometryError {
-            message: format!("Internal error: {e}"),
-        })?
+        .map_err(|e| CommandError::failed(format!("Internal error: {e}")))?
+        .map_err(|e| CommandError::failed(e.message))
 }
 
 /// Internal implementation for file-based geometry loading.

@@ -70,10 +70,13 @@ pub struct ShotCreated {
     pub remote_link: Option<RemoteLinkBits>,
 }
 
-/// `reverse_section`: the section, and the reverse it applied.
+/// `reverse_section`: the reverse it applied.
+///
+/// No `section_id`: a reverse of a section with no shots is a provable no-op that
+/// `AppState::execute` answers with a bare success (#24), so the producer does not
+/// always set one, and the frontend never read it.
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct ReverseOutcome {
-    pub section_id: u32,
     /// The PARITY-REDUCED set of sections whose numbering this command reversed
     /// (see [`Command::reversed_section_ids`](crate::core::Command::reversed_section_ids)),
     /// each with the shot count in force at the reverse.
@@ -208,7 +211,6 @@ impl FromCommandResult for ShotCreated {
 impl FromCommandResult for ReverseOutcome {
     fn from_success(result: CommandResult) -> Result<Self, CommandError> {
         Ok(Self {
-            section_id: result.section_id.ok_or_else(|| missing("section id"))?,
             reversed_sections: result.reversed_sections.unwrap_or_default(),
             warnings: result.warnings,
             remote_link: None,

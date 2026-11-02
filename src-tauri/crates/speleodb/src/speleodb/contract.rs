@@ -19,6 +19,7 @@ use ts_rs::TS;
 
 use super::models::{DumpCandidateKind, SpeleoErrorDto, UnpushedLocalEdits};
 use super::SpeleoDbError;
+use crate::models::CommandErrorCode;
 
 /// The decision the caller should take after a SpeleoDB call, derived from the
 /// HTTP status + the endpoint it came from. Crosses IPC as a ts-rs enum so the
@@ -219,6 +220,24 @@ pub fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
     }
 }
 
+/// [#576 C4/A6] The IPC routing code for `action`: one `SPELEODB_*` code per
+/// action, so a `CommandError` built from a [`SpeleoErrorDto`] says what the old
+/// `action` field said (which is no longer sent).
+pub fn code_for_action(action: SpeleoDbAction) -> CommandErrorCode {
+    match action {
+        SpeleoDbAction::ReLogin => CommandErrorCode::SpeleodbRelogin,
+        SpeleoDbAction::ReadOnly => CommandErrorCode::SpeleodbReadOnly,
+        SpeleoDbAction::Fence => CommandErrorCode::SpeleodbFence,
+        SpeleoDbAction::StayDirty => CommandErrorCode::SpeleodbStayDirty,
+        SpeleoDbAction::UpToDate => CommandErrorCode::SpeleodbUpToDate,
+        SpeleoDbAction::Retry => CommandErrorCode::SpeleodbRetry,
+        SpeleoDbAction::Adopt => CommandErrorCode::SpeleodbAdopt,
+        SpeleoDbAction::UnpushedLocalEdits => CommandErrorCode::SpeleodbUnpushedLocalEdits,
+        SpeleoDbAction::Ambiguous => CommandErrorCode::SpeleodbAmbiguous,
+        SpeleoDbAction::Fatal => CommandErrorCode::SpeleodbFatal,
+    }
+}
+
 /// Convert a [`SpeleoDbError`] into the IPC [`SpeleoErrorDto`], deriving the
 /// typed action from the endpoint the call came from (D-B2). This is the single
 /// conversion the IPC boundary uses; it needs the `endpoint` context, so it is a
@@ -324,6 +343,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         | SpeleoDbError::NoRemoteProject => (SpeleoDbAction::Fatal, None, err.to_string()),
     };
     SpeleoErrorDto {
+        code: code_for_action(action),
         message,
         action,
         status,

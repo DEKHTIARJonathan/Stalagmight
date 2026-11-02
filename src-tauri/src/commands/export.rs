@@ -7,7 +7,7 @@ use crate::commands::pool;
 use crate::commands::write_path::{check_write_path, WriteTarget};
 use crate::config::GasConfig;
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
-use crate::core::AppState;
+use crate::core::{AppState, CommandError};
 use crate::export::{ExportImageOptions, ProfileFormat};
 use crate::models::{Cylinder, Diver, PlanSegment, Project, StationRef};
 
@@ -147,7 +147,7 @@ fn export_format_with_notes(
 
 /// Export project data to CSV
 #[tauri::command]
-pub async fn export_csv<R: Runtime>(app: AppHandle<R>, path: PathBuf) -> Result<(), String> {
+pub async fn export_csv<R: Runtime>(app: AppHandle<R>, path: PathBuf) -> Result<(), CommandError> {
     pool::run(app, move |state| {
         export_format_impl(
             state,
@@ -156,13 +156,14 @@ pub async fn export_csv<R: Runtime>(app: AppHandle<R>, path: PathBuf) -> Result<
             WriteTarget::Csv,
             crate::export::export_csv,
         )
+        .map_err(CommandError::from)
     })
     .await
 }
 
 /// Export project data to JSON
 #[tauri::command]
-pub async fn export_json<R: Runtime>(app: AppHandle<R>, path: PathBuf) -> Result<(), String> {
+pub async fn export_json<R: Runtime>(app: AppHandle<R>, path: PathBuf) -> Result<(), CommandError> {
     pool::run(app, move |state| {
         export_format_impl(
             state,
@@ -171,6 +172,7 @@ pub async fn export_json<R: Runtime>(app: AppHandle<R>, path: PathBuf) -> Result
             WriteTarget::Json,
             crate::export::export_json,
         )
+        .map_err(CommandError::from)
     })
     .await
 }
@@ -184,7 +186,7 @@ pub async fn export_json<R: Runtime>(app: AppHandle<R>, path: PathBuf) -> Result
 pub async fn export_tml<R: Runtime>(
     app: AppHandle<R>,
     path: PathBuf,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, CommandError> {
     pool::run(app, move |state| {
         export_format_with_notes(
             state,
@@ -193,6 +195,7 @@ pub async fn export_tml<R: Runtime>(
             WriteTarget::Ariane,
             crate::export::export_tml,
         )
+        .map_err(CommandError::from)
     })
     .await
 }
@@ -208,7 +211,7 @@ pub async fn export_image<R: Runtime>(
     app: AppHandle<R>,
     path: PathBuf,
     options: ExportImageOptions,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let sink = tauri_sink(app.clone());
     pool::run(app, move |state| {
         let mut options = options;
@@ -246,7 +249,9 @@ pub async fn export_image<R: Runtime>(
                 purpose = "protect the open project database",
                 "Refusing to export an image over a file the open project owns"
             );
-            return Err("Cannot export over the open project file".to_string());
+            return Err(CommandError::failed(
+                "Cannot export over the open project file",
+            ));
         }
         // [#576 C11-D1] The image format's own extension, nowhere app-internal or system.
         check_write_path(&path, WriteTarget::Image(options.format))?;
@@ -298,7 +303,7 @@ pub async fn export_image<R: Runtime>(
             );
         }
 
-        result.map_err(|e| e.to_string())
+        result.map_err(|e| CommandError::failed(e.to_string()))
     })
     .await
 }
@@ -384,7 +389,7 @@ pub async fn export_dive_profile(
     path: PathBuf,
     format: String,
     request: DiveProfileRequest,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     // Parse BEFORE anything else logs it. `format` is arbitrary caller input, and the refusal
     // branch below records it with Display - a newline-bearing value would forge log records.
     let format = ProfileFormat::from_wire(&format).map_err(|e| e.to_string())?;
@@ -436,6 +441,7 @@ pub async fn export_dive_profile(
     })
     .await
     .map_err(|e| format!("Dive profile export task panicked: {e}"))?
+    .map_err(CommandError::from)
 }
 
 /// Render the planned dive profile as text WITHOUT writing it, for the clipboard (#299).
@@ -443,7 +449,7 @@ pub async fn export_dive_profile(
 pub async fn render_dive_profile_text(
     app_handle: AppHandle,
     request: DiveProfileRequest,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         // [#576 RV5-4] Settled: never a project caught in the middle of a command.
@@ -454,6 +460,7 @@ pub async fn render_dive_profile_text(
     })
     .await
     .map_err(|e| format!("Dive profile render task panicked: {e}"))?
+    .map_err(CommandError::from)
 }
 
 /// Generate the SVG markup that `export_image` would write, without
@@ -467,7 +474,7 @@ pub async fn render_dive_profile_text(
 pub async fn preview_svg_export(
     app_handle: AppHandle,
     mut options: ExportImageOptions,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         // Same config-wins rule as the export itself, so the preview cannot
@@ -487,6 +494,7 @@ pub async fn preview_svg_export(
     })
     .await
     .map_err(|e| format!("Preview task panicked: {e}"))?
+    .map_err(CommandError::from)
 }
 
 #[cfg(test)]

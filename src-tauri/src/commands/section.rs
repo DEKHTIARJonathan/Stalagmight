@@ -2,7 +2,9 @@ use chrono::NaiveDate;
 use tauri::{AppHandle, Runtime};
 
 use crate::commands::pool;
-use crate::core::{AppState, Command, CommandResult};
+use crate::core::{
+    BatchOutcome, Command, CommandError, EditOutcome, ReverseOutcome, SectionCreated,
+};
 use crate::models::{
     ClosureStrategy, Coordinates, SectionId, SectionRelationships, SectionUpdates, ShotData,
     StationRef, SurveyDirection,
@@ -20,16 +22,18 @@ pub async fn create_section<R: Runtime>(
     color: String,
     direction: Option<SurveyDirection>,
     shots: Vec<ShotData>,
-) -> CommandResult {
-    pool::run(app, move |state| {
-        state.execute(Command::CreateSection {
-            name,
-            surveyor,
-            date,
-            color,
-            direction,
-            shots,
-        })
+) -> Result<SectionCreated, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute(Command::CreateSection {
+                name,
+                surveyor,
+                date,
+                color,
+                direction,
+                shots,
+            })
+            .into_outcome::<SectionCreated>()
     })
     .await
 }
@@ -40,21 +44,28 @@ pub async fn update_section<R: Runtime>(
     app: AppHandle<R>,
     section_id: SectionId,
     updates: SectionUpdates,
-) -> CommandResult {
-    pool::run(app, move |state| {
-        state.execute(Command::UpdateSectionMetadata {
-            section_id,
-            updates,
-        })
+) -> Result<EditOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute(Command::UpdateSectionMetadata {
+                section_id,
+                updates,
+            })
+            .into_outcome::<EditOutcome>()
     })
     .await
 }
 
 /// Delete a section
 #[tauri::command]
-pub async fn delete_section<R: Runtime>(app: AppHandle<R>, section_id: SectionId) -> CommandResult {
-    pool::run(app, move |state| {
-        state.execute(Command::DeleteSection { section_id })
+pub async fn delete_section<R: Runtime>(
+    app: AppHandle<R>,
+    section_id: SectionId,
+) -> Result<EditOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute(Command::DeleteSection { section_id })
+            .into_outcome::<EditOutcome>()
     })
     .await
 }
@@ -70,12 +81,14 @@ pub async fn reverse_section<R: Runtime>(
     app: AppHandle<R>,
     section_id: SectionId,
     swap_left_right: bool,
-) -> CommandResult {
-    pool::run(app, move |state| {
-        state.execute(Command::ReverseSection {
-            section_id,
-            swap_left_right,
-        })
+) -> Result<ReverseOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute(Command::ReverseSection {
+                section_id,
+                swap_left_right,
+            })
+            .into_outcome::<ReverseOutcome>()
     })
     .await
 }
@@ -86,9 +99,11 @@ pub async fn move_section<R: Runtime>(
     app: AppHandle<R>,
     section_id: SectionId,
     offset: Coordinates,
-) -> CommandResult {
-    pool::run(app, move |state| {
-        state.execute(Command::MoveSection { section_id, offset })
+) -> Result<EditOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute(Command::MoveSection { section_id, offset })
+            .into_outcome::<EditOutcome>()
     })
     .await
 }
@@ -99,17 +114,27 @@ pub async fn move_segment<R: Runtime>(
     app: AppHandle<R>,
     section_id: SectionId,
     offset: Coordinates,
-) -> CommandResult {
-    pool::run(app, move |state| {
-        state.execute(Command::MoveSegment { section_id, offset })
+) -> Result<EditOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute(Command::MoveSegment { section_id, offset })
+            .into_outcome::<EditOutcome>()
     })
     .await
 }
 
 /// Execute a batch of commands as a single undo/redo unit
 #[tauri::command]
-pub async fn execute_batch<R: Runtime>(app: AppHandle<R>, commands: Vec<Command>) -> CommandResult {
-    pool::run(app, move |state| state.execute(Command::Batch { commands })).await
+pub async fn execute_batch<R: Runtime>(
+    app: AppHandle<R>,
+    commands: Vec<Command>,
+) -> Result<BatchOutcome, CommandError> {
+    pool::run_mutation(app, move |state| {
+        state
+            .execute(Command::Batch { commands })
+            .into_outcome::<BatchOutcome>()
+    })
+    .await
 }
 
 /// Get all section IDs connected through merges and aligned closures (rigid groups)
@@ -117,10 +142,12 @@ pub async fn execute_batch<R: Runtime>(app: AppHandle<R>, commands: Vec<Command>
 pub async fn get_rigid_connected_section_ids<R: Runtime>(
     app: AppHandle<R>,
     section_id: SectionId,
-) -> Result<Vec<SectionId>, String> {
+) -> Result<Vec<SectionId>, CommandError> {
     // Not under `settled_read`: the query takes `command_lock` itself (#576 C2).
     pool::run(app, move |state| {
-        state.get_rigid_connected_section_ids(section_id)
+        state
+            .get_rigid_connected_section_ids(section_id)
+            .map_err(CommandError::from)
     })
     .await
 }
@@ -129,9 +156,12 @@ pub async fn get_rigid_connected_section_ids<R: Runtime>(
 #[tauri::command]
 pub async fn get_anchored_section_ids<R: Runtime>(
     app: AppHandle<R>,
-) -> Result<Vec<SectionId>, String> {
+) -> Result<Vec<SectionId>, CommandError> {
     // Not under `settled_read`: the query takes `command_lock` itself (#576 C2).
-    pool::run(app, AppState::get_anchored_section_ids).await
+    pool::run(app, |state| {
+        state.get_anchored_section_ids().map_err(CommandError::from)
+    })
+    .await
 }
 
 /// Create a new section and immediately merge one of its stations with an existing station.
@@ -151,24 +181,26 @@ pub async fn create_section_and_merge<R: Runtime>(
     import_station_index: u32,
     target_station: StationRef,
     closure_strategy: ClosureStrategy,
-) -> CommandResult {
-    pool::run(app, move |state| {
+) -> Result<SectionCreated, CommandError> {
+    pool::run_mutation(app, move |state| {
         // Use a special internal execution that:
         // 1. Takes a project snapshot for undo
         // 2. Creates the section
         // 3. Merges with the actual section ID
         // 4. Returns as a single undo unit
-        state.execute_create_and_merge(
-            name,
-            surveyor,
-            date,
-            color,
-            direction,
-            shots,
-            import_station_index,
-            target_station,
-            closure_strategy,
-        )
+        state
+            .execute_create_and_merge(
+                name,
+                surveyor,
+                date,
+                color,
+                direction,
+                shots,
+                import_station_index,
+                target_station,
+                closure_strategy,
+            )
+            .into_outcome::<SectionCreated>()
     })
     .await
 }
@@ -179,14 +211,16 @@ pub async fn create_section_and_merge<R: Runtime>(
 pub async fn get_section_relationships<R: Runtime>(
     app: AppHandle<R>,
     section_id: SectionId,
-) -> Result<SectionRelationships, String> {
+) -> Result<SectionRelationships, CommandError> {
     pool::run(app, move |state| {
         let project = state
             .settled_snapshot()
             .ok_or_else(|| "No project open".to_string())?;
 
         if project.get_section(section_id).is_none() {
-            return Err(format!("Section {section_id} not found"));
+            return Err(CommandError::failed(format!(
+                "Section {section_id} not found"
+            )));
         }
 
         Ok(project.get_section_relationships(section_id))
@@ -200,7 +234,12 @@ pub async fn get_section_relationships<R: Runtime>(
 pub async fn get_segment_geometry<R: Runtime>(
     app: AppHandle<R>,
     section_id: SectionId,
-) -> Result<SegmentGeometry, String> {
+) -> Result<SegmentGeometry, CommandError> {
     // Not under `settled_read`: the query takes `command_lock` itself (#576 C2).
-    pool::run(app, move |state| state.get_segment_geometry(section_id)).await
+    pool::run(app, move |state| {
+        state
+            .get_segment_geometry(section_id)
+            .map_err(CommandError::from)
+    })
+    .await
 }

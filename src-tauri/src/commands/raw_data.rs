@@ -5,13 +5,18 @@
 use tauri::{AppHandle, Runtime};
 
 use crate::commands::pool;
+use crate::core::CommandError;
 use crate::persistence::RawTableData;
 
 /// List the raw sqlite table names in the current project database
 #[tauri::command]
-pub async fn get_raw_table_names<R: Runtime>(app: AppHandle<R>) -> Result<Vec<String>, String> {
+pub async fn get_raw_table_names<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<Vec<String>, CommandError> {
     pool::run(app, |state| {
-        state.list_raw_table_names().map_err(|e| e.to_string())
+        state
+            .list_raw_table_names()
+            .map_err(|e| CommandError::failed(e.to_string()))
     })
     .await
 }
@@ -23,11 +28,11 @@ pub async fn get_raw_table<R: Runtime>(
     table: String,
     limit: u32,
     offset: u32,
-) -> Result<RawTableData, String> {
+) -> Result<RawTableData, CommandError> {
     pool::run(app, move |state| {
         state
             .read_raw_table(&table, limit, offset)
-            .map_err(|e| e.to_string())
+            .map_err(|e| CommandError::failed(e.to_string()))
     })
     .await
 }

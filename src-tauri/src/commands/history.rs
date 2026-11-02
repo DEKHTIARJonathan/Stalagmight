@@ -1,7 +1,7 @@
 use tauri::{AppHandle, Runtime};
 
 use crate::commands::pool;
-use crate::core::{AppState, CommandResult};
+use crate::core::{CommandError, HistoryOutcome};
 
 pub use crate::core::undo::history_view::{
     entry_to_history_item, FieldChange, PreviewData, UndoHistoryItem,
@@ -9,14 +9,14 @@ pub use crate::core::undo::history_view::{
 
 /// Undo the last command
 #[tauri::command]
-pub async fn undo<R: Runtime>(app: AppHandle<R>) -> CommandResult {
-    pool::run(app, AppState::undo).await
+pub async fn undo<R: Runtime>(app: AppHandle<R>) -> Result<HistoryOutcome, CommandError> {
+    pool::run_mutation(app, |state| state.undo().into_outcome()).await
 }
 
 /// Redo the last undone command
 #[tauri::command]
-pub async fn redo<R: Runtime>(app: AppHandle<R>) -> CommandResult {
-    pool::run(app, AppState::redo).await
+pub async fn redo<R: Runtime>(app: AppHandle<R>) -> Result<HistoryOutcome, CommandError> {
+    pool::run_mutation(app, |state| state.redo().into_outcome()).await
 }
 
 /// Check if undo is available
@@ -51,13 +51,19 @@ pub async fn get_redo_stack<R: Runtime>(app: AppHandle<R>) -> Vec<UndoHistoryIte
 /// Undo to a specific index in the undo stack
 /// Index 0 = most recent action, so undo_to(N) executes (N+1) undos
 #[tauri::command]
-pub async fn undo_to<R: Runtime>(app: AppHandle<R>, index: usize) -> CommandResult {
-    pool::run(app, move |state| state.undo_to(index)).await
+pub async fn undo_to<R: Runtime>(
+    app: AppHandle<R>,
+    index: usize,
+) -> Result<HistoryOutcome, CommandError> {
+    pool::run_mutation(app, move |state| state.undo_to(index).into_outcome()).await
 }
 
 /// Redo to a specific index in the redo stack
 /// Index 0 = most recent undone action, so redo_to(N) executes (N+1) redos
 #[tauri::command]
-pub async fn redo_to<R: Runtime>(app: AppHandle<R>, index: usize) -> CommandResult {
-    pool::run(app, move |state| state.redo_to(index)).await
+pub async fn redo_to<R: Runtime>(
+    app: AppHandle<R>,
+    index: usize,
+) -> Result<HistoryOutcome, CommandError> {
+    pool::run_mutation(app, move |state| state.redo_to(index).into_outcome()).await
 }

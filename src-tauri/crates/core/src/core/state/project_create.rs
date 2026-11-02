@@ -427,7 +427,7 @@ impl AppState {
             match self.resolve_project_path(&name, save_directory.as_ref()) {
                 Ok(path) => path,
                 Err(e) => {
-                    early_return_err!(LoadError::new("IO", e));
+                    early_return_err!(LoadError::new(crate::models::CommandErrorCode::Io, e));
                 }
             }
         };
@@ -449,7 +449,7 @@ impl AppState {
             if !parent.exists() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
                     early_return_err!(LoadError::new(
-                        "IO",
+                        crate::models::CommandErrorCode::Io,
                         format!("Failed to create directory: {e}")
                     ));
                 }
@@ -464,7 +464,7 @@ impl AppState {
                 Ok(db) => Some(db),
                 Err(e) => {
                     early_return_err!(LoadError::new(
-                        "DATABASE",
+                        crate::models::CommandErrorCode::Database,
                         format!("Failed to create database: {e}")
                     ));
                 }
@@ -484,7 +484,7 @@ impl AppState {
         if let Some(ref mut database) = db {
             if let Err(e) = database.save_project(&project) {
                 early_return_err!(LoadError::new(
-                    "DATABASE",
+                    crate::models::CommandErrorCode::Database,
                     format!("Failed to save project: {e}")
                 ));
             }
@@ -532,7 +532,7 @@ impl AppState {
                 if let Err(e) = database.save_display_setting(key, value) {
                     // Fail the command if display settings can't be saved - this indicates a real DB error
                     early_return_err!(LoadError::new(
-                        "DATABASE",
+                        crate::models::CommandErrorCode::Database,
                         format!("Failed to save display setting {key}: {e}")
                     ));
                 }
