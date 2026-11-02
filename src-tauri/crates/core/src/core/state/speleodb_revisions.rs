@@ -835,6 +835,8 @@ impl AppState {
         // open gate, so the record alone cannot mint - it is only ever handed back to
         // a session that demonstrably had one on the way in.
         let had_lock_record = self.speleodb_lock_acquired_here(&project_id);
+        // Of the same kind: a resumed claim stays resumed (#576 RV4-R-S3).
+        let had_resumed_record = self.speleodb_lock_resumed_here(&project_id);
         self.close_project();
         self.do_load_project_full(dest).map_err(|e| {
             local_dto(SpeleoDbError::Io(format!(
@@ -844,7 +846,11 @@ impl AppState {
         if restore {
             self.set_edit_enabled(true);
             if had_lock_record {
-                self.speleodb_note_lock_acquired(Some(&project_id));
+                if had_resumed_record {
+                    self.speleodb_note_resumed_lock(&project_id);
+                } else {
+                    self.speleodb_note_lock_acquired(Some(&project_id));
+                }
             }
         }
         self.set_force_editing(false);

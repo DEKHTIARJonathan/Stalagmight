@@ -195,8 +195,10 @@ lock it resumes for this session (`speleodb_start_editing` with
 `resumeHeldLock`, #576 RV2-R-13-RESTART), so Done then releases it as usual. A
 plain Start editing under the account's lock still claims nothing; such a lock is
 released from the held-lock prompt or the SpeleoDB project dialog's Admin tab.
-The claim also licenses the authorship self-heal above for the resumed session -
-the user chose to resume that lock as their own.
+That claim is marked as resumed: it licenses the release only, not the
+authorship self-heal above (#576 RV4-R-S3). The prompt lists every lock the
+account holds at sign-in, so the resumed lock may be one a second session of the
+account is still editing under, and its commits must read as a divergence there.
 
 **Mitigation (the notice):** `speleodb_open_project` checks the project's
 `active_mutex` at open time; if the lock is already held by **our own** account, a

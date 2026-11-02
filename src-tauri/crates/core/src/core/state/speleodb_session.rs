@@ -111,6 +111,15 @@ pub(super) struct LockClaim {
     /// the lock again is a new decision, and the next release is the ordinary
     /// one.
     kept: bool,
+    /// [#576 RV4-R-S3] Whether this claim records a lock the held-lock prompt's
+    /// "Continue editing" RESUMED rather than one this process acquired.
+    ///
+    /// A resumed claim licenses the release (Done hands the lock back, decision
+    /// RV2-R-13-RESTART) but NOT the authorship shortcut (#576 B32): the prompt
+    /// lists every lock the account holds at sign-in, so resuming one can happen
+    /// on a second computer while the first is still editing under it, and that
+    /// session must not explain the first one's commits away as its own push.
+    resumed: bool,
 }
 
 impl LockClaim {
@@ -125,7 +134,22 @@ impl LockClaim {
             endpoint,
             email,
             kept: false,
+            resumed: false,
         }
+    }
+
+    /// This claim, marked as a lock "Continue editing" resumed (see
+    /// [`LockClaim::resumed`]).
+    pub(super) fn as_resumed(self) -> Self {
+        Self {
+            resumed: true,
+            ..self
+        }
+    }
+
+    /// Whether this claim records a resumed lock (see [`LockClaim::resumed`]).
+    pub(super) fn is_resumed(&self) -> bool {
+        self.resumed
     }
 
     /// Whether this lock is deliberately held back (see [`LockClaim::kept`]).

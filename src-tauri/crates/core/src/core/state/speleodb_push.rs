@@ -683,6 +683,8 @@ impl AppState {
                 // inherited or sibling-session lock - and license it to explain away
                 // another session's commit as our own unrecorded push.
                 let had_lock_record = self.speleodb_lock_acquired_here(&link.project_id);
+                // Of the same kind: a resumed claim stays resumed (#576 RV4-R-S3).
+                let had_resumed_record = self.speleodb_lock_resumed_here(&link.project_id);
                 let local_path = self
                     .speleodb_fast_forward(
                         &endpoint,
@@ -722,7 +724,11 @@ impl AppState {
                         // authorship claim it never earned.
                         Ok(()) => {
                             if had_lock_record {
-                                self.speleodb_note_lock_acquired(Some(&link.project_id));
+                                if had_resumed_record {
+                                    self.speleodb_note_resumed_lock(&link.project_id);
+                                } else {
+                                    self.speleodb_note_lock_acquired(Some(&link.project_id));
+                                }
                             }
                         }
                         Err(e) => tracing::info!(

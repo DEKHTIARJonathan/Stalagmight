@@ -894,7 +894,9 @@ impl AppState {
     /// The authorship licence: whether a commit in the BASE..tip gap carrying our
     /// email may be explained away as THIS session's own unrecorded push. Record AND
     /// gate AND not force-editing AND the server naming our account as the holder -
-    /// see [`Self::speleodb_remote_state`] for why each half is needed.
+    /// see [`Self::speleodb_remote_state`] for why each half is needed. The record
+    /// must be an ACQUISITION: a lock "Continue editing" resumed licenses its
+    /// release but not this (#576 RV4-R-S3).
     ///
     /// One helper for the poll and the push (#576 B32): `sync::poll_verdict` and
     /// `sync::plan_push` take this same bool, so the passive mark and the Done/Push
@@ -906,7 +908,7 @@ impl AppState {
         project_id: &str,
         lock_holder: Option<&str>,
     ) -> bool {
-        self.speleodb_lock_acquired_here(project_id)
+        self.speleodb_lock_taken_here(project_id)
             && self.edit_enabled()
             && !self.force_editing()
             && lock_held_by_me(lock_holder, self.speleodb_my_email().as_deref())
@@ -965,7 +967,15 @@ impl AppState {
     /// this session's to drop, and each is the only local pointer to a mutex
     /// still held elsewhere.
     pub(super) fn speleodb_note_lock_acquired(&self, project_id: Option<&str>) {
-        self.speleodb_record_claim(project_id, false);
+        self.speleodb_record_claim(project_id, false, false);
+    }
+
+    /// [`Self::speleodb_note_lock_acquired`] for a lock the held-lock prompt's
+    /// "Continue editing" RESUMED (#576 RV2-R-13-RESTART): a claim that licenses
+    /// the release but not the authorship shortcut (#576 RV4-R-S3, see
+    /// `LockClaim::resumed`).
+    pub(super) fn speleodb_note_resumed_lock(&self, project_id: &str) {
+        self.speleodb_record_claim(Some(project_id), false, true);
     }
 
     /// [`Self::speleodb_note_lock_acquired`] for the acquisition a Start Editing
@@ -981,7 +991,7 @@ impl AppState {
     /// is indistinguishable that way, and the unwind released THAT while leaving
     /// the mutex it had just taken held.
     pub(super) fn speleodb_note_acquisition_by_this_flow(&self, project_id: &str) {
-        self.speleodb_record_claim(Some(project_id), true);
+        self.speleodb_record_claim(Some(project_id), true, false);
     }
 
     /// Open a Start Editing operation: forget whatever the PREVIOUS one left in
@@ -1002,7 +1012,7 @@ impl AppState {
     }
 
     /// The body of both, so the two cannot record differently.
-    fn speleodb_record_claim(&self, project_id: Option<&str>, by_this_flow: bool) {
+    fn speleodb_record_claim(&self, project_id: Option<&str>, by_this_flow: bool, resumed: bool) {
         let mut session = self.speleodb.lock();
         let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
         session.locks_acquired_here.retain(|claim| {
@@ -1019,7 +1029,10 @@ impl AppState {
         // direction as the poisoned-lock case above - it costs the shortcut rather
         // than granting one.
         if let Some(((project_id, endpoint), email)) = project_id.zip(endpoint).zip(email) {
-            let claim = super::speleodb_session::LockClaim::taken(project_id, endpoint, email);
+            let mut claim = super::speleodb_session::LockClaim::taken(project_id, endpoint, email);
+            if resumed {
+                claim = claim.as_resumed();
+            }
             if by_this_flow {
                 // Recorded in the SAME session acquisition as the claim itself,
                 // so the two can never disagree about what was just acquired.
@@ -1040,6 +1053,30 @@ impl AppState {
         let session = self.speleodb.lock();
         session.locks_acquired_here.iter().any(|claim| {
             claim.project_id == project_id
+                && claim.taken_by(session.endpoint.as_deref(), session.email.as_deref())
+        })
+    }
+
+    /// [`Self::speleodb_lock_acquired_here`] for a claim this process ACQUIRED, not
+    /// one "Continue editing" resumed (#576 RV4-R-S3): the provenance the
+    /// authorship licence needs. A resumed lock may be one a second session of
+    /// the same account is still editing under.
+    pub(super) fn speleodb_lock_taken_here(&self, project_id: &str) -> bool {
+        let session = self.speleodb.lock();
+        session.locks_acquired_here.iter().any(|claim| {
+            claim.project_id == project_id
+                && !claim.is_resumed()
+                && claim.taken_by(session.endpoint.as_deref(), session.email.as_deref())
+        })
+    }
+
+    /// Whether this account's claim on `project_id` records a RESUMED lock - read
+    /// by the in-place reloads so they re-record a claim of the same kind.
+    pub(super) fn speleodb_lock_resumed_here(&self, project_id: &str) -> bool {
+        let session = self.speleodb.lock();
+        session.locks_acquired_here.iter().any(|claim| {
+            claim.project_id == project_id
+                && claim.is_resumed()
                 && claim.taken_by(session.endpoint.as_deref(), session.email.as_deref())
         })
     }
@@ -2113,6 +2150,8 @@ impl AppState {
     /// (the decided rule releases only a lock the session holds a claim on). The
     /// prompt lists only locks this account holds at sign-in and the user resumes
     /// one explicitly - after a restart that is this app's own earlier session.
+    /// The claim is marked RESUMED: it does not license the authorship shortcut
+    /// (#576 RV4-R-S3), since the lock may be a second session's.
     pub fn speleodb_resume_held_lock_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
         self.speleodb_start_editing_with(true)
     }
@@ -2129,7 +2168,9 @@ impl AppState {
             .speleodb_open_link()
             .is_ok_and(|open| open.project_id == project_id);
         if self.edit_enabled() && still_open {
-            self.speleodb_note_lock_acquired(Some(project_id));
+            // A resumed claim: it licenses the release, not the authorship
+            // shortcut (#576 RV4-R-S3).
+            self.speleodb_note_resumed_lock(project_id);
         }
     }
 
