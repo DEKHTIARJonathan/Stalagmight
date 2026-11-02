@@ -254,19 +254,27 @@ fn place_anchor_first(
         );
         tree.grow(chain);
     }
-    let mut warns = anchored.is_some();
+    // The component every later one is "not connected to": the georeferenced one when
+    // the anchor placed it, else the first one placed at origin [#576 NF-W4M-3] - with no
+    // fixed station in use there is no georeferenced survey to name.
+    let mut first_component = anchored.map(|_| None);
     for seed in 0..tree.names.len() {
         if tree.visited[seed] {
             continue;
         }
-        if warns {
-            warnings.push(format!(
+        match &first_component {
+            Some(None) => warnings.push(format!(
                 "Section '{}' starts a separate component not connected to the georeferenced \
                  survey; placed at origin",
                 label_of(seed)
-            ));
+            )),
+            Some(Some(first)) => warnings.push(format!(
+                "Section '{}' starts a separate component not connected to section '{first}'; \
+                 no fixed station georeferences either, so both are placed at origin",
+                label_of(seed)
+            )),
+            None => first_component = Some(Some(label_of(seed))),
         }
-        warns = true;
         tree.root(seed, ImportPlacement::Origin);
         tree.grow(seed);
     }

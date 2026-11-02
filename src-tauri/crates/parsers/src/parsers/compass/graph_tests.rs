@@ -147,11 +147,12 @@ fn unanchored_looped_surveys_keep_their_merges_and_closures() {
         ]
     );
     assert_eq!(ties, ["1:3->0:0", "2:3->2:0", "3:3->3:0"]);
+    // [#576 NF-W4M-3] No fixed station: there is no georeferenced survey to name.
     assert_eq!(
         warnings,
         [
-            "Section 'Far' starts a separate component not connected to the georeferenced \
-             survey; placed at origin"
+            "Section 'Far' starts a separate component not connected to section 'Main'; \
+             no fixed station georeferences either, so both are placed at origin"
         ]
     );
 }
