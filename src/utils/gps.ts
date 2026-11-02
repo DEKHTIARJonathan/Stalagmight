@@ -405,15 +405,21 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
           .match(/^(\s*)(North|South|East|Este|Est|West|[NSEW])(?![A-Za-z])(\s+[A-Za-z])?/i);
         if (before?.[4] === '+') latDegStr = `+${latDegStr}`;
         const wordBefore = before?.[1] !== undefined;
+        // Whether another word sits beside the direction word, for its note only
+        // (RV3-FE-11): any word, so a name starting with a letter outside ASCII
+        // (`Ñandú South 20...`) or with a digit counts. The label-word groups above
+        // stay ASCII: they decide the reading, not just the note.
+        const nameBefore = before !== null && WORD_THEN_DIRECTION.test(trimmed.slice(0, match.index));
+        const nameAfter = after !== null && wordFollowsAt(trimmed, end + after[1]!.length + after[2]!.length);
         const latSide =
-          before && adjacentHemisphere(before[2]!, before[3] !== '', wordBefore, wordBefore, latDegStr ?? '', 'NS');
+          before && adjacentHemisphere(before[2]!, before[3] !== '', wordBefore, nameBefore, latDegStr ?? '', 'NS');
         const lonSide =
           after &&
           adjacentHemisphere(
             after[2]!,
             after[1] !== '',
             after[2]!.length > 1 && after[3] !== undefined,
-            after[3] !== undefined,
+            nameAfter,
             lonDegStr ?? '',
             'EW'
           );
@@ -567,10 +573,23 @@ function wordDecides(found: string | undefined, degrees: string | undefined, nex
     : undefined;
 }
 
-/** True when another word follows `match` in `text`, after a space (`... West entrance`). */
+/**
+ * True when another word follows `match` in `text`, after a space (`... West entrance`).
+ * Any word (RV3-FE-11): one starting with a letter outside ASCII (`West Ñandú`) or with
+ * a digit (`West 2nd`) can make the direction word part of a name just as well.
+ */
 function wordFollows(text: string, match: RegExpMatchArray): boolean {
-  return /^\s+[A-Za-z]/.test(text.slice((match.index ?? 0) + match[0].length));
+  return wordFollowsAt(text, (match.index ?? 0) + match[0].length);
 }
+
+/** True when a word starts after a space at `at` in `text` - see `wordFollows`. */
+function wordFollowsAt(text: string, at: number): boolean {
+  return /^\s+[\p{L}\d]/u.test(text.slice(at));
+}
+
+/** A word, a space, then the direction word ending the text before a latitude
+ *  (`Ñandú South `, `Pit 2 South`) - the before-side twin of `wordFollowsAt`. */
+const WORD_THEN_DIRECTION = /[\p{L}\d]\s+(?:North|South|East|Este|Est|West|[NSEW])\s*\+?$/iu;
 
 /** "Took the hemisphere from "West" - read as -87.307500.", or undefined. */
 function hemisphereFromTextNote(text: string | undefined, value: number): string | undefined {

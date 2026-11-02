@@ -1312,6 +1312,23 @@ describe('the word note only where the word sits next to another word (COORD-Q1)
     expectCoordsClose(result, lat, lon);
     expect(result.note).toMatch(new RegExp(`hemisphere from "${word}"`));
   });
+
+  // RV3-FE-11: "another word" is any word - one that starts with a letter outside
+  // ASCII (Spanish and French cave names) or with a digit counts too. Only the note
+  // depends on it; the values are the ones the ASCII neighbours give.
+  it.each([
+    [`20°30'15"N 87°18'27" West Ña`, DMS_LAT, -DMS_LON, 'West'],
+    [`20°30'15"N 87°18'27" West Ébène`, DMS_LAT, -DMS_LON, 'West'],
+    [`20°30.5'N 87°18.5' West Ñandú`, DDM_LAT, -DDM_LON, 'West'],
+    [`-20°30'15" 87°18'27" West Ébène`, -DMS_LAT, -DMS_LON, 'West'],
+    [`Ñandú South 20°30'15" -87°18'27"`, -DMS_LAT, -DMS_LON, 'South'],
+    [`20°30'15"N 87°18'27" West 2nd`, DMS_LAT, -DMS_LON, 'West'],
+    [`Pit 2 South 20°30'15" -87°18'27"`, -DMS_LAT, -DMS_LON, 'South'],
+  ])('%s: a non-ASCII or numeric neighbour is another word too', (input, lat, lon, word) => {
+    const result = parsedOk(input);
+    expectCoordsClose(result, lat, lon);
+    expect(result.note).toMatch(new RegExp(`hemisphere from "${word}"`));
+  });
 });
 
 describe('the dash note only where the dash changed the reading (R5-3)', () => {
