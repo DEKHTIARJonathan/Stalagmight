@@ -6366,7 +6366,7 @@ mod tests {
         // under the `project` mutex, then releases once that mutex (and the
         // database handle) are out of the way.
         let params = state
-            .speleodb_abandon_lock_release_params()
+            .speleodb_delete_lock_release_params()
             .expect("precondition: the fixture holds a lock, so there is a snapshot");
         assert!(
             state.speleodb_lock_acquired_here(REMOTE_ID),
@@ -6459,7 +6459,7 @@ mod tests {
         let (base, _listener, hits) = answering_counting_stub(REMOTE_ID);
         let (_temp, state) = editing_fixture(&base);
         let params = state
-            .speleodb_abandon_lock_release_params()
+            .speleodb_delete_lock_release_params()
             .expect("precondition: the fixture holds a lock, so there is a snapshot");
         state.speleodb_forget_lock_acquired_for(&params.project_id);
         // A successor Start Editing on the same remote project commits its claim
@@ -6507,7 +6507,7 @@ mod tests {
         let (base, _listener, hits) = answering_counting_stub(REMOTE_ID);
         let (_temp, state) = editing_fixture(&base);
         let params = state
-            .speleodb_abandon_lock_release_params()
+            .speleodb_delete_lock_release_params()
             .expect("precondition: the fixture holds a lock, so there is a snapshot");
         assert_eq!(
             params.project_id, REMOTE_ID,

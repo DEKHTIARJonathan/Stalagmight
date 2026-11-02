@@ -391,14 +391,18 @@ impl AppState {
                 //   read plus the session and config locks, no network at all (see
                 //   `speleodb_held_lock_release_params`). Bounded work, and the same
                 //   read every close already performs.
-                // - It is the ABANDON snapshot, not the silent one. Destroying the
+                // - It is the DELETE snapshot, not the silent one. Destroying the
                 //   file forfeits any un-pushed edits by the user's own instruction,
                 //   so the veto that protects them on close / quit / switch has
                 //   nothing left to protect here and would only strand the server
                 //   lock. Same reasoning as `speleodb_unlink`, which likewise drops
                 //   the local link and so could never release from this project
-                //   again.
-                held_lock = self.speleodb_abandon_lock_release_params();
+                //   again. Unlike unlink it keeps the claim check (#576 RV5-F4-4):
+                //   a session that only inherited the lock (a second window or
+                //   computer on the same account, gate opened by the status poll)
+                //   leaves it with the account instead of freeing the mutex the
+                //   other session is editing under (decision RV2-R-13).
+                held_lock = self.speleodb_delete_lock_release_params();
                 // End OUR claim now, while the identity decision above is still
                 // atomic under this guard. After the guard drops, a successor Start
                 // Editing on the SAME remote project can mint a claim of its own in

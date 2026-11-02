@@ -30,11 +30,14 @@
 //!
 //! `AppState::delete_project` is the third abandon caller and the only one that
 //! cannot use a single verb: it destroys the `.stalx` the link row lives in, so it
-//! has to snapshot with [`AppState::speleodb_abandon_lock_release_params`] while the
+//! has to snapshot with [`AppState::speleodb_delete_lock_release_params`] while the
 //! database handle is still alive and release with
 //! [`AppState::speleodb_release_captured_lock`] once its teardown - and the `project`
 //! mutex - are out of the way. Destroying the file is the plainest abandon there is,
-//! which is why it takes the un-vetoed snapshot.
+//! which is why its snapshot skips the un-pushed-edits veto. It KEEPS the claim
+//! check (#576 RV5-F4-4): the delete is about the local file, and a session that
+//! only inherited the lock (a second window or computer on the same account) must
+//! not free the mutex the other session is editing under (decision RV2-R-13).
 
 use std::time::Duration;
 
@@ -76,6 +79,24 @@ enum ReleaseIntent {
     /// `speleodb_take_remote`): the user has said outright they are walking away
     /// from the local work, so there is no future push for the veto to protect.
     Abandon,
+    /// [#576 RV5-F4-4] Deleting the OPEN project's local file
+    /// (`AppState::delete_project`). An abandon of the local work, so no
+    /// un-pushed-edits veto; but only of THIS session's lock: an inherited one
+    /// stays with the account, like on a silent release.
+    DeleteLocal,
+}
+
+impl ReleaseIntent {
+    /// Whether this release hands back only a lock this app session acquired
+    /// (decision RV2-R-13). The deliberate abandons do not ask: unlink and take
+    /// remote are disclosed exceptions (the link row, or the local edits, are
+    /// being given up on purpose).
+    fn needs_session_claim(self) -> bool {
+        match self {
+            Self::Silent | Self::DeleteLocal => true,
+            Self::Abandon => false,
+        }
+    }
 }
 
 impl AppState {
@@ -94,6 +115,14 @@ impl AppState {
     /// abandon (see [`AppState::speleodb_release_held_lock_abandoning`]).
     pub(super) fn speleodb_abandon_lock_release_params(&self) -> Option<LockReleaseParams> {
         self.speleodb_lock_release_params(ReleaseIntent::Abandon)
+    }
+
+    /// The snapshot for deleting the open project's file (#576 RV5-F4-4): no
+    /// un-pushed-edits veto (the file those edits live in is being destroyed), but
+    /// the RV2-R-13 claim check of the silent releases - a lock this session did
+    /// not take is not this session's to free.
+    pub(super) fn speleodb_delete_lock_release_params(&self) -> Option<LockReleaseParams> {
+        self.speleodb_lock_release_params(ReleaseIntent::DeleteLocal)
     }
 
     /// Shared body of the two snapshots above. `intent` is what separates a silent
@@ -145,13 +174,16 @@ impl AppState {
         // without taking the lock, and a clean close, switch or quit there used to
         // free the lock the other session is editing under. An inherited lock is
         // handed back only by a deliberate verb (Release in the held-lock prompt,
-        // the Admin tab, Done after a Continue-editing claim) or by an abandon.
-        if intent == ReleaseIntent::Silent && !self.speleodb_lock_acquired_here(&link.project_id) {
+        // the Admin tab, Done after a Continue-editing claim) or by an abandon. Deleting
+        // the open project's file is not one of those (#576 RV5-F4-4): it is about the
+        // local copy, so it asks the same question.
+        if intent.needs_session_claim() && !self.speleodb_lock_acquired_here(&link.project_id) {
             tracing::info!(
                 project_id = %link.project_id,
+                ?intent,
                 purpose = "release only a lock this app session acquired (#576 RV2-R-13)",
-                "speleodb: skipping the silent lock release; this session did not take \
-                 the lock, so it stays with the account"
+                "speleodb: skipping the lock release; this session did not take the lock, \
+                 so it stays with the account"
             );
             return None;
         }
@@ -417,17 +449,17 @@ impl AppState {
     ///   mutex, because an HTTP round trip inside that critical section would stall
     ///   every other state-layer operation for its duration. So the two halves are
     ///   necessarily separate calls there, with
-    ///   [`AppState::speleodb_abandon_lock_release_params`] as the first one.
+    ///   [`AppState::speleodb_delete_lock_release_params`] as the first one.
     /// - It has to surface a failure to the user, not just the log. Every other
     ///   caller leaves a lock whose `.stalx` (and link row) survive, so the release
     ///   is retryable from the project itself; a delete destroys exactly that, and
     ///   the user's only remaining route to the stranded mutex is the held-lock
     ///   prompt - which they will not look for unless they are told.
     ///
-    /// The ABANDON snapshot is the one to pair this with: a delete forfeits any
+    /// The DELETE snapshot is the one to pair this with: a delete forfeits any
     /// un-pushed edits by definition, so the veto that protects them on
     /// close / quit / switch has nothing left to protect and would only strand the
-    /// server lock.
+    /// server lock; it still releases only a lock this session acquired.
     ///
     /// The same deferral is why the acquisition-record clear below is CONDITIONAL,
     /// unlike the one every other release verb makes - see
