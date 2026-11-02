@@ -377,7 +377,12 @@ fn repair_keeps_its_backup_with_the_projects_journal() {
         project_name(&backup),
         project_name(&project)
     );
-    assert!(backup_journal.as_deref() == Some(journal_before.as_slice()));
+    assert!(
+        backup_journal
+            .as_deref()
+            .is_some_and(|journal| journal == journal_before.as_slice()),
+        "the backup keeps the project's journal, unchanged"
+    );
     assert_eq!(project_name(&backup), "Original");
     assert_eq!(project_name(&project), "Original");
 }
