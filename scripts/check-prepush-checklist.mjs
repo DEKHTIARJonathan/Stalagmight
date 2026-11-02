@@ -111,6 +111,12 @@ export const SHELL_GATE_STEPS = [
     checklist: 'git status --porcelain src-tauri/bindings',
     why: 'the bindings tree is a side effect of cargo test; CI fails on modified or untracked files under it',
   },
+  {
+    workflow: '.github/workflows/ci.yml',
+    step: 'Generated IPC types match the checkout',
+    checklist: 'git status --porcelain src/types/ipc src/types/ipc.generated.ts',
+    why: 'the frontend IPC types are written by pnpm gen:ipc-types; CI fails on modified or untracked files under them',
+  },
 ];
 
 // Actions that gate nothing: runner setup, caches and report uploads. Matched

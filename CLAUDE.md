@@ -83,6 +83,8 @@ pnpm lint:readonly-gates:test && pnpm lint:readonly-gates   # read-only gating t
 pnpm exec vitest run                                      # vitest unit + component (plain "pnpm test" watches and never exits locally)
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry
 git status --porcelain src-tauri/bindings                 # must print nothing after cargo test (generated ts-rs bindings are committed)
+pnpm gen:ipc-types                                        # regenerate the frontend IPC types from the Rust types
+git status --porcelain src/types/ipc src/types/ipc.generated.ts   # must print nothing after gen:ipc-types (the generated frontend IPC types are committed)
 cargo test --locked --manifest-path src-tauri/vendor/compass_data/Cargo.toml   # workspace-excluded vendored crate; no telemetry feature/env
 # --- smoke job (e2e-smoke.yml) ---
 pnpm lint:e2e-parallel:test && pnpm lint:e2e-parallel     # Playwright parallel-safety

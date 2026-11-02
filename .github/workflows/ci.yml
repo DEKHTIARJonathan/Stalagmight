@@ -267,6 +267,32 @@ jobs:
             echo "Run the Rust tests locally and commit the result; never hand-edit that tree."
             exit 1
           fi
+      # `src/types/ipc/` and `src/types/ipc.generated.ts` are the generated tree the
+      # frontend, the Playwright mock and tsc actually compile against (#576 C1).
+      # Unlike `src-tauri/bindings/` above, no test writes it: types such as
+      # `Project`, `CommandResult` and `Config` carry no `#[ts(export)]` and reach
+      # it only through `pnpm gen:ipc-types`, so a Rust change that skipped the
+      # generator left tsc and the mock agreeing with a stale declaration until a
+      # packaged build failed at runtime. Regenerate, then fail on any difference.
+      - name: Regenerate the IPC types
+        id: gen-ipc-types
+        if: ${{ !cancelled() }}
+        run: pnpm gen:ipc-types
+      - name: Generated IPC types match the checkout
+        if: ${{ !cancelled() && steps.gen-ipc-types.outcome == 'success' }}
+        run: |
+          # Untracked matters as much as modified: a type newly added to the
+          # generator's export list writes a file `git diff` cannot see.
+          untracked=$(git ls-files --others --exclude-standard src/types/ipc src/types/ipc.generated.ts)
+          if [ -n "$untracked" ]; then
+            echo "Generated but never committed:"
+            printf '%s\n' "$untracked"
+          fi
+          if ! git diff --exit-code src/types/ipc src/types/ipc.generated.ts || [ -n "$untracked" ]; then
+            echo "::error title=Stale generated IPC types::src/types/ipc does not match what pnpm gen:ipc-types just generated"
+            echo "Run pnpm gen:ipc-types locally and commit the result; never hand-edit that tree."
+            exit 1
+          fi
       # Vendored compass_data is [workspace]-excluded, so `cargo test --workspace`
       # compiles it (as a path dep) but never runs its tests (#494). Test it
       # directly. No telemetry feature or TELEMETRY_ENDPOINT - the crate defines

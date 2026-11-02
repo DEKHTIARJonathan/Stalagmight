@@ -29,6 +29,30 @@ all, and `flatten_import_paths` rewrites the ts-rs-emitted relative import
 specifiers so the flat `src/types/ipc/` output stays internally consistent no
 matter which crate a type came from.
 
+### The freshness gate
+
+This is the tree the frontend, the Playwright IPC mock and `tsc` compile
+against, and most of it has no other writer: `Project`, `CommandResult`,
+`Config` and the rest carry no `#[ts(export)]`, so no test regenerates them.
+A Rust change that skipped `pnpm gen:ipc-types` used to leave `tsc` and the mock
+agreeing with the stale declaration, and the mismatch first showed up at runtime
+in a packaged build (#576 C1).
+
+The `check` job now runs **Regenerate the IPC types** (`pnpm gen:ipc-types`)
+after `cargo test`, then **Generated IPC types match the checkout**, which fails
+on any modified or untracked file under `src/types/ipc/` or
+`src/types/ipc.generated.ts`. Locally the same pair is on the pre-push
+checklist:
+
+```bash
+pnpm gen:ipc-types
+git status --porcelain src/types/ipc src/types/ipc.generated.ts   # must print nothing
+```
+
+The generator is deterministic, so a clean checkout regenerates byte-identical
+files. Like ts-rs, it only writes: a file left behind after its type is removed
+from the export list is not flagged - delete it by hand.
+
 ## The second tree: `src-tauri/bindings/`
 
 There is a *second* committed tree of generated TypeScript, and `pnpm gen:ipc-types`
