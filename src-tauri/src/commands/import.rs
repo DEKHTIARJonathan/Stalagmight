@@ -5,6 +5,9 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, State};
 
 use crate::commands::event_sink::tauri_sink;
+use crate::commands::import_runner::{
+    guarded, run_file_import, ApplyPath, ConvertedImport, ImportKind,
+};
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::state::{AppState, VirtualShotMode};
 use crate::core::CommandResult;
@@ -27,7 +30,7 @@ pub fn import_dmp(path: PathBuf) -> Result<DmpFile, String> {
         purpose = "prepare import preview",
         "Parsing DMP file for import preview"
     );
-    let result = crate::parsers::parse_dmp(&path);
+    let result = guarded(|| crate::parsers::parse_dmp(&path));
     if let Err(ref e) = result {
         tracing::error!(
             path = ?path,
@@ -156,7 +159,10 @@ fn walls_unit_conversion_note(any_feet_units: bool) -> Option<String> {
 /// the in-memory import under the close-guard) but carries a warning about the
 /// failed save. Returning a hard failure here would make the UI treat the import as
 /// failed, never mark dirty, and silently lose the imported data on exit.
-fn finalize_deferred_import(state: &AppState, import_result: CommandResult) -> CommandResult {
+pub(crate) fn finalize_deferred_import(
+    state: &AppState,
+    import_result: CommandResult,
+) -> CommandResult {
     if !import_result.success || !state.initial_save_deferred() {
         return import_result;
     }
@@ -311,7 +317,7 @@ pub fn parse_tml(path: PathBuf) -> Result<TmlFile, String> {
         purpose = "prepare TML import preview",
         "Parsing Ariane TML/TMLU file for import preview"
     );
-    let result = crate::parsers::tml::parse_tml(&path);
+    let result = guarded(|| crate::parsers::tml::parse_tml(&path));
     if let Err(ref e) = result {
         tracing::error!(
             path = ?path,
@@ -449,7 +455,7 @@ pub fn parse_compass(path: PathBuf) -> Result<CompassFile, String> {
         purpose = "prepare Compass import preview",
         "Parsing Compass .DAT/.MAK file for import preview"
     );
-    let parsed = crate::parsers::compass::parse_compass(&path).map_err(|e| {
+    let parsed = guarded(|| crate::parsers::compass::parse_compass(&path)).map_err(|e| {
         tracing::error!(
             path = ?path,
             purpose = "prepare Compass import preview",
@@ -472,94 +478,48 @@ pub fn execute_compass_import(
     apply_corrections: bool,
     comments_on_stations: bool,
 ) -> CommandResult {
-    tracing::info!(
-        path = ?path,
-        purpose = "import Compass",
-        "Executing Compass import"
-    );
-
-    let mut emitter = ProgressEmitter::new_for_import(tauri_sink(app));
-
-    emitter.start_phase(LoadingPhase::ImportParsing);
-    let parsed = match crate::parsers::compass::parse_compass(&path) {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            tracing::error!(
-                path = ?path,
-                purpose = "import Compass",
-                reason = %e,
-                "Failed to parse Compass file for import"
-            );
-            return CommandResult::failure(format!("Failed to parse Compass file: {e}"));
-        }
-    };
-    emitter.complete_phase(LoadingPhase::ImportParsing);
-
-    emitter.start_phase(LoadingPhase::ImportConverting);
     let opts = CompassImportOptions {
         include_excluded,
         apply_corrections,
         comments_on_stations,
     };
+    run_file_import(
+        state.inner(),
+        tauri_sink(app),
+        &COMPASS_IMPORT,
+        &path,
+        file_hash,
+        // Auto: no dialog on this path carries a per-file override, so the
+        // chain rule decides (decision C10-D1).
+        VirtualShotMode::Auto,
+        crate::parsers::compass::parse_compass,
+        |parsed| convert_compass(parsed, &opts),
+    )
+}
+
+/// The Compass importer as the runner names it.
+const COMPASS_IMPORT: ImportKind = ImportKind {
+    receipt_label: "Compass",
+    error_label: "Compass",
+    purpose: "import Compass",
+};
+
+/// Compass's convert step for [`run_file_import`].
+fn convert_compass(
+    parsed: &crate::parsers::compass::ParsedCompass,
+    opts: &CompassImportOptions,
+) -> anyhow::Result<ConvertedImport> {
     let (sections, closures, warnings) =
-        match crate::parsers::compass::convert_compass_to_import_configs(&parsed, &opts) {
-            Ok(result) => result,
-            Err(e) => {
-                tracing::error!(
-                    path = ?path,
-                    purpose = "import Compass",
-                    reason = %e,
-                    "Failed to convert Compass data to import configs"
-                );
-                return CommandResult::failure(format!("Failed to convert Compass data: {e}"));
-            }
-        };
-    emitter.complete_phase(LoadingPhase::ImportConverting);
-
-    for warning in &warnings {
-        tracing::warn!(purpose = "import Compass", "{warning}");
-    }
-
-    tracing::info!(
-        path = ?path,
-        section_count = sections.len(),
-        closure_count = closures.len(),
-        warning_count = warnings.len(),
-        purpose = "import Compass",
-        "Converted Compass to import configs, executing import"
-    );
-
-    let (sections_found, length_unit) = crate::parsers::compass::preview_scalars(&parsed);
-    let unit_conversion = compass_unit_conversion_note(length_unit.as_deref());
-
-    emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let mut result = state.execute_import_sections(
+        crate::parsers::compass::convert_compass_to_import_configs(parsed, opts)?;
+    let (sections_found, length_unit) = crate::parsers::compass::preview_scalars(parsed);
+    Ok(ConvertedImport {
         sections,
         closures,
-        file_hash,
-        Vec::new(),
-        Vec::new(),
-        // Auto: no dialog on this path carries a per-file override, so the chain
-        // rule decides. An Option parameter here was unreachable - no frontend
-        // caller ever populated it - which read as "the override works" while
-        // silently always meaning Auto.
-        VirtualShotMode::Auto,
-    );
-    emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
-
-    decorate_receipt(
-        &mut result,
-        "Compass",
-        &path,
-        sections_found,
-        unit_conversion,
         warnings,
-    );
-
-    emitter.start_phase(LoadingPhase::ImportFinalizing);
-    emitter.complete_phase(LoadingPhase::ImportFinalizing);
-
-    finalize_deferred_import(state.inner(), result)
+        sections_found,
+        unit_conversion: compass_unit_conversion_note(length_unit.as_deref()),
+        apply: ApplyPath::Sections,
+    })
 }
 
 /// Parse a GPX file and return preview data for the import dialog.
@@ -570,7 +530,7 @@ pub fn parse_gpx(path: PathBuf) -> Result<GpxFile, String> {
         purpose = "prepare GPX import preview",
         "Parsing GPX file for import preview"
     );
-    let result = crate::parsers::gpx::parse_gpx(&path);
+    let result = guarded(|| crate::parsers::gpx::parse_gpx(&path));
     if let Err(ref e) = result {
         tracing::error!(
             path = ?path,
@@ -797,7 +757,7 @@ pub fn parse_walls(path: PathBuf) -> Result<WallsFile, String> {
         purpose = "prepare Walls import preview",
         "Parsing Walls .WPJ/.SRV file for import preview"
     );
-    let parsed = crate::parsers::walls::parse_walls(&path).map_err(|e| {
+    let parsed = guarded(|| crate::parsers::walls::parse_walls(&path)).map_err(|e| {
         tracing::error!(
             path = ?path,
             purpose = "prepare Walls import preview",
@@ -820,102 +780,57 @@ pub fn execute_walls_import(
     include_splays: bool,
     selected_surveys: Option<Vec<u32>>,
 ) -> CommandResult {
-    tracing::info!(
-        path = ?path,
-        purpose = "import Walls",
-        "Executing Walls import"
-    );
-
-    let mut emitter = ProgressEmitter::new_for_import(tauri_sink(app));
-
-    emitter.start_phase(LoadingPhase::ImportParsing);
-    let parsed = match crate::parsers::walls::parse_walls(&path) {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            tracing::error!(
-                path = ?path,
-                purpose = "import Walls",
-                reason = %e,
-                "Failed to parse Walls file for import"
-            );
-            return CommandResult::failure(format!("Failed to parse Walls file: {e}"));
-        }
-    };
-    emitter.complete_phase(LoadingPhase::ImportParsing);
-
-    emitter.start_phase(LoadingPhase::ImportConverting);
     let opts = WallsImportOptions {
         comments_on_stations,
         include_splays,
-        // `None` ⇒ import every survey; `Some(list)` ⇒ only the chosen survey
+        // `None` => import every survey; `Some(list)` => only the chosen survey
         // indices (into the preview's `WallsFile::surveys`, which is 1:1 with
         // the parser's survey order).
         selected_surveys: selected_surveys.map(|v| v.into_iter().collect()),
     };
+    run_file_import(
+        state.inner(),
+        tauri_sink(app),
+        &WALLS_IMPORT,
+        &path,
+        file_hash,
+        // Auto: no dialog on this path carries a per-file override, so the
+        // chain rule decides (decision C10-D1).
+        VirtualShotMode::Auto,
+        crate::parsers::walls::parse_walls,
+        |parsed| convert_walls(parsed, &opts),
+    )
+}
+
+/// The Walls importer as the runner names it.
+const WALLS_IMPORT: ImportKind = ImportKind {
+    receipt_label: "Walls",
+    error_label: "Walls",
+    purpose: "import Walls",
+};
+
+/// Walls's convert step for [`run_file_import`].
+fn convert_walls(
+    parsed: &crate::parsers::walls::ParsedWalls,
+    opts: &WallsImportOptions,
+) -> anyhow::Result<ConvertedImport> {
     let (sections, closures, warnings) =
-        match crate::parsers::walls::convert_walls_to_import_configs(&parsed, &opts) {
-            Ok(result) => result,
-            Err(e) => {
-                tracing::error!(
-                    path = ?path,
-                    purpose = "import Walls",
-                    reason = %e,
-                    "Failed to convert Walls data to import configs"
-                );
-                return CommandResult::failure(format!("Failed to convert Walls data: {e}"));
-            }
-        };
-    emitter.complete_phase(LoadingPhase::ImportConverting);
-
-    for warning in &warnings {
-        tracing::warn!(purpose = "import Walls", "{warning}");
-    }
-
-    tracing::info!(
-        path = ?path,
-        section_count = sections.len(),
-        closure_count = closures.len(),
-        warning_count = warnings.len(),
-        purpose = "import Walls",
-        "Converted Walls to import configs, executing import"
-    );
-
-    let (sections_found, any_feet_units) = crate::parsers::walls::preview_scalars(&parsed);
-    let unit_conversion = walls_unit_conversion_note(any_feet_units);
-
-    emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let mut result = state.execute_import_sections(
+        crate::parsers::walls::convert_walls_to_import_configs(parsed, opts)?;
+    let (sections_found, any_feet_units) = crate::parsers::walls::preview_scalars(parsed);
+    Ok(ConvertedImport {
         sections,
         closures,
-        file_hash,
-        Vec::new(),
-        Vec::new(),
-        // Auto: no dialog on this path carries a per-file override, so the chain
-        // rule decides. An Option parameter here was unreachable - no frontend
-        // caller ever populated it - which read as "the override works" while
-        // silently always meaning Auto.
-        VirtualShotMode::Auto,
-    );
-    emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
-
-    decorate_receipt(
-        &mut result,
-        "Walls",
-        &path,
-        sections_found,
-        unit_conversion,
         warnings,
-    );
-
-    emitter.start_phase(LoadingPhase::ImportFinalizing);
-    emitter.complete_phase(LoadingPhase::ImportFinalizing);
-
-    finalize_deferred_import(state.inner(), result)
+        sections_found,
+        unit_conversion: walls_unit_conversion_note(any_feet_units),
+        apply: ApplyPath::Sections,
+    })
 }
 
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
+    clippy::panic,
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod receipt_tests {
@@ -1228,5 +1143,291 @@ mod receipt_tests {
         let mut refused = CommandResult::failure("refused".to_string());
         lead_receipt_with_source_warnings(&mut refused, vec!["dropped".to_string()]);
         assert!(refused.import_receipt.is_none());
+    }
+
+    // ----- the shared runner (#576 C10) ------------------------------------
+
+    /// Records the phase of every progress event.
+    #[derive(Default)]
+    struct RecordingSink(std::sync::Mutex<Vec<String>>);
+
+    impl crate::core::events::EventSink for RecordingSink {
+        fn emit(&self, event: &str, payload: serde_json::Value) {
+            if let Ok(mut events) = self.0.lock() {
+                events.push(format!(
+                    "{event}:{}",
+                    payload["phase"].as_str().unwrap_or("?")
+                ));
+            }
+        }
+
+        fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+            false
+        }
+    }
+
+    /// The phases `sink` saw, in order.
+    fn phases(sink: &RecordingSink) -> Vec<String> {
+        sink.0.lock().map(|e| e.clone()).unwrap_or_default()
+    }
+
+    /// A fresh app state with an open, empty project.
+    fn project_state() -> AppState {
+        let state = AppState::new().expect("app state");
+        let created = state.execute(crate::core::Command::CreateProject {
+            name: "Synthetic Cave".to_string(),
+            location: None,
+        });
+        assert!(created.success, "{:?}", created.error);
+        state
+    }
+
+    /// The parts of a result the receipt-equality checks compare.
+    fn comparable(result: &CommandResult) -> serde_json::Value {
+        serde_json::to_value(result).expect("a command result serializes")
+    }
+
+    const TEST_IMPORT: ImportKind = ImportKind {
+        receipt_label: "Synthetic",
+        error_label: "Synthetic",
+        purpose: "import Synthetic",
+    };
+
+    /// #576 B8 remainder: a panic in a parser used to unwind out of the
+    /// command, so the frontend's promise never settled and the dialog
+    /// waited forever. The runner turns it into a failed import that says
+    /// what happened, and nothing is imported.
+    #[test]
+    fn a_panicking_parse_or_convert_fails_the_import_instead_of_unwinding() {
+        let state = project_state();
+        let sink = std::sync::Arc::new(RecordingSink::default());
+        let parse_panics = run_file_import(
+            &state,
+            std::sync::Arc::<RecordingSink>::clone(&sink),
+            &TEST_IMPORT,
+            Path::new("/tmp/synthetic.dat"),
+            None,
+            VirtualShotMode::Auto,
+            |_| -> anyhow::Result<()> { panic!("index out of bounds: synthetic") },
+            |()| -> anyhow::Result<ConvertedImport> { panic!("not reached") },
+        );
+        assert!(!parse_panics.success);
+        assert_eq!(
+            parse_panics.error.as_deref(),
+            Some(
+                "Failed to parse Synthetic file: the importer stopped on an internal error \
+                 (index out of bounds: synthetic); nothing was imported"
+            )
+        );
+
+        let detail = String::from("formatted detail");
+        let convert_panics = run_file_import(
+            &state,
+            sink,
+            &TEST_IMPORT,
+            Path::new("/tmp/synthetic.dat"),
+            None,
+            VirtualShotMode::Auto,
+            |_| Ok(()),
+            move |()| -> anyhow::Result<ConvertedImport> { panic!("{detail}") },
+        );
+        assert_eq!(
+            convert_panics.error.as_deref(),
+            Some(
+                "Failed to convert Synthetic data: the importer stopped on an internal error \
+                 (formatted detail); nothing was imported"
+            )
+        );
+        let project = state.get_project_state().expect("project");
+        assert!(project.sections.is_empty(), "nothing was imported");
+        assert!(!state.can_undo(), "and nothing was recorded");
+    }
+
+    /// Every runner import reports the four import phases, in order.
+    #[test]
+    fn the_runner_reports_every_import_phase() {
+        let state = project_state();
+        let sink = std::sync::Arc::new(RecordingSink::default());
+        let result = run_file_import(
+            &state,
+            std::sync::Arc::<RecordingSink>::clone(&sink),
+            &TEST_IMPORT,
+            Path::new("/tmp/synthetic.dat"),
+            None,
+            VirtualShotMode::Auto,
+            |_| Ok(()),
+            |()| {
+                Ok(ConvertedImport {
+                    sections: Vec::new(),
+                    closures: Vec::new(),
+                    warnings: vec!["a converter note".to_string()],
+                    sections_found: 0,
+                    unit_conversion: None,
+                    apply: ApplyPath::Sections,
+                })
+            },
+        );
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(
+            result.import_receipt.expect("receipt").warnings,
+            vec!["a converter note".to_string()]
+        );
+        let starts: Vec<String> = phases(&sink).into_iter().step_by(2).collect();
+        assert_eq!(
+            starts,
+            [
+                "loading-progress:import_parsing",
+                "loading-progress:import_converting",
+                "loading-progress:import_applying_changes",
+                "loading-progress:import_finalizing",
+            ]
+        );
+    }
+
+    /// A synthetic one-survey Compass `.DAT` (feet, two legs).
+    fn synthetic_compass_dat(dir: &Path) -> PathBuf {
+        let path = dir.join("synthetic.dat");
+        fs::write(
+            &path,
+            "Synthetic Cave\r\n\
+             SURVEY NAME: A\r\n\
+             SURVEY DATE: 7 10 1979\r\n\
+             SURVEY TEAM:\r\n\
+             Nobody\r\n\
+             DECLINATION: 0.00  FORMAT: DMMDLRUDLADN  CORRECTIONS: 0.00 0.00 0.00\r\n\
+             \r\n\
+             FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS\r\n\
+             \r\n\
+             A1 A2 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n\
+             A2 A3 12.50 180.00 -10.00 1.00 2.00 3.00 4.00\r\n\
+             \x0c\r\n",
+        )
+        .expect("write the synthetic .DAT");
+        path
+    }
+
+    /// Compass on the runner produces exactly the result the hand-written
+    /// command did: parse, convert, apply, decorate, finalize.
+    #[test]
+    fn a_compass_import_on_the_runner_keeps_its_receipt() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = synthetic_compass_dat(dir.path());
+        let opts = CompassImportOptions {
+            include_excluded: false,
+            apply_corrections: true,
+            comments_on_stations: false,
+        };
+
+        let legacy_state = project_state();
+        let parsed = crate::parsers::compass::parse_compass(&path).expect("parse");
+        let (sections, closures, warnings) =
+            crate::parsers::compass::convert_compass_to_import_configs(&parsed, &opts)
+                .expect("convert");
+        let (sections_found, length_unit) = crate::parsers::compass::preview_scalars(&parsed);
+        let mut legacy = legacy_state.execute_import_sections(
+            sections,
+            closures,
+            Some("hash".to_string()),
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+        );
+        decorate_receipt(
+            &mut legacy,
+            "Compass",
+            &path,
+            sections_found,
+            compass_unit_conversion_note(length_unit.as_deref()),
+            warnings,
+        );
+        let legacy = finalize_deferred_import(&legacy_state, legacy);
+
+        let state = project_state();
+        let runner = run_file_import(
+            &state,
+            std::sync::Arc::new(RecordingSink::default()),
+            &COMPASS_IMPORT,
+            &path,
+            Some("hash".to_string()),
+            VirtualShotMode::Auto,
+            crate::parsers::compass::parse_compass,
+            |parsed| convert_compass(parsed, &opts),
+        );
+
+        assert!(runner.success, "{:?}", runner.error);
+        assert!(
+            runner
+                .import_receipt
+                .as_ref()
+                .is_some_and(|r| r.shot_count > 0 && r.unit_conversion.is_some()),
+            "premise: a receipt with shots and a unit note, got {:?}",
+            runner.import_receipt
+        );
+        assert_eq!(comparable(&runner), comparable(&legacy));
+    }
+
+    /// Walls on the runner produces exactly the result the hand-written
+    /// command did.
+    #[test]
+    fn a_walls_import_on_the_runner_keeps_its_receipt() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("synthetic.srv");
+        fs::write(
+            &path,
+            "#UNITS feet order=DAV\nA1 A2 10 90 0\nA2 A3 12.5 180 -10\n",
+        )
+        .expect("write the synthetic .SRV");
+        let opts = WallsImportOptions {
+            comments_on_stations: false,
+            include_splays: false,
+            selected_surveys: None,
+        };
+
+        let legacy_state = project_state();
+        let parsed = crate::parsers::walls::parse_walls(&path).expect("parse");
+        let (sections, closures, warnings) =
+            crate::parsers::walls::convert_walls_to_import_configs(&parsed, &opts)
+                .expect("convert");
+        let (sections_found, any_feet_units) = crate::parsers::walls::preview_scalars(&parsed);
+        let mut legacy = legacy_state.execute_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+        );
+        decorate_receipt(
+            &mut legacy,
+            "Walls",
+            &path,
+            sections_found,
+            walls_unit_conversion_note(any_feet_units),
+            warnings,
+        );
+        let legacy = finalize_deferred_import(&legacy_state, legacy);
+
+        let state = project_state();
+        let runner = run_file_import(
+            &state,
+            std::sync::Arc::new(RecordingSink::default()),
+            &WALLS_IMPORT,
+            &path,
+            None,
+            VirtualShotMode::Auto,
+            crate::parsers::walls::parse_walls,
+            |parsed| convert_walls(parsed, &opts),
+        );
+
+        assert!(runner.success, "{:?}", runner.error);
+        assert!(
+            runner
+                .import_receipt
+                .as_ref()
+                .is_some_and(|r| r.shot_count > 0 && r.unit_conversion.is_some()),
+            "premise: a receipt with shots and a unit note, got {:?}",
+            runner.import_receipt
+        );
+        assert_eq!(comparable(&runner), comparable(&legacy));
     }
 }
