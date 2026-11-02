@@ -57,8 +57,10 @@ mod azimuth_reference_tests;
 #[expect(
     clippy::unwrap_used,
     clippy::print_stdout,
-    reason = "test module: panics on a failed assumption are the point, and the printed \
-              values are the evidence a run captures"
+    clippy::result_large_err,
+    reason = "test module: panics on a failed assumption are the point, the printed \
+              values are the evidence a run captures, and the closures return the \
+              loads' own large LoadError"
 )]
 mod cancelled_load_lock_tests;
 #[cfg(test)]
@@ -333,8 +335,10 @@ mod sdb_endpoint_tests;
     clippy::unwrap_used,
     clippy::indexing_slicing,
     clippy::print_stdout,
-    reason = "test module: panics on a failed assumption are the point, and the printed \
-              values are the evidence a run captures"
+    clippy::result_large_err,
+    reason = "test module: panics on a failed assumption are the point, the printed \
+              values are the evidence a run captures, and the closures return the \
+              verbs' own large SpeleoErrorDto"
 )]
 mod sdb_failed_push_save_tests;
 #[cfg(test)]

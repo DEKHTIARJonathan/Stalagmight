@@ -1031,7 +1031,7 @@ impl AppState {
         if let Some(((project_id, endpoint), email)) = project_id.zip(endpoint).zip(email) {
             let mut claim = super::speleodb_session::LockClaim::taken(project_id, endpoint, email);
             if resumed {
-                claim = claim.as_resumed();
+                claim = claim.into_resumed();
             }
             if by_this_flow {
                 // Recorded in the SAME session acquisition as the claim itself,
@@ -2179,6 +2179,11 @@ impl AppState {
     /// Take remote, Discard changes): the coded refusal of
     /// [`Self::guard_workspace`], shown as written so the frontend recognises it as
     /// the edit gate and shows its notice.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the SpeleoErrorDto every SpeleoDB verb returns; boxing the error type is a \
+                  repo-wide change outside #576 RV4"
+    )]
     pub(super) fn speleodb_guard_workspace(&self, what: &str) -> Result<(), SpeleoErrorDto> {
         self.guard_workspace(what)
             .map_err(|refusal| local_dto(SpeleoDbError::Refused(refusal.error.unwrap_or_default())))

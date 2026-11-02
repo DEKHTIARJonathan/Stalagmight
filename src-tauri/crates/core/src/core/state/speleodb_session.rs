@@ -140,7 +140,7 @@ impl LockClaim {
 
     /// This claim, marked as a lock "Continue editing" resumed (see
     /// [`LockClaim::resumed`]).
-    pub(super) fn as_resumed(self) -> Self {
+    pub(super) fn into_resumed(self) -> Self {
         Self {
             resumed: true,
             ..self

@@ -220,6 +220,11 @@ impl AppState {
     /// [`Self::speleodb_done_acknowledged`] with the warnings of the save the push
     /// ran first (#576 NF-W2SAVE-1): what the `speleodb_done` command answers, so the
     /// frontend shows them like a normal save's warnings.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the SpeleoErrorDto every SpeleoDB verb returns; boxing the error type is a \
+                  repo-wide change outside #576 RV4"
+    )]
     pub fn speleodb_done_reported(
         &self,
         message: Option<String>,
@@ -244,6 +249,11 @@ impl AppState {
     /// not repeat them - so a push that fails after it (a refused or dropped upload, a
     /// failed render or snapshot) used to leave the user never told what that save
     /// could not keep. Nothing is sent when the save did not run or lost nothing.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the SpeleoErrorDto every SpeleoDB verb returns; boxing the error type is a \
+                  repo-wide change outside #576 RV4"
+    )]
     pub(super) fn speleodb_with_pre_push_save<R>(
         &self,
         body: impl FnOnce(&mut Vec<ValidationWarning>) -> Result<R, SpeleoErrorDto>,
@@ -441,6 +451,11 @@ impl AppState {
 
     /// [`Self::speleodb_push_only_acknowledged`] with the warnings of the save the
     /// push ran first (#576 NF-W2SAVE-1): what the `speleodb_push` command answers.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the SpeleoErrorDto every SpeleoDB verb returns; boxing the error type is a \
+                  repo-wide change outside #576 RV4"
+    )]
     pub fn speleodb_push_only_reported(
         &self,
         message: Option<String>,
