@@ -2,6 +2,7 @@ import type { DmpSection, DmpShot } from '../types/commands';
 import type { ShotData } from '../types/project';
 import type { EditableShot } from '../components/common/ShotTableEditor';
 import { isEmittedShot } from '../components/common/emittedShots';
+import { normalizeAzimuth } from './azimuth';
 
 const DEFAULT_EXCLUDED_DMP_SHOT_LENGTH = 1;
 
@@ -24,6 +25,12 @@ export function isImportableDmpShot(shot: DmpShot): boolean {
  * each, which must not reach the project as a measured 0 degrees or a measured
  * zero-width passage (#576 NF-AN4-3), so such a row carries none. The marker
  * index is in every version's record.
+ *
+ * Headings are wrapped into [0, 360) here (#576 RV2-FE-D7). A DMP heading is a
+ * raw `i16 * 0.1`, so a damaged dump can carry 400 or -30; the core import gate
+ * stores every azimuth wrapped (B24-D2), so the wizard shows - and validates -
+ * the bearing that will be stored instead of flagging 400 as out of range while
+ * the import silently keeps 40. A non-finite reading passes through untouched.
  */
 export function convertToEditableShots(shots: DmpShot[], version: number): EditableShot[] {
   const recordsTemperature = version >= 3;
@@ -32,8 +39,8 @@ export function convertToEditableShots(shots: DmpShot[], version: number): Edita
     .filter(isImportableDmpShot)
     .map((shot, index) => ({
       id: index,
-      azimuth_in: shot.heading_in,
-      azimuth_out: shot.heading_out,
+      azimuth_in: normalizeAzimuth(shot.heading_in),
+      azimuth_out: normalizeAzimuth(shot.heading_out),
       length: shot.length,
       depth_in: shot.depth_in,
       depth_out: shot.depth_out,

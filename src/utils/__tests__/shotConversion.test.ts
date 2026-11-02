@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { DmpShot } from '../../types/commands';
 import { blankEditableShot } from '../../components/common/editableShot';
 import { convertToEditableShots, editableShotToShotData } from '../shotConversion';
+import { validateEditableShot } from '../validation';
 
 function makeDmpShot(overrides?: Partial<DmpShot>): DmpShot {
   return {
@@ -129,5 +130,27 @@ describe('DMP device fields through the wizard conversion', () => {
     expect(sent.pitch_in).toBe(16.9);
     expect(sent.pitch_out).toBe(16.9);
     expect(sent.depth_out - sent.depth_in).toBeGreaterThan(0);
+  });
+});
+
+// #576 RV2-FE-D7. A DMP heading is a raw `i16 * 0.1`, so a damaged dump can carry
+// 400 or -30. The core import gate wraps every azimuth into [0, 360) (B24-D2), so
+// the import stores 40 / 330 - while the wizard's table showed the raw reading
+// with the "must be between 0 and 360" error flag. Wrapped at the conversion, the
+// table shows what will be stored and flags nothing the import accepts.
+describe('DMP headings outside [0, 360) through the wizard conversion', () => {
+  it('shows the wrapped bearing the import gate will store, with no range error', () => {
+    const [row] = convertToEditableShots([makeDmpShot({ heading_in: 400, heading_out: -30 })], 5);
+    expect({ azimuth_in: row!.azimuth_in, azimuth_out: row!.azimuth_out }).toEqual({
+      azimuth_in: 40,
+      azimuth_out: 330,
+    });
+    const rangeErrors = validateEditableShot(row!, 1, 0).filter((e) => e.field === 'azimuth_in' || e.field === 'azimuth_out');
+    expect(rangeErrors).toEqual([]);
+  });
+
+  it('pin: leaves an in-range heading exactly as read', () => {
+    const [row] = convertToEditableShots([makeDmpShot({ heading_in: 359.9, heading_out: 0 })], 5);
+    expect([row!.azimuth_in, row!.azimuth_out]).toEqual([359.9, 0]);
   });
 });
