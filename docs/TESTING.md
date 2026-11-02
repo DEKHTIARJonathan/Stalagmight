@@ -170,6 +170,10 @@ parts of these requirements. The scanner rejects interactive JSX without a test
 ID, duplicate literal sibling IDs, and literal IDs inside `map`, `flatMap`, and
 `Array.from` render callbacks. Dynamic expressions and helper-component reuse
 still require review because static analysis cannot prove their runtime identity.
+In particular, a custom component's call site (`<SectionRow onClick={...}>`, a
+capitalized tag not in the scanner's `INTERACTIVE_TAGS`) is deliberately not
+checked: the component's own definition is, so it must tag the control it
+renders. A wrapper that is itself a plain control belongs in `INTERACTIVE_TAGS`.
 
 ### Dialogs (mandatory shape)
 

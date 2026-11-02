@@ -74,8 +74,19 @@ function hasAttribute(node, names) {
   );
 }
 
-function isInteractive(node, tag) {
+export function isInteractive(node, tag) {
   if (INTERACTIVE_TAGS.has(tag)) return true;
+  // Deliberate exemption (#576 E2-D1): a capitalized tag that is NOT in
+  // INTERACTIVE_TAGS is a custom component, and its call sites are not checked
+  // even with a click handler or an interactive role (`<SectionRow onClick>`,
+  // `<Card role="button">`). The gate checks each component's own definition
+  // instead - the JSX that finally reaches the DOM - and every such call site
+  // audited in #576 renders a tagged inner control (ToolButton -> tool-${tool},
+  // SectionRow -> section-row-${id}, ...). Gating call sites would demand a
+  // redundant testId on each, or an allowlist row per wrapper. What this cannot
+  // see - a wrapper spreading props onto an untagged element - is left to review
+  // (docs/TESTING.md, UI component testability). A wrapper that IS a plain
+  // control belongs in INTERACTIVE_TAGS. Pinned by check-test-ids.test.mjs.
   if (tag[0] !== tag[0]?.toLowerCase()) return false;
   const role = literalAttribute(node, ['role']);
   if (role && INTERACTIVE_ROLES.has(role)) return true;

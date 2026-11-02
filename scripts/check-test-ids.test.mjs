@@ -138,6 +138,26 @@ assert.deepEqual(
   [],
 );
 
+// The custom-component exemption is a stated choice, not an accident (#576
+// E2-D1): a capitalized tag outside INTERACTIVE_TAGS is not checked at its call
+// site, whatever handler or role it gets; its own definition is checked instead.
+assert.deepEqual(analyzeSource('wrapper.tsx', 'const view = <SectionRow onClick={select} />;'), []);
+assert.deepEqual(analyzeSource('wrapper-role.tsx', 'const view = <Card role="button" onClick={select}>x</Card>;'), []);
+assert.deepEqual(analyzeSource('wrapper-menu.tsx', 'const view = <ToolButton onContextMenu={menu} />;'), []);
+// ...while a listed wrapper and a lowercase element with the same props are gated.
+assert.match(
+  analyzeSource('listed.tsx', 'const view = <Button onClick={save}>Save</Button>;')[0]?.message ?? '',
+  /<Button> has no data-testid/,
+);
+assert.match(
+  analyzeSource('div.tsx', 'const view = <div onClick={select}>x</div>;')[0]?.message ?? '',
+  /<div> has no data-testid/,
+);
+assert.match(
+  analyzeSource('role.tsx', 'const view = <span role="button">x</span>;')[0]?.message ?? '',
+  /<span> has no data-testid/,
+);
+
 // scan() walks <repoRoot>/src through the shared lister (scripts/lib/src-files.mjs).
 const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-test-id-root-'));
 try {
