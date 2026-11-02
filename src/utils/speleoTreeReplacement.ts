@@ -74,6 +74,9 @@ export async function applySpeleoTreeReplacement(
       useProjectStore.setState({
         newerSchemaVersion: flags.newerSchemaVersion,
         speleoLinkUnreadable: flags.speleoLinkUnreadable,
+        // [#576 RV4-R-S5] The third file property: the stored settings this file's
+        // open could not read, which refuse every save and drive the banner.
+        unreadableProjectSettings: flags.unreadableProjectSettings,
       });
     }
 

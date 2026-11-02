@@ -77,6 +77,7 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
         return {
           newerSchemaVersion: null,
           speleoLinkUnreadable: false,
+          unreadableProjectSettings: [],
           ...((window as unknown as Record<string, unknown>)
             .__openFileFlagsOverrides as Record<string, unknown> | undefined),
         } satisfies MockReply<'speleodb_open_file_flags'>;

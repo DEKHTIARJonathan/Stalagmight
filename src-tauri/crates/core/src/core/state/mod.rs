@@ -191,6 +191,14 @@ mod north_reference_mode_tests;
 )]
 mod older_schema_tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod open_file_flags_settings_tests;
+#[cfg(test)]
 mod open_undo_bugs_tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]

@@ -938,9 +938,10 @@ pub struct LoadProjectFullResult {
 // ============================================================================
 
 /// [#576 NF-W2F-1] The open-time flags that describe the open project's FILE, as
-/// they stand now. The same two values a load hands the frontend
+/// they stand now. The same values a load hands the frontend
 /// ([`LoadProjectFullResult::newer_schema_version`] /
-/// [`LoadProjectFullResult::speleo_link_unreadable`]), re-asked after a SpeleoDB
+/// [`LoadProjectFullResult::speleo_link_unreadable`] /
+/// [`LoadProjectFullResult::unreadable_project_settings`]), re-asked after a SpeleoDB
 /// in-place tree swap (revision View/Restore, fast-forward, take remote): the
 /// backend reloads the swapped file, but the frontend does not go through
 /// `loadProject` there, so without this its read-only banner and gate kept
@@ -953,6 +954,10 @@ pub struct OpenFileFlags {
     pub newer_schema_version: Option<i32>,
     /// The file carries a `speleo_link` table whose row cannot be read.
     pub speleo_link_unreadable: bool,
+    /// [#576 RV4-R-S5] The stored project settings the open could not read
+    /// ([`LoadProjectFullResult::unreadable_project_settings`]): each refuses
+    /// every save until set again. Empty when they were all read.
+    pub unreadable_project_settings: Vec<String>,
 }
 
 // ============================================================================

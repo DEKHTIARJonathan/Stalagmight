@@ -1264,8 +1264,8 @@ impl AppState {
     }
 
     /// [#576 NF-W2F-1] The open file's flags as they stand NOW: the committed
-    /// newer-file stamp, and whether the open database's `speleo_link` row can be
-    /// read - the same read the load and every save make, so the answer always
+    /// newer-file stamp, the unread-settings list (RV4-R-S5), and whether the open
+    /// database's `speleo_link` row can be read - the same read the load and every save make, so the answer always
     /// matches what the next save would do. No project (or no database) open reads
     /// as neither.
     pub fn open_file_flags(&self) -> crate::core::loading::OpenFileFlags {
@@ -1277,6 +1277,8 @@ impl AppState {
         crate::core::loading::OpenFileFlags {
             newer_schema_version: self.newer_file_schema(),
             speleo_link_unreadable,
+            // [#576 RV4-R-S5] The list the slot commit set for the file open now.
+            unreadable_project_settings: self.unreadable_project_settings(),
         }
     }
 
