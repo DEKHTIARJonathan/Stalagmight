@@ -254,7 +254,7 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
       return undefined; // refreshUndoState / refreshWarnings - best-effort
     });
 
-    await useProjectStore.getState().removeLoopClosure(1n);
+    await useProjectStore.getState().removeLoopClosure(1);
 
     expect(useProjectStore.getState().integrityIssues).toEqual([]);
   });

@@ -41,7 +41,7 @@ const displaySettings: DisplaySettings = {
 /** Resolves the load with the backend's newer-version verdict for this file. */
 const mockLoad = (newerSchemaVersion: number | null, path: string) =>
   loadBinaryMock.mockResolvedValue({
-    loadingId: 1n,
+    loadingId: 1,
     isRemote: false,
     newerSchemaVersion,
     project: {
@@ -58,7 +58,7 @@ const mockLoad = (newerSchemaVersion: number | null, path: string) =>
       section_offsets: {},
       imported_file_hashes: [],
       imported_section_hashes: [],
-      next_closure_id: 1n,
+      next_closure_id: 1,
     },
     stations: [],
     surveyData: { shots: [], stations: [] },
@@ -110,7 +110,7 @@ beforeEach(() => {
     recentProjects: [],
     autosaveFailure: null,
     isDirty: false,
-    loading: { loadingId: 0n, clientOpId: 0, isLoading: false, overallProgress: 0 },
+    loading: { loadingId: 0, clientOpId: 0, isLoading: false, overallProgress: 0 },
   });
 });
 

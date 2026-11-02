@@ -168,7 +168,7 @@ async function setupProjectWithStationClosures(
             project: {
               sections: Array<{ id: number }>;
               loop_closures: Array<{
-                id: bigint;
+                id: number;
                 station_a: StationRef;
                 station_b: StationRef;
               }>;

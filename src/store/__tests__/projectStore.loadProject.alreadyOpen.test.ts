@@ -67,7 +67,7 @@ beforeEach(() => {
   useProjectStore.setState({
     project: null,
     isDirty: false,
-    loading: { loadingId: 0n, clientOpId: 0, isLoading: false, overallProgress: 0 },
+    loading: { loadingId: 0, clientOpId: 0, isLoading: false, overallProgress: 0 },
     refreshUndoState: vi.fn(async () => {}),
   });
 });

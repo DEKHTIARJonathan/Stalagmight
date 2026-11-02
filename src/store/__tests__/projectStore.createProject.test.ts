@@ -19,7 +19,7 @@ describe('projectStore.createProject', () => {
       if (command === 'list_recent_projects') return [];
       if (command === 'create_project_full') {
         return {
-          loadingId: 1n,
+          loadingId: 1,
           project: {
             name: args?.name ?? 'Untitled Project',
             location: args?.projectLocation ?? null,
@@ -34,7 +34,7 @@ describe('projectStore.createProject', () => {
             section_offsets: {},
             imported_file_hashes: [],
             imported_section_hashes: [],
-            next_closure_id: 1n,
+            next_closure_id: 1,
           },
           // Complete payload (satisfies pins it): applyDisplaySettings merges
           // with ??, so an omitted field would silently keep prior in-memory
@@ -71,7 +71,7 @@ describe('projectStore.createProject', () => {
       autosaveFailure: null,
       isDirty: false,
       loading: {
-        loadingId: 0n,
+        loadingId: 0,
         clientOpId: 0,
         isLoading: false,
         overallProgress: 0,

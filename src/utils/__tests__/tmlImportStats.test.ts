@@ -29,8 +29,8 @@ const TRUTH_TABLE: Array<[TmlShotType, boolean, boolean, boolean]> = [
 
 function shot(shotType: TmlShotType, excluded: boolean): TmlShot {
   return {
-    id: 1n,
-    from_id: 0n,
+    id: 1,
+    from_id: 0,
     shot_type: shotType,
     azimuth: 0,
     length: 1,
@@ -48,7 +48,7 @@ function shot(shotType: TmlShotType, excluded: boolean): TmlShot {
     excluded,
     latitude: 0,
     longitude: 0,
-    closure_to_id: -1n,
+    closure_to_id: -1,
     section: '',
   };
 }
@@ -67,8 +67,8 @@ describe('survivesImport mirrors the Rust survives_import', () => {
       date: null,
       color: '#000000',
       is_branch_split: false,
-      start_ariane_id: -1n,
-      end_ariane_id: -1n,
+      start_ariane_id: -1,
+      end_ariane_id: -1,
       start_depth: 0,
     };
     for (const include of [false, true]) {

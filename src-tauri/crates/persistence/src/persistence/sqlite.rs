@@ -597,6 +597,7 @@ pub struct RawTableData {
 #[serde(rename_all = "camelCase")]
 pub struct BackupInfo {
     pub path: String,
+    #[ts(type = "number")]
     pub size_bytes: u64,
     pub modified_at: String,
     /// What the file is, which the dialog turns into its label.

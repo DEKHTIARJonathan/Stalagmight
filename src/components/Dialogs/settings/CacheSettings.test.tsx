@@ -1,11 +1,10 @@
 /**
  * Component test (#576 C6) - the Clear cache button must be disabled when the
- * cache is empty. ts-rs types `CacheStats.total_tiles` (a Rust u64) as `bigint`,
- * but `get_cache_stats` is a JSON `invoke()`: serde writes the u64 as a JSON
- * number and the frontend receives a plain JS number. A `=== 0n` compare is
- * then `0 === 0n` (false), so the button stayed enabled on an empty cache.
- * These tests feed the real wire shape (plain numbers) as well as the typed
- * bigint shape.
+ * cache is empty. ts-rs used to type `CacheStats.total_tiles` (a Rust u64) as
+ * `bigint`, but `get_cache_stats` is a JSON `invoke()`: serde writes the u64 as
+ * a JSON number and the frontend receives a plain JS number. A `=== 0n` compare
+ * was then `0 === 0n` (false), so the button stayed enabled on an empty cache.
+ * The generated type now says `number`, which is what these tests feed.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -67,8 +66,21 @@ describe('CacheSettings Clear cache button (#576 C6)', () => {
     expect(button).toBeEnabled();
   });
 
-  it('is disabled for a bigint 0n tile count (the typed shape and the error fallback)', async () => {
-    const button = await renderWithStats({ total_tiles: 0n, total_bytes: 0n, providers: {} });
-    expect(button).toBeDisabled();
+  it('is disabled on the zero fallback a failed stats load leaves', async () => {
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_cache_stats') throw new Error('cache unavailable');
+      return null;
+    });
+    render(
+      <CacheSettings
+        config={defaultConfig}
+        onChange={vi.fn()}
+        changedFields={new Set()}
+        onValidationError={vi.fn()}
+        panelIdBase="settings"
+      />
+    );
+    await waitFor(() => expect(screen.getByTestId('cache-tile-count')).toHaveTextContent('0'));
+    expect(screen.getByTestId('clear-cache-button')).toBeDisabled();
   });
 });

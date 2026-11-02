@@ -297,11 +297,7 @@ export default function CorruptionRecoveryDialog() {
           </p>
           <div className="space-y-1 max-h-60 overflow-auto">
             {backups.map((backup, index) => {
-              // sizeBytes comes as bigint from ts-rs but may arrive as number from Tauri IPC
-              const sizeNum = typeof backup.sizeBytes === 'bigint'
-                ? Number(backup.sizeBytes)
-                : Number(backup.sizeBytes);
-              const sizeKb = (sizeNum / 1024).toFixed(1);
+              const sizeKb = (backup.sizeBytes / 1024).toFixed(1);
               const filename = extractFilename(backup.path);
               // [#576 C15] An unusable candidate is listed (so the user sees it
               // exists, and why it is not offered) but cannot be picked.

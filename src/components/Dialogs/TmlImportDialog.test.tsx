@@ -111,8 +111,8 @@ const okWithoutSectionIds = (receipt: ImportReceipt): CommandResult =>
 /** A section carrying one shot per flavour asked for. */
 const shot = (overrides: Partial<TmlShot> = {}): TmlShot =>
   ({
-    id: 1n,
-    from_id: 0n,
+    id: 1,
+    from_id: 0,
     shot_type: 'Real',
     azimuth: 0,
     length: 10,
@@ -130,7 +130,7 @@ const shot = (overrides: Partial<TmlShot> = {}): TmlShot =>
     excluded: false,
     latitude: 0,
     longitude: 0,
-    closure_to_id: 0n,
+    closure_to_id: 0,
     section: 'S',
     ...overrides,
   }) as TmlShot;
@@ -145,8 +145,8 @@ const withShots = (shots: TmlShot[]): TmlFile => ({
       date: null,
       color: '#3b82f6',
       is_branch_split: false,
-      start_ariane_id: 0n,
-      end_ariane_id: 0n,
+      start_ariane_id: 0,
+      end_ariane_id: 0,
       start_depth: 0,
     },
   ],
@@ -422,9 +422,9 @@ describe('TmlImportDialog empty-project residue (#411 C2)', () => {
 describe('TmlImportDialog preview honesty (#411 C4)', () => {
   it('counts only the shots that will actually import', async () => {
     const file = withShots([
-      shot({ id: 1n }),
-      shot({ id: 2n, excluded: true }),
-      shot({ id: 3n, shot_type: 'Closure' }),
+      shot({ id: 1 }),
+      shot({ id: 2, excluded: true }),
+      shot({ id: 3, shot_type: 'Closure' }),
     ]);
     render(<TmlImportDialog tmlFile={file} filePath="/tmp/cave.tml" />);
 
@@ -438,7 +438,7 @@ describe('TmlImportDialog preview honesty (#411 C4)', () => {
   });
 
   it('blocks the import when nothing survives the current options', async () => {
-    const file = withShots([shot({ shot_type: 'Closure' }), shot({ id: 2n, excluded: true })]);
+    const file = withShots([shot({ shot_type: 'Closure' }), shot({ id: 2, excluded: true })]);
     render(<TmlImportDialog tmlFile={file} filePath="/tmp/cave.tml" />);
 
     expect(await screen.findByTestId('tml-import-empty')).toBeInTheDocument();
@@ -454,8 +454,8 @@ describe('TmlImportDialog preview honesty (#411 C4)', () => {
     const file: TmlFile = {
       ...tmlFile,
       sections: [
-        withShots([shot({ id: 1n })]).sections[0]!,
-        { ...withShots([shot({ id: 2n, excluded: true })]).sections[0]!, name: 'All excluded' },
+        withShots([shot({ id: 1 })]).sections[0]!,
+        { ...withShots([shot({ id: 2, excluded: true })]).sections[0]!, name: 'All excluded' },
       ],
     };
     render(<TmlImportDialog tmlFile={file} filePath="/tmp/cave.tml" />);
@@ -657,24 +657,24 @@ describe('TmlImportDialog section selection and placement (#425)', () => {
     sections: [
       {
         name: 'A',
-        shots: [shot({ id: 1n, from_id: 0n, ...over })],
+        shots: [shot({ id: 1, from_id: 0, ...over })],
         surveyor: null,
         date: null,
         color: '#3b82f6',
         is_branch_split: false,
-        start_ariane_id: 0n,
-        end_ariane_id: 1n,
+        start_ariane_id: 0,
+        end_ariane_id: 1,
         start_depth: 0,
       },
       {
         name: 'B',
-        shots: [shot({ id: 2n, from_id: 1n })],
+        shots: [shot({ id: 2, from_id: 1 })],
         surveyor: null,
         date: null,
         color: '#ef4444',
         is_branch_split: false,
-        start_ariane_id: 1n,
-        end_ariane_id: 2n,
+        start_ariane_id: 1,
+        end_ariane_id: 2,
         start_depth: 0,
       },
     ],
@@ -723,13 +723,13 @@ describe('TmlImportDialog section selection and placement (#425)', () => {
         ...twoSections().sections,
         {
           name: 'C',
-          shots: [shot({ id: 3n, from_id: 2n })],
+          shots: [shot({ id: 3, from_id: 2 })],
           surveyor: null,
           date: null,
           color: '#22c55e',
           is_branch_split: false,
-          start_ariane_id: 2n,
-          end_ariane_id: 3n,
+          start_ariane_id: 2,
+          end_ariane_id: 3,
           start_depth: 0,
         },
       ],
@@ -813,24 +813,24 @@ describe('TmlImportDialog placement is not walked over by other controls (#425)'
     sections: [
       {
         name: 'A',
-        shots: [shot({ id: 1n, from_id: 0n, latitude: 20.5, longitude: -87.1 })],
+        shots: [shot({ id: 1, from_id: 0, latitude: 20.5, longitude: -87.1 })],
         surveyor: null,
         date: null,
         color: '#3b82f6',
         is_branch_split: false,
-        start_ariane_id: 0n,
-        end_ariane_id: 1n,
+        start_ariane_id: 0,
+        end_ariane_id: 1,
         start_depth: 0,
       },
       {
         name: 'B',
-        shots: [shot({ id: 2n, from_id: 1n })],
+        shots: [shot({ id: 2, from_id: 1 })],
         surveyor: null,
         date: null,
         color: '#ef4444',
         is_branch_split: false,
-        start_ariane_id: 1n,
-        end_ariane_id: 2n,
+        start_ariane_id: 1,
+        end_ariane_id: 2,
         start_depth: 0,
       },
     ],
@@ -878,24 +878,24 @@ describe('TmlImportDialog root agreement (#425 review)', () => {
     sections: [
       {
         name: 'Dropped',
-        shots: [shot({ id: 1n, from_id: 0n, excluded: true })],
+        shots: [shot({ id: 1, from_id: 0, excluded: true })],
         surveyor: null,
         date: null,
         color: '#3b82f6',
         is_branch_split: false,
-        start_ariane_id: 0n,
-        end_ariane_id: 1n,
+        start_ariane_id: 0,
+        end_ariane_id: 1,
         start_depth: 0,
       },
       {
         name: 'Survivor',
-        shots: [shot({ id: 2n, from_id: 1n })],
+        shots: [shot({ id: 2, from_id: 1 })],
         surveyor: null,
         date: null,
         color: '#ef4444',
         is_branch_split: false,
-        start_ariane_id: 1n,
-        end_ariane_id: 2n,
+        start_ariane_id: 1,
+        end_ariane_id: 2,
         start_depth: 0,
       },
     ],
@@ -940,8 +940,8 @@ describe('TmlImportDialog root agreement (#425 review)', () => {
         {
           ...firstSectionAllExcluded.sections[1]!,
           name: 'Crafted',
-          shots: [shot({ id: 1n, from_id: 0n, latitude: Number.NaN, longitude: Number.NaN })],
-          start_ariane_id: 0n,
+          shots: [shot({ id: 1, from_id: 0, latitude: Number.NaN, longitude: Number.NaN })],
+          start_ariane_id: 0,
         },
       ],
     };
@@ -955,35 +955,35 @@ describe('TmlImportDialog root agreement (#425 review)', () => {
 
 describe('TmlImportDialog reads the ids the wire actually delivers (#566)', () => {
   /**
-   * Every other fixture in this file builds `BigInt` ids because that is what
-   * the GENERATED types say. Tauri's IPC is JSON and serde writes an `i64` as a
-   * JSON number, so the shipped app hands this dialog plain numbers - and a
-   * lookup that only worked for bigints made every non-root section look
-   * stranded the moment the dialog opened.
+   * Tauri's IPC is JSON and serde writes an `i64` as a JSON number, so the
+   * shipped app hands this dialog plain numbers - and a lookup that only worked
+   * for the bigints the generated types used to declare made every non-root
+   * section look stranded the moment the dialog opened. The types say `number`
+   * since #576 C6; this pins the dialog on a file built straight from them.
    */
   const wireIds: TmlFile = {
     ...tmlFile,
     sections: [
       {
         name: 'A',
-        shots: [{ ...shot(), id: 1 as unknown as bigint, from_id: 0 as unknown as bigint }],
+        shots: [{ ...shot(), id: 1, from_id: 0 }],
         surveyor: null,
         date: null,
         color: '#3b82f6',
         is_branch_split: false,
-        start_ariane_id: 0 as unknown as bigint,
-        end_ariane_id: 1 as unknown as bigint,
+        start_ariane_id: 0,
+        end_ariane_id: 1,
         start_depth: 0,
       },
       {
         name: 'B',
-        shots: [{ ...shot(), id: 2 as unknown as bigint, from_id: 1 as unknown as bigint }],
+        shots: [{ ...shot(), id: 2, from_id: 1 }],
         surveyor: null,
         date: null,
         color: '#ef4444',
         is_branch_split: false,
-        start_ariane_id: 1 as unknown as bigint,
-        end_ariane_id: 2 as unknown as bigint,
+        start_ariane_id: 1,
+        end_ariane_id: 2,
         start_depth: 0,
       },
     ],

@@ -12,7 +12,7 @@ const TIMEOUT_MS = 30000; // 30 second timeout
 
 // Track the highest seen backend loadingId globally to filter truly stale events
 // when store.loadingId is 0 (awaiting first event from new load)
-let lastSeenBackendLoadingId = 0n;
+let lastSeenBackendLoadingId = 0;
 
 export function useLoadingProgress() {
   const setLoadingProgress = useProjectStore((s) => s.setLoadingProgress);
@@ -46,16 +46,9 @@ export function useLoadingProgress() {
     const setupListener = async () => {
       const listener = await listen<LoadingProgressPayload>('loading-progress', (event) => {
         const currentState = useProjectStore.getState().loading;
-        // event.payload comes from a Tauri `listen` JSON event, so
-        // `loadingId` arrives as a plain JS number even though the ts-rs
-        // type says `bigint`. Only the binary result path (loadProjectBinary)
-        // actually delivers a JS bigint - a JSON `invoke()` result (e.g.
-        // CreateProjectFullResult) lies about the type the same way this
-        // event does. Normalize here so every comparison and store write
-        // below uses bigint consistently - see issue #486.
-        const rawLoadingId = event.payload.loadingId;
-        const eventLoadingId =
-          typeof rawLoadingId === 'bigint' ? rawLoadingId : BigInt(rawLoadingId);
+        // A plain number, like every other loadingId the frontend sees (#486,
+        // #576 C6: the generated type used to say bigint).
+        const eventLoadingId = event.payload.loadingId;
 
         // Check if a newer load started (clientOpId changed)
         if (currentState.clientOpId !== clientOpIdRef.current) {
@@ -68,7 +61,7 @@ export function useLoadingProgress() {
         // Filter stale events:
         // - If store.loadingId is 0, only accept events with ID > lastSeenBackendLoadingId
         // - If store.loadingId is set, only accept events with matching ID
-        if (currentState.loadingId === 0n) {
+        if (currentState.loadingId === 0) {
           // Awaiting first event - only accept if it's newer than any we've seen
           if (eventLoadingId <= lastSeenBackendLoadingId) {
             if (import.meta.env.DEV) {

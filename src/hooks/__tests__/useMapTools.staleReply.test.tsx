@@ -59,7 +59,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     section_offsets: {},
     imported_file_hashes: [],
     imported_section_hashes: [],
-    next_closure_id: 1n,
+    next_closure_id: 1,
     validation: {
       warn_shot_length_min: 0,
       warn_shot_length_max: 100,

@@ -286,7 +286,7 @@ export default function ContextMenu() {
       const currentStation = stations.find((station) => sameStationRef(station.station_ref, target.ref));
       const mergedStations = currentStation?.merged_with ?? [];
       const directClosures = (() => {
-        const deduped = new Map<string, { closureId: bigint; stationRef: StationRef }>();
+        const deduped = new Map<string, { closureId: number; stationRef: StationRef }>();
         for (const closure of currentStation?.closures_with ?? []) {
           if (closure.is_transitive) continue;
           const key = closure.closure_id.toString();

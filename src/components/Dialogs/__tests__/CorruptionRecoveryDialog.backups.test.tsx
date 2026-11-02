@@ -41,7 +41,7 @@ function candidate(
 ): BackupInfo {
   return {
     path: `/survey/${file}`,
-    sizeBytes: 2048n,
+    sizeBytes: 2048,
     modifiedAt: '2026-11-01T10:00:00+00:00',
     kind,
     restoreNumber: null,

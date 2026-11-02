@@ -138,8 +138,10 @@ pub struct TmlSection {
     pub color: String,
     pub is_branch_split: bool,
     /// Ariane ID of the first shot's FromID (for topology linking).
+    #[ts(type = "number")]
     pub start_ariane_id: i64,
     /// Ariane ID of the last shot in this section.
+    #[ts(type = "number")]
     pub end_ariane_id: i64,
     /// Cumulative depth of the parent shot (from_id target) for correct rebasing
     /// when a section branches mid-chain. 0.0 if the section starts from a
@@ -151,6 +153,7 @@ pub struct TmlSection {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub struct TmlShot {
+    #[ts(type = "number")]
     pub id: i64,
     /// Ariane's own `<UUID>`/`<UU>` for this row, verbatim - `None` when the
     /// element is absent or empty. Carried into [`crate::models::ShotData::uuid`]
@@ -160,6 +163,7 @@ pub struct TmlShot {
     #[serde(default)]
     #[ts(optional)]
     pub uuid: Option<String>,
+    #[ts(type = "number")]
     pub from_id: i64,
     pub shot_type: TmlShotType,
     pub azimuth: f64,
@@ -179,6 +183,7 @@ pub struct TmlShot {
     pub excluded: bool,
     pub latitude: f64,
     pub longitude: f64,
+    #[ts(type = "number")]
     pub closure_to_id: i64,
     pub section: String,
 }

@@ -70,8 +70,8 @@ describe('SectionPreview: a section being imported (computeStationsFromDmpShots)
 
 function tmlShot(id: number, fromId: number, over: Partial<TmlShot>): TmlShot {
   return {
-    id: BigInt(id),
-    from_id: BigInt(fromId),
+    id,
+    from_id: fromId,
     shot_type: 'Real',
     azimuth: 0,
     length: 1,
@@ -89,7 +89,7 @@ function tmlShot(id: number, fromId: number, over: Partial<TmlShot>): TmlShot {
     excluded: false,
     latitude: 0,
     longitude: 0,
-    closure_to_id: -1n,
+    closure_to_id: -1,
     section: '',
     ...over,
   };
@@ -103,8 +103,8 @@ function tmlSection(name: string, startId: number, shots: TmlShot[], startDepth 
     date: null,
     color: '#ff0000',
     is_branch_split: false,
-    start_ariane_id: BigInt(startId),
-    end_ariane_id: shots[shots.length - 1]?.id ?? -1n,
+    start_ariane_id: startId,
+    end_ariane_id: shots[shots.length - 1]?.id ?? -1,
     start_depth: startDepth,
   };
 }

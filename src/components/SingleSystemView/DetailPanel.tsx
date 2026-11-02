@@ -1545,7 +1545,7 @@ function ClosuresSection({
   const editingBlocked = useEditingBlocked();
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
-  const [removingClosureId, setRemovingClosureId] = useState<bigint | null>(null);
+  const [removingClosureId, setRemovingClosureId] = useState<number | null>(null);
   const contentId = 'closures-section-content';
 
   // Precompute station existence set for O(1) lookups
@@ -1563,7 +1563,7 @@ function ClosuresSection({
 
   // Precompute loop closures map for O(1) lookups
   const closureMap = useMemo(() => {
-    const map = new Map<bigint, LoopClosure>();
+    const map = new Map<number, LoopClosure>();
     for (const lc of loopClosures) {
       map.set(lc.id, lc);
     }
@@ -1572,7 +1572,7 @@ function ClosuresSection({
 
   // Group closures by closure_id and sort deterministically
   const sortedGroups = useMemo(() => {
-    const grouped = new Map<bigint, ClosureRef[]>();
+    const grouped = new Map<number, ClosureRef[]>();
     for (const c of closures) {
       const existing = grouped.get(c.closure_id);
       if (existing) {
@@ -1594,7 +1594,7 @@ function ClosuresSection({
     });
   }, [closures]);
 
-  const handleRemoveClosure = async (closureId: bigint) => {
+  const handleRemoveClosure = async (closureId: number) => {
     trackContextMenuAction('remove-closure', 'detail-panel');
     setRemovingClosureId(closureId);
     try {

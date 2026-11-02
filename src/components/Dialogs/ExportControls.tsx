@@ -88,7 +88,7 @@ export default function ExportControls({
   const [tmlAllSectionsUnanchored, setTmlAllSectionsUnanchored] = useState(false);
   const [tmlTotalSectionCount, setTmlTotalSectionCount] = useState(0);
   // Track the loadingId we're expecting (to filter out events from other operations)
-  const exportLoadingIdRef = useRef<bigint | null>(null);
+  const exportLoadingIdRef = useRef<number | null>(null);
 
   // Track if component is mounted to prevent setState on unmounted component
   const isMountedRef = useRef(true);

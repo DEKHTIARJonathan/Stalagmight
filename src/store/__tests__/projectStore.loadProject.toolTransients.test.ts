@@ -45,7 +45,7 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
     });
 
     loadBinaryMock.mockResolvedValue({
-      loadingId: 1n,
+      loadingId: 1,
       // A local project (#270): the load result carries the backend's is_remote.
       isRemote: false,
       project: {
@@ -62,7 +62,7 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
         section_offsets: {},
         imported_file_hashes: [],
         imported_section_hashes: [],
-        next_closure_id: 1n,
+        next_closure_id: 1,
       },
       stations: [],
       surveyData: { shots: [], stations: [] },
@@ -101,7 +101,7 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
       autosaveFailure: null,
       isDirty: false,
       loading: {
-        loadingId: 0n,
+        loadingId: 0,
         clientOpId: 0,
         isLoading: false,
         overallProgress: 0,

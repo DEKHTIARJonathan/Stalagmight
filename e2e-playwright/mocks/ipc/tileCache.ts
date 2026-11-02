@@ -11,19 +11,19 @@ export const tileCacheCommands: MockCommandFamily = (ctx) => {
   // Cache mock state - tracks cache operations for verification
   // Use explicit types so providers can be empty and keys can be deleted
   interface MockProviderStats {
-    tiles: bigint;
-    bytes: bigint;
+    tiles: number;
+    bytes: number;
   }
   interface MockCacheStats {
-    total_tiles: bigint;
-    total_bytes: bigint;
+    total_tiles: number;
+    total_bytes: number;
     providers: Record<string, MockProviderStats>;
   }
   const defaultCacheStats: MockCacheStats = {
-    total_tiles: 150n,
-    total_bytes: 25600000n, // ~25MB
+    total_tiles: 150,
+    total_bytes: 25600000, // ~25MB
     providers: {
-      esri: { tiles: 150n, bytes: 25600000n },
+      esri: { tiles: 150, bytes: 25600000 },
     },
   };
   let mockCacheStats: MockCacheStats = {
@@ -62,8 +62,8 @@ export const tileCacheCommands: MockCommandFamily = (ctx) => {
           // Clear specific provider
           delete mockCacheStats.providers[provider];
           // Recalculate totals
-          let totalTiles = 0n;
-          let totalBytes = 0n;
+          let totalTiles = 0;
+          let totalBytes = 0;
           for (const p of Object.values(mockCacheStats.providers)) {
             totalTiles += p.tiles;
             totalBytes += p.bytes;
@@ -72,7 +72,7 @@ export const tileCacheCommands: MockCommandFamily = (ctx) => {
           mockCacheStats.total_bytes = totalBytes;
         } else {
           // Clear all
-          mockCacheStats = { total_tiles: 0n, total_bytes: 0n, providers: {} };
+          mockCacheStats = { total_tiles: 0, total_bytes: 0, providers: {} };
         }
         return null; // Tauri serializes () as null
       }

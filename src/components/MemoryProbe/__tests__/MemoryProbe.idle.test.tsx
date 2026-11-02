@@ -26,9 +26,9 @@ import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
 
 const STATS = {
-  backend: { pid: 1, name: 'stalagmight', role: 'backend', rss_kb: 1024n, vm_size_kb: 0n, vm_peak_kb: 0n, vm_rss_anon_kb: 0n },
+  backend: { pid: 1, name: 'stalagmight', role: 'backend', rss_kb: 1024, vm_size_kb: 0, vm_peak_kb: 0, vm_rss_anon_kb: 0 },
   webkit_processes: [],
-  total_rss_kb: 1024n,
+  total_rss_kb: 1024,
   webkit_enumeration_supported: true,
 };
 

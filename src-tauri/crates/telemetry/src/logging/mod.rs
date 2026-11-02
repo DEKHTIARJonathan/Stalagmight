@@ -31,7 +31,9 @@ static LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 /// monotonic sequence number and a wall-clock timestamp (ms since the epoch).
 #[derive(Clone, Debug, Serialize, TS)]
 pub struct RingLogEntry {
+    #[ts(type = "number")]
     pub seq: u64,
+    #[ts(type = "number")]
     pub ts_ms: i64,
     pub line: String,
 }
@@ -42,6 +44,7 @@ pub struct RingLogEntry {
 #[derive(Clone, Debug, Default, Serialize, TS)]
 pub struct LogsSince {
     pub entries: Vec<RingLogEntry>,
+    #[ts(type = "number")]
     pub latest_seq: u64,
     pub dropped: bool,
 }

@@ -576,6 +576,7 @@ impl LoadingPhase {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct LoadingProgress {
+    #[ts(type = "number")]
     pub loading_id: u64,
     pub phase: LoadingPhase,
     pub phase_index: u8,
@@ -871,6 +872,7 @@ impl ProgressEmitter {
 #[ts(rename_all = "camelCase")]
 pub struct LoadProjectFullResult {
     /// Unique ID for this load operation (for filtering stale events)
+    #[ts(type = "number")]
     pub loading_id: u64,
     /// The loaded project. Serialized in positional wire form (like
     /// `ProjectState`) so cross-references reach the frontend as
@@ -964,6 +966,7 @@ pub struct OpenFileFlags {
 #[ts(rename_all = "camelCase")]
 pub struct CreateProjectFullResult {
     /// Unique ID for this load operation (for filtering stale events)
+    #[ts(type = "number")]
     pub loading_id: u64,
     /// The created project. Serialized in positional wire form (see
     /// `LoadProjectFullResult`); harmless for a fresh project (no cross-refs yet),

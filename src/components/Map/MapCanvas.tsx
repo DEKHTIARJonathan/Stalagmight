@@ -451,7 +451,7 @@ function MapCanvas({ onReloadMap }: MapCanvasProps) {
   );
 
   const alignedClosureIds = useMemo(() => {
-    if (!project?.loop_closures) return new Set<bigint>();
+    if (!project?.loop_closures) return new Set<number>();
     return new Set(
       project.loop_closures
         .filter((closure) => closure.is_aligned)

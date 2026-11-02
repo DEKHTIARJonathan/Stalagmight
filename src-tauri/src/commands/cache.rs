@@ -15,8 +15,10 @@ use crate::core::AppState;
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct ProviderStats {
     /// Number of tiles from this provider
+    #[ts(type = "number")]
     pub tiles: u64,
     /// Total size in bytes for this provider
+    #[ts(type = "number")]
     pub bytes: u64,
 }
 
@@ -26,8 +28,10 @@ pub struct ProviderStats {
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct CacheStats {
     /// Total number of tiles across all providers
+    #[ts(type = "number")]
     pub total_tiles: u64,
     /// Total size in bytes across all providers
+    #[ts(type = "number")]
     pub total_bytes: u64,
     /// Per-provider statistics
     pub providers: HashMap<String, ProviderStats>,
@@ -224,14 +228,19 @@ pub async fn get_tile_attribution(
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct TileFetchStatsResponse {
     /// Number of tile requests currently in flight
+    #[ts(type = "number")]
     pub in_flight: u64,
     /// Average latency of completed tile fetches in ms
+    #[ts(type = "number")]
     pub avg_latency_ms: u64,
     /// Last tile fetch latency in ms
+    #[ts(type = "number")]
     pub last_latency_ms: u64,
     /// Total tiles successfully fetched
+    #[ts(type = "number")]
     pub total_fetched: u64,
     /// Total fetch errors (after retries exhausted)
+    #[ts(type = "number")]
     pub total_errors: u64,
 }
 

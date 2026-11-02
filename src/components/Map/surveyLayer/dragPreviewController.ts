@@ -309,7 +309,7 @@ export class DragPreviewController {
     for (let g = 0; g < data.stationCount; g++) {
       globalByKey.set(`${data.stationSectionIds[g]}:${data.stationIndices[g]}`, g);
     }
-    const alignedClosureIds = new Set<bigint>(
+    const alignedClosureIds = new Set<number>(
       (this.host.loopClosures() ?? [])
         .filter((closure) => closure.is_aligned)
         .map((closure) => closure.id)

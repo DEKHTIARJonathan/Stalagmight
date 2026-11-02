@@ -791,6 +791,7 @@ pub struct LoopClosure {
 #[ts(rename = "LoopClosure", export_to = "bindings/LoopClosure.ts")]
 pub struct LoopClosureWire {
     #[serde(default)]
+    #[ts(type = "number")]
     pub id: u64,
     pub station_a: StationRef,
     pub station_b: StationRef,
@@ -809,6 +810,7 @@ pub struct LoopClosureWire {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ClosureRef {
     /// References LoopClosure.id
+    #[ts(type = "number")]
     pub closure_id: u64,
     /// Target station in the closure
     pub station_ref: StationRef,

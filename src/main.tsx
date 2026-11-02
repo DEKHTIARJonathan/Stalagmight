@@ -80,7 +80,7 @@ declare global {
       networkStore?: typeof useNetworkStore;
       // Loading progress E2E hooks
       getLoadingId?: () => number;
-      getBackendLoadingId?: () => bigint;
+      getBackendLoadingId?: () => number;
       simulateLoadingProgress?: (payload: Partial<LoadingState>) => void;
       simulateLoadingError?: (message: string, details?: string) => void;
       resetLoading?: () => void;

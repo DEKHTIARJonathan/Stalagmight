@@ -298,7 +298,7 @@ async function createDirectClosure(
             createLoopClosure: (left: typeof a, right: typeof b, strategy: string) => Promise<unknown>;
             project: {
               loop_closures: Array<{
-                id: bigint;
+                id: number;
                 station_a: { section_id: number; station_index: number };
                 station_b: { section_id: number; station_index: number };
               }>;

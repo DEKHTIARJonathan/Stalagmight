@@ -88,6 +88,7 @@ pub struct StationPair {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 pub struct ClosurePair {
+    #[ts(type = "number")]
     pub closure_id: u64,
     pub station_a: StationRef,
     pub station_b: StationRef,
@@ -147,6 +148,7 @@ impl PartialOrd for HeapItem {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 pub struct ClosureUpdate {
+    #[ts(type = "number")]
     pub closure_id: u64,
     pub old_station: StationRef,
     pub new_station: StationRef,
@@ -301,6 +303,7 @@ pub struct Project {
     pub imported_section_hashes: Vec<String>,
     /// Monotonic counter for closure IDs. Never reused, even after deletions.
     #[serde(default)]
+    #[ts(type = "number")]
     pub next_closure_id: u64,
     /// Per-project validation thresholds (#57). Stored in the `.stalx` so they
     /// travel with the file. New projects are seeded from

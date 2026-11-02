@@ -154,6 +154,26 @@ that - `pnpm test:mock-contract` checks only that the mock covers the command
 NAMES in `generate_handler!`, not the shape of what it returns - so a mock
 literal that drifts from the wire is caught by review, not by a gate.
 
+## A 64-bit integer is declared `number`
+
+ts-rs 7 declares every `u64`/`i64` as `bigint`, but no IPC path in this app
+delivers one: `invoke()` results and events are JSON, where serde writes the
+integer as a JSON number, and the msgpack load envelope is decoded with
+`@msgpack/msgpack`'s default `useBigInt64: false`, which yields numbers too. A
+`bigint` declaration lied about the wire, and code that trusted it failed only
+against the real backend (`0 === 0n` is false - Clear cache never disabled)
+while the Playwright mock, which speaks the declared type, returned real bigints
+and stayed green (#576 C6).
+
+So every such field carries `#[ts(type = "number")]` (an `Option<u64>` would
+take `"number | null"`). That is sound because every one of them - ids,
+sequence counters, byte and tile counts, latencies, epoch milliseconds - stays
+far below 2^53, where a JS number is exact; a value that could exceed it would
+already lose precision on the JSON wire whatever the declaration said.
+`pnpm gen:ipc-types` panics if any generated file still says `bigint`, naming
+the file, and `src/test/__tests__/ipcWireNumbers.test.ts` pins the committed
+tree.
+
 ## Automation Policy
 
 These IPC types are **always generated**, never written by hand:
@@ -177,7 +197,9 @@ These IPC types are **always generated**, never written by hand:
 3. If the type uses `#[serde(rename_all = "...")]`, add the matching
    `#[ts(rename_all = "...")]` so the TS output matches JSON.
 4. For non-JSON-friendly fields (e.g., `PathBuf`, `DateTime`), add
-   field-level overrides like `#[ts(type = "string")]`.
+   field-level overrides like `#[ts(type = "string")]`. A `u64`/`i64` field
+   gets `#[ts(type = "number")]` (see below); the generator refuses to write a
+   `bigint`.
 5. For any field carrying `skip_serializing_if`, apply the rule above - a
    collection field must either lose the skip or become an `Option`, never a
    skipped `Vec`.

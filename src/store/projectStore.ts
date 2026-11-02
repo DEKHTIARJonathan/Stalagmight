@@ -80,7 +80,7 @@ export interface LoadingState {
    * Set from the first progress event or result.loadingId.
    * Value of 0 means "accept events until we learn the backend ID".
    */
-  loadingId: bigint;
+  loadingId: number;
   /**
    * Client operation ID for race detection (local to frontend).
    * Incremented on each load start. Used to detect if a newer load started.
@@ -113,7 +113,7 @@ export interface LoadingState {
 }
 
 const initialLoadingState: LoadingState = {
-  loadingId: 0n,
+  loadingId: 0,
   clientOpId: 0,
   isLoading: false,
   overallProgress: 0,
@@ -413,7 +413,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   unmergeStationPair: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
   checkMergeConnectivity: (stationA: StationRef, stationB: StationRef) => Promise<ConnectivityResult>;
   createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandResult>;
-  removeLoopClosure: (closureId: bigint) => Promise<CommandResult>;
+  removeLoopClosure: (closureId: number) => Promise<CommandResult>;
   updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
   moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
@@ -958,7 +958,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     set({
       loading: {
         ...initialLoadingState,
-        loadingId: 0n, // Will be set from first progress event or result
+        loadingId: 0, // Will be set from first progress event or result
         clientOpId: newClientOpId,
         isLoading: true,
         projectName,
@@ -977,15 +977,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       loading: {
         ...state.loading,
         ...progress,
-        // ts-rs declares every wire loadingId as `bigint`, but neither a JSON
-        // `invoke()` result (e.g. CreateProjectFullResult) nor a `listen()`
-        // event actually delivers a JS bigint - both decode it as a plain
-        // number regardless of the type. Coerce here, at the single write
-        // path every caller (createProject, useLoadingProgress, the E2E
-        // simulateLoadingProgress hook) goes through, so the store never
-        // holds a loadingId that later fails a `bigint === bigint` compare
-        // (#486).
-        ...(progress.loadingId !== undefined ? { loadingId: BigInt(progress.loadingId) } : {}),
         lastEventTime: Date.now(),
       },
     })),
@@ -1968,11 +1959,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
   },
 
-  removeLoopClosure: async (closureId: bigint) => {
+  removeLoopClosure: async (closureId: number) => {
     return executeCommand(
       'remove_loop_closure',
-      { closureId: Number(closureId) },
-      { purpose: 'remove loop closure', fields: { closureId: closureId.toString() } }
+      { closureId },
+      { purpose: 'remove loop closure', fields: { closureId } }
     );
   },
 

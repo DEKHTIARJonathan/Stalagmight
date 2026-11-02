@@ -164,25 +164,6 @@ export function isOfferableCoordinate(latitude: number, longitude: number): bool
   return Math.abs(latitude) > Number.EPSILON || Math.abs(longitude) > Number.EPSILON;
 }
 
-/**
- * An Ariane id as a plain number, whatever runtime shape it arrived in.
- *
- * The generated types say `bigint` because the Rust field is `i64`, but Tauri's
- * IPC is JSON and serde writes an `i64` as a JSON NUMBER - so in the shipped app
- * every one of these (`shot.id`, `from_id`, `start_ariane_id`, `end_ariane_id`,
- * `closure_to_id`) is a `number` at runtime and every `typeof x === 'bigint'`
- * test is false. The e2e mock states the same thing in its `TmlWire<T>` helper,
- * and `loadProjectBinary.ts` normalizes the same union for the msgpack path,
- * where bigints ARE real.
- *
- * Normalizing here, at the one boundary where ids enter the layout, is what
- * keeps that from having to be remembered per lookup: `Number` is exact for
- * every integer below 2^53, and Ariane numbers its shots from 0 upward.
- */
-export function normalizeTmlId(id: bigint | number): number {
-  return typeof id === 'bigint' ? Number(id) : id;
-}
-
 function hasUsableGps(shot: TmlShot | undefined): boolean {
   return shot !== undefined && isOfferableCoordinate(shot.latitude, shot.longitude);
 }
@@ -236,14 +217,14 @@ export function computeTmlPreviewLayout(
   // only, so a deselected parent resolves to nothing. Shot `i` ends at station
   // `i + 1`.
   //
-  // Keyed by NUMBER, through `normalizeTmlId` on both sides - see its comment
-  // for why the declared `bigint` is not what arrives.
+  // Keyed by the plain-number Ariane id the JSON wire delivers (#576 C6: the
+  // generated type used to say bigint, which a lookup could not trust).
   const idToLoc = new Map<number, { section: number; station: number }>();
   const kept: TmlShot[][] = tml.sections.map((section, i) => {
     const shots = importableShots(section, includeExcluded);
     if (isSelected(i)) {
       shots.forEach((shot, si) =>
-        idToLoc.set(normalizeTmlId(shot.id), { section: i, station: si + 1 })
+        idToLoc.set(shot.id, { section: i, station: si + 1 })
       );
     }
     return shots;
@@ -262,7 +243,6 @@ export function computeTmlPreviewLayout(
     // the first surviving shot's, for a section whose lead shots were excluded.
     const candidates = [section.start_ariane_id, shots[0]?.from_id]
       .filter((id) => id !== undefined)
-      .map(normalizeTmlId)
       // Ariane spells "names nothing" as a negative id (`-1`), on both the
       // section's declared start and a shot's `from_id`.
       .filter((id) => id >= 0);

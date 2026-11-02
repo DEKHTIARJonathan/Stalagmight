@@ -674,6 +674,33 @@ fn main() {
     );
 
     write_default_config(&out_dir);
+    assert_no_bigint(&out_dir);
+}
+
+/// [#576 C6] ts-rs 7 declares every `u64`/`i64` as `bigint`, but no IPC path
+/// delivers one: `invoke()` results and events are JSON numbers, and the msgpack
+/// load envelope is decoded with `useBigInt64: false`, which yields numbers too.
+/// A `bigint` declaration is therefore a lie the Playwright mock repeats, so the
+/// generator refuses to leave one in the tree. The fix is `#[ts(type = "number")]`
+/// on the field - sound because every such value (ids, counters, byte sizes,
+/// epoch milliseconds) stays far below 2^53, where a JS number is exact.
+fn assert_no_bigint(out_dir: &Path) {
+    let mut offenders: Vec<String> = fs::read_dir(out_dir)
+        .expect("ipc types directory should be readable")
+        .map(|entry| entry.expect("ipc types directory entry").path())
+        .filter(|path| {
+            fs::read_to_string(path)
+                .expect("generated TS file should be readable")
+                .contains("bigint")
+        })
+        .map(|path| path.display().to_string())
+        .collect();
+    offenders.sort();
+    assert!(
+        offenders.is_empty(),
+        "generated IPC types declare `bigint`, which no IPC path delivers - add \
+         #[ts(type = \"number\")] to the u64/i64 field(s) in: {offenders:?}"
+    );
 }
 
 /// Emit `Config::default()`, serialized through the same `serde_json` path the

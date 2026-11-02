@@ -138,7 +138,7 @@ const STATION_UINT_FIELDS = 2;
  *  Exported for the load-path laziness regression test's fixture builder. */
 export interface BinaryEnvelope {
   version: number;
-  loading_id: bigint | number;
+  loading_id: number;
   /** Is this a SpeleoDB project? Same value the backend set its edit gate
    *  from, so the frontend's read-only gate settles with the load (#270). */
   is_remote: boolean;
@@ -187,7 +187,7 @@ interface ProjectHeaderBinary {
   modified_at: string;
   file_path: string | null;
   next_section_id: number;
-  next_closure_id: bigint | number;
+  next_closure_id: number;
   sections: SectionHeaderBinary[];
   station_merges: StationMerge[];
   zero_datums: ZeroDatum[];
@@ -434,7 +434,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     section_offsets,
     imported_file_hashes: env.project_header.imported_file_hashes,
     imported_section_hashes: env.project_header.imported_section_hashes,
-    next_closure_id: BigInt(env.project_header.next_closure_id as unknown as number | bigint),
+    next_closure_id: env.project_header.next_closure_id,
     validation: env.project_header.validation,
     surface_elevation: env.project_header.surface_elevation,
     // Spread rather than assigned: the generated `Project` declares this
@@ -497,7 +497,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   recordPerfTiming('binary payload size (KB)', totalBytes / 1024);
 
   return {
-    loadingId: typeof env.loading_id === 'bigint' ? env.loading_id : BigInt(env.loading_id),
+    loadingId: env.loading_id,
     project,
     stations,
     stats: env.stats,

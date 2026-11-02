@@ -13,19 +13,6 @@ import { speleodbCommands } from './ipc/speleodb';
 import { tileCacheCommands } from './ipc/tileCache';
 import { buildMockShot } from './ipc/shots';
 
-/** The wire shape of a ts-rs generated type: serde writes i64 as a JSON
- *  number, so fields the generated interfaces declare as `bigint` arrive as
- *  `number` at runtime. Recursive and type-only (erases at compile time) -
- *  its purpose is that a `gen:ipc-types` regen which adds a required field
- *  fails `typecheck:playwright` here instead of drifting silently. */
-type TmlWire<T> = T extends bigint
-  ? number
-  : T extends Array<infer U>
-    ? Array<TmlWire<U>>
-    : T extends object
-      ? { [K in keyof T]: TmlWire<T[K]> }
-      : T;
-
 declare global {
   interface Window {
     /** Installed by this mock; the app's IPC bridge. Also used to emit events. */
@@ -627,8 +614,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         fromId: number,
         section: string,
         depth: number,
-        overrides: Partial<TmlWire<TmlShot>> = {}
-      ): TmlWire<TmlShot> => ({
+        overrides: Partial<TmlShot> = {}
+      ): TmlShot => ({
         id,
         from_id: fromId,
         shot_type: 'Real',
@@ -660,13 +647,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // shot lists, including Closure/excluded rows). The real START-target
       // fallback is not modeled - this fixture has no START shots.
       const deriveTmlClosures = (
-        sections: TmlWire<TmlFile>['sections']
-      ): TmlWire<TmlFile>['closures'] => {
+        sections: TmlFile['sections']
+      ): TmlFile['closures'] => {
         const idToRawLoc = new Map<number, [number, number]>();
         sections.forEach((section, si) =>
           section.shots.forEach((shot, idx) => idToRawLoc.set(shot.id, [si, idx]))
         );
-        const closures: TmlWire<TmlFile>['closures'] = [];
+        const closures: TmlFile['closures'] = [];
         sections.forEach((section, si) =>
           section.shots.forEach((shot, idx) => {
             if (shot.shot_type !== 'Closure' || shot.closure_to_id < 0) return;
@@ -696,10 +683,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // way, and start_depth is read only for a sentinel depth_in, which no shot
       // that survives the import carries here (only the Closure row has one, and
       // the preview and the import both skip Closure rows).
-      const buildMockTmlFile = (path: string | null | undefined): TmlWire<TmlFile> => {
+      const buildMockTmlFile = (path: string | null | undefined): TmlFile => {
         const imperial = (path ?? '').toLowerCase().includes('imperial');
         const scale = imperial ? 0.3048 : 1;
-        const scaleShot = (shot: TmlWire<TmlShot>): TmlWire<TmlShot> => ({
+        const scaleShot = (shot: TmlShot): TmlShot => ({
           ...shot,
           length: shot.length * scale,
           depth: shot.depth * scale,
@@ -709,7 +696,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           up: shot.up * scale,
           down: shot.down * scale,
         });
-        const sections: TmlWire<TmlFile>['sections'] = [
+        const sections: TmlFile['sections'] = [
           {
             name: 'Main Line',
             shots: [
@@ -1025,7 +1012,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // omits `closures_with` when empty (#441), so the mock must too -
               // a present-but-empty array is a wire shape the app never sees.
               closures_with?: Array<{
-                closure_id: bigint;
+                closure_id: number;
                 station_ref: { section_id: number; station_index: number };
                 via_station: { section_id: number; station_index: number } | null;
                 is_transitive: boolean;
@@ -1039,7 +1026,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               station_b: { section_id: number; station_index: number };
             }>;
             const currentClosures = (currentProject.loop_closures ?? []) as Array<{
-              id: bigint;
+              id: number;
               station_a: { section_id: number; station_index: number };
               station_b: { section_id: number; station_index: number };
             }>;
@@ -1561,7 +1548,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // omits `closures_with` when empty (#441), so the mock must too -
               // a present-but-empty array is a wire shape the app never sees.
               closures_with?: Array<{
-                closure_id: bigint;
+                closure_id: number;
                 station_ref: { section_id: number; station_index: number };
                 via_station: { section_id: number; station_index: number } | null;
                 is_transitive: boolean;
@@ -1576,7 +1563,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               station_b: { section_id: number; station_index: number };
             }>;
             const stateClosures = (currentProject?.loop_closures ?? []) as Array<{
-              id: bigint;
+              id: number;
               station_a: { section_id: number; station_index: number };
               station_b: { section_id: number; station_index: number };
             }>;
@@ -2288,7 +2275,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // already-filtered list length, so requested == created here.
             let closuresCreated = 0;
             const loopClosures = (currentProject?.loop_closures ?? []) as Array<{
-              id: bigint;
+              id: number;
               station_a: { section_id: number; station_index: number };
               station_b: { section_id: number; station_index: number };
               path_length: number;
@@ -2310,10 +2297,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 if (fromSectionId == null || toSectionId == null) continue;
                 const maxExistingId = loopClosures.reduce(
                   (maxId, closure) => (closure.id > maxId ? closure.id : maxId),
-                  0n
+                  0
                 );
                 loopClosures.push({
-                  id: maxExistingId + 1n,
+                  id: maxExistingId + 1,
                   station_a: { section_id: fromSectionId, station_index: from[1] },
                   station_b: { section_id: toSectionId, station_index: to[1] },
                   path_length: 0,
@@ -2498,7 +2485,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
             if (currentProject) {
               const loopClosures = currentProject.loop_closures as Array<{
-                id: bigint;
+                id: number;
                 station_a: { section_id: number; station_index: number };
                 station_b: { section_id: number; station_index: number };
                 path_length: number;
@@ -2529,9 +2516,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
               const maxExistingId = loopClosures.reduce(
                 (maxId, closure) => (closure.id > maxId ? closure.id : maxId),
-                0n
+                0
               );
-              const nextId = maxExistingId + 1n;
+              const nextId = maxExistingId + 1;
 
               loopClosures.push({
                 id: nextId,
@@ -2556,14 +2543,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (closureIdRaw === undefined || closureIdRaw === null) {
               return { success: false, error: 'Missing closure ID' };
             }
-            const closureId =
-              typeof closureIdRaw === 'bigint'
-                ? closureIdRaw
-                : typeof closureIdRaw === 'number'
-                  ? BigInt(closureIdRaw)
-                  : typeof closureIdRaw === 'string'
-                    ? BigInt(closureIdRaw)
-                    : null;
+            // A u64 on the Rust side: serde accepts only a JSON number.
+            const closureId = typeof closureIdRaw === 'number' ? closureIdRaw : null;
             if (closureId === null) {
               return { success: false, error: 'Invalid closure ID' };
             }
@@ -2572,7 +2553,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               return { success: false, error: 'No project open' };
             }
 
-            const loopClosures = currentProject.loop_closures as Array<{ id: bigint }>;
+            const loopClosures = currentProject.loop_closures as Array<{ id: number }>;
             const closureIndex = loopClosures.findIndex((closure) => closure.id === closureId);
             if (closureIndex < 0) {
               return { success: false, error: 'Loop closure not found' };
@@ -3233,7 +3214,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ],
               removed_closures: [
                 {
-                  closure_id: 1n,
+                  closure_id: 1,
                   station_a: { section_id: sectionId, station_index: 0 },
                   station_b: { section_id: sectionId, station_index: 2 },
                 },

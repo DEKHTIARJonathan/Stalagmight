@@ -10,7 +10,7 @@ import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 
 interface ClosureChoice {
-  closureId: bigint;
+  closureId: number;
   stationRef: StationRef;
 }
 

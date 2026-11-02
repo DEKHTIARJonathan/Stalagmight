@@ -39,9 +39,8 @@ function fmtBytes(b: number): string {
   return `${b} B`;
 }
 
-function fmtKb(kb: bigint | number): string {
-  const n = typeof kb === 'bigint' ? Number(kb) : kb;
-  return fmtBytes(n * 1024);
+function fmtKb(kb: number): string {
+  return fmtBytes(kb * 1024);
 }
 
 interface Snapshot {
