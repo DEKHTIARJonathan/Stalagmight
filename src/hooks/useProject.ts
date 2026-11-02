@@ -5,8 +5,6 @@ import { useSpeleoStore } from '../store/speleoStore';
 import { useShallow } from 'zustand/react/shallow';
 import { getErrorMessage } from '../utils/ipc';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
-import { exportSaveFilters, saveDialog } from '../utils/fileDialogs';
-import { resolveSavePath } from '../utils/overwriteGuard';
 import { openOrImport } from '../utils/openOrImport';
 import { newProjectGuarded, saveProjectAs } from '../utils/projectActions';
 import { debugLog } from '../utils/debugLog';
@@ -27,8 +25,6 @@ export function useProject() {
   // them stay stable; the data fields re-render only when they actually change.
   const saveProject = useProjectStore((s) => s.saveProject);
   const closeProject = useProjectStore((s) => s.closeProject);
-  const exportCsv = useProjectStore((s) => s.exportCsv);
-  const exportJson = useProjectStore((s) => s.exportJson);
   const undo = useProjectStore((s) => s.undo);
   const redo = useProjectStore((s) => s.redo);
 
@@ -151,37 +147,6 @@ export function useProject() {
    */
   const handleOpenOrImport = useCallback(() => openOrImport(), []);
 
-  const handleExportCsv = useCallback(async () => {
-    const selected = await saveDialog({
-      filters: exportSaveFilters('CSV', 'csv'),
-    });
-
-    // [#576 D35] `null` = the rewritten name exists and the user declined.
-    const finalPath = selected ? await resolveSavePath(selected, 'csv') : null;
-    if (finalPath) {
-      try {
-        await exportCsv(finalPath);
-      } catch (e) {
-        console.error('Failed to export CSV:', e);
-      }
-    }
-  }, [exportCsv]);
-
-  const handleExportJson = useCallback(async () => {
-    const selected = await saveDialog({
-      filters: exportSaveFilters('JSON', 'json'),
-    });
-
-    const finalPath = selected ? await resolveSavePath(selected, 'json') : null;
-    if (finalPath) {
-      try {
-        await exportJson(finalPath);
-      } catch (e) {
-        console.error('Failed to export JSON:', e);
-      }
-    }
-  }, [exportJson]);
-
   return {
     project,
     stats,
@@ -197,8 +162,6 @@ export function useProject() {
     handleSaveProject,
     handleSaveProjectAs,
     handleCloseProject,
-    handleExportCsv,
-    handleExportJson,
 
     undo,
     redo,
