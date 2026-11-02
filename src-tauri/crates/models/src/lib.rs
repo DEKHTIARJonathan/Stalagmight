@@ -13,6 +13,14 @@ pub mod placement_suggest;
 pub mod poison_policy;
 pub mod process_memory;
 pub mod project;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              findings are the evidence a run captures"
+)]
+mod raw_lock_scan_tests;
 pub mod section;
 pub mod shot;
 pub mod speleo_link;
