@@ -700,6 +700,16 @@ enum TileFetchOutcome {
         /// with a blank tile and lets the tilemap probe decide - so this is for
         /// the providers the registry is built to take, not the one it ships.)
         denied: bool,
+        /// We never learned whether the provider has this tile: the request
+        /// did not get through (transport failure, a 5xx) or the protocol
+        /// misbehaved. A `404` is the opposite - an answer that it is absent.
+        ///
+        /// Decides whether an overzoomed crop may be STORED under this tile's
+        /// key. A crop for a tile that does not exist is the best that tile
+        /// will be until the parent's grant runs out; a crop for one we merely
+        /// could not reach would keep answering as a fresh cache hit after the
+        /// network came back, blurry, for up to that whole grant (#576 C16).
+        transient: bool,
     },
 }
 
@@ -917,11 +927,12 @@ where
                     Ok(TileFetchResponse::Fetched(fetched)) => {
                         store_and_serve(tile_cache, provider, z, y, x, fetched, cache_enabled)
                     }
-                    _ => TileFetchOutcome::Missing {
+                    other => TileFetchOutcome::Missing {
                         error: "Tile not available: provider returned 304 with no cached copy"
                             .to_string(),
                         // A protocol oddity, not a refusal - a parent may serve.
                         denied: false,
+                        transient: refetch_left_it_unknown(&other),
                     },
                 };
             };
@@ -953,11 +964,12 @@ where
                     Ok(TileFetchResponse::Fetched(fetched)) => {
                         store_and_serve(tile_cache, provider, z, y, x, fetched, cache_enabled)
                     }
-                    _ => TileFetchOutcome::Missing {
+                    other => TileFetchOutcome::Missing {
                         error: "Tile not available: provider revoked storage on revalidation"
                             .to_string(),
                         // Storage was revoked, not access - a parent may serve.
                         denied: false,
+                        transient: refetch_left_it_unknown(&other),
                     },
                 };
             }
@@ -994,6 +1006,8 @@ where
                 return TileFetchOutcome::Missing {
                     error: format!("Tile not available: {e}"),
                     denied: is_provider_denial(&e),
+                    // The provider answered: absent (404) or refused.
+                    transient: false,
                 };
             }
 
@@ -1011,6 +1025,8 @@ where
                 return TileFetchOutcome::Missing {
                     error: format!("Tile not available: {e}"),
                     denied: false,
+                    // Only transport failures and 5xx get this far.
+                    transient: true,
                 };
             }
 
@@ -1040,8 +1056,23 @@ where
             TileFetchOutcome::Missing {
                 error: format!("Tile not available: {e}"),
                 denied: is_provider_denial(&e),
+                // A transport failure or a 5xx with nothing stored: the
+                // provider was not reached, so whether the tile exists is
+                // unknown.
+                transient: true,
             }
         }
+    }
+}
+
+/// For the two "ask again without a validator" recoveries: did the second
+/// attempt leave us not knowing whether the tile exists? Only a non-5xx status
+/// is the provider saying so; an error that allows the stale fallback, or a
+/// second protocol oddity, says nothing.
+fn refetch_left_it_unknown(result: &Result<TileFetchResponse, TileFetchError>) -> bool {
+    match result {
+        Err(e) => e.allows_stale_fallback(),
+        Ok(_) => true,
     }
 }
 
@@ -1172,6 +1203,9 @@ where
     // via `break`, since `Tile` outcomes return immediately).
     #[expect(unused_assignments)]
     let mut last_error = None;
+    // Some level between the requested tile and the one finally served was
+    // unreachable rather than absent; see `TileFetchOutcome::Missing::transient`.
+    let mut climbed_past_unreachable = false;
 
     // Can the cache answer for this exact tile without asking anyone?
     //
@@ -1267,22 +1301,38 @@ where
                     y,
                     &tile,
                 )?;
-                cache_put_best_effort(
-                    tile_cache,
-                    provider,
-                    z,
-                    y,
-                    x,
-                    &derived.data,
-                    &derived.content_type,
-                    // A derived tile is a crop of the parent, so it lives under
-                    // the parent's remaining grant - overzooming cannot mint a
-                    // longer life than the imagery it came from. No etag: this
-                    // bytes never came off the wire, so it has no validator.
-                    tile.policy,
-                    None,
-                    cache_enabled,
-                );
+                if climbed_past_unreachable {
+                    // Served, not stored: a finer tile may well exist and was
+                    // only out of reach. Re-deriving per request is cheap (the
+                    // parent is cached, and so is its decode), and it lets the
+                    // real tile replace the crop the moment the network is back.
+                    tracing::debug!(
+                        provider = %provider,
+                        z = z,
+                        y = y,
+                        x = x,
+                        fallback_z = current_z,
+                        "Overzoomed crop not cached: a finer level was unreachable, not absent"
+                    );
+                } else {
+                    cache_put_best_effort(
+                        tile_cache,
+                        provider,
+                        z,
+                        y,
+                        x,
+                        &derived.data,
+                        &derived.content_type,
+                        // A derived tile is a crop of the parent, so it lives
+                        // under the parent's remaining grant - overzooming
+                        // cannot mint a longer life than the imagery it came
+                        // from. No etag: this bytes never came off the wire, so
+                        // it has no validator.
+                        tile.policy,
+                        None,
+                        cache_enabled,
+                    );
+                }
                 tracing::info!(
                     provider = %provider,
                     z = z,
@@ -1294,7 +1344,11 @@ where
                 );
                 return Ok(derived);
             }
-            TileFetchOutcome::Missing { error, denied } => {
+            TileFetchOutcome::Missing {
+                error,
+                denied,
+                transient,
+            } => {
                 if denied {
                     // The provider refused this imagery. Climbing to a parent
                     // would hand back an upscaled crop of the very area it just
@@ -1310,6 +1364,7 @@ where
                     );
                     return Err(error);
                 }
+                climbed_past_unreachable |= transient;
                 last_error = Some(error);
             }
         }
@@ -3348,6 +3403,192 @@ mod tests {
             response.status(),
             http::StatusCode::OK,
             "a 404 is an absence, not a refusal - the parent may still serve"
+        );
+    }
+
+    /// Mark a tilemap region as "imagery everywhere", so the overzoom tests
+    /// below never send a real availability probe to the provider.
+    fn warm_tilemap(tilemap_cache: &Arc<Mutex<TilemapCache>>, z: u32, y: u32, x: u32) {
+        let (base_y, base_x) = TilemapCache::get_region_origin(y, x);
+        let cells = (tilemap_cache::TILEMAP_GRID_SIZE * tilemap_cache::TILEMAP_GRID_SIZE) as usize;
+        tilemap_cache
+            .lock()
+            .unwrap()
+            .insert("esri", z, base_y, base_x, vec![true; cells]);
+    }
+
+    /// A tile cache holding one fresh parent at z9 (250, 125), and a tilemap
+    /// that says imagery exists at z9..=z11 there.
+    fn cache_with_a_z9_parent() -> (Arc<Mutex<Option<TileCache>>>, Arc<Mutex<TilemapCache>>) {
+        let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+        cache
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .put_granted("esri", 9, 250, 125, &make_jpeg_bytes(), "image/jpeg")
+            .unwrap();
+        let tilemap_cache = make_test_tilemap_cache();
+        warm_tilemap(&tilemap_cache, 9, 250, 125);
+        warm_tilemap(&tilemap_cache, 10, 500, 250);
+        warm_tilemap(&tilemap_cache, 11, 1000, 500);
+        (cache, tilemap_cache)
+    }
+
+    #[test]
+    fn an_overzoomed_crop_after_a_transient_failure_is_served_but_not_stored() {
+        // [#576 C16] Offline for a moment while zoomed past the imagery held:
+        // the z10 fetch fails (transport, or a single 5xx), so the loop climbs
+        // to the cached z9 parent and serves an upscaled crop - which is right.
+        // Storing that crop under the z10 key as a FRESH tile is not: once the
+        // network is back, the blurry crop kept answering as a cache hit, with
+        // no request made, until the parent's grant ran out (a day for Esri),
+        // across restarts.
+        for outage in [
+            TileFetchError::transport("Connection reset".to_string()),
+            TileFetchError::status(503, "HTTP 503".to_string()),
+        ] {
+            let (cache, tilemap_cache) = cache_with_a_z9_parent();
+            let label = outage.to_string();
+            let offline = move |_: &str,
+                                _: u32,
+                                _: u32,
+                                _: u32,
+                                _: Option<&str>|
+                  -> Result<TileFetchResponse, TileFetchError> {
+                Err(outage.clone())
+            };
+            let response = handle_tile_request_with_fetcher(
+                "esri",
+                10,
+                500,
+                250,
+                &cache,
+                &tilemap_cache,
+                offline,
+                true,
+            );
+            assert_eq!(
+                response.status(),
+                http::StatusCode::OK,
+                "{label}: the parent crop still serves"
+            );
+            let crop_len = response.body().len();
+
+            // The network is back and the provider has the real z10 tile.
+            let z10_requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = Arc::clone(&z10_requests);
+            let online = move |_: &str,
+                               z: u32,
+                               _: u32,
+                               _: u32,
+                               _: Option<&str>|
+                  -> Result<TileFetchResponse, TileFetchError> {
+                if z == 10 {
+                    counter.fetch_add(1, Ordering::Relaxed);
+                }
+                Ok(TileFetchResponse::Fetched(FetchedTile {
+                    data: b"sharp z10 imagery".to_vec(),
+                    content_type: "image/jpeg".to_string(),
+                    policy: cache::tiles::parse_cache_control("max-age=86400"),
+                    etag: None,
+                }))
+            };
+            let response = handle_tile_request_with_fetcher(
+                "esri",
+                10,
+                500,
+                250,
+                &cache,
+                &tilemap_cache,
+                online,
+                true,
+            );
+            let requests = z10_requests.load(Ordering::Relaxed);
+            let fetched = response.body().as_slice() == b"sharp z10 imagery";
+            assert!(
+                fetched && requests == 1,
+                "{label}: after reconnecting, z10 was answered by {} with {requests} request(s) \
+                 to the provider",
+                if fetched {
+                    "the provider's own z10 tile".to_string()
+                } else {
+                    format!(
+                        "a stored {}-byte tile (the {crop_len}-byte crop)",
+                        response.body().len()
+                    )
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn an_overzoomed_crop_is_not_stored_when_any_level_on_the_way_up_was_unreachable() {
+        // z11 is a 404 (absent - that alone would allow storing a crop), but
+        // z10 was unreachable, so the z11 crop came from z9 only for want of
+        // z10. Stored, it would outlive the outage at the coarser resolution.
+        let (cache, tilemap_cache) = cache_with_a_z9_parent();
+        let fetch = move |_: &str,
+                          z: u32,
+                          _: u32,
+                          _: u32,
+                          _: Option<&str>|
+              -> Result<TileFetchResponse, TileFetchError> {
+            match z {
+                11 => Err(TileFetchError::status(404, "HTTP 404".to_string())),
+                _ => Err(TileFetchError::transport("Connection reset".to_string())),
+            }
+        };
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            11,
+            1000,
+            500,
+            &cache,
+            &tilemap_cache,
+            fetch,
+            true,
+        );
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let guard = cache.lock().unwrap();
+        let held = guard.as_ref().unwrap();
+        assert!(
+            !held.has_fresh_tile("esri", 11, 1000, 500)
+                && !held.has_stale_tile("esri", 11, 1000, 500),
+            "the z11 crop was stored although z10 was only unreachable"
+        );
+    }
+
+    #[test]
+    fn an_overzoomed_crop_for_a_tile_the_provider_does_not_have_is_still_stored() {
+        // The case caching a crop exists for: a 404 says there is no imagery
+        // at this zoom here, so the crop IS the best this tile will be until
+        // the parent's grant runs out, and re-deriving it per request buys
+        // nothing.
+        let (cache, tilemap_cache) = cache_with_a_z9_parent();
+        let absent = move |_: &str,
+                           _: u32,
+                           _: u32,
+                           _: u32,
+                           _: Option<&str>|
+              -> Result<TileFetchResponse, TileFetchError> {
+            Err(TileFetchError::status(404, "HTTP 404".to_string()))
+        };
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            10,
+            500,
+            250,
+            &cache,
+            &tilemap_cache,
+            absent,
+            true,
+        );
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let guard = cache.lock().unwrap();
+        assert!(
+            guard.as_ref().unwrap().has_fresh_tile("esri", 10, 500, 250),
+            "a crop for a tile the provider does not have is stored, under the parent's grant"
         );
     }
 
