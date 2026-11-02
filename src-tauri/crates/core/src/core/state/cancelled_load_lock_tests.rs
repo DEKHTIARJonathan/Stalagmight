@@ -60,7 +60,7 @@ fn cancelled_while_waiting<T: Send>(
     work: impl FnOnce() -> T + Send,
 ) -> T {
     std::thread::scope(|scope| {
-        let held = state.command_lock.lock().unwrap();
+        let held = state.command_lock.lock();
         let running = scope.spawn(work);
         let started = Instant::now();
         while !events.lock().unwrap().iter().any(|e| e.contains(phase)) {

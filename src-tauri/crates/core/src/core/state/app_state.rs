@@ -96,6 +96,11 @@ pub struct AppState {
     /// batch command for no benefit. Take it via [`AppState::modify_config`] rather
     /// than by hand - `update_config` takes it too, so a nested acquisition
     /// deadlocks.
+    ///
+    /// The recent-projects writers take it as well
+    /// (`AppState::persist_recent_projects`, #576 RV4-R-M2), with `recent_projects`
+    /// and possibly `project` already held: a holder of this lock must therefore
+    /// never take `recent_projects`, `project` or `command_lock`.
     pub(super) config_write_lock: RecoveringMutex<()>,
     /// Recent projects list
     pub(super) recent_projects: RecoveringMutex<Vec<PathBuf>>,

@@ -48,6 +48,30 @@ impl AppState {
             .collect()
     }
 
+    /// [#576 RV4-R-M2] Write `recent` into the live config and persist it, under
+    /// `config_write_lock` like every other write of the live config. A settings
+    /// save (`modify_config`) clones the config under that lock and writes the
+    /// clone back; a recents write taking only the `config` mutex could land in
+    /// between and be reverted, in the live config and in `config.toml`, while
+    /// the in-memory recents list kept it. With `truncate`, `recent` is first cut
+    /// to `recent_projects_max`. The caller holds the `recent_projects` mutex (and
+    /// may hold `project`): nothing holding `config_write_lock` takes either.
+    ///
+    /// Returns the save's outcome.
+    pub(super) fn persist_recent_projects(
+        &self,
+        recent: &mut Vec<PathBuf>,
+        truncate: bool,
+    ) -> anyhow::Result<()> {
+        let _guard = self.config_write_lock.lock();
+        let mut config = self.config.lock();
+        if truncate {
+            recent.truncate(config.general.recent_projects_max);
+        }
+        config.general.recent_projects.clone_from(recent);
+        config.save()
+    }
+
     /// Remove a project from the recent projects list
     pub fn remove_from_recent_projects(&self, path: PathBuf) -> CommandResult {
         let mut recent = self.recent_projects.lock();
@@ -74,13 +98,9 @@ impl AppState {
         }
 
         // Update config and save
-        {
-            let mut config = self.config.lock();
-            config.general.recent_projects.clone_from(&recent);
-            if let Err(e) = config.save() {
-                tracing::warn!("Failed to save config after removing from recent: {}", e);
-                return CommandResult::failure(format!("Failed to save config: {e}"));
-            }
+        if let Err(e) = self.persist_recent_projects(&mut recent, false) {
+            tracing::warn!("Failed to save config after removing from recent: {}", e);
+            return CommandResult::failure(format!("Failed to save config: {e}"));
         }
 
         tracing::info!(path = ?path, "Removed project from recent list");
@@ -438,20 +458,18 @@ impl AppState {
             let before = recent.len();
             recent.retain(|p| !doomed.contains(p));
             if recent.len() != before {
-                {
-                    let mut config = self.config.lock();
-                    config.general.recent_projects.clone_from(&recent);
-                    if let Err(e) = config.save() {
-                        // The `.stalx` is already trashed and the in-memory recents
-                        // are pruned; a failed persist must NOT report the whole
-                        // delete as a failure (that strands the zombie row). Warn.
-                        tracing::warn!("Failed to save config after deleting project: {}", e);
-                        warnings.push(ValidationWarning {
-                            code: "delete_project_persist_failed".to_string(),
-                            message: format!("Project deleted, but the recent-projects list could not be saved: {e}"),
-                            severity: WarningSeverity::Warning,
-                        });
-                    }
+                if let Err(e) = self.persist_recent_projects(&mut recent, false) {
+                    // The `.stalx` is already trashed and the in-memory recents
+                    // are pruned; a failed persist must NOT report the whole
+                    // delete as a failure (that strands the zombie row). Warn.
+                    tracing::warn!("Failed to save config after deleting project: {}", e);
+                    warnings.push(ValidationWarning {
+                        code: "delete_project_persist_failed".to_string(),
+                        message: format!(
+                            "Project deleted, but the recent-projects list could not be saved: {e}"
+                        ),
+                        severity: WarningSeverity::Warning,
+                    });
                 }
             }
         }

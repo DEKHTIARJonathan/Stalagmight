@@ -1015,17 +1015,13 @@ impl AppState {
             let mut recent = self.recent_projects.lock();
             recent.retain(|p| p != path);
             recent.insert(0, path.to_path_buf());
-            {
-                let mut config = self.config.lock();
-                recent.truncate(config.general.recent_projects_max);
-                config.general.recent_projects.clone_from(&recent);
-                if let Err(e) = config.save() {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "persist recent projects list",
-                        "Failed to save config with recent projects"
-                    );
-                }
+            // Under the config write lock (#576 RV4-R-M2).
+            if let Err(e) = self.persist_recent_projects(&mut recent, true) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "persist recent projects list",
+                    "Failed to save config with recent projects"
+                );
             }
         }
     }
