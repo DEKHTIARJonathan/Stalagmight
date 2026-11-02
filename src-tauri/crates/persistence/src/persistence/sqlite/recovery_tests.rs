@@ -151,6 +151,61 @@ fn a_journal_left_beside_the_project_moves_aside_with_its_safety_copy() {
     );
 }
 
+/// [#576 RV3-R-6] When the final rename fails AFTER the project's rollback
+/// journal moved aside with its safety copy (Windows refuses the rename while
+/// another process holds the file), the journal goes back beside the project:
+/// the error says the project file was not changed, and it must read exactly as
+/// it did. Left with the copy, the project's pages opened torn.
+#[test]
+fn a_failed_install_puts_the_projects_journal_back() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("old.stalx");
+    project_file(&source, "Original");
+    let project = temp.path().join("CaveA.stalx");
+    torn_copy(&source, &project);
+    let backup = temp.path().join("CaveA.stalx.backup");
+    project_file(&backup, "Restored");
+    let project_before = std::fs::read(&project).unwrap();
+    let journal_before = std::fs::read(journal_of(&project)).unwrap();
+
+    let outcome = {
+        let _failing = super::repair::fault::fail_restore_install();
+        Database::restore_from_backup(&project, &backup)
+    };
+    let message = outcome.as_ref().err().map(|e| format!("{e:#}"));
+    // Bytes first: opening the project below rolls its journal back.
+    let journal_back = std::fs::read(journal_of(&project)).ok();
+    let project_unchanged = std::fs::read(&project).unwrap() == project_before;
+    let listing: Vec<String> = std::fs::read_dir(temp.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("CaveA.stalx"))
+        .collect();
+    println!("restore -> {message:?}");
+    println!(
+        "project journal back: {}; project bytes unchanged: {project_unchanged}; \
+         project reads: {}; beside it: {listing:?}",
+        journal_back.as_deref() == Some(journal_before.as_slice()),
+        project_name(&project)
+    );
+    assert!(
+        message
+            .as_deref()
+            .is_some_and(|m| m.contains("your project file was not changed")),
+        "{message:?}"
+    );
+    assert!(
+        journal_back.as_deref() == Some(journal_before.as_slice()),
+        "the project's journal must be back beside it, unchanged"
+    );
+    assert!(project_unchanged);
+    assert_eq!(project_name(&project), "Original");
+    assert!(
+        !listing.iter().any(|name| name.contains(".pre-restore.")),
+        "no torn safety copy is left behind: {listing:?}"
+    );
+}
+
 /// [#576 C15] Restores never overwrite an earlier safety copy: each one is
 /// numbered, and the copy of the original survives any number of restores.
 #[test]

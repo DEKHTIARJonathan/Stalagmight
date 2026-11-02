@@ -34,6 +34,56 @@ fn journal_of(path: &Path) -> std::path::PathBuf {
     sibling(path, "-journal")
 }
 
+/// A restore's step 3: rename the staged file over the project (behind the
+/// test-only fault hook, since a failing rename has no organic trigger here).
+fn install_staged(staging: &Path, project: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    fault::check_install()?;
+    std::fs::rename(staging, project)
+}
+
+/// Test-only fault injection for a restore's install rename (#576 RV3-R-6): on
+/// Windows it fails when another process holds the project open, which a test
+/// cannot arrange portably.
+#[cfg(test)]
+pub(super) mod fault {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FAIL_INSTALL: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Every restore install on this thread fails until the guard drops.
+    pub(in crate::persistence::sqlite) fn fail_restore_install() -> FailingInstall {
+        FAIL_INSTALL.with(|fail| fail.set(true));
+        FailingInstall
+    }
+
+    /// Clears the injection on drop, so a failed assertion cannot leak it into
+    /// the next test on the same thread.
+    pub(in crate::persistence::sqlite) struct FailingInstall;
+
+    impl Drop for FailingInstall {
+        fn drop(&mut self) {
+            FAIL_INSTALL.with(|fail| fail.set(false));
+        }
+    }
+
+    pub(super) fn check_install() -> std::io::Result<()> {
+        if FAIL_INSTALL.with(Cell::get) {
+            return Err(std::io::Error::other("injected install failure"));
+        }
+        Ok(())
+    }
+}
+
+/// The safety copy a restore keeps of the file it replaces.
+struct PreRestoreCopy {
+    path: std::path::PathBuf,
+    /// The project's rollback journal moved to `<path>-journal` with it.
+    took_journal: bool,
+}
+
 /// Remove `path` and its journal, ignoring "not there".
 fn remove_with_journal(path: &Path) {
     let _ = std::fs::remove_file(path);
@@ -739,7 +789,8 @@ impl Database {
     ///    one on the next open. If the copy cannot be made, nothing is restored.
     /// 3. The staged file is renamed over the project - one atomic step, so an
     ///    interruption leaves either the old file or the restored one, never a
-    ///    half-copied mix.
+    ///    half-copied mix. If the rename fails, step 2 is undone: the journal
+    ///    goes back beside the project and the safety copy is removed.
     pub fn restore_from_backup(project: &Path, candidate: &Path) -> Result<RestoreOutcome> {
         if !candidate.exists() {
             anyhow::bail!("Backup file not found: {}", candidate.display());
@@ -793,12 +844,12 @@ impl Database {
         };
 
         // 3. Install.
-        if let Err(e) = std::fs::rename(&staging, project) {
+        if let Err(e) = install_staged(&staging, project) {
             remove_with_journal(&staging);
-            return Err(anyhow::Error::from(e).context(
-                "Could not put the restored file in place; your project file was not changed",
-            ));
+            let message = Self::undo_pre_restore_copy(project, safety_copy.as_ref());
+            return Err(anyhow::Error::from(e).context(message));
         }
+        let safety_copy = safety_copy.map(|copy| copy.path);
         tracing::info!(
             project = ?project,
             candidate = ?candidate,
@@ -809,10 +860,45 @@ impl Database {
         Ok(RestoreOutcome { safety_copy })
     }
 
+    /// [#576 RV3-R-6] Undo step 2 of a restore whose install failed, and say what
+    /// the user is left with. The project's rollback journal goes back beside it
+    /// (left with the safety copy, the project's pages opened torn), and the
+    /// safety copy - a duplicate of an unchanged file, and torn itself once its
+    /// journal is gone - is removed.
+    fn undo_pre_restore_copy(project: &Path, copy: Option<&PreRestoreCopy>) -> String {
+        const UNCHANGED: &str =
+            "Could not put the restored file in place; your project file was not changed";
+        let Some(copy) = copy else {
+            return UNCHANGED.to_string();
+        };
+        if copy.took_journal {
+            if let Err(e) = std::fs::rename(journal_of(&copy.path), journal_of(project)) {
+                tracing::error!(
+                    project = ?project,
+                    safety_copy = ?copy.path,
+                    error = %e,
+                    purpose = "restore a project from the recovery dialog",
+                    "Could not move the project's journal back after a failed restore"
+                );
+                return format!(
+                    "Could not put the restored file in place, and the record of an unfinished \
+                     write that belongs to your project could not be moved back beside it ({e}). \
+                     It is kept with the safety copy {}: restore that copy to get your project \
+                     back as it was",
+                    copy.path.file_name().unwrap_or_default().to_string_lossy()
+                );
+            }
+        }
+        if project.exists() {
+            let _ = std::fs::remove_file(&copy.path);
+        }
+        UNCHANGED.to_string()
+    }
+
     /// [#576 C15] Copy `project` to the first free `<name>.pre-restore.N` (from
     /// 1), never overwriting, and move a rollback journal left beside `project`
     /// to `<name>.pre-restore.N-journal`, so the copy and its journal stay a pair.
-    fn keep_pre_restore_copy(project: &Path) -> Result<std::path::PathBuf> {
+    fn keep_pre_restore_copy(project: &Path) -> Result<PreRestoreCopy> {
         for n in 1..=10_000u32 {
             let copy = sibling(project, &format!(".pre-restore.{n}"));
             if copy.symlink_metadata().is_ok() {
@@ -832,14 +918,18 @@ impl Database {
                 return Err(anyhow::Error::from(e).context(format!("write {}", copy.display())));
             }
             let journal = journal_of(project);
-            if journal.exists() {
+            let took_journal = journal.exists();
+            if took_journal {
                 if let Err(e) = std::fs::rename(&journal, journal_of(&copy)) {
                     let _ = std::fs::remove_file(&copy);
                     return Err(anyhow::Error::from(e)
                         .context("move the project's unfinished-write journal aside"));
                 }
             }
-            return Ok(copy);
+            return Ok(PreRestoreCopy {
+                path: copy,
+                took_journal,
+            });
         }
         anyhow::bail!("Too many earlier pre-restore copies beside the project")
     }
