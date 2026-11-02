@@ -1023,10 +1023,6 @@ impl Database {
     clippy::expect_used,
     reason = "unit test fixtures fail loudly on setup errors"
 )]
-#[expect(
-    clippy::print_stderr,
-    reason = "a permission-dependent test announces why it skipped, or the skip is invisible"
-)]
 mod tests {
     use super::{Database, Path};
 
@@ -1253,15 +1249,10 @@ mod tests {
         std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o555))
             .expect("make the staging dir unwritable");
         // ...unless we are root, for whom the mode bits are advisory. Probe the
-        // property this test actually depends on rather than the uid behind it -
-        // `unsafe_code` is denied crate-wide, so `geteuid` is not available here.
-        if std::fs::File::create(staging.join(".root-probe")).is_ok() {
-            let _ = std::fs::remove_file(staging.join(".root-probe"));
-            std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
-                .expect("restore permissions so tempdir can clean up");
-            eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
-            return;
-        }
+        // property this test depends on rather than the uid behind it, and fail
+        // when the bits do not bite: a skip would pass on nothing (#576
+        // NF-ROOT-PERM; CI runs the Rust tests unprivileged).
+        crate::models::test_support::assert_dir_refuses_new_files(&staging);
         let result = Database::sanitize_push_snapshot(&snapshot, false, None);
         std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
             .expect("restore permissions so tempdir can clean up");

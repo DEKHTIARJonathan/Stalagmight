@@ -6995,14 +6995,8 @@ fn save_into_unwritable_dir_reports_permission_code() {
     let locked = temp_dir.path().join("locked");
     std::fs::create_dir(&locked).unwrap();
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-
-    // If we can still write despite 0o000 (e.g. running as root, as some CI
-    // does), the permission scenario doesn't apply - skip rather than
-    // false-fail. Restore perms first so TempDir cleanup can remove it.
-    if std::fs::File::create(locked.join(".probe")).is_ok() {
-        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
-        return;
-    }
+    // Root writes despite 0o000: fail, never pass on nothing (#576 NF-ROOT-PERM).
+    crate::models::test_support::assert_dir_refuses_new_files(&locked);
 
     let mut project = Project::new("Perm".to_string(), None);
     project.add_section(SectionData {
@@ -7031,8 +7025,8 @@ fn open_project_into_unreadable_dir_reports_permission_code() {
     // open_project switched exists() -> try_exists() so a metadata-access denial
     // surfaces as PERMISSION_DENIED_CODE instead of collapsing to "File not found"
     // (#169). try_exists() on a path inside a 0o000 dir returns Err(PermissionDenied)
-    // because the dir can't be traversed. Same CI-safe 0o000 idiom (root-skip) as
-    // save_into_unwritable_dir_reports_permission_code.
+    // because the dir can't be traversed. Same 0o000 idiom (precondition asserted)
+    // as save_into_unwritable_dir_reports_permission_code.
     use crate::core::loading::PERMISSION_DENIED_CODE;
     use std::os::unix::fs::PermissionsExt;
 
@@ -7040,14 +7034,8 @@ fn open_project_into_unreadable_dir_reports_permission_code() {
     let locked = temp_dir.path().join("locked");
     std::fs::create_dir(&locked).unwrap();
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-
-    // Root (some CI) bypasses 0o000, so try_exists would succeed and the permission
-    // scenario wouldn't apply - skip rather than false-fail. Restore perms first so
-    // TempDir cleanup can remove the directory.
-    if std::fs::File::create(locked.join(".probe")).is_ok() {
-        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
-        return;
-    }
+    // Root walks through 0o000: fail, never pass on nothing (#576 NF-ROOT-PERM).
+    crate::models::test_support::assert_lookup_refused(&locked.join("p.stalx"));
 
     let state = AppState::new().unwrap();
     let result = state.open_project(locked.join("p.stalx"));
@@ -17193,7 +17181,7 @@ fn an_implicit_save_is_refused_when_the_missing_handle_cannot_be_reopened() {
     let renamed = temp_dir.path().join("X_1.stalx");
     // Whatever holds the file shut, the reopen fails the way it did after the
     // rename. A file SQLite cannot read is the portable way to make it fail
-    // (mode bits do not stop root, and CI runs as root).
+    // (mode bits do not stop root).
     std::fs::write(&path, b"not a database").unwrap();
 
     let result = state.save_project(None);

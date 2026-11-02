@@ -32,7 +32,6 @@ mod app_contract_tests;
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::print_stderr,
-    unsafe_code,
     clippy::float_cmp
 )]
 mod command_tests;

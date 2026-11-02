@@ -744,19 +744,16 @@ mod tests {
         // at it.
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000))
             .expect("lock the directory");
-        let stat_denied = std::fs::symlink_metadata(&path).is_err();
+        // Root ignores the bits, and then there is no unreadable path to test
+        // with: fail rather than pass on nothing (#576 NF-ROOT-PERM).
+        crate::models::test_support::assert_lookup_refused(&path);
         let state = AppState::new().expect("state");
-        let result = stat_denied.then(|| state.delete_project(path.clone()));
+        let result = state.delete_project(path.clone());
         // Unlocked before any assertion, so a failing assert cannot leave a
         // directory the temp-dir cleanup is unable to remove.
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
             .expect("unlock the directory");
 
-        let Some(result) = result else {
-            // Running as root, where permission bits do not apply - there is no
-            // unreadable path to be had, so there is nothing to assert.
-            return;
-        };
         assert!(
             !result.success,
             "a path we cannot read must not report a successful delete"

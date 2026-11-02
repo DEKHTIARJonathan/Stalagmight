@@ -6425,18 +6425,13 @@ mod tests {
         let dir = path.parent().expect("parent").to_path_buf();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555))
             .expect("make the directory read-only");
-        let probe = dir.join(".writable");
-        let running_as_root = std::fs::write(&probe, b"x").is_ok();
-        let _ = std::fs::remove_file(&probe);
-        let result = (!running_as_root).then(|| state.delete_project(path.clone()));
+        // Root ignores the permission bits, and then there is no denied unlink
+        // to test with: fail rather than pass on nothing (#576 NF-ROOT-PERM).
+        crate::models::test_support::assert_dir_refuses_new_files(&dir);
+        let result = state.delete_project(path.clone());
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
             .expect("restore the directory");
 
-        let Some(result) = result else {
-            // Root ignores the permission bits, so there is no denied unlink to
-            // test with.
-            return;
-        };
         assert!(!result.success, "the delete failed");
         assert!(path.exists(), "and the file is still there");
         assert!(

@@ -106,10 +106,6 @@ mod issue_485_tests;
 #[expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
-    // The read-only fixture says on stderr when the OS declined to make it
-    // read-only - root ignores mode bits, and CI's check job runs as root - so
-    // a pass there is not mistaken for a pass of the guard (the #485 pattern).
-    clippy::print_stderr,
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod issue_517_tests;

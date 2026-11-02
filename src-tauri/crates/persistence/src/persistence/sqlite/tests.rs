@@ -348,19 +348,11 @@ fn an_unwritable_unstamped_file_still_opens_without_running_the_chain() {
     }
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
 
-    // The mode bits are advice, not a guarantee: root ignores them, and CI's
-    // check job runs as root in a container. Confirm the protection actually
-    // took before asserting anything about it - otherwise this test reports a
-    // failure of the guard when what really happened is that the fixture could
-    // not be built. It stays live on every developer machine and on macOS.
-    if std::fs::OpenOptions::new().write(true).open(&path).is_ok() {
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        eprintln!(
-            "skipping an_unwritable_unstamped_file_still_opens_without_running_the_chain: this \
-             user can write a 0444 file (root?), so there is no read-only database to test"
-        );
-        return;
-    }
+    // The mode bits are advice, not a guarantee: root ignores them. Confirm the
+    // protection took before asserting anything about it, and fail when it did
+    // not - a skip would pass on nothing (#576 NF-ROOT-PERM; CI runs the Rust
+    // tests unprivileged).
+    crate::models::test_support::assert_file_refuses_writes(&path);
 
     let opened = Database::open_existing(&path);
     // Restore before asserting so a failure cannot leave TempDir unable to clean up.
@@ -416,11 +408,7 @@ fn an_unwritable_file_claiming_the_future_is_refused_rather_than_left_unsanitize
             .unwrap();
     }
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
-    if std::fs::OpenOptions::new().write(true).open(&path).is_ok() {
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        eprintln!("skipping: this user can write a 0444 file (root?)");
-        return;
-    }
+    crate::models::test_support::assert_file_refuses_writes(&path);
 
     let opened = Database::open_existing(&path);
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();

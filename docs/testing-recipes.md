@@ -1597,9 +1597,23 @@ with libtest's repeatable `--skip <filter>`.
 
 ### Inducing save failures must be root-safe
 
-The self-hosted CI runner executes tests as **uid 0 with `CAP_DAC_OVERRIDE`**,
-so a `chmod 0444` directory does *not* produce `EACCES` and a permissions-based
-inducer silently passes. Use uid-independent inducers instead:
+Root - or any process holding `CAP_DAC_OVERRIDE` - ignores mode bits: a
+`chmod 0444` file or `0555` directory does *not* produce `EACCES` for it. The
+self-hosted CI runner is a container running as uid 0, so the `check` job runs
+`cargo test` through `scripts/ci-cargo-test-unprivileged.sh`, which compiles as
+the job's user and runs every test binary as an unprivileged one (#576
+NF-ROOT-PERM).
+
+A test that does take a permission away with mode bits must **assert that they
+bite**, right after setting them, with `assert_dir_refuses_new_files`,
+`assert_file_refuses_writes` or `assert_lookup_refused` from
+`stalagmight_models::test_support`. They fail the test when the process can
+still write or look up the path, so a privileged run is a red test, never a
+silent pass. Never skip instead: a skip makes the test unfailable exactly where
+it would mean nothing.
+
+Where a uid-independent inducer exists, prefer it - it keeps the test
+meaningful on every machine:
 
 - **Generic "cannot save":** point `file_path` at a **missing parent directory**
   so `Database::open(temp)` fails.
@@ -1738,5 +1752,5 @@ data for a specific edge case, and record what it is for in the fixtures README.
 |---------|-------|
 | Passes locally, fails in CI | Run with `--workspace`, `--features telemetry` and `TELEMETRY_ENDPOINT` set - without `--workspace` the member crates are skipped, and a featureless run filters the registry-coverage tests out |
 | Every test binary aborts at startup on Windows (`0xC0000139`) | Use `./scripts/test.ps1` |
-| A permission-based save-failure test passes vacuously in CI | CI runs as root. Use a root-safe inducer (above) |
+| A permission test fails with "permission precondition failed" | The process ignores mode bits (root, or `CAP_DAC_OVERRIDE`). Run the Rust tests as an unprivileged user - CI does, through `scripts/ci-cargo-test-unprivileged.sh` - or use a root-safe inducer (above) |
 | Flaky or order-dependent | Shared mutable state between tests |

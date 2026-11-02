@@ -404,10 +404,9 @@ mod tests {
         let path = dir.path().join("CaveA.png");
         std::fs::write(&path, OLD).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
-        if OpenOptions::new().write(true).open(&path).is_ok() {
-            // Running with permission overrides (root): there is no refusal to preserve.
-            return;
-        }
+        // Root writes through 0444, and then there is no refusal to preserve:
+        // fail rather than pass on nothing (#576 NF-ROOT-PERM).
+        crate::models::test_support::assert_file_refuses_writes(&path);
 
         let err = write_atomic_bytes(&path, b"new").unwrap_err();
 

@@ -77,6 +77,10 @@ export const PLUMBING_COMMANDS = [
   { re: /^pnpm install(\s|$)/, why: 'dependency install' },
   { re: /^pnpm exec playwright install(-deps)?(\s|$)/, why: 'browser / system-dependency install' },
   { re: /^node scripts\/pw-timing-summary\.mjs(\s|$)/, why: 'run-page timing table; it cannot fail the job' },
+  {
+    re: /^\.\/scripts\/ci-cargo-test-unprivileged\.sh(\s|$)/,
+    why: 'runner setup: on a root runner the Rust test binaries run as a non-root user (#576 NF-ROOT-PERM)',
+  },
 ];
 
 // Steps that run no gate command at all, keyed by workflow + step name.

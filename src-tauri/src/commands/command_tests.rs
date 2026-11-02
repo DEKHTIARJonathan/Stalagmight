@@ -1470,12 +1470,6 @@ fn test_get_project_state_emits_positional_wire_refs() {
 fn test_open_project_updates_recent_projects_when_config_save_fails() {
     use std::os::unix::fs::PermissionsExt;
 
-    // Skip when running as root - file permission restrictions don't apply to UID 0
-    if unsafe { libc::geteuid() } == 0 {
-        eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
-        return;
-    }
-
     // Resolve the config path for REAL rather than into this thread's own temp
     // dir: this test drives config_path() itself by pointing XDG_CONFIG_HOME at
     // a read-only dir to force a save failure. The env is process-wide, so the
@@ -1486,6 +1480,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
         let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
         perms.set_mode(0o555);
         fs::set_permissions(readonly_dir.path(), perms).unwrap();
+        crate::models::test_support::assert_dir_refuses_new_files(readonly_dir.path());
 
         let _env_guard = EnvVarGuard::set("XDG_CONFIG_HOME", readonly_dir.path().to_str().unwrap());
 
@@ -1530,11 +1525,6 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
 fn test_open_project_updates_recent_projects_when_config_save_fails_macos() {
     use std::os::unix::fs::PermissionsExt;
 
-    if unsafe { libc::geteuid() } == 0 {
-        eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
-        return;
-    }
-
     // Real resolution (not this thread's temp dir): drives config_path() via HOME.
     let _config_guard = crate::test_helpers::real_config_resolution();
     {
@@ -1542,6 +1532,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails_macos() {
         let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
         perms.set_mode(0o555);
         fs::set_permissions(readonly_dir.path(), perms).unwrap();
+        crate::models::test_support::assert_dir_refuses_new_files(readonly_dir.path());
 
         // On macOS, directories crate uses ~/Library/Application Support/...
         // Setting HOME to a read-only dir makes create_dir_all fail for config save.
@@ -1869,9 +1860,9 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
 // A real EACCES is the only route to that branch since #429: SQLite's generic
 // "unable to open database file" is no longer read as a denial on its own (a
 // directory squatting the temp path produces it too, and that is not a
-// permission problem). So this is unix-only, and skips itself when the mode bits
-// don't bite (container-root holds CAP_DAC_OVERRIDE) rather than false-failing -
-// the same idiom as `save_into_unwritable_dir_reports_permission_code`. The
+// permission problem). So this is unix-only, and FAILS when the mode bits don't
+// bite (root holds CAP_DAC_OVERRIDE; CI runs the tests unprivileged, #576
+// NF-ROOT-PERM) - the same idiom as `save_into_unwritable_dir_reports_permission_code`. The
 // partial-success invariants (no phantom, in-memory survival, still-deferred) are
 // already covered by the generic-failure twin above; this test focuses on the
 // message mapping.
@@ -1885,11 +1876,7 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
         let locked = dir.path().join("locked");
         fs::create_dir_all(&locked).unwrap();
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
-        // Restore perms first so TempDir cleanup can remove the directory.
-        if fs::File::create(locked.join(".probe")).is_ok() {
-            let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
-            return;
-        }
+        crate::models::test_support::assert_dir_refuses_new_files(&locked);
         let project_path = locked.join("new-import.stalx");
 
         let mut project = Project::new("New Import".to_string(), None);
@@ -2202,12 +2189,6 @@ fn test_delete_project_leaves_a_same_stem_tml_alone() {
 fn test_delete_project_partial_failure_still_prunes_recents() {
     use std::os::unix::fs::PermissionsExt;
 
-    // Skip when running as root - file permission restrictions don't apply to UID 0
-    if unsafe { libc::geteuid() } == 0 {
-        eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
-        return;
-    }
-
     // Same technique as test_open_project_updates_recent_projects_when_config_save_fails:
     // resolve `config_path()` for real rather than into this thread's temp dir, and point
     // the platform's config root at a read-only directory so every `config.save()` fails
@@ -2219,6 +2200,7 @@ fn test_delete_project_partial_failure_still_prunes_recents() {
     let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
     perms.set_mode(0o555);
     fs::set_permissions(readonly_dir.path(), perms).unwrap();
+    crate::models::test_support::assert_dir_refuses_new_files(readonly_dir.path());
     #[cfg(target_os = "linux")]
     let _env_guard = EnvVarGuard::set("XDG_CONFIG_HOME", readonly_dir.path().to_str().unwrap());
     #[cfg(target_os = "macos")]
@@ -2387,12 +2369,6 @@ fn test_delete_project_of_open_project_tears_down_the_session() {
 fn test_delete_project_tears_down_before_removing_the_file() {
     use std::os::unix::fs::PermissionsExt;
 
-    // Skip when running as root - file permission restrictions don't apply to UID 0
-    if unsafe { libc::geteuid() } == 0 {
-        eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
-        return;
-    }
-
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
@@ -2410,7 +2386,7 @@ fn test_delete_project_tears_down_before_removing_the_file() {
             let mut perms = fs::metadata(dir.path()).unwrap().permissions();
             perms.set_mode(0o555);
             fs::set_permissions(dir.path(), perms).unwrap();
-
+            crate::models::test_support::assert_dir_refuses_new_files(dir.path());
             let result = project::delete_project(state(&app), saved_path.clone());
 
             // Restore permissions BEFORE the assertions: a panicking assert would

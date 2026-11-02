@@ -666,23 +666,11 @@ fn an_unwritable_unstamped_pre_v8_file_keeps_its_ignores_through_a_save_as() {
         .unwrap();
     std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o444)).unwrap();
 
-    // Mode bits are advice, not a guarantee: root ignores them, and CI's check
-    // job runs as root in a container. Confirm the protection took before
-    // asserting anything about it (the #485 pattern) - otherwise a failure here
-    // would report the guard, when what really happened is that the fixture
-    // could not be built.
-    if std::fs::OpenOptions::new()
-        .write(true)
-        .open(&source)
-        .is_ok()
-    {
-        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644)).unwrap();
-        eprintln!(
-            "skipping an_unwritable_unstamped_pre_v8_file_keeps_its_ignores_through_a_save_as: \
-             this user can write a 0444 file (root?), so there is no read-only database to test"
-        );
-        return;
-    }
+    // Mode bits are advice, not a guarantee: root ignores them. Confirm the
+    // protection took before asserting anything about it (the #485 pattern),
+    // and fail when it did not - run as root this test could not mean anything
+    // (#576 NF-ROOT-PERM; CI runs the Rust tests unprivileged).
+    crate::models::test_support::assert_file_refuses_writes(&source);
 
     let state = AppState::new().unwrap();
     let opened = state.open_project(source.clone());

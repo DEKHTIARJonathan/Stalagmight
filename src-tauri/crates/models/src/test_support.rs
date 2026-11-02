@@ -19,6 +19,18 @@
 //! Blanket `cargo test -- --ignored` therefore fails for every opt-in test
 //! whose prerequisites are absent; filter the run to the tests you can feed
 //! (docs/testing-recipes.md, "Opt-in tests").
+//!
+//! # Permission preconditions (#576 NF-ROOT-PERM)
+//!
+//! A test that takes a permission away with mode bits - a read-only folder, a
+//! 0444 file, an unsearchable directory - relies on the process honouring
+//! them. Root, and any process holding `CAP_DAC_OVERRIDE`, does not: run that
+//! way, such a test passes without ever meeting the refusal it is about. Each
+//! one confirms the bits bite right after setting them, through
+//! [`assert_dir_refuses_new_files`], [`assert_file_refuses_writes`] or
+//! [`assert_lookup_refused`], which fail the test otherwise. CI runs the Rust
+//! tests as an unprivileged user for this reason
+//! (`scripts/ci-cargo-test-unprivileged.sh`).
 
 use std::path::{Path, PathBuf};
 
@@ -95,7 +107,73 @@ pub fn require_env_file(var: &str) -> PathBuf {
     }
 }
 
+/// Fail the calling test because the permission it took away did not bite.
+#[track_caller]
+#[expect(
+    clippy::panic,
+    reason = "a test helper: failing the calling test is its whole job"
+)]
+fn permission_precondition_failed(what: &str) -> ! {
+    panic!(
+        "permission precondition failed: {what}. This process ignores mode bits (it runs \
+         as root, or holds CAP_DAC_OVERRIDE), so the test would pass without meeting the \
+         refusal it is about. Run the Rust tests as an unprivileged user, as CI does \
+         (scripts/ci-cargo-test-unprivileged.sh)."
+    )
+}
+
+/// `dir`, whose write permission the caller took away, refuses a new entry.
+/// Probes by creating (and, if that works, removing) a file in it.
+///
+/// # Panics
+///
+/// When the file can be created.
+#[track_caller]
+pub fn assert_dir_refuses_new_files(dir: &Path) {
+    let probe = dir.join(".permission-precondition-probe");
+    if std::fs::File::create(&probe).is_ok() {
+        let _ = std::fs::remove_file(&probe);
+        permission_precondition_failed(&format!("{} still accepts new files", dir.display()));
+    }
+}
+
+/// `path`, whose write permission the caller took away, refuses to open for
+/// writing. The probe opens without truncating, so it changes nothing.
+///
+/// # Panics
+///
+/// When the file opens for writing.
+#[track_caller]
+pub fn assert_file_refuses_writes(path: &Path) {
+    if std::fs::OpenOptions::new().write(true).open(path).is_ok() {
+        permission_precondition_failed(&format!("{} still opens for writing", path.display()));
+    }
+}
+
+/// `path` cannot even be looked up, because the caller made a directory above
+/// it unsearchable: a stat of it fails with a permission error (not "not
+/// found", which is what a privileged process sees for a path that is absent).
+///
+/// # Panics
+///
+/// When the stat succeeds or fails for another reason.
+#[track_caller]
+pub fn assert_lookup_refused(path: &Path) {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {}
+        other => permission_precondition_failed(&format!(
+            "looking up {} is not refused ({:?})",
+            path.display(),
+            other.map(|_| "it succeeded")
+        )),
+    }
+}
+
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test module: a failed setup step is the failure"
+)]
 mod tests {
     use super::*;
 
@@ -144,5 +222,75 @@ mod tests {
     fn a_file_variable_naming_an_existing_path_is_returned() {
         let dir = require_env_file("CARGO_MANIFEST_DIR");
         assert!(dir.join("Cargo.toml").exists());
+    }
+
+    /// A scratch directory under the system temp dir, writable again and
+    /// removed on drop (this crate has no `tempfile` dependency).
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "stalagmight-test-support-{tag}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create the scratch dir");
+            Self(dir)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+            }
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "still accepts new files")]
+    fn a_writable_dir_fails_the_dir_precondition() {
+        let dir = Scratch::new("writable-dir");
+        assert_dir_refuses_new_files(&dir.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "still opens for writing")]
+    fn a_writable_file_fails_the_file_precondition() {
+        let dir = Scratch::new("writable-file");
+        let file = dir.0.join("CaveA.stalx");
+        std::fs::write(&file, b"x").expect("write the file");
+        assert_file_refuses_writes(&file);
+    }
+
+    #[test]
+    #[should_panic(expected = "is not refused")]
+    fn a_path_that_can_be_looked_up_fails_the_lookup_precondition() {
+        assert_lookup_refused(Path::new(env!("CARGO_MANIFEST_DIR")));
+    }
+
+    /// The other side of the three above, and a canary for the environment:
+    /// run as root these fail, which is the point - a permission test cannot
+    /// mean anything there (CI runs the tests unprivileged).
+    #[cfg(unix)]
+    #[test]
+    fn mode_bits_that_bite_satisfy_every_precondition() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = Scratch::new("read-only");
+        let file = dir.0.join("CaveA.stalx");
+        std::fs::write(&file, b"x").expect("write the file");
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o444))
+            .expect("make the file read-only");
+        std::fs::set_permissions(&dir.0, std::fs::Permissions::from_mode(0o555))
+            .expect("make the dir read-only");
+        assert_dir_refuses_new_files(&dir.0);
+        assert_file_refuses_writes(&file);
+        std::fs::set_permissions(&dir.0, std::fs::Permissions::from_mode(0o000))
+            .expect("make the dir unsearchable");
+        assert_lookup_refused(&file);
     }
 }
