@@ -136,11 +136,17 @@ across `src-tauri/crates/*/bindings/`. So the rule is: every exported type in
 a member crate carries `#[ts(export, export_to = "../../bindings/")]`, which
 resolves from `crates/<member>/` back to the single `src-tauri/bindings/`
 tree, and running the workspace tests rewrites every file in it. The **app
-crate hosts no bindings-defaulted exports** - keep it that way, so every
-writer of the committed tree follows the one explicit `export_to` convention.
-Its only ts exports are the two types in `commands/memory.rs`, which opt out
-with `#[ts(export, export_to = "../../src/types/ipc/")]` and land in the
-frontend tree instead.
+crate hosts no `#[ts(export)]` at all** - keep it that way: an `export_to` is
+resolved against the declaring crate's own directory, so an app-crate export
+either lands in the bindings tree by a different spelling or, as the two
+memory-probe types once did with `"../../src/types/ipc/"`, outside the
+checkout altogether (every `cargo test` wrote `MemoryStats.ts` and
+`ProcessMemory.ts` into the checkout's parent, #576 RV5-RL-1). Those types now
+live in the models crate (`process_memory.rs`); an app-crate type the frontend
+needs derives `TS` without `export` and reaches `src/types/ipc/` through the
+generator only. `ts_export_paths_tests` (app crate) scans every `#[ts(export
+...)]` in the workspace and fails on one that would write anywhere but
+`src-tauri/bindings/`, or that the app crate hosts.
 
 **Nothing consumes it.** No module in `src/`, `e2e-playwright/`, `e2e/` or
 `scripts/` imports from it, and it is in no tsconfig's `include` (see

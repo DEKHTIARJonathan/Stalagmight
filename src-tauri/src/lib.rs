@@ -42,6 +42,14 @@ pub mod tile_attribution;
               values are the evidence a run captures"
 )]
 mod entry_point_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod ts_export_paths_tests;
 pub use stalagmight_core::tile_providers;
 pub use stalagmight_persistence::tilemap_cache;
 /// Linux-only WebKit memory-pressure wiring (see the module docs and the

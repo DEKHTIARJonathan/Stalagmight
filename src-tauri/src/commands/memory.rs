@@ -7,42 +7,10 @@
 //!
 //! Used by the in-app debug memory panel to diagnose WebProcess bloat.
 
-use serde::Serialize;
-use ts_rs::TS;
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../src/types/ipc/")]
-pub struct ProcessMemory {
-    pub pid: u32,
-    pub name: String,
-    #[ts(type = "number")]
-    pub rss_kb: u64,
-    #[ts(type = "number")]
-    pub vm_size_kb: u64,
-    #[ts(type = "number")]
-    pub vm_peak_kb: u64,
-    #[ts(type = "number")]
-    pub vm_rss_anon_kb: u64,
-    #[ts(type = "number")]
-    pub vm_rss_file_kb: u64,
-    #[ts(type = "number")]
-    pub vm_rss_shmem_kb: u64,
-    /// Heuristic role: "backend" | "webkit-web" | "webkit-network" | "webkit-gpu" | "webkit-other".
-    pub role: String,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../src/types/ipc/")]
-pub struct MemoryStats {
-    pub backend: ProcessMemory,
-    pub webkit_processes: Vec<ProcessMemory>,
-    #[ts(type = "number")]
-    pub total_rss_kb: u64,
-    /// True if WebKit children were discovered via /proc; false on platforms
-    /// where we can't enumerate them (macOS, Windows). In that case the
-    /// caller should fall back to whatever in-process introspection it has.
-    pub webkit_enumeration_supported: bool,
-}
+// The payload types live in the models crate, whose ts-rs export tests write
+// into `src-tauri/bindings/` (#576 RV5-RL-1); re-exported under the old path
+// for `gen_ipc_types` and the probes below.
+pub use crate::models::process_memory::{MemoryStats, ProcessMemory};
 
 #[tauri::command]
 pub async fn get_memory_stats() -> Result<MemoryStats, String> {

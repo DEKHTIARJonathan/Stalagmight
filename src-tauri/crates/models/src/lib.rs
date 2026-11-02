@@ -11,6 +11,7 @@ pub mod id_stride;
 pub mod import_receipt;
 pub mod placement_suggest;
 pub mod poison_policy;
+pub mod process_memory;
 pub mod project;
 pub mod section;
 pub mod shot;
