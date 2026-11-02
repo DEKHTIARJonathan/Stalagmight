@@ -51,7 +51,10 @@ pub mod webkit_memory;
 
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
+
+use commands::event_sink::emit_event;
+use core::events::{CloseRequested, TileTransportError, TileTransportSuccess};
 
 // The tile engine is the `stalagmight-tiles` workspace member (#576 C8). This
 // crate keeps the `stalagmight-tiles://` protocol registration in `run()` and
@@ -242,11 +245,11 @@ pub fn run() {
                     if had_network_success {
                         // Emit `tile-transport-success` once per offline→online transition.
                         if tile_fetch_stats_notify.transition_to_online() {
-                            let _ = app_handle.emit("tile-transport-success", ());
+                            let _ = emit_event::<TileTransportSuccess, _>(&app_handle, ());
                         }
                     } else if had_network_error && tile_fetch_stats_notify.transition_to_offline() {
                         // Emit `tile-transport-error` once per online→offline transition.
-                        let _ = app_handle.emit("tile-transport-error", ());
+                        let _ = emit_event::<TileTransportError, _>(&app_handle, ());
                     }
 
                     // Tile-consumption telemetry (#31): one event per SERVED tile, tagged by
@@ -279,7 +282,7 @@ pub fn run() {
     let builder = builder.on_window_event(|window, event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
-            if let Err(e) = window.emit("tauri://close-requested", ()) {
+            if let Err(e) = emit_event::<CloseRequested, _>(window, ()) {
                 tracing::error!(
                     error = %e,
                     purpose = "allow frontend to confirm close",

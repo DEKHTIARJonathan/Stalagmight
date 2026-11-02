@@ -323,7 +323,7 @@ export async function suggestOrphanPlacementsAfterImport(
   ui: Pick<ImportDialogUi, 'showToast'>,
 ): Promise<OrphanPlacementSuggestion[]> {
   try {
-    return await invokeIpc<OrphanPlacementSuggestion[]>(
+    return await invokeIpc(
       'suggest_orphan_placements',
       { newlyImportedSectionIds },
       { purpose },
@@ -369,7 +369,7 @@ export async function finishImportWithoutOrphanSuggestions(
   let finalReceipt: ImportReceiptWithUnanchoredCount | undefined = receipt;
   if (receipt) {
     try {
-      const unanchoredCount = await invokeIpc<number>(
+      const unanchoredCount = await invokeIpc(
         'count_unanchored_sections',
         { newlyImportedSectionIds },
         { purpose: 'check for unanchored sections after import' },

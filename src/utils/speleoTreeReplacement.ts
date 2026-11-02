@@ -16,7 +16,7 @@ import { runTreeReplacement } from './projectTransition';
  */
 async function readOpenFileFlags(): Promise<OpenFileFlags | null> {
   try {
-    return await invokeIpc<OpenFileFlags>('speleodb_open_file_flags', undefined, {
+    return await invokeIpc('speleodb_open_file_flags', undefined, {
       purpose: 're-read the open file flags after an in-place tree swap',
     });
   } catch (e) {

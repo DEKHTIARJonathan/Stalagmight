@@ -4,9 +4,9 @@
  * Includes timeout detection to show "taking longer than expected" message.
  */
 import { useEffect, useRef } from 'react';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { UnlistenFn } from '@tauri-apps/api/event';
+import { IPC_EVENTS, listenIpc } from '../utils/ipcEvents';
 import { useProjectStore } from '../store/projectStore';
-import type { LoadingProgressPayload } from '../types/loading';
 
 const TIMEOUT_MS = 30000; // 30 second timeout
 
@@ -44,7 +44,7 @@ export function useLoadingProgress() {
     };
 
     const setupListener = async () => {
-      const listener = await listen<LoadingProgressPayload>('loading-progress', (event) => {
+      const listener = await listenIpc(IPC_EVENTS.LOADING_PROGRESS, (event) => {
         const currentState = useProjectStore.getState().loading;
         // A plain number, like every other loadingId the frontend sees (#486,
         // #576 C6: the generated type used to say bigint).

@@ -1,4 +1,4 @@
-import type { MockCommandFamily } from './types';
+import type { MockCommandFamily, MockReply } from './types';
 
 /**
  * Tile-cache and network commands of the Playwright IPC mock, with their reset hooks.
@@ -52,7 +52,7 @@ export const tileCacheCommands: MockCommandFamily = (ctx) => {
       // Cache commands
       case 'get_cache_stats':
         console.log('[Mock IPC] get_cache_stats called');
-        return mockCacheStats;
+        return mockCacheStats satisfies MockReply<'get_cache_stats'>;
 
       case 'clear_tile_cache': {
         // Normalize provider: could be string, null, or undefined from frontend
@@ -74,12 +74,12 @@ export const tileCacheCommands: MockCommandFamily = (ctx) => {
           // Clear all
           mockCacheStats = { total_tiles: 0, total_bytes: 0, providers: {} };
         }
-        return null; // Tauri serializes () as null
+        return null satisfies MockReply<'clear_tile_cache'>; // Tauri serializes () as null
       }
 
       case 'get_network_status':
         console.log('[Mock IPC] get_network_status called');
-        return mockNetworkStatus;
+        return mockNetworkStatus satisfies MockReply<'get_network_status'>;
 
       case 'get_tile_providers':
         // Return TileProviderInfo[] matching Rust struct shape
@@ -100,9 +100,11 @@ export const tileCacheCommands: MockCommandFamily = (ctx) => {
             content_type_hint: 'image/jpeg',
             api_key_env: null,
             auth_header: null,
+            tilemap_url_template:
+              'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tilemap/{z}/{y}/{x}/128/128?f=json',
             available: true,
           },
-        ];
+        ] satisfies MockReply<'get_tile_providers'>;
 
       case 'get_tile_attribution':
         // Mirrors the offline path of the real command: specs run with no
@@ -116,7 +118,7 @@ export const tileCacheCommands: MockCommandFamily = (ctx) => {
           notice: 'Powered by Esri',
           notice_url: 'https://www.esri.com',
           live: false,
-        };
+        } satisfies MockReply<'get_tile_attribution'>;
 
       default:
         return ctx.unhandled;

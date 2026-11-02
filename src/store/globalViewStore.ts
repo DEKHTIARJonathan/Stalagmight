@@ -129,7 +129,7 @@ export const useGlobalViewStore = create<GlobalViewStore>((set, get) => ({
     }));
 
     try {
-      const geometry = await invokeIpc<SurveyGeometry>('get_survey_geometry_for_file', {
+      const geometry = await invokeIpc('get_survey_geometry_for_file', {
         path: filePath,
       }, { purpose: 'load survey geometry for file' });
 

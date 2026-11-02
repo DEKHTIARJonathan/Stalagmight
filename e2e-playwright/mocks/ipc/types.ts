@@ -1,3 +1,14 @@
+import type { IpcCommands } from '../../../src/types/ipc/IpcCommands';
+
+/**
+ * What the real backend resolves command `K` with, from the manifest generated
+ * out of `generate_handler!` (#576 C3, E3-D3). Every mock reply is written
+ * `return <value> satisfies MockReply<'k'>` (type-only: the mock runs in the page
+ * through `Function.prototype.toString`, so it may import types, never values),
+ * which makes `typecheck:playwright` fail when a reply drifts from the wire.
+ */
+export type MockReply<K extends keyof IpcCommands> = IpcCommands[K]['result'];
+
 /**
  * The contract between the Playwright IPC mock's core (`../tauri-ipc.ts`) and the
  * command families split out of it (#576 E8). The core installs the mock in the page;

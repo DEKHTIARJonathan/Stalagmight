@@ -11,7 +11,7 @@
 //!   the newcomer and forwards its argv to the running instance.
 //!
 //! All three converge here. Paths are pushed onto [`PendingLaunchFiles`] and the
-//! frontend is nudged with [`LAUNCH_FILE_EVENT`]; the frontend drains the queue
+//! frontend is nudged with [`LaunchFileQueued`]; the frontend drains the queue
 //! via [`take_pending_launch_files`] once it is ready and routes each path
 //! through its own unified open/import router. The queue - rather than an event
 //! payload - is what makes a cold launch work at all: the file is known long
@@ -27,14 +27,15 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager, Runtime, Url};
+use tauri::{AppHandle, Manager, Runtime, Url};
 
-/// Payload-free nudge telling the frontend to drain the pending-launch queue.
+/// Payload-free nudge telling the frontend to drain the pending-launch queue
+/// (`core::events::LaunchFileQueued`, #576 C13).
 ///
 /// Deliberately carries no path: the queue is the single source of truth, so a
 /// listener that misses this event (or is not mounted yet) still gets the file
 /// on its next drain, and no path can be handled twice.
-pub const LAUNCH_FILE_EVENT: &str = "launch-file-queued";
+pub use crate::core::events::LaunchFileQueued;
 
 /// Extensions the OS may hand us, lowercase and without the leading dot.
 ///
@@ -302,7 +303,7 @@ pub fn queue_and_notify<R: Runtime>(app: &AppHandle<R>, paths: Vec<String>) {
     if pending.push_all(paths) == 0 {
         return;
     }
-    if let Err(e) = app.emit(LAUNCH_FILE_EVENT, ()) {
+    if let Err(e) = super::event_sink::emit_event::<LaunchFileQueued, _>(app, ()) {
         tracing::warn!(
             error = %e,
             purpose = "notify the frontend of an OS-opened file",

@@ -23958,10 +23958,15 @@ fn done_without_edit_session_is_noop_not_a_release() {
 /// except the two entries on the read-only-workspace allowlist. Both tests drive
 /// the same [`probe_mutation_entrypoints`], which calls every listed entry once.
 ///
-/// CAVEAT - this list is hand-maintained (#576 C5-D3: to be derived from the IPC
-/// command manifest when C3 lands), so it catches a forgotten guard on a KNOWN
+/// CAVEAT - this list is hand-maintained, so it catches a forgotten guard on a KNOWN
 /// entry, NOT a brand-new `execute_*`/`set_*_for_path` method added without a
-/// `guard_mutation` call (that would compile and pass green). The exhaustive
+/// `guard_mutation` call (that would compile and pass green). It is NOT derived
+/// from the IPC command manifest (#576 C5-D3, decided when C3 landed): the manifest
+/// is read from `#[tauri::command]` signatures, which say nothing about mutating (a
+/// `CommandResult` return is not it - save/close/recent-list commands return one);
+/// these entries are `AppState` methods and `Command` variants below the IPC surface,
+/// many-to-one with commands; each still needs its hand-built probe call; and the
+/// manifest is app-crate output this crate cannot read. The exhaustive
 /// `is_lifecycle_passthrough` match closes the hole for new `Command` *variants*.
 /// A new method that does call `guard_mutation` is refused in Plan/Export by
 /// default; only an explicit `guard_metadata_mutation` caller is allowed there.

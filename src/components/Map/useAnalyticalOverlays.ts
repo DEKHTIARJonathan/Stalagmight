@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import maplibregl from 'maplibre-gl';
-import type { DistanceField, Station } from '../../types/project';
-import type { GasReachField } from '../../types/ipc.generated';
+import type { Station } from '../../types/project';
 import type { GpsOrigin } from '../../types/config';
 import type { ProjectStore } from '../../store/projectStore';
 import type { UIStoreState } from '../../store/uiSelectKeys';
@@ -113,7 +112,7 @@ export function useAnalyticalOverlays({
       return undefined;
     }
     let cancelled = false;
-    invokeIpc<DistanceField>(
+    invokeIpc(
       'get_station_distances_from',
       { from: distanceGradientOrigin ?? null },
       { purpose: 'distance gradient field', fields: { origin: distanceGradientOrigin ?? 'entrance' } }
@@ -185,7 +184,7 @@ export function useAnalyticalOverlays({
       return undefined;
     }
     let cancelled = false;
-    invokeIpc<GasReachField | null>(
+    invokeIpc(
       'compute_gas_reach_field',
       {
         origin: gasComputeGate.origin,

@@ -150,7 +150,7 @@ export default function SpeleoQuitDialog() {
     if (!(await maybeSaveLocally())) return;
     setReleasing(true);
     try {
-      await invokeIpc<null>('speleodb_release_current_lock');
+      await invokeIpc('speleodb_release_current_lock');
     } catch (e) {
       showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), TOAST_KEYS.SPELEODB_LOCK, 'error');
       setReleasing(false);

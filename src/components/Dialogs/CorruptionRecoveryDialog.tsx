@@ -6,9 +6,7 @@ import { invokeIpc } from '../../utils/ipc';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import type { RepairResult } from '../../types/ipc/RepairResult';
 import type { BackupInfo } from '../../types/ipc/BackupInfo';
-import type { SalvagedData } from '../../types/ipc/SalvagedData';
 import { trackDialogComplete, setProjectActionSource } from '../../utils/telemetry';
 import { recoveryBackupItemTestId } from '../../utils/testId';
 
@@ -57,7 +55,7 @@ export default function CorruptionRecoveryDialog() {
     setStep('repairing');
     setBusy(true);
     try {
-      const res = await invokeIpc<RepairResult>('attempt_repair', { path: filePath }, {
+      const res = await invokeIpc('attempt_repair', { path: filePath }, {
         purpose: 'repair corrupt database',
       });
       setResult({
@@ -84,7 +82,7 @@ export default function CorruptionRecoveryDialog() {
     setStep('listing-backups');
     setBusy(true);
     try {
-      const list = await invokeIpc<BackupInfo[]>('list_backups', { path: filePath }, {
+      const list = await invokeIpc('list_backups', { path: filePath }, {
         purpose: 'list backup files',
       });
       setBackups(list);
@@ -116,7 +114,7 @@ export default function CorruptionRecoveryDialog() {
     setStep('restoring');
     setBusy(true);
     try {
-      const msg = await invokeIpc<string>('restore_from_backup', {
+      const msg = await invokeIpc('restore_from_backup', {
         projectPath: filePath,
         backupPath,
       }, {
@@ -146,7 +144,7 @@ export default function CorruptionRecoveryDialog() {
     setStep('salvaging');
     setBusy(true);
     try {
-      const data = await invokeIpc<SalvagedData>('export_salvageable_data', { path: filePath }, {
+      const data = await invokeIpc('export_salvageable_data', { path: filePath }, {
         purpose: 'salvage data from corrupt database',
       });
 

@@ -25,7 +25,7 @@ export default function DeleteShotChoiceDialog() {
 
   useEffect(() => {
     if (sectionId !== undefined && shotId !== undefined) {
-      invokeIpc<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId }, { purpose: 'preview shot deletion' })
+      invokeIpc('preview_delete_shot', { sectionId, shotId }, { purpose: 'preview shot deletion' })
         .then((result) => {
           setImpact(result);
           setImpactError(null);

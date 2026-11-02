@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use ts_rs::TS;
 
-use crate::core::events::EventSink;
+use crate::core::events::{self, EventSink, IpcEvent, LoadingProgressEvent};
 
 // ============================================================================
 // LoadError
@@ -829,8 +829,8 @@ impl ProgressEmitter {
             is_indeterminate,
         };
 
-        match serde_json::to_value(&progress) {
-            Ok(payload) => self.sink.emit("loading-progress", payload),
+        match events::payload::<LoadingProgressEvent>(&progress) {
+            Ok(payload) => self.sink.emit(LoadingProgressEvent::NAME, payload),
             Err(e) => tracing::warn!(
                 error = %e,
                 purpose = "report loading progress to UI",

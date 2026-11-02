@@ -995,15 +995,18 @@ fails for the wrong reason, or worse, passes vacuously.
 ```typescript
 case 'your_new_command': {
   const param = args?.param_name as string;
-  return { success: true, data: mockData };   // shape must match the Rust return type
+  return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'your_new_command'>;
 }
 ```
 
-`src/test/__tests__/mockContract.test.ts` (vitest) enforces this in both
-directions: it parses `generate_handler!` in `src-tauri/src/lib.rs` and the
-mock's `switch` cases and fails on drift, with reasoned allowlists and
+`MockReply<'name'>` (`e2e-playwright/mocks/ipc/types.ts`) is the command's
+result type from the generated command manifest (`src/types/ipc/IpcCommands.ts`,
+#576 C3), so `pnpm typecheck:playwright` fails when a reply drifts from what the
+backend returns. `src/test/__tests__/mockContract.test.ts` (vitest) enforces the
+names in both directions: it compares the manifest's `IPC_COMMAND_NAMES` with
+the mock's `switch` cases and fails on drift, with reasoned allowlists and
 stale-allowlist self-checks. **Adding or removing a `#[tauri::command]` fails
-vitest until the mock and the allowlist agree.**
+vitest until the mock and the allowlist agree** (after `pnpm gen:ipc-types`).
 
 It is gated from both sides: `check` runs it as part of the vitest suite when
 Rust or `src/` changes, and `smoke` runs it on its own (`pnpm test:mock-contract`)

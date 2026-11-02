@@ -16,9 +16,7 @@ import { COUNTRIES } from '../../data/countries';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import type {
   Permission,
-  SpeleoCollaborators,
   SpeleoPublishParams,
-  SpeleoPublishResult,
   Visibility,
 } from '../../types/ipc.generated';
 
@@ -122,7 +120,7 @@ export default function PublishToSpeleoDbDialog() {
       longitude: bothCoords ? lonNum : null,
     };
     try {
-      const result = await invokeIpc<SpeleoPublishResult>('speleodb_publish', { params });
+      const result = await invokeIpc('speleodb_publish', { params });
       // The project now EXISTS on the server and is linked. Reload its cache copy so the
       // app converges on the now-remote project. loadProject reports failure via
       // {success:false} (it never throws - it may have opened a recovery dialog), so a
@@ -157,7 +155,7 @@ export default function PublishToSpeleoDbDialog() {
       const failed: string[] = [];
       for (const c of collaborators) {
         try {
-          await invokeIpc<SpeleoCollaborators>('speleodb_add_collaborator', {
+          await invokeIpc('speleodb_add_collaborator', {
             email: c.email,
             permission: c.permission,
           });

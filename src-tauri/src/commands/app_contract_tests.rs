@@ -1,52 +1,33 @@
 //! App-surface contract tests relocated next to the wiring they pin, ahead of
-//! the crate split: `lib.rs`'s `generate_handler![]` registration and
-//! `tauri.conf.json` stay with the app crate, so the tests that read them
-//! live here too.
+//! the crate split: the IPC command registry (`generate_handler![]` in
+//! `lib.rs`, read through its generated manifest) and `tauri.conf.json` stay
+//! with the app crate, so the tests that read them live here too.
 
-/// The body of the `generate_handler![...]` block in `src`, found by counting
-/// `[`/`]` depth from the macro's opening bracket to its matching close. A
-/// first-`]` slice would end the scan at the `]` of any attribute inside the
-/// block (e.g. `#[cfg(feature = "e2e")]`), silently truncating the scanned
-/// region and letting the contract tests below pass vacuously.
-pub(super) fn generate_handler_block(src: &str) -> &str {
-    let start = src
-        .find("generate_handler![")
-        .expect("generate_handler![ not found")
-        + "generate_handler![".len();
-    let mut depth = 1usize;
-    let end = src[start..]
-        .char_indices()
-        .find_map(|(i, c)| {
-            match c {
-                '[' => depth += 1,
-                ']' => depth -= 1,
-                _ => {}
-            }
-            (depth == 0).then_some(i)
+/// Every command `generate_handler![]` registers, from the manifest
+/// `pnpm gen:ipc-types` writes (#576 C3) - parsed out of `lib.rs` with `syn`
+/// and kept fresh by CI's generated-types gate - instead of a text scan of
+/// `lib.rs` here.
+fn registered_commands() -> Vec<String> {
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../../../src/types/ipc/ipcCommands.json"))
+            .expect("ipcCommands.json is the generator's JSON");
+    let names: Vec<String> = manifest["commands"]
+        .as_array()
+        .expect("the manifest lists commands")
+        .iter()
+        .map(|c| {
+            c["name"]
+                .as_str()
+                .expect("every command has a name")
+                .to_owned()
         })
-        .expect("matching closing ] not found for generate_handler!");
-    &src[start..start + end]
-}
-
-#[test]
-fn generate_handler_block_scans_past_inner_brackets() {
-    let src = "\
-        .invoke_handler(tauri::generate_handler![\n\
-            commands::project::create_project,\n\
-            #[cfg(feature = \"e2e\")]\n\
-            commands::debug::e2e_probe,\n\
-            commands::project::after_attribute,\n\
-        ])\n\
-        .setup(trailing_marker)";
-    let block = generate_handler_block(src);
+        .collect();
     assert!(
-        block.contains("after_attribute"),
-        "an attribute's `]` inside the block must not truncate the scan; got: {block}"
+        names.len() > 100,
+        "the manifest lists only {} commands",
+        names.len()
     );
-    assert!(
-        !block.contains("trailing_marker"),
-        "the scan must stop at the macro's own closing bracket; got: {block}"
-    );
+    names
 }
 
 #[test]
@@ -54,20 +35,11 @@ fn the_legacy_open_project_is_not_exposed_over_ipc() {
     // `AppState::open_project` deliberately has NO canonical-storage guard
     // (see its doc comment): its one production caller reopens the canonical
     // cache path after a failed replace. That is only sound while the webview
-    // cannot reach it, so pin the non-exposure the same way
-    // `registry_covers_all_commands` reads the handler block.
-    let lib_src = include_str!("../lib.rs");
-    let block = generate_handler_block(lib_src);
-    let exposed = block.lines().any(|line| {
-        let trimmed = line.trim();
-        !trimmed.starts_with("//")
-            && trimmed
-                .rsplit("::")
-                .next()
-                .is_some_and(|name| name.trim_end_matches(',').trim() == "open_project")
-    });
+    // cannot reach it, so pin its absence from the command registry.
     assert!(
-        !exposed,
+        !registered_commands()
+            .iter()
+            .any(|name| name == "open_project"),
         "open_project gained an IPC registration - it must now run the \
          canonical-storage guard (see AppState::open_project's doc comment)"
     );

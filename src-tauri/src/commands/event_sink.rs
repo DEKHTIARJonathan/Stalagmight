@@ -9,10 +9,20 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-use crate::core::events::EventSink;
+use crate::core::events::{EventSink, IpcEvent};
 use crate::core::state::AppState;
+
+/// Emit `E` to the webview (#576 C13): the name and the payload type both come
+/// from `E`'s one declaration in `core::events`, so neither can drift from what
+/// the generated `IpcEvents` tells the frontend's listeners.
+pub fn emit_event<E: IpcEvent, R: Runtime>(
+    emitter: &impl Emitter<R>,
+    payload: E::Payload,
+) -> tauri::Result<()> {
+    emitter.emit(E::NAME, payload)
+}
 
 /// [`EventSink`] over the real Tauri app handle. Installed on [`AppState`]
 /// during app setup; unit tests never construct one (they run with no sink).

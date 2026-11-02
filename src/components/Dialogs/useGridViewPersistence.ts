@@ -47,8 +47,8 @@ export interface GridViewPersistenceConfig {
   orderField: string;
   hiddenField: string;
   widthsField: string;
-  /** Partial-update command for those fields. */
-  command: string;
+  /** Partial-update command for those fields (all three take the same arguments). */
+  command: 'update_new_section_view' | 'update_edit_section_view' | 'update_import_shots_view';
   /** Hidden set for a config that has never stored one. Only used when the
    *  field is ABSENT - see the seed effect. */
   fallbackHidden: readonly string[];

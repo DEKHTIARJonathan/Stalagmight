@@ -5,7 +5,6 @@ import { speleoProjectSessionIssuedFor } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import { afterQueuedEdits } from '../utils/projectTransition';
-import type { SpeleoOpenResult } from '../types/ipc.generated';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
 export interface RestoreRevisionArgs {
@@ -107,7 +106,7 @@ export function useRestoreRevision() {
       // (the open project is unchanged), so unlike the open/adopt flow there is no
       // concurrent-session notice to surface here.
       // [#576 D23-SWAP] The swap waits for the edits queued before it.
-      await afterQueuedEdits(() => invokeIpc<SpeleoOpenResult>('speleodb_restore_revision', {
+      await afterQueuedEdits(() => invokeIpc('speleodb_restore_revision', {
         projectId,
         projectName,
         hexsha,

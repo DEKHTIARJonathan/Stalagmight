@@ -236,7 +236,7 @@ export function useRevertRevision() {
       // about the tip while this asks about `hexsha`, so the short-circuit was answering
       // a different question than the one put to it.
       if (!entryPath) {
-        const candidates = await invokeIpc<SpeleoDumpCandidate[] | null>(
+        const candidates = await invokeIpc(
           'speleodb_dump_candidates',
           { projectId, hexsha },
         ).catch(() => null);
@@ -273,7 +273,7 @@ export function useRevertRevision() {
         // this process's lock, so unwind that provenance-scoped claim before classifying
         // the false result as ordinary contention or failure.
         if (useSpeleoStore.getState().remoteProjectId !== projectId) {
-          await invokeIpc<null>('speleodb_release_lock_acquired_here').catch((e: unknown) => {
+          await invokeIpc('speleodb_release_lock_acquired_here').catch((e: unknown) => {
             console.warn(
               'revert: could not release the lock taken before the project changed',
               e,
@@ -330,7 +330,7 @@ export function useRevertRevision() {
       // name the smaller problem; a stranded lock stays visible in the held-lock
       // resume prompt.
       if (useSpeleoStore.getState().remoteProjectId !== projectId) {
-        await invokeIpc<null>('speleodb_release_lock_acquired_here').catch((e: unknown) => {
+        await invokeIpc('speleodb_release_lock_acquired_here').catch((e: unknown) => {
           console.warn('revert: could not release the lock taken before the project changed', e);
         });
         return { kind: 'project_changed' };
@@ -351,7 +351,7 @@ export function useRevertRevision() {
           ...(entryPath ? { entryPath } : {}),
         });
         if (!applied) {
-          await invokeIpc<null>('speleodb_release_lock_acquired_here').catch((e: unknown) => {
+          await invokeIpc('speleodb_release_lock_acquired_here').catch((e: unknown) => {
             console.warn(
               'revert: could not release the lock after the project changed during restore',
               e,

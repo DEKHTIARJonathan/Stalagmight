@@ -497,7 +497,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       try {
         // [#576 D23-SWAP] Re-opening the project on screen swaps its tree in
         // place: the edits queued before this reach the backend first.
-        result = await afterQueuedEdits(() => invokeIpc<SpeleoOpenResult>('speleodb_open_project', {
+        result = await afterQueuedEdits(() => invokeIpc('speleodb_open_project', {
           // [Track B] (#189) pass name + latest SHA so the backend stamps the
           // speleo_link row (is_remote) on the pulled .stalx.
           projectId: summary.id,
@@ -679,7 +679,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       let result: SpeleoOpenResult;
       try {
         // [#576 D23-SWAP] As in `openRemote`: queued edits land first.
-        result = await afterQueuedEdits(() => invokeIpc<SpeleoOpenResult>('speleodb_open_project_discarding_local', {
+        result = await afterQueuedEdits(() => invokeIpc('speleodb_open_project_discarding_local', {
           projectId: summary.id,
           projectName: summary.name,
           latestCommitSha: summary.latest_commit_sha ?? null,
@@ -776,7 +776,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       let result: SpeleoAdoptResult;
       try {
         // [#576 D23-SWAP] As in `openRemote`: queued edits land first.
-        result = await afterQueuedEdits(() => invokeIpc<SpeleoAdoptResult>('speleodb_adopt_ariane', {
+        result = await afterQueuedEdits(() => invokeIpc('speleodb_adopt_ariane', {
           projectId: summary.id,
           projectName: summary.name,
           latestCommitSha: summary.latest_commit_sha ?? null,

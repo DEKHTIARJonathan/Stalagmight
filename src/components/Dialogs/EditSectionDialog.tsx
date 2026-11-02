@@ -294,7 +294,7 @@ export default function EditSectionDialog() {
 
   useEffect(() => {
     if (pendingMidDelete && sectionId !== undefined) {
-      invokeIpc<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId: pendingMidDelete.shotId }, { purpose: 'preview mid-shot deletion impact' })
+      invokeIpc('preview_delete_shot', { sectionId, shotId: pendingMidDelete.shotId }, { purpose: 'preview mid-shot deletion impact' })
         .then((result) => {
           setPendingImpact(result);
           setPendingImpactError(null);

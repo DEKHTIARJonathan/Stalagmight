@@ -6,9 +6,9 @@ import { useTranslation } from 'react-i18next';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { CheckCircleIcon } from '../common/icons';
-import type { DmpFile, CrossSectionSuggestion, ImportSectionForSuggestion, SegmentGeometry } from '../../types/commands';
+import type { DmpFile, CrossSectionSuggestion, ImportSectionForSuggestion } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
-import type { DistanceField, Project, Station, ShotData } from '../../types/project';
+import type { Project, Station, ShotData } from '../../types/project';
 import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from '../../types/commands';
 import type { ZeroDatumConfigResult } from './ZeroDatumConfigDialog';
 import type { DmpSection } from '../../types/commands';
@@ -1208,7 +1208,7 @@ export default function DmpNewImportDialog({
       if (currentSuggestion.targetType === 'existing' && currentSuggestion.existingSectionId != null) {
         // Fetch segment geometry for the existing target section
         try {
-          const result = await invokeIpc<SegmentGeometry>('get_segment_geometry', { sectionId: currentSuggestion.existingSectionId }, { purpose: 'fetch segment geometry for target section' });
+          const result = await invokeIpc('get_segment_geometry', { sectionId: currentSuggestion.existingSectionId }, { purpose: 'fetch segment geometry for target section' });
           if (cancelled) return;
 
           for (const s of result.sections) {
@@ -1251,7 +1251,7 @@ export default function DmpNewImportDialog({
           coveredExistingSectionIds.add(anchor.existingSectionId);
 
           try {
-            const result = await invokeIpc<SegmentGeometry>('get_segment_geometry', { sectionId: anchor.existingSectionId }, { purpose: 'fetch segment geometry for anchor section' });
+            const result = await invokeIpc('get_segment_geometry', { sectionId: anchor.existingSectionId }, { purpose: 'fetch segment geometry for anchor section' });
             if (cancelled) return;
 
             const anchorGeo = result.sections.find((s) => s.section_id === anchor.existingSectionId);
@@ -1294,7 +1294,7 @@ export default function DmpNewImportDialog({
         coveredExistingSectionIds.add(anchor.existingSectionId);
 
         try {
-          const result = await invokeIpc<SegmentGeometry>('get_segment_geometry', { sectionId: anchor.existingSectionId }, { purpose: 'fetch segment geometry for import-side anchor' });
+          const result = await invokeIpc('get_segment_geometry', { sectionId: anchor.existingSectionId }, { purpose: 'fetch segment geometry for import-side anchor' });
           if (cancelled) return;
 
           const anchorGeo = result.sections.find((s) => s.section_id === anchor.existingSectionId);
@@ -1750,12 +1750,13 @@ export default function DmpNewImportDialog({
     await Promise.all(missing.map(async (origin) => {
       const key = `${origin.section_id}:${origin.station_index}`;
       try {
-        const field = await invokeIpc<DistanceField>(
+        const field = await invokeIpc(
           'get_station_distances_from',
           { from: origin },
           { purpose: 'temporal DMP placement rerank', fields: { origin: key } },
         );
-        const distances = distanceMapFromField(origin, field);
+        // null only when no project is open, which an open import rules out (#576 C3).
+        const distances = distanceMapFromField(origin, field!);
         for (const [distanceKey, distance] of distances) {
           temporalDistanceCacheRef.current.set(distanceKey, distance);
         }
@@ -1963,7 +1964,7 @@ export default function DmpNewImportDialog({
     }
 
     try {
-      const suggestions = await invokeIpc<CrossSectionSuggestion[]>(
+      const suggestions = await invokeIpc(
         'suggest_all_import_placements',
         { importSections: remainingSections },
         { purpose: 'suggest import placements for remaining sections' },

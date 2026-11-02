@@ -6,7 +6,7 @@ import { TOAST_KEYS } from '../utils/toastKeys';
 import { speleoState } from './speleoStoreHandle';
 import { useUIStore } from './uiStore';
 import { refuseMutationDuringCarry } from './moveCarry';
-import type { ProjectWarning, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
+import type { IntegrityRepairResult } from '../types/commands';
 import type { ProjectStore } from './projectStore';
 
 /**
@@ -61,7 +61,7 @@ export function createProjectIntegrityActions(
   return {
     refreshWarnings: async () => {
       try {
-        const warnings = await invokeIpc<ProjectWarning[]>('get_project_warnings', undefined, {
+        const warnings = await invokeIpc('get_project_warnings', undefined, {
           purpose: 'refresh validation warnings',
         });
         set({ warnings });
@@ -126,7 +126,7 @@ export function createProjectIntegrityActions(
       const opAtStart = get().loading.clientOpId;
       const mySeq = ++integrityCheckSeq;
       try {
-        const result = await invokeIpc<IntegrityCheckResult>('check_project_integrity', undefined, {
+        const result = await invokeIpc('check_project_integrity', undefined, {
           purpose: 'check project structural integrity after load',
         });
         const cur = get();
@@ -185,7 +185,7 @@ export function createProjectIntegrityActions(
       const refused = refuseMutationDuringCarry();
       if (refused) throw refused;
       try {
-        const result = await invokeIpc<IntegrityRepairResult>('repair_project_integrity', undefined, {
+        const result = await invokeIpc('repair_project_integrity', undefined, {
           purpose: 'repair project structural integrity',
         });
         // Repair mutates the project; refresh derived state so the UI reflects it.

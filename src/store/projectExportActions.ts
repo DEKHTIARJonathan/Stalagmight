@@ -44,7 +44,7 @@ export function createProjectExportActions(): ProjectExportActions {
       // ordinary project. Raised here rather than in `ExportControls` so every
       // route reaches the user - the modal, the Export-mode panel and this action
       // called directly.
-      const notes = await invokeIpc<string[]>('export_tml', { path }, {
+      const notes = await invokeIpc('export_tml', { path }, {
         purpose: 'export project as Ariane TML',
         fields: { path },
       });

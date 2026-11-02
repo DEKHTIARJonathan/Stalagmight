@@ -1,4 +1,4 @@
-import type { MockCommandFamily } from './types';
+import type { MockCommandFamily, MockReply } from './types';
 
 /**
  * SpeleoDB commands of the Playwright IPC mock: deterministic logged-out / local defaults.
@@ -23,7 +23,7 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
           // is exactly what the UI must be able to say without probing.
           storage: null,
           keychain: 'not_attempted',
-        };
+        } satisfies MockReply<'speleodb_session'>;
       // The credential-storage verbs both answer with a refreshed session. A
       // mocked run is signed out, so they echo the logged-out shape above
       // rather than inventing a session the rest of the mock does not have.
@@ -36,7 +36,7 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
           keychain_backed: false,
           storage: null,
           keychain: 'not_attempted',
-        };
+        } satisfies MockReply<'speleodb_set_token_storage'> & MockReply<'speleodb_retry_keychain'>;
       case 'speleodb_link_status':
         // Full SpeleoLinkStatus shape (remote_state / access_denied / server_error
         // included) so a spec that flips is_remote:true still matches the DTO.
@@ -58,16 +58,18 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
           // rather than false and no spec could reach the state at all - the state
           // this whole feature is built around.
           unwound: false,
-          // [#303] The hybrid undo stack's policy fields. Full is the default, and
-          // not overridden, so the settings control renders "following the global
-          // default" - the shape a spec sees unless it overrides this.
+          // [#303] The hybrid undo stack's policy. Full is the default - the shape a
+          // spec sees unless it overrides this.
           undo_mode: 'full',
-          undo_mode_overridden: false,
+          // #213 / #218: no force-edit session, the opt-in off, no remote project open.
+          force_editing: false,
+          allow_force_edit: false,
+          project_id: null,
           // A spec opts into a different link state by assigning this before the app
           // asks; anything it carries wins over the defaults above.
           ...((window as unknown as Record<string, unknown>)
             .__speleoLinkStatusOverrides as Record<string, unknown> | undefined),
-        };
+        } satisfies MockReply<'speleodb_link_status'>;
       case 'speleodb_open_file_flags':
         // [#576 NF-W2F-1] The open file's flags, re-asked after an in-place tree swap.
         // The mock never swaps a tree in place, so the open file is whatever the last
@@ -77,17 +79,17 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
           speleoLinkUnreadable: false,
           ...((window as unknown as Record<string, unknown>)
             .__openFileFlagsOverrides as Record<string, unknown> | undefined),
-        };
+        } satisfies MockReply<'speleodb_open_file_flags'>;
       case 'speleodb_list_projects':
-        return [];
+        return [] satisfies MockReply<'speleodb_list_projects'>;
       // #270: local (un-pushed) state per project id, keyed by id. Nothing is
       // cached in a mocked run, so every list renders without a local-edit
       // accent; specs that need one override this per spec.
       case 'speleodb_local_project_states':
-        return {};
+        return {} satisfies MockReply<'speleodb_local_project_states'>;
       case 'speleodb_take_remote':
         // Returns the reloaded .stalx path (#198); no e2e spec drives it yet.
-        return '/mock/project.stalx';
+        return '/mock/project.stalx' satisfies MockReply<'speleodb_take_remote'>;
       case 'speleodb_logout':
       case 'speleodb_unlink':
       // Strip half of the managed-file prompt: deletes a foreign copy's
@@ -105,18 +107,27 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
       // #215 lock release + delete: no payload.
       case 'speleodb_release_current_lock':
       case 'speleodb_delete_project':
-        return null;
+        return null satisfies MockReply<'speleodb_logout'> &
+          MockReply<'speleodb_unlink'> &
+          MockReply<'speleodb_remove_link_at'> &
+          MockReply<'speleodb_release_all_locks'> &
+          MockReply<'speleodb_release_lock'> &
+          MockReply<'speleodb_release_lock_acquired_here'> &
+          MockReply<'speleodb_set_exclude_geojson'> &
+          MockReply<'speleodb_set_undo_mode'> &
+          MockReply<'speleodb_release_current_lock'> &
+          MockReply<'speleodb_delete_project'>;
       // [#303] Which revision a chain step would load, backward and forward. `null`
       // by default - a mocked project has no revision history to walk - so neither
       // dropdown shows its step entry unless a spec overrides this.
       case 'speleodb_unwind_target':
       case 'speleodb_rewind_target':
-        return null;
+        return null satisfies MockReply<'speleodb_unwind_target'> & MockReply<'speleodb_rewind_target'>;
       // [#303] Discard the local copy and re-lock. Mocked as a plain successful
       // acquire: the specs that reach it care that the app returns to an editing
       // state, not about the download it does on the way.
       case 'speleodb_discard_changes':
-        return { kind: 'editing' };
+        return { kind: 'editing' } satisfies MockReply<'speleodb_discard_changes'>;
       // #215 collaborator management: the roster (users + teams). The mutating
       // commands echo the refreshed roster; the picker lists no teams by default.
       case 'speleodb_list_collaborators':
@@ -126,11 +137,17 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
       case 'speleodb_add_team':
       case 'speleodb_set_team':
       case 'speleodb_remove_team':
-        return { users: [], teams: [] };
+        return { users: [], teams: [] } satisfies MockReply<'speleodb_list_collaborators'> &
+          MockReply<'speleodb_add_collaborator'> &
+          MockReply<'speleodb_set_collaborator'> &
+          MockReply<'speleodb_remove_collaborator'> &
+          MockReply<'speleodb_add_team'> &
+          MockReply<'speleodb_set_team'> &
+          MockReply<'speleodb_remove_team'>;
       case 'speleodb_list_teams':
-        return [];
+        return [] satisfies MockReply<'speleodb_list_teams'>;
       case 'speleodb_search_users':
-        return [];
+        return [] satisfies MockReply<'speleodb_search_users'>;
       case 'speleodb_get_project_metadata':
       case 'speleodb_patch_project':
         // Deterministic project metadata for the #206 settings tab. patch echoes
@@ -143,14 +160,14 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
           latitude: null,
           longitude: null,
           exclude_geojson: false,
-        };
+        } satisfies MockReply<'speleodb_get_project_metadata'> & MockReply<'speleodb_patch_project'>;
       case 'speleodb_publish':
         // #207 publish result: the reloaded (now-remote) local .stalx path.
         return {
           project_id: 'mock-project-id',
           endpoint: 'https://speleodb.example',
           local_path: '/mock/project.stalx',
-        };
+        } satisfies MockReply<'speleodb_publish'>;
       case 'speleodb_login':
         return {
           user_email: 'test@example.com',
@@ -159,7 +176,7 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
           storage: 'keychain',
           keychain: 'available',
           needs_storage_choice: false,
-        };
+        } satisfies MockReply<'speleodb_login'>;
 
       default:
         return ctx.unhandled;

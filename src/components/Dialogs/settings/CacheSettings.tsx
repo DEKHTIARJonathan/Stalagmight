@@ -92,7 +92,7 @@ export function CacheSettings({
     if (!mountedRef.current) return;
     setIsLoadingStats(true);
     try {
-      const stats = await invokeIpc<CacheStats>('get_cache_stats', undefined, {
+      const stats = await invokeIpc('get_cache_stats', undefined, {
         purpose: 'load tile cache statistics',
       });
       if (mountedRef.current) {

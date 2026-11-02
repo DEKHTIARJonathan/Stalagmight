@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { IPC_COMMAND_NAMES } from '../../types/ipc/IpcCommands';
+import type { IpcCommandName } from '../../utils/ipc';
 
 /**
  * Mock contract tripwire (issue #275).
@@ -11,21 +13,25 @@ import { fileURLToPath } from 'node:url';
  * `default: console.warn(...); return null`, so a new `#[tauri::command]`
  * added to the registry without a matching mock case makes any spec that
  * exercises it fail silently (returns null instead of real data) rather than
- * with a clear error. This test parses both sides of the contract and fails
+ * with a clear error. This test compares both sides of the contract and fails
  * loudly on drift in either direction. It bit PR #59's
  * `split_shot_at_distance`; see the class documented in CLAUDE.md.
+ *
+ * The registered side is the generated command manifest (#576 C3:
+ * `IPC_COMMAND_NAMES`, read out of `generate_handler!` by `pnpm gen:ipc-types`
+ * and gated fresh by CI), not a re-parse of lib.rs. The mocked side is still the
+ * case labels; what each case RETURNS is checked by `typecheck:playwright`
+ * through `MockReply` (e2e-playwright/mocks/ipc/types.ts).
  */
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../../../');
-const LIB_RS_PATH = path.join(REPO_ROOT, 'src-tauri/src/lib.rs');
 const MOCK_TS_PATH = path.join(REPO_ROOT, 'e2e-playwright/mocks/tauri-ipc.ts');
 // The command families split out of the mock (#576 E8): each module exports one
 // `MockCommandFamily` factory with its own `switch (cmd)`.
 const MOCK_FAMILY_DIR = path.join(REPO_ROOT, 'e2e-playwright/mocks/ipc');
 
-const libRsSource = fs.readFileSync(LIB_RS_PATH, 'utf8');
 const mockTsSource = fs.readFileSync(MOCK_TS_PATH, 'utf8');
 const mockFamilySources = fs
   .readdirSync(MOCK_FAMILY_DIR)
@@ -137,38 +143,9 @@ function stripComments(source: string): string {
   return out.join('');
 }
 
-/**
- * Parses the `tauri::generate_handler![...]` command list out of
- * `src-tauri/src/lib.rs`. Every entry there is fully qualified
- * (`commands::<module>::<fn>`), so this extracts the last path segment as
- * the wire command name Tauri dispatches on.
- */
-function parseRegisteredRustCommands(source: string): string[] {
-  const macroMatch = /tauri::generate_handler!\s*\[/.exec(source);
-  if (!macroMatch) {
-    throw new Error(
-      'parseRegisteredRustCommands: could not find `tauri::generate_handler![` in src-tauri/src/lib.rs. ' +
-        'Has the invoke_handler registration moved or been renamed?'
-    );
-  }
-  const openIndex = source.indexOf('[', macroMatch.index);
-  const closeIndex = findMatchingBracket(source, openIndex, '[', ']');
-  const block = stripComments(source.slice(openIndex + 1, closeIndex));
-
-  const commandRegex = /\bcommands::[A-Za-z_][A-Za-z0-9_]*::([A-Za-z_][A-Za-z0-9_]*)\b/g;
-  const names = new Set<string>();
-  let match: RegExpExecArray | null;
-  while ((match = commandRegex.exec(block)) !== null) {
-    names.add(match[1]!);
-  }
-
-  if (names.size === 0) {
-    throw new Error(
-      'parseRegisteredRustCommands: found the generate_handler! block but extracted zero command names. ' +
-        'The `commands::<module>::<fn>` pattern this test looks for may no longer match.'
-    );
-  }
-  return [...names].sort();
+/** Every command the backend registers, from the generated manifest. */
+function registeredRustCommands(): string[] {
+  return [...IPC_COMMAND_NAMES].sort();
 }
 
 /**
@@ -260,7 +237,7 @@ function parseAllMockedCommands(): string[] {
 // (the "allowlist entries stay accurate" test below catches a stale removal
 // the other way: a command that no longer needs the exemption).
 // ----------------------------------------------------------------------------
-const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
+const UNMOCKED_COMMAND_REASONS: Partial<Record<IpcCommandName, string>> = {
   // Dev/debug-only, not reachable via any UI flow a spec drives.
   debug_trigger_panic: 'dev-only crash-testing command, not reachable via any UI flow',
   get_memory_stats: 'dev/debug memory probe, not reachable via any UI flow',
@@ -358,8 +335,8 @@ const STALE_MOCK_CASE_REASONS: Record<string, string> = {
 };
 
 describe('mock contract tripwire (#275)', () => {
-  it('parses a non-empty registered Rust command list', () => {
-    expect(parseRegisteredRustCommands(libRsSource).length).toBeGreaterThan(0);
+  it('reads a non-empty registered Rust command list from the manifest', () => {
+    expect(registeredRustCommands().length).toBeGreaterThan(0);
   });
 
   it('parses a non-empty mocked command list', () => {
@@ -367,7 +344,7 @@ describe('mock contract tripwire (#275)', () => {
   });
 
   it('every registered Rust command has a mock case or an allowlist reason', () => {
-    const registered = parseRegisteredRustCommands(libRsSource);
+    const registered = registeredRustCommands();
     const mocked = new Set(parseAllMockedCommands());
 
     const missing = registered.filter((cmd) => !mocked.has(cmd) && !(cmd in UNMOCKED_COMMAND_REASONS));
@@ -382,7 +359,7 @@ describe('mock contract tripwire (#275)', () => {
   });
 
   it('every mock case corresponds to a registered command or an allowlist reason', () => {
-    const registered = new Set(parseRegisteredRustCommands(libRsSource));
+    const registered = new Set(registeredRustCommands());
     const mocked = parseAllMockedCommands();
 
     const orphaned = mocked.filter((cmd) => !registered.has(cmd) && !(cmd in STALE_MOCK_CASE_REASONS));
@@ -397,7 +374,7 @@ describe('mock contract tripwire (#275)', () => {
   });
 
   it('UNMOCKED_COMMAND_REASONS has no stale entries', () => {
-    const registered = new Set(parseRegisteredRustCommands(libRsSource));
+    const registered = new Set(registeredRustCommands());
     const mocked = new Set(parseAllMockedCommands());
 
     const stale = Object.keys(UNMOCKED_COMMAND_REASONS).filter(
@@ -407,17 +384,7 @@ describe('mock contract tripwire (#275)', () => {
     expect(stale, 'these allowlist entries no longer need an exemption; remove them').toEqual([]);
   });
 
-  it('ignores command paths and case labels that appear only in comments', () => {
-    const rustSource = [
-      'fn main() { builder.invoke_handler(tauri::generate_handler![',
-      '    commands::project::real_command,',
-      '    // TODO: also register commands::project::phantom_from_line_comment here',
-      '    /* commands::project::phantom_from_block_comment, */',
-      '    commands::export::other_real_command,',
-      ']); }',
-    ].join('\n');
-    expect(parseRegisteredRustCommands(rustSource)).toEqual(['other_real_command', 'real_command']);
-
+  it('ignores case labels that appear only in comments', () => {
     const tsSource = [
       'switch (cmd) {',
       "  case 'real_case':",
@@ -431,7 +398,7 @@ describe('mock contract tripwire (#275)', () => {
   });
 
   it('STALE_MOCK_CASE_REASONS has no stale entries', () => {
-    const registered = new Set(parseRegisteredRustCommands(libRsSource));
+    const registered = new Set(registeredRustCommands());
     const mocked = new Set(parseAllMockedCommands());
 
     const stale = Object.keys(STALE_MOCK_CASE_REASONS).filter(

@@ -29,7 +29,7 @@ use crate::core::command::{EDIT_DISABLED_CODE, WORKSPACE_READ_ONLY_CODE};
 use crate::core::CommandResult;
 
 /// The three workspace modes, spelled as the frontend's `AppMode` spells them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkspaceMode {
     Survey,

@@ -134,7 +134,7 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
     setLoading(true);
     setLoadError(null);
     try {
-      const meta = await invokeIpc<SpeleoProjectMetadata>('speleodb_get_project_metadata');
+      const meta = await invokeIpc('speleodb_get_project_metadata');
       if (!current()) return;
       setMetadata((prev) => foldLoaded(prev, meta));
     } catch (e) {
@@ -205,7 +205,7 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
       longitude: coordinatesChanged ? lonNum : null,
     };
     try {
-      const updated = await invokeIpc<SpeleoProjectMetadata>('speleodb_patch_project', { patch });
+      const updated = await invokeIpc('speleodb_patch_project', { patch });
       setMetadata({ baseline: updated, form: toForm(updated) });
       // The backend folds a name change into the local .stalx; mirror it in the UI.
       // A lightweight in-memory set (not set_project_name_for_path) avoids marking the

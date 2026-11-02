@@ -3,6 +3,7 @@
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use ts_rs::TS;
 
@@ -27,14 +28,16 @@ use stalagmight_lib::config::{
     ThemeMode, TokenFallback, UnitsConfig, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
-    CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
-    ReversedSection, SpeleoDoneReport, SpeleoPushReport, ValidationWarning, WarningSeverity,
+    Command, CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult,
+    IntegrityRepairResult, ReversedSection, SpeleoDoneReport, SpeleoPushReport, ValidationWarning,
+    WarningSeverity,
 };
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
     OpenFileFlags, SpeleoManagedFile,
 };
 use stalagmight_lib::core::state::VirtualShotMode;
+use stalagmight_lib::core::WorkspaceMode;
 use stalagmight_lib::export::{ColorMode, ExportImageOptions, ImageFormat};
 use stalagmight_lib::logging::{LogsSince, RingLogEntry};
 use stalagmight_lib::models::placement_suggest::{
@@ -80,6 +83,19 @@ use stalagmight_lib::speleodb::{
 use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
+#[path = "gen_ipc_types/commands.rs"]
+mod commands;
+#[path = "gen_ipc_types/events.rs"]
+mod events;
+
+/// `(Rust ident, TS name)` of every exported type: the command manifest resolves
+/// the types in a `#[tauri::command]` signature against it.
+static EXPORTED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+// The manifest declares these id aliases `number`; pin that they are still `u32`.
+const _: fn(stalagmight_lib::models::SectionId, stalagmight_lib::models::ShotId) -> (u32, u32) =
+    |section, shot| (section, shot);
+
 fn export<T: TS + 'static>(out_dir: &Path) {
     let export_to = T::EXPORT_TO
         .and_then(|path| Path::new(path).file_name())
@@ -87,6 +103,16 @@ fn export<T: TS + 'static>(out_dir: &Path) {
     let out_path = out_dir.join(export_to);
     T::export_to(&out_path).expect("Failed to export TS type");
     flatten_import_paths(&out_path);
+    let rust_path = std::any::type_name::<T>();
+    let rust_ident = rust_path
+        .split('<')
+        .next()
+        .and_then(|path| path.rsplit("::").next())
+        .unwrap_or(rust_path);
+    EXPORTED
+        .lock()
+        .expect("export registry lock")
+        .push((rust_ident.to_string(), T::name()));
 }
 
 /// Rewrite every `import type { X } from "<somewhere>/X";` to the sibling form
@@ -147,6 +173,9 @@ fn main() {
     export::<IntegrityCheckResult>(&out_dir);
     export::<ValidationWarning>(&out_dir);
     export::<WarningSeverity>(&out_dir);
+    // [#576 C3] execute_batch's payload and set_workspace_mode's argument
+    export::<Command>(&out_dir);
+    export::<WorkspaceMode>(&out_dir);
 
     // Loading/progress types
     export::<DisplaySettings>(&out_dir);
@@ -431,6 +460,8 @@ fn main() {
         "IntegrityCheckResult",
         "ValidationWarning",
         "WarningSeverity",
+        "Command",
+        "WorkspaceMode",
         "DisplaySettings",
         "LoadingPhase",
         "LoadingProgress",
@@ -643,6 +674,10 @@ fn main() {
         "SpeleoCollaborators",
         "SpeleoTeamOption",
         "SpeleoUserSuggestion",
+        // [#576 C3] the command manifest (written by `commands::write_manifest`)
+        "IpcCommands",
+        // [#576 C13] the event manifest (written by `events::write_events`)
+        "IpcEvents",
     ];
 
     let mut generated =
@@ -674,6 +709,20 @@ fn main() {
     );
 
     write_default_config(&out_dir);
+
+    // [#576 C3] The command manifest, typed against everything exported above.
+    let exported = EXPORTED.lock().expect("export registry lock").clone();
+    commands::write_manifest(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &out_dir,
+        &commands::TypeTable::new(&exported),
+    );
+    // [#576 C13] The event manifest.
+    events::write_events(
+        &out_dir,
+        &exported.iter().map(|(_, ts)| ts.clone()).collect(),
+    );
+
     assert_no_bigint(&out_dir);
 }
 

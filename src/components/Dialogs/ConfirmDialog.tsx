@@ -48,7 +48,7 @@ export default function ConfirmDialog() {
   // Fetch relationships when dialog opens for any deletion that removes a section
   useEffect(() => {
     if (removesSection && sectionId !== undefined) {
-      invokeIpc<SectionRelationships>('get_section_relationships', { sectionId }, { purpose: 'fetch section relationships for deletion' })
+      invokeIpc('get_section_relationships', { sectionId }, { purpose: 'fetch section relationships for deletion' })
         .then(setRelationships)
         .catch(() => setRelationships(null));
     } else {
@@ -59,7 +59,7 @@ export default function ConfirmDialog() {
   // Fetch delete impact for shot deletions (edge shots)
   useEffect(() => {
     if (type === 'shot' && !removesSection && !splitRequired && sectionId !== undefined && shotId !== undefined) {
-      invokeIpc<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId }, { purpose: 'preview shot deletion impact' })
+      invokeIpc('preview_delete_shot', { sectionId, shotId }, { purpose: 'preview shot deletion impact' })
         .then((result) => {
           setShotImpact(result);
           setShotImpactError(null);

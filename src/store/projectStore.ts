@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import i18n from '../i18n';
-import { invokeIpc } from '../utils/ipc';
+import { invokeIpc, type CommandResultCommand, type ForwardedInvoke, type IpcCallArgs } from '../utils/ipc';
 import { trackCommand, setSource, peekProjectActionSource, clearProjectActionSource } from '../utils/telemetry';
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
@@ -23,7 +23,6 @@ import { refuseMutationDuringCarry, refuseStaleCarryCommit, takeMoveCarryCommit,
 import { runSerialized } from './mutationQueue';
 import type {
   Project,
-  ProjectState,
   ProjectMetadata,
   Station,
   ProjectStats,
@@ -56,8 +55,6 @@ export interface ImportReceiptProvenance {
   /** The file's own parse warnings (`DmpFile.warnings`, #576 B13); they lead the receipt. */
   sourceWarnings?: string[];
 }
-import type { CreateProjectFullResult } from '../types/loading';
-import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
@@ -659,11 +656,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   /** True when the project a request was ISSUED against is no longer the open one (#24). */
   const lostProject = (key: string | null) => projectSwitched(key, get().project?.created_at ?? null);
   /** Shared helper: invoke IPC command, refresh state on success, mark dirty. */
-  const executeCommand = async (
-    command: string,
-    args: Record<string, unknown> | undefined,
+  const executeCommand = async <K extends CommandResultCommand>(
+    command: K,
+    typedArgs: IpcCallArgs<K> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown>; readOnlyNoticeInline?: boolean }
   ): Promise<CommandResult> => {
+    // Checked against the command's manifest entry at the call site (#576 C3); forwarded as is.
+    const args = typedArgs as Record<string, unknown> | undefined;
     // Captured when the user ISSUES the command, not when the queue gets round to it. The two
     // differ once a mutation can wait behind another: project load/create/close do not go
     // through the queue, so B can open while this entry is still waiting, and reading the
@@ -682,7 +681,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   };
 
   const executeCommandInner = async (
-    command: string,
+    command: CommandResultCommand,
     args: Record<string, unknown> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown>; readOnlyNoticeInline?: boolean },
     requestProjectKey: string | null,
@@ -706,7 +705,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // survey it was computed against, is refused here - the last moment before IPC.
       const staleCarryCommit = refuseStaleCarryCommit(carryCommit, get().projectTreeGeneration);
       if (staleCarryCommit) return staleCarryCommit;
-      const result = await invokeIpc<CommandResult>(command, args, meta);
+      const result: CommandResult = await (invokeIpc as ForwardedInvoke)(command, args, meta);
       if (result.success) {
         // Re-resolve those pins BEFORE the refetch: the reach-field effect keys on modified_at,
         // so a stale pin sent here would paint a route through the wrong station for a frame.
@@ -791,9 +790,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   };
 
   /** Shared helper for undo/redo operations: invoke, toast on failure, always refresh. */
-  const executeUndoRedo = async (
-    command: string,
-    args: Record<string, unknown> | undefined,
+  const executeUndoRedo = async <K extends CommandResultCommand>(
+    command: K,
+    typedArgs: IpcCallArgs<K> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown> },
     toastId: string,
     checkPartialFailure: boolean,
@@ -802,13 +801,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const requestProjectKey = get().project?.created_at ?? null;
     const refused = refuseMutationDuringCarry();
     if (refused) return refused;
+    const args = typedArgs as Record<string, unknown> | undefined;
     return runSerialized(() =>
       executeUndoRedoInner(command, args, meta, toastId, checkPartialFailure, requestProjectKey)
     );
   };
 
   const executeUndoRedoInner = async (
-    command: string,
+    command: CommandResultCommand,
     args: Record<string, unknown> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown> },
     toastId: string,
@@ -838,7 +838,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // themselves, and the refresh + integrity re-check simply re-read whatever is now open -
       // exactly what already happens today when the switch is caught one guard later.
       if (lostProject(requestProjectKey)) return emptyCommandResult(false, PROJECT_CHANGED);
-      result = await invokeIpc<CommandResult>(command, args, meta);
+      result = await (invokeIpc as ForwardedInvoke)(command, args, meta);
       if (result.success) {
         reversedSections = result.reversed_sections;
         set({ isDirty: true });
@@ -1194,7 +1194,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // has already been consumed from the backend, so losing this dialog
         // loses the prompt for the session, leaving substitutions unreviewed.
         try {
-          const found = await invokeIpc<UnrecognisedShotKind[]>(
+          const found = await invokeIpc(
             'take_unrecognised_shot_kinds',
             // Scoped to THIS load: a cancelled load runs on to its next
             // checkpoint, so without the id an abandoned project's shot ids
@@ -1335,7 +1335,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // flow also fires import_sections, which peeks the same source).
       const actionSource = peekProjectActionSource();
       if (actionSource) setSource(actionSource);
-      const result = await invokeIpc<CreateProjectFullResult>(
+      const result = await invokeIpc(
         'create_project_full',
         {
           name,
@@ -1425,7 +1425,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // as a cheap signal to refresh below, avoiding a get_project_state on every
     // clean save / autosave.
     const hadIntegrityIssues = get().integrityIssues.length > 0;
-    const result = await invokeIpc<CommandResult>(
+    const result = await invokeIpc(
       'save_project',
       { path, isAutosave: isAutosave === true },
       { purpose: 'persist project changes', fields: { path, isAutosave } }
@@ -1603,7 +1603,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     set({ isClosing: true });
     return runProjectSwitch(async () => {
       try {
-        const result = await invokeIpc<CommandResult>(
+        const result = await invokeIpc(
           'close_project',
           // Default: release a held SpeleoDB lock so the close doesn't strand it
           // (fix 1). The keep-lock close path passes { releaseLock: false }.
@@ -1629,7 +1629,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   refreshProjectState: async () => {
     try {
       debugLog('[projectStore] refreshProjectState: invoking get_project_state...');
-      const state = await invokeIpc<ProjectState | null>('get_project_state', undefined, {
+      const state = await invokeIpc('get_project_state', undefined, {
         purpose: 'refresh project state in UI',
       });
       debugLog('[projectStore] refreshProjectState: got state, sections:', state?.project?.sections?.length);
@@ -1666,7 +1666,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // [perf] Hot path on every navigation to GlobalView. Surfaced in the
       // memory probe panel to confirm the SQL-aggregate fast path stays fast.
       const t0 = performance.now();
-      const recent = await invokeIpc<ProjectMetadata[]>('list_recent_projects', undefined, {
+      const recent = await invokeIpc('list_recent_projects', undefined, {
         purpose: 'load recent projects list',
       });
       const ms = performance.now() - t0;
@@ -1690,7 +1690,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   removeFromRecentProjects: async (path: string) => {
     try {
-      const result = await invokeIpc<CommandResult>(
+      const result = await invokeIpc(
         'remove_from_recent_projects',
         { path },
         { purpose: 'update recent projects list', fields: { path } }
@@ -1715,7 +1715,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // config so the project disappears from the available AND "missing" recent rows.
   deleteProject: (path: string) => runProjectSwitch(async () => {
     try {
-      const result = await invokeIpc<CommandResult>(
+      const result = await invokeIpc(
         'delete_project',
         { path },
         { purpose: 'permanently delete project', fields: { path } }
@@ -1767,7 +1767,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         date: data.date,
         color: data.color,
         direction: data.direction,
-        quality: data.quality,
         shots: data.shots,
       },
       {
@@ -1791,7 +1790,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         date: data.date,
         color: data.color,
         direction: data.direction,
-        quality: data.quality,
         shots: data.shots,
         importStationIndex,
         targetStation,
@@ -1944,7 +1942,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   checkMergeConnectivity: async (stationA: StationRef, stationB: StationRef) => {
-    return await invokeIpc<ConnectivityResult>(
+    return await invokeIpc(
       'check_merge_connectivity',
       { stationA, stationB },
       { purpose: 'check merge connectivity', fields: { stationA, stationB } }
@@ -1981,7 +1979,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
     set({ adjustedLoading: true });
     try {
-      const adjusted = await invokeIpc<Station[]>('get_adjusted_stations', undefined, {
+      const adjusted = await invokeIpc('get_adjusted_stations', undefined, {
         purpose: 'closure-adjusted geometry view',
       });
       // Discard if the project OR the closure-adjustment config changed while the
@@ -2074,7 +2072,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   getConnectedSectionIds: async (sectionId: SectionId) => {
-    return await invokeIpc<number[]>(
+    return await invokeIpc(
       'get_rigid_connected_section_ids',
       { sectionId },
       { purpose: 'query connected section ids', fields: { sectionId } }
@@ -2082,7 +2080,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   getAnchoredSectionIds: async () => {
-    return await invokeIpc<number[]>(
+    return await invokeIpc(
       'get_anchored_section_ids',
       undefined,
       { purpose: 'query anchored section ids' }
@@ -2103,13 +2101,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     executeUndoRedo('redo_to', { index }, { purpose: 'redo to history index', fields: { index } }, TOAST_KEYS.REDO_FAILED, true),
 
   getUndoStack: async () => {
-    return await invokeIpc<UndoHistoryItem[]>('get_undo_stack', undefined, {
+    return await invokeIpc('get_undo_stack', undefined, {
       purpose: 'fetch undo history',
     });
   },
 
   getRedoStack: async () => {
-    return await invokeIpc<UndoHistoryItem[]>('get_redo_stack', undefined, {
+    return await invokeIpc('get_redo_stack', undefined, {
       purpose: 'fetch redo history',
     });
   },
@@ -2117,8 +2115,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   refreshUndoState: async () => {
     try {
       const [canUndo, canRedo] = await Promise.all([
-        invokeIpc<boolean>('can_undo', undefined, { purpose: 'check undo availability' }),
-        invokeIpc<boolean>('can_redo', undefined, { purpose: 'check redo availability' }),
+        invokeIpc('can_undo', undefined, { purpose: 'check undo availability' }),
+        invokeIpc('can_redo', undefined, { purpose: 'check redo availability' }),
       ]);
       set({ canUndo, canRedo });
     } catch (e) {
@@ -2137,14 +2135,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // Import/Export
   importDmp: async (path: string) => {
-    return await invokeIpc<DmpFile>('import_dmp', { path }, {
+    return await invokeIpc('import_dmp', { path }, {
       purpose: 'parse DMP for import preview',
       fields: { path },
     });
   },
 
   parseTml: async (path: string) => {
-    return await invokeIpc<TmlFile>('parse_tml', { path }, {
+    return await invokeIpc('parse_tml', { path }, {
       purpose: 'parse TML for import preview',
       fields: { path },
     });
@@ -2178,7 +2176,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   parseCompass: async (path: string) => {
-    return await invokeIpc<CompassFile>('parse_compass', { path }, {
+    return await invokeIpc('parse_compass', { path }, {
       purpose: 'parse Compass for import preview',
       fields: { path },
     });
@@ -2207,7 +2205,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   parseWalls: async (path: string) => {
-    return await invokeIpc<WallsFile>('parse_walls', { path }, {
+    return await invokeIpc('parse_walls', { path }, {
       purpose: 'parse Walls for import preview',
       fields: { path },
     });
@@ -2270,7 +2268,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   parseGpx: async (path: string) => {
-    return await invokeIpc<GpxFile>('parse_gpx', { path }, {
+    return await invokeIpc('parse_gpx', { path }, {
       purpose: 'parse GPX for import preview',
       fields: { path },
     });
@@ -2301,21 +2299,21 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   calculateFileHash: async (path: string) => {
-    return await invokeIpc<string>('calculate_file_hash', { path }, {
+    return await invokeIpc('calculate_file_hash', { path }, {
       purpose: 'detect duplicate imports',
       fields: { path },
     });
   },
 
   checkDuplicateImport: async (hash: string) => {
-    return await invokeIpc<boolean>('check_duplicate_import', { hash }, {
+    return await invokeIpc('check_duplicate_import', { hash }, {
       purpose: 'detect duplicate imports',
       fields: { hash },
     });
   },
 
   checkSectionHashes: async (hashes: string[]) => {
-    return await invokeIpc<boolean[]>('check_section_hashes', { hashes }, {
+    return await invokeIpc('check_section_hashes', { hashes }, {
       purpose: 'detect duplicate section imports',
       fields: { count: hashes.length },
     });
@@ -2370,7 +2368,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // difference of the two corrections.
     azimuthReference?: AzimuthReference | null,
   ) => {
-    return await invokeIpc<PlacementSuggestion[]>(
+    return await invokeIpc(
       'suggest_import_placement',
       { shots, azimuthReference: azimuthReference ?? null },
       { purpose: 'suggest placement from reference shot overlap' },
@@ -2379,7 +2377,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   mergeProjects: async (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => {
     try {
-      const result = await invokeIpc<CommandResult>(
+      const result = await invokeIpc(
         'merge_projects',
         {
           sourcePaths,

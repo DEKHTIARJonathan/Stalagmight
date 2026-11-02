@@ -131,7 +131,7 @@ export function createProjectConfigActions(
   return {
     loadConfig: async () => {
       try {
-        const config = await invokeIpc<Config>('get_config', undefined, {
+        const config = await invokeIpc('get_config', undefined, {
           purpose: 'load user configuration',
         });
         set({ config });
@@ -148,7 +148,7 @@ export function createProjectConfigActions(
       // keeps it (#576 NF-W4M-1; see the command's doc).
       if (!base) {
         return persistConfig(() =>
-          invokeIpc<ConfigSaveReport | null>('update_config', { config }, { purpose: 'persist user settings' }),
+          invokeIpc('update_config', { config }, { purpose: 'persist user settings' }),
         );
       }
       const patches = configPatches(base, config);
@@ -158,7 +158,7 @@ export function createProjectConfigActions(
 
     patchConfig: async (patches: ConfigPatch[]) =>
       persistConfig(() =>
-        invokeIpc<ConfigSaveReport | null>('patch_config', { patches }, { purpose: 'persist user settings' }),
+        invokeIpc('patch_config', { patches }, { purpose: 'persist user settings' }),
       ),
 
     updateGasConfig: async (gas: GasConfig) => {

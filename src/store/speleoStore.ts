@@ -924,13 +924,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // catch below so the dialog still surfaces that warning. Clearing only on
         // success would leave the UI claiming a session the backend no longer has.
         try {
-          await invokeIpc<null>('speleodb_logout');
+          await invokeIpc('speleodb_logout');
         } finally {
           set({ pendingAuth: null, authError: null });
           get().clearSession();
         }
       } else {
-        const r = await invokeIpc<SpeleoLoginResult>('speleodb_login', {
+        const r = await invokeIpc('speleodb_login', {
           endpoint: (endpoint ?? '').trim() || undefined,
           email: p.useToken ? undefined : p.email.trim() || undefined,
           password: p.useToken ? undefined : p.password || undefined,
@@ -1048,7 +1048,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     const seq = ++linkStatusSeq;
     const requestedLink = get().link;
     try {
-      const status = await invokeIpc<SpeleoLinkStatus>('speleodb_link_status');
+      const status = await invokeIpc('speleodb_link_status');
       if ((useProjectStore.getState().project?.file_path ?? null) !== requestedPath) return;
       const current = get().link;
       if (current !== requestedLink && !(current && seededLinks.has(current))) return;
@@ -1101,7 +1101,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   refreshSession: async () => {
     try {
-      const status = await invokeIpc<SpeleoSessionStatus>('speleodb_session');
+      const status = await invokeIpc('speleodb_session');
       get().setSession(status);
     } catch {
       // Best-effort - leave whatever the store had.
@@ -1253,7 +1253,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   // config still keeps anything rendering off it honest about where the key went.
   setTokenStorage: async (mode) => {
     try {
-      const status = await invokeIpc<SpeleoSessionStatus>('speleodb_set_token_storage', { mode });
+      const status = await invokeIpc('speleodb_set_token_storage', { mode });
       // Seed from the ANSWER, not from the request: a plaintext write can itself
       // fail, and then the honest thing to show is session-only.
       get().setSession(status);
@@ -1271,7 +1271,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   retryKeychain: async () => {
     try {
-      const status = await invokeIpc<SpeleoSessionStatus>('speleodb_retry_keychain');
+      const status = await invokeIpc('speleodb_retry_keychain');
       get().setSession(status);
       await useProjectStore.getState().loadConfig();
       return true;
@@ -1302,7 +1302,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       return;
     }
     try {
-      const projects = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
+      const projects = await invokeIpc('speleodb_list_projects');
       // Staleness guard: a logout / account switch can land while the list_projects
       // GET is in flight. Bail if the session moved so we never repaint the ended
       // session's badges or re-raise its prompt (mirrors refreshLinkStatus's guard).
@@ -1345,7 +1345,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   releaseLock: async (projectId) => {
     // Throws on failure so the dialog keeps itself open and surfaces the error.
-    await invokeIpc<null>('speleodb_release_lock', { projectId });
+    await invokeIpc('speleodb_release_lock', { projectId });
     // Optimistic local update (avoids a full re-scan per release when the user frees
     // several one by one): drop this lock from the prompt's list and mark the project
     // free in the badge map. `heldLocks` going empty is what auto-closes the dialog.
@@ -1827,7 +1827,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   enableRendering: async () => {
     // Throws on failure so the banner keeps itself open and shows the error.
-    await invokeIpc<null>('speleodb_set_exclude_geojson', { exclude: false });
+    await invokeIpc('speleodb_set_exclude_geojson', { exclude: false });
     // Drop the rendering-disabled banner (this resolved it) and re-seed from the
     // server so the flag reflects the change.
     set((state) => (state.banner?.kind === 'rendering_disabled' ? { banner: null } : {}));
@@ -1838,7 +1838,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     // [#303] Throws on failure so the caller (the settings control) renders the
     // refusal - most usefully the lock one, since this writes the `.stalx` and so
     // becomes every collaborator's policy on the next push.
-    await invokeIpc<null>('speleodb_set_undo_mode', { mode });
+    await invokeIpc('speleodb_set_undo_mode', { mode });
     // The backend policy changed even if the best-effort status refresh below cannot
     // reach the server, so a target resolved under the old policy is already stale.
     get().invalidateChainTargets();

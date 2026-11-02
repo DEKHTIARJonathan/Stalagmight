@@ -29,8 +29,8 @@ import { useUIStore, type AppMode } from './uiStore';
 
 /** Send one mode, after every edit and send already queued. Never rejects. */
 export function sendWorkspaceMode(mode: AppMode): Promise<void> {
-  return runSerialized(() =>
-    invokeIpc<void>('set_workspace_mode', { mode }, {
+  return runSerialized(async () => {
+    await invokeIpc('set_workspace_mode', { mode }, {
       purpose: 'mirror the workspace mode for the read-only gate',
       fields: { mode },
     }).catch((e: unknown) => {
@@ -38,8 +38,8 @@ export function sendWorkspaceMode(mode: AppMode): Promise<void> {
         mode,
         reason: String(e),
       });
-    })
-  );
+    });
+  });
 }
 
 /**

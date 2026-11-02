@@ -1,4 +1,4 @@
-import type { MockCommandFamily } from './types';
+import type { MockCommandFamily, MockReply } from './types';
 
 /**
  * The Compass (.mak/.dat) import pair of the Playwright IPC mock (#576 NF-W3CI-2):
@@ -76,11 +76,11 @@ export const compassImportCommands: MockCommandFamily = (ctx) => {
             declination: s.declination,
           })),
           warnings: [],
-        };
+        } satisfies MockReply<'parse_compass'>;
 
       case 'execute_compass_import': {
         const project = ctx.currentProject() as { sections: Array<Record<string, unknown>> } | null;
-        if (!project) return { success: false, error: 'No project open', warnings: [], section_ids: [] };
+        if (!project) return { success: false, error: 'No project open', warnings: [], section_ids: [] } satisfies MockReply<'execute_compass_import'>;
         const includeExcluded = (args?.includeExcluded as boolean | undefined) ?? false;
         let nextId = project.sections.reduce((max, s) => Math.max(max, Number(s.id) || 0), 0);
         const sectionIds: number[] = [];
@@ -130,8 +130,9 @@ export const compassImportCommands: MockCommandFamily = (ctx) => {
             unit_conversion: null,
             warnings: [],
             info: [],
+            zero_datum_created: null,
           },
-        };
+        } satisfies MockReply<'execute_compass_import'>;
       }
 
       default:

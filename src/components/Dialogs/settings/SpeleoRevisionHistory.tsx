@@ -98,7 +98,7 @@ export function SpeleoRevisionHistory() {
     setError(null);
     void (async () => {
       try {
-        const list = await invokeIpc<SpeleoRevision[]>('speleodb_get_revisions', { projectId });
+        const list = await invokeIpc('speleodb_get_revisions', { projectId });
         if (!cancelled) setRevisions(list);
       } catch (e) {
         if (!cancelled) setError(humanizeSpeleoError(e, t('speleodb.revisions.failed')));

@@ -1,4 +1,4 @@
-import type { MockCommandFamily } from './types';
+import type { MockCommandFamily, MockReply } from './types';
 
 /**
  * Plan-mode commands of the Playwright IPC mock: dive-plan persistence (#244), the
@@ -128,7 +128,7 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
           name: p.name,
           created_at: p.created_at,
           updated_at: p.updated_at,
-        }));
+        })) satisfies MockReply<'list_dive_plans'>;
       case 'load_dive_plan': {
         const found = mockDivePlans.find((p) => p.id === args?.id);
         if (!found) throw new Error('That dive plan no longer exists.');
@@ -150,7 +150,8 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
             created_at: found.created_at,
             updated_at: found.updated_at,
           },
-          snapshot: found.snapshot,
+          // shape not checked: the DivePlanSnapshot the app last sent to save_dive_plan, stored as unknown
+          snapshot: found.snapshot as MockReply<'load_dive_plan'>['snapshot'],
           stale_ref_count: 0,
           anchors: {
             origin: refToAnchor(snap.origin ?? null),
@@ -161,7 +162,7 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
               refToAnchor(r ?? null),
             ),
           },
-        };
+        } satisfies MockReply<'load_dive_plan'>;
       }
       case 'save_dive_plan': {
         const id = (args?.id ?? null) as number | null;
@@ -183,7 +184,7 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
             name: plan.name,
             created_at: plan.created_at,
             updated_at: plan.updated_at,
-          };
+          } satisfies MockReply<'save_dive_plan'>;
         }
         const existing = mockDivePlans.find((p) => p.id === id);
         if (!existing) throw new Error('That dive plan no longer exists.');
@@ -195,7 +196,7 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
           name: existing.name,
           created_at: existing.created_at,
           updated_at: existing.updated_at,
-        };
+        } satisfies MockReply<'save_dive_plan'>;
       }
       case 'delete_dive_plan': {
         const before = mockDivePlans.length;
@@ -203,7 +204,7 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
         if (mockDivePlans.length === before) {
           throw new Error('That dive plan no longer exists.');
         }
-        return null;
+        return null satisfies MockReply<'delete_dive_plan'>;
       }
 
       // #310: anchor / re-resolve live plan pins across a survey edit. Recorded together in
@@ -215,7 +216,7 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
         const calls = (win.__MOCK_ANCHOR_CALLS__ as unknown[]) ?? [];
         calls.push({ cmd: 'plan_anchors_for_refs', refs, anchors });
         win.__MOCK_ANCHOR_CALLS__ = calls;
-        return anchors;
+        return anchors satisfies MockReply<'plan_anchors_for_refs'>;
       }
       case 'plan_refs_for_anchors': {
         const anchors = (args?.anchors ?? []) as Array<MockPlanAnchor | null>;
@@ -224,7 +225,7 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
         const calls = (win.__MOCK_ANCHOR_CALLS__ as unknown[]) ?? [];
         calls.push({ cmd: 'plan_refs_for_anchors', anchors, refs });
         win.__MOCK_ANCHOR_CALLS__ = calls;
-        return refs;
+        return refs satisfies MockReply<'plan_refs_for_anchors'>;
       }
       case 'compute_gas_reach_field': {
         // Record every call's inputs so drag e2e can assert the dragged station was sent as a
@@ -707,7 +708,7 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
           scooter_drop_ref,
           route_runtime_min,
           turn_on_scooter_range,
-        };
+        } satisfies MockReply<'compute_gas_reach_field'>;
       }
 
       default:

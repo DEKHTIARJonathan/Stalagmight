@@ -74,7 +74,7 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
       // preview matches what the chosen format will actually write - including
       // the live theme's depth endpoints, which the backend cannot resolve and
       // which the export path stamps on the same way (#360).
-      invokeIpc<string>('preview_svg_export', { options: withThemeDepthRamp(options) }, {
+      invokeIpc('preview_svg_export', { options: withThemeDepthRamp(options) }, {
         purpose: 'render export preview',
       })
         .then((markup) => {

@@ -59,7 +59,7 @@ export default function OpenFromSpeleoDbDialog() {
   const [pendingAdopt, setPendingAdopt] = useState<SpeleoProjectSummary | null>(null);
 
   const refreshProjects = async (isCancelled: () => boolean = () => false) => {
-    const list = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
+    const list = await invokeIpc('speleodb_list_projects');
     if (!isCancelled()) {
       setProjects(list);
       setListFailed(false);
@@ -73,7 +73,7 @@ export default function OpenFromSpeleoDbDialog() {
       // user to the login prompt.
       let status: SpeleoSessionStatus;
       try {
-        status = await invokeIpc<SpeleoSessionStatus>('speleodb_session');
+        status = await invokeIpc('speleodb_session');
         if (cancelled) return;
         setSession(status);
       } catch (e) {

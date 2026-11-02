@@ -115,7 +115,7 @@ export function MemoryProbe(): JSX.Element | null {
 
     async function tick() {
       try {
-        const stats = await invokeIpc<MemoryStats>('get_memory_stats', undefined, {
+        const stats = await invokeIpc('get_memory_stats', undefined, {
           purpose: 'memory probe poll',
         });
         if (cancelled) return;

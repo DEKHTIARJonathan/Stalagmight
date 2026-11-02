@@ -1,4 +1,4 @@
-import type { MockCommandFamily } from './types';
+import type { MockCommandFamily, MockReply } from './types';
 
 /**
  * The mNemo `.dmp` parse the import wizard previews (`import_dmp` / `parse_dmp`).
@@ -14,6 +14,7 @@ export const dmpImportCommands: MockCommandFamily = (ctx) => {
       case 'parse_dmp': {
         return {
           version: 5,
+          // shape not checked: sections lack the wire's per-section version/content_hash and some shots omit LRUD; adding them changes what the wizard shows
           sections: [
             {
               name: 'Main Passage',
@@ -332,10 +333,10 @@ export const dmpImportCommands: MockCommandFamily = (ctx) => {
                 },
               ],
             },
-          ],
+          ] as unknown as MockReply<'import_dmp'>['sections'],
           // What the parser could not read (#576 B13); a clean file has none.
           warnings: [],
-        };
+        } satisfies MockReply<'import_dmp'>;
       }
 
       default:

@@ -306,7 +306,7 @@ export function AdvancedSettings({
     setIsReloading(true);
     setReloadMessage(null);
     try {
-      const newConfig = await invokeIpc<Config>('reload_config', undefined, { purpose: 'reload config from disk' });
+      const newConfig = await invokeIpc('reload_config', undefined, { purpose: 'reload config from disk' });
 
       if (!mountedRef.current) return;
 

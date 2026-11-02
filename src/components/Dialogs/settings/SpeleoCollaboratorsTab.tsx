@@ -209,10 +209,10 @@ export function SpeleoCollaboratorsTab() {
     setLoadError(null);
     void (async () => {
       try {
-        const list = await invokeIpc<SpeleoCollaborators>('speleodb_list_collaborators');
+        const list = await invokeIpc('speleodb_list_collaborators');
         // Only an admin can add, so only an admin needs the team picker.
         const options = canManage
-          ? await invokeIpc<SpeleoTeamOption[]>('speleodb_list_teams')
+          ? await invokeIpc('speleodb_list_teams')
           : [];
         if (cancelled) return;
         setRoster(list);
@@ -259,7 +259,7 @@ export function SpeleoCollaboratorsTab() {
     if (!email) return;
     void mutate(
       () =>
-        invokeIpc<SpeleoCollaborators>('speleodb_add_collaborator', {
+        invokeIpc('speleodb_add_collaborator', {
           email,
           permission: newLevel,
         }).then((r) => {
@@ -274,7 +274,7 @@ export function SpeleoCollaboratorsTab() {
     if (!newTeamId) return;
     void mutate(
       () =>
-        invokeIpc<SpeleoCollaborators>('speleodb_add_team', {
+        invokeIpc('speleodb_add_team', {
           teamId: newTeamId,
           permission: newTeamLevel,
         }).then((r) => {
@@ -357,7 +357,7 @@ export function SpeleoCollaboratorsTab() {
                     onSetLevel={(permission) =>
                       void mutate(
                         () =>
-                          invokeIpc<SpeleoCollaborators>('speleodb_set_collaborator', {
+                          invokeIpc('speleodb_set_collaborator', {
                             email: u.email,
                             permission,
                           }),
@@ -367,7 +367,7 @@ export function SpeleoCollaboratorsTab() {
                     onRemove={() =>
                       void mutate(
                         () =>
-                          invokeIpc<SpeleoCollaborators>('speleodb_remove_collaborator', {
+                          invokeIpc('speleodb_remove_collaborator', {
                             email: u.email,
                           }),
                         'speleodb.collaborators.removeFailed',
@@ -402,7 +402,7 @@ export function SpeleoCollaboratorsTab() {
                       onSetLevel={(permission) =>
                         void mutate(
                           () =>
-                            invokeIpc<SpeleoCollaborators>('speleodb_set_team', {
+                            invokeIpc('speleodb_set_team', {
                               teamId: g.team_id,
                               permission,
                             }),
@@ -412,7 +412,7 @@ export function SpeleoCollaboratorsTab() {
                       onRemove={() =>
                         void mutate(
                           () =>
-                            invokeIpc<SpeleoCollaborators>('speleodb_remove_team', {
+                            invokeIpc('speleodb_remove_team', {
                               teamId: g.team_id,
                             }),
                           'speleodb.collaborators.removeFailed',

@@ -989,7 +989,7 @@ function App() {
             if (newSectionIds?.length) {
               let suggestions: OrphanPlacementSuggestion[] = [];
               try {
-                suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
+                suggestions = await invokeIpc(
                   'suggest_orphan_placements',
                   { newlyImportedSectionIds: newSectionIds },
                   { purpose: 'suggest orphan placements after DMP import' }

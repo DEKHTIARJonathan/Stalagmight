@@ -69,7 +69,7 @@ export function SpeleoUserAutocomplete({
     }
     let cancelled = false;
     const handle = setTimeout(() => {
-      invokeIpc<SpeleoUserSuggestion[]>('speleodb_search_users', { query })
+      invokeIpc('speleodb_search_users', { query })
         .then((r) => {
           if (!cancelled) setSuggestions(r);
         })

@@ -4,7 +4,7 @@ import { dirname, resolve as pathResolve } from 'node:path';
 import { createRequire } from 'node:module';
 import type { TmlFile } from '../../src/types/ipc/TmlFile';
 import type { TmlShot } from '../../src/types/ipc/TmlShot';
-import type { MockCommandFamily, MockIpcContext } from './ipc/types';
+import type { MockCommandFamily, MockIpcContext, MockReply } from './ipc/types';
 import { compassImportCommands } from './ipc/compassImport';
 import { configCommands } from './ipc/config';
 import { dmpImportCommands } from './ipc/dmpImport';
@@ -350,8 +350,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         stationA: { section_id: number; station_index: number };
         stationB: { section_id: number; station_index: number };
       }> = [];
-      let mockOrphanPlacementSuggestions: unknown[] = [];
-      let mockImportPlacementSuggestions: unknown[] = [];
+      let mockOrphanPlacementSuggestions: MockReply<'suggest_orphan_placements'> = [];
+      let mockImportPlacementSuggestions: MockReply<'suggest_all_import_placements'> = [];
       // Records execute_walls_import args (esp. selectedSurveys) so the Walls
       // import dialog spec can assert the select-all→null / explicit-index path.
       let wallsImportCalls: Array<Record<string, unknown>> = [];
@@ -458,13 +458,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         dialogOpenCount = 0;
       };
       (window as unknown as Record<string, unknown>).__MOCK_SET_ORPHAN_SUGGESTIONS__ = (suggestions: unknown[]) => {
-        mockOrphanPlacementSuggestions = Array.isArray(suggestions) ? [...suggestions] : [];
+        // shape not checked: spec-seeded suggestions, passed through as given
+        mockOrphanPlacementSuggestions = (Array.isArray(suggestions) ? [...suggestions] : []) as MockReply<'suggest_orphan_placements'>;
       };
       (window as unknown as Record<string, unknown>).__MOCK_RESET_ORPHAN_SUGGESTIONS__ = () => {
         mockOrphanPlacementSuggestions = [];
       };
       (window as unknown as Record<string, unknown>).__MOCK_SET_IMPORT_PLACEMENT_SUGGESTIONS__ = (suggestions: unknown[]) => {
-        mockImportPlacementSuggestions = Array.isArray(suggestions) ? [...suggestions] : [];
+        // shape not checked: spec-seeded suggestions, passed through as given
+        mockImportPlacementSuggestions = (Array.isArray(suggestions) ? [...suggestions] : []) as MockReply<'suggest_all_import_placements'>;
       };
       (window as unknown as Record<string, unknown>).__MOCK_RESET_IMPORT_PLACEMENT_SUGGESTIONS__ = () => {
         mockImportPlacementSuggestions = [];
@@ -833,7 +835,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               return Promise.reject(`unknown variant \`${String(mode)}\`, expected one of \`survey\`, \`plan\`, \`export\``);
             }
             mockWorkspaceMode = mode;
-            return null;
+            return null satisfies MockReply<'set_workspace_mode'>;
           }
 
           case 'update_project_settings': {
@@ -850,7 +852,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   args.defaultAzimuthReference ?? null;
               }
             }
-            return { success: true, section_ids: [], project: currentProject };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'update_project_settings'>;
           }
 
           case 'set_surface_elevation': {
@@ -858,7 +860,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Real command returns a plain CommandResult (no `project` payload) -
             // the frontend re-fetches via get_project_state's own round trip.
             if (!currentProject) {
-              return { success: false, error: 'No project open' };
+              return { success: false, error: 'No project open', warnings: [], section_ids: [] } satisfies MockReply<'set_surface_elevation'>;
             }
             // Mirrors the backend's guard_mutation: a remote project without the
             // write lock rejects with the EDIT_DISABLED coded failure. The mock
@@ -869,18 +871,20 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               return {
                 success: false,
                 error: 'EDIT_DISABLED: Set entrance elevation is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.',
-              };
+                warnings: [],
+                section_ids: [],
+              } satisfies MockReply<'set_surface_elevation'>;
             }
             const elevation = args?.elevation;
             if (elevation !== null && elevation !== undefined && typeof elevation !== 'number') {
-              return { success: false, error: 'Elevation must be a finite number' };
+              return { success: false, error: 'Elevation must be a finite number', warnings: [], section_ids: [] } satisfies MockReply<'set_surface_elevation'>;
             }
             if (typeof elevation === 'number' && !Number.isFinite(elevation)) {
-              return { success: false, error: 'Elevation must be a finite number' };
+              return { success: false, error: 'Elevation must be a finite number', warnings: [], section_ids: [] } satisfies MockReply<'set_surface_elevation'>;
             }
             (currentProject as Record<string, unknown>).surface_elevation =
               typeof elevation === 'number' ? elevation : null;
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'set_surface_elevation'>;
           }
 
           case 'create_project_full': {
@@ -919,23 +923,29 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Return CreateProjectFullResult format
             return {
               loadingId: Date.now(),
-              project: currentProject,
+              // shape not checked: currentProject is the mock's loose project record (sections: unknown[])
+              project: currentProject as unknown as MockReply<'create_project_full'>['project'],
+              // The backend's DisplaySettings::default() (loading.rs), every field it sends.
               displaySettings: {
                 showStations: true,
+                showShots: true,
                 showSectionNames: true,
                 showStationLabels: false,
                 showShotData: false,
                 showReferenceShots: true,
+                showJumps: true,
                 showZeroDatum: true,
                 showGrid: false,
-                showScaleBar: true,
                 // Mirrors the backend's DisplaySettings default (loading.rs);
                 // satellite ships on.
                 showSatellite: true,
                 showDepthGradient: false,
+                showStationComments: false,
+                showShotComments: false,
                 gridSpacing: 10,
+                geometryMode: 'measured',
               },
-            };
+            } satisfies MockReply<'create_project_full'>;
           }
 
           case 'load_project_full': {
@@ -1160,7 +1170,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Return LoadProjectFullResult format
             return {
               loadingId,
-              project: currentProject,
+              // shape not checked: currentProject is the mock's loose project record (sections: unknown[])
+              project: currentProject as unknown as MockReply<'load_project_full'>['project'],
               stations: mockStations,
               stats: {
                 section_count: currentProject.sections.length,
@@ -1173,22 +1184,29 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 penetration_distance: totalLength,
               },
               warnings: [],
+              // The backend's DisplaySettings::default() (loading.rs), every field it sends.
               displaySettings: {
                 showStations: true,
+                showShots: true,
                 showSectionNames: true,
                 showStationLabels: false,
                 showShotData: false,
                 showReferenceShots: true,
+                showJumps: true,
                 showZeroDatum: true,
                 showGrid: false,
-                showScaleBar: true,
                 // Mirrors the backend's DisplaySettings default (loading.rs);
                 // satellite ships on.
                 showSatellite: true,
                 showDepthGradient: false,
+                showStationComments: false,
+                showShotComments: false,
                 gridSpacing: 10,
+                geometryMode: 'measured',
               },
-            };
+              isRemote: projectIsRemote,
+              newerSchemaVersion: mockNewerSchema,
+            } satisfies MockReply<'load_project_full'>;
           }
 
           case 'load_project_full_binary': {
@@ -1458,10 +1476,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             mockWorkspaceMode = 'survey'; // #576 C5: a project opens in Survey
             openProjectSpeleoLinkUnreadable = mockSpeleoLinkUnreadable;
             const bytes = MessagePack.encode(envelope);
-            // Return as plain number[] so the frontend's
-            // `Array.isArray` fallback converts to Uint8Array without
-            // any extra cross-realm dance.
-            return Array.from(bytes);
+            // An ArrayBuffer, as Tauri delivers the backend's raw `Response` (the
+            // decoder's `instanceof ArrayBuffer` branch). `slice()` copies exactly the
+            // encoded bytes: `encode` may hand back a view into a larger buffer.
+            return bytes.slice().buffer satisfies MockReply<'load_project_full_binary'>;
           }
 
           case 'save_project': {
@@ -1476,7 +1494,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   `read-only. Update Stalagmight to edit it.`,
                 warnings: [],
                 section_ids: [],
-              };
+              } satisfies MockReply<'save_project'>;
             }
             // #576 B35(b): a link row the open could not read refuses every save that
             // would rewrite this file (the backend's message); a Save As to another
@@ -1493,7 +1511,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     'to another file.',
                   warnings: [],
                   section_ids: [],
-                };
+                } satisfies MockReply<'save_project'>;
               }
               openProjectSpeleoLinkUnreadable = false;
             }
@@ -1508,13 +1526,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 error: null,
                 warnings: [],
                 section_ids: [],
-              };
+              } satisfies MockReply<'save_project'>;
             }
             projectPath = (args?.path as string) ?? projectPath;
             if (currentProject && projectPath) {
               currentProject.file_path = projectPath;
             }
-            return { success: true, saved_path: projectPath, error: null, warnings: [], section_ids: [] };
+            return { success: true, saved_path: projectPath, error: null, warnings: [], section_ids: [] } satisfies MockReply<'save_project'>;
           }
 
           case 'close_project': {
@@ -1523,17 +1541,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             openProjectNewerSchema = null;
             mockWorkspaceMode = 'survey'; // #576 C5
             openProjectSpeleoLinkUnreadable = false;
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'close_project'>;
           }
 
           case 'cancel_loading': {
             // Idempotent - does nothing but shouldn't error
-            return undefined;
+            return null satisfies MockReply<'cancel_loading'>;
           }
 
           case 'get_recent_logs':
             // DebugDialog expects string[] log lines prefixed with a level.
-            return ['INFO [mock] app started', 'DEBUG [mock] project loaded'];
+            return ['INFO [mock] app started', 'DEBUG [mock] project loaded'] satisfies MockReply<'get_recent_logs'>;
 
           case 'get_project':
           case 'get_project_state': {
@@ -1679,7 +1697,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // showed the populated count. A deep clone keeps every consumer's
               // ref-identity check honest, not just the sections one. (Caused ~50
               // full-suite failures; smoke seeds once, so it never hit this.)
-              project: currentProject ? structuredClone(currentProject) : currentProject,
+              // shape not checked: the mock's loose project record, and null with no project open (the backend resolves the whole reply null)
+              project: (currentProject ? structuredClone(currentProject) : currentProject) as unknown as NonNullable<
+                MockReply<'get_project_state'>
+              >['project'],
               stations: mockStations,
               stats: {
                 section_count: currentProject?.sections.length ?? 0,
@@ -1692,17 +1713,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 penetration_distance: totalLength,
               },
               frozen_shots: [],
-            };
+            } satisfies MockReply<'get_project_state'>;
           }
 
           case 'get_adjusted_stations': {
             // Closure-adjusted geometry view. The mock has no real least-squares
             // solver, so the adjusted geometry is identical to measured: reuse the
             // station array get_project_state builds.
-            const state = mockHandler('get_project_state', args) as
-              | { stations?: unknown[] }
-              | null;
-            return state?.stations ?? [];
+            // shape not checked: mockHandler returns unknown; the get_project_state case checks this value
+            const state = mockHandler('get_project_state', args) as MockReply<'get_project_state'>;
+            return (state?.stations ?? []) satisfies MockReply<'get_adjusted_stations'>;
           }
 
           case 'get_station_distances_from': {
@@ -1728,7 +1748,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               distances,
               station_refs: stations.map((s) => s.station_ref),
               max_reachable: max,
-            };
+            } satisfies MockReply<'get_station_distances_from'>;
           }
 
           case 'get_along_line_distance': {
@@ -1745,7 +1765,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const path_stations = sec
               ? Array.from({ length: path_shots.length + 1 }, (_, i) => ({ section_id: sec.id, station_index: i }))
               : [];
-            return { along_line: 12.34, path_shots, path_stations };
+            return { along_line: 12.34, path_shots, path_stations } satisfies MockReply<'get_along_line_distance'>;
           }
 
           case 'create_section': {
@@ -1763,7 +1783,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shots,
             };
             currentProject?.sections.push(section);
-            return { success: true, section, section_id: sectionCounter, section_ids: [], warnings: [], error: null };
+            return { success: true, section_id: sectionCounter, section_ids: [], warnings: [], error: null } satisfies MockReply<'create_section'>;
           }
 
           case 'import_sections': {
@@ -1773,7 +1793,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // Mirrors the real backend's `sections.is_empty()` early return
               // (execute_import_sections, command_import.rs): no receipt when
               // nothing was imported.
-              return { success: true, warnings: [], error: null, section_ids: [] };
+              return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'import_sections'>;
             }
             if (!currentProject) {
               const now = new Date().toISOString();
@@ -1828,7 +1848,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               error: null,
               section_ids: sectionIds,
               ...(sectionIds[0] != null ? { section_id: sectionIds[0] } : {}),
-              sections: importedSections,
               import_receipt: {
                 source_format: sourceLabel ?? 'mNemo DMP',
                 file_name: sourceFileName ?? '',
@@ -1840,8 +1859,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 unit_conversion: null,
                 warnings: sourceWarnings,
                 info: [],
+                zero_datum_created: null,
               },
-            };
+            } satisfies MockReply<'import_sections'>;
           }
 
           case 'execute_walls_import': {
@@ -1868,21 +1888,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 unit_conversion: null,
                 warnings: [],
                 info: [],
+                zero_datum_created: null,
               },
-            };
+            } satisfies MockReply<'execute_walls_import'>;
           }
 
           // File hash tracking for duplicate detection
           case 'calculate_file_hash':
             // Return a mock SHA256 hash based on path for consistency
-            return `mock_hash_${(args?.path as string)?.split('/').pop() ?? 'unknown'}`;
+            return `mock_hash_${(args?.path as string)?.split('/').pop() ?? 'unknown'}` satisfies MockReply<'calculate_file_hash'>;
 
           case 'check_duplicate_import':
             // Configurable via __MOCK_SET_CHECK_DUPLICATE_RESULT__
-            return mockCheckDuplicateResult;
+            return mockCheckDuplicateResult satisfies MockReply<'check_duplicate_import'>;
 
           case 'parse_gpx': {
-            return buildMockGpxFile(args?.path as string | undefined);
+            return buildMockGpxFile(args?.path as string | undefined) satisfies MockReply<'parse_gpx'>;
           }
 
           case 'execute_gpx_import': {
@@ -2087,12 +2108,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 unit_conversion: null,
                 warnings: [],
                 info: [],
+                zero_datum_created: null,
               },
-            };
+            } satisfies MockReply<'execute_gpx_import'>;
           }
 
           case 'parse_tml':
-            return buildMockTmlFile(args?.path as string | undefined);
+            return buildMockTmlFile(args?.path as string | undefined) satisfies MockReply<'parse_tml'>;
 
           case 'execute_tml_import': {
             tmlImportCalls.push({ ...(args ?? {}) });
@@ -2336,8 +2358,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 unit_conversion:
                   tmlFile.unit === 'Imperial' ? 'Lengths converted from feet to meters' : null,
                 warnings: [],
+                info: [],
+                zero_datum_created: null,
               },
-            };
+            } satisfies MockReply<'execute_tml_import'>;
           }
 
           case 'merge_stations': {
@@ -2360,7 +2384,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 });
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'merge_stations'>;
           }
 
           case 'execute_batch': {
@@ -2395,16 +2419,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // must therefore emit two entries, not one.
             const reversedSections: Array<{ section_id: number; shot_count: number }> = [];
             for (const command of commands) {
-              let result:
-                | {
-                    success?: boolean;
-                    error?: string;
-                    // Always present on a real CommandResult (#441), unlike
-                    // `reversed_sections` which the wire genuinely omits.
-                    section_ids?: number[];
-                    reversed_sections?: Array<{ section_id: number; shot_count: number }>;
-                  }
-                | undefined;
+              // A sub-command's CommandResult, from this mock's own (checked) cases.
+              let result: MockReply<'execute_batch'> | undefined;
               if (command?.type === 'update_shot') {
                 result = mockHandler('update_shot', {
                   sectionId: command.section_id,
@@ -2418,7 +2434,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // and `check_duplicate_import` reads one configurable flag), so
                 // the faithful replay is to clear that flag.
                 mockCheckDuplicateResult = false;
-                result = { success: true, section_ids: [] };
+                result = { success: true, warnings: [], error: null, section_ids: [] };
               } else if (command?.type === 'delete_section') {
                 // Withdrawing an abandoned import (#394) removes N sections in
                 // ONE batch, so the batch has to replay it or a cancelled DMP
@@ -2445,14 +2461,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   delete mockStationComments[key];
                 }
                 Object.assign(mockStationComments, commentsBefore);
-                return result;
+                return result satisfies MockReply<'execute_batch'>;
               }
             }
             return {
               success: true,
+              warnings: [],
+              error: null,
               section_ids: [],
               ...(reversedSections.length > 0 ? { reversed_sections: reversedSections } : {}),
-            };
+            } satisfies MockReply<'execute_batch'>;
           }
 
           case 'check_merge_connectivity': {
@@ -2460,14 +2478,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Default: not connected but merge allowed (opens merge dialog)
             // Tests can override via __MOCK_CONNECTIVITY_RESULT__
             console.log('[Mock IPC] check_merge_connectivity called with:', args);
-            const mockConnectivity = (window as unknown as Record<string, unknown>).__MOCK_CONNECTIVITY_RESULT__ as {
-              connected: boolean;
-              preview: unknown | null;
-            } | undefined;
+            // shape not checked: a spec-injected __MOCK_CONNECTIVITY_RESULT__, passed through as given
+            const mockConnectivity = (window as unknown as Record<string, unknown>).__MOCK_CONNECTIVITY_RESULT__ as
+              | MockReply<'check_merge_connectivity'>
+              | undefined;
             if (mockConnectivity) {
-              return mockConnectivity;
+              return mockConnectivity satisfies MockReply<'check_merge_connectivity'>;
             }
-            return { connected: false, preview: null, can_merge: true, reason: null };
+            return { connected: false, preview: null, can_merge: true, reason: null } satisfies MockReply<'check_merge_connectivity'>;
           }
 
           case 'create_loop_closure': {
@@ -2480,7 +2498,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               | undefined;
             const closureStrategy = (args?.closureStrategy ?? args?.closure_strategy) as string | undefined;
             if (!stationA || !stationB) {
-              return { success: false, error: 'Missing closure stations' };
+              return { success: false, error: 'Missing closure stations', warnings: [], section_ids: [] } satisfies MockReply<'create_loop_closure'>;
             }
 
             if (currentProject) {
@@ -2511,7 +2529,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 return direct || reverse;
               });
               if (alreadyExists) {
-                return { success: false, error: 'A loop closure already exists between these stations.' };
+                return { success: false, error: 'A loop closure already exists between these stations.', warnings: [], section_ids: [] } satisfies MockReply<'create_loop_closure'>;
               }
 
               const maxExistingId = loopClosures.reduce(
@@ -2534,33 +2552,33 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               });
             }
 
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'create_loop_closure'>;
           }
 
           case 'remove_loop_closure': {
             console.log('[Mock IPC] remove_loop_closure called with:', args);
             const closureIdRaw = args?.closureId ?? args?.closure_id;
             if (closureIdRaw === undefined || closureIdRaw === null) {
-              return { success: false, error: 'Missing closure ID' };
+              return { success: false, error: 'Missing closure ID', warnings: [], section_ids: [] } satisfies MockReply<'remove_loop_closure'>;
             }
             // A u64 on the Rust side: serde accepts only a JSON number.
             const closureId = typeof closureIdRaw === 'number' ? closureIdRaw : null;
             if (closureId === null) {
-              return { success: false, error: 'Invalid closure ID' };
+              return { success: false, error: 'Invalid closure ID', warnings: [], section_ids: [] } satisfies MockReply<'remove_loop_closure'>;
             }
 
             if (!currentProject) {
-              return { success: false, error: 'No project open' };
+              return { success: false, error: 'No project open', warnings: [], section_ids: [] } satisfies MockReply<'remove_loop_closure'>;
             }
 
             const loopClosures = currentProject.loop_closures as Array<{ id: number }>;
             const closureIndex = loopClosures.findIndex((closure) => closure.id === closureId);
             if (closureIndex < 0) {
-              return { success: false, error: 'Loop closure not found' };
+              return { success: false, error: 'Loop closure not found', warnings: [], section_ids: [] } satisfies MockReply<'remove_loop_closure'>;
             }
 
             loopClosures.splice(closureIndex, 1);
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'remove_loop_closure'>;
           }
 
           case 'unmerge_stations':
@@ -2618,14 +2636,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'unmerge_stations'>;
 
           case 'unmerge_station_pair': {
             console.log('[Mock IPC] unmerge_station_pair called with:', args);
             const stationA = (args?.stationA ?? args?.station_a) as { section_id: number; station_index: number } | undefined;
             const stationB = (args?.stationB ?? args?.station_b) as { section_id: number; station_index: number } | undefined;
             if (!stationA || !stationB) {
-              return { success: false, error: 'Missing station pair' };
+              return { success: false, error: 'Missing station pair', warnings: [], section_ids: [] } satisfies MockReply<'unmerge_station_pair'>;
             }
 
             unmergeStationPairCalls.push({ stationA, stationB });
@@ -2674,11 +2692,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     return !(direct || reverse);
                   });
                 }
-                return { success: true, section_ids: [] };
+                return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'unmerge_station_pair'>;
               }
             }
 
-            return { success: false, error: 'Stations are not directly merged' };
+            return { success: false, error: 'Stations are not directly merged', warnings: [], section_ids: [] } satisfies MockReply<'unmerge_station_pair'>;
           }
 
           case 'move_segment': {
@@ -2690,7 +2708,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
             calls.push({ command: 'move_segment', args: args ?? null });
             win.__MOCK_MOVE_CALLS__ = calls;
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'move_segment'>;
           }
 
           case 'move_section': {
@@ -2701,7 +2719,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
             calls.push({ command: 'move_section', args: args ?? null });
             win.__MOCK_MOVE_CALLS__ = calls;
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'move_section'>;
           }
 
           case 'move_station': {
@@ -2710,7 +2728,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
             calls.push({ command: 'move_station', args: args ?? null });
             win.__MOCK_MOVE_CALLS__ = calls;
-            return { success: true };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'move_station'>;
           }
 
           case 'move_shot':
@@ -2727,9 +2745,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }>;
               const anchoredIds = [...new Set(datums.map(d => d.station_ref.section_id))];
               anchoredIds.sort((a, b) => a - b);
-              return anchoredIds;
+              return anchoredIds satisfies MockReply<'get_anchored_section_ids'>;
             }
-            return [];
+            return [] satisfies MockReply<'get_anchored_section_ids'>;
 
           case 'set_zero_datum': {
             console.log('[Mock IPC] set_zero_datum called with:', args);
@@ -2758,7 +2776,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 datums.push({ station_ref: stationRef, gps: coordinates });
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'set_zero_datum'>;
           }
 
           case 'remove_zero_datum': {
@@ -2778,7 +2796,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 datums.splice(idx, 1);
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'remove_zero_datum'>;
           }
 
           case 'set_station_comment': {
@@ -2791,25 +2809,25 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             } else {
               mockStationComments[key] = comment;
             }
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'set_station_comment'>;
           }
 
           case 'check_section_hashes': {
             const hashes = (Array.isArray(args?.hashes) ? args?.hashes : []) as string[];
-            return hashes.map(() => false);
+            return hashes.map(() => false) satisfies MockReply<'check_section_hashes'>;
           }
 
           case 'suggest_import_placement':
-            return [];
+            return [] satisfies MockReply<'suggest_import_placement'>;
 
           case 'suggest_all_import_placements':
-            return [...mockImportPlacementSuggestions];
+            return [...mockImportPlacementSuggestions] satisfies MockReply<'suggest_all_import_placements'>;
 
           case 'suggest_orphan_placements':
-            return [...mockOrphanPlacementSuggestions];
+            return [...mockOrphanPlacementSuggestions] satisfies MockReply<'suggest_orphan_placements'>;
 
           case 'count_unanchored_sections':
-            return 0;
+            return 0 satisfies MockReply<'count_unanchored_sections'>;
 
           case 'get_segment_geometry':
             return {
@@ -2820,25 +2838,27 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   shot_lines: [[[0, 0], [10, 0]]],
                 },
               ],
-            };
+            } satisfies MockReply<'get_segment_geometry'>;
 
           case 'undo':
           case 'redo':
             undoRedoCalls.push(cmd);
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'undo'> & MockReply<'redo'>;
 
           case 'can_undo':
-            return false;
+            return false satisfies MockReply<'can_undo'>;
 
           case 'can_redo':
-            return false;
+            return false satisfies MockReply<'can_redo'>;
 
           case 'get_undo_state':
             return { can_undo: false, can_redo: false };
 
           case 'get_recent_projects':
           case 'list_recent_projects':
-            return [
+            // `station_count: 0` / `is_remote: false` are what the UI read (`?? 0`, falsy)
+            // while these rows omitted the two fields the backend always sends.
+            return ([
               {
                 name: 'Cave System Alpha',
                 location: 'Yucatan, Mexico',
@@ -2846,6 +2866,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 modified_at: new Date().toISOString(),
                 section_count: 5,
                 total_length: 1250.5,
+                station_count: 0,
+                is_remote: false,
                 gps_center: [-87.4631, 20.2137],
                 gps_bounds: {
                   north: 20.2200,
@@ -2861,6 +2883,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 modified_at: new Date(Date.now() - 86400000).toISOString(),
                 section_count: 3,
                 total_length: 820.0,
+                station_count: 0,
+                is_remote: false,
                 gps_center: [-82.4584, 29.6516],
                 gps_bounds: {
                   north: 29.6550,
@@ -2876,6 +2900,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 modified_at: new Date(Date.now() - 172800000).toISOString(),
                 section_count: 8,
                 total_length: 2100.3,
+                station_count: 0,
+                is_remote: false,
                 gps_center: [-77.3963, 25.0343],
                 gps_bounds: null,
               },
@@ -2886,21 +2912,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 modified_at: new Date(Date.now() - 259200000).toISOString(),
                 section_count: 2,
                 total_length: 350.0,
+                station_count: 0,
+                is_remote: false,
                 gps_center: null,
                 gps_bounds: null,
               },
-            ].filter((p) => !deletedProjectPaths.has(p.file_path)).map((p) =>
+            ] satisfies MockReply<'list_recent_projects'>).filter((p) => !deletedProjectPaths.has(p.file_path)).map((p) =>
               recentNameOverrides[p.file_path]
                 ? { ...p, name: recentNameOverrides[p.file_path] }
                 : p
-            );
+            ) satisfies MockReply<'list_recent_projects'>;
 
           case 'get_warnings':
           case 'get_project_warnings':
-            return [];
+            return [] satisfies MockReply<'get_project_warnings'>;
 
           case 'check_project_integrity':
-            return { messages: mockIntegrityIssues, save_blocked: mockIntegritySaveBlocked };
+            return { messages: mockIntegrityIssues, save_blocked: mockIntegritySaveBlocked } satisfies MockReply<'check_project_integrity'>;
 
           case 'history_discarded':
             // #473: whether the open project's edit history was unreadable and
@@ -2908,7 +2936,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // keeps answering the same thing while the project is open, so the
             // mock must too or a re-render would clear the banner.
             mockHistoryDiscardedCalls += 1;
-            return mockHistoryDiscarded;
+            return mockHistoryDiscarded satisfies MockReply<'history_discarded'>;
 
           case 'repair_project_integrity': {
             // #576 D39(a): a read-only project refuses Repair with the coded error the
@@ -2931,32 +2959,34 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const fixed = total - remaining;
             // Keep the trailing `remaining` issues as detect-only residue.
             mockIntegrityIssues = mockIntegrityIssues.slice(total - remaining);
-            return { fixed, remaining };
+            // `changed: false` is what the store read (falsy) while the mock omitted it:
+            // the mock records no undo entry, so nothing marks the project dirty.
+            return { fixed, remaining, changed: false } satisfies MockReply<'repair_project_integrity'>;
           }
 
           case 'remove_from_recent_projects':
             // Mock remove from recent - just return success
             console.log('[Mock IPC] remove_from_recent_projects called with:', args);
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'remove_from_recent_projects'>;
 
           case 'delete_project':
             // Mock destructive delete: like the backend, the file leaves the
             // recents list. Per-page state, so nothing leaks into another test.
             deletedProjectPaths.add(String(args?.path ?? ''));
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'delete_project'>;
 
           case 'set_project_name_for_path': {
             const p = String(args?.path ?? '');
             const name = String(args?.name ?? '').trim();
-            if (!name) return { success: false, error: 'Project name cannot be empty' };
+            if (!name) return { success: false, error: 'Project name cannot be empty', warnings: [], section_ids: [] } satisfies MockReply<'set_project_name_for_path'>;
             recentNameOverrides[p] = name;
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'set_project_name_for_path'>;
           }
 
           // Display settings (per-project) - uses in-memory storage for persistence testing
           case 'load_display_settings':
             // Return current display settings from in-memory storage
-            return { ...mockDisplaySettings };
+            return { ...mockDisplaySettings } satisfies MockReply<'load_display_settings'>;
 
           case 'save_display_setting': {
             // Persist setting to in-memory storage
@@ -2966,7 +2996,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               mockDisplaySettings[key] = value;
               console.log(`[Mock IPC] save_display_setting: ${key}=${value}`);
             }
-            return undefined;
+            return null satisfies MockReply<'save_display_setting'>;
           }
 
           // Window plugin commands
@@ -3037,11 +3067,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // Export commands
           case 'export_csv':
             console.log('[Mock IPC] export_csv called with:', args);
-            return { success: true, path: args?.path };
+            return null satisfies MockReply<'export_csv'>;
 
           case 'export_json':
             console.log('[Mock IPC] export_json called with:', args);
-            return { success: true, path: args?.path };
+            return null satisfies MockReply<'export_json'>;
 
           // Dive-profile export (#299). Records the call so a spec can assert the plan INPUTS
           // reached the backend - the real command recomputes the reach field from them rather
@@ -3051,7 +3081,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const calls = (win.__MOCK_DIVE_PROFILE_EXPORTS__ as unknown[]) ?? [];
             calls.push({ path: args?.path, format: args?.format, request: args?.request });
             win.__MOCK_DIVE_PROFILE_EXPORTS__ = calls;
-            return undefined;
+            return null satisfies MockReply<'export_dive_profile'>;
           }
 
           case 'render_dive_profile_text':
@@ -3061,7 +3091,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               '',
               '   Dist(m)   Depth(m)   Runtime      Gas(L)  Leg',
               '       0.0        0.0      0:00           0  in',
-            ].join('\n');
+            ].join('\n') satisfies MockReply<'render_dive_profile_text'>;
 
           case 'preview_svg_export': {
             // Stick-map preview lives in the same backend command pipeline; the
@@ -3071,7 +3101,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const threshold = (opts?.branching_threshold as number | undefined) ?? 0;
             // Encode the threshold in a data attribute so tests can verify
             // the preview re-fetches when the slider changes.
-            return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" data-threshold="${threshold}"><rect width="100" height="100" fill="#ffffff"/><line x1="10" y1="50" x2="90" y2="50" stroke="#000000" stroke-width="1"/></svg>`;
+            return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" data-threshold="${threshold}"><rect width="100" height="100" fill="#ffffff"/><line x1="10" y1="50" x2="90" y2="50" stroke="#000000" stroke-width="1"/></svg>` satisfies MockReply<'preview_svg_export'>;
           }
 
           case 'export_image': {
@@ -3152,7 +3182,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }).catch(() => {});
             }, 400);
             // Return after delay to allow progress events to be received and observed
-            return new Promise(resolve => setTimeout(() => resolve({ success: true, path: args?.path }), 500));
+            return new Promise(resolve => setTimeout(() => resolve(null), 500)) satisfies Promise<MockReply<'export_image'>>;
           }
 
           // Section and shot editing commands
@@ -3174,7 +3204,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'update_shot'>;
           }
 
           case 'delete_shot': {
@@ -3194,12 +3224,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 if (idx >= 0) section.shots.splice(idx, 1);
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'delete_shot'>;
           }
 
           case 'delete_last_shot_and_section':
             console.log('[Mock IPC] delete_last_shot_and_section called with:', args);
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'delete_last_shot_and_section'>;
 
           case 'preview_delete_shot': {
             console.log('[Mock IPC] preview_delete_shot called with:', args);
@@ -3226,12 +3256,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               closure_rewire_skipped: true,
               shift_blocked: false,
               shift_blocked_reasons: [],
-            };
+            } satisfies MockReply<'preview_delete_shot'>;
           }
 
           case 'delete_shot_and_split':
             console.log('[Mock IPC] delete_shot_and_split called with:', args);
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'delete_shot_and_split'>;
 
           case 'preview_delete_shot_range': {
             console.log('[Mock IPC] preview_delete_shot_range called with:', args);
@@ -3258,16 +3288,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shift_blocked_reasons: [],
               removed_datums: [],
               removed_comments: [],
-            };
+            } satisfies MockReply<'preview_delete_shot_range'>;
           }
 
           case 'delete_shot_range_split':
             console.log('[Mock IPC] delete_shot_range_split called with:', args);
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'delete_shot_range_split'>;
 
           case 'delete_shot_range_shift':
             console.log('[Mock IPC] delete_shot_range_shift called with:', args);
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'delete_shot_range_shift'>;
 
           case 'update_section': {
             console.log('[Mock IPC] update_section called with:', args);
@@ -3283,7 +3313,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 console.log('[Mock IPC] update_section: applied updates to section', sectionId, updates);
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'update_section'>;
           }
 
           case 'delete_section': {
@@ -3294,7 +3324,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 (s) => s.id !== sectionId,
               );
             }
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'delete_section'>;
           }
 
           case 'reverse_section': {
@@ -3306,7 +3336,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shots: Array<Record<string, unknown>>;
             }> | undefined)?.find((s) => s.id === sectionId);
             if (!section) {
-              return { success: false, error: `Section ${sectionId} not found` };
+              return { success: false, error: `Section ${sectionId} not found`, warnings: [], section_ids: [] } satisfies MockReply<'reverse_section'>;
             }
             const shotCount = section.shots.length;
             // Mirror the backend transform (#24, models/project/reverse.rs):
@@ -3443,12 +3473,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // it is the divisor for the frontend's mirror).
             return {
               success: true,
+              warnings: [],
+              error: null,
               section_ids: [],
               section_id: sectionId,
               ...(shotCount > 0
                 ? { reversed_sections: [{ section_id: sectionId, shot_count: shotCount }] }
                 : {}),
-            };
+            } satisfies MockReply<'reverse_section'>;
           }
 
           case 'create_shot': {
@@ -3469,7 +3501,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shots: Array<{ id: number } & Record<string, unknown>>;
             }> | undefined)?.find((s) => s.id === sectionId);
             if (!section) {
-              return { success: false, error: `Section ${sectionId} not found` };
+              return { success: false, error: `Section ${sectionId} not found`, warnings: [], section_ids: [] } satisfies MockReply<'create_shot'>;
             }
             const shotData = (args?.shot ?? {}) as Record<string, unknown>;
             const afterShotId = (args?.afterShotId ?? args?.after_shot_id ?? null) as number | null;
@@ -3490,7 +3522,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               if (i >= 0) insertAt = i;
             }
             section.shots.splice(insertAt, 0, newShot);
-            return { success: true, section_ids: [], shot_id: nextId };
+            return { success: true, warnings: [], error: null, section_ids: [], shot_id: nextId } satisfies MockReply<'create_shot'>;
           }
 
           case 'split_shot_at_distance': {
@@ -3510,11 +3542,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shots: Array<{ id: number } & Record<string, unknown>>;
             }> | undefined)?.find((s) => s.id === sectionId);
             if (!section) {
-              return { success: false, error: `Section ${sectionId} not found` };
+              return { success: false, error: `Section ${sectionId} not found`, warnings: [], section_ids: [] } satisfies MockReply<'split_shot_at_distance'>;
             }
             const idx = section.shots.findIndex((s) => s.id === shotId);
             if (idx < 0) {
-              return { success: false, error: `Shot ${shotId} not found in section ${sectionId}` };
+              return { success: false, error: `Shot ${shotId} not found in section ${sectionId}`, warnings: [], section_ids: [] } satisfies MockReply<'split_shot_at_distance'>;
             }
             const target = section.shots[idx] as Record<string, unknown>;
             const length = (target.length as number) ?? 0;
@@ -3532,7 +3564,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 error: `Both sides of the split must be at least ${MIN_SPLIT_CHILD_LENGTH_M.toFixed(
                   2,
                 )}m (shot length ${length.toFixed(2)}m)`,
-              };
+                warnings: [],
+                section_ids: [],
+              } satisfies MockReply<'split_shot_at_distance'>;
             }
             // Mirrors the backend's collinear split: shared azimuth/pitch/LRUD,
             // depth linearly interpolated at the split point. The tail is
@@ -3558,12 +3592,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             target.length = length - distance;
             target.depth_in = midDepth;
             section.shots.splice(idx, 0, headShot);
-            return { success: true, section_ids: [], shot_id: nextId };
+            return { success: true, warnings: [], error: null, section_ids: [], shot_id: nextId } satisfies MockReply<'split_shot_at_distance'>;
           }
 
           case 'merge_projects':
             console.log('[Mock IPC] merge_projects called with:', args);
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'merge_projects'>;
 
           case 'set_shot_kind': {
             console.log('[Mock IPC] set_shot_kind called with:', args);
@@ -3581,7 +3615,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }
               }
             }
-            return { success: true, section_ids: [] };
+            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'set_shot_kind'>;
           }
 
           // Raw sqlite browsing (data table fullscreen)
@@ -3591,7 +3625,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               throw new Error('No project database; save the project to browse raw data');
             }
             // Alphabetical, mirroring list_raw_table_names' ORDER BY name.
-            return ['project', 'sections', 'shots', 'undo_stack'];
+            return ['project', 'sections', 'shots', 'undo_stack'] satisfies MockReply<'get_raw_table_names'>;
           }
 
           case 'get_raw_table': {
@@ -3686,7 +3720,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               columns,
               rows: allRows.slice(offset, offset + limit),
               total_rows: allRows.length,
-            };
+            } satisfies MockReply<'get_raw_table'>;
           }
 
           // Plugin: event system handlers for @tauri-apps/api/event
@@ -3727,7 +3761,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Check if this path should be delayed
             const delay = geometryDelayPaths.get(filePath);
             // Return a SurveyGeometry-conformant payload matching src/types/survey.ts
-            const mockGeometry = {
+            const mockGeometry: MockReply<'get_survey_geometry_for_file'> = {
               origin: [-82.46, 24.93] as [number, number],
               shots: [
                 { from: [-82.46, 24.93] as [number, number], to: [-82.4599, 24.9301] as [number, number], kind: 'Normal', section_id: 1 },
@@ -3736,27 +3770,27 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
 
             if (delay && delay > 0) {
-              return new Promise((resolve) => setTimeout(() => resolve(mockGeometry), delay));
+              return new Promise((resolve) => setTimeout(() => resolve(mockGeometry), delay)) satisfies Promise<MockReply<'get_survey_geometry_for_file'>>;
             }
 
-            return mockGeometry;
+            return mockGeometry satisfies MockReply<'get_survey_geometry_for_file'>;
           }
 
           case 'take_pending_launch_files':
             // #424: no OS handed this browser-hosted app a file. Present so the
             // startup drain resolves to an empty list instead of falling through
             // to the `null` default, which `for (const p of null)` would throw on.
-            return [];
+            return [] satisfies MockReply<'take_pending_launch_files'>;
 
           case 'take_unrecognised_shot_kinds':
             // #27: no unreadable kinds in the mocked fixtures. Present so the
             // post-load call resolves instead of throwing into the catch, which
             // would mask a real regression in that path.
-            return [];
+            return [] satisfies MockReply<'take_unrecognised_shot_kinds'>;
 
           // Silent no-ops: commands that should succeed without side-effects
           case 'push_frontend_log':
-            return null;
+            return null satisfies MockReply<'push_frontend_log'>;
 
           default:
             for (const handle of familyHandlers) {

@@ -4435,6 +4435,7 @@ dependencies = [
  "stalagmight-speleodb",
  "stalagmight-telemetry",
  "stalagmight-tiles",
+ "syn 2.0.114",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

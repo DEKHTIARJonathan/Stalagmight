@@ -20,10 +20,7 @@ import { surfaceSaveWarnings } from '../utils/saveFeedback';
 import type {
   DoneResult,
   PushResult,
-  SpeleoDoneReport,
-  SpeleoPushReport,
   StartEditingResult,
-  UpdateResult,
   ValidationWarning,
 } from '../types/ipc.generated';
 
@@ -239,8 +236,8 @@ export function useSpeleoActions(): SpeleoActions {
       // before this reach the backend first.
       const result = await afterQueuedEdits(() =>
         options?.resumeHeldLock
-          ? invokeIpc<StartEditingResult>('speleodb_start_editing', { resumeHeldLock: true })
-          : invokeIpc<StartEditingResult>('speleodb_start_editing'),
+          ? invokeIpc('speleodb_start_editing', { resumeHeldLock: true })
+          : invokeIpc('speleodb_start_editing'),
       );
       const routed = await routeStartEditingResult(result, true, issuedFor);
       if (!routed.landed) return false;
@@ -269,7 +266,7 @@ export function useSpeleoActions(): SpeleoActions {
         // [#576 D23-SWAP] Discard always swaps the tree (see below): the edits
         // queued before this reach the backend first.
         const result = await afterQueuedEdits(() =>
-          invokeIpc<StartEditingResult | null>('speleodb_discard_changes', {
+          invokeIpc('speleodb_discard_changes', {
             keepLock,
             acknowledged: true,
           }),
@@ -303,7 +300,7 @@ export function useSpeleoActions(): SpeleoActions {
       // No result payload: the backend flips the edit gate + force-edit flag.
       // Re-seed the link so `editState → editing` and `forceEditing → true` drive
       // the read-only badge off and the big-red banner on.
-      await invokeIpc<null>('speleodb_force_edit');
+      await invokeIpc('speleodb_force_edit');
       await refreshLinkStatus();
       showToast(t('speleodb.forceEdit.toasts.active'), TOAST_KEYS.SPELEODB_FORCE_EDIT, 'warning');
       return true;
@@ -326,7 +323,7 @@ export function useSpeleoActions(): SpeleoActions {
     const busyToken = beginBusy();
     try {
       // [#576 D23-SWAP] A fast-forward swaps the tree: queued edits land first.
-      const result = await afterQueuedEdits(() => invokeIpc<UpdateResult>('speleodb_update'));
+      const result = await afterQueuedEdits(() => invokeIpc('speleodb_update'));
       if (!speleoProjectSessionStillCurrent(issuedFor)) return;
       applyUpdate(result);
       switch (result.kind) {
@@ -377,7 +374,7 @@ export function useSpeleoActions(): SpeleoActions {
       clearPushFailedBanner();
       try {
         const { result, saveWarnings } = readSpeleoReport<PushResult>(
-          await invokeIpc<SpeleoPushReport>('speleodb_push', {
+          await invokeIpc('speleodb_push', {
             message: message ?? null,
             acceptOlderVersion: opts?.acceptOlderVersion ?? false,
           }),
@@ -487,7 +484,7 @@ export function useSpeleoActions(): SpeleoActions {
       const hadUnpushedEdits = useSpeleoStore.getState().link?.hasUnpushedEdits ?? false;
       try {
         const { result, saveWarnings } = readSpeleoReport<DoneResult>(
-          await invokeIpc<SpeleoDoneReport>('speleodb_done', {
+          await invokeIpc('speleodb_done', {
             message: message ?? null,
             acceptOlderVersion: opts?.acceptOlderVersion ?? false,
           }),
@@ -580,7 +577,7 @@ export function useSpeleoActions(): SpeleoActions {
       // Backend re-pulls + resets the tree to the server tip and returns the
       // reloaded path; loadProject re-seeds the link status (→ read-only).
       // [#576 D23-SWAP] The reset swaps the tree: queued edits land first.
-      const localPath = await afterQueuedEdits(() => invokeIpc<string>('speleodb_take_remote'));
+      const localPath = await afterQueuedEdits(() => invokeIpc('speleodb_take_remote'));
       // If the reload was superseded (the user opened another project mid-pull),
       // don't claim success: the backend reset already happened, but the view the
       // caller thinks it reloaded is not showing. Skip the toast + return false so

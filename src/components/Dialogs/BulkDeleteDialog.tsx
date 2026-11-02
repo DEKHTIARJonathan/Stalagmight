@@ -75,7 +75,7 @@ export default function BulkDeleteDialog() {
 
   useEffect(() => {
     if (sectionId !== undefined && startShotId !== undefined && endShotId !== undefined) {
-      invokeIpc<DeleteShotRangeImpact>(
+      invokeIpc(
         'preview_delete_shot_range',
         { sectionId, startShotId, endShotId },
         { purpose: 'preview shot range deletion' }

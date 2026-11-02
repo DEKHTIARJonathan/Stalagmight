@@ -22,6 +22,9 @@ This runs `src-tauri/examples/gen_ipc_types.rs` (via `--example`) and produces:
 
 - `src/types/ipc.generated.ts` (re-exports for all generated IPC types)
 - `src/types/ipc/*.ts` (one file per exported Rust type)
+- `src/types/ipc/IpcCommands.ts` + `src/types/ipc/ipcCommands.json` (the command
+  manifest, see below)
+- `src/types/ipc/IpcEvents.ts` (the event manifest, see below)
 
 The exported types live across the workspace member crates
 (`src-tauri/crates/*`) as well as the app crate; the generator collects them
@@ -52,6 +55,72 @@ git status --porcelain src/types/ipc src/types/ipc.generated.ts   # must print n
 The generator is deterministic, so a clean checkout regenerates byte-identical
 files. Like ts-rs, it only writes: a file left behind after its type is removed
 from the export list is not flagged - delete it by hand.
+
+## The command manifest
+
+`generate_handler!` in `src-tauri/src/lib.rs` is the only registry of IPC
+commands, and each `#[tauri::command]` signature is the only statement of a
+command's argument names. The generator reads both and writes the manifest
+(#576 C3):
+
+- `src/types/ipc/IpcCommands.ts` - `interface IpcCommands { <name>: { args;
+  result; error } }` for every registered command, plus `IPC_COMMAND_NAMES`.
+  `args` holds the keys Tauri deserializes (its default camelCase of the Rust
+  parameter names; an `Option` parameter may be omitted); `result` is what the
+  command resolves with (`ArrayBuffer` for a raw `tauri::ipc::Response`, `null`
+  for `()`); `error` is its `Err` type (`never` when it returns no `Result`;
+  Tauri still rejects with a string when it cannot deserialize the arguments).
+- `src/types/ipc/ipcCommands.json` - the same data, machine-readable, with the
+  Rust spelling of every type, for the Rust tests.
+
+Its consumers, which used to keep their own copies or re-parse `lib.rs`:
+
+- `invokeIpc` (`src/utils/ipc.ts`) is typed by it: an unregistered name, a
+  wrong or missing argument, or a wrong assumption about the result does not
+  compile, and callers no longer assert a result type. `plugin:*` commands stay
+  untyped; a dispatcher that forwards a command name it was handed (the
+  mutation queue) calls it as `ForwardedInvoke` and types its own callers with
+  `IpcCallArgs<K>`.
+- The Playwright IPC mock types every reply with `MockReply<'name'>`
+  (`e2e-playwright/mocks/ipc/types.ts`), so `pnpm typecheck:playwright` fails
+  when a mocked reply drifts from what the backend returns.
+- `pnpm test:mock-contract` takes the registered names from
+  `IPC_COMMAND_NAMES`.
+- The telemetry vocabulary no longer lists `command.*` events (the generated
+  names are their vocabulary; docs/telemetry.md), and the app crate's
+  open_project tripwire reads `ipcCommands.json`.
+- `execute_batch`'s payload is the generated `Command` (the Rust enum, with
+  `?:` on its `Option` fields since the frontend only sends it);
+  `BatchCommand` (`src/types/commands.ts`) narrows it to the variants the
+  frontend batches.
+
+**Mechanism.** The generator (`src-tauri/examples/gen_ipc_types/commands.rs`)
+parses `lib.rs` and the `commands/` modules with `syn`, an optional dependency
+compiled only under the `ipc-typegen` feature. A proc-macro attribute would
+have needed a new crate and an annotation on every command, and a build script
+would run on every build; reading the source in the generator needs neither,
+and the CI freshness gate above makes the committed manifest as trustworthy as
+a build step. Types resolve by their last path segment against everything the
+generator exports, plus three small tables in that file (Tauri-injected
+parameters, string/number primitives incl. the `SectionId`/`ShotId` aliases,
+and the two deliberately opaque types). Anything else stops the generator with
+the command and parameter named, so a new command whose types are not exported
+cannot produce a partial manifest. Not modelled (the generator refuses them):
+an entry under `#[cfg]` in `generate_handler!`, a `#[tauri::command(...)]` with
+arguments (they change the wire keys), a command outside `commands::<module>`.
+
+## The event manifest
+
+Every event the backend emits to the webview is declared once in
+`core::events` (#576 C13): a marker type implementing `IpcEvent` with the
+wire `NAME` and the `Payload` type. Core emitters serialize through
+`events::payload::<E>`, the app crate's through `commands::event_sink::emit_event::<E>`,
+so a misspelled name or a wrong payload does not compile. The generator writes
+`src/types/ipc/IpcEvents.ts` (`interface IpcEvents { <name>: <payload> }` and
+`IPC_EVENTS`), and listeners go through `listenIpc(IPC_EVENTS.<NAME>, ...)`
+(`src/utils/ipcEvents.ts`), which types the payload. A new event is a new
+`IpcEvent` impl plus one line in `gen_ipc_types/events.rs`; until that line
+exists the frontend has no `IPC_EVENTS` key to listen with.
 
 ## The second tree: `src-tauri/bindings/`
 
@@ -149,10 +218,12 @@ Add the same pair when you add a serde-omitted field. In the Playwright IPC mock
 (`e2e-playwright/mocks/tauri-ipc.ts`) the same convention applies by hand: an
 omitted field is written **absent**, not present-and-empty (`closures_with` on
 the `get_project_state` stations), and an always-present one is written even when
-empty (`section_ids` on every `-> CommandResult` handler). Nothing enforces
-that - `pnpm test:mock-contract` checks only that the mock covers the command
-NAMES in `generate_handler!`, not the shape of what it returns - so a mock
-literal that drifts from the wire is caught by review, not by a gate.
+empty (`section_ids` on every `-> CommandResult` handler). Half of that is
+gated since #576 C3: every reply is checked against the generated result type
+(`MockReply`, see "The command manifest"), so a required field cannot be left
+out. The other half is not - a type cannot tell an absent optional field from a
+present-and-empty one - so writing an omitted field absent is still caught by
+review, not by a gate.
 
 ## A 64-bit integer is declared `number`
 
@@ -205,6 +276,11 @@ These IPC types are **always generated**, never written by hand:
    skipped `Vec`.
 6. Add the type to the export list in `src-tauri/examples/gen_ipc_types.rs`.
 7. Re-run `pnpm gen:ipc-types` and commit the updated generated files.
+
+A new **command** needs no manifest edit: register it in `generate_handler!`,
+make sure its argument and result types are exported (the generator names any
+that are not), and regenerate. Then add its mock case (or an
+`UNMOCKED_COMMAND_REASONS` entry) - `pnpm test:mock-contract` asks for it.
 
 ## Notes
 

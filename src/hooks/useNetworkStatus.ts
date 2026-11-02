@@ -1,6 +1,7 @@
 import { useEffect, useCallback } from 'react';
 import { useLatest } from './useLatest';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { UnlistenFn } from '@tauri-apps/api/event';
+import { IPC_EVENTS, listenIpc, type IpcEventName } from '../utils/ipcEvents';
 import { invokeIpc } from '../utils/ipc';
 import { useNetworkStore } from '../store/networkStore';
 
@@ -54,9 +55,9 @@ export function useNetworkStatus() {
         console.warn(`[useNetworkStatus] ${event} listener release failed:`, e);
       });
     };
-    const register = async (event: string, handler: () => void) => {
+    const register = async (event: IpcEventName, handler: () => void) => {
       try {
-        const unlisten = await listen(event, handler);
+        const unlisten = await listenIpc(event, handler);
         if (disposed) release(event, unlisten);
         else unlisteners.push(() => release(event, unlisten));
       } catch (e) {
@@ -65,12 +66,12 @@ export function useNetworkStatus() {
       }
     };
 
-    void register('tile-transport-error', () => goOffline());
-    void register('tile-transport-success', () => goOnline());
+    void register(IPC_EVENTS.TILE_TRANSPORT_ERROR, () => goOffline());
+    void register(IPC_EVENTS.TILE_TRANSPORT_SUCCESS, () => goOnline());
 
     const handleBrowserOnline = () => {
       // Browser reports online - verify with backend
-      invokeIpc<boolean>('get_network_status', undefined, { purpose: 'check network status' })
+      invokeIpc('get_network_status', undefined, { purpose: 'check network status' })
         .then((online) => { if (online) goOnline(); })
         .catch(() => { /* ignore - tile events will confirm */ });
     };
@@ -93,7 +94,7 @@ export function useNetworkStatus() {
 
     const poll = async () => {
       try {
-        const online = await invokeIpc<boolean>('get_network_status', undefined, { purpose: 'check network status' });
+        const online = await invokeIpc('get_network_status', undefined, { purpose: 'check network status' });
         if (online) goOnline();
       } catch {
         // Still offline

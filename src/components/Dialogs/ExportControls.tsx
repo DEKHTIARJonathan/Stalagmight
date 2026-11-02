@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useId } from 'react';
 import { useTranslation } from 'react-i18next';
-import { listen } from '@tauri-apps/api/event';
+import { IPC_EVENTS, listenIpc } from '../../utils/ipcEvents';
 import { saveDialog } from '../../utils/fileDialogs';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -217,7 +217,7 @@ export default function ExportControls({
           pathWasChosen = true;
           // Register listener BEFORE starting export to avoid race condition with early events
           // Uses shared loading-progress events for consistency with LoadingProgress infrastructure
-          const unlisten = await listen<LoadingProgressPayload>('loading-progress', (event) => {
+          const unlisten = await listenIpc(IPC_EVENTS.LOADING_PROGRESS, (event) => {
             if (isMountedRef.current) {
               // Only process export-related events (filter by loadingId once we know it,
               // or accept all export_* phase events if loadingId not yet known)

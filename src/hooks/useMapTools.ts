@@ -9,7 +9,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { useActiveStations } from './useActiveStations';
 import { getErrorMessage, invokeIpc } from '../utils/ipc';
-import type { SectionId, ShotId, StationRef, Coordinates, RulerEndpoint, AlongLineResult } from '../types/project';
+import type { SectionId, ShotId, StationRef, Coordinates, RulerEndpoint } from '../types/project';
 import type { GpsOrigin } from '../types/config';
 import { distance, mapCoordsToMeters } from '../utils/coordinates';
 import { reachableStationKeySet, nearestOriginShotEndpoint } from '../utils/gasReach';
@@ -313,7 +313,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       const requestProjectKey = projectIdentityKey(useProjectStore.getState().project);
       setMeasureAlongLinePending(true);
       try {
-        const result = await invokeIpc<AlongLineResult | null>(
+        const result = await invokeIpc(
           'get_along_line_distance',
           { a, b },
           { purpose: 'ruler along-line distance' }

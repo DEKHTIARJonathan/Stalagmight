@@ -1,4 +1,4 @@
-import type { MockCommandFamily, MockCommandHandler } from './types';
+import type { MockCommandFamily, MockCommandHandler, MockReply } from './types';
 
 /**
  * Config commands of the Playwright IPC mock: `get_config` / `reload_config`, and the
@@ -107,6 +107,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
         // overlaying any view state stored via update_data_table_view and any
         // `[gas]` block stored via update_gas_config.
         if (savedConfig) {
+          // shape not checked: savedConfig is the Config the app last sent to update_config/patch_config, held as Record<string, unknown>
           return {
             ...savedConfig,
             panels: {
@@ -118,8 +119,9 @@ export const configCommands: MockCommandFamily = (ctx) => {
             ...mockImportShotsView,
             },
             ...(mockGasConfig ? { gas: mockGasConfig } : {}),
-          };
+          } as unknown as MockReply<'get_config'>;
         }
+        // shape not checked: a partial hand-rolled Config fixture (fields the backend always sends are absent); completing it would change what the app reads
         return {
           general: {
             auto_save: true,
@@ -383,15 +385,15 @@ export const configCommands: MockCommandFamily = (ctx) => {
           },
           // Spread LAST so a stored `[gas]` block wins over the literal's own.
           ...(mockGasConfig ? { gas: mockGasConfig } : {}),
-        };
+        } as unknown as MockReply<'get_config'>;
 
       case 'update_config':
         // Mock update_config - store config and return the real command's shape:
-        // a ConfigSaveReport whose only field is the keyring residue a "never use
-        // the OS keychain" save could not evict. `null` is the ordinary answer.
+        // a ConfigSaveReport carrying the keyring (and other persistent-tier) residue
+        // a "never use the OS keychain" save could not evict. `null` is the ordinary answer.
         console.log('[Mock IPC] update_config called with:', args);
         savedConfig = args?.config as Record<string, unknown> | undefined ?? null;
-        return { keychain_residue: null };
+        return { keychain_residue: null, persistent_residue: null } satisfies MockReply<'update_config'>;
 
       case 'patch_config': {
         // [#576 D27-32(c)] Apply each changed setting onto the CURRENT config (what
@@ -410,7 +412,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
           if (leaf !== undefined) node[leaf] = value;
         }
         savedConfig = next;
-        return { keychain_residue: null };
+        return { keychain_residue: null, persistent_residue: null } satisfies MockReply<'patch_config'>;
       }
 
       case 'update_gas_config': {
@@ -424,7 +426,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
         console.log('[Mock IPC] update_gas_config called with:', args);
         const gas = args?.gas as Record<string, unknown> | undefined;
         if (gas) mockGasConfig = gas;
-        return null;
+        return null satisfies MockReply<'update_gas_config'>;
       }
 
       case 'update_data_table_view': {
@@ -460,7 +462,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
         if (stationColumnWidths != null) {
           mockDataTableView.data_table_station_column_widths = stationColumnWidths;
         }
-        return null; // Tauri serializes () as null
+        return null satisfies MockReply<'update_data_table_view'>; // Tauri serializes () as null
       }
 
       case 'update_new_section_view': {
@@ -483,7 +485,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
           | Record<string, number>
           | undefined;
         if (columnWidths != null) mockNewSectionView.new_section_column_widths = columnWidths;
-        return null; // Tauri serializes () as null
+        return null satisfies MockReply<'update_new_section_view'>; // Tauri serializes () as null
       }
 
       case 'update_edit_section_view': {
@@ -505,7 +507,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
           | Record<string, number>
           | undefined;
         if (columnWidths != null) mockEditSectionView.edit_section_column_widths = columnWidths;
-        return null; // Tauri serializes () as null
+        return null satisfies MockReply<'update_edit_section_view'>; // Tauri serializes () as null
       }
       case 'update_import_shots_view': {
         console.log('[Mock IPC] update_import_shots_view called with:', args);
@@ -530,7 +532,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
           | Record<string, number>
           | undefined;
         if (columnWidths != null) mockImportShotsView.import_shots_column_widths = columnWidths;
-        return null; // Tauri serializes () as null
+        return null satisfies MockReply<'update_import_shots_view'>; // Tauri serializes () as null
       }
 
       case 'reload_config': {
@@ -543,6 +545,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
         // otherwise treats as persisted, and a reload-after-save test would
         // have asserted against the wrong baseline.
         if (savedConfig) {
+          // shape not checked: savedConfig is the Config the app last sent to update_config/patch_config, held as Record<string, unknown>
           return {
             ...savedConfig,
             panels: {
@@ -554,7 +557,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
             ...mockImportShotsView,
             },
             ...(mockGasConfig ? { gas: mockGasConfig } : {}),
-          };
+          } as unknown as MockReply<'reload_config'>;
         }
         // Return mock config with any test overrides applied
         // This allows tests to modify config values via __MOCK_SET_CONFIG_OVERRIDES__
@@ -813,7 +816,8 @@ export const configCommands: MockCommandFamily = (ctx) => {
           // mockDataTableView above.)
           ...(mockGasConfig ? { gas: mockGasConfig } : {}),
         };
-        return baseConfig;
+        // shape not checked: a partial hand-rolled Config fixture (fields the backend always sends are absent); completing it would change what the app reads
+        return baseConfig as unknown as MockReply<'reload_config'>;
       }
 
       default:

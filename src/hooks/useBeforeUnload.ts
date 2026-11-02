@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { UnlistenFn } from '@tauri-apps/api/event';
+import { IPC_EVENTS, listenIpc } from '../utils/ipcEvents';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { debugLog } from '../utils/debugLog';
@@ -114,7 +115,7 @@ export function useBeforeUnload(
     const setupTauriListener = async () => {
       try {
         debugLog('[useBeforeUnload] Setting up close listener');
-        const unlisten = await listen('tauri://close-requested', async () => {
+        const unlisten = await listenIpc(IPC_EVENTS.TAURI_CLOSE_REQUESTED, async () => {
           debugLog('[useBeforeUnload] Close requested, shouldBlock:', shouldBlockRef.current, 'isClosing:', isClosing.current);
 
           // If we're already closing, don't do anything

@@ -7,6 +7,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import type { IpcCommandName } from './ipc';
 import { DISPLAY_DEFAULTS } from '../store/displaySelectors';
 
 /** How often (ms) to flush batched counts to Rust. */
@@ -149,7 +150,7 @@ const UNDOABLE_COMMANDS: ReadonlySet<string> = new Set([
   'delete_shot_range_split', 'delete_shot_range_shift',
   'import_sections', 'execute_tml_import', 'execute_compass_import', 'execute_walls_import',
   'execute_gpx_import', 'execute_batch',
-]);
+] satisfies IpcCommandName[]);
 
 /**
  * Check if the telemetry feature is compiled into the Rust backend.

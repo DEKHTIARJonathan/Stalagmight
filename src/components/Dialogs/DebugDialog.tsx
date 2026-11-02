@@ -107,7 +107,7 @@ export default function DebugDialog() {
 
   const fetchLogs = useCallback(async (): Promise<boolean> => {
     try {
-      const result = await invokeIpc<string[]>('get_recent_logs', undefined, { purpose: 'fetch recent debug logs' });
+      const result = await invokeIpc('get_recent_logs', undefined, { purpose: 'fetch recent debug logs' });
       setLogs(result);
       setError(null);
       return true;

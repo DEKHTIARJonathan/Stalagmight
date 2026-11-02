@@ -38,29 +38,40 @@ impl std::fmt::Display for CommentHolder {
 }
 
 /// All persistent commands that modify project state
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Generated as the TS `Command` (#576 C3), which `execute_batch` takes and the
+/// frontend's `BatchCommand` narrows. The frontend only ever SENDS one, so every
+/// `Option` field is declared `?:` - serde reads a missing key as `None`.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
     // Project commands
     CreateProject {
         name: String,
+        #[ts(optional)]
         location: Option<String>,
     },
     OpenProject {
         path: PathBuf,
     },
     SaveProject {
+        #[ts(optional)]
         path: Option<PathBuf>,
     },
     CloseProject,
 
     // Section commands
     CreateSection {
+        #[ts(optional)]
         name: Option<String>,
+        #[ts(optional)]
         surveyor: Option<String>,
+        #[ts(type = "string")]
+        #[ts(optional)]
         date: Option<NaiveDate>,
         color: String,
         #[serde(default)]
+        #[ts(optional)]
         direction: Option<SurveyDirection>,
         shots: Vec<ShotData>,
     },
@@ -86,8 +97,10 @@ pub enum Command {
     CreateShot {
         section_id: SectionId,
         shot: ShotData,
+        #[ts(optional)]
         after_shot_id: Option<ShotId>,
         #[serde(default)]
+        #[ts(optional)]
         before_shot_id: Option<ShotId>,
     },
     UpdateShot {
@@ -140,6 +153,7 @@ pub enum Command {
         closure_strategy: ClosureStrategy,
     },
     RemoveLoopClosure {
+        #[ts(type = "number")]
         closure_id: u64,
     },
     SetZeroDatum {
@@ -153,6 +167,7 @@ pub enum Command {
     // Station comment commands
     SetStationComment {
         station_ref: StationRef,
+        #[ts(optional)]
         comment: Option<String>,
     },
 

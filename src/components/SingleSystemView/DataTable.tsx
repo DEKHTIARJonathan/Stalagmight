@@ -1398,7 +1398,7 @@ export default function DataTable({ sections }: DataTableProps) {
   const [rawTables, setRawTables] = useState<string[] | 'unavailable' | null>(null);
   const lastRawTableRef = useRef<string | null>(null);
   const fetchRawTableNames = useCallback(() => {
-    invokeIpc<string[]>('get_raw_table_names', undefined, {
+    invokeIpc('get_raw_table_names', undefined, {
       purpose: 'list raw sqlite tables for the data viewer',
     })
       .then((names) => setRawTables(Array.isArray(names) ? names : 'unavailable'))
