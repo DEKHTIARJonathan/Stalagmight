@@ -47,9 +47,21 @@ impl AppState {
     /// `read` must not reach anything that takes `command_lock` itself (`execute`,
     /// undo/redo, the imports, save, close, load, repair, the adjusted solve):
     /// the lock is not reentrant.
+    ///
+    /// [#576 RV5-PI-4] A panic in `read` is caught, the guard released normally, and
+    /// the panic then resumed: unwinding through the guard would poison
+    /// `command_lock`, and `refuse_after_crash` would then refuse undo, redo and
+    /// every SpeleoDB push for the rest of the session over a crash that mutated
+    /// nothing. A cell `read` itself held when it panicked (the project, the
+    /// database) is still poisoned and reported by its own lock, as it should be.
     pub fn settled_read<T>(&self, read: impl FnOnce() -> T) -> T {
-        let _between_commands = self.hold_commands();
-        read()
+        let between_commands = self.hold_commands();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read));
+        drop(between_commands);
+        match outcome {
+            Ok(value) => value,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
     }
 
     /// A deep copy of the open project, for a caller that has to own and change
