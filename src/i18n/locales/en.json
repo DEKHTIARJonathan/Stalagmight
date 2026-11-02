@@ -2582,7 +2582,7 @@
       "issue_other": "issues",
       "needWord_one": "needs",
       "needWord_other": "need",
-      "partial": "Fixed {{fixed}} {{issueWord}}; {{remaining}} {{needWord}} manual attention (recompute or remove drifted loop closures, fix non-finite shots). Save to keep the fix.",
+      "partial": "Fixed {{fixed}} {{issueWord}}; {{remaining}} {{needWord}} manual attention (recompute or remove drifted loop closures, fix non-finite shots, correct GPS tie points with impossible values). Save to keep the fix.",
       "full": "Repaired {{fixed}} {{issueWord}}. Save to keep the fix.",
       "failed": "Repair failed - nothing was changed. Please try again."
     },

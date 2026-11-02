@@ -488,7 +488,10 @@ pub struct CommandResult {
 /// they stay consistent with the integrity banner's count - unlike summing
 /// per-operation counters that mix different units. `remaining` is whatever the
 /// repair could not auto-fix (detect-only: a drifted aligned loop closure to
-/// recompute/remove, or non-finite shot geometry to correct by hand).
+/// recompute/remove, non-finite shot geometry to correct by hand, or a GPS tie
+/// point with impossible values - `invalid_zero_datum`, #576 B35(g) - which only
+/// the user can correct). The partial-result toast names all three (#576
+/// NF-W3-4).
 ///
 /// `changed` is true when the repair actually mutated the project (an undo entry
 /// was recorded). It is a STRICTLY broader signal than `fixed > 0`: the repair
