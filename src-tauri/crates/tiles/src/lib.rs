@@ -638,6 +638,19 @@ impl TileFetchError {
             Some(code) => (500..600).contains(&code),
         }
     }
+
+    /// Whether this failure leaves it unknown if the provider has the tile.
+    ///
+    /// True for everything that allows the stale fallback (transport, 5xx),
+    /// and also for `408 Request Timeout` and `429 Too Many Requests`: both
+    /// say "ask later", not "absent" (#576 RV4-R-T1). Any other status is the
+    /// provider answering - a `404` that the tile is absent, a `403` that it
+    /// is refused. Decides whether an overzoomed crop may be stored under this
+    /// tile's key; it does not widen the stale fallback, which stays at
+    /// transport failures and 5xx.
+    fn left_existence_unknown(&self) -> bool {
+        self.allows_stale_fallback() || matches!(self.status, Some(408 | 429))
+    }
 }
 
 impl std::fmt::Display for TileFetchError {
@@ -671,8 +684,9 @@ enum TileFetchOutcome {
         /// the providers the registry is built to take, not the one it ships.)
         denied: bool,
         /// We never learned whether the provider has this tile: the request
-        /// did not get through (transport failure, a 5xx) or the protocol
-        /// misbehaved. A `404` is the opposite - an answer that it is absent.
+        /// did not get through (transport failure, a 5xx), the provider said
+        /// "ask later" (408, 429) or the protocol misbehaved. A `404` is the
+        /// opposite - an answer that it is absent.
         ///
         /// Decides whether an overzoomed crop may be STORED under this tile's
         /// key. A crop for a tile that does not exist is the best that tile
@@ -976,8 +990,9 @@ where
                 return TileFetchOutcome::Missing {
                     error: format!("Tile not available: {e}"),
                     denied: is_provider_denial(&e),
-                    // The provider answered: absent (404) or refused.
-                    transient: false,
+                    // The provider answered: absent (404) or refused - unless
+                    // it only said "ask later" (408, 429).
+                    transient: e.left_existence_unknown(),
                 };
             }
 
@@ -1036,12 +1051,12 @@ where
 }
 
 /// For the two "ask again without a validator" recoveries: did the second
-/// attempt leave us not knowing whether the tile exists? Only a non-5xx status
-/// is the provider saying so; an error that allows the stale fallback, or a
-/// second protocol oddity, says nothing.
+/// attempt leave us not knowing whether the tile exists? Only a status that
+/// answers (a 404, a refusal) says so; a transport failure, a 5xx, a 408 or
+/// 429, or a second protocol oddity says nothing.
 fn refetch_left_it_unknown(result: &Result<TileFetchResponse, TileFetchError>) -> bool {
     match result {
-        Err(e) => e.allows_stale_fallback(),
+        Err(e) => e.left_existence_unknown(),
         Ok(_) => true,
     }
 }
@@ -1496,3 +1511,7 @@ pub fn tile_fetch_impl(
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod crop_storage_rv4_tests;
