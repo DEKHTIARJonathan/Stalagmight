@@ -1125,7 +1125,9 @@ mod tests {
 
     #[test]
     fn shot_display_position_pre_reload_ids() {
-        // Before save/load, shot IDs are small sequential integers (0-indexed)
+        // An id below its section's stride base reads as id + 1: section 0's own
+        // pre-save ids (0, 1, 2, ...) and an unstrided id from an older file. Other
+        // sections' pre-save ids start at section_id * FEATURE_ID_STRIDE (Section::new).
         assert_eq!(shot_display_position(0, 1), 1); // first shot → position 1
         assert_eq!(shot_display_position(4, 1), 5); // fifth shot → position 5
         assert_eq!(shot_display_position(0, 0), 1); // section 0 edge case
