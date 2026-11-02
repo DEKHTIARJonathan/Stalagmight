@@ -25,6 +25,7 @@ mod save_sidecars;
 mod session_commit;
 #[cfg(any(test, feature = "test-support"))]
 pub mod settle_gate;
+mod settled_adjusted;
 mod speleodb;
 mod speleodb_admin;
 mod speleodb_cache;
@@ -512,6 +513,15 @@ mod sdb_swap_gate_tests;
 mod session_commit_tests;
 #[cfg(test)]
 #[expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              timings and counts are the evidence a run captures"
+)]
+mod settled_lookup_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::panic,
     clippy::print_stdout,
@@ -608,6 +618,7 @@ mod tests_support;
 
 pub use app_state::AppState;
 pub use command_import::VirtualShotMode;
+pub use settled_adjusted::SettledProject;
 pub use workspace_mode::WorkspaceMode;
 #[cfg(test)]
 #[expect(

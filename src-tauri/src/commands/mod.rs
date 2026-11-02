@@ -42,6 +42,12 @@ mod command_tests;
     clippy::print_stdout,
     reason = "test module: the printed values are the evidence a run captures"
 )]
+mod export_pairing_tests;
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "test module: the printed values are the evidence a run captures"
+)]
 mod geometry_query_tests;
 #[cfg(test)]
 #[expect(

@@ -406,9 +406,14 @@ impl AppState {
     /// "Ignore" by UUID (issue #57). After `do_load_project_full` every shot
     /// has a UUID, so this is `Some` for any shot the user can act on; returns
     /// `None` only if no project is open or the shot is gone.
+    ///
+    /// [#576 NF-W6A-3] Read from the SETTLED project: the commands run on the
+    /// pool, and a structural edit mutates the project before it settles it, so a
+    /// plain lookup could resolve the id against a project no user ever sees.
+    /// Called from the two commands only, never inside a command span
+    /// (`settled_snapshot` is not reentrant).
     pub fn shot_uuid_for(&self, section_id: SectionId, shot_id: ShotId) -> Option<String> {
-        let guard = self.project.lock();
-        let project = guard.as_ref()?;
+        let project = self.settled_snapshot()?;
         let section = project.sections.iter().find(|s| s.id == section_id)?;
         let shot = section.shots.iter().find(|s| s.id == shot_id)?;
         shot.uuid.clone()

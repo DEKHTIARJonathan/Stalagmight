@@ -216,7 +216,10 @@ pub async fn export_image<R: Runtime>(
         // label its penetration with the same graph the app is showing, so this
         // comes from the live config, never from whatever the frontend sent.
         options.include_reference_legs = state.get_config().gas.include_reference_legs;
-        let project = state.settled_snapshot().ok_or_else(|| {
+        // [#576 NF-W6A-4] One settled version for the project AND its adjusted
+        // geometry (below): two separate reads could pair a project with stations
+        // a command in between had already changed.
+        let settled = state.settled_project().ok_or_else(|| {
             tracing::warn!(
                 path = ?path,
                 purpose = "export map image for sharing",
@@ -225,6 +228,7 @@ pub async fn export_image<R: Runtime>(
             );
             "No project open".to_string()
         })?;
+        let project = &settled.project;
 
         // Never let an image export clobber a file the open project owns: the raw
         // file write in `export/image.rs` would overwrite the live database, or the
@@ -235,7 +239,7 @@ pub async fn export_image<R: Runtime>(
         // profile used the wider one, so a PNG/SVG/PDF aimed at `<project>.plnx`
         // was written - and the doc comment on `is_project_owned_file` already
         // claimed the gap was closed.
-        if is_project_owned_file(&path, &project) {
+        if is_project_owned_file(&path, project) {
             tracing::warn!(
                 path = ?path,
                 open_project = ?project.file_path,
@@ -253,10 +257,10 @@ pub async fn export_image<R: Runtime>(
             format = ?options.format,
             "Starting image export"
         );
-        // Render from the memoized closure-adjusted solve so the saved image
-        // matches the on-screen (adjusted) map; falls back to measured
-        // coordinates when there are no eligible closures.
-        let adjusted = state.get_adjusted_stations();
+        // Render from the closure-adjusted solve of that same version (memoized)
+        // so the saved image matches the on-screen (adjusted) map; measured
+        // coordinates where there are no eligible closures.
+        let stations = state.adjusted_stations_of(&settled);
 
         // Use shared ProgressEmitter for consistent progress events
         let mut emitter = ProgressEmitter::new_for_export(sink);
@@ -268,12 +272,7 @@ pub async fn export_image<R: Runtime>(
         emitter.start_phase(LoadingPhase::ExportGenerating);
 
         // Perform the actual export
-        let result = match adjusted {
-            Some(stations) => {
-                crate::export::export_image_with_stations(&project, &path, &options, stations)
-            }
-            None => crate::export::export_image(&project, &path, &options),
-        };
+        let result = crate::export::export_image_with_stations(project, &path, &options, stations);
 
         if result.is_ok() {
             // Writing phase
@@ -474,20 +473,17 @@ pub async fn preview_svg_export(
         // Same config-wins rule as the export itself, so the preview cannot
         // disagree with the file it is previewing (#27).
         options.include_reference_legs = state.get_config().gas.include_reference_legs;
-        // [#576 RV5-4] Settled: never a project caught in the middle of a command.
-        let project = state
-            .settled_snapshot()
+        // [#576 RV5-4, NF-W6A-4] Settled, and the project and its adjusted geometry
+        // from that one settled version, exactly as the export takes them.
+        let settled = state
+            .settled_project()
             .ok_or_else(|| "No project open".to_string())?;
-        // Render from the memoized closure-adjusted solve so the preview matches
-        // the on-screen (adjusted) map; falls back to measured coordinates when
-        // there are no eligible closures.
-        match state.inner().get_adjusted_stations() {
-            Some(stations) => {
-                crate::export::generate_svg_string_with_stations(&project, &options, stations)
-            }
-            None => crate::export::generate_svg_string(&project, &options),
-        }
-        .map_err(|e| e.to_string())
+        // Render from the closure-adjusted solve (memoized) so the preview matches
+        // the on-screen (adjusted) map; measured coordinates where there are no
+        // eligible closures.
+        let stations = state.adjusted_stations_of(&settled);
+        crate::export::generate_svg_string_with_stations(&settled.project, &options, stations)
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("Preview task panicked: {e}"))?
