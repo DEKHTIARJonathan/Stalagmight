@@ -2278,12 +2278,24 @@ mod tests {
     /// Run cross-section suggestions on kb5.dmp sections (with 002 as existing)
     /// and validate the overlap detection results.
     ///
-    /// Re-blessed for #576 NF-KB5-ROT (decision E13-D3): d93f93b2 (2026-06-11)
-    /// tightened the placement cutoff on purpose, and since then the two-shot
-    /// overlaps of 001's back and 004's back against existing 002 no longer
-    /// clear it. The test was skipped at the time, so nothing noticed; it now
-    /// pins the stricter outcome, and a suggestion reappearing there means the
-    /// cutoff loosened.
+    /// Re-blessed for #576 NF-KB5-ROT (decision E13-D3): the 2026-06-11
+    /// placement tuning removed the two-shot overlaps of 001's back and 004's
+    /// back against existing 002 on purpose, and the test was skipped at the time,
+    /// so nothing noticed; it now pins the stricter outcome. Measured by reverting
+    /// each tuning step at the tip (#576 RV5-RL-2), more than one cutoff rejects
+    /// each, so a suggestion reappearing there means several loosened at once:
+    ///
+    /// - 001 -> 002 (002 station 182, reverse) is refused by each of three steps on
+    ///   its own: the depth cutoff 0.50 -> 0.30 m (5570de8d6; the second shot's
+    ///   depth differs by 0.47 m), the length cutoff's floor 2.0 -> 0.4 m
+    ///   (d93f93b2; the second shot's length differs by 1.71 m), and the
+    ///   shallow-crossing veto (9a4889dfe / 14c412b8e; every merge offset fails
+    ///   it). Only with all three reverted does it come back.
+    /// - 004 -> 002 (002 station 257, forward) is refused by the depth cutoff and
+    ///   by the length floor, each on its own; the crossing veto passes it.
+    ///
+    /// (The re-bless first credited d93f93b2 alone; restoring that cutoff by itself
+    /// brings neither back.)
     /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_suggestions_regression -- --nocapture
     #[test]
     fn kb5_suggestions_regression() {
@@ -2384,9 +2396,10 @@ mod tests {
         // 1. import=4(005) impStn=7 → target=importing:0(001) exStn=25 matched=2 dir=forward
         // 2. import=3(004) impStn=0 → target=importing:0(001) exStn=28 matched=2 dir=reverse
         // 3. import=2(003) impStn=0 → target=importing:0(001) exStn=27 matched=2 dir=forward
-        // Before d93f93b2 there was a fourth, import=0(001) impStn=107 →
-        // target=existing:0(002) exStn=182 matched=2 dir=reverse; the stricter
-        // cutoff no longer offers it.
+        // Before the 2026-06-11 tuning there was a fourth, import=0(001)
+        // impStn=107 → target=existing:0(002) exStn=182 matched=2 dir=reverse;
+        // the depth cutoff, the length floor and the crossing veto each refuse it
+        // now (see the doc comment).
         let s001_to_002 = suggestions.iter().find(|s| {
             s.import_section_index == 0
                 && s.target_type == TargetType::Existing
@@ -2394,7 +2407,7 @@ mod tests {
         });
         assert!(
             s001_to_002.is_none(),
-            "001 has no placement onto existing 002 under the d93f93b2 cutoff, got {s001_to_002:?}"
+            "001 has no placement onto existing 002 under the tuned cutoffs, got {s001_to_002:?}"
         );
 
         // Verify import→import suggestions exist
@@ -2460,7 +2473,7 @@ mod tests {
 
         // Section 004's back used to overlap existing 002 too (two shots at 002
         // station 257 - the source of the double-treatment bug); under the
-        // d93f93b2 cutoff it is not offered either.
+        // tuned depth and length cutoffs it is not offered either.
         let s004_to_existing = suggestions.iter().find(
             |s| {
                 s.import_section_index == 3
@@ -2470,7 +2483,7 @@ mod tests {
         );
         assert!(
             s004_to_existing.is_none(),
-            "004's back has no placement onto existing 002 under the d93f93b2 cutoff, got \
+            "004's back has no placement onto existing 002 under the tuned cutoffs, got \
              {s004_to_existing:?}"
         );
     }
@@ -2488,10 +2501,13 @@ mod tests {
     /// - Suggestions targeting importing:1 (section 002) are skipped (002 is existing, not imported)
     ///
     ///
-    /// Re-blessed for #576 NF-KB5-ROT (decision E13-D3): since d93f93b2 tightened
-    /// the placement cutoff there is no 001→002 suggestion (see
-    /// `kb5_suggestions_regression`), so nothing deletes 001's two overlap shots
-    /// and 001 keeps all 107.
+    /// Re-blessed for #576 NF-KB5-ROT (decision E13-D3): since the 2026-06-11
+    /// tuning there is no 001→002 suggestion (the depth cutoff, the length floor
+    /// and the crossing veto each refuse it - see `kb5_suggestions_regression`),
+    /// so nothing deletes 001's two overlap shots and 001 keeps all 107. Nor is
+    /// there a 004→002 one, so the treated-shots guard is no longer driven
+    /// through an import-to-import plus import-to-existing overlap on the same
+    /// shots (the double-treatment case) by any kb5 test.
     /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_overlap_treatment_regression -- --nocapture
     #[test]
     fn kb5_overlap_treatment_regression() {
