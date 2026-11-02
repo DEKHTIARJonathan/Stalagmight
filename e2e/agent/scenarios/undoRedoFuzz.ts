@@ -605,6 +605,7 @@ import { mulberry32, type Scenario, type ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import { RELOAD_RESOLVED_GEOMETRY, SAVE_HEALING_MUTATIONS } from '../lib/projectSnapshot';
 import { checkSnapshot } from '../lib/fuzzSnapshotCheck';
+import { allowKnownBugs, dumpFullHistory, fuzzFixture, replayTracePath, traceOutPath } from '../lib/fuzzKnobs';
 import type { TargetingDigest } from '../lib/fuzzOracleCore';
 import {
   streamV2,
@@ -639,63 +640,10 @@ import {
   type StepResponse,
 } from './undoRedoFuzzBridge';
 
-/**
- * EVERY env knob below is read at CALL time, never frozen into a module-level
- * const.
- *
- * Two runners set these variables from inside their own `main()`, long after
- * this module was imported: `pnpm agent:scenario --trace` parses its flags
- * there, and `pnpm agent:fuzz-shrink` restores the env the RECORDING ran under
- * there. A module-level const would capture whatever shell the runner was
- * started from instead - so a trace recorded against one fixture would silently
- * replay against another, and the shrink would report the trace as green. Same
- * rule, and the same reason, as `agentBuildMode()` in `e2e/lib/env.ts`.
- */
-
-/**
- * INERT, and kept deliberately. Every issue-413 finding this scenario reproduced
- * is fixed, every classifier is deleted, and there is nothing left for this flag
- * to tolerate - a mismatch of any shape fails the run.
- *
- * It is still READ, and still reported in the `reproduce:` line, for two
- * reasons: a repro line copied from the issue history still runs (it just no
- * longer changes the verdict), and a failure message that names the flag makes
- * "this run was tolerant" impossible to assume when it was not. If a future
- * open bug ever needs the same escape hatch, re-derive it here - including its
- * rule, which is that it must never be the default, because a green default
- * would mean the oracle had been weakened.
- */
-function allowKnownBugs(): boolean {
-  return process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
-}
-
-/**
- * Replay a recorded trace instead of drawing moves (`STALAGMIGHT_FUZZ_REPLAY`,
- * or `--trace` on `pnpm agent:scenario`, which sets it).
- *
- * Replay is a MODE of this scenario, never a separate one. Everything after the
- * move is chosen - the fused step, the three oracles, the model bookkeeping, the
- * classification and the failure payload - is the same code on both paths, so a
- * replayed failure is the same failure and not a lookalike. Only the source of
- * the decisions changes.
- */
-function replayTracePath(): string {
-  return process.env.STALAGMIGHT_FUZZ_REPLAY ?? '';
-}
-
-/** Force-write the trace of a run that PASSED, to this path. */
-function traceOutPath(): string {
-  return process.env.STALAGMIGHT_FUZZ_TRACE ?? '';
-}
-
-/**
- * Which `.stalx` under `e2e/fixtures/` to fuzz. Basename only - anything else is
- * flattened by `fixtureSourcePath`'s `path.basename`, which is the containment
- * guard and stays the only one.
- */
-function fuzzFixture(): string {
-  return process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
-}
+// The shared env knobs (`replayTracePath`, `traceOutPath`, `fuzzFixture`,
+// `allowKnownBugs`, `dumpFullHistory`) live in `lib/fuzzKnobs.ts`, with the
+// read-at-CALL-time rule they all follow. The knobs below are this
+// scenario's own, and follow the same rule.
 
 /** The stream label a run reports, in traces, metrics and the repro line. */
 function streamName(): 'v1' | 'v2' | 'v3' {
@@ -785,14 +733,6 @@ const SHOWN_DIFFS = 6;
 const DIFF_LIMIT = 200;
 /** Actions shown in the failure message's history tail. */
 const HISTORY_TAIL = 12;
-/**
- * `STALAGMIGHT_FUZZ_DUMP_HISTORY=1` prints the WHOLE action history on failure
- * instead of the tail. The tail is right for reading a failure; the full
- * sequence is what you need to transcribe a repro into a Rust test.
- */
-function dumpFullHistory(): boolean {
-  return process.env.STALAGMIGHT_FUZZ_DUMP_HISTORY === '1';
-}
 /** Headroom kept below the undo history limit so FIFO trimming can never fire. */
 const DEPTH_HEADROOM = 5;
 

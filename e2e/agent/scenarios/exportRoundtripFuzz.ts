@@ -433,7 +433,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import type { Scenario, ScenarioContext } from './framework';
-import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
+import { disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import { HOSTILE_COMMENTS } from '../lib/surveyFileSpecs';
 import { shotSetDelta, describeShotSetDelta } from '../lib/projectSnapshot';
 import {
@@ -444,6 +444,7 @@ import {
   type FuzzTrace,
   type TraceStep,
 } from '../lib/fuzzTrace';
+import { fuzzFixture, replayTracePath, traceOutPath } from '../lib/fuzzKnobs';
 import {
   canonicalizeUuids,
   checkByteIdentity,
@@ -555,21 +556,13 @@ const EXPECTED_DEFAULT_OPTIONS: OptionSnapshot = {
 };
 
 // ---------------------------------------------------------------------------
-// Knobs. Read at CALL time, never frozen at import.
+// Knobs. Read at CALL time, never frozen at import. The fixture and the trace
+// replay/record paths are the shared ones in `lib/fuzzKnobs.ts`.
 // ---------------------------------------------------------------------------
 
-function fixtureName(): string {
-  return process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
-}
 function movesPerEpisode(): number {
   const raw = Number(process.env.STALAGMIGHT_FUZZ_EXPORT_MOVES);
   return Number.isInteger(raw) && raw > 0 ? raw : 3;
-}
-function replayTracePath(): string {
-  return process.env.STALAGMIGHT_FUZZ_REPLAY ?? '';
-}
-function traceOutPath(): string {
-  return process.env.STALAGMIGHT_FUZZ_TRACE ?? '';
 }
 
 // ---------------------------------------------------------------------------
@@ -770,7 +763,7 @@ export const exportRoundtripFuzz: Scenario = {
   defaultIterations: 30,
 
   async run(ctx: ScenarioContext, { iterations }): Promise<void> {
-    const fixture = fixtureName();
+    const fixture = fuzzFixture();
     const sessionDir = ctx.artifactsDir;
     if (!sessionDir) {
       throw new Error(`${SCENARIO} needs a session artifacts dir to write its exports into`);
@@ -1356,7 +1349,7 @@ export const exportRoundtripFuzz: Scenario = {
       //
       // X7 still covers the hostile comments where they belong: at the file
       // level, where it asserts they survive a .tmlu write and a parse_tml read.
-      await loadFixtureWithoutUndoHistory(ctx, fixtureName());
+      await loadFixtureWithoutUndoHistory(ctx, fuzzFixture());
       await disableAutoSave(ctx);
       const original = await readProjectDigest(ctx);
       const dir = path.join(episodeDir, 'roundtrip');
@@ -1719,7 +1712,7 @@ export const exportRoundtripFuzz: Scenario = {
 
       // X8b: a project switch drops the panel's set.
       const dirty = await readPanelOptions(ctx);
-      await loadFixtureWithoutUndoHistory(ctx, fixtureName());
+      await loadFixtureWithoutUndoHistory(ctx, fuzzFixture());
       await disableAutoSave(ctx);
       const afterSwitch = await readPanelOptions(ctx);
       guarded(() => checkExportStoreReset({ dirty, afterSwitch, defaults }, reproduce));
@@ -1773,7 +1766,7 @@ export const exportRoundtripFuzz: Scenario = {
       // A direct project switch mid-Export: `applyDisplaySettings` clears the
       // snapshot and forces survey, so the later exit must be a no-op rather
       // than a restore of the PREVIOUS project's geometry.
-      await loadFixtureWithoutUndoHistory(ctx, fixtureName());
+      await loadFixtureWithoutUndoHistory(ctx, fuzzFixture());
       await disableAutoSave(ctx);
       const afterLoad = await readModeSnapshot(ctx);
       if (afterLoad.appMode !== 'survey') {

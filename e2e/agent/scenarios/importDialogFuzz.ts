@@ -395,6 +395,7 @@ import {
   type FuzzTrace,
   type TraceStep,
 } from '../lib/fuzzTrace';
+import { fuzzFixture, replayTracePath, traceOutPath } from '../lib/fuzzKnobs';
 import {
   materializeSurveyFile,
   randomSurveyFileSpec,
@@ -534,11 +535,10 @@ function forceStationsVisible(): boolean {
 // ---------------------------------------------------------------------------
 // Knobs. Read at CALL time, never frozen at import: a replay restores the
 // recording's environment AFTER this module is loaded (see scenario-run.ts).
+// The fixture and the trace replay/record paths are the shared ones in
+// `lib/fuzzKnobs.ts`.
 // ---------------------------------------------------------------------------
 
-function fixtureName(): string {
-  return process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
-}
 function flowsPerEpisode(): number {
   const raw = Number(process.env.STALAGMIGHT_FUZZ_IMPORT_FLOWS_PER_EPISODE);
   return Number.isInteger(raw) && raw > 0 ? raw : 3;
@@ -546,12 +546,6 @@ function flowsPerEpisode(): number {
 function maxFlowSteps(): number {
   const raw = Number(process.env.STALAGMIGHT_FUZZ_IMPORT_MAX_FLOW_STEPS);
   return Number.isInteger(raw) && raw > 0 ? raw : 140;
-}
-function replayTracePath(): string {
-  return process.env.STALAGMIGHT_FUZZ_REPLAY ?? '';
-}
-function traceOutPath(): string {
-  return process.env.STALAGMIGHT_FUZZ_TRACE ?? '';
 }
 
 // ---------------------------------------------------------------------------
@@ -701,7 +695,7 @@ export const importDialogFuzz: Scenario = {
   defaultIterations: 3,
 
   async run(ctx: ScenarioContext, { iterations }): Promise<void> {
-    const fixture = fixtureName();
+    const fixture = fuzzFixture();
     const sessionDir = ctx.artifactsDir;
     if (!sessionDir) {
       throw new Error(`${SCENARIO} needs a session artifacts dir to write its generated files into`);

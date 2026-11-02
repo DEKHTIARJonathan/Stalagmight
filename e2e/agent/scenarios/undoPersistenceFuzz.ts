@@ -292,6 +292,7 @@ import type { Scenario, ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import { RELOAD_RESOLVED_GEOMETRY, SAVE_HEALING_MUTATIONS } from '../lib/projectSnapshot';
 import { checkSnapshot } from '../lib/fuzzSnapshotCheck';
+import { allowKnownBugs, dumpFullHistory, fuzzFixture, replayTracePath, traceOutPath } from '../lib/fuzzKnobs';
 import type { TargetingDigest } from '../lib/fuzzOracleCore';
 import {
   COVERAGE_STEPS,
@@ -327,28 +328,10 @@ import {
   type StepResponse,
 } from './undoRedoFuzzBridge';
 
-/**
- * EVERY env knob below is read at CALL time, never frozen into a module-level
- * const - the rule, and the reason, are spelled out in `undoRedoFuzz.ts`:
- * `pnpm agent:scenario --trace` and `pnpm agent:fuzz-shrink` both set these
- * variables from inside their own `main()`, after this module was imported.
- */
-
-/**
- * INERT, and kept for the same reason the main fuzzer keeps it: every finding
- * this scenario reproduced (bug 1, bug 8, findings 11/12/13) is fixed and every
- * classifier is deleted, so there is nothing left to tolerate. Still read, and
- * still named in the `reproduce:` line, so a tolerant-looking invocation cannot
- * be mistaken for one that actually relaxed anything.
- */
-function allowKnownBugs(): boolean {
-  return process.env.STALAGMIGHT_FUZZ_ALLOW_KNOWN_BUGS === '1';
-}
-
-/** Which `.stalx` under `e2e/fixtures/` to fuzz. Basename only, as the main fuzzer. */
-function fuzzFixture(): string {
-  return process.env.STALAGMIGHT_FUZZ_FIXTURE || DEFAULT_FIXTURE;
-}
+// The env knobs (`replayTracePath`, `traceOutPath`, `fuzzFixture`,
+// `allowKnownBugs`, `dumpFullHistory`) live in `lib/fuzzKnobs.ts`, read at CALL
+// time: `pnpm agent:scenario --trace` and `pnpm agent:fuzz-shrink` both set them
+// from inside their own `main()`, after this module was imported.
 
 /** Diffs shown in a failure message (more are counted, not printed). */
 const SHOWN_DIFFS = 6;
@@ -363,32 +346,9 @@ const SHOWN_DIFFS = 6;
 const DIFF_LIMIT = 400;
 /** Actions shown in the failure message's history tail. */
 const HISTORY_TAIL = 14;
-/** `STALAGMIGHT_FUZZ_DUMP_HISTORY=1` prints the WHOLE iteration history instead. */
-function dumpFullHistory(): boolean {
-  return process.env.STALAGMIGHT_FUZZ_DUMP_HISTORY === '1';
-}
 
 /** Most entries undone before the save, so the redo stack is non-empty there. */
 const MAX_PRE_SAVE_UNDOS = 4;
-
-/**
- * Replay a recorded trace instead of running the coverage plan, and where to
- * force-write the trace of a run that passed.
- *
- * Read at RUN time, not at import time: `pnpm agent:scenario --trace` parses its
- * flags inside `main()`, after this module is imported, so a module-level const
- * would capture the empty string and silently fall back to generating.
- *
- * Replay is a MODE of this scenario, never a separate one - the fused step, the
- * three oracles and the epoch attribution are all the same code on both paths.
- */
-function replayTracePath(): string {
-  return process.env.STALAGMIGHT_FUZZ_REPLAY ?? '';
-}
-
-function traceOutPath(): string {
-  return process.env.STALAGMIGHT_FUZZ_TRACE ?? '';
-}
 
 /** `get_undo_stack` / `get_redo_stack` rows, as the frontend sees them. */
 interface HistoryItem {
