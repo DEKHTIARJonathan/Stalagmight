@@ -511,7 +511,25 @@ impl UndoData {
                 shot_id,
                 ..
             }) => Some((*section_id, None, *shot_id)),
-            _ => None,
+            // [#576 RV4-R-U3] Named, not a wildcard: a NEW variant that addresses a
+            // shot must decide here, at compile time, whether the load-time filter
+            // for entries whose shot no longer resolves (`persistence.rs`
+            // `drop_unresolvable_*`) checks it. (`InverseCommand` of any other
+            // command addresses no shot by id that this filter could resolve.)
+            UndoData::PreviousValues { shot_id: None, .. }
+            | UndoData::InverseCommand(_)
+            | UndoData::SectionSnapshot { .. }
+            | UndoData::CreatedSectionSnapshot { .. }
+            | UndoData::ShotSnapshot { .. }
+            | UndoData::MergeInfo { .. }
+            | UndoData::UnmergeInfo { .. }
+            | UndoData::ClosureInfo { .. }
+            | UndoData::ZeroDatumInfo { .. }
+            | UndoData::SegmentMoveInfo { .. }
+            | UndoData::StationMoveInfo { .. }
+            | UndoData::ProjectSnapshot(_)
+            | UndoData::ProjectSnapshotPair { .. }
+            | UndoData::None => None,
         }
     }
 

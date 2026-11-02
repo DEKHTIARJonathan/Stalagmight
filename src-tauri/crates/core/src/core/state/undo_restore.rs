@@ -159,7 +159,25 @@ impl AppState {
                 file_hashes,
                 section_hashes,
             } => self.untrack_import(file_hashes, section_hashes),
-            _ => CommandResult::failure("Command cannot be executed in undo context".to_string()),
+            // [#576 RV4-R-U3] Named, not a wildcard: a NEW Command variant must
+            // decide here, at compile time, whether it can run as a redo
+            // re-execution, an `InverseCommand` undo or a Batch sub-command - a
+            // wildcard failed it only at runtime, rolling back a whole batch.
+            // The commands that are not undoable (lifecycle, merge, Repair) and
+            // the edits that record their own snapshot pair (the comment move, the
+            // project settings, the entrance elevation - undone and redone from
+            // those snapshots, never re-executed) are not.
+            Command::CreateProject { .. }
+            | Command::OpenProject { .. }
+            | Command::SaveProject { .. }
+            | Command::CloseProject
+            | Command::MoveComment { .. }
+            | Command::MergeProjects { .. }
+            | Command::RepairIntegrity
+            | Command::UpdateProjectSettings
+            | Command::SetSurfaceElevation => {
+                CommandResult::failure("Command cannot be executed in undo context".to_string())
+            }
         }
     }
 

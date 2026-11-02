@@ -74,6 +74,14 @@ mod config_patch_tests;
 #[cfg(test)]
 mod crash_property_tests;
 #[cfg(test)]
+#[expect(
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod exhaustive_undo_arms_tests;
+#[cfg(test)]
 mod format_property_tests;
 #[cfg(test)]
 #[expect(
