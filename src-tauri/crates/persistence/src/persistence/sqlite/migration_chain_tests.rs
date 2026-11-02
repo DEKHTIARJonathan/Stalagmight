@@ -1,8 +1,12 @@
 //! [#576 B1-D2] The migration chain reaches today's schema from the oldest file
 //! this build opens: a file with v0.0.3's own DDL is migrated and compared,
-//! table by table and column by column, against a freshly created file.
+//! table by table - columns, indexes, foreign keys and triggers - against a
+//! freshly created file.
 //!
-//! Moved out of `tests.rs` unchanged (#576 E8: the monolith is frozen).
+//! Moved out of `tests.rs` (#576 E8: the monolith is frozen); indexes, foreign
+//! keys and triggers joined the comparison with #576 RV3-R-4.
+
+use std::collections::BTreeMap;
 
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -170,59 +174,136 @@ const V0_0_3_SCHEMA_2_DDL: &str = r"
             CREATE INDEX IF NOT EXISTS idx_undo_sequence ON undo_stack(sequence);
 ";
 
-/// Every user table of `conn` and its columns as `pragma_table_info` reports
-/// them: `(name, declared type, notnull, default, pk position)`, keyed by name so
-/// the comparison does not depend on column ORDER - an `ALTER TABLE ADD COLUMN`
-/// appends, while `init_schema` declares a column where it reads best.
-fn schema_columns(
-    conn: &Connection,
-) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> {
-    let tables: Vec<String> = conn
-        .prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' \
-             AND name NOT LIKE 'sqlite_%' ORDER BY name",
-        )
-        .unwrap()
-        .query_map([], |r| r.get(0))
-        .unwrap()
-        .map(|r| r.unwrap())
-        .collect();
-    tables
-        .into_iter()
-        .map(|table| {
-            let columns = conn
-                .prepare(
-                    "SELECT name, type, \"notnull\", dflt_value, pk FROM pragma_table_info(?1)",
+/// `object -> (member -> shape)` for one schema: everything about it the
+/// migration chain has to reproduce, keyed by name so the comparison does not
+/// depend on ORDER.
+type SchemaShape = BTreeMap<String, BTreeMap<String, String>>;
+
+/// The rows of a single-text-column query, in order.
+fn strings(conn: &Connection, sql: &str, params: impl rusqlite::Params) -> Vec<String> {
+    let mut statement = conn.prepare(sql).unwrap();
+    let rows = statement.query_map(params, |r| r.get(0)).unwrap();
+    rows.map(|r| r.unwrap()).collect()
+}
+
+/// Every user table of `conn` with (#576 RV3-R-4: not only its columns):
+/// - `table T`: its columns as `pragma_table_info` reports them - `(declared
+///   type, notnull, default, pk position)`, keyed by name, because an `ALTER
+///   TABLE ADD COLUMN` appends while `init_schema` declares a column where it
+///   reads best;
+/// - `indexes on T`: every index, explicit or behind a UNIQUE / PRIMARY KEY
+///   constraint, with its uniqueness, origin, partial flag and columns. A
+///   constraint's automatic index is keyed by its columns, not its
+///   SQLite-derived name;
+/// - `foreign keys of T`: every reference with its ON UPDATE / ON DELETE;
+/// - `triggers on T`: every trigger, with its full SQL.
+fn schema_shape(conn: &Connection) -> SchemaShape {
+    let tables = strings(
+        conn,
+        "SELECT name FROM sqlite_master WHERE type = 'table' \
+         AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        [],
+    );
+    let mut shape = SchemaShape::new();
+    for table in tables {
+        let columns = conn
+            .prepare("SELECT name, type, \"notnull\", dflt_value, pk FROM pragma_table_info(?1)")
+            .unwrap()
+            .query_map([&table], |r| {
+                let name: String = r.get(0)?;
+                let decl: String = r.get(1)?;
+                let notnull: i64 = r.get(2)?;
+                let default: Option<String> = r.get(3)?;
+                let pk: i64 = r.get(4)?;
+                Ok((
+                    name,
+                    format!("{decl} notnull={notnull} default={default:?} pk={pk}"),
+                ))
+            })
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        shape.insert(format!("table {table}"), columns);
+
+        let indexes = conn
+            .prepare("SELECT name, \"unique\", origin, partial FROM pragma_index_list(?1)")
+            .unwrap()
+            .query_map([&table], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
+            .unwrap()
+            .map(|r| r.unwrap())
+            .map(|(name, unique, origin, partial)| {
+                let columns = strings(
+                    conn,
+                    "SELECT coalesce(name, '<expr>') FROM pragma_index_info(?1) ORDER BY seqno",
+                    [&name],
                 )
-                .unwrap()
-                .query_map([&table], |r| {
-                    let name: String = r.get(0)?;
-                    let decl: String = r.get(1)?;
-                    let notnull: i64 = r.get(2)?;
-                    let default: Option<String> = r.get(3)?;
-                    let pk: i64 = r.get(4)?;
-                    Ok((
-                        name,
-                        format!("{decl} notnull={notnull} default={default:?} pk={pk}"),
-                    ))
-                })
-                .unwrap()
-                .map(|r| r.unwrap())
-                .collect();
-            (table, columns)
-        })
-        .collect()
+                .join(",");
+                let key = if name.starts_with("sqlite_autoindex_") {
+                    format!("automatic({columns})")
+                } else {
+                    name
+                };
+                (
+                    key,
+                    format!("unique={unique} origin={origin} partial={partial} on ({columns})"),
+                )
+            })
+            .collect();
+        shape.insert(format!("indexes on {table}"), indexes);
+
+        let foreign_keys = conn
+            .prepare(
+                "SELECT \"from\", \"table\", \"to\", on_update, on_delete \
+                 FROM pragma_foreign_key_list(?1)",
+            )
+            .unwrap()
+            .query_map([&table], |r| {
+                let from: String = r.get(0)?;
+                let parent: String = r.get(1)?;
+                let to: Option<String> = r.get(2)?;
+                let on_update: String = r.get(3)?;
+                let on_delete: String = r.get(4)?;
+                Ok((
+                    format!("{from} -> {parent}({to:?})"),
+                    format!("on update {on_update}, on delete {on_delete}"),
+                ))
+            })
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        shape.insert(format!("foreign keys of {table}"), foreign_keys);
+
+        let triggers = conn
+            .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?1")
+            .unwrap()
+            .query_map([&table], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        shape.insert(format!("triggers on {table}"), triggers);
+    }
+    shape
 }
 
 /// [#576 B1-D2] THE guard for "a column must be declared in five places": a file
 /// at the oldest supported schema (v0.0.3's DDL, with a little synthetic data in
 /// v0.0.3's own column shapes) is opened, and once the migration chain has run,
-/// every table must have exactly the columns a freshly created file has - and the
-/// migrated project must save in place and load back unchanged.
+/// every table must have exactly the columns, indexes, foreign keys and triggers
+/// a freshly created file has - and the migrated project must save in place and
+/// load back unchanged.
 ///
 /// A column added to `init_schema` without the matching `migrate_schema` step (or
 /// a table only `init_schema` creates) shows up here as a difference, long before
-/// a user's first save on an upgraded file fails with `no such column`.
+/// a user's first save on an upgraded file fails with `no such column`. So does
+/// an index a table rebuild drops (#576 RV3-R-4: the v2 -> v3 undo-table rebuild
+/// lost `idx_undo_sequence`).
 #[test]
 fn migrate_schema_from_the_oldest_supported_file_matches_a_fresh_file() {
     let temp = TempDir::new().unwrap();
@@ -267,37 +348,49 @@ fn migrate_schema_from_the_oldest_supported_file_matches_a_fresh_file() {
     let mut db = Database::open_existing(&path).expect("a v0.0.3 file must open");
     assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
 
-    let migrated = schema_columns(&db.conn);
-    let fresh = schema_columns(&Database::in_memory().unwrap().conn);
+    let migrated = schema_shape(&db.conn);
+    let fresh = schema_shape(&Database::in_memory().unwrap().conn);
     let mut differences = Vec::new();
-    for (table, fresh_columns) in &fresh {
-        let Some(migrated_columns) = migrated.get(table) else {
-            differences.push(format!("table {table}: missing from the migrated file"));
+    for (object, fresh_members) in &fresh {
+        let Some(migrated_members) = migrated.get(object) else {
+            differences.push(format!("{object}: missing from the migrated file"));
             continue;
         };
-        for (column, shape) in fresh_columns {
-            match migrated_columns.get(column) {
-                None => differences.push(format!("{table}.{column}: missing ({shape})")),
+        for (member, shape) in fresh_members {
+            match migrated_members.get(member) {
+                None => differences.push(format!("{object}: {member} missing ({shape})")),
                 Some(got) if got != shape => differences.push(format!(
-                    "{table}.{column}: migrated `{got}`, fresh `{shape}`"
+                    "{object}: {member} migrated `{got}`, fresh `{shape}`"
                 )),
                 Some(_) => {}
             }
         }
-        for column in migrated_columns.keys() {
-            if !fresh_columns.contains_key(column) {
-                differences.push(format!("{table}.{column}: only in the migrated file"));
+        for member in migrated_members.keys() {
+            if !fresh_members.contains_key(member) {
+                differences.push(format!("{object}: {member} only in the migrated file"));
             }
         }
     }
-    for table in migrated.keys() {
-        if !fresh.contains_key(table) {
-            differences.push(format!("table {table}: only in the migrated file"));
+    for object in migrated.keys() {
+        if !fresh.contains_key(object) {
+            differences.push(format!("{object}: only in the migrated file"));
         }
     }
+    let count = |kind: &str| -> usize {
+        fresh
+            .iter()
+            .filter(|(object, _)| object.starts_with(kind))
+            .map(|(_, members)| members.len())
+            .sum()
+    };
     println!(
-        "tables compared: {}, differences: {}",
-        fresh.len(),
+        "compared: {} tables, {} columns, {} indexes, {} foreign keys, {} triggers; \
+         differences: {}",
+        fresh.keys().filter(|o| o.starts_with("table ")).count(),
+        count("table "),
+        count("indexes on "),
+        count("foreign keys of "),
+        count("triggers on "),
         differences.len()
     );
     for difference in &differences {
@@ -305,7 +398,7 @@ fn migrate_schema_from_the_oldest_supported_file_matches_a_fresh_file() {
     }
     assert!(
         differences.is_empty(),
-        "a file migrated from the oldest supported schema must have exactly the columns a \
+        "a file migrated from the oldest supported schema must have exactly the schema a \
          fresh file has:\n  {}",
         differences.join("\n  ")
     );
@@ -341,4 +434,42 @@ fn migrate_schema_from_the_oldest_supported_file_matches_a_fresh_file() {
     assert_eq!(reopened.sections[0].name.as_deref(), Some("SectionA"));
     assert_eq!(reopened.sections[0].shots.len(), 2);
     assert_eq!(reopened.zero_datums.len(), 1);
+}
+
+/// [#576 RV3-R-4] A file an EARLIER build already upgraded from v2 has no
+/// `idx_undo_sequence` (that build's v2 -> v3 rebuild dropped it), and the v3
+/// arm will never run on it again: its next upgrade puts the index back.
+#[test]
+fn an_upgrade_restores_the_undo_sequence_index_an_earlier_build_dropped() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("CaveA.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&crate::models::Project::new("CaveA".to_string(), None))
+            .unwrap();
+        db.conn
+            .execute_batch(&format!(
+                "DROP INDEX idx_undo_sequence; PRAGMA user_version = {};",
+                SCHEMA_VERSION - 1
+            ))
+            .unwrap();
+    }
+    let has_index = |conn: &Connection| -> bool {
+        conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'index' \
+             AND name = 'idx_undo_sequence' AND tbl_name = 'undo_stack'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+            == 1
+    };
+
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+    println!(
+        "idx_undo_sequence after the upgrade: {}",
+        has_index(&db.conn)
+    );
+    assert!(has_index(&db.conn));
 }

@@ -514,6 +514,10 @@ impl Database {
             tracing::info!("Added shot_uuid column to resolved_warnings table (schema v8)");
         }
 
+        // [#576 RV3-R-4] A file an earlier build upgraded from v2 lost this index
+        // in the v2 -> v3 undo-table rebuild; restore it on its next upgrade.
+        Self::ensure_undo_sequence_index(&self.conn)?;
+
         tracing::debug!("Schema migration complete");
         Ok(())
     }
@@ -874,7 +878,30 @@ impl Database {
             ))?;
             tracing::info!("Migrated {table} to BLOB columns");
         }
+        // [#576 RV3-R-4] `DROP TABLE undo_stack` took `idx_undo_sequence` with it,
+        // and `open_existing` never runs `init_schema`, so every file upgraded
+        // from v2 lacked the index a fresh file has. Put it back.
+        Self::ensure_undo_sequence_index(tx)?;
 
+        Ok(())
+    }
+
+    /// `init_schema`'s `idx_undo_sequence`, for a file whose `undo_stack` lacks
+    /// it (#576 RV3-R-4). A no-op without an `undo_stack` table.
+    fn ensure_undo_sequence_index(conn: &Connection) -> Result<()> {
+        let has_undo_stack: bool = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='undo_stack'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)?;
+        if has_undo_stack {
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_undo_sequence ON undo_stack(sequence)",
+                [],
+            )?;
+        }
         Ok(())
     }
 
