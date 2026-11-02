@@ -520,7 +520,9 @@ describe('SpeleoQuitDialog - the unwound-push confirmation carries the quit', ()
     await userEvent.click(screen.getByTestId('speleodb-unwound-push-discard'));
 
     await waitFor(() => expect(useUIStore.getState().activeDialog).toBe('speleodb-quit'));
-    expect(calledCommands()).toEqual(['speleodb_discard_changes']);
+    // [#576 NF-W2F-1] The tree swap re-reads the open file's newer-version and
+    // unreadable-link flags; that is the reconciliation, not part of the quit.
+    expect(calledCommands()).toEqual(['speleodb_discard_changes', 'speleodb_open_file_flags']);
     expect(performQuitMock).not.toHaveBeenCalled();
   });
 });

@@ -115,6 +115,8 @@ describe('useRevertRevision - the happy path', () => {
       'speleodb_dump_candidates',
       'speleodb_start_editing',
       'speleodb_restore_revision',
+      // [#576 NF-W2F-1] the restored tree re-reads the open file's flags
+      'speleodb_open_file_flags',
       'speleodb_done',
     ]);
     expect(argsOf('speleodb_restore_revision')).toEqual({
@@ -764,6 +766,7 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
     expect(issued()).toEqual([
       'speleodb_start_editing',
       'speleodb_restore_revision',
+      'speleodb_open_file_flags',
       'speleodb_done',
     ]);
     expect(argsOf('speleodb_restore_revision')?.entryPath).toBe('misc/b.stalx');
