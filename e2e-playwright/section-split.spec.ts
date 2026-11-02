@@ -8,6 +8,7 @@ import {
   type SectionSeed,
 } from './helpers/app';
 import type { E2EWindow } from './helpers/e2eWindow';
+import type { MockReply } from './mocks/ipc/types';
 
 /**
  * E2E tests for the section split workflow.
@@ -135,12 +136,17 @@ test.describe('Section Split Dialog', () => {
   test('confirm triggers IPC and closes dialog', async ({ page }) => {
     const { sectionId, shotId, sectionName } = await getIds(page);
 
-    // Set up mock override for delete_shot_and_split
-    await page.evaluate(() => {
+    // Set up mock override for delete_shot_and_split. `section_id` is section B's (a
+    // SectionCreated always names it); the dialog keeps A selected and never reads it.
+    await page.evaluate((id) => {
       const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
-      overrides.delete_shot_and_split = { success: true };
+      overrides.delete_shot_and_split = {
+        section_id: id + 1,
+        warnings: [],
+        remote_link: null,
+      } satisfies MockReply<'delete_shot_and_split'>;
       (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
-    });
+    }, sectionId);
 
     await openSplitDialog(page, sectionId, shotId, sectionName);
     await page.getByTestId('split-confirm').click();

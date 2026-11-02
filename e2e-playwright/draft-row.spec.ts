@@ -10,6 +10,7 @@ import {
 import { clearIpcOverrideKeys, setIpcOverrides } from './helpers/ipcOverrides';
 import type { E2EWindow } from './helpers/e2eWindow';
 import type { IpcCommands } from '../src/types/ipc/IpcCommands';
+import type { CommandError } from '../src/types/ipc/CommandError';
 
 /**
  * E2E tests for the data table's draft "new shot" rows.
@@ -312,7 +313,7 @@ test.describe('Draft shot rows', () => {
 
   test('a refused create_shot keeps the typed draft row, and editing it retries (DRAFT-1)', async ({ page }) => {
     await setIpcOverrides(page, {
-      create_shot: { success: false, warnings: [], error: 'Simulated refusal', section_ids: [] },
+      create_shot: { __reject: { code: 'FAILED', message: 'Simulated refusal' } satisfies CommandError },
     });
     await fillDraftRow(page, 3, '5');
 

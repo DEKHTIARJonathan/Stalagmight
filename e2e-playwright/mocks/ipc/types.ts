@@ -1,4 +1,5 @@
 import type { IpcCommands } from '../../../src/types/ipc/IpcCommands';
+import type { RemoteLinkBits } from '../../../src/types/ipc/RemoteLinkBits';
 
 /**
  * What the real backend resolves command `K` with, from the manifest generated
@@ -27,6 +28,12 @@ export interface MockIpcContext {
   invoke(cmd: string, args?: Record<string, unknown>): unknown;
   /** The mock's one shot builder (`./shots.ts`), so a family lands shots exactly as the core does. */
   buildShot: typeof buildMockShot;
+  /**
+   * The `remote_link` a survey-mutation success carries (#576 D22): `{ has_unpushed_edits:
+   * true, unwound: false }` while the open project is remote, else null. A simplification
+   * the core documents next to its helper; a rejection carries none.
+   */
+  remoteLink(): RemoteLinkBits | null;
 }
 
 export type MockCommandHandler = (cmd: string, args?: Record<string, unknown>) => unknown;

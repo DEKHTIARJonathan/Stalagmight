@@ -1,3 +1,4 @@
+import type { CommandError } from '../../../src/types/ipc/CommandError';
 import type { MockCommandFamily, MockReply } from './types';
 
 /**
@@ -80,7 +81,7 @@ export const compassImportCommands: MockCommandFamily = (ctx) => {
 
       case 'execute_compass_import': {
         const project = ctx.currentProject() as { sections: Array<Record<string, unknown>> } | null;
-        if (!project) return { success: false, error: 'No project open', warnings: [], section_ids: [] } satisfies MockReply<'execute_compass_import'>;
+        if (!project) return Promise.reject({ code: 'FAILED', message: 'No project open' } satisfies CommandError);
         const includeExcluded = (args?.includeExcluded as boolean | undefined) ?? false;
         let nextId = project.sections.reduce((max, s) => Math.max(max, Number(s.id) || 0), 0);
         const sectionIds: number[] = [];
@@ -114,11 +115,9 @@ export const compassImportCommands: MockCommandFamily = (ctx) => {
         }
         const path = (args?.path as string | undefined) ?? '';
         return {
-          success: true,
           warnings: [],
-          error: null,
+          remote_link: ctx.remoteLink(),
           section_ids: sectionIds,
-          ...(sectionIds[0] != null ? { section_id: sectionIds[0] } : {}),
           import_receipt: {
             source_format: 'Compass',
             file_name: path.split('/').pop() ?? path,

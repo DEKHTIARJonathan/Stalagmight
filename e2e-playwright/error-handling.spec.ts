@@ -2,6 +2,7 @@ import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 import { setupMockedPage, createProject as createProjectViaApp, openAppMenu } from './helpers/app';
 import { setIpcOverrides, clearIpcOverrideKeys } from './helpers/ipcOverrides';
+import type { CommandError } from '../src/types/ipc/CommandError';
 
 /**
  * Error Handling E2E Tests
@@ -36,12 +37,12 @@ test.describe('Error Handling', () => {
       await setupMockedPage(page);
       await createProjectViaApp(page, 'Error Test Project');
 
-      // `save_project` returns a CommandResult, not Result<_, String>, so the
-      // real backend can never reject the promise - a failure is always
-      // success:false. Simulating a throw exercised a path the app does not
-      // have, which is why this assertion used to be skipped rather than met.
+      // A refused save rejects with a `CommandError` (#576 C4) - what the backend
+      // sends. Simulating only a throw (`__throw`, a transport failure) exercised a
+      // path a refusal does not take, which is why this assertion used to be skipped
+      // rather than met.
       await setIpcOverrides(page, {
-        save_project: { success: false, error: 'Permission denied: cannot write to file' },
+        save_project: { __reject: { code: 'FAILED', message: 'Permission denied: cannot write to file' } satisfies CommandError },
       });
 
       // Trigger save with Ctrl+S

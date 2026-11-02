@@ -1,3 +1,4 @@
+import type { CommandError } from '../../../src/types/ipc/CommandError';
 import type { MockCommandFamily, MockReply } from './types';
 
 /**
@@ -131,7 +132,7 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
         })) satisfies MockReply<'list_dive_plans'>;
       case 'load_dive_plan': {
         const found = mockDivePlans.find((p) => p.id === args?.id);
-        if (!found) throw new Error('That dive plan no longer exists.');
+        if (!found) return Promise.reject({ code: 'FAILED', message: 'That dive plan no longer exists.' } satisfies CommandError);
         // #310: this mock keeps a plan's refs POSITIONAL (unlike the real `.plnx`, which
         // canonicalizes to shot-uuid anchors on save), so the anchors below are derived
         // fresh at load time against the CURRENT survey - exactly what a real load would
@@ -187,7 +188,7 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
           } satisfies MockReply<'save_dive_plan'>;
         }
         const existing = mockDivePlans.find((p) => p.id === id);
-        if (!existing) throw new Error('That dive plan no longer exists.');
+        if (!existing) return Promise.reject({ code: 'FAILED', message: 'That dive plan no longer exists.' } satisfies CommandError);
         existing.name = name;
         existing.updated_at = stamp;
         existing.snapshot = snapshot;
@@ -202,7 +203,7 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
         const before = mockDivePlans.length;
         mockDivePlans = mockDivePlans.filter((p) => p.id !== args?.id);
         if (mockDivePlans.length === before) {
-          throw new Error('That dive plan no longer exists.');
+          return Promise.reject({ code: 'FAILED', message: 'That dive plan no longer exists.' } satisfies CommandError);
         }
         return null satisfies MockReply<'delete_dive_plan'>;
       }

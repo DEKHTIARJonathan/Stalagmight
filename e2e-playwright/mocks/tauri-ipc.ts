@@ -2,6 +2,8 @@ import { Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve as pathResolve } from 'node:path';
 import { createRequire } from 'node:module';
+import type { CommandError } from '../../src/types/ipc/CommandError';
+import type { RemoteLinkBits } from '../../src/types/ipc/RemoteLinkBits';
 import type { TmlFile } from '../../src/types/ipc/TmlFile';
 import type { TmlShot } from '../../src/types/ipc/TmlShot';
 import type { MockCommandFamily, MockIpcContext, MockReply } from './ipc/types';
@@ -224,6 +226,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Playwright load to `projectLinkKind: 'local'`. Local by default (what
       // almost every spec means); flip per-spec with __MOCK_SET_PROJECT_IS_REMOTE__.
       let projectIsRemote = false;
+      // #576 D22: the SpeleoDB link bits (`remote_link`) every survey-mutation outcome
+      // carries (EditOutcome, SectionCreated, ShotCreated, ReverseOutcome, BatchOutcome,
+      // HistoryOutcome, ImportOutcome, IntegrityRepairResult). Deliberately simple: the
+      // real backend reads the open project's link row after the command
+      // (`AppState::remote_link_bits`, written by `pool::run_mutation`); the mock keeps
+      // no link row, so a remote project reports itself un-pushed and not unwound after
+      // every successful edit - a no-op edit included - and a local one reports null.
+      // A rejection carries none. The command families reach it as `ctx.remoteLink()`.
+      const remoteLink = (): RemoteLinkBits | null =>
+        projectIsRemote ? { has_unpushed_edits: true, unwound: false } : null;
       // `BinaryEnvelope::newer_schema_version` (#576 B6-D1): the schema version of a
       // loaded `.stalx` a NEWER Stalagmight saved, else null. Like `projectIsRemote`
       // it describes the NEXT binary load (flip per-spec with
@@ -239,8 +251,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       let mockWorkspaceMode: 'survey' | 'plan' | 'export' = 'survey';
       // The IPC commands whose backend handler runs `AppState::guard_mutation` and is
       // NOT on its read-only-workspace allowlist (`update_project_settings`,
-      // `set_project_name_for_path` stay editable in every mode). The ones that
-      // return `Result<_, String>` reject; the rest resolve a failed CommandResult.
+      // `set_project_name_for_path` stay editable in every mode). Every one of them
+      // rejects with a WORKSPACE_READ_ONLY `CommandError` (#576 C4).
       const WORKSPACE_GUARDED_COMMANDS = new Set([
         'create_section', 'update_section', 'delete_section', 'reverse_section', 'move_section',
         'move_segment', 'execute_batch', 'create_shot', 'update_shot', 'delete_shot', 'set_shot_kind',
@@ -252,7 +264,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         'create_section_and_merge', 'import_sections', 'execute_tml_import', 'execute_compass_import',
         'execute_walls_import', 'execute_gpx_import', 'resolve_warning', 'unresolve_warning',
       ]);
-      const WORKSPACE_GUARDED_REJECTS = new Set(['repair_project_integrity', 'resolve_warning', 'unresolve_warning']);
       // `BinaryEnvelope::speleo_link_unreadable` (#576 B35(b) review): the NEXT binary
       // load reports that the file's SpeleoDB link row could not be read. Flip per-spec
       // with __MOCK_SET_PROJECT_SPELEO_LINK_UNREADABLE__. `openProjectSpeleoLinkUnreadable`
@@ -1066,6 +1077,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         currentProject: () => currentProject,
         invoke: (cmd, args) => mockHandler(cmd, args),
         buildShot,
+        remoteLink,
       };
       const familyHandlers = families.map((family) => family(familyContext));
 
@@ -1083,8 +1095,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           | undefined;
         if (overrideMap && Object.prototype.hasOwnProperty.call(overrideMap, cmd)) {
           const override = overrideMap[cmd];
+          // The two failure forms (#576 C4). `{ __throw: msg }` throws an Error: a
+          // transport / JS failure, which the backend never sends as a refusal.
+          // `{ __reject: value }` rejects with `value` exactly as given: a backend
+          // refusal is `{ __reject: { code, message, ...payload } }` (a `CommandError`;
+          // a command whose manifest `error` is `string` rejects with a string).
+          // Anything else is the reply itself.
           if (override && typeof override === 'object' && '__throw' in override) {
             throw new Error(String((override as { __throw?: unknown }).__throw ?? 'Mock error'));
+          }
+          if (override && typeof override === 'object' && '__reject' in override) {
+            return Promise.reject((override as { __reject?: unknown }).__reject);
           }
           return override as unknown;
         }
@@ -1092,11 +1113,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         // #576 C5: the backend's read-only-workspace backstop (guard_mutation).
         if (mockWorkspaceMode !== 'survey' && WORKSPACE_GUARDED_COMMANDS.has(cmd)) {
           const label = mockWorkspaceMode === 'plan' ? 'Plan' : 'Export';
-          const error =
-            `EDIT_DISABLED: WORKSPACE_READ_ONLY: ${cmd} is disabled: the ${label} workspace is ` +
+          const message =
+            `${cmd} is disabled: the ${label} workspace is ` +
             `read-only. Switch to Survey to edit.`;
-          if (WORKSPACE_GUARDED_REJECTS.has(cmd)) return Promise.reject(error);
-          return { success: false, error, warnings: [], section_ids: [] };
+          return Promise.reject({ code: 'WORKSPACE_READ_ONLY', message } satisfies CommandError);
         }
 
         switch (cmd) {
@@ -1123,15 +1143,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   args.defaultAzimuthReference ?? null;
               }
             }
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'update_project_settings'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'update_project_settings'>;
           }
 
           case 'set_surface_elevation': {
             // Entrance elevation (#465): set or (given null/undefined) clear.
-            // Real command returns a plain CommandResult (no `project` payload) -
+            // Real command returns a plain EditOutcome (no `project` payload) -
             // the frontend re-fetches via get_project_state's own round trip.
             if (!currentProject) {
-              return { success: false, error: 'No project open', warnings: [], section_ids: [] } satisfies MockReply<'set_surface_elevation'>;
+              return Promise.reject({ code: 'FAILED', message: 'No project open' } satisfies CommandError);
             }
             // Mirrors the backend's guard_mutation: a remote project without the
             // write lock rejects with the EDIT_DISABLED coded failure. The mock
@@ -1139,23 +1159,21 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // __MOCK_SET_PROJECT_IS_REMOTE__) is the closest read-only proxy -
             // exercised by the elevation read-only-gate spec.
             if (projectIsRemote) {
-              return {
-                success: false,
-                error: 'EDIT_DISABLED: Set entrance elevation is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.',
-                warnings: [],
-                section_ids: [],
-              } satisfies MockReply<'set_surface_elevation'>;
+              return Promise.reject({
+                code: 'EDIT_DISABLED',
+                message: 'Set entrance elevation is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.',
+              } satisfies CommandError);
             }
             const elevation = args?.elevation;
             if (elevation !== null && elevation !== undefined && typeof elevation !== 'number') {
-              return { success: false, error: 'Elevation must be a finite number', warnings: [], section_ids: [] } satisfies MockReply<'set_surface_elevation'>;
+              return Promise.reject({ code: 'FAILED', message: 'Elevation must be a finite number' } satisfies CommandError);
             }
             if (typeof elevation === 'number' && !Number.isFinite(elevation)) {
-              return { success: false, error: 'Elevation must be a finite number', warnings: [], section_ids: [] } satisfies MockReply<'set_surface_elevation'>;
+              return Promise.reject({ code: 'FAILED', message: 'Elevation must be a finite number' } satisfies CommandError);
             }
             (currentProject as Record<string, unknown>).surface_elevation =
               typeof elevation === 'number' ? elevation : null;
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'set_surface_elevation'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'set_surface_elevation'>;
           }
 
           case 'create_project_full': {
@@ -1538,34 +1556,31 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'save_project': {
             // #576 B6-D1: a project a newer build saved refuses every save, in place
-            // and Save As alike, with the marker `surfaceSaveFailure` routes on.
+            // and Save As alike, with the code `surfaceSaveFailure` routes on.
             if (openProjectNewerSchema !== null) {
-              return {
-                success: false,
-                error:
-                  `NEWER_FILE_READ_ONLY: Saving is disabled: this project was saved by a newer ` +
+              return Promise.reject({
+                code: 'NEWER_FILE_READ_ONLY',
+                message:
+                  `Saving is disabled: this project was saved by a newer ` +
                   `version of Stalagmight (file format ${openProjectNewerSchema}) and is open ` +
                   `read-only. Update Stalagmight to edit it.`,
-                warnings: [],
-                section_ids: [],
-              } satisfies MockReply<'save_project'>;
+              } satisfies CommandError);
             }
             // #576 B35(b): a link row the open could not read refuses every save that
-            // would rewrite this file (the backend's message); a Save As to another
-            // file goes ahead and the session moves there, unlinked.
+            // would rewrite this file (the backend's code and message, save_sidecars.rs
+            // `read_speleo_link`); a Save As to another file goes ahead and the session
+            // moves there, unlinked.
             if (openProjectSpeleoLinkUnreadable) {
               const target = (args?.path as string | undefined) ?? projectPath;
               if (target === projectPath) {
-                return {
-                  success: false,
-                  error:
+                return Promise.reject({
+                  code: 'SPELEODB_LINK_UNREADABLE',
+                  message:
                     "Can't save: this project's SpeleoDB link could not be read (no such column: " +
                     'project_name). Saving would rewrite the file without it, so nothing was ' +
                     'written - the file on disk is unchanged. Use Save As to save your changes ' +
                     'to another file.',
-                  warnings: [],
-                  section_ids: [],
-                } satisfies MockReply<'save_project'>;
+                } satisfies CommandError);
               }
               openProjectSpeleoLinkUnreadable = false;
             }
@@ -1575,18 +1590,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // result carries unlinked_copy_path instead of saved_path.
             if (projectIsRemote && args?.path) {
               return {
-                success: true,
+                saved_path: null,
                 unlinked_copy_path: args.path as string,
-                error: null,
                 warnings: [],
-                section_ids: [],
               } satisfies MockReply<'save_project'>;
             }
             projectPath = (args?.path as string) ?? projectPath;
             if (currentProject && projectPath) {
               currentProject.file_path = projectPath;
             }
-            return { success: true, saved_path: projectPath, error: null, warnings: [], section_ids: [] } satisfies MockReply<'save_project'>;
+            return { saved_path: projectPath, unlinked_copy_path: null, warnings: [] } satisfies MockReply<'save_project'>;
           }
 
           case 'close_project': {
@@ -1595,7 +1608,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             openProjectNewerSchema = null;
             mockWorkspaceMode = 'survey'; // #576 C5
             openProjectSpeleoLinkUnreadable = false;
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'close_project'>;
+            return { warnings: [] } satisfies MockReply<'close_project'>;
           }
 
           case 'cancel_loading': {
@@ -1844,7 +1857,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shots,
             };
             currentProject?.sections.push(section);
-            return { success: true, section_id: sectionCounter, section_ids: [], warnings: [], error: null } satisfies MockReply<'create_section'>;
+            return { section_id: sectionCounter, warnings: [], remote_link: remoteLink() } satisfies MockReply<'create_section'>;
           }
 
           case 'import_sections': {
@@ -1854,7 +1867,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // Mirrors the real backend's `sections.is_empty()` early return
               // (execute_import_sections, command_import.rs): no receipt when
               // nothing was imported.
-              return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'import_sections'>;
+              return { section_ids: [], import_receipt: null, warnings: [], remote_link: remoteLink() } satisfies MockReply<'import_sections'>;
             }
             if (!currentProject) {
               const now = new Date().toISOString();
@@ -1904,11 +1917,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ? (args?.sourceWarnings as string[]).filter((w) => w.length > 0)
               : [];
             return {
-              success: true,
               warnings: [],
-              error: null,
+              remote_link: remoteLink(),
               section_ids: sectionIds,
-              ...(sectionIds[0] != null ? { section_id: sectionIds[0] } : {}),
               import_receipt: {
                 source_format: sourceLabel ?? 'mNemo DMP',
                 file_name: sourceFileName ?? '',
@@ -1933,11 +1944,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const wallsPath = (args?.path as string | undefined) ?? '';
             const wallsFileName = wallsPath.split('/').pop() ?? wallsPath;
             return {
-              success: true,
               warnings: [],
-              error: null,
+              remote_link: remoteLink(),
               section_ids: [1],
-              section_id: 1,
               import_receipt: {
                 source_format: 'Walls',
                 file_name: wallsFileName,
@@ -2153,11 +2162,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
             const gpxFileName = (filePath ?? '').split('/').pop() ?? filePath ?? '';
             return {
-              success: true,
               warnings: [],
-              error: null,
+              remote_link: remoteLink(),
               section_ids: createdSectionIds,
-              ...(createdSectionIds[0] != null ? { section_id: createdSectionIds[0] } : {}),
               import_receipt: {
                 source_format: 'GPX',
                 file_name: gpxFileName,
@@ -2403,11 +2410,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
 
             return {
-              success: true,
               warnings: [],
-              error: null,
+              remote_link: remoteLink(),
               section_ids: tmlSectionIds,
-              ...(tmlSectionIds[0] != null ? { section_id: tmlSectionIds[0] } : {}),
               import_receipt: {
                 source_format: 'Ariane TML',
                 file_name: tmlPath.split('/').pop() ?? tmlPath,
@@ -2445,7 +2450,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 });
               }
             }
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'merge_stations'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'merge_stations'>;
           }
 
           case 'execute_batch': {
@@ -2480,14 +2485,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // must therefore emit two entries, not one.
             const reversedSections: Array<{ section_id: number; shot_count: number }> = [];
             for (const command of commands) {
-              // A sub-command's CommandResult, from this mock's own (checked) cases.
-              let result: MockReply<'execute_batch'> | undefined;
+              // A sub-command's reply, from this mock's own (checked) cases: its outcome, or
+              // the rejected promise its failure is (#576 C4: a refusal is a rejection with
+              // a `CommandError`, never a resolved value).
+              let result: unknown;
               if (command?.type === 'update_shot') {
                 result = mockHandler('update_shot', {
                   sectionId: command.section_id,
                   shotId: command.shot_id,
                   updates: command.updates,
-                }) as typeof result;
+                });
               } else if (command?.type === 'untrack_import') {
                 // Rides the withdrawal batch (#394) so a re-import of the same
                 // file is not reported as a duplicate. This mock does not keep
@@ -2495,26 +2502,27 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // and `check_duplicate_import` reads one configurable flag), so
                 // the faithful replay is to clear that flag.
                 mockCheckDuplicateResult = false;
-                result = { success: true, warnings: [], error: null, section_ids: [] };
               } else if (command?.type === 'delete_section') {
                 // Withdrawing an abandoned import (#394) removes N sections in
                 // ONE batch, so the batch has to replay it or a cancelled DMP
                 // import would look like it kept everything.
                 result = mockHandler('delete_section', {
                   sectionId: command.section_id,
-                }) as typeof result;
+                });
               } else if (command?.type === 'reverse_section') {
                 // Multi-section reverse (#24) is batched so it is atomic and
                 // costs one undo, so the batch has to replay it too.
                 result = mockHandler('reverse_section', {
                   sectionId: command.section_id,
                   swapLeftRight: command.swap_left_right,
-                }) as typeof result;
-                if (result?.reversed_sections) {
-                  reversedSections.push(...result.reversed_sections);
+                });
+                const reversed = (result as Partial<MockReply<'reverse_section'>> | null)?.reversed_sections;
+                if (reversed) {
+                  reversedSections.push(...reversed);
                 }
               }
-              if (result && result.success === false) {
+              if (result instanceof Promise) {
+                // The sub-command was refused: restore, and reject with its CommandError.
                 if (currentProject && projectBefore) {
                   Object.assign(currentProject, projectBefore);
                 }
@@ -2522,15 +2530,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   delete mockStationComments[key];
                 }
                 Object.assign(mockStationComments, commentsBefore);
-                return result satisfies MockReply<'execute_batch'>;
+                return result;
               }
             }
             return {
-              success: true,
-              warnings: [],
-              error: null,
               section_ids: [],
-              ...(reversedSections.length > 0 ? { reversed_sections: reversedSections } : {}),
+              reversed_sections: reversedSections,
+              warnings: [],
+              remote_link: remoteLink(),
             } satisfies MockReply<'execute_batch'>;
           }
 
@@ -2559,7 +2566,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               | undefined;
             const closureStrategy = (args?.closureStrategy ?? args?.closure_strategy) as string | undefined;
             if (!stationA || !stationB) {
-              return { success: false, error: 'Missing closure stations', warnings: [], section_ids: [] } satisfies MockReply<'create_loop_closure'>;
+              return Promise.reject({ code: 'FAILED', message: 'Missing closure stations' } satisfies CommandError);
             }
 
             if (currentProject) {
@@ -2590,7 +2597,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 return direct || reverse;
               });
               if (alreadyExists) {
-                return { success: false, error: 'A loop closure already exists between these stations.', warnings: [], section_ids: [] } satisfies MockReply<'create_loop_closure'>;
+                return Promise.reject({ code: 'FAILED', message: 'A loop closure already exists between these stations.' } satisfies CommandError);
               }
 
               const maxExistingId = loopClosures.reduce(
@@ -2613,33 +2620,33 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               });
             }
 
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'create_loop_closure'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'create_loop_closure'>;
           }
 
           case 'remove_loop_closure': {
             console.log('[Mock IPC] remove_loop_closure called with:', args);
             const closureIdRaw = args?.closureId ?? args?.closure_id;
             if (closureIdRaw === undefined || closureIdRaw === null) {
-              return { success: false, error: 'Missing closure ID', warnings: [], section_ids: [] } satisfies MockReply<'remove_loop_closure'>;
+              return Promise.reject({ code: 'FAILED', message: 'Missing closure ID' } satisfies CommandError);
             }
             // A u64 on the Rust side: serde accepts only a JSON number.
             const closureId = typeof closureIdRaw === 'number' ? closureIdRaw : null;
             if (closureId === null) {
-              return { success: false, error: 'Invalid closure ID', warnings: [], section_ids: [] } satisfies MockReply<'remove_loop_closure'>;
+              return Promise.reject({ code: 'FAILED', message: 'Invalid closure ID' } satisfies CommandError);
             }
 
             if (!currentProject) {
-              return { success: false, error: 'No project open', warnings: [], section_ids: [] } satisfies MockReply<'remove_loop_closure'>;
+              return Promise.reject({ code: 'FAILED', message: 'No project open' } satisfies CommandError);
             }
 
             const loopClosures = currentProject.loop_closures as Array<{ id: number }>;
             const closureIndex = loopClosures.findIndex((closure) => closure.id === closureId);
             if (closureIndex < 0) {
-              return { success: false, error: 'Loop closure not found', warnings: [], section_ids: [] } satisfies MockReply<'remove_loop_closure'>;
+              return Promise.reject({ code: 'FAILED', message: 'Loop closure not found' } satisfies CommandError);
             }
 
             loopClosures.splice(closureIndex, 1);
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'remove_loop_closure'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'remove_loop_closure'>;
           }
 
           case 'unmerge_stations':
@@ -2697,14 +2704,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }
               }
             }
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'unmerge_stations'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'unmerge_stations'>;
 
           case 'unmerge_station_pair': {
             console.log('[Mock IPC] unmerge_station_pair called with:', args);
             const stationA = (args?.stationA ?? args?.station_a) as { section_id: number; station_index: number } | undefined;
             const stationB = (args?.stationB ?? args?.station_b) as { section_id: number; station_index: number } | undefined;
             if (!stationA || !stationB) {
-              return { success: false, error: 'Missing station pair', warnings: [], section_ids: [] } satisfies MockReply<'unmerge_station_pair'>;
+              return Promise.reject({ code: 'FAILED', message: 'Missing station pair' } satisfies CommandError);
             }
 
             unmergeStationPairCalls.push({ stationA, stationB });
@@ -2753,11 +2760,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     return !(direct || reverse);
                   });
                 }
-                return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'unmerge_station_pair'>;
+                return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'unmerge_station_pair'>;
               }
             }
 
-            return { success: false, error: 'Stations are not directly merged', warnings: [], section_ids: [] } satisfies MockReply<'unmerge_station_pair'>;
+            return Promise.reject({ code: 'FAILED', message: 'Stations are not directly merged' } satisfies CommandError);
           }
 
           case 'move_segment': {
@@ -2769,7 +2776,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
             calls.push({ command: 'move_segment', args: args ?? null });
             win.__MOCK_MOVE_CALLS__ = calls;
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'move_segment'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'move_segment'>;
           }
 
           case 'move_section': {
@@ -2780,7 +2787,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
             calls.push({ command: 'move_section', args: args ?? null });
             win.__MOCK_MOVE_CALLS__ = calls;
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'move_section'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'move_section'>;
           }
 
           case 'move_station': {
@@ -2789,7 +2796,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
             calls.push({ command: 'move_station', args: args ?? null });
             win.__MOCK_MOVE_CALLS__ = calls;
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'move_station'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'move_station'>;
           }
 
           case 'move_shot':
@@ -2837,7 +2844,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 datums.push({ station_ref: stationRef, gps: coordinates });
               }
             }
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'set_zero_datum'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'set_zero_datum'>;
           }
 
           case 'remove_zero_datum': {
@@ -2857,7 +2864,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 datums.splice(idx, 1);
               }
             }
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'remove_zero_datum'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'remove_zero_datum'>;
           }
 
           case 'set_station_comment': {
@@ -2870,7 +2877,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             } else {
               mockStationComments[key] = comment;
             }
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'set_station_comment'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'set_station_comment'>;
           }
 
           case 'check_section_hashes': {
@@ -2904,7 +2911,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'undo':
           case 'redo':
             undoRedoCalls.push(cmd);
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'undo'> & MockReply<'redo'>;
+            return { reversed_steps: [], warnings: [], remote_link: remoteLink() } satisfies MockReply<'undo'> & MockReply<'redo'>;
 
           case 'can_undo':
             return false satisfies MockReply<'can_undo'>;
@@ -3004,16 +3011,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // backend's guard_mutation returns, never a zero result. `projectIsRemote`
             // is the mock's read-only-remote proxy, as in set_surface_elevation.
             if (openProjectNewerSchema !== null) {
-              return Promise.reject(
-                `EDIT_DISABLED: NEWER_FILE_READ_ONLY: Repair integrity is disabled: this project was ` +
+              return Promise.reject({
+                code: 'NEWER_FILE_EDIT_DISABLED',
+                message:
+                  `Repair integrity is disabled: this project was ` +
                   `saved by a newer version of Stalagmight (file format ${openProjectNewerSchema}) and ` +
                   `is open read-only. Update Stalagmight to edit it.`,
-              );
+              } satisfies CommandError);
             }
             if (projectIsRemote) {
-              return Promise.reject(
-                'EDIT_DISABLED: Repair integrity is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.',
-              );
+              return Promise.reject({
+                code: 'EDIT_DISABLED',
+                message: 'Repair integrity is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.',
+              } satisfies CommandError);
             }
             const total = mockIntegrityIssues.length;
             const remaining = Math.min(mockIntegrityRemaining, total);
@@ -3022,26 +3032,28 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             mockIntegrityIssues = mockIntegrityIssues.slice(total - remaining);
             // `changed: false` is what the store read (falsy) while the mock omitted it:
             // the mock records no undo entry, so nothing marks the project dirty.
-            return { fixed, remaining, changed: false } satisfies MockReply<'repair_project_integrity'>;
+            return { fixed, remaining, changed: false, remote_link: remoteLink() } satisfies MockReply<'repair_project_integrity'>;
           }
 
           case 'remove_from_recent_projects':
             // Mock remove from recent - just return success
             console.log('[Mock IPC] remove_from_recent_projects called with:', args);
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'remove_from_recent_projects'>;
+            return { warnings: [] } satisfies MockReply<'remove_from_recent_projects'>;
 
           case 'delete_project':
             // Mock destructive delete: like the backend, the file leaves the
             // recents list. Per-page state, so nothing leaks into another test.
             deletedProjectPaths.add(String(args?.path ?? ''));
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'delete_project'>;
+            // `session_closed: false`: the mock never tears down the open session on a
+            // delete (the reply before #576 C4 left the field out, which read as false).
+            return { session_closed: false, warnings: [] } satisfies MockReply<'delete_project'>;
 
           case 'set_project_name_for_path': {
             const p = String(args?.path ?? '');
             const name = String(args?.name ?? '').trim();
-            if (!name) return { success: false, error: 'Project name cannot be empty', warnings: [], section_ids: [] } satisfies MockReply<'set_project_name_for_path'>;
+            if (!name) return Promise.reject({ code: 'FAILED', message: 'Project name cannot be empty' } satisfies CommandError);
             recentNameOverrides[p] = name;
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'set_project_name_for_path'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'set_project_name_for_path'>;
           }
 
           // Display settings (per-project) - uses in-memory storage for persistence testing
@@ -3265,7 +3277,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }
               }
             }
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'update_shot'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'update_shot'>;
           }
 
           case 'delete_shot': {
@@ -3285,12 +3297,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 if (idx >= 0) section.shots.splice(idx, 1);
               }
             }
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'delete_shot'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'delete_shot'>;
           }
 
           case 'delete_last_shot_and_section':
             console.log('[Mock IPC] delete_last_shot_and_section called with:', args);
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'delete_last_shot_and_section'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'delete_last_shot_and_section'>;
 
           case 'preview_delete_shot': {
             console.log('[Mock IPC] preview_delete_shot called with:', args);
@@ -3322,7 +3334,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'delete_shot_and_split':
             console.log('[Mock IPC] delete_shot_and_split called with:', args);
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'delete_shot_and_split'>;
+            // `section_id` is section B's: the id the backend's `next_section_id` would give
+            // it. The mock does not model the split, so no section lands under that id.
+            return { section_id: sectionCounter + 1, warnings: [], remote_link: remoteLink() } satisfies MockReply<'delete_shot_and_split'>;
 
           case 'preview_delete_shot_range': {
             console.log('[Mock IPC] preview_delete_shot_range called with:', args);
@@ -3354,11 +3368,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'delete_shot_range_split':
             console.log('[Mock IPC] delete_shot_range_split called with:', args);
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'delete_shot_range_split'>;
+            // `section_id`: section B's, as in delete_shot_and_split (not modelled either).
+            return { section_id: sectionCounter + 1, warnings: [], remote_link: remoteLink() } satisfies MockReply<'delete_shot_range_split'>;
 
           case 'delete_shot_range_shift':
             console.log('[Mock IPC] delete_shot_range_shift called with:', args);
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'delete_shot_range_shift'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'delete_shot_range_shift'>;
 
           case 'update_section': {
             console.log('[Mock IPC] update_section called with:', args);
@@ -3374,7 +3389,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 console.log('[Mock IPC] update_section: applied updates to section', sectionId, updates);
               }
             }
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'update_section'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'update_section'>;
           }
 
           case 'delete_section': {
@@ -3385,7 +3400,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 (s) => s.id !== sectionId,
               );
             }
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'delete_section'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'delete_section'>;
           }
 
           case 'reverse_section': {
@@ -3397,7 +3412,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shots: Array<Record<string, unknown>>;
             }> | undefined)?.find((s) => s.id === sectionId);
             if (!section) {
-              return { success: false, error: `Section ${sectionId} not found`, warnings: [], section_ids: [] } satisfies MockReply<'reverse_section'>;
+              return Promise.reject({ code: 'FAILED', message: `Section ${sectionId} not found` } satisfies CommandError);
             }
             const shotCount = section.shots.length;
             // Mirror the backend transform (#24, models/project/reverse.rs):
@@ -3533,14 +3548,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // this step, and a shot-less section is DROPPED (nothing was renumbered, and
             // it is the divisor for the frontend's mirror).
             return {
-              success: true,
+              reversed_sections: shotCount > 0 ? [{ section_id: sectionId, shot_count: shotCount }] : [],
               warnings: [],
-              error: null,
-              section_ids: [],
-              section_id: sectionId,
-              ...(shotCount > 0
-                ? { reversed_sections: [{ section_id: sectionId, shot_count: shotCount }] }
-                : {}),
+              remote_link: remoteLink(),
             } satisfies MockReply<'reverse_section'>;
           }
 
@@ -3562,7 +3572,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shots: Array<{ id: number } & Record<string, unknown>>;
             }> | undefined)?.find((s) => s.id === sectionId);
             if (!section) {
-              return { success: false, error: `Section ${sectionId} not found`, warnings: [], section_ids: [] } satisfies MockReply<'create_shot'>;
+              return Promise.reject({ code: 'FAILED', message: `Section ${sectionId} not found` } satisfies CommandError);
             }
             const shotData = (args?.shot ?? {}) as Record<string, unknown>;
             const afterShotId = (args?.afterShotId ?? args?.after_shot_id ?? null) as number | null;
@@ -3583,7 +3593,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               if (i >= 0) insertAt = i;
             }
             section.shots.splice(insertAt, 0, newShot);
-            return { success: true, warnings: [], error: null, section_ids: [], shot_id: nextId } satisfies MockReply<'create_shot'>;
+            return { shot_id: nextId, warnings: [], remote_link: remoteLink() } satisfies MockReply<'create_shot'>;
           }
 
           case 'split_shot_at_distance': {
@@ -3603,11 +3613,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shots: Array<{ id: number } & Record<string, unknown>>;
             }> | undefined)?.find((s) => s.id === sectionId);
             if (!section) {
-              return { success: false, error: `Section ${sectionId} not found`, warnings: [], section_ids: [] } satisfies MockReply<'split_shot_at_distance'>;
+              return Promise.reject({ code: 'FAILED', message: `Section ${sectionId} not found` } satisfies CommandError);
             }
             const idx = section.shots.findIndex((s) => s.id === shotId);
             if (idx < 0) {
-              return { success: false, error: `Shot ${shotId} not found in section ${sectionId}`, warnings: [], section_ids: [] } satisfies MockReply<'split_shot_at_distance'>;
+              return Promise.reject({ code: 'FAILED', message: `Shot ${shotId} not found in section ${sectionId}` } satisfies CommandError);
             }
             const target = section.shots[idx] as Record<string, unknown>;
             const length = (target.length as number) ?? 0;
@@ -3620,14 +3630,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               distance < MIN_SPLIT_CHILD_LENGTH_M ||
               length - distance < MIN_SPLIT_CHILD_LENGTH_M
             ) {
-              return {
-                success: false,
-                error: `Both sides of the split must be at least ${MIN_SPLIT_CHILD_LENGTH_M.toFixed(
+              return Promise.reject({
+                code: 'FAILED',
+                message: `Both sides of the split must be at least ${MIN_SPLIT_CHILD_LENGTH_M.toFixed(
                   2,
                 )}m (shot length ${length.toFixed(2)}m)`,
-                warnings: [],
-                section_ids: [],
-              } satisfies MockReply<'split_shot_at_distance'>;
+              } satisfies CommandError);
             }
             // Mirrors the backend's collinear split: shared azimuth/pitch/LRUD,
             // depth linearly interpolated at the split point. The tail is
@@ -3653,12 +3661,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             target.length = length - distance;
             target.depth_in = midDepth;
             section.shots.splice(idx, 0, headShot);
-            return { success: true, warnings: [], error: null, section_ids: [], shot_id: nextId } satisfies MockReply<'split_shot_at_distance'>;
+            return { shot_id: nextId, warnings: [], remote_link: remoteLink() } satisfies MockReply<'split_shot_at_distance'>;
           }
 
           case 'merge_projects':
             console.log('[Mock IPC] merge_projects called with:', args);
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'merge_projects'>;
+            return { warnings: [] } satisfies MockReply<'merge_projects'>;
 
           case 'set_shot_kind': {
             console.log('[Mock IPC] set_shot_kind called with:', args);
@@ -3676,7 +3684,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }
               }
             }
-            return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'set_shot_kind'>;
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'set_shot_kind'>;
           }
 
           // Raw sqlite browsing (data table fullscreen)

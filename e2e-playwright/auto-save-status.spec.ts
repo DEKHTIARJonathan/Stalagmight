@@ -9,6 +9,7 @@ import {
 } from './helpers/app';
 import { recordIpcCalls, getIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
 import type { E2EWindow } from './helpers/e2eWindow';
+import type { CommandError } from '../src/types/ipc/CommandError';
 
 /**
  * E2E tests for Auto-Save Status Bar indicator.
@@ -157,7 +158,7 @@ test.describe('Auto-Save Status Bar', () => {
     // Override save_project to return error
     await page.evaluate(() => {
       const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
-      overrides.save_project = { success: false, error: 'Disk full' };
+      overrides.save_project = { __reject: { code: 'FAILED', message: 'Disk full' } satisfies CommandError };
       (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 

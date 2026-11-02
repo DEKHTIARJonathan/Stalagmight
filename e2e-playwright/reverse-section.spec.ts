@@ -14,6 +14,7 @@ import {
   waitForNoDialogs,
 } from './helpers/app';
 import type { E2EWindow } from './helpers/e2eWindow';
+import type { CommandError } from '../src/types/ipc/CommandError';
 
 type StationRef = { section_id: number; station_index: number };
 
@@ -633,14 +634,14 @@ test.describe('Reverse Section', () => {
 
   test('surfaces a rejected reverse and leaves the dialog open to retry', async ({ page }) => {
     // The read-only self-check has its own test; this is the OTHER error surface -
-    // a `{ success: false }` from the backend, which must render `result.error`
-    // verbatim rather than closing the dialog on a reverse that never happened.
+    // a refusal from the backend (a `CommandError` rejection), whose message must
+    // render verbatim rather than closing the dialog on a reverse that never happened.
     const [sectionId] = await setup(page);
     const before = await readShots(page, sectionId);
 
     await page.evaluate(() => {
       (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = {
-        reverse_section: { success: false, error: 'Section is locked by another editor' },
+        reverse_section: { __reject: { code: 'FAILED', message: 'Section is locked by another editor' } satisfies CommandError },
       };
     });
 

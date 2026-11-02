@@ -1,6 +1,7 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
 import type { E2EWindow } from './helpers/e2eWindow';
+import type { MockReply } from './mocks/ipc/types';
 
 /**
  * E2E tests for the Merge Projects dialog.
@@ -137,7 +138,7 @@ test.describe('Merge Projects Dialog', () => {
     // Set up mock override for merge_projects
     await page.evaluate(() => {
       const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
-      overrides.merge_projects = { success: true };
+      overrides.merge_projects = { warnings: [] } satisfies MockReply<'merge_projects'>;
       (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
     });
 
