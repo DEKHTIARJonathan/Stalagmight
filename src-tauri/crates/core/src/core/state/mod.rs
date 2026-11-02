@@ -136,6 +136,12 @@ mod reverse_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod roundtrip_fidelity_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::indexing_slicing,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, and the printed \

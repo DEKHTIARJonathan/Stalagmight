@@ -38,6 +38,13 @@ mod command_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod import_receipt_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, and the printed \
               values are the evidence a run captures"

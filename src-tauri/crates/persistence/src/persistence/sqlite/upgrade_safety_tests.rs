@@ -1,0 +1,202 @@
+//! [#576 B6] Upgrading an older file is safe: one pre-upgrade copy is kept
+//! beside it, the chain and its stamp commit together, and a crash-shaped v9
+//! link still gets its backfill.
+//!
+//! Moved out of `tests.rs` unchanged (#576 E8: the monolith is frozen).
+
+use std::path::Path;
+
+use rusqlite::Connection;
+use tempfile::TempDir;
+
+use super::{Database, SCHEMA_VERSION};
+use crate::models::{Project, SectionData, ShotData};
+
+/// A current file holding one section of two shots, then reshaped by `surgery`.
+pub(super) fn b6_build_file(dir: &Path, name: &str, surgery: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    let mut project = Project::new("CaveA".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("SectionA".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#123456".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![
+            ShotData {
+                length: 5.0,
+                ..Default::default()
+            },
+            ShotData {
+                length: 7.0,
+                ..Default::default()
+            },
+        ],
+    });
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&project).unwrap();
+    drop(db);
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(surgery)
+        .unwrap();
+    path
+}
+
+fn b6_user_version(path: &Path) -> i64 {
+    Connection::open(path)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap()
+}
+
+fn b6_has_column(path: &Path, table: &str, column: &str) -> bool {
+    Connection::open(path)
+        .unwrap()
+        .query_row(
+            &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = ?1"),
+            [column],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+        > 0
+}
+
+fn b6_dir_listing(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// [#576 B6-D2] Opening an older file keeps ONE copy of it, as it was, before the
+/// upgrade changes anything: `<name>.stalx.pre-v<old>.backup` beside it, which the
+/// recovery dialog lists. Upgrades are one-way (several drop undo history, v12
+/// rewrote every pitch), so without it there was no way back. A current file
+/// gets no copy, and an existing copy is never overwritten.
+#[test]
+fn an_upgrade_keeps_one_copy_of_the_file_as_it_was() {
+    let temp = TempDir::new().unwrap();
+    let path = b6_build_file(
+        temp.path(),
+        "CaveA.stalx",
+        "UPDATE project SET schema_version = 17; PRAGMA user_version = 17;",
+    );
+    let original = std::fs::read(&path).unwrap();
+    let copy = temp.path().join("CaveA.stalx.pre-v17.backup");
+
+    drop(Database::open_existing(&path).unwrap());
+    println!("after the upgrade: {:?}", b6_dir_listing(temp.path()));
+    assert_eq!(b6_user_version(&path), i64::from(SCHEMA_VERSION));
+    let kept = std::fs::read(&copy).unwrap_or_default();
+    assert!(
+        kept == original,
+        "the copy must be the file exactly as it was before the upgrade ({} bytes kept, {} \
+         original)",
+        kept.len(),
+        original.len()
+    );
+
+    // A current file takes no copy.
+    let listing = b6_dir_listing(temp.path());
+    drop(Database::open_existing(&path).unwrap());
+    assert_eq!(
+        b6_dir_listing(temp.path()),
+        listing,
+        "no copy of a current file"
+    );
+
+    // The same upgrade again (a different file content) never replaces the copy.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "UPDATE project SET name = 'CaveB', schema_version = 17; PRAGMA user_version = 17;",
+        )
+        .unwrap();
+    drop(Database::open_existing(&path).unwrap());
+    assert!(
+        std::fs::read(&copy).unwrap() == original,
+        "an existing pre-upgrade copy must never be overwritten"
+    );
+}
+
+/// [#576 B6] The migration chain and its stamp commit together: an arm that fails
+/// part-way leaves the file exactly as unmigrated as it was - no column added by
+/// an earlier step, no stamp - so the next open runs the whole chain again
+/// instead of finding a half-migrated file. Here the v13 arm's `DROP COLUMN
+/// is_reference` fails on an index over that column, after `migrate_schema` has
+/// already re-added a missing `sections` column and the arm itself has added
+/// `shots.kind`.
+#[test]
+fn a_migration_that_fails_part_way_leaves_the_file_unmigrated() {
+    let temp = TempDir::new().unwrap();
+    let path = b6_build_file(
+        temp.path(),
+        "CaveA.stalx",
+        "ALTER TABLE shots ADD COLUMN is_reference INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE shots DROP COLUMN kind;
+         CREATE INDEX idx_shots_is_reference ON shots(is_reference);
+         ALTER TABLE sections DROP COLUMN azimuth_epoch_year;
+         UPDATE project SET schema_version = 12;
+         PRAGMA user_version = 12;",
+    );
+
+    let opened = Database::open_existing(&path);
+    println!(
+        "open_existing -> {}",
+        opened
+            .as_ref()
+            .err()
+            .map_or_else(|| "<opened>".to_string(), |e| format!("{e:#}"))
+    );
+    assert!(opened.is_err(), "premise: the v13 arm fails on this file");
+    drop(opened);
+
+    let kind_added = b6_has_column(&path, "shots", "kind");
+    let azimuth_added = b6_has_column(&path, "sections", "azimuth_epoch_year");
+    let stamp = b6_user_version(&path);
+    println!(
+        "after the failed open: shots.kind present={kind_added} \
+         sections.azimuth_epoch_year present={azimuth_added} user_version={stamp}"
+    );
+    assert_eq!(stamp, 12, "no stamp for a chain that did not finish");
+    assert!(
+        !kind_added && !azimuth_added,
+        "every step before the failure must be rolled back with it"
+    );
+}
+
+/// [#576 B6] The v9 -> v10 `speleo_link.last_edit_at` backfill must not depend on
+/// the column being absent. A crash between that ALTER and its backfill (they
+/// committed separately) left the column present, the backfill unrun and the
+/// stamp still 9 - and since the backfill was guarded on the column, no later open
+/// ever ran it: the legacy dirty bit could then never be cleared by a push.
+#[test]
+fn a_crash_shaped_v9_link_still_gets_its_last_edit_at_backfill() {
+    let temp = TempDir::new().unwrap();
+    let path = b6_build_file(
+        temp.path(),
+        "CaveA.stalx",
+        "INSERT INTO speleo_link (id, endpoint, project_id, project_name, base_commit_sha, \
+             has_unpushed_edits, last_edit_at)
+         VALUES (1, 'https://speleodb.invalid', '00000000-0000-4000-8000-000000000001', \
+             'CaveA', NULL, 1, NULL);
+         UPDATE project SET schema_version = 9;
+         PRAGMA user_version = 9;",
+    );
+
+    let db = Database::open_existing(&path).unwrap();
+    let link = db.load_speleo_link().unwrap().unwrap();
+    println!(
+        "last_edit_at after open = {:?} (has_unpushed_edits={})",
+        link.last_edit_at, link.has_unpushed_edits
+    );
+    assert_eq!(
+        link.last_edit_at.as_deref(),
+        Some("1970-01-01T00:00:00+00:00"),
+        "a dirty pre-v10 row must get the epoch stamp, whatever the column's presence"
+    );
+}
