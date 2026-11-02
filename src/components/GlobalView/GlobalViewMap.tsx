@@ -127,10 +127,17 @@ function createMarkerSpinner(strokeLight: string, strokeColor: string): HTMLDivE
 }
 
 /** Stable empty defaults: a `new Map()` default parameter is a new object on every
- *  render, which every effect depending on these props would see as a change. Left
- *  untyped like the inline defaults they replace, so the props keep their old type. */
-const NO_GEOMETRY = new Map();
-const NO_GEOMETRY_STATES = new Map();
+ *  render, which every effect depending on these props would see as a change. Typed,
+ *  so the props' values are checked where they are read (#576 NF-W3UI-4). */
+const NO_GEOMETRY = new Map<string, SurveyGeometry>();
+const NO_GEOMETRY_STATES = new Map<string, SystemGeometryState>();
+
+/** A shot endpoint as `[lng, lat]`, or null unless it holds two finite numbers. The
+ *  geometry is IPC data typed `Array<number>`, so the length is not guaranteed. */
+function endpointLngLat(point: readonly number[]): [number, number] | null {
+  const [lng, lat] = point;
+  return lng !== undefined && lat !== undefined && Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null;
+}
 
 /**
  * Map component for GlobalView showing all GPS-positioned systems.
@@ -228,23 +235,25 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
           let sumLat = 0;
 
           for (const shot of geometry.shots) {
-            const fromKey = `${shot.from[0]},${shot.from[1]}`;
-            const toKey = `${shot.to[0]},${shot.to[1]}`;
-
-            if (!stations.has(fromKey)) {
-              stations.add(fromKey);
-              sumLng += shot.from[0];
-              sumLat += shot.from[1];
-            }
-            if (!stations.has(toKey)) {
-              stations.add(toKey);
-              sumLng += shot.to[0];
-              sumLat += shot.to[1];
+            // An endpoint without two finite numbers used to be summed anyway and
+            // turned the whole centroid into NaN, so the arrow keys could never
+            // reach the system (#576 NF-W3UI-4). Skip it instead.
+            for (const point of [shot.from, shot.to]) {
+              const lngLat = endpointLngLat(point);
+              if (!lngLat) continue;
+              const key = `${lngLat[0]},${lngLat[1]}`;
+              if (stations.has(key)) continue;
+              stations.add(key);
+              sumLng += lngLat[0];
+              sumLat += lngLat[1];
             }
           }
 
           if (stations.size > 0) {
             centroids.set(project.file_path, [sumLng / stations.size, sumLat / stations.size]);
+          } else if (project.gps_center) {
+            // No usable station position: the same fallback as no geometry.
+            centroids.set(project.file_path, project.gps_center);
           }
         } else if (project.gps_center) {
           // Fall back to gps_center if no geometry loaded
