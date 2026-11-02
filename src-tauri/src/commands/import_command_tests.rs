@@ -2,41 +2,44 @@
 //! NF-IMPORT-APPHANDLE).
 //!
 //! `execute_tml_import`, `execute_compass_import` and `execute_walls_import`
-//! take a Wry `AppHandle` to build their progress sink, and `tauri::test`
-//! builds a `MockRuntime` app, so no test could call them; the shared runner
-//! was tested, but not what each command feeds it. Each command now forwards
-//! its IPC arguments unchanged to an `execute_*_import_impl` taking the sink,
-//! and these tests drive that: one IPC option toggled both ways, the receipt
-//! the importer labels, and the file hash the import records. Every file is
-//! synthetic, written into a temp dir here.
+//! are generic over the Tauri runtime (#576 C2/C9), so these tests call the
+//! registered commands themselves with a `tauri::test` app: one IPC option
+//! toggled both ways, the receipt the importer labels, and the file hash the
+//! import records. Every file is synthetic, written into a temp dir here.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
+use tauri::async_runtime::block_on;
+use tauri::test::MockRuntime;
+use tauri::{App, Manager};
 use tempfile::TempDir;
 
 use super::import::{
-    check_duplicate_import_impl, execute_compass_import_impl, execute_tml_import_impl,
-    execute_walls_import_impl,
+    check_duplicate_import_impl, execute_compass_import, execute_tml_import, execute_walls_import,
 };
-use super::import_runner::SilentSink;
 use crate::core::state::AppState;
 use crate::core::{Command, CommandResult};
 
-/// A fresh app state with an open, empty project.
-fn project_state() -> AppState {
+/// A `tauri::test` app managing a fresh app state with an open, empty project.
+fn project_app() -> App<MockRuntime> {
     let state = AppState::new().expect("app state");
     let created = state.execute(Command::CreateProject {
         name: "CaveA".to_string(),
         location: None,
     });
     assert!(created.success, "{:?}", created.error);
-    state
+    let app = tauri::test::mock_app();
+    app.manage(state);
+    app
+}
+
+fn state_of(app: &App<MockRuntime>) -> &AppState {
+    app.state::<AppState>().inner()
 }
 
 /// The shots now in the project, across all sections.
-fn shots_in(state: &AppState) -> usize {
-    state
+fn shots_in(app: &App<MockRuntime>) -> usize {
+    state_of(app)
         .get_project_state()
         .expect("project")
         .sections
@@ -45,7 +48,7 @@ fn shots_in(state: &AppState) -> usize {
         .sum()
 }
 
-fn write(dir: &TempDir, name: &str, body: &str) -> PathBuf {
+pub(super) fn write(dir: &TempDir, name: &str, body: &str) -> PathBuf {
     let path = dir.path().join(name);
     std::fs::write(&path, body).expect("write the synthetic file");
     path
@@ -63,13 +66,13 @@ fn receipt_of(result: &CommandResult) -> (String, Option<String>, u32) {
     )
 }
 
-fn hash_recorded(state: &AppState, hash: &str) -> bool {
-    check_duplicate_import_impl(state, hash.to_string()).expect("check the hash")
+fn hash_recorded(app: &App<MockRuntime>, hash: &str) -> bool {
+    check_duplicate_import_impl(state_of(app), hash.to_string()).expect("check the hash")
 }
 
 /// Ariane: a short survey in feet, with an entrance elevation of 328.084 ft
 /// (100 m).
-fn synthetic_tmlu(dir: &TempDir) -> PathBuf {
+pub(super) fn synthetic_tmlu(dir: &TempDir) -> PathBuf {
     use crate::parsers::tml::test_helpers::{tml_shot_xml_depth, tml_shot_xml_gps, wrap_xml_with};
     let shots = [
         tml_shot_xml_gps(0, -1, "START", "Main", 20.5, -87.3),
@@ -86,20 +89,19 @@ fn tml_import(
     path: &Path,
     hash: Option<&str>,
     sections: Option<Vec<u32>>,
-) -> (AppState, CommandResult) {
-    let state = project_state();
-    let result = execute_tml_import_impl(
-        &state,
-        Arc::new(SilentSink),
-        path,
+) -> (App<MockRuntime>, CommandResult) {
+    let app = project_app();
+    let result = block_on(execute_tml_import(
+        app.handle().clone(),
+        path.to_path_buf(),
         hash.map(str::to_string),
         false,
         false,
         None,
         sections,
         None,
-    );
-    (state, result)
+    ));
+    (app, result)
 }
 
 #[test]
@@ -116,7 +118,9 @@ fn the_ariane_command_honours_selected_sections_and_records_the_file() {
         hash_recorded(&all, "hash-tml"),
         "the import records its file hash"
     );
-    let elevation = all.get_project_state().and_then(|p| p.surface_elevation);
+    let elevation = state_of(&all)
+        .get_project_state()
+        .and_then(|p| p.surface_elevation);
     assert_eq!(
         elevation.map(|e| (e * 1000.0).round()),
         Some(100_000.0),
@@ -148,7 +152,7 @@ fn the_ariane_command_honours_selected_sections_and_records_the_file() {
 }
 
 /// Compass: one survey in feet, two legs plus one `#|X#`-excluded leg.
-fn synthetic_compass_dat(dir: &TempDir) -> PathBuf {
+pub(super) fn synthetic_compass_dat(dir: &TempDir) -> PathBuf {
     write(
         dir,
         "CaveA.dat",
@@ -172,18 +176,17 @@ fn compass_import(
     path: &Path,
     hash: Option<&str>,
     include_excluded: bool,
-) -> (AppState, CommandResult) {
-    let state = project_state();
-    let result = execute_compass_import_impl(
-        &state,
-        Arc::new(SilentSink),
-        path,
+) -> (App<MockRuntime>, CommandResult) {
+    let app = project_app();
+    let result = block_on(execute_compass_import(
+        app.handle().clone(),
+        path.to_path_buf(),
         hash.map(str::to_string),
         include_excluded,
         true,
         false,
-    );
-    (state, result)
+    ));
+    (app, result)
 }
 
 #[test]
@@ -220,7 +223,7 @@ fn the_compass_command_honours_include_excluded_and_records_the_file() {
 }
 
 /// Walls: one survey in feet, two legs and a splay off the second station.
-fn synthetic_walls_srv(dir: &TempDir) -> PathBuf {
+pub(super) fn synthetic_walls_srv(dir: &TempDir) -> PathBuf {
     write(
         dir,
         "CaveA.srv",
@@ -232,18 +235,17 @@ fn walls_import(
     path: &Path,
     hash: Option<&str>,
     include_splays: bool,
-) -> (AppState, CommandResult) {
-    let state = project_state();
-    let result = execute_walls_import_impl(
-        &state,
-        Arc::new(SilentSink),
-        path,
+) -> (App<MockRuntime>, CommandResult) {
+    let app = project_app();
+    let result = block_on(execute_walls_import(
+        app.handle().clone(),
+        path.to_path_buf(),
         hash.map(str::to_string),
         false,
         include_splays,
         None,
-    );
-    (state, result)
+    ));
+    (app, result)
 }
 
 #[test]
@@ -273,16 +275,15 @@ fn the_walls_command_honours_include_splays_and_records_the_file() {
         "include_splays reaches the converter"
     );
 
-    let none = project_state();
-    let result = execute_walls_import_impl(
-        &none,
-        Arc::new(SilentSink),
-        &path,
+    let none = project_app();
+    let result = block_on(execute_walls_import(
+        none.handle().clone(),
+        path.clone(),
         None,
         false,
         false,
         Some(Vec::new()),
-    );
+    ));
     receipt_of(&result);
     assert_eq!(shots_in(&none), 0, "selected_surveys reaches the converter");
 }

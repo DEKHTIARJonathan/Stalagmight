@@ -215,19 +215,16 @@ fn test_execute_gpx_import_decorates_receipt() {
         use std::io::Write;
         file.write_all(gpx_xml.as_bytes()).unwrap();
 
-        let result = import::execute_gpx_import_impl(
-            state(&app).inner(),
-            std::sync::Arc::new(crate::commands::import_runner::SilentSink),
-            file.path(),
+        let result = tauri::async_runtime::block_on(import::execute_gpx_import(
+            app.handle().clone(),
+            file.path().to_path_buf(),
             None,
-            import::GpxSelection {
-                import_waypoints: false,
-                import_tracks: true,
-                import_routes: false,
-                depth_inverted: false,
-            },
-            &[],
-        );
+            false,
+            true,
+            false,
+            Vec::new(),
+            false,
+        ));
         assert_success(&result);
         let receipt = result
             .import_receipt

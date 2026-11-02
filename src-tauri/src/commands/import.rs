@@ -1,12 +1,13 @@
 use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Runtime, State};
 
 use crate::commands::event_sink::tauri_sink;
 use crate::commands::import_runner::{
     guarded, run_file_import, ApplyPath, ConvertedImport, ImportKind,
 };
+use crate::commands::pool;
 use crate::core::state::{AppState, VirtualShotMode};
 use crate::core::CommandResult;
 use crate::models::placement_suggest::{
@@ -315,15 +316,19 @@ pub fn parse_tml(path: PathBuf) -> Result<TmlFile, String> {
 }
 
 /// Parse a TML/TMLU file, convert to import configs, and execute the import.
+///
+/// [#576 NF-FIX3A-2 / C2] Runs on the blocking pool (`pool::run`), so the main
+/// thread stays free while the file is read and converted: the progress events
+/// reach the dialog as they are emitted, and the dialog's Cancel
+/// (`cancel_loading`) reaches the import between its phases.
 #[tauri::command]
 #[expect(
     clippy::too_many_arguments,
     reason = "one parameter per import-dialog control; grouping them into a \
               struct would put a second, hand-written shape on the IPC wire"
 )]
-pub fn execute_tml_import(
-    app: AppHandle,
-    state: State<'_, AppState>,
+pub async fn execute_tml_import<R: Runtime>(
+    app: AppHandle<R>,
     path: PathBuf,
     file_hash: Option<String>,
     include_excluded: bool,
@@ -332,65 +337,31 @@ pub fn execute_tml_import(
     selected_sections: Option<Vec<u32>>,
     root_placement: Option<TmlRootPlacement>,
 ) -> CommandResult {
-    execute_tml_import_impl(
-        state.inner(),
-        tauri_sink(app),
-        &path,
-        file_hash,
-        include_excluded,
-        comments_on_stations,
-        virtual_shot_mode,
-        selected_sections,
-        root_placement,
-    )
-}
-
-/// [`execute_tml_import`] with its progress going to `sink`.
-///
-/// The commands take an `AppHandle` (Wry) only to build the event sink their
-/// progress goes to, and `tauri::test` builds a `MockRuntime` app whose handle
-/// is a different type - so a test cannot call the command itself. Each
-/// `execute_*_import` therefore forwards its IPC arguments unchanged to an
-/// `_impl` that takes the sink instead (as [`execute_gpx_import_impl`] does),
-/// and the tests in `import_command_tests.rs` drive that (#576
-/// NF-IMPORT-APPHANDLE). Keep the command a pure forward: anything it did
-/// beyond `state.inner()` and `tauri_sink(app)` would be untested.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the command's IPC arguments, forwarded one for one"
-)]
-pub(crate) fn execute_tml_import_impl(
-    state: &AppState,
-    sink: std::sync::Arc<dyn crate::core::events::EventSink>,
-    path: &std::path::Path,
-    file_hash: Option<String>,
-    include_excluded: bool,
-    comments_on_stations: bool,
-    virtual_shot_mode: Option<VirtualShotMode>,
-    selected_sections: Option<Vec<u32>>,
-    root_placement: Option<TmlRootPlacement>,
-) -> CommandResult {
-    let opts = TmlImportOptions {
-        include_excluded,
-        comments_on_stations,
-        // `None` => import every section; `Some(list)` => only the chosen
-        // section indices (into the preview's `TmlFile::sections`, which the
-        // dialog lists 1:1). An empty list imports nothing and lands the empty
-        // receipt, exactly like a file whose every shot was filtered out.
-        selected_sections: selected_sections.map(|v| v.into_iter().collect()),
-        // `None` => the pre-#425 silent default (the file's GPS, else origin).
-        root_placement,
-    };
-    run_file_import(
-        state,
-        sink,
-        &TML_IMPORT,
-        path,
-        file_hash,
-        virtual_shot_mode.unwrap_or_default(),
-        crate::parsers::tml::parse_tml,
-        |tml| convert_tml(tml, &opts),
-    )
+    let sink = tauri_sink(app.clone());
+    pool::run(app, move |state| {
+        let opts = TmlImportOptions {
+            include_excluded,
+            comments_on_stations,
+            // `None` => import every section; `Some(list)` => only the chosen
+            // section indices (into the preview's `TmlFile::sections`, which the
+            // dialog lists 1:1). An empty list imports nothing and lands the empty
+            // receipt, exactly like a file whose every shot was filtered out.
+            selected_sections: selected_sections.map(|v| v.into_iter().collect()),
+            // `None` => the pre-#425 silent default (the file's GPS, else origin).
+            root_placement,
+        };
+        run_file_import(
+            state,
+            sink,
+            &TML_IMPORT,
+            &path,
+            file_hash,
+            virtual_shot_mode.unwrap_or_default(),
+            crate::parsers::tml::parse_tml,
+            |tml| convert_tml(tml, &opts),
+        )
+    })
+    .await
 }
 
 /// The Ariane importer as the runner names it.
@@ -450,55 +421,37 @@ pub fn parse_compass(path: PathBuf) -> Result<CompassFile, String> {
 }
 
 /// Parse a Compass file, convert to import configs, and execute the import.
+/// On the blocking pool, like [`execute_tml_import`].
 #[tauri::command]
-pub fn execute_compass_import(
-    app: AppHandle,
-    state: State<'_, AppState>,
+pub async fn execute_compass_import<R: Runtime>(
+    app: AppHandle<R>,
     path: PathBuf,
     file_hash: Option<String>,
     include_excluded: bool,
     apply_corrections: bool,
     comments_on_stations: bool,
 ) -> CommandResult {
-    execute_compass_import_impl(
-        state.inner(),
-        tauri_sink(app),
-        &path,
-        file_hash,
-        include_excluded,
-        apply_corrections,
-        comments_on_stations,
-    )
-}
-
-/// [`execute_compass_import`] with its progress going to `sink`. See
-/// [`execute_tml_import_impl`] for why the seam exists.
-pub(crate) fn execute_compass_import_impl(
-    state: &AppState,
-    sink: std::sync::Arc<dyn crate::core::events::EventSink>,
-    path: &std::path::Path,
-    file_hash: Option<String>,
-    include_excluded: bool,
-    apply_corrections: bool,
-    comments_on_stations: bool,
-) -> CommandResult {
-    let opts = CompassImportOptions {
-        include_excluded,
-        apply_corrections,
-        comments_on_stations,
-    };
-    run_file_import(
-        state,
-        sink,
-        &COMPASS_IMPORT,
-        path,
-        file_hash,
-        // Auto: no dialog on this path carries a per-file override, so the
-        // chain rule decides (decision C10-D1).
-        VirtualShotMode::Auto,
-        crate::parsers::compass::parse_compass,
-        |parsed| convert_compass(parsed, &opts),
-    )
+    let sink = tauri_sink(app.clone());
+    pool::run(app, move |state| {
+        let opts = CompassImportOptions {
+            include_excluded,
+            apply_corrections,
+            comments_on_stations,
+        };
+        run_file_import(
+            state,
+            sink,
+            &COMPASS_IMPORT,
+            &path,
+            file_hash,
+            // Auto: no dialog on this path carries a per-file override, so the
+            // chain rule decides (decision C10-D1).
+            VirtualShotMode::Auto,
+            crate::parsers::compass::parse_compass,
+            |parsed| convert_compass(parsed, &opts),
+        )
+    })
+    .await
 }
 
 /// The Compass importer as the runner names it.
@@ -547,15 +500,15 @@ pub fn parse_gpx(path: PathBuf) -> Result<GpxFile, String> {
 }
 
 /// Parse a GPX file, convert to import configs, and execute the import.
+/// On the blocking pool, like [`execute_tml_import`].
 #[tauri::command]
 #[expect(
     clippy::too_many_arguments,
     reason = "one parameter per import-dialog control; grouping them into a \
               struct would put a second, hand-written shape on the IPC wire"
 )]
-pub fn execute_gpx_import(
-    app: AppHandle,
-    state: State<'_, AppState>,
+pub async fn execute_gpx_import<R: Runtime>(
+    app: AppHandle<R>,
     path: PathBuf,
     file_hash: Option<String>,
     import_waypoints: bool,
@@ -564,56 +517,41 @@ pub fn execute_gpx_import(
     section_placements: Vec<GpxSectionPlacement>,
     depth_inverted: bool,
 ) -> CommandResult {
-    execute_gpx_import_impl(
-        state.inner(),
-        tauri_sink(app),
-        &path,
-        file_hash,
-        GpxSelection {
+    let sink = tauri_sink(app.clone());
+    pool::run(app, move |state| {
+        let selection = GpxSelection {
             import_waypoints,
             import_tracks,
             import_routes,
             depth_inverted,
-        },
-        &section_placements,
-    )
-}
-
-/// [`execute_gpx_import`] with its progress going to `sink`, so a test can
-/// run the command's pipeline without a Tauri app handle.
-pub(crate) fn execute_gpx_import_impl(
-    state: &AppState,
-    sink: std::sync::Arc<dyn crate::core::events::EventSink>,
-    path: &std::path::Path,
-    file_hash: Option<String>,
-    selection: GpxSelection,
-    section_placements: &[GpxSectionPlacement],
-) -> CommandResult {
-    tracing::info!(
-        path = ?path,
-        purpose = "import GPX",
-        import_waypoints = selection.import_waypoints,
-        import_tracks = selection.import_tracks,
-        import_routes = selection.import_routes,
-        "GPX import options"
-    );
-    run_file_import(
-        state,
-        sink,
-        &GPX_IMPORT,
-        path,
-        file_hash,
-        // Auto, not a per-file override: the GPX dialog has no mode control,
-        // so there is nothing to pass through - but the chain rule still has
-        // to run. `parsers::gpx` seeds every leg as Reference on the promise
-        // that the classifier can promote it, and skipping the pass (this path
-        // used to call `finalize_deferred_import` directly) left a GPS surface
-        // track tying two sumps together permanently excluded from the survey
-        // graph.
-        VirtualShotMode::Auto,
-        crate::parsers::gpx::parse_gpx,
-        |gpx| convert_gpx(gpx, &selection, section_placements),
-    )
+        };
+        tracing::info!(
+            path = ?path,
+            purpose = "import GPX",
+            import_waypoints = selection.import_waypoints,
+            import_tracks = selection.import_tracks,
+            import_routes = selection.import_routes,
+            "GPX import options"
+        );
+        run_file_import(
+            state,
+            sink,
+            &GPX_IMPORT,
+            &path,
+            file_hash,
+            // Auto, not a per-file override: the GPX dialog has no mode control,
+            // so there is nothing to pass through - but the chain rule still has
+            // to run. `parsers::gpx` seeds every leg as Reference on the promise
+            // that the classifier can promote it, and skipping the pass (this path
+            // used to call `finalize_deferred_import` directly) left a GPS surface
+            // track tying two sumps together permanently excluded from the survey
+            // graph.
+            VirtualShotMode::Auto,
+            crate::parsers::gpx::parse_gpx,
+            |gpx| convert_gpx(gpx, &selection, &section_placements),
+        )
+    })
+    .await
 }
 
 /// The GPX importer as the runner names it.
@@ -799,58 +737,40 @@ pub fn parse_walls(path: PathBuf) -> Result<WallsFile, String> {
 }
 
 /// Parse a Walls file, convert to import configs, and execute the import.
+/// On the blocking pool, like [`execute_tml_import`].
 #[tauri::command]
-pub fn execute_walls_import(
-    app: AppHandle,
-    state: State<'_, AppState>,
+pub async fn execute_walls_import<R: Runtime>(
+    app: AppHandle<R>,
     path: PathBuf,
     file_hash: Option<String>,
     comments_on_stations: bool,
     include_splays: bool,
     selected_surveys: Option<Vec<u32>>,
 ) -> CommandResult {
-    execute_walls_import_impl(
-        state.inner(),
-        tauri_sink(app),
-        &path,
-        file_hash,
-        comments_on_stations,
-        include_splays,
-        selected_surveys,
-    )
-}
-
-/// [`execute_walls_import`] with its progress going to `sink`. See
-/// [`execute_tml_import_impl`] for why the seam exists.
-pub(crate) fn execute_walls_import_impl(
-    state: &AppState,
-    sink: std::sync::Arc<dyn crate::core::events::EventSink>,
-    path: &std::path::Path,
-    file_hash: Option<String>,
-    comments_on_stations: bool,
-    include_splays: bool,
-    selected_surveys: Option<Vec<u32>>,
-) -> CommandResult {
-    let opts = WallsImportOptions {
-        comments_on_stations,
-        include_splays,
-        // `None` => import every survey; `Some(list)` => only the chosen survey
-        // indices (into the preview's `WallsFile::surveys`, which is 1:1 with
-        // the parser's survey order).
-        selected_surveys: selected_surveys.map(|v| v.into_iter().collect()),
-    };
-    run_file_import(
-        state,
-        sink,
-        &WALLS_IMPORT,
-        path,
-        file_hash,
-        // Auto: no dialog on this path carries a per-file override, so the
-        // chain rule decides (decision C10-D1).
-        VirtualShotMode::Auto,
-        crate::parsers::walls::parse_walls,
-        |parsed| convert_walls(parsed, &opts),
-    )
+    let sink = tauri_sink(app.clone());
+    pool::run(app, move |state| {
+        let opts = WallsImportOptions {
+            comments_on_stations,
+            include_splays,
+            // `None` => import every survey; `Some(list)` => only the chosen survey
+            // indices (into the preview's `WallsFile::surveys`, which is 1:1 with
+            // the parser's survey order).
+            selected_surveys: selected_surveys.map(|v| v.into_iter().collect()),
+        };
+        run_file_import(
+            state,
+            sink,
+            &WALLS_IMPORT,
+            &path,
+            file_hash,
+            // Auto: no dialog on this path carries a per-file override, so the
+            // chain rule decides (decision C10-D1).
+            VirtualShotMode::Auto,
+            crate::parsers::walls::parse_walls,
+            |parsed| convert_walls(parsed, &opts),
+        )
+    })
+    .await
 }
 
 /// The Walls importer as the runner names it.

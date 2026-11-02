@@ -11,6 +11,7 @@ mod import_runner;
 pub mod launch;
 pub mod logging;
 pub mod memory;
+pub(crate) mod pool;
 pub mod project;
 pub mod raw_data;
 pub mod recovery;
@@ -66,6 +67,14 @@ mod import_command_tests;
               values are the evidence a run captures"
 )]
 mod import_hash_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod import_offthread_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

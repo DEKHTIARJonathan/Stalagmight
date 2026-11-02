@@ -875,7 +875,7 @@
     {
       "name": "execute_compass_import",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -925,7 +925,7 @@
     {
       "name": "execute_gpx_import",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -989,7 +989,7 @@
     {
       "name": "execute_tml_import",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -1053,7 +1053,7 @@
     {
       "name": "execute_walls_import",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",

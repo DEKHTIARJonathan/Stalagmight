@@ -91,6 +91,8 @@ pub(crate) fn run_file_import<P>(
     let mut emitter = ProgressEmitter::new_for_import(sink, Arc::clone(&active.token));
 
     emitter.start_phase(LoadingPhase::ImportParsing);
+    #[cfg(test)]
+    parse_gate::hold(path);
     let parsed = match guarded(|| parse(path)) {
         Ok(parsed) => parsed,
         Err(e) => {
@@ -222,6 +224,111 @@ impl<'a> ActiveImport<'a> {
 impl Drop for ActiveImport<'_> {
     fn drop(&mut self) {
         self.state.clear_active_load(&self.token);
+    }
+}
+
+/// [#576 NF-FIX3A-2] Test seam: hold an import in its read phase - after it has
+/// reported that phase, before it parses - until the test releases it, so a test
+/// can dispatch `cancel_loading` while the import command is still running.
+/// Keyed by the file's path, so tests running at once never hold each other's
+/// imports; an import of a path nobody parked runs straight through.
+#[cfg(test)]
+pub(crate) mod parse_gate {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Condvar, Mutex, PoisonError};
+    use std::time::Duration;
+
+    /// How long a held import waits for its release before it reads its file
+    /// regardless. A command run ON the dispatching thread (the defect this seam
+    /// exposes) holds that thread for this long and then finishes, instead of
+    /// waiting forever for a release its own thread would have to send.
+    pub(crate) const HOLD_LIMIT: Duration = Duration::from_secs(3);
+
+    /// `(entered, released)`.
+    #[derive(Default)]
+    struct Gate {
+        state: Mutex<(bool, bool)>,
+        changed: Condvar,
+    }
+
+    static GATES: Mutex<Vec<(PathBuf, Arc<Gate>)>> = Mutex::new(Vec::new());
+
+    /// An import of `path` held in its read phase; released on drop.
+    pub(crate) struct Parked {
+        path: PathBuf,
+        gate: Arc<Gate>,
+    }
+
+    /// Hold the next import of `path` in its read phase.
+    pub(crate) fn park(path: &Path) -> Parked {
+        let gate = Arc::new(Gate::default());
+        GATES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((path.to_path_buf(), Arc::clone(&gate)));
+        Parked {
+            path: path.to_path_buf(),
+            gate,
+        }
+    }
+
+    impl Parked {
+        /// Wait up to `limit` for the import to reach its read phase; whether it did.
+        pub(crate) fn wait_entered(&self, limit: Duration) -> bool {
+            let state = self
+                .gate
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let (state, _) = self
+                .gate
+                .changed
+                .wait_timeout_while(state, limit, |(entered, _)| !*entered)
+                .unwrap_or_else(PoisonError::into_inner);
+            state.0
+        }
+
+        /// Let the held import read its file.
+        pub(crate) fn release(&self) {
+            let mut state = self
+                .gate
+                .state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            state.1 = true;
+            self.gate.changed.notify_all();
+        }
+    }
+
+    impl Drop for Parked {
+        fn drop(&mut self) {
+            self.release();
+            GATES
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .retain(|(path, gate)| !(path == &self.path && Arc::ptr_eq(gate, &self.gate)));
+        }
+    }
+
+    /// The runner's side: report the read phase entered, then wait for the release
+    /// (at most [`HOLD_LIMIT`]) if a test parked this path.
+    pub(super) fn hold(path: &Path) {
+        let gate = GATES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|(parked, _)| parked == path)
+            .map(|(_, gate)| Arc::clone(gate));
+        let Some(gate) = gate else {
+            return;
+        };
+        let mut state = gate.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.0 = true;
+        gate.changed.notify_all();
+        let _released = gate
+            .changed
+            .wait_timeout_while(state, HOLD_LIMIT, |(_, released)| !*released)
+            .unwrap_or_else(PoisonError::into_inner);
     }
 }
 
