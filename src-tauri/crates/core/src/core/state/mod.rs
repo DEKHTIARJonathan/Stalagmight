@@ -165,6 +165,9 @@ mod older_schema_tests;
 #[cfg(test)]
 mod open_undo_bugs_tests;
 #[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod perf_probe_tests;
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::print_stdout,

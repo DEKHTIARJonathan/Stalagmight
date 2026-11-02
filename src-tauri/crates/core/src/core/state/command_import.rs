@@ -827,9 +827,15 @@ impl AppState {
             // and every geometry path below would apply it. Same rule the
             // `.stalx` read path imposes on the stored columns (#438).
             let declared_reference = config.azimuth_reference.map(AzimuthReference::sanitised);
+            // Read under the lock rather than through `get_project_state`, which
+            // CLONES the whole project - once per section that declares no
+            // reference, so an import of N such sections copied the project N
+            // times (#576 NF-AN6-5). Same lock, same poisoned-lock fallback.
             let azimuth_reference = declared_reference.unwrap_or_else(|| {
-                self.get_project_state()
-                    .and_then(|p| p.default_azimuth_reference)
+                self.project
+                    .lock()
+                    .ok()
+                    .and_then(|guard| guard.as_ref().and_then(|p| p.default_azimuth_reference))
                     .unwrap_or_default()
             });
             let reverse_offset = config.reverse.then(|| {
