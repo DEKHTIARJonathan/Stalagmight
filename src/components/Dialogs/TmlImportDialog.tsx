@@ -3,11 +3,12 @@ import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { isMoveCarryRefusal } from '../../store/moveCarry';
 import { useUIStore } from '../../store/uiStore';
-import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { getErrorMessage } from '../../utils/ipc';
 import {
   completeImportToSingleView,
   finalizeDeferredSaveWarnings,
   finishImportWithoutOrphanSuggestions,
+  suggestOrphanPlacementsAfterImport,
   importFailureMessage,
   surfaceImportFailure,
   type ImportFailure,
@@ -30,7 +31,7 @@ import {
   type TmlFileAnchor,
   type TmlPlacementState,
 } from './TmlPlacementStep';
-import type { TmlFile, OrphanPlacementSuggestion } from '../../types/commands';
+import type { TmlFile } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import type { VirtualShotMode } from '../../types/project';
 import { computeTmlImportStats } from '../../utils/tmlImportStats';
@@ -390,22 +391,17 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       // Same shape as WallsImportDialog.
       const sectionIds = result.section_ids ?? [];
 
-      // Check for orphan placement opportunities. The suggest call is the
-      // ONLY thing wrapped in try/catch here (non-fatal - a failed lookup
-      // just skips the suggestion step); `finishImportWithoutOrphanSuggestions`
-      // sits outside it and completes the import exactly once, so a throw
-      // partway through IT can never fall through to a duplicate completion.
+      // Check for orphan placement opportunities. Only the lookup may fail
+      // softly here (it skips the suggestion step, and says so - #576
+      // NF-DMPS-1); `finishImportWithoutOrphanSuggestions` runs outside it and
+      // completes the import exactly once, so a throw partway through IT can
+      // never fall through to a duplicate completion.
       if (sectionIds.length > 0) {
-        let suggestions: OrphanPlacementSuggestion[] = [];
-        try {
-          suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
-            'suggest_orphan_placements',
-            { newlyImportedSectionIds: sectionIds },
-            { purpose: 'suggest orphan placements after TML import' }
-          );
-        } catch {
-          // Non-fatal: proceed without orphan detection
-        }
+        const suggestions = await suggestOrphanPlacementsAfterImport(
+          sectionIds,
+          'suggest orphan placements after TML import',
+          importUi
+        );
         if (suggestions.length > 0) {
           setSource('dialog');
           openDialog('orphan-placement', { suggestions, receipt: result.import_receipt });

@@ -13,6 +13,7 @@ import { importReceiptSummaryParts, isEmptyImportReceipt } from './importReceipt
 import { TOAST_KEYS } from './toastKeys';
 import type { ValidationWarning } from '../types/ipc/ValidationWarning';
 import type { ImportReceipt } from '../types/ipc/ImportReceipt';
+import type { OrphanPlacementSuggestion } from '../types/commands';
 import type { ToastKind } from '../store/uiStore';
 
 /**
@@ -294,6 +295,40 @@ export function presentImportReceipt(
     TOAST_KEYS.IMPORT_RECEIPT,
     'success',
   );
+}
+
+/**
+ * Ask where the sections an import just created could attach
+ * (`suggest_orphan_placements`), for the TML, Compass and Walls dialogs.
+ *
+ * A failed lookup is skipped, but not silently (#576 NF-DMPS-1, as the DMP
+ * wizard's NF-AN4-N4): the import has landed, so it completes as before - this
+ * answers `[]` and the caller goes on to `finishImportWithoutOrphanSuggestions`
+ * - and the user is told the step that offers to attach unanchored sections did
+ * not run, and why. A warning toast with the DMP wording: the importer's dialog
+ * is closing over an import that succeeded, so there is nothing to decide.
+ */
+export async function suggestOrphanPlacementsAfterImport(
+  newlyImportedSectionIds: number[],
+  purpose: string,
+  ui: Pick<ImportDialogUi, 'showToast'>,
+): Promise<OrphanPlacementSuggestion[]> {
+  try {
+    return await invokeIpc<OrphanPlacementSuggestion[]>(
+      'suggest_orphan_placements',
+      { newlyImportedSectionIds },
+      { purpose },
+    );
+  } catch (e) {
+    const reason = getErrorMessage(e);
+    console.warn('[import] orphan placement lookup failed:', reason);
+    ui.showToast(
+      i18n.t('dialogs.importReceipt.orphanLookupFailed', { reason }),
+      TOAST_KEYS.ORPHAN_LOOKUP_FAILED,
+      'warning',
+    );
+    return [];
+  }
 }
 
 /**

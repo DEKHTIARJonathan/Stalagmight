@@ -1008,3 +1008,33 @@ describe('TmlImportDialog reads the ids the wire actually delivers (#566)', () =
     expect(screen.queryByTestId('tml-reanchored-notice')).toBeNull();
   });
 });
+
+/**
+ * #576 NF-DMPS-1: a rejected `suggest_orphan_placements` was swallowed
+ * ("non-fatal"), so the step that offers to attach unanchored sections was
+ * skipped without a word. The DMP wizard says so (NF-AN4-N4); this importer
+ * now does too, through the shared helper, and the import still completes.
+ */
+describe('TmlImportDialog orphan lookup failure (#576 NF-DMPS-1)', () => {
+  it('says so in a warning toast and still completes the import', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    executeTmlImport.mockResolvedValue(ok([], [1]));
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'suggest_orphan_placements') throw new Error('orphan matcher unavailable (test)');
+      return 0; // count_unanchored_sections
+    });
+    render(<TmlImportDialog tmlFile={withShots([shot()])} filePath="/tmp/cave.tml" />);
+
+    await clickImport();
+
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled()); // the import completed
+    expect(showToast).toHaveBeenCalledWith(
+      'Imported, but unattached sections could not be matched: orphan matcher unavailable (test)',
+      'orphan-lookup-failed',
+      'warning',
+    );
+    expect(openDialog).not.toHaveBeenCalledWith('orphan-placement', expect.anything());
+  });
+});

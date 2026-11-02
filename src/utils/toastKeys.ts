@@ -131,6 +131,8 @@ export const TOAST_KEYS = {
   DMP_MANUAL_PLACEMENT_HINT: 'dmp-manual-placement-hint',
   /** A DMP import landed but the orphan-placement lookup after it failed (#576 NF-AN4-N4). */
   DMP_ORPHAN_LOOKUP_FAILED: 'dmp-orphan-lookup-failed',
+  /** A TML / Compass / Walls import landed but the orphan-placement lookup after it failed (#576 NF-DMPS-1). */
+  ORPHAN_LOOKUP_FAILED: 'orphan-lookup-failed',
   PROJECT_SETTINGS: 'project-settings',
   DELETE_PROJECT_WARNING: 'delete-project-warning',
   /** Warning-free import receipt, surfaced as a toast instead of a modal (#411/#420). */

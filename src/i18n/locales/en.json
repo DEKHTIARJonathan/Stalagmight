@@ -1272,6 +1272,7 @@
       "unanchoredInfoShort_one": "{{count}} section unanchored",
       "unanchoredInfoShort_other": "{{count}} sections unanchored",
       "zeroDatumCreated": "Zero datum created on \"{{section}}\"",
+      "orphanLookupFailed": "Imported, but unattached sections could not be matched: {{reason}}",
       "toast": "{{source}} import: {{summary}}",
       "viewDetails": "View details",
       "hideDetails": "Hide details",
