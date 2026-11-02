@@ -298,3 +298,38 @@ describe('a carry cancelled while the WebGL context is lost (#576 NF-MAP-5)', ()
     expect(ctrl.isCustom()).toBe(false);
   });
 });
+
+describe('a pick-up while the WebGL context is lost (#576 NF-W4MAP-1)', () => {
+  it('begins idle: nothing thrown, no layer or source added, and the next pick-up draws again', () => {
+    const fake = makeFakeMap();
+    const ctrl = new DragGhostController(fake.map, makeOptions());
+    dropStyle(fake.map);
+    // Every style-backed call MapLibre makes reads the missing style, sources and
+    // paint included (getSource / addSource / setPaintProperty -> this.style.*).
+    const m = fake.map as unknown as Record<string, unknown>;
+    const thrower = (name: string) => () => {
+      throw new TypeError(`Cannot read properties of null (reading '${name}')`);
+    };
+    const addLayer = vi.fn(m.addLayer as () => void);
+    m.addLayer = addLayer;
+    m.getSource = thrower('getSource');
+    m.addSource = thrower('addSource');
+    m.setPaintProperty = thrower('setPaintProperty');
+
+    expect(() => ctrl.begin(SET)).not.toThrow();
+    // Not even attempted: MapLibre's addLayer lazily builds an EMPTY style when
+    // it has none (`_lazyInitEmptyStyle`), which a lost context must not get.
+    expect(addLayer).not.toHaveBeenCalled();
+    expect(fake.layers.size).toBe(0);
+    expect(fake.sources.size).toBe(0);
+    expect(ctrl.isCustom()).toBe(false);
+    expect(() => ctrl.move(4, 2)).not.toThrow();
+    expect(() => ctrl.end()).not.toThrow();
+
+    // The restore brings a live style back; the next pick-up builds its ghost.
+    const live = makeFakeMap();
+    const next = new DragGhostController(live.map, makeOptions());
+    expect(next.begin(SET)).toBe('custom');
+    expect(live.layers.has(GHOST_ID)).toBe(true);
+  });
+});

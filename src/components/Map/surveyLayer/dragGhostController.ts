@@ -107,6 +107,13 @@ export class DragGhostController {
     this.end();
     this.set = set;
     this.offset = { dx: 0, dy: 0 };
+    // A pick-up while the WebGL context is lost (#576 NF-W4MAP-1): there is no
+    // style, so neither path can add its layers - the stock one's getSource reads
+    // the missing style and throws, and MapLibre's addLayer would lazily build an
+    // EMPTY style to hold the custom one. Nothing could be drawn until the restore
+    // anyway, so the carry stays idle (as the drag preview's begin paths skip their
+    // style writes) and the next pick-up builds its ghost.
+    if (!hasLiveStyle(this.map)) return 'idle';
     if (this.startCustom(set)) {
       this.mode = 'custom';
       return 'custom';
@@ -202,7 +209,8 @@ export class DragGhostController {
       return true;
     } catch (e) {
       console.warn('[dragGhost] custom ghost threw on add; using stock drag preview', e);
-      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      // The cleanup reads the style too; a style gone by now has no layer to drop.
+      if (hasLiveStyle(this.map) && this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
       return false;
     }
   }

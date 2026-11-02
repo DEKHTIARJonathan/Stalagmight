@@ -126,8 +126,12 @@ export class DragPreviewController {
     this.dragGeneration += 1;
     this.dragPreviewSet = { features };
     this.dragPreviewActive = true;
-    if (this.dragGhost.begin(this.dragPreviewSet) === 'custom') this.setDragExclusion(exclusion);
-    else this.setDragExclusionWhenPreviewReady(exclusion);
+    const ghost = this.dragGhost.begin(this.dragPreviewSet);
+    if (ghost === 'custom') this.setDragExclusion(exclusion);
+    else if (ghost === 'stock') this.setDragExclusionWhenPreviewReady(exclusion);
+    // 'idle': the WebGL context is lost (#576 NF-W4MAP-1). No preview source will
+    // load to wait for - and isSourceLoaded reads the missing style - so the
+    // originals are not hidden; nothing is drawn until the restore anyway.
     this.renderOverlayFollow(0, 0);
   }
 
