@@ -177,10 +177,14 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
     macro_rules! flush_pending {
         () => {
             if let Some(entry) = pending.take() {
+                // Only `.ENDBOOK` closes a book, so a file missing those lines
+                // nests every sibling book in the one before it and lands here
+                // too (#576 RV3-R-NITS): the message names that cause as well.
                 if entry.is_book && stack.len() >= MAX_BOOK_DEPTH {
                     bail!(
                         "This .WPJ nests books more than {MAX_BOOK_DEPTH} levels deep (book \
-                         '{}' opens level {}); no real project does, so it was not imported.",
+                         '{}' opens level {}), or is missing .ENDBOOK lines; no real project \
+                         does, so it was not imported.",
                         crate::models::sanitize_display_text(&entry.title, 64),
                         stack.len() + 1
                     );

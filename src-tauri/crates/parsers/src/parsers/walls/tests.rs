@@ -3393,6 +3393,32 @@ fn a_wpj_nested_deeper_than_256_books_is_refused() {
     assert_eq!(parsed.book_count, 256, "exactly 256 levels still import");
 }
 
+/// #576 RV3-R-NITS (B12): only `.ENDBOOK` closes a book, so a malformed `.WPJ`
+/// that leaves them out nests every SIBLING book inside the one before it and
+/// is refused past 256 books - where it used to import, nested wrongly. Walls
+/// itself writes `.ENDBOOK`, so this stays refused, but the message has to name
+/// the likelier cause instead of only a nesting depth nobody wrote.
+#[test]
+fn a_wpj_missing_endbook_lines_is_refused_naming_them() {
+    use std::fmt::Write as _;
+    let dir = temp_dir("no_endbook");
+    let mut wpj = String::from(";WALLS Project File\n");
+    for k in 1..=300 {
+        write!(wpj, ".BOOK B{k}\n.NAME N{k}\n.STATUS 8\n").unwrap();
+    }
+    let path = dir.join("Flat.wpj");
+    std::fs::write(&path, wpj).unwrap();
+    let err = parse_walls(&path)
+        .map(|p| p.book_count)
+        .unwrap_err()
+        .to_string();
+    println!("300 books, no .ENDBOOK: {err}");
+    assert!(
+        err.contains("more than 256 levels deep") && err.contains(".ENDBOOK"),
+        "{err}"
+    );
+}
+
 /// Sharing the ancestors' state changes nothing about what a survey
 /// inherits: every ancestor's options apply root first (the last `decl` and
 /// the later `meters` win over the root's `feet`), and the segment is every
