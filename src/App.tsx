@@ -997,8 +997,17 @@ function App() {
                   { newlyImportedSectionIds: newSectionIds },
                   { purpose: 'suggest orphan placements after DMP import' }
                 );
-              } catch {
-                // Non-fatal: proceed without orphan detection
+              } catch (e) {
+                // Skipped, but not silently (#576 NF-AN4-N4): the import has
+                // landed, so it completes, and the user is told the step that
+                // offers to attach unanchored sections did not run, and why.
+                const reason = getErrorMessage(e);
+                console.warn('[dmpImport] orphan placement lookup failed:', reason);
+                useUIStore.getState().showToast(
+                  t('dmpWizard.toasts.orphanLookupFailed', { reason }),
+                  TOAST_KEYS.DMP_ORPHAN_LOOKUP_FAILED,
+                  'warning',
+                );
               }
               if (suggestions.length > 0) {
                 openDialog('orphan-placement', { suggestions, receipt });

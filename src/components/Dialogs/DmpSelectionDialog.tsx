@@ -9,6 +9,7 @@ import { extractFilename } from '../../utils/path';
 import { defaultConfig } from '../../types/config';
 import { formatLength, formatDepthRange } from '../../utils/formatStats';
 import { isImportableDmpShot } from '../../utils/shotConversion';
+import { getErrorMessage } from '../../utils/ipc';
 import type { DmpFile } from '../../types/commands';
 
 /**
@@ -132,11 +133,20 @@ export default function DmpSelectionDialog({
   const [duplicateSectionIndices, setDuplicateSectionIndices] = useState<Set<number>>(new Set());
   const [sectionHashesSettled, setSectionHashesSettled] = useState(false);
 
+  // Why a duplicate check could not run (#576 NF-AN4-N4). The checks are
+  // advisory, so the user may still continue - but a failed one used to be
+  // swallowed, which reads as "no duplicates" and lets them re-import sections
+  // the project already holds without a word.
+  const [sectionCheckError, setSectionCheckError] = useState<string | null>(null);
+  const [fileCheckError, setFileCheckError] = useState<string | null>(null);
+  const duplicateCheckError = fileCheckError ?? sectionCheckError;
+
   // Check section content hashes for duplicates on mount
   useEffect(() => {
     let cancelled = false;
     setSectionHashesSettled(false);
     setDuplicateSectionIndices(new Set());
+    setSectionCheckError(null);
     (async () => {
       try {
         const hashes = dmpFile.sections.map(s => s.content_hash);
@@ -157,8 +167,10 @@ export default function DmpSelectionDialog({
             return next;
           });
         }
-      } catch {
-        // Graceful degradation
+      } catch (e) {
+        const reason = getErrorMessage(e);
+        console.warn('[dmpImport] section duplicate check failed:', reason);
+        if (!cancelled) setSectionCheckError(reason);
       } finally {
         if (!cancelled) {
           setSectionHashesSettled(true);
@@ -175,6 +187,7 @@ export default function DmpSelectionDialog({
     setFileHash(null);
     setIsDuplicate(false);
     setHashSettled(false);
+    setFileCheckError(null);
     (async () => {
       try {
         const hash = await calculateFileHash(filePath);
@@ -184,8 +197,11 @@ export default function DmpSelectionDialog({
         const isDup = await checkDuplicateImport(hash);
         if (cancelled) return;
         setIsDuplicate(isDup);
-      } catch {
-        // Graceful degradation: proceed without warning
+      } catch (e) {
+        // Still advisory - the user may continue - but said, not swallowed.
+        const reason = getErrorMessage(e);
+        console.warn('[dmpImport] file duplicate check failed:', reason);
+        if (!cancelled) setFileCheckError(reason);
       } finally {
         if (!cancelled) {
           setHashSettled(true);
@@ -395,6 +411,16 @@ export default function DmpSelectionDialog({
               duplicates: duplicateSectionIndices.size,
               total: dmpFile.sections.length,
             })}
+          </div>
+        )}
+
+        {/* A duplicate check that could not run (#576 NF-AN4-N4) */}
+        {duplicateCheckError && (
+          <div
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
+            data-testid="duplicate-check-failed"
+          >
+            {'\u26A0'} {t('dialogs.dmpSelection.duplicateCheckFailed', { reason: duplicateCheckError })}
           </div>
         )}
 

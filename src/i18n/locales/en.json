@@ -1609,6 +1609,7 @@
       "depth": "Depth: {{range}}",
       "duplicateHashWarning": "File may have been imported before (same hash detected)",
       "duplicateSectionsWarning": "{{duplicates}} of {{total}} sections already imported (auto-deselected)",
+      "duplicateCheckFailed": "Could not check whether this file was imported before ({{reason}}) - sections already in the project are not flagged.",
       "parseWarningsTitle": "Not all of this file could be read:",
       "defaultValues": "Default Values (apply to all sections)",
       "surveyorLabel": "Surveyor",
@@ -2544,7 +2545,8 @@
       "emptySections": "Not imported - no shots left to import: {{names}}",
       "sectionIncomplete_one": "\"{{name}}\": 1 shot is missing required values. Fill it in or clear the row.",
       "sectionIncomplete_other": "\"{{name}}\": {{count}} shots are missing required values. Fill them in or clear the rows.",
-      "placementHint": "Placement: Click to place section. Esc for more placement options and metadata changes."
+      "placementHint": "Placement: Click to place section. Esc for more placement options and metadata changes.",
+      "orphanLookupFailed": "Imported, but unattached sections could not be matched: {{reason}}"
     }
   },
   "banners": {
