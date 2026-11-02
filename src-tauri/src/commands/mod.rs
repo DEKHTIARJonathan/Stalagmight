@@ -116,6 +116,14 @@ mod recovery_tests;
 )]
 mod refresh_probe_tests;
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod remote_link_tests;
+#[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod telemetry_coverage_tests;
 #[cfg(test)]

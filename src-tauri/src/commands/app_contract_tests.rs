@@ -143,3 +143,183 @@ fn every_registered_command_runs_off_the_main_thread() {
          reason: {on_main_thread:?}"
     );
 }
+
+/// [#576 D22] The success values that carry the SpeleoDB link bits: every type
+/// the core's `carries_remote_link!` invocation implements `MutationOutcome` for,
+/// read off that source, so a new one is covered without editing a list here.
+fn mutation_outcome_types() -> Vec<String> {
+    let src = include_str!("../../crates/core/src/core/outcome.rs");
+    let start = src
+        .find("carries_remote_link!(")
+        .expect("the MutationOutcome impl list is present");
+    let list = &src[start + "carries_remote_link!(".len()..];
+    let list = &list[..list.find(");").expect("the impl list terminates")];
+    list.split(',')
+        .map(str::trim)
+        .filter(|ty| !ty.is_empty())
+        .map(|ty| ty.rsplit("::").next().unwrap_or(ty).to_owned())
+        .collect()
+}
+
+/// `text` from its first `{` to the matching `}`, skipping string literals and
+/// line comments (a `{` inside `"{e}"` is not a brace). `None` when it never
+/// closes.
+fn braced_block(text: &str) -> Option<&str> {
+    let open = text.find('{')?;
+    let bytes = text.as_bytes();
+    let (mut depth, mut i) = (0usize, open);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&text[open..=i]);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The `X` of a `Result<X, CommandError>` return type (its last path segment), or
+/// `None` for any other return type.
+fn ok_type_of_command_result(ret: &str) -> Option<String> {
+    let inner = ret.trim().strip_prefix("Result<")?;
+    let mut depth = 0i32;
+    let comma = inner.char_indices().find_map(|(at, c)| {
+        match c {
+            '<' | '(' => depth += 1,
+            '>' | ')' => depth -= 1,
+            ',' if depth == 0 => return Some(at),
+            _ => {}
+        }
+        None
+    })?;
+    let error = inner[comma + 1..].trim_start();
+    if !(error.starts_with("CommandError>") || error.contains("::CommandError>")) {
+        return None;
+    }
+    let ok = inner[..comma].trim();
+    Some(ok.rsplit("::").next().unwrap_or(ok).to_owned())
+}
+
+/// [#576 D22] `pool::run_mutation` is the ONE writer of an answer's `remote_link`,
+/// so every command answering a `MutationOutcome` must run through it: one that
+/// answers through `pool::run` (or anything else) leaves `remote_link` at the
+/// `null` its outcome is built with, and the frontend - which applies the bits in
+/// one place and keeps no mirror - never learns the edit dirtied the copy. A
+/// source scan, like the tripwires above, of every `#[tauri::command]` in
+/// `src/commands/*.rs`, cross-checked against the generated command manifest so
+/// it cannot pass by seeing nothing.
+#[test]
+fn every_mutation_outcome_command_runs_through_run_mutation() {
+    let outcomes = mutation_outcome_types();
+    for known in [
+        "EditOutcome",
+        "SectionCreated",
+        "ShotCreated",
+        "ReverseOutcome",
+        "BatchOutcome",
+        "HistoryOutcome",
+        "ImportOutcome",
+        "IntegrityRepairResult",
+    ] {
+        assert!(
+            outcomes.iter().any(|ty| ty == known),
+            "premise: `{known}` carries the link bits; parsed {outcomes:?}"
+        );
+    }
+
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands");
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+        .expect("the commands dir reads")
+        .map(|entry| entry.expect("a dir entry").path())
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "rs")
+                && !path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.ends_with("_tests.rs"))
+        })
+        .collect();
+    files.sort();
+    let mut scanned: Vec<String> = Vec::new();
+    let mut offenders: Vec<String> = Vec::new();
+    for path in files {
+        let text = std::fs::read_to_string(&path).expect("a command file reads");
+        // Production only: a file's own top-level test module ends it.
+        let prod = text.split("\n#[cfg(test)]").next().unwrap_or(&text);
+        let file = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+        for chunk in prod.split("#[tauri::command]").skip(1) {
+            let after = &chunk[chunk.find("fn ").expect("a command is a fn") + 3..];
+            let name: String = after
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            let signature = &after[..after.find('{').expect("a command has a body")];
+            let ret = signature.rsplit("->").next().unwrap_or_default();
+            let Some(ok) = ok_type_of_command_result(ret) else {
+                continue;
+            };
+            if !outcomes.contains(&ok) {
+                continue;
+            }
+            scanned.push(name.clone());
+            let body = braced_block(after).expect("the command's body closes");
+            if !body.contains("pool::run_mutation(") {
+                offenders.push(format!("{file}::{name} -> Result<{ok}, CommandError>"));
+            }
+        }
+    }
+    scanned.sort();
+
+    // The manifest's view of the same set: the scan must have seen every command
+    // whose answer is a MutationOutcome, or a parse slip would pass vacuously.
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../../../src/types/ipc/ipcCommands.json"))
+            .expect("the generated command manifest parses");
+    let mut expected: Vec<String> = manifest["commands"]
+        .as_array()
+        .expect("the manifest lists its commands")
+        .iter()
+        .filter(|c| {
+            c["result"]["rust"]
+                .as_str()
+                .is_some_and(|ty| outcomes.iter().any(|o| o == ty))
+        })
+        .filter_map(|c| c["name"].as_str().map(str::to_owned))
+        .collect();
+    expected.sort();
+    assert!(
+        scanned.len() >= 40,
+        "premise: the scan finds the survey mutations, got {}: {scanned:?}",
+        scanned.len()
+    );
+    assert_eq!(
+        scanned, expected,
+        "the source scan and the generated manifest disagree on which commands answer a \
+         MutationOutcome"
+    );
+    assert!(
+        offenders.is_empty(),
+        "these {} of {} commands answer a MutationOutcome but do not run through \
+         `pool::run_mutation`, so their answer never carries the SpeleoDB link bits \
+         (#576 D22): {offenders:?}",
+        offenders.len(),
+        scanned.len()
+    );
+}

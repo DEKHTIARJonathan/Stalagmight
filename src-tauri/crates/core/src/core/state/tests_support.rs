@@ -31,6 +31,14 @@ impl AppState {
         self.initial_save_deferred
             .store(deferred, std::sync::atomic::Ordering::Relaxed);
     }
+
+    /// The edit gate as a Start editing that took the lock leaves it (#191), with
+    /// no server round trip: the app crate's tests of what the IPC answers on a
+    /// remote project in an edit session (#576 D22).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_edit_enabled_for_tests(&self, enabled: bool) {
+        self.set_edit_enabled(enabled);
+    }
 }
 
 /// Every production region in the `core::state::speleodb*` family, paired with the
