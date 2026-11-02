@@ -78,7 +78,7 @@ export default function SpeleoCloseDialog() {
         // saveProject) instead of silently keeping this dialog open with no
         // feedback - matches every other save path (fix S4). The abort below still
         // keeps the project open so unsaved work is never dropped.
-        surfaceSaveFailure(result?.error ?? null, openDialog);
+        surfaceSaveFailure(result?.error ?? null, openDialog, useProjectStore.getState());
         return false;
       }
       return true;

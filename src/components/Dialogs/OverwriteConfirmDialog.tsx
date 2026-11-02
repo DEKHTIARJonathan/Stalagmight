@@ -50,7 +50,7 @@ export default function OverwriteConfirmDialog() {
         }
         trackDialogComplete('confirm-overwrite');
         closeDialog();
-        surfaceSaveFailure(result.error, showDialog);
+        surfaceSaveFailure(result.error, showDialog, useProjectStore.getState());
       } else {
         // Save succeeded.
         trackDialogComplete('confirm-overwrite');

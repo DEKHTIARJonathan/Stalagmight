@@ -1,4 +1,3 @@
-import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import {
   classifySaveError,
@@ -15,6 +14,15 @@ import type { ValidationWarning } from '../types/ipc/ValidationWarning';
 import type { ImportReceipt } from '../types/ipc/ImportReceipt';
 import type { OrphanPlacementSuggestion } from '../types/commands';
 import type { ToastKind } from '../store/uiStore';
+import type { ProjectStore } from '../store/projectStore';
+
+/**
+ * What surfaceSaveFailure needs from the project store, passed in rather than
+ * imported: projectStore calls this module, so importing projectStore back made
+ * the two part of a value-import cycle (#576 D27-32(b)). Callers pass
+ * `useProjectStore.getState()` (or `get()` inside the store) at the call.
+ */
+export type SaveFailureIntegrity = Pick<ProjectStore, 'integritySaveBlocked' | 'openIntegrityDialog'>;
 
 /**
  * Surface a failed (non-throwing) save to the user.
@@ -31,8 +39,8 @@ import type { ToastKind } from '../store/uiStore';
  *     SQLite's "Failed to open database".
  *  4. Anything else (a real I/O error) - show the error dialog as before.
  *
- * Reads `integritySaveBlocked`, which `saveProject` refreshes (awaited) on
- * failure, so it is current by the time this runs. On an IPC-transport reject
+ * Reads `integrity.integritySaveBlocked`, which `saveProject` refreshes
+ * (awaited) on failure, so it is current by the time this runs. On an IPC-transport reject
  * that re-check never ran, so `integritySaveBlocked` may be stale - pass
  * `skipIntegrityRouting` there to go straight to the error dialog instead of
  * wrongly opening Review & Repair. `title` overrides the dialog title (e.g.
@@ -47,6 +55,7 @@ import type { ToastKind } from '../store/uiStore';
 export function surfaceSaveFailure(
   error: string | null | undefined,
   openDialog: (dialog: string, data?: Record<string, unknown>) => void,
+  integrity: SaveFailureIntegrity,
   opts?: { skipIntegrityRouting?: boolean; title?: string },
 ): void {
   // [#576 B6-D1] A project saved by a newer version refuses every save. That is a
@@ -74,8 +83,8 @@ export function surfaceSaveFailure(
   }
   const routesToIntegrity =
     !opts?.skipIntegrityRouting && !isUnreadableRefusal(classifySaveError(error));
-  if (routesToIntegrity && useProjectStore.getState().integritySaveBlocked) {
-    useProjectStore.getState().openIntegrityDialog();
+  if (routesToIntegrity && integrity.integritySaveBlocked) {
+    integrity.openIntegrityDialog();
     return;
   }
   if (!error) return;

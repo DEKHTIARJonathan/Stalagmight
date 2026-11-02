@@ -169,6 +169,16 @@ jobs:
         run: |
           pnpm lint:eslint:test
           pnpm lint:eslint
+      # Value-import cycles under src/ (#576 D27-32(b)), zero tolerance: two
+      # modules importing each other's values evaluate in an order set by
+      # whoever imported first, so one top-level cross read is a start-up
+      # ReferenceError. `import type` edges do not count. Seconds; the fixture
+      # test pins the edge kinds.
+      - name: Value-import cycles
+        if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
+        run: |
+          pnpm lint:import-cycles:test
+          pnpm lint:import-cycles
       # Agent-harness typecheck (tsconfig.agent.json covers e2e/agent + e2e/lib).
       # The harness runs via tsx, which transpiles WITHOUT type-checking, and it
       # is exercised on-demand only - this seconds-cheap step is its one

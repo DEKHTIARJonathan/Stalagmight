@@ -3,7 +3,7 @@ import i18n from '../i18n';
 import { invokeIpc } from '../utils/ipc';
 import { isEditDisabledError, READ_ONLY_EDIT_NOTICE } from '../utils/editErrors';
 import { TOAST_KEYS } from '../utils/toastKeys';
-import { useSpeleoStore } from './speleoStore';
+import { speleoState } from './speleoStoreHandle';
 import { useUIStore } from './uiStore';
 import { refuseMutationDuringCarry } from './moveCarry';
 import type { ProjectWarning, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
@@ -80,7 +80,7 @@ export function createProjectIntegrityActions(
           { sectionId, shotId, warningCode, comment },
           { purpose: 'acknowledge validation warning', fields: { sectionId, shotId, warningCode } }
         );
-        useSpeleoStore.getState().markForwardEdit();
+        speleoState()?.markForwardEdit();
         await get().refreshWarnings();
         return true;
       } catch (e) {
@@ -105,7 +105,7 @@ export function createProjectIntegrityActions(
           { sectionId, shotId, warningCode },
           { purpose: 'reopen validation warning', fields: { sectionId, shotId, warningCode } }
         );
-        useSpeleoStore.getState().markForwardEdit();
+        speleoState()?.markForwardEdit();
         await get().refreshWarnings();
       } catch (e) {
         console.error('Failed to unresolve warning:', e);
@@ -219,7 +219,7 @@ export function createProjectIntegrityActions(
           // [#303] `repair_integrity` pairs it with speleodb_forget_unwind_position under
           // the same `changed` guard this branch is under (commands.rs:467-473), so mirror
           // both halves.
-          useSpeleoStore.getState().markForwardEdit();
+          speleoState()?.markForwardEdit();
         }
         return result;
       } catch (e) {

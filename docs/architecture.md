@@ -173,6 +173,7 @@ in `src-tauri/src/commands/telemetry_coverage_tests.rs`.
 | `src-tauri/src/commands/cache.rs` | Cache IPC commands (stats, clear, fetch) |
 | `src-tauri/src/commands/survey_geometry.rs` | Survey geometry IPC command (`get_survey_geometry_for_file`) |
 | `src/store/projectStore.ts` | Frontend state, Tauri IPC calls |
+| `src/store/speleoStoreHandle.ts` | Late-bound handle projectStore and its slices use to reach speleoStore, which imports projectStore (no value-import cycle; `pnpm lint:import-cycles`) |
 | `src/store/uiStore.ts` | UI state (selection, tools, panels, `appMode`) |
 | `src/store/gasPlanStore.ts` | Gas/dive-plan inputs (runtime only, never persisted) |
 | `src/store/globalViewStore.ts` | Global View state (selection, geometry loading) |

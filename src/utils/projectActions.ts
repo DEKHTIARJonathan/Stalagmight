@@ -109,7 +109,7 @@ export async function saveProjectAs(opts?: {
 
     const result = await useProjectStore.getState().saveProject(finalPath);
     if (result && !result.success) {
-      surfaceSaveFailure(result.error, openDialog);
+      surfaceSaveFailure(result.error, openDialog, useProjectStore.getState());
     }
     return result;
   } catch (e) {
@@ -120,7 +120,7 @@ export async function saveProjectAs(opts?: {
     // call sites don't catch. Return null (not a failure result) so the
     // delegating handleSaveProject doesn't surface a second dialog and
     // saveAndClose treats it as "not saved" and keeps the project open.
-    surfaceSaveFailure(getErrorMessage(e, 'Failed to save project'), openDialog, {
+    surfaceSaveFailure(getErrorMessage(e, 'Failed to save project'), openDialog, useProjectStore.getState(), {
       skipIntegrityRouting: true,
     });
     return null;
@@ -165,12 +165,12 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
     finalPath = resolved;
     const result = await useProjectStore.getState().saveProject(finalPath);
     if (!result || !result.success) {
-      surfaceSaveFailure(result?.error ?? null, openDialog);
+      surfaceSaveFailure(result?.error ?? null, openDialog, useProjectStore.getState());
       return false;
     }
     wroteDetachedCopy = Boolean(result.unlinked_copy_path);
   } catch (e) {
-    surfaceSaveFailure(getErrorMessage(e, 'Failed to save a local copy'), openDialog, {
+    surfaceSaveFailure(getErrorMessage(e, 'Failed to save a local copy'), openDialog, useProjectStore.getState(), {
       skipIntegrityRouting: true,
     });
     return false;
@@ -195,6 +195,7 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
     surfaceSaveFailure(
       getErrorMessage(e, 'The local copy was saved, but detaching from SpeleoDB failed'),
       openDialog,
+      useProjectStore.getState(),
       { skipIntegrityRouting: true, title: i18n.t('dialogs.saveFailure.detachTitle') },
     );
     return false;

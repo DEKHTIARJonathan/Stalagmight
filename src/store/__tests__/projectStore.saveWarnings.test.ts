@@ -157,7 +157,7 @@ describe('a refused save over an unreadable side table', () => {
       "Can't save: this project's SpeleoDB link could not be read (x). Saving would rewrite " +
       'the file without it, so nothing was written - the file on disk is unchanged.';
 
-    surfaceSaveFailure(`${marker}: ${sentence}`, openDialog);
+    surfaceSaveFailure(`${marker}: ${sentence}`, openDialog, useProjectStore.getState());
 
     expect(openIntegrityDialog).not.toHaveBeenCalled();
     expect(openDialog).toHaveBeenCalledWith('error', expect.objectContaining({ message: sentence }));

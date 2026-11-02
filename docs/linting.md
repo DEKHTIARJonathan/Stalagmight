@@ -212,3 +212,26 @@ whose own inputs were already listed).
 (`pnpm exec eslint src e2e-playwright e2e --rule '{"<rule>": "warn"}' -f json`), prefer surgical
 rules, and land a new warn-level rule with its counts in the baseline rather
 than with a sweep of unrelated fixes.
+
+### Import cycles
+
+`pnpm lint:import-cycles` (`scripts/check-import-cycles.mjs`, fixtures in
+`pnpm lint:import-cycles:test`, CI `check` job) fails on any value-import
+cycle among the `.ts`/`.tsx` modules under `src/`, tests included. Zero
+tolerance, no baseline: the tree had one cycle when the gate landed (#576
+D27-32(b): projectStore, speleoStore and three modules pulled into the same
+loop), and it was broken first.
+
+Why it matters: two modules that import each other's values evaluate in the
+order some third module happened to import them, and the second one sees the
+first's exports before they exist. A single top-level read of a cross-import
+then crashes the app at start, for one import order only.
+
+What counts as an edge: default, named, namespace and side-effect imports,
+`export ... from` and `export * from`. Not an edge: `import type`,
+`export type`, an import whose every specifier is an inline `type`, and a
+dynamic `import()` (it runs after both modules evaluated). To break a loop,
+move the shared value to a leaf module (`src/store/commandResult.ts`), pass it
+in as a parameter (`surfaceSaveFailure` takes the integrity state), or
+late-bind it (`src/store/speleoStoreHandle.ts`); when only types cross, use
+`import type`.

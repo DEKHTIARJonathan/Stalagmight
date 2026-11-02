@@ -58,7 +58,7 @@ export function useProject() {
     try {
       const result = await saveProject();
       if (result && !result.success) {
-        surfaceSaveFailure(result.error, openDialog);
+        surfaceSaveFailure(result.error, openDialog, useProjectStore.getState());
       }
       return result;
     } catch (e) {
@@ -68,7 +68,7 @@ export function useProject() {
       // like the save-status retry and the menu Save invoke this without awaiting
       // or catching (`void onSave()` / `() => onSave()`).
       const message = getErrorMessage(e, 'Failed to save');
-      surfaceSaveFailure(message, openDialog);
+      surfaceSaveFailure(message, openDialog, useProjectStore.getState());
       return { success: false, error: message };
     }
   }, [saveProject, handleSaveProjectAs, openDialog]);

@@ -65,7 +65,7 @@ describe('surfaceSaveFailure', () => {
     useProjectStore.setState({ integritySaveBlocked: true });
     const openDialog = vi.fn();
 
-    surfaceSaveFailure("Can't save: 1 unresolved cross-reference", openDialog);
+    surfaceSaveFailure("Can't save: 1 unresolved cross-reference", openDialog, useProjectStore.getState());
 
     // No error dialog - instead the integrity (Review & Repair) dialog opens.
     expect(openDialog).not.toHaveBeenCalled();
@@ -75,7 +75,7 @@ describe('surfaceSaveFailure', () => {
   it('shows the error dialog for a real (non-integrity) failure', () => {
     const openDialog = vi.fn();
 
-    surfaceSaveFailure('Disk full', openDialog);
+    surfaceSaveFailure('Disk full', openDialog, useProjectStore.getState());
 
     expect(openDialog).toHaveBeenCalledWith('error', {
       message: 'Disk full',
@@ -95,7 +95,8 @@ describe('surfaceSaveFailure', () => {
 
     surfaceSaveFailure(
       `${IGNORES_UNREADABLE}: Can't save: this project's list of ignored warnings could not be read (the resolved_warnings table has no warning_code column). Saving would rewrite the file without them, so nothing was written - the file on disk is unchanged.`,
-      openDialog
+      openDialog,
+      useProjectStore.getState(),
     );
 
     expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
@@ -110,7 +111,7 @@ describe('surfaceSaveFailure', () => {
   it('does nothing when there is no error and the project is not save-blocked', () => {
     const openDialog = vi.fn();
 
-    surfaceSaveFailure(undefined, openDialog);
+    surfaceSaveFailure(undefined, openDialog, useProjectStore.getState());
 
     expect(openDialog).not.toHaveBeenCalled();
     expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
@@ -119,7 +120,7 @@ describe('surfaceSaveFailure', () => {
   it('leaves a permission denial to the folder-access guidance dialog', () => {
     const openDialog = vi.fn();
 
-    surfaceSaveFailure(`${FS_PERMISSION_DENIED}: Failed to create save file: ...`, openDialog);
+    surfaceSaveFailure(`${FS_PERMISSION_DENIED}: Failed to create save file: ...`, openDialog, useProjectStore.getState());
 
     expect(openDialog).not.toHaveBeenCalled();
   });
@@ -129,7 +130,8 @@ describe('surfaceSaveFailure', () => {
 
     surfaceSaveFailure(
       `${FS_PATH_NOT_FOUND}: Cannot save to Z:\\surveys\\cave.stalx: the folder no longer exists or the drive is not connected`,
-      openDialog
+      openDialog,
+      useProjectStore.getState(),
     );
 
     const [dialog, data] = openDialog.mock.calls[0] as [string, { message: string }];
@@ -143,7 +145,8 @@ describe('surfaceSaveFailure', () => {
 
     surfaceSaveFailure(
       `${FS_PATH_TOO_LONG}: Failed to create save file: Failed to open database`,
-      openDialog
+      openDialog,
+      useProjectStore.getState(),
     );
 
     const [, data] = openDialog.mock.calls[0] as [string, { message: string }];

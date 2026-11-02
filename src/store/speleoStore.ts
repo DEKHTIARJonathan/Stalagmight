@@ -26,6 +26,7 @@ import {
 import { emailsMatch } from '../utils/email';
 import { useProjectStore } from './projectStore';
 import { useUIStore } from './uiStore';
+import { registerSpeleoStore } from './speleoStoreHandle';
 
 /** [#258] Which ambiguity the picker is resolving. Both share the mechanics and
     differ only in the verb the user is offered. */
@@ -359,7 +360,7 @@ export interface SpeleoLinkSnapshot {
   banner: SpeleoBanner | null;
 }
 
-interface SpeleoStore {
+export interface SpeleoStore {
   /** Backend session, or `null` before the first `setSession`/`refreshSession`. */
   session: SpeleoSession | null;
   /**
@@ -1850,6 +1851,11 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   dismissBanner: () => set({ banner: null }),
 }));
+
+// projectStore reaches this store through speleoStoreHandle instead of importing
+// it (this module imports projectStore; the two used to be a value-import cycle,
+// #576 D27-32(b)).
+registerSpeleoStore(() => useSpeleoStore.getState());
 
 /**
  * [#260] The dialogs that OWN a push/unlock failure while they are open: they

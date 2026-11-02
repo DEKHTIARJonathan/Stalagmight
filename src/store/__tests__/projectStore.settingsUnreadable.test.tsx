@@ -149,7 +149,7 @@ describe('a save refused over unread settings', () => {
     useProjectStore.setState({ integritySaveBlocked: true, openIntegrityDialog } as never);
 
     expect(classifySaveError(REFUSAL)).toBe('settings-unreadable');
-    surfaceSaveFailure(REFUSAL, openDialog);
+    surfaceSaveFailure(REFUSAL, openDialog, useProjectStore.getState());
 
     expect(openDialog).not.toHaveBeenCalled();
     expect(openIntegrityDialog).not.toHaveBeenCalled();

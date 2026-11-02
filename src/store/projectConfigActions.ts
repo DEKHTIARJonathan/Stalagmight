@@ -8,7 +8,8 @@ import type { CommandResult } from '../types/commands';
 import type { ConfigSaveReport } from '../types/ipc/ConfigSaveReport';
 import type { ConfigPatch } from '../types/ipc/ConfigPatch';
 import { configPatches } from '../utils/configPatches';
-import { emptyCommandResult, type ProjectStore } from './projectStore';
+import type { ProjectStore } from './projectStore';
+import { emptyCommandResult } from './commandResult';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
 /**

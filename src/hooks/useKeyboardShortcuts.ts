@@ -719,7 +719,7 @@ export function useKeyboardShortcuts() {
               if (result && !result.success) {
                 // A save blocked by integrity issues is not a "real" error -
                 // route to Review & Repair instead of an error window.
-                surfaceSaveFailure(result.error, openDialog);
+                surfaceSaveFailure(result.error, openDialog, useProjectStore.getState());
               }
             });
             maybeShowToast(action);

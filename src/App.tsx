@@ -765,7 +765,7 @@ function App() {
             onClick={() => {
               void (async () => {
                 const result = await saveProject().catch((e: unknown) => {
-                  surfaceSaveFailure(getErrorMessage(e, t('banners.autosave.genericFailure')), openDialog, {
+                  surfaceSaveFailure(getErrorMessage(e, t('banners.autosave.genericFailure')), openDialog, useProjectStore.getState(), {
                     skipIntegrityRouting: true,
                   });
                   return null;
@@ -773,7 +773,7 @@ function App() {
                 // A manual retry that still fails gets the full user-initiated
                 // treatment (permission guidance / Review & Repair / error dialog).
                 if (result && !result.success) {
-                  surfaceSaveFailure(result.error, openDialog);
+                  surfaceSaveFailure(result.error, openDialog, useProjectStore.getState());
                 }
               })();
             }}

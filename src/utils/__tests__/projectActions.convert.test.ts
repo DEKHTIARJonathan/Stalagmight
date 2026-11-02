@@ -134,6 +134,7 @@ describe('convertToUnmanagedStalx ordering', () => {
     expect(surfaceSaveFailureMock).toHaveBeenCalledWith(
       expect.stringContaining('detaching from SpeleoDB failed'),
       openDialog,
+      expect.anything(), // the integrity state, unused with skipIntegrityRouting
       expect.objectContaining({ skipIntegrityRouting: true }),
     );
   });

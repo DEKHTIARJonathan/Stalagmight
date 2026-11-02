@@ -86,7 +86,7 @@ describe('a refused save', () => {
     const showToast = vi.spyOn(useUIStore.getState(), 'showToast');
     const openDialog = vi.fn();
 
-    surfaceSaveFailure(SAVE_REFUSAL, openDialog);
+    surfaceSaveFailure(SAVE_REFUSAL, openDialog, useProjectStore.getState());
 
     expect(openDialog).not.toHaveBeenCalled();
     expect(useProjectStore.getState().integrityDialogOpen).toBe(false);

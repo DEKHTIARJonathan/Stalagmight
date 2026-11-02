@@ -16,7 +16,8 @@ import { captureDistanceOrigin, remapDistanceOrigin, type OriginCapture } from '
 import { useUIStore } from './uiStore';
 import { autosaveFailureMessage, surfaceSaveFailure, surfaceSaveWarnings } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
-import { useSpeleoStore } from './speleoStore';
+import { speleoState } from './speleoStoreHandle';
+import { emptyCommandResult } from './commandResult';
 import { useExportStore } from './exportStore';
 import { refuseMutationDuringCarry, refuseStaleCarryCommit, takeMoveCarryCommit, type MoveCarryCommit } from './moveCarry';
 import { runSerialized } from './mutationQueue';
@@ -142,19 +143,6 @@ interface CreateProjectOptions {
   savePath?: string;
   saveDirectory?: string;
   deferInitialSave?: boolean;
-}
-
-export function emptyCommandResult(
-  success: boolean,
-  error?: string | null,
-  warnings: CommandResult['warnings'] = []
-): CommandResult {
-  return {
-    success,
-    warnings,
-    error: success ? null : (error ?? null),
-    section_ids: [],
-  };
 }
 
 /**
@@ -664,7 +652,7 @@ function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): v
   // sub-mode; it does not clear either store's values.
   useExportStore.getState().reset();
   // #204: drop the SpeleoDB action-shell edit-state - no project is open.
-  useSpeleoStore.getState().clearLink();
+  speleoState()?.clearLink();
 }
 
 export const useProjectStore = create<ProjectStore>((set, get) => {
@@ -744,7 +732,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // also stops the copy being "merely unwound". Mirroring through `markDirty`
         // alone was a no-op here - an unwound copy is already dirty - which left the
         // discard prompts offering to throw away the edit that just landed.
-        useSpeleoStore.getState().markForwardEdit();
+        speleoState()?.markForwardEdit();
         // A command can RESOLVE (or surface) an integrity issue - e.g. removing a
         // drifted loop closure clears its banner entry - so re-check, mirroring
         // executeUndoRedo. refreshProjectState doesn't re-check, and the next save
@@ -768,7 +756,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // divergence prompt instead of the plain read-only notice - the dialog is
         // the feedback, and the backend already dropped its edit gate.
         if (isReverifyDivergedError(result.error)) {
-          useSpeleoStore.getState().notifyReverifyDivergence();
+          speleoState()?.notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
           // ...unless the caller shows it inline itself (`importSections`).
           if (!meta.readOnlyNoticeInline) {
@@ -856,7 +844,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         set({ isDirty: true });
         // #204: an undo/redo mutates the remote project too - mirror the backend
         // dirty bit into the SpeleoDB store (no-op for a local project).
-        useSpeleoStore.getState().markDirty();
+        speleoState()?.markDirty();
       } else {
         const failedStep = checkPartialFailure ? multiStepFailureStep(result.error) : null;
         // #576 NF-W2S-2: the single-step verbs have no step number to read, but the
@@ -869,7 +857,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // SpeleoDB copy un-pushed for every one of them. Mirroring only N > 1 left
           // the two dirty bits disagreeing (and both clean after a step-1 failure).
           set({ isDirty: true });
-          useSpeleoStore.getState().markDirty();
+          speleoState()?.markDirty();
         }
         if (failedStep !== null && failedStep > 1) {
           // A partial multi-step failure still renumbered: the steps BEFORE the
@@ -885,7 +873,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // on a read-only remote project shows one tidy toast, not "EDIT_DISABLED:…".
         // A #202 re-verify divergence routes to the divergence prompt instead.
         if (isReverifyDivergedError(result.error)) {
-          useSpeleoStore.getState().notifyReverifyDivergence();
+          speleoState()?.notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
           useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE(result.error), TOAST_KEYS.EDIT_DISABLED, 'warning');
         } else {
@@ -1164,7 +1152,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // local one is editable from the first frame (no read-only flash).
         // `path` identifies WHICH project this link is for, so a link left over
         // from the previously-open remote project is replaced rather than reused.
-        useSpeleoStore.getState().syncProjectLink(result.isRemote, path);
+        speleoState()?.syncProjectLink(result.isRemote, path);
 
         // Apply display settings to UI store (merge, don't overwrite)
         useUIStore.getState().applyDisplaySettings(result.displaySettings);
@@ -1200,11 +1188,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // remote project looking editable. Deliberately not awaited: for a remote
         // project this command also makes best-effort `get_project` /
         // `get_revisions` HTTP calls, and no open should wait on the network.
-        void useSpeleoStore.getState().refreshLinkStatus();
+        void speleoState()?.refreshLinkStatus();
         // Also refresh who we are, so the action button can tell our own held lock
         // from someone else's (otherwise a reopen-from-recents has no session and
         // every held lock reads as "locked by other").
-        void useSpeleoStore.getState().refreshSession();
+        void speleoState()?.refreshSession();
 
         // #27: shots whose stored `kind` this build could not read. The backend
         // already failed them closed to Reference (so nothing routes through a
@@ -1256,8 +1244,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // recovery poll on `link !== null`). Seeding remote is the pessimistic
           // direction - read-only, with a way out on screen - and the status reply
           // resolves it either way (a non-remote status seeds `local`).
-          if (useSpeleoStore.getState().projectLinkKind === 'unknown') {
-            useSpeleoStore.getState().syncProjectLink(true, path);
+          if (speleoState()?.projectLinkKind === 'unknown') {
+            speleoState()?.syncProjectLink(true, path);
           }
           useUIStore.getState().setView('single');
           get().resetLoading();
@@ -1278,7 +1266,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // the seeding side (`keepLocalCopy`, and now every route through
           // `finishOpen`) is correct on its own, offline included, and the
           // fail-closed fallback above covers the case nothing else resolved.
-          void useSpeleoStore.getState().refreshLinkStatus();
+          void speleoState()?.refreshLinkStatus();
           return { success: true };
         }
 
@@ -1413,7 +1401,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // `speleo_link` row until a later Publish - and saying so before the view
       // renders is what keeps the pessimistic default from leaving it read-only:
       // nothing on this path ever calls `refreshLinkStatus`.
-      useSpeleoStore.getState().syncProjectLink(false);
+      speleoState()?.syncProjectLink(false);
 
       // Apply display settings from backend (defaults for new project)
       useUIStore.getState().applyDisplaySettings(result.displaySettings);
@@ -1577,7 +1565,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // executeCommand; this keeps the two dirty flags in lockstep on every path.
       // [#303] Forward work, so it drops the chain pointer too - the import reached the
       // backend through `execute`, which already forgot it there.
-      useSpeleoStore.getState().markForwardEdit();
+      speleoState()?.markForwardEdit();
       return true;
     }
     // New project: the initial save is deferred, so the import is invisible until
@@ -1594,7 +1582,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Repair. The project stays dirty (close-guarded).
       console.error('[import] save after import failed:', e);
       set({ isDirty: true });
-      surfaceSaveFailure(e instanceof Error ? e.message : String(e), useUIStore.getState().openDialog, {
+      surfaceSaveFailure(e instanceof Error ? e.message : String(e), useUIStore.getState().openDialog, get(), {
         skipIntegrityRouting: true,
       });
       return false;
@@ -1607,6 +1595,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       surfaceSaveFailure(
         result.error ?? 'Failed to save the imported project.',
         useUIStore.getState().openDialog,
+        get(),
       );
       return false;
     }
