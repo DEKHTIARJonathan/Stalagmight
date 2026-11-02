@@ -7,8 +7,7 @@ import type maplibregl from 'maplibre-gl';
  * and any calls to getLayer/getSource/etc will throw.
  */
 export function hasLiveStyle(map: maplibregl.Map | null): boolean {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return !!(map && (map as any).style);
+  return !!(map && (map as unknown as { style?: unknown }).style);
 }
 
 /**

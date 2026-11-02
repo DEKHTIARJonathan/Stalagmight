@@ -219,7 +219,7 @@ export default function GlobalView() {
         }
       }
     }
-  }, [selectedSystemIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedSystemIds]); // eslint-disable-line react-hooks/exhaustive-deps -- one-way store-to-local sync: the local selection is only compared against
 
   // Check if there are any GPS-positioned projects (null check only, no sentinel)
   const gpsProjectCount = useMemo(
@@ -677,8 +677,8 @@ export default function GlobalView() {
   // header EXPANDS again when space is freed). Declared before the step-up effect.
   useLayoutEffect(() => {
     if (headerCondenseRef.current !== 0) setHeaderCondenseBoth(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    setHeaderCondenseBoth,
     headerMeasureWidth,
     showToolbarIcons,
     hasRecentItems,

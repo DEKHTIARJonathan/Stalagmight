@@ -1431,7 +1431,7 @@ export default function DmpNewImportDialog({
     sectionEditsRef.current.set(idx, newState);
     setEditStateForSection(idx);
     setEditState(newState);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- (re)initialise only when the active section changes; the other inputs are read at that moment
   }, [activeEditableSectionIndex]);
 
   // Keep sectionEditsRef in sync with editState changes (user edits to shots/metadata).
@@ -2040,7 +2040,7 @@ export default function DmpNewImportDialog({
     };
 
     init();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: the zero-datum import starts once (importStartedRef also guards a StrictMode re-run)
   }, []);
 
   // When restored from manual placement with an empty segment queue, transition to placing.
@@ -2103,7 +2103,7 @@ export default function DmpNewImportDialog({
     };
 
     doLateImport();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- phase machine: runs on entering 'placing' (or a retry), not whenever a callback it calls is re-created
   }, [phase, placingRetry]);
 
   // Handle 'done' phase (only reached when no sections to place)
@@ -2141,7 +2141,7 @@ export default function DmpNewImportDialog({
     // single-selected-section file, or a selection with nothing left to
     // suggest - so dropping it silenced the receipt for those imports too.
     onComplete(...completion());
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- phase machine: runs on entering 'done' and when the import or calculation settles
   }, [phase, isImporting, isCalculating]);
 
   // Build preview section for import side from original shots (no mode modifications).
@@ -2371,8 +2371,7 @@ export default function DmpNewImportDialog({
         suggestionActionInFlightRef.current = false;
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSuggestion, selectedMergePair, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual]);
+  }, [currentSuggestion, selectedMergePair, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual, clearFailure, refuseIncompleteShots]);
 
   // Skip handler (suggesting phase)
   const handleSkip = useCallback(async () => {
@@ -2889,8 +2888,7 @@ export default function DmpNewImportDialog({
       directPlacementsRef.current = placements;
       advanceSegmentQueue();
     });
-  // Mount only: `saved` is this instance's restore data.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only: `saved` is this instance's restore data
   }, []);
 
   /**

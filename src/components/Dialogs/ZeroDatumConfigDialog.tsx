@@ -632,7 +632,7 @@ export default function ZeroDatumConfigDialog({
     if (gpsInput.trim()) {
       handleGpsInputChange(gpsInput, depthReferenceValid ? depthReferenceParsed : 0);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-parse on a depth-reference change only; GPS keystrokes already parse in handleGpsInputChange
   }, [depthReferenceParsed, depthReferenceValid]);
 
   // Shot editing handlers. Each is one dispatch: the reducer derives the new

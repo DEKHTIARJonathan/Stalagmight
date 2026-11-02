@@ -73,6 +73,7 @@ TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo check --release --manifest-path src-tauri/Cargo.toml --workspace --features telemetry   # release profile: debug_assertions off (#541)
 pnpm tsc --noEmit
 pnpm lint:test-ids:test && pnpm lint:test-ids             # interactive UI test-ID contract
+pnpm lint:eslint:test && pnpm lint:eslint                 # ESLint: hook rules; warnings ratcheted (eslint-baseline.json)
 pnpm typecheck:agent                                      # agent-harness typecheck
 ./scripts/test-release.sh                                 # release tooling, driven in throwaway clones
 pnpm lint:rust-file-size:test && pnpm lint:rust-file-size # Rust file-size ratchet
@@ -197,7 +198,7 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [SPEC.md](docs/SPEC.md) | **Full specification** - data model, UI design, workflows, file formats, validation rules |
 | [Testing Guide](docs/TESTING.md) | Which tier a test belongs in, and the UI testability requirements |
 | [Testing Recipes](docs/testing-recipes.md) | Commands per tier, Playwright/agent-harness/Rust/vitest patterns, mock conventions, troubleshooting |
-| [Linting & Format Policy](docs/linting.md) | Rust clippy/rustfmt CI gates, the anti-AI-slop policy, the per-test-module `#[expect]` idiom, considered-but-deferred lints |
+| [Linting & Format Policy](docs/linting.md) | Rust clippy/rustfmt CI gates, the anti-AI-slop policy, the per-test-module `#[expect]` idiom, considered-but-deferred lints; the frontend ESLint gate and its warning ratchet |
 | [Toolchain](docs/toolchain.md) | The pnpm/node pins: corepack integrity hash, `allowBuilds` build-script approvals, lockfile version policy |
 | [Architecture](docs/architecture.md) | Workspace crate layout, state flow, command pattern, key files, Rust patterns |
 | [Project Structure](docs/project-structure.md) | Directory tree, tech stack |

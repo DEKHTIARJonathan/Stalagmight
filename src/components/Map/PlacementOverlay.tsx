@@ -58,6 +58,11 @@ export default function PlacementOverlay({
   const anchorIndex = Math.max(0, Math.min(alignStationIndex, stationPositions.length - 1));
   const anchorStation = stationPositions[anchorIndex];
 
+  // Subscribe to theme for reactive color updates (value triggers re-render).
+  // Above the early return: a hook after it would run on some renders and not
+  // others, which React rejects as a changed hook order (#576 D1).
+  useUIStore((s) => s.resolvedTheme);
+
   if (!cursorPosition || !anchorStation) {
     return null;
   }
@@ -83,8 +88,6 @@ export default function PlacementOverlay({
     })
     .join(' ');
 
-  // Subscribe to theme for reactive color updates (value triggers re-render)
-  useUIStore((s) => s.resolvedTheme);
   const snapColor = getThemeColor('--cc-snap-color');
   const crosshairColor = getThemeColor('--cc-compass-color');
   const stationStrokeColor = getThemeColor('--cc-stroke-color');

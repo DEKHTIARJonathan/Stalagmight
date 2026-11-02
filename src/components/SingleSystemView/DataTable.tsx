@@ -1146,7 +1146,7 @@ export default function DataTable({ sections }: DataTableProps) {
       }),
     // getShotWarnings reads shotWarningsMap (derived from `warnings`); rebuild when
     // warnings change so frozen/warning icons stay current.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- getShotWarnings is a fresh closure every render; `warnings` (what it reads) is listed instead
     [t, precision, selectedSectionId, editingBlocked, isShotFrozen, warnings, shotIndexAt, handleCycleShotKind, triggerResolveWarning]
   );
 

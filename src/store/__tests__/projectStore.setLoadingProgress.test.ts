@@ -23,8 +23,8 @@ beforeEach(() => {
 
 describe('projectStore.setLoadingProgress - loadingId normalization (#486)', () => {
   it('coerces a plain-number loadingId (as createProject receives from invoke()) to bigint', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- simulating the untyped JSON invoke() result
-    useProjectStore.getState().setLoadingProgress({ loadingId: 3 as any });
+    // Simulating the untyped JSON invoke() result: a plain number, not a bigint.
+    useProjectStore.getState().setLoadingProgress({ loadingId: 3 as unknown as bigint });
 
     expect(useProjectStore.getState().loading.loadingId).toBe(3n);
     expect(typeof useProjectStore.getState().loading.loadingId).toBe('bigint');
@@ -41,12 +41,12 @@ describe('projectStore.setLoadingProgress - loadingId normalization (#486)', () 
     // practice) writes first, then a later progress write with the same
     // numeric id must read back as the identical bigint, not fail an
     // `===` compare a caller might run against it.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- simulating the untyped JSON invoke() result
-    useProjectStore.getState().setLoadingProgress({ loadingId: 3 as any });
+    // Simulating the untyped JSON invoke() result: a plain number, not a bigint.
+    useProjectStore.getState().setLoadingProgress({ loadingId: 3 as unknown as bigint });
     const afterResult = useProjectStore.getState().loading.loadingId;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- simulating a raw JSON event payload
-    useProjectStore.getState().setLoadingProgress({ loadingId: 3 as any, overallProgress: 55 });
+    // Simulating a raw JSON event payload: a plain number, not a bigint.
+    useProjectStore.getState().setLoadingProgress({ loadingId: 3 as unknown as bigint, overallProgress: 55 });
 
     expect(useProjectStore.getState().loading.loadingId).toBe(afterResult);
     expect(useProjectStore.getState().loading.overallProgress).toBe(55);

@@ -115,7 +115,6 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
       {svg && (
         <div
           className="w-full h-full [&>svg]:w-full [&>svg]:h-full"
-          // eslint-disable-next-line react/no-danger
           dangerouslySetInnerHTML={{ __html: svg }}
         />
       )}

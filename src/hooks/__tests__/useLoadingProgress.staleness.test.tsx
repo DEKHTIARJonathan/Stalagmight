@@ -52,8 +52,8 @@ function progressPayload(overrides: Partial<LoadingProgress>): LoadingProgress {
 /** Fire a `loading-progress` event, mimicking Tauri's JSON decode (a plain number id). */
 async function emitProgress(loadingId: number, overrides: Partial<LoadingProgress> = {}) {
   for (const cb of [...listeners]) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- simulating the untyped JSON wire payload
-    await cb({ payload: progressPayload({ loadingId: loadingId as any, ...overrides }) });
+    // Simulating the untyped JSON wire payload: a plain number, not a bigint.
+    await cb({ payload: progressPayload({ loadingId: loadingId as unknown as bigint, ...overrides }) });
   }
 }
 

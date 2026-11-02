@@ -1,8 +1,9 @@
-# Rust Linting & Formatting Policy
+# Linting & Formatting Policy
 
 This repo runs a deliberately strict Rust lint + format policy whose primary job
 is to **catch AI-generated-code smells** before they land. Both gates run in the
-CI `check` job and must be green to merge.
+CI `check` job and must be green to merge. The frontend's ESLint gate is at the
+end: [Frontend: ESLint](#frontend-eslint).
 
 | Gate | Command | Config |
 |------|---------|--------|
@@ -130,3 +131,58 @@ clean tree.
 | `too_many_arguments` (deny), `cognitive_complexity`, `too-many-lines-threshold` | - | Contradict deliberate `allow`s for the complex geometry/numerical code. |
 | `transmute_ptr_to_ref`, `cast_ptr_alignment` | - | Redundant: `unsafe_code = "deny"` already blocks anything that needs `unsafe`. |
 | `cargo_common_metadata`, `multiple_crate_versions` | 15 / 44 | Matter for *published* crates; this is a private app binary with a large transitive tree. |
+
+## Frontend: ESLint
+
+The TypeScript side has one linter gate, ESLint, added in #576 (D1). Before it
+there was no JS/TS linter at all, yet the tree carried ~40 `eslint-disable`
+comments for rules that had never run - the same "policy that isn't a gate"
+rot as the clippy story above.
+
+| Piece | Where |
+|-------|-------|
+| Config | `eslint.config.js` (flat config) |
+| Gate | `pnpm lint:eslint` (`scripts/check-eslint.mjs`), fixture test `pnpm lint:eslint:test` |
+| Warning baseline | `eslint-baseline.json` (generated: `pnpm lint:eslint --update`) |
+| CI | `check` job, step "ESLint (hook rules, ratcheted warnings)" |
+
+**Scope and rules.** `src/**/*.{ts,tsx}` (tests included; the generated IPC
+types are ignored), parsed with typescript-eslint's parser and **no type-aware
+rules** (no `parserOptions.project`, so a run needs no TypeScript program).
+Two rules, from `eslint-plugin-react-hooks`:
+
+- `react-hooks/rules-of-hooks` - **error**. A hook behind `||`, a condition or
+  an early return runs on some renders and not others, and React throws
+  "Rendered more hooks than during the previous render". The first run found
+  one (`PlacementOverlay`, a store hook after an early return).
+- `react-hooks/exhaustive-deps` - **warn, ratcheted**. A missing effect/memo
+  dependency can be a stale-closure bug, but the tree carried ~100 findings
+  when the rule landed, so they are frozen rather than fixed in one sweep.
+
+`linterOptions.reportUnusedDisableDirectives` is `error`, so a directive that
+suppresses nothing, or names a rule that is not loaded (`react/...`,
+`jsx-a11y/...`), fails the gate instead of rotting.
+
+**The ratchet.** `eslint-baseline.json` records the warning count per rule and
+per file. The gate fails when a count grows, when an unrecorded file or rule
+warns, and - so the count can only go down - when a count drops below its row:
+fixing a warning means running `pnpm lint:eslint --update` and committing the
+smaller baseline. Errors are never baselined. Raising a number is a
+review-visible decision; fix the warning unless there is a reason not to.
+
+**Disabling a rule on one line** needs a reason after ` -- `:
+
+```ts
+// eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: hash the file this dialog opened with, once
+```
+
+Every kept `react-hooks/exhaustive-deps` disable carries one. The review that
+added the gate deleted the directives that suppressed nothing or named rules
+that are not loaded, and fixed the ones whose missing dependency was a stable
+identity (a `useCallback(..., [])` setter, a callback whose own inputs were
+already listed).
+
+**Extending it.** Same rule as for clippy: measure on the real tree first
+(`pnpm exec eslint src --rule '{"<rule>": "warn"}' -f json`), prefer surgical
+rules, and land a new warn-level rule with its counts in the baseline rather
+than with a sweep of unrelated fixes.

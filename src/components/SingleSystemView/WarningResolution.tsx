@@ -485,7 +485,7 @@ export function WarningResolution({
     // stepping). Deliberately NOT keyed on `options`/`shot` object identity: a
     // background project refresh rebuilds those references and would otherwise
     // wipe the user's in-progress manual edit and reset their selection.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-seed only when the resolved warning changes (see above)
   }, [warning.sectionId, warning.shotId, warning.code]);
 
   // Strict parse of a manual field (NaN when empty/non-numeric/garbage). Used
@@ -571,7 +571,6 @@ export function WarningResolution({
       stations: [ghostEnd],
       color: PREVIEW_COLOR,
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, manual, shot, options, activeStations, negativeLrud, warning.sectionId, warning.shotIndex]);
 
   // Push the preview to the map; clear it when leaving the resolution view.
@@ -595,7 +594,7 @@ export function WarningResolution({
       return exceedsSlopeLength(num('length'), shot.depth_in, shot.depth_out);
     }
     return false;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- num() reads `manual`, which is listed
   }, [selected, manual, shot, options]);
 
   /**

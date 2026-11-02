@@ -53,7 +53,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
       }
       setHashChecked(true);
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: hash the file this dialog opened with, once (the store actions are stable)
   }, []);
 
   const fileName = useMemo(() => {

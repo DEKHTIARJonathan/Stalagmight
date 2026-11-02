@@ -281,7 +281,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
       setSelection({ type: 'shot', sectionId: activeWarning.sectionId, shotId: activeWarning.shotId });
       triggerCenterOnShot(activeWarning.sectionId, activeWarning.shotId);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the warning identity so it re-fires as the queue steps, not on every refresh
   }, [activeKey]);
 
   // Open the resolve flow when requested from outside (e.g. clicking the warning
@@ -523,7 +523,6 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                 operable (role=button + Enter/Space) to preserve select-by-keyboard.
                 Either way it stays normal flow so the text wraps around the
                 floated action button. */}
-            {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
             <div
               {...(showPills
                 ? {}

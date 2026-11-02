@@ -259,7 +259,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         // Non-fatal: import without provenance rather than blocking on it.
       }
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: hash the file this dialog opened with, once (calculateFileHash is a stable store action)
   }, []);
 
   const fileName = useMemo(() => {

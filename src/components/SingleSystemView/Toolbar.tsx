@@ -342,8 +342,8 @@ export default function Toolbar({
   // the toolbar EXPANDS again when space is freed). Runs before the step-up effect.
   useLayoutEffect(() => {
     if (condenseRef.current !== 0) setCondenseBoth(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    setCondenseBoth,
     headerWidth,
     appMode,
     dataTableFullScreen,
