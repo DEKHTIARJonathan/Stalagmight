@@ -935,16 +935,21 @@ impl Database {
     }
 
     /// Create a numbered backup: file.stalx.backup, .backup.1, .backup.2, etc.
+    ///
+    /// [#576 NF-W3-3] With the project's rollback journal, when it has one: a
+    /// project frozen mid-write holds pages its journal undoes, so the main
+    /// file copied alone is torn, while the pair opens as the last committed
+    /// state (the restore list never offers the journal on its own).
     pub(super) fn create_numbered_backup(path: &Path) -> Result<std::path::PathBuf> {
         let base = path.with_extension("stalx.backup");
         if !base.exists() {
-            std::fs::copy(path, &base)?;
+            copy_with_journal(path, &base)?;
             return Ok(base);
         }
         for i in 1..100 {
             let numbered = path.with_extension(format!("stalx.backup.{i}"));
             if !numbered.exists() {
-                std::fs::copy(path, &numbered)?;
+                copy_with_journal(path, &numbered)?;
                 return Ok(numbered);
             }
         }

@@ -356,6 +356,32 @@ fn repair_rewrites_beside_the_file_and_survives_a_leftover_staging_file() {
     assert!(!staging.exists(), "no staging file left behind");
 }
 
+/// [#576 NF-W3-3] Repair's numbered backup of a project frozen mid-write keeps
+/// the project's rollback journal with it, so the backup reads as the project's
+/// last committed state. Copied alone, the backup held the torn pages.
+#[test]
+fn repair_keeps_its_backup_with_the_projects_journal() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("old.stalx");
+    project_file(&source, "Original");
+    let project = temp.path().join("CaveA.stalx");
+    torn_copy(&source, &project);
+    let journal_before = std::fs::read(journal_of(&project)).unwrap();
+
+    let (backup, ok) = Database::attempt_repair(&project).unwrap();
+    let backup_journal = std::fs::read(journal_of(&backup)).ok();
+    println!(
+        "repair ok={ok}; backup {:?} journal kept: {}; backup reads: {}; project reads: {}",
+        backup.file_name().unwrap(),
+        backup_journal.as_deref() == Some(journal_before.as_slice()),
+        project_name(&backup),
+        project_name(&project)
+    );
+    assert!(backup_journal.as_deref() == Some(journal_before.as_slice()));
+    assert_eq!(project_name(&backup), "Original");
+    assert_eq!(project_name(&project), "Original");
+}
+
 /// [#576 B27(f)] A source-level tripwire, like the push snapshot's: Repair must
 /// never fall back to a plain `VACUUM`.
 #[test]
