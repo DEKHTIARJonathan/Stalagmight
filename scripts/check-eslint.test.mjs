@@ -251,6 +251,83 @@ await test('an unused directive is an error in the e2e trees too', async () => {
   assert.equal(msgs[0].severity, 2);
 });
 
+// --- stalagmight/no-render-ref-write (#576 D17) ----------------------------------
+
+const REF_RULE = 'stalagmight/no-render-ref-write';
+const refHits = async (rel, code) => ruleHits(await lint(rel, code), REF_RULE);
+
+await test('no-render-ref-write: a render-body mirror in a component is an error', async () => {
+  const hits = await refHits(SRC, `
+    import { useRef } from 'react';
+    export function Probe({ value }: { value: number }) {
+      const valueRef = useRef(value);
+      valueRef.current = value;
+      return <span>{valueRef.current}</span>;
+    }
+  `);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].severity, 2);
+  assert.match(hits[0].message, /valueRef\.current.*Probe.*useLatest/);
+});
+
+await test('no-render-ref-write: hooks, arrow components, memo/forwardRef wrappers and nested render-time blocks are covered', async () => {
+  const hits = await refHits(SRC, `
+    import { forwardRef, memo, useMemo, useRef } from 'react';
+    export function useThing(v: number) {
+      const r = useRef(v);
+      r.current = v;
+      return r;
+    }
+    export const Arrow = ({ v }: { v: number }) => {
+      const r = useRef(v);
+      if (v > 0) { r.current = v; }
+      return null;
+    };
+    export const Memoed = memo(function Inner({ v }: { v: number }) {
+      const r = useRef(v);
+      r.current = v;
+      return null;
+    });
+    export const Forwarded = forwardRef<HTMLDivElement, { v: number }>(({ v }, ref) => {
+      const r = useRef(v);
+      r.current = v;
+      return <div ref={ref} />;
+    });
+    export function InMemo({ v }: { v: number }) {
+      const r = useRef(0);
+      useMemo(() => { r.current = v; }, [v]);
+      return null;
+    }
+  `);
+  assert.equal(hits.length, 5, JSON.stringify(hits));
+});
+
+await test('no-render-ref-write: writes in effects, handlers and plain functions, and lazy init, are clean', async () => {
+  const hits = await refHits(SRC, `
+    import { useEffect, useRef } from 'react';
+    export function Probe({ value }: { value: number }) {
+      const a = useRef(value);
+      const b = useRef<number[] | null>(null);
+      if (b.current === null) b.current = [];
+      const c = useRef<Map<string, number> | null>(null);
+      c.current ??= new Map();
+      useEffect(() => { a.current = value; });
+      const onClick = () => { a.current = 0; };
+      return <button onClick={onClick} />;
+    }
+    export function helper(r: { current: number }) {
+      r.current = 1;
+    }
+  `);
+  assert.deepEqual(hits, []);
+});
+
+await test('no-render-ref-write: src only (the e2e trees render no React)', async () => {
+  const code = 'export function Probe(r: { current: number }) { r.current = 1; }\n';
+  assert.equal((await refHits(SRC, code)).length, 1);
+  assert.deepEqual(await refHits(PW, code), []);
+});
+
 if (failures.length > 0) {
   console.error(`\n✗ check-eslint fixtures: ${failures.length} failed, ${passed} passed\n`);
   for (const f of failures) console.error(`  ${f}`);

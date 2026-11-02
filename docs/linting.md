@@ -171,6 +171,18 @@ found three findings there, fixed when it landed). In `e2e-playwright/` and
 found 236 `any` across 22 Playwright specs and 25 unused names, which is test
 debt to pay down file by file, not a reason to keep the gate off those trees.
 
+- **`stalagmight/no-render-ref-write`** - error, `src/` only; the repo's own
+  rule (`scripts/eslint/`, registered in `eslint.config.js` as the
+  `stalagmight` plugin). No `ref.current = ...` while a component or hook
+  renders: a render React throws away (an error-boundary retry, a suspended
+  or interrupted transition) would leave its value behind. Mirror a latest
+  value with `useLatest(value)` (`src/hooks/useLatest.ts`, which publishes it
+  in a layout effect), or write the ref in an effect or handler. React's
+  documented lazy init (`if (ref.current === null) ref.current = ...`, `??=`)
+  is allowed. Added in #576 (D17), which migrated the 42 writes it found.
+  `exhaustive-deps` does not know a `useLatest` ref is stable, so it asks for
+  it in dependency arrays; listing it is harmless (the object never changes).
+
 `linterOptions.reportUnusedDisableDirectives` is `error`, so a directive that
 suppresses nothing, or names a rule that is not loaded (`react/...`,
 `jsx-a11y/...`), fails the gate instead of rotting.

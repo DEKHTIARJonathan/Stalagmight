@@ -10,6 +10,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react';
+import { useLatest } from '../../../hooks/useLatest';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTouchContextMenu } from '../../../hooks/useTouchContextMenu';
 import './SpreadsheetGrid.css';
@@ -420,8 +421,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const rect = useMemo(() => selectionRect(selection, colIndexOf), [selection, colIndexOf]);
 
   // Host name-box feed: selection dims + active cell, on mount and every change.
-  const onSelectionChangeRef = useRef(onSelectionChange);
-  onSelectionChangeRef.current = onSelectionChange;
+  const onSelectionChangeRef = useLatest(onSelectionChange);
   useEffect(() => {
     onSelectionChangeRef.current?.({
       rows: rect.r1 - rect.r0 + 1,
@@ -429,7 +429,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       activeRow: selection.active.row,
       activeColKey: selection.active.colKey,
     });
-  }, [rect, selection.active.row, selection.active.colKey]);
+  }, [rect, selection.active.row, selection.active.colKey, onSelectionChangeRef]);
   const focusColIdx = colIndexOf(selection.focus.colKey);
   const activeColIdx = colIndexOf(selection.active.colKey);
   const multiCell = !rectIsSingleCell(rect);
@@ -1001,10 +1001,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // so each Ctrl+V also arms a one-shot fallback: if no paste event arrives
   // shortly after the keystroke, read the clipboard - and failing that, paste
   // the internal copy stash.
-  const pasteTextRef = useRef(pasteText);
-  pasteTextRef.current = pasteText;
-  const editingRef = useRef<EditState | null>(editing);
-  editingRef.current = editing;
+  const pasteTextRef = useLatest(pasteText);
+  const editingRef = useLatest<EditState | null>(editing);
   const lastPasteEventAt = useRef(0); // set by the container's onPaste handler
   const suppressNativePasteUntil = useRef(0); // fallback ran → swallow a late event
   const pasteFallbackTimer = useRef<number | undefined>(undefined);
@@ -1035,7 +1033,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         }
       })();
     }, 150);
-  }, []);
+  }, [editingRef, pasteTextRef]);
 
   // Copy-fill the selection block across `preview`'s extension: tile the RAW
   // source values (modular repeat, fill order away from the source). NO series
@@ -1391,8 +1389,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [rect],
   );
 
-  const onRowHoverRef = useRef(onRowHover);
-  onRowHoverRef.current = onRowHover;
+  const onRowHoverRef = useLatest(onRowHover);
   const hoverRowRef = useRef<number | null>(null);
   const onCellMouseEnter = useCallback(
     (rowIdx: number, colIdx: number) => {
@@ -1417,7 +1414,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (key === undefined) return;
       setSelection((prev) => ({ anchor: prev.anchor, focus: { row: rowIdx, colKey: key }, active: prev.active }));
     },
-    [colKeys, rect],
+    [colKeys, rect, onRowHoverRef],
   );
 
   const startResize = useCallback((e: ReactMouseEvent, key: string, startW: number) => {
@@ -1546,7 +1543,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       }
       if (rowDrag.current?.mode === 'select') selectRowRange(rowDrag.current.anchorRow, rowIdx);
     },
-    [selectRowRange],
+    [selectRowRange, onRowHoverRef],
   );
 
   // Apply a row move via the host callback, then keep the moved block selected.
@@ -1735,10 +1732,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     autoScrollRAF.current = requestAnimationFrame(autoScrollTick);
   }, [extendToRow, rowCount]);
 
-  const onMoveRef = useRef<(e: MouseEvent) => void>(() => {});
-  const onUpRef = useRef<() => void>(() => {});
-  const cancelDragRef = useRef<() => void>(() => {});
-  onMoveRef.current = (e) => {
+  // The window listeners below bind once and call these three through refs.
+  // useLatest publishes each render's handlers when that render commits
+  // (#576 D17), so onMove may name onUpRef/cancelDragRef before they are declared:
+  // it only runs from a listener, after all three exist.
+  const onMoveRef = useLatest((e: MouseEvent) => {
     // A mouseup we missed (released outside the window) leaves a flag latched; a
     // later buttonless move must abort the drag rather than keep extending.
     const anyDrag =
@@ -1827,7 +1825,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         if (nearEdge && autoScrollRAF.current === 0) autoScrollRAF.current = requestAnimationFrame(autoScrollTick);
       }
     }
-  };
+  });
   // Reset all drag flags + transient drag state WITHOUT committing anything.
   const resetDrag = () => {
     colDrag.current = null;
@@ -1853,11 +1851,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // flag: the in-progress value is already in the live map, and every commit
   // spreads that whole map, so a later resize of an unrelated column would
   // otherwise persist this one too.
-  cancelDragRef.current = () => {
+  const cancelDragRef = useLatest(() => {
     if (resizing.current) revertWidths();
     resetDrag();
-  };
-  onUpRef.current = () => {
+  });
+  const onUpRef = useLatest(() => {
     if (colDrag.current?.mode === 'move' && colMoveDrop) {
       reorderColumns(colDrag.current.fromC0, colDrag.current.fromC1, colMoveDrop.index);
     }
@@ -1871,7 +1869,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     // matches the map the host already has, so a bare click is not a save.
     if (resizing.current) commitWidths(widthsRef.current);
     resetDrag();
-  };
+  });
   useEffect(() => {
     const mv = (e: MouseEvent) => onMoveRef.current(e);
     const up = () => onUpRef.current();
@@ -1884,7 +1882,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       window.removeEventListener('mouseup', up);
       window.removeEventListener('blur', cancel);
     };
-  }, []);
+  }, [cancelDragRef, onMoveRef, onUpRef]);
 
   const onCellContextMenu = useCallback(
     (rowIdx: number, c: number, e: ReactMouseEvent) => {

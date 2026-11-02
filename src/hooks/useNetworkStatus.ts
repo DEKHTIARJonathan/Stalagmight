@@ -1,4 +1,5 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useCallback } from 'react';
+import { useLatest } from './useLatest';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invokeIpc } from '../utils/ipc';
 import { useNetworkStore } from '../store/networkStore';
@@ -21,8 +22,7 @@ export function useNetworkStatus() {
   const triggerTileReload = useNetworkStore((s) => s.triggerTileReload);
 
   // Ref to avoid stale closures in event handlers
-  const isOnlineRef = useRef(isOnline);
-  isOnlineRef.current = isOnline;
+  const isOnlineRef = useLatest(isOnline);
 
   const goOnline = useCallback(() => {
     if (!isOnlineRef.current) {
@@ -30,14 +30,14 @@ export function useNetworkStatus() {
       triggerTileReload();
       console.info('[useNetworkStatus] Online - tiles reloading');
     }
-  }, [setOnline, triggerTileReload]);
+  }, [setOnline, triggerTileReload, isOnlineRef]);
 
   const goOffline = useCallback(() => {
     if (isOnlineRef.current) {
       setOnline(false);
       console.info('[useNetworkStatus] Offline');
     }
-  }, [setOnline]);
+  }, [setOnline, isOnlineRef]);
 
   // Listen for Tauri tile transport events + browser online/offline
   useEffect(() => {

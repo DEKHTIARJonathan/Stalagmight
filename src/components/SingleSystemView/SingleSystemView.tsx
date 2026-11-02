@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { useOnboardingStep } from '../../hooks/useOnboardingStep';
 import { useProject } from '../../hooks/useProject';
@@ -295,21 +296,16 @@ export default function SingleSystemView() {
   // Read through a ref rather than deps: these props feed useResizeHandle, which
   // re-binds its listeners whenever their identity changes, and the display size
   // moves ~60x/s during an unsqueezed drag.
-  const squeezeRef = useRef({
-    sections: { display: 0, user: 0 },
-    detail: { display: 0, user: 0 },
-    data: { display: 0, user: 0 },
-  });
-  squeezeRef.current = {
+  const squeezeRef = useLatest({
     sections: { display: sectionsDisplayWidth, user: sectionsPanelWidth },
     detail: { display: detailDisplayWidth, user: detailPanelWidth },
     data: { display: dataDisplayHeight, user: dataTableHeight },
-  };
+  });
   /** The size to write for `size`, clamped to what this drag could reach on screen. */
   const resolveSize = useCallback((axis: 'sections' | 'detail' | 'data', size: number) => {
     const { display, user } = squeezeRef.current[axis];
     return resolveResize(display, user, size);
-  }, []);
+  }, [squeezeRef]);
 
   // Stable onResizeEnd handlers per Dock so handleProps identity stays stable
   // through a drag (these props feed useResizeHandle, which re-binds listeners
@@ -453,8 +449,7 @@ export default function SingleSystemView() {
   // single-click no longer moving the map. Lives here (not in SectionsPanel,
   // which unmounts on collapse) so the timer survives the panel mount/unmount.
   const prevFocusedRef = useRef<SectionId | null>(null);
-  const focusedSectionIdRef = useRef<SectionId | null>(focusedSectionId);
-  focusedSectionIdRef.current = focusedSectionId;
+  const focusedSectionIdRef = useLatest<SectionId | null>(focusedSectionId);
   const refitTimerRef = useRef<number | null>(null);
   useEffect(() => {
     const prev = prevFocusedRef.current;
@@ -482,7 +477,7 @@ export default function SingleSystemView() {
         triggerFitToBounds();
       }
     }, SECTION_FOCUS_REFIT_DELAY_MS);
-  }, [focusedSectionId, triggerZoomToSection, triggerFitToBounds]);
+  }, [focusedSectionId, triggerZoomToSection, triggerFitToBounds, focusedSectionIdRef]);
   // The effect above no longer returns a per-change cleanup (so a follow can't
   // cancel an in-flight entry zoom); clear any pending re-fit on unmount instead.
   useEffect(

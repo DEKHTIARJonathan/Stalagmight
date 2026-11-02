@@ -26,6 +26,7 @@
  * moment as its text is unreliably announced.
  */
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -362,8 +363,7 @@ export function ToastStack() {
     setPaused(hoverPausedRef.current || focusPausedRef.current);
   }, []);
 
-  const reducedMotionRef = useRef(reducedMotion);
-  reducedMotionRef.current = reducedMotion;
+  const reducedMotionRef = useLatest(reducedMotion);
 
   const clocks = useRef(new Map<number, Clock>());
   /** The stack container, so the tick can re-check whether it is really hovered. */
@@ -580,7 +580,7 @@ export function ToastStack() {
       if (dirty) bump();
     }, TICK_MS);
     return () => window.clearInterval(handle);
-  }, [hasToasts, endFocus]);
+  }, [hasToasts, endFocus, reducedMotionRef]);
 
 
   // The entrance. A toast renders its first frame below its slot at opacity 0,

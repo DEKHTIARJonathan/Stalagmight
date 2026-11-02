@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import { useTranslation } from 'react-i18next';
 import { type Section, type Shot, type ShotData, type Station, type StationRef } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
@@ -1435,10 +1436,8 @@ export default function DataTable({ sections }: DataTableProps) {
   // only when it actually changes (toolbar wrap), guarded against sub-pixel churn so
   // a drag doesn't re-render the table via this state.
   const [chromeOffset, setChromeOffset] = useState(CHROME_OFFSET_DEFAULT);
-  const dataTableHeightRef = useRef(dataTableHeight);
-  dataTableHeightRef.current = dataTableHeight;
-  const dataTableFullScreenRef = useRef(dataTableFullScreen);
-  dataTableFullScreenRef.current = dataTableFullScreen;
+  const dataTableHeightRef = useLatest(dataTableHeight);
+  const dataTableFullScreenRef = useLatest(dataTableFullScreen);
   useEffect(() => {
     const el = gridBodyRef.current;
     if (!el) return undefined;
@@ -1455,7 +1454,7 @@ export default function DataTable({ sections }: DataTableProps) {
     ro.observe(el);
     measure();
     return () => ro.disconnect();
-  }, []);
+  }, [dataTableFullScreenRef, dataTableHeightRef]);
   // Entering/leaving fullscreen changes the body height drastically; measure it
   // synchronously so the fullscreen grid is sized in the same paint (no trailing).
   useLayoutEffect(() => {

@@ -1,5 +1,7 @@
 import { usePreviewSize } from './usePreviewSize';
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useLatest } from '../../hooks/useLatest';
+import { useLiveShots } from './dmpWizard/useLiveShots';
 import { useTranslation } from 'react-i18next';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
@@ -885,24 +887,16 @@ export default function DmpNewImportDialog({
 
   // Section editing state
   const [editState, setEditState] = useState<SectionEditState | null>(null);
-  /** The live edit state, for actions that must not read a captured copy - see
-   *  refuseIncompleteShots. */
-  const editStateRef = useRef<SectionEditState | null>(null);
-  editStateRef.current = editState;
-  /** Rows a mutator produced earlier in the CURRENT event, before React has
-   *  rendered them. Cleared on every render - by then `editStateRef` holds them
-   *  - so a second row change in one gesture still counts from the first's
-   *  result rather than from the array on screen. */
-  const pendingShotsRef = useRef<EditableShot[] | null>(null);
-  pendingShotsRef.current = null;
+  /** The live edit state and rows, for actions that must not read a captured
+   *  copy - see refuseIncompleteShots and applyShotEdit. */
+  const { editStateRef, currentShots, stageShots } = useLiveShots(editState);
   // Tracks which import section index the current editState was loaded for.
   // Used to prevent the sync effect from writing stale editState to the wrong section
   // when currentSuggestion changes before editState catches up.
   const [editStateForSection, setEditStateForSection] = useState<number | null>(null);
   /** Which section `editStateRef` currently holds, as a ref: the gate below has
    *  to pair the two, and a captured pairing is the stale-closure bug again. */
-  const editStateForSectionRef = useRef<number | null>(null);
-  editStateForSectionRef.current = editStateForSection;
+  const editStateForSectionRef = useLatest<number | null>(editStateForSection);
   const sectionEditsRef = useRef<Map<number, SectionEditState>>(
     saved ? new Map(saved.sectionEdits) : new Map()
   );
@@ -1034,14 +1028,12 @@ export default function DmpNewImportDialog({
   const transitionToPlacingInFlightRef = useRef(false);
 
   // Refs to avoid stale closures
-  const connectionsRef = useRef(connections);
-  connectionsRef.current = connections;
-  const skippedIndicesRef = useRef(skippedIndices);
-  skippedIndicesRef.current = skippedIndices;
+  const connectionsRef = useLatest(connections);
+  const skippedIndicesRef = useLatest(skippedIndices);
 
   const chooseSegmentAnchorSection = useCallback((segment: number[]): number => {
     return segment.find((idx) => skippedIndicesRef.current.has(idx)) ?? segment[0]!;
-  }, []);
+  }, [skippedIndicesRef]);
 
   const selectedIndices = useMemo(
     () => Array.from(selectionConfig.selectedIndices).sort((a, b) => a - b),
@@ -1612,13 +1604,6 @@ export default function DmpNewImportDialog({
     [derivedKindIndices]
   );
 
-  /** The rows as they stand NOW - including a change made earlier in this same
-   *  event, which React has not rendered yet. */
-  const currentShots = useCallback(
-    (): EditableShot[] => pendingShotsRef.current ?? editStateRef.current?.shots ?? [],
-    []
-  );
-
   /**
    * The one path a row-count change takes.
    *
@@ -1635,7 +1620,7 @@ export default function DmpNewImportDialog({
   const applyShotEdit = useCallback(
     (arrayIndex: number, delta: number, mutate: (shots: EditableShot[]) => EditableShot[]) => {
       const before = currentShots();
-      pendingShotsRef.current = mutate(before);
+      stageShots(mutate(before));
       setEditState((prev) => (prev ? { ...prev, shots: mutate(prev.shots) } : prev));
 
       const anchor = segmentAnchorRef.current;
@@ -1650,7 +1635,7 @@ export default function DmpNewImportDialog({
         commitSegmentAnchor({ sectionIndex: anchor.sectionIndex, stationIndex });
       }
     },
-    [activeEditableSectionIndex, commitSegmentAnchor, currentShots]
+    [activeEditableSectionIndex, commitSegmentAnchor, currentShots, stageShots]
   );
 
   /** Blank rows to insert, each with its own temp id. */
@@ -1779,7 +1764,7 @@ export default function DmpNewImportDialog({
         debugLog('[dmp-temporal-rerank] distance fetch failed', origin, e);
       }
     }));
-  }, []);
+  }, [connectionsRef]);
 
   const pickFromPool = useCallback(async () => {
     const connected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
@@ -1835,7 +1820,7 @@ export default function DmpNewImportDialog({
         .slice(0, 4)
     );
     return true;
-  }, [computeDefaultMergeOffset, dmpFile.sections, ensureTemporalDistances]);
+  }, [computeDefaultMergeOffset, dmpFile.sections, ensureTemporalDistances, connectionsRef, skippedIndicesRef]);
 
   /** A section that reached the emit loop and produced nothing would otherwise
    *  disappear between the wizard and the map: it is not in the `unreachable`
@@ -1929,7 +1914,7 @@ export default function DmpNewImportDialog({
       transitionToPlacingInFlightRef.current = false;
       suggestionActionInFlightRef.current = false;
     }
-  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, importBatch, completion, reportEmptySections, resolvedTheme]);
+  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, importBatch, completion, reportEmptySections, resolvedTheme, connectionsRef, skippedIndicesRef]);
 
   /**
    * Ask the backend where every remaining section might connect, then present
@@ -2287,7 +2272,7 @@ export default function DmpNewImportDialog({
       'warning',
     );
     return true;
-  }, [selectedIndices, t]);
+  }, [selectedIndices, t, editStateForSectionRef, editStateRef]);
 
   const handleConfirm = useCallback(async () => {
     if (!currentSuggestion) return;
@@ -2371,7 +2356,7 @@ export default function DmpNewImportDialog({
         suggestionActionInFlightRef.current = false;
       }
     }
-  }, [currentSuggestion, selectedMergePair, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual, clearFailure, refuseIncompleteShots]);
+  }, [currentSuggestion, selectedMergePair, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual, clearFailure, refuseIncompleteShots, connectionsRef, skippedIndicesRef]);
 
   // Skip handler (suggesting phase)
   const handleSkip = useCallback(async () => {
@@ -2422,7 +2407,7 @@ export default function DmpNewImportDialog({
         suggestionActionInFlightRef.current = false;
       }
     }
-  }, [currentSuggestion, selectedMergePair, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual]);
+  }, [currentSuggestion, selectedMergePair, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual, connectionsRef, skippedIndicesRef]);
 
   // Alternative click handler
   const handleAlternativeClick = useCallback((alt: CrossSectionSuggestion) => {
@@ -2622,7 +2607,7 @@ export default function DmpNewImportDialog({
     };
     directPlacementsRef.current = [...directPlacementsRef.current, dp];
     advanceSegmentQueue();
-  }, [currentSegment, segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId, fromExistingStationIdx, advanceSegmentQueue, emittedAnchorStation, refuseIncompleteShots]);
+  }, [currentSegment, segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId, fromExistingStationIdx, advanceSegmentQueue, emittedAnchorStation, refuseIncompleteShots, connectionsRef]);
 
   // Skip segment handler - appends to end of queue
   const handleSegmentSkip = useCallback(() => {
@@ -2728,7 +2713,7 @@ export default function DmpNewImportDialog({
 
       return { sectionData, additionalSections, emittedStationIndex };
     },
-    [dmpFile.sections, emittedAnchorStation, selectionConfig.defaultDate, selectionConfig.defaultSurveyor, selectedIndices, sectionPalette],
+    [dmpFile.sections, emittedAnchorStation, selectionConfig.defaultDate, selectionConfig.defaultSurveyor, selectedIndices, sectionPalette, connectionsRef],
   );
 
   /** Import the segment just placed on the map: the whole batch as it stands
@@ -2751,7 +2736,7 @@ export default function DmpNewImportDialog({
         reportEmptySections(batch.emptySections);
         return batch;
       }),
-    [dmpFile, earlyImported, importSegment, reportEmptySections, selectionConfig, zeroDatumConfig?.sectionIndex, resolvedTheme],
+    [dmpFile, earlyImported, importSegment, reportEmptySections, selectionConfig, zeroDatumConfig?.sectionIndex, resolvedTheme, connectionsRef],
   );
 
   /**
@@ -2863,6 +2848,8 @@ export default function DmpNewImportDialog({
     closeDialog,
     openDialog,
     showToast,
+    connectionsRef,
+    skippedIndicesRef,
   ]);
 
   /**

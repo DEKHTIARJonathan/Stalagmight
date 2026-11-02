@@ -37,7 +37,8 @@
  *    `pendingBackendCheck` remembers to look again once the screen clears, so
  *    skipping the fetch holds the request rather than losing it.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
+import { useLatest } from '../hooks/useLatest';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useUIStore, isScreenBusy } from '../store/uiStore';
 import { invokeIpc } from './ipc';
@@ -175,8 +176,7 @@ function drainInBackground(): void {
 export function useLaunchWithFile(ready: boolean): void {
   // The listener is registered once and lives for the app's lifetime, so it
   // reads readiness through a ref rather than closing over a stale `ready`.
-  const readyRef = useRef(ready);
-  readyRef.current = ready;
+  const readyRef = useLatest(ready);
 
   useEffect(() => {
     let disposed = false;
@@ -218,7 +218,7 @@ export function useLaunchWithFile(ready: boolean): void {
       unlisten?.();
       unsubscribe();
     };
-  }, []);
+  }, [readyRef]);
 
   useEffect(() => {
     // Covers both the cold launch (queued before the webview existed) and any

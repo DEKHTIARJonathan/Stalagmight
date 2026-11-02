@@ -16,6 +16,8 @@
 //     exhaustive-deps (warn, ratcheted) - a missing effect/memo dependency can
 //     be a stale-closure bug, but the tree carried ~100 findings when this
 //     landed, so they are frozen in the baseline rather than fixed in one go.
+//   - stalagmight/no-render-ref-write (error, src/ only; scripts/eslint/): no
+//     `ref.current = ...` while a component or hook renders - use useLatest.
 //   - in the test-automation trees, no-explicit-any and no-unused-vars are
 //     warnings, ratcheted the same way: the recommended set found ~260 there
 //     when it landed (236 `any` across 22 Playwright specs, 25 unused names).
@@ -24,6 +26,7 @@
 // unknown-rule directive is an error (reportUnusedDisableDirectives).
 import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
+import stalagmight from './scripts/eslint/plugin.mjs';
 
 const SRC = ['src/**/*.{ts,tsx}'];
 const E2E = ['e2e-playwright/**/*.ts', 'e2e/**/*.ts'];
@@ -53,10 +56,11 @@ export default [
   },
   {
     files: SRC,
-    plugins: { 'react-hooks': reactHooks },
+    plugins: { 'react-hooks': reactHooks, stalagmight },
     rules: {
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'warn',
+      'stalagmight/no-render-ref-write': 'error',
     },
   },
   {

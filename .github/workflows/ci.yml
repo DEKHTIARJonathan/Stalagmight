@@ -159,11 +159,11 @@ jobs:
         run: |
           pnpm lint:test-ids:test
           pnpm lint:test-ids
-      # ESLint (#576 D1; config eslint.config.js, policy docs/linting.md):
-      # react-hooks/rules-of-hooks and stale/unknown-rule eslint-disable
-      # directives are errors; exhaustive-deps warnings are ratcheted per file
-      # in eslint-baseline.json (a count may only shrink). The fixture test pins
-      # the ratchet and that the config still reports each rule.
+      # ESLint (#576 D1/D17; config eslint.config.js, policy docs/linting.md)
+      # over src/, e2e-playwright/ and e2e/: the React hook rules, typescript-eslint
+      # recommended and the repo's no-render-ref-write; errors fail, and the
+      # warning-level rules are ratcheted per file in eslint-baseline.json (a
+      # count may only shrink). The fixture test pins the ratchet and each rule.
       - name: ESLint (hook rules, ratcheted warnings)
         if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
         run: |

@@ -1,4 +1,5 @@
 import { useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import type { CommandResult } from '../../types/commands';
 import type { Section, SectionId, ShotData, ShotId, ShotUpdates } from '../../types/project';
 import { setSource } from '../../utils/telemetry';
@@ -65,10 +66,8 @@ export function useDraftAutoCommit({
   const committedKeys = useRef(new Set<number>());
   // The drafts as last rendered, read when a create resolves: a cell commit is a
   // discrete event React has rendered long before the create's round trip ends.
-  const draftsRef = useRef(drafts);
-  draftsRef.current = drafts;
-  const nextDraftKeyRef = useRef(nextDraftKey);
-  nextDraftKeyRef.current = nextDraftKey;
+  const draftsRef = useLatest(drafts);
+  const nextDraftKeyRef = useLatest(nextDraftKey);
 
   useEffect(() => {
     for (const key of committedKeys.current) {
@@ -107,5 +106,5 @@ export function useDraftAutoCommit({
         });
       return;
     }
-  }, [drafts, selectedSection, createShot, updateShot, setDrafts]);
+  }, [drafts, selectedSection, createShot, updateShot, setDrafts, draftsRef, nextDraftKeyRef]);
 }

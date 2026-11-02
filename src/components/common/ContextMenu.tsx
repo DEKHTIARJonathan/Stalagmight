@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useUIStore } from '../../store/uiStore';
@@ -195,8 +196,7 @@ export default function ContextMenu() {
         'menu must say which scroll invalidates it; see useDismissableLayer.',
     );
   }
-  const scrollScopeRef = useRef<HTMLElement | null>(null);
-  scrollScopeRef.current = scrollScope ? document.querySelector<HTMLElement>(scrollScope) : null;
+  const scrollScopeRef = useLatest<HTMLElement | null>(scrollScope ? document.querySelector<HTMLElement>(scrollScope) : null);
 
   useDismissableLayer({
     open: true,

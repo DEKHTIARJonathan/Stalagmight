@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
@@ -178,14 +179,12 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
   // Read by the marker tooltip at hover time: the markers are built once per
   // system set (#576 D10), so a precision captured at build time went stale when
   // the user changed it in Settings (#576 RV3-FE-NITS).
-  const precisionRef = useRef(precision);
-  precisionRef.current = precision;
+  const precisionRef = useLatest(precision);
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   // Buffer for geometry data that arrives before map is ready
   const pendingGeometryRef = useRef<Map<string, SurveyGeometry> | null>(null);
   // Store searchTerm in ref for access during map initialization (avoids stale closure)
-  const searchTermRef = useRef(searchTerm);
-  searchTermRef.current = searchTerm;
+  const searchTermRef = useLatest(searchTerm);
   // Flag to suppress persistence for "Fit All" button (temporary override per spec)
   const suppressNextPersistRef = useRef(false);
 
@@ -201,16 +200,13 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
   // View mode state (persisted in localStorage)
   const [viewMode, setViewMode] = useViewMode();
   // Store viewMode in ref for callbacks that need current value without closure staleness
-  const viewModeRef = useRef<ViewMode>(viewMode);
-  viewModeRef.current = viewMode;
+  const viewModeRef = useLatest<ViewMode>(viewMode);
   // Read by the marker creation effect and the marker click handlers, so that
   // effect re-runs only when the SET of systems changes (#576 D10): a loading-state
   // or selection change restyles the existing markers (styles effect below)
   // instead of tearing down and rebuilding every marker's DOM.
-  const geometryStatesRef = useRef(geometryStates);
-  geometryStatesRef.current = geometryStates;
-  const selectedProjectIdRef = useRef(selectedProjectId);
-  selectedProjectIdRef.current = selectedProjectId;
+  const geometryStatesRef = useLatest(geometryStates);
+  const selectedProjectIdRef = useLatest(selectedProjectId);
 
   // The FPS-driven tolerance throttle was removed with the GeoJSON source (#mem):
   // GlobalSurveyLayer now serves bulk geometry as on-demand vector tiles, which
@@ -224,13 +220,18 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
   // failing system, retried it in an endless loop.
   const gpsProjects = useMemo(() => projects.filter((p) => p.gps_center !== null), [projects]);
 
-  // Store gpsProjects and geometryData in refs for imperative handle
-  const gpsProjectsRef = useRef(gpsProjects);
-  const geometryDataRef = useRef(geometryData);
-  useEffect(() => {
-    gpsProjectsRef.current = gpsProjects;
-    geometryDataRef.current = geometryData;
-  }, [gpsProjects, geometryData]);
+  // The latest systems and geometry, for the imperative handle and the map's
+  // `load` handler (which is registered once, on mount).
+  const gpsProjectsRef = useLatest(gpsProjects);
+  const geometryDataRef = useLatest(geometryData);
+
+  // Store callbacks in refs to avoid stale closures in map event handlers
+  // (declared before the init effect, whose listeners call them)
+  const onProjectSelectRef = useLatest(onProjectSelect);
+  const onProjectOpenRef = useLatest(onProjectOpen);
+  const selectSystemRef = useLatest(selectSystem);
+  const toggleSystemSelectionRef = useLatest(toggleSystemSelection);
+  const onContextMenuRef = useLatest(onContextMenu);
 
   // Expose imperative handle for parent to get system centroids
   useImperativeHandle(ref, () => ({
@@ -275,7 +276,7 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
 
       return centroids;
     },
-  }), []);
+  }), [geometryDataRef, gpsProjectsRef]);
 
   // Calculate raw bounds (no padding) for all systems
   // Note: These are the actual bounds of all systems, without any span limiting
@@ -343,6 +344,7 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
     }
     return rawBounds;
   }, [calculateRawBounds]);
+  const calculateBoundsRef = useLatest(calculateBounds);
 
   // Soft bounds (20% padding) - animate back if user pans beyond this
   const softBoundsRef = useRef<maplibregl.LngLatBounds | null>(null);
@@ -438,10 +440,15 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
     );
 
     map.current.on('load', () => {
+      // The style loads asynchronously, so the systems may have changed since
+      // this effect ran on mount: read them (and their bounds) as they are NOW.
+      // The mount-time list used to drop a system that arrived in between from
+      // the first fit and from the buffered geometry (#576 D17).
+      const projectsNow = gpsProjectsRef.current;
       // Fit to bounds after load only if no persisted state
       // (persisted state is already applied via initial center/zoom)
-      if (gpsProjects.length > 0 && map.current && !persistedState) {
-        map.current.fitBounds(bounds, { padding: 50, maxZoom: 15 });
+      if (projectsNow.length > 0 && map.current && !persistedState) {
+        map.current.fitBounds(calculateBoundsRef.current(), { padding: 50, maxZoom: 15 });
       }
 
       // Initialize survey layer now that map is loaded
@@ -477,7 +484,7 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
         // Only apply if still in survey mode (user may have toggled to markers while map was loading)
         if (pendingGeometryRef.current && pendingGeometryRef.current.size > 0 && viewModeRef.current === 'survey') {
           const systems: SystemGeometry[] = [];
-          for (const project of gpsProjects) {
+          for (const project of projectsNow) {
             const geometry = pendingGeometryRef.current.get(project.file_path);
             if (geometry) {
               systems.push({ metadata: project, geometry });
@@ -618,7 +625,7 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
       map.current?.remove();
       map.current = null;
     };
-  }, []);
+  }, [calculateBoundsRef, gpsProjectsRef, onContextMenuRef, onProjectOpenRef, onProjectSelectRef, searchTermRef, selectSystemRef, toggleSystemSelectionRef, viewModeRef]);
 
   // A WebGL context that is lost and does not come back within a few seconds
   // leaves every system's survey blank for good: say so, and offer the rebuild
@@ -634,20 +641,6 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
       delete w.__stalagmight_global_map__;
     };
   }, [mapLoaded]);
-
-  // Store callbacks in refs to avoid stale closures in map event handlers
-  const onProjectSelectRef = useRef(onProjectSelect);
-  const onProjectOpenRef = useRef(onProjectOpen);
-  const selectSystemRef = useRef(selectSystem);
-  const toggleSystemSelectionRef = useRef(toggleSystemSelection);
-  const onContextMenuRef = useRef(onContextMenu);
-  useEffect(() => {
-    onProjectSelectRef.current = onProjectSelect;
-    onProjectOpenRef.current = onProjectOpen;
-    selectSystemRef.current = selectSystem;
-    toggleSystemSelectionRef.current = toggleSystemSelection;
-    onContextMenuRef.current = onContextMenu;
-  }, [onProjectSelect, onProjectOpen, selectSystem, toggleSystemSelection, onContextMenu]);
 
   // Update survey layer when geometry data changes (from props)
   useEffect(() => {
@@ -781,7 +774,7 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
     return () => {
       map.current?.off('moveend', handleMoveEnd);
     };
-  }, [mapLoaded, gpsProjects, loadGeometryBatch, viewMode]);
+  }, [mapLoaded, gpsProjects, loadGeometryBatch, viewMode, viewModeRef]);
 
   // Show error popup for a failed geometry load
   const showErrorPopup = useCallback((filePath: string, name: string, error: string, lng: number, lat: number) => {
@@ -1098,7 +1091,7 @@ const GlobalViewMapInner = forwardRef<GlobalViewMapHandle, GlobalViewMapInnerPro
 
       markersRef.current.set(project.file_path, marker);
     }
-  }, [gpsProjects, mapLoaded, resolvedTheme, t]);
+  }, [gpsProjects, mapLoaded, resolvedTheme, t, geometryStatesRef, onContextMenuRef, onProjectOpenRef, onProjectSelectRef, precisionRef, selectedProjectIdRef, viewModeRef]);
 
   // Update marker styles when selection, loading states, or theme changes:
   // colours, border, the loading spinner and the loading-state data attribute.

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useId, type ReactNode } from 'react';
+import { useLatest } from '../../hooks/useLatest';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
@@ -315,11 +316,9 @@ export default function UndoHistoryDropdown({
   // Token to detect stale hover callbacks (incremented on any close)
   const hoverTokenRef = useRef(0);
   // Track disabled in a ref to avoid closure issues
-  const disabledRef = useRef(disabled);
-  disabledRef.current = disabled;
+  const disabledRef = useLatest(disabled);
   // Track isOpen in a ref for use in async callbacks / event listeners
-  const isOpenRef = useRef(isOpen);
-  isOpenRef.current = isOpen;
+  const isOpenRef = useLatest(isOpen);
   // Unique ID for ARIA attributes
   const menuId = useId();
 
@@ -333,10 +332,8 @@ export default function UndoHistoryDropdown({
   const iHoldLock = useSpeleoStore((s) => holdsWriteLock(s.link));
   // Read from the hover/queue callbacks, which must not re-create themselves every time
   // the lock state changes (the same reason `disabledRef` exists).
-  const iHoldLockRef = useRef(iHoldLock);
-  iHoldLockRef.current = iHoldLock;
-  const hoverableWhenEmptyRef = useRef(hoverableWhenEmpty);
-  hoverableWhenEmptyRef.current = hoverableWhenEmpty;
+  const iHoldLockRef = useLatest(iHoldLock);
+  const hoverableWhenEmptyRef = useLatest(hoverableWhenEmpty);
   // [#303] The chain step past the bottom of THIS stack, in this dropdown's own
   // direction. Undo offers the walk back, redo the walk forward, and each is offered on
   // the same condition: its own stack is exhausted, so the next step is past a commit
@@ -522,7 +519,7 @@ export default function UndoHistoryDropdown({
 
     isActionInProgressRef.current = false;
     setIsActionInProgress(false);
-  }, [mode, fetchStack, hardClose, openDialog, t, modeLabel, buildErrorMessage]);
+  }, [mode, fetchStack, hardClose, openDialog, t, modeLabel, buildErrorMessage, iHoldLockRef]);
 
   // Enqueue an action and start processing if idle
   const enqueueAction = useCallback((
@@ -604,7 +601,7 @@ export default function UndoHistoryDropdown({
         // Error already logged in fetchStack
       }
     }, 300);
-  }, [fetchStack, resolveChainTarget]);
+  }, [fetchStack, resolveChainTarget, disabledRef, hoverableWhenEmptyRef, iHoldLockRef]);
 
   // Close dropdown with small delay buffer (for mouse leave)
   const closeDropdown = useCallback((event?: React.MouseEvent) => {
@@ -789,6 +786,9 @@ export default function UndoHistoryDropdown({
     scrollActiveItemIntoView,
     handleItemClick,
     hardClose,
+    disabledRef,
+    hoverableWhenEmptyRef,
+    iHoldLockRef,
   ]);
 
   // Handle keyboard navigation when dropdown is open
@@ -874,7 +874,7 @@ export default function UndoHistoryDropdown({
       hardClose();
       onSingleAction();
     }
-  }, [mode, undo, redo, enqueueAction, onSingleAction, hardClose, items, t]);
+  }, [mode, undo, redo, enqueueAction, onSingleAction, hardClose, items, t, disabledRef, isOpenRef]);
 
   // Close on Escape - use hardClose and return focus to button
   useEffect(() => {
