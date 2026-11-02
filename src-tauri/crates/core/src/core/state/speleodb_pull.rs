@@ -107,8 +107,9 @@ fn sweep_own_staging(dir: &Path) {
 /// file's author chooses - would otherwise fold this line into "... and N more".
 ///
 /// Uncapped here: these go straight into an [`ImportReceipt`], and `decorate_receipt`
-/// caps the list they land in. Capping twice folds the cap's own summary line into a
-/// second summary.
+/// caps the list they land in, once. (Capping twice would now be harmless - since
+/// #576 C17 `cap_warnings` carries the count it hid in `hidden_warnings` - but one cap
+/// is all the list needs.)
 ///
 /// CLOSURE shots are left out of the count deliberately: they are dropped from every
 /// import whatever their `excluded` flag says, and the converter already reports the
