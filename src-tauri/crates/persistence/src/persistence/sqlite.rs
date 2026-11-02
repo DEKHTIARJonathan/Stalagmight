@@ -107,6 +107,12 @@ const OLDEST_SUPPORTED_SCHEMA_VERSION: i32 = 2;
 /// error code instead of a generic database failure.
 pub const PRE_RELEASE_FILE_CODE: &str = "PRE_RELEASE_FILE";
 
+/// [#576 RV4-R-M3-OPEN] Prefix of the error [`Database::open_existing_refusing_upgrade`]
+/// returns for a file the open would have upgraded in place: the caller said the
+/// file sits where nothing may be written, so the upgrade (and the pre-upgrade copy
+/// it writes beside the file) is refused and the file is left as it was.
+pub const UPGRADE_REFUSED_CODE: &str = "UPGRADE_REFUSED";
+
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///
 /// v7 changed the `ShotUpdates` JSON wire format: nullable fields now use a

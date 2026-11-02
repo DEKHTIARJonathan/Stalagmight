@@ -8,7 +8,7 @@ use crate::models::FEATURE_ID_STRIDE;
 
 use super::{
     Database, OLDEST_SUPPORTED_SCHEMA_VERSION, PRE_RELEASE_FILE_CODE, SCHEMA_VERSION,
-    UNDO_FORMAT_SAFE_VERSION,
+    UNDO_FORMAT_SAFE_VERSION, UPGRADE_REFUSED_CODE,
 };
 
 /// Columns of `speleo_link` that MUST survive every future SCHEMA_VERSION bump
@@ -1264,6 +1264,14 @@ impl Database {
 
     /// Ensure schema migrations are applied and user_version is current.
     pub(super) fn ensure_schema_version(&self) -> Result<()> {
+        self.ensure_schema_version_with(None)
+    }
+
+    /// [`Self::ensure_schema_version`], refusing the upgrade with `refuse_upgrade`
+    /// (`"{UPGRADE_REFUSED_CODE}: {refusal}"`) when it would write - the migration
+    /// chain and the pre-upgrade copy alike (#576 RV4-R-M3-OPEN). A file it would
+    /// not write to (current, newer, unstamped on read-only media) passes as before.
+    pub(super) fn ensure_schema_version_with(&self, refuse_upgrade: Option<&str>) -> Result<()> {
         // Two different claims, and only one of them is evidence that migrations
         // RAN. `PRAGMA user_version` is written by this app in exactly two places:
         // at the end of a completed migration chain (below), and on a file it just
@@ -1387,6 +1395,19 @@ impl Database {
         // the copy below and the first migration write, and on media that cannot
         // be written this fails before any step runs, exactly as the first write
         // used to. Dropped on an error, which rolls everything back.
+        //
+        // [#576 RV4-R-M3-OPEN] The first write is the transaction itself: a file the
+        // caller placed where nothing may be written is refused here, untouched,
+        // with no pre-upgrade copy beside it.
+        if let Some(refusal) = refuse_upgrade {
+            tracing::warn!(
+                version = current,
+                expected = SCHEMA_VERSION,
+                purpose = "refuse to upgrade a project where nothing may be written (#576 RV4-R-M3)",
+                "Not upgrading an older project in place: it is in a folder the app does not write to"
+            );
+            anyhow::bail!("{UPGRADE_REFUSED_CODE}: {refusal}");
+        }
         let chain = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
 
         // [#576 B6-D2] Keep one copy of the file as it was before this upgrade,

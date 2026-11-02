@@ -115,6 +115,21 @@ impl Database {
 
     /// Open an existing database (does not create if missing)
     pub fn open_existing(path: &Path) -> Result<Self> {
+        Self::open_existing_with(path, None)
+    }
+
+    /// [#576 RV4-R-M3-OPEN] [`Self::open_existing`] for a file in a place nothing
+    /// may be written (the app's own folders, a system folder): a file this build
+    /// can read as it is opens exactly as it would anywhere, but one the open would
+    /// UPGRADE in place - the migration chain, and the pre-upgrade copy it keeps
+    /// beside the file - is refused before the first write, with
+    /// `"{UPGRADE_REFUSED_CODE}: {refusal}"`, and left as it was. `refusal` is the
+    /// user-facing message.
+    pub fn open_existing_refusing_upgrade(path: &Path, refusal: &str) -> Result<Self> {
+        Self::open_existing_with(path, Some(refusal))
+    }
+
+    fn open_existing_with(path: &Path, refuse_upgrade: Option<&str>) -> Result<Self> {
         // Verbose open-time logging is debug-only - it fires on every
         // project load and every recent-projects metadata read, which
         // adds up.  The error paths still log at error/warn.
@@ -174,7 +189,7 @@ impl Database {
 
         // Run lightweight migrations to ensure newer tables exist in legacy projects
         let t = std::time::Instant::now();
-        db.ensure_schema_version()?;
+        db.ensure_schema_version_with(refuse_upgrade)?;
         tracing::debug!(
             ms = t.elapsed().as_millis() as u64,
             "open_existing: ensure_schema_version"

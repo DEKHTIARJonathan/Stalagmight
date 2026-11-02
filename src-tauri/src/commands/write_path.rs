@@ -119,33 +119,35 @@ pub(crate) fn check_write_path_with(
     location_refusal(path, matches!(target, WriteTarget::Project), dirs).map_or(Ok(()), refuse)
 }
 
-/// [#576 RV4-R-M3] Check `path` before a load opens it. A load is not read-only:
-/// an older-schema project is upgraded IN PLACE and a `.pre-v<N>.backup` copy is
-/// written beside it, and every open writes SQLite's journal next to the file. So
-/// the location rules of [`check_write_path`] apply - not inside the app's own
-/// folders (the SpeleoDB managed-project cache excepted), not inside a system
-/// folder. The extension rule does not: the open dialog offers "All Files", and a
-/// load creates no file of the name it is handed.
-pub(crate) fn check_load_path(path: &Path) -> Result<(), String> {
-    check_load_path_with(path, &AppDirs::current())
+/// [#576 RV4-R-M3-OPEN] What a load of `path` may not write, as the message to
+/// refuse it with - or `None` where a user keeps projects.
+///
+/// Opening a project only reads it, with one exception: an older-format file is
+/// upgraded IN PLACE, and a `.pre-v<N>.backup` copy of it is written beside it
+/// first. So a load anywhere opens the file (viewing and exporting a project kept
+/// in the app's own folders or a system folder work as anywhere else), and the
+/// location rules of [`check_write_path`] - not inside the app's own folders (the
+/// SpeleoDB managed-project cache excepted), not inside a system folder - apply
+/// to that upgrade alone: it is refused there with this message, before anything
+/// is written, and the file is left as it was. The extension rule does not apply:
+/// the open dialog offers "All Files", and a load creates no file of that name.
+pub(crate) fn load_upgrade_refusal(path: &Path) -> Option<String> {
+    load_upgrade_refusal_with(path, &AppDirs::current())
 }
 
-/// [`check_load_path`] against given app directories (the testable core).
-pub(crate) fn check_load_path_with(path: &Path, dirs: &AppDirs) -> Result<(), String> {
-    let Some(why) = location_refusal(path, true, dirs) else {
-        return Ok(());
-    };
-    tracing::warn!(
-        path = ?path,
-        reason = %why,
-        purpose = "refuse a load that would write where the app does not (#576 RV4-R-M3)",
-        "Refused to open a project"
-    );
+/// [`load_upgrade_refusal`] against given app directories (the testable core).
+pub(crate) fn load_upgrade_refusal_with(path: &Path, dirs: &AppDirs) -> Option<String> {
+    let why = location_refusal(path, true, dirs)?;
     let name = path.file_name().map_or_else(
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
     );
-    Err(format!("Refused to open {name}: {why}"))
+    Some(format!(
+        "{name} was saved by an older version of Stalagmight, and opening it would upgrade \
+         it to the current file format in place and keep a backup copy beside it - but {why}, \
+         where Stalagmight does not write. The file was left as it was. Copy the project to a \
+         folder of your own (for example Documents) and open the copy."
+    ))
 }
 
 /// Why `path` is in a place no command may write, or `None`. `project` lets a

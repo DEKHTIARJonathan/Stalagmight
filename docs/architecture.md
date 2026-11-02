@@ -134,12 +134,17 @@ folders (the SpeleoDB managed-project cache excepted, for projects), and must no
 be inside a system folder (`/etc`, `/usr`, `/bin`, ..., `C:\Windows`,
 `C:\Program Files`). The list is deliberately narrow - `/home`, `/var`,
 `/run/media`, `/mnt`, `/media`, `/opt` and `/tmp` are places users save to.
-Opening a project (`load_project_full`, `load_project_full_binary`) is not
-read-only either: an older-schema file is upgraded in place with a
-`.pre-v<N>.backup` copy written beside it, and every open writes SQLite's journal
-next to the file. So the loads run `check_load_path`: the same two folder rules,
-without the extension rule (the open dialog offers "All Files") (#576 RV4-R-M3).
-Commands that only read keep taking any path.
+Opening a project (`load_project_full`, `load_project_full_binary`) opens it
+wherever it is - viewing and exporting a project kept in the app's folders or a
+system folder work as anywhere else - but it is not always read-only: an
+older-schema file is upgraded in place with a `.pre-v<N>.backup` copy written
+beside it. That write alone is checked (#576 RV4-R-M3-OPEN): the loads ask
+`load_upgrade_refusal` (the same two folder rules, without the extension rule -
+the open dialog offers "All Files"), and in those folders an older file is refused
+before anything is written (`Database::open_existing_refusing_upgrade`, load error
+`UPGRADE_REFUSED`) with a message saying to copy the project somewhere writable;
+a current or newer file opens untouched. Commands that only read keep taking any
+path.
 
 ## Data Model
 

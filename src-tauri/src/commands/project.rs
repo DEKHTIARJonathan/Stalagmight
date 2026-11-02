@@ -3,7 +3,7 @@ use tauri::{Manager, Runtime};
 use ts_rs::TS;
 
 use crate::commands::pool;
-use crate::commands::write_path::{check_load_path, check_write_path, WriteTarget};
+use crate::commands::write_path::{check_write_path, load_upgrade_refusal, WriteTarget};
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
@@ -398,12 +398,13 @@ pub async fn load_project_full(
     // transport + JS JSON.parse. The "load_project_full handler returning"
     // line lets us compute: js_total - rust_total ≈ serialize + parse.
     let t_start = std::time::Instant::now();
-    // [#576 RV4-R-M3] A load can rewrite the file and write a backup beside it.
-    check_load_path(&path).map_err(LoadError::internal)?;
+    // [#576 RV4-R-M3-OPEN] Opens anywhere; only the in-place upgrade of an
+    // older-format file (and its backup copy) is refused where nothing may be written.
+    let upgrade_refusal = load_upgrade_refusal(&path);
     let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();
-            state.do_load_project_full(path)
+            state.do_load_project_full_with(path, upgrade_refusal.as_deref())
         })
         .await;
     let handler_elapsed = t_start.elapsed();
@@ -435,12 +436,13 @@ pub async fn load_project_full_binary(
     path: PathBuf,
 ) -> Result<tauri::ipc::Response, LoadError> {
     let t_start = std::time::Instant::now();
-    // [#576 RV4-R-M3] A load can rewrite the file and write a backup beside it.
-    check_load_path(&path).map_err(LoadError::internal)?;
+    // [#576 RV4-R-M3-OPEN] Opens anywhere; only the in-place upgrade of an
+    // older-format file (and its backup copy) is refused where nothing may be written.
+    let upgrade_refusal = load_upgrade_refusal(&path);
     let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();
-            state.do_load_project_full(path)
+            state.do_load_project_full_with(path, upgrade_refusal.as_deref())
         })
         .await;
     let handler_elapsed = t_start.elapsed();

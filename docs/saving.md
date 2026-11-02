@@ -56,7 +56,11 @@ recovery dialog offers it with the other backups. No copy is taken of a file tha
 is already current, of an empty file becoming a new project, or of an unstamped
 file whose project row claims the current version (nothing is stamped there, so it
 is not an upgrade). If the copy cannot be written, the file is not upgraded and the
-open fails with a message saying so.
+open fails with a message saying so. A file inside the app's own folders or a
+system folder is not upgraded at all: the open is refused before the chain starts
+(load error `UPGRADE_REFUSED`), the file is left as it was, and the message says to
+copy the project somewhere writable and open the copy (#576 RV4-R-M3-OPEN; see
+docs/architecture.md, "IPC trust boundary").
 
 The whole chain - `migrate_schema`, every version arm and the stamp - runs in ONE
 `BEGIN IMMEDIATE` transaction (#576 B6), so an upgrade lands completely or not at

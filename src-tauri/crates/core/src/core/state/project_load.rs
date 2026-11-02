@@ -358,9 +358,18 @@ impl AppState {
     /// All computation happens locally, then state is committed at the end.
     /// Cancellation is honored up to finalization; once finalization begins, it is
     /// non-cancellable to avoid partial AppState updates.
-    pub fn do_load_project_full(
+    ///
+    /// [#576 RV4-R-M3-OPEN] `upgrade_refusal` is for a file in a place nothing may
+    /// be written (the app's own folders, a system folder): it opens as anywhere
+    /// else, but an older-format file - one the open would upgrade in place and
+    /// copy beside itself first - is refused with [`UPGRADE_REFUSED_CODE`] and this
+    /// message, untouched. `None` everywhere a user keeps projects.
+    ///
+    /// [`UPGRADE_REFUSED_CODE`]: crate::persistence::UPGRADE_REFUSED_CODE
+    pub fn do_load_project_full_with(
         &self,
         path: PathBuf,
+        upgrade_refusal: Option<&str>,
     ) -> Result<crate::core::loading::LoadProjectFullResult, crate::core::loading::LoadError> {
         use crate::core::loading::{
             DisplaySettings, LoadError, LoadProjectFullResult, LoadingPhase, ProgressEmitter,
@@ -471,7 +480,11 @@ impl AppState {
             }
         };
         // Local variable only - NO state mutation until Finalizing
-        let db = match Database::open_existing(&path) {
+        let opened = match upgrade_refusal {
+            None => Database::open_existing(&path),
+            Some(refusal) => Database::open_existing_refusing_upgrade(&path, refusal),
+        };
+        let db = match opened {
             Ok(db) => db,
             Err(e) => {
                 let msg = e.to_string();
@@ -496,6 +509,19 @@ impl AppState {
                 {
                     early_return_err!(LoadError::with_details(
                         crate::persistence::PRE_RELEASE_FILE_CODE,
+                        message,
+                        path.display().to_string()
+                    ));
+                }
+                // [#576 RV4-R-M3-OPEN] An older file in a place nothing may be
+                // written: the same shape - its own code, the message alone (it says
+                // to copy the project somewhere writable), the file untouched.
+                if let Some(message) = msg
+                    .strip_prefix(crate::persistence::UPGRADE_REFUSED_CODE)
+                    .map(|rest| rest.trim_start_matches(':').trim())
+                {
+                    early_return_err!(LoadError::with_details(
+                        crate::persistence::UPGRADE_REFUSED_CODE,
                         message,
                         path.display().to_string()
                     ));
@@ -1029,5 +1055,14 @@ impl AppState {
             // [#576 B35(h)] ...and what the load reset or dropped.
             load_repairs: load_report.repairs,
         })
+    }
+
+    /// [`Self::do_load_project_full_with`] for a file where a user keeps projects:
+    /// an older-format file is upgraded in place as usual.
+    pub fn do_load_project_full(
+        &self,
+        path: PathBuf,
+    ) -> Result<crate::core::loading::LoadProjectFullResult, crate::core::loading::LoadError> {
+        self.do_load_project_full_with(path, None)
     }
 }
