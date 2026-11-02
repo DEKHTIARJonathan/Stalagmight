@@ -362,7 +362,7 @@ impl Database {
     ///
     /// Hand the SAME one to every stack of that open - `load_*_with_timestamps_within`
     /// take it for exactly this reason. A caller that instead lets each stack default to
-    /// its own budget doubles the real ceiling while every doc still says 1 GiB, which is
+    /// its own budget doubles the real ceiling while every doc states the single one, which is
     /// the defect this function exists to make hard to reintroduce.
     pub fn load_history_budget() -> InflationBudget {
         InflationBudget::new(MAX_HISTORY_LOAD_BYTES)

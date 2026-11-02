@@ -255,20 +255,23 @@ const MAX_DECOMPRESSED_BLOB_BYTES: u64 = 256 * 1024 * 1024;
 /// compressed rows sqlite already read are resident on top of it, and `read_to_end` grows
 /// its `Vec` by doubling, so a single blob transiently costs ~1.5-2x what it reserved.
 ///
-/// 1 GiB, derived from what a save can legitimately produce - and note WHICH knob bounds
-/// that, because there are two and they are easy to swap. What a count-window
-/// (non-SpeleoDB) project WRITES is bounded by `undo_persist_limit`, default **20**
-/// (`config/defaults.rs`, read in `project_io.rs::rows_to_persist`). `undo_history_limit`
-/// (100) is the in-memory/read window and never reaches disk. So the honest worst case
-/// is 20 `ProjectSnapshotPair` entries on a 20,000-shot survey at ~17 MB each = ~340 MB
-/// per stack, ~680 MB for the pair - comfortably under this ceiling, which is the point.
+/// [#576 NF-W4U-2] Derived from what a save can write since #576 B20 bounded the writer
+/// in bytes: of its newest entries a save keeps only those whose estimated sizes fit in
+/// [`crate::persistence::undo_limits::UNDO_BYTE_BUDGET_BYTES`] per stack, the newest always kept even alone over it
+/// (`UndoStack::persist_window`; Full mode is held to the same budget in memory). So one
+/// stack is either a window of at most that many bytes or one larger newest entry, whose
+/// biggest blob the per-blob ceiling already bounds - at most
+/// `UNDO_BYTE_BUDGET_BYTES + MAX_DECOMPRESSED_BLOB_BYTES` per stack with room for the
+/// small command blobs and the estimate's slack, and twice that for the pair: 576 MiB.
 ///
-/// The write side carries no BYTE bound of its own for such a project, only that count,
-/// so a user who raises `undo_persist_limit` far past its default can still author more
-/// history than this will read back. That is the residual: bounding the writer in bytes,
-/// so this ceiling can be tightened without ever refusing real work, is the follow-up.
-/// The exposure meanwhile drops from ~50 GiB to ~1 GiB.
-const MAX_HISTORY_LOAD_BYTES: u64 = 1024 * 1024 * 1024;
+/// It was 1 GiB, sized for the old writer, which kept the newest `undo_persist_limit`
+/// (default 20) entries whatever their size: 20 `ProjectSnapshotPair`s on a 20,000-shot
+/// survey at ~17 MB each, ~680 MB for the pair. A file an older build wrote with that
+/// much history now opens without it, behind the discarded-history banner, the way one
+/// over 1 GiB always did; the next save writes the capped window.
+const MAX_HISTORY_LOAD_BYTES: u64 = 2
+    * (MAX_DECOMPRESSED_BLOB_BYTES
+        + crate::persistence::undo_limits::UNDO_BYTE_BUDGET_BYTES as u64);
 
 /// [#473] The bytes ONE PROJECT OPEN has left to inflate into, shared by both history
 /// stacks, every row of each, and every decompression thread.
@@ -767,3 +770,13 @@ mod upgrade_safety_tests;
               values are the evidence a run captures"
 )]
 mod open_order_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod history_ceiling_tests;

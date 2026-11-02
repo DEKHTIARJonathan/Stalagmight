@@ -444,7 +444,7 @@ load, and the reason there are three is that the first two multiply rather than 
 |---|---|---|
 | Row count | `MAX_PERSISTED_HISTORY_ROWS` (65536) | how many rows one load reads |
 | Per blob | `MAX_DECOMPRESSED_BLOB_BYTES` (256 MiB) | how far ONE blob may inflate - gzip or legacy |
-| Per open | `MAX_HISTORY_LOAD_BYTES` (1 GiB) | the total across BOTH stacks of one open |
+| Per open | `MAX_HISTORY_LOAD_BYTES` (576 MiB) | the total across BOTH stacks of one open |
 
 The third is not redundant. With only the first two, the default 100-row count window
 allows 100 x 2 x 256 MiB = 50 GiB, and Full mode's row ceiling makes it 32 TiB nominal.
@@ -485,7 +485,7 @@ Mechanically, and in the order the checks actually fire:
    and it is what carries the spend from the first stack into the second. Do not describe
    it as the thing that stops the attack.
 
-1 GiB is derived from what a save can legitimately produce - and note WHICH knob bounds
+The old 1 GiB was derived from what a save could legitimately produce - and note WHICH knob bounds
 that, because there are two and swapping them changes the answer by 5x. What a
 count-window (non-SpeleoDB) project WRITES is bounded by `undo_persist_limit`, **default
 20** (read in `project_io.rs::rows_to_persist`). `undo_history_limit` (100) is the
@@ -497,9 +497,13 @@ Since #576 B20 the writer is bounded in bytes as well: of those newest
 `undo_persist_limit` entries, a save keeps only the newest whose estimated sizes fit in
 `UNDO_BYTE_BUDGET_BYTES` (32 MiB) per stack - the newest always kept, even alone over it
 (`UndoStack::persist_window`). So a count-window save now writes at most ~32 MiB of JSON
-per stack, or one larger newest entry. The read ceiling has not been tightened to match;
-that is still open, and only worth doing with the "one oversized newest entry" case in
-mind.
+per stack, or one larger newest entry - whose biggest blob the per-blob ceiling bounds.
+The per-open ceiling is derived from that (#576 NF-W4U-2): `2 x (MAX_DECOMPRESSED_BLOB_BYTES
++ UNDO_BYTE_BUDGET_BYTES)` = 576 MiB, down from 1 GiB, room for one stack's window or one
+maximal newest entry (plus the small command blobs) on each side. A file an older build
+wrote with more history than that (the ~680 MB pair above) opens without it, behind the
+discarded-history banner, as one over 1 GiB always did; its next save writes the capped
+window.
 
 The number bounds RESERVATIONS, not process RSS. Two terms sit on top of it, and the
 second is not small: `read_to_end` doubles its buffer, so one blob transiently costs
