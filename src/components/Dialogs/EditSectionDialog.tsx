@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../../i18n';
 import { useUIStore } from '../../store/uiStore';
 import { classifyDeleteRun, isEndRun } from './editSectionDeletes';
 import { useProjectStore } from '../../store/projectStore';
@@ -321,7 +322,8 @@ export default function EditSectionDialog() {
         })
         .catch((e) => {
           setPendingImpact(null);
-          setPendingImpactError(getErrorMessage(e, 'Failed to load shot impacts'));
+          // i18n.t, not the hook's t: this IPC effect must not re-fetch on a language change.
+          setPendingImpactError(getErrorMessage(e, i18n.t('editSection.loadImpactsFailed')));
         });
     } else {
       setPendingImpact(null);
@@ -356,14 +358,14 @@ export default function EditSectionDialog() {
 
   const confirmSplitMidDelete = useCallback(() => {
     if (!pendingMidDelete || sectionId === undefined) return;
-    const targetName = section?.name ?? `Section ${sectionId}`;
+    const targetName = section?.name ?? t('editSection.sectionFallback', { id: sectionId });
     setSource('dialog');
     openDialog('split-section', {
       sectionId,
       shotId: pendingMidDelete.shotId,
       sectionName: targetName,
     });
-  }, [pendingMidDelete, sectionId, section, openDialog]);
+  }, [pendingMidDelete, sectionId, section, openDialog, t]);
 
   const handleSave = async () => {
     if (sectionId === undefined) return;
@@ -383,7 +385,7 @@ export default function EditSectionDialog() {
       });
 
       if (!sectionResult.success) {
-        setError(sectionResult.error ?? 'Failed to update section');
+        setError(sectionResult.error ?? t('editSection.updateSectionFailed'));
         return;
       }
 
@@ -395,7 +397,7 @@ export default function EditSectionDialog() {
       for (const shot of deletedShots.reverse()) {
         const result = await deleteShot(sectionId, shot.id);
         if (!result.success) {
-          setError(result.error ?? 'Failed to delete shot');
+          setError(result.error ?? t('editSection.deleteShotFailed'));
           return;
         }
       }
@@ -422,7 +424,7 @@ export default function EditSectionDialog() {
             temperature: original.temperature ?? null,
           });
           if (!result.success) {
-            setError(result.error ?? 'Failed to update shot');
+            setError(result.error ?? t('editSection.updateShotFailed'));
             return;
           }
         }
@@ -450,7 +452,7 @@ export default function EditSectionDialog() {
         };
         const result = await createShot(sectionId, shotData, undefined, beforeShotId);
         if (!result.success) {
-          setError(result.error ?? 'Failed to create shot');
+          setError(result.error ?? t('editSection.createShotFailed'));
           return;
         }
       }
@@ -458,7 +460,7 @@ export default function EditSectionDialog() {
       trackDialogComplete('edit-section');
       closeDialog();
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to update section'));
+      setError(getErrorMessage(e, t('editSection.updateSectionFailed')));
     } finally {
       setIsLoading(false);
     }
@@ -616,7 +618,7 @@ export default function EditSectionDialog() {
                 ? t('editSection.editingDisabled')
                 : isDirty
                   ? t('editSection.saveOrDiscardFirst')
-                  : 'Renumber this section end-to-end (the cave does not move)'
+                  : t('editSection.reverseTitle')
             }
             data-testid="edit-section-reverse"
           >

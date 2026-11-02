@@ -19,12 +19,8 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent } from '@testing-library/react';
 
-// Partial mock: `src/i18n/index.ts` (pulled in by the number formatters) needs
-// the real `initReactI18next`.
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (k: string) => k }),
-}));
+// Real i18n: the station options ("Station N") picked below render from en.json.
+import '../../../i18n';
 
 vi.mock('maplibre-gl', () => ({ default: {} }));
 vi.mock('../SectionPreview', () => ({ default: () => null }));

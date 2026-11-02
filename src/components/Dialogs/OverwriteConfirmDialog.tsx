@@ -75,7 +75,7 @@ export default function OverwriteConfirmDialog() {
   };
 
   return (
-    <DialogWrapper title="Overwrite File?" onClose={closeDialog} size="md" data-testid="overwrite-confirm-dialog">
+    <DialogWrapper title={t('dialogs.overwriteConfirm.title')} onClose={closeDialog} size="md" data-testid="overwrite-confirm-dialog">
       <div className="space-y-4">
         {/* #576 RV2-FE-5: both variants' copy lives in en.json (D20-D1). */}
         <p
@@ -97,10 +97,10 @@ export default function OverwriteConfirmDialog() {
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={closeDialog} disabled={isLoading} data-testid="overwrite-confirm-cancel">
-            Cancel
+            {t('common.actions.cancel')}
           </Button>
           <Button variant="danger" onClick={handleConfirm} disabled={isLoading} data-primary-action="" data-testid="overwrite-confirm-accept">
-            {isLoading ? 'Saving...' : 'Overwrite'}
+            {isLoading ? t('dialogs.overwriteConfirm.saving') : t('dialogs.overwriteConfirm.overwrite')}
           </Button>
         </div>
       </div>

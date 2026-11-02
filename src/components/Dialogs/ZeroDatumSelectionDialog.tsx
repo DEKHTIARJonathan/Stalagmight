@@ -20,6 +20,7 @@ import type { DmpSelectionConfig } from './DmpSelectionDialog';
  * `computeStationsFromDmpShots`, whose module loads MapLibre.
  */
 function SectionMiniPreview({ shots, size = 140 }: { shots: DmpShot[]; size?: number }) {
+  const { t } = useTranslation();
   const points = useMemo(
     () =>
       walkStations(
@@ -79,7 +80,7 @@ function SectionMiniPreview({ shots, size = 140 }: { shots: DmpShot[]; size?: nu
         </>
       ) : (
         <text x={size / 2} y={size / 2} textAnchor="middle" dominantBaseline="middle" fill="var(--cc-text-secondary)" fontSize={12}>
-          No shots
+          {t('dialogs.zeroDatumSelection.noShots')}
         </text>
       )}
     </svg>

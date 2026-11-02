@@ -101,3 +101,17 @@ describe('SectionAdjustDialog negative / partial input (#161)', () => {
     expect(dx).toHaveValue('-2'); // rejected → field unchanged
   });
 });
+
+// #576 D20: "Adjusting: <name>" is a <Trans> template now (`Adjusting:
+// <blob>{{name}}</blob>`). A section name that looks like markup must render as
+// typed inside the section pill, not be parsed as a tag of the template.
+describe('SectionAdjustDialog section name', () => {
+  it('renders a name that looks like markup as typed', async () => {
+    useProjectStore.setState({
+      project: { sections: [{ id: SECTION_ID, name: 'Main <A> & </blob>B' }] } as unknown as Project,
+    });
+    render(<SectionAdjustDialog />);
+    const pill = await screen.findByText('Main <A> & </blob>B');
+    expect(pill.parentElement?.textContent).toBe('Adjusting: Main <A> & </blob>B');
+  });
+});

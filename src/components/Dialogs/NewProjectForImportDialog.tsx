@@ -61,8 +61,8 @@ export default function NewProjectForImportDialog() {
   const [isCreating, setIsCreating] = useState(false);
 
   const normalizedBaseName = useMemo(
-    () => (name.trim() || defaultName || 'Project').replace(/[^a-zA-Z0-9]/g, '_'),
-    [defaultName, name]
+    () => (name.trim() || defaultName || t('dialogs.newProjectForImport.fallbackFileName')).replace(/[^a-zA-Z0-9]/g, '_'),
+    [defaultName, name, t]
   );
 
   const joinPath = (base: string, child: string): string => {
@@ -125,7 +125,7 @@ export default function NewProjectForImportDialog() {
   const handleSelectSavePath = async () => {
     try {
       const selected = await saveDialog({
-        title: 'Save Project',
+        title: t('dialogs.newProjectForImport.saveDialogTitle'),
         filters: projectSaveFilters(),
         defaultPath: savePath.trim() || resolvedDefaultSavePath || `${normalizedBaseName}.stalx`,
       });

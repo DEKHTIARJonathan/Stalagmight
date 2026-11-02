@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useProject } from '../../hooks/useProject';
@@ -9,6 +10,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
 import { useShallow } from 'zustand/react/shallow';
 
 export default function UnsavedChangesDialog() {
+  const { t } = useTranslation();
   const { closeDialog, setView, openDialog, dialogData } = useUIStore(
     useShallow((s) => ({
       closeDialog: s.closeDialog,
@@ -105,34 +107,34 @@ export default function UnsavedChangesDialog() {
   };
 
   return (
-    <DialogWrapper title="Unsaved Changes" onClose={handleCancel} size="md" data-testid="unsaved-changes-dialog">
+    <DialogWrapper title={t('dialogs.unsavedChanges.title')} onClose={handleCancel} size="md" data-testid="unsaved-changes-dialog">
       <div className="space-y-4">
         <p>
           {pendingQuit
-            ? 'You have unsaved changes. Quit anyway?'
+            ? t('dialogs.unsavedChanges.messageQuit')
             : pendingNewProject
-            ? 'You have unsaved changes. Create a new project anyway?'
+            ? t('dialogs.unsavedChanges.messageNewProject')
             : pendingOpenPath
-            ? 'You have unsaved changes. Open another project anyway?'
-            : 'You have unsaved changes. Are you sure you want to go back?'}
+            ? t('dialogs.unsavedChanges.messageOpenProject')
+            : t('dialogs.unsavedChanges.messageBack')}
         </p>
         <p className="text-text-secondary text-sm">
-          {pendingQuit ? 'Save your changes, or discard them and quit.' : 'Your changes will be lost.'}
+          {pendingQuit ? t('dialogs.unsavedChanges.noteQuit') : t('dialogs.unsavedChanges.note')}
         </p>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={handleCancel} data-testid="unsaved-changes-cancel">Cancel</Button>
+          <Button onClick={handleCancel} data-testid="unsaved-changes-cancel">{t('common.actions.cancel')}</Button>
           <Button
             data-testid="unsaved-changes-discard"
             variant="danger"
             onClick={handleDiscard}
             {...(pendingQuit ? {} : { 'data-primary-action': '' })}
           >
-            {pendingQuit ? 'Discard & Quit' : 'Discard Changes'}
+            {pendingQuit ? t('dialogs.unsavedChanges.discardQuit') : t('dialogs.unsavedChanges.discard')}
           </Button>
           {pendingQuit && (
             <Button variant="primary" onClick={handleSaveAndQuit} data-testid="unsaved-changes-save-quit">
-              Save &amp; Quit
+              {t('dialogs.unsavedChanges.saveQuit')}
             </Button>
           )}
         </div>

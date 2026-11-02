@@ -484,9 +484,9 @@ export default function ZeroDatumConfigDialog({
   const stationOptions = useMemo(() => {
     return Array.from({ length: stationCount }, (_, i) => ({
       value: String(i),
-      label: `Station ${i}`,
+      label: t('dialogs.zeroDatumConfig.stationOption', { index: i }),
     }));
-  }, [stationCount]);
+  }, [stationCount, t]);
 
   // GPS origin for map preview - only set when valid GPS coordinates are entered
   const gpsOrigin = useMemo(() => {
@@ -824,8 +824,10 @@ export default function ZeroDatumConfigDialog({
               )}
               {gpsCoords && (
                 <div className="text-xs text-success pl-1" data-testid="zero-datum-gps-parsed">
-                  Lat: {formatFixed(gpsCoords.latitude, undefined, precision.gps)}, Lon:{' '}
-                  {formatFixed(gpsCoords.longitude, undefined, precision.gps)}
+                  {t('dialogs.zeroDatumConfig.gpsParsed', {
+                    lat: formatFixed(gpsCoords.latitude, undefined, precision.gps),
+                    lon: formatFixed(gpsCoords.longitude, undefined, precision.gps),
+                  })}
                 </div>
               )}
               {gpsCoords && gpsNote && (

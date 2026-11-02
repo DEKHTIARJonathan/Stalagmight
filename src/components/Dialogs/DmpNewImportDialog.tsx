@@ -1829,7 +1829,7 @@ export default function DmpNewImportDialog({
   const reportEmptySections = useCallback((indices: number[]) => {
     if (indices.length === 0) return;
     const names = indices.map(
-      (i) => sectionEditsRef.current.get(i)?.name ?? dmpFile.sections[i]?.name ?? `Section ${i}`,
+      (i) => sectionEditsRef.current.get(i)?.name ?? dmpFile.sections[i]?.name ?? t('dialogs.dmpNewImport.sectionFallbackName', { id: i }),
     );
     useUIStore.getState().showToast(
       t('dmpWizard.toasts.emptySections', { names: names.join(', ') }),
@@ -3069,8 +3069,8 @@ export default function DmpNewImportDialog({
   // Section names in current segment (for display)
   const segmentSectionNames = useMemo(() => {
     if (!currentSegment) return [];
-    return currentSegment.map(idx => dmpFile.sections[idx]?.name ?? `Section ${idx}`);
-  }, [currentSegment, dmpFile.sections]);
+    return currentSegment.map(idx => dmpFile.sections[idx]?.name ?? t('dialogs.dmpNewImport.sectionFallbackName', { id: idx }));
+  }, [currentSegment, dmpFile.sections, t]);
 
   // Whether current placement mode is valid for submission
   const isSegmentPlacementValid = useMemo(() => {
@@ -3169,7 +3169,7 @@ export default function DmpNewImportDialog({
                     <span className="font-medium">&ldquo;{targetSectionName}&rdquo;</span>
                     {' '}{t('dialogs.dmpNewImport.station', { index: selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex })}
                     {isImportTarget && (
-                      <span className="ml-1 text-xs text-text-secondary">(importing)</span>
+                      <span className="ml-1 text-xs text-text-secondary">{t('dialogs.dmpNewImport.importingTag')}</span>
                     )}
                   </div>
                 </div>
@@ -3196,17 +3196,17 @@ export default function DmpNewImportDialog({
                       onChange={(v) => setSelectedMergeOffset(Number(v))}
                       options={mergeOptions.map((opt) => ({
                         value: String(opt.offset),
-                        label: `stn ${opt.importStation} → ${targetSectionName} stn ${opt.existingStation}`,
+                        label: t('dialogs.dmpNewImport.mergeOption', { importStation: opt.importStation, target: targetSectionName, existingStation: opt.existingStation }),
                       }))}
                       size="sm"
                       data-testid="merge-station-select"
                     />
                   ) : (
                     <span className="text-xs text-text-secondary">
-                      stn {selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
-                      {' → '}
-                      {targetSectionName} stn{' '}
-                      {selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex}
+                      {t('dialogs.dmpNewImport.mergeOption', {
+                        importStation: selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex, target: targetSectionName,
+                        existingStation: selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex,
+                      })}
                     </span>
                   )}
                 </div>
@@ -3278,12 +3278,12 @@ export default function DmpNewImportDialog({
                             {t(`dialogs.dmpNewImport.confidence.${alt.confidence}`).split(' ')[0]}
                           </span>
                           <span className="flex-1 truncate">
-                            <span className="text-text-secondary">stn {alt.importStationIndex}</span>
+                            <span className="text-text-secondary">{t('dialogs.dmpNewImport.stn', { index: alt.importStationIndex })}</span>
                             <span className="text-text-secondary"> → </span>
                             <span className="font-medium">{alt.existingSectionName}</span>
-                            <span className="text-text-secondary"> stn {alt.existingStationIndex}</span>
+                            <span className="text-text-secondary"> {t('dialogs.dmpNewImport.stn', { index: alt.existingStationIndex })}</span>
                             {alt.targetType === 'importing' && (
-                              <span className="text-text-secondary text-[10px] ml-0.5">(imp)</span>
+                              <span className="text-text-secondary text-[10px] ml-0.5">{t('dialogs.dmpNewImport.importingShort')}</span>
                             )}
                           </span>
                           <span className="text-text-secondary">

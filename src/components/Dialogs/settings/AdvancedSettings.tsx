@@ -222,7 +222,7 @@ export function AdvancedSettings({
     const ps = config.placement_suggestion;
     if (ps) {
       if (ps.azimuth_sigma <= 0 || ps.length_sigma <= 0 || ps.depth_sigma <= 0) {
-        errors.push('Placement suggestion sigma values must be positive');
+        errors.push(t('settings.advanced.validation.placementSigma'));
       }
     }
 
@@ -489,7 +489,7 @@ export function AdvancedSettings({
 
       <SettingsSection title={t('settings.advanced.sections.placementSuggestion')} data-testid="section-placement-suggestion">
         {/* Scoring Weights */}
-        <p className="text-xs text-text-secondary font-medium mt-1 mb-2">Scoring Weights</p>
+        <p className="text-xs text-text-secondary font-medium mt-1 mb-2">{t('settings.advanced.placementSuggestion.groups.weights')}</p>
         <PsRow field="azimuth_weight" i18nKey="azimuthWeight" step={0.05} min={0} max={1}
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsAzimuthWeight} t={t} />
         <PsRow field="length_weight" i18nKey="lengthWeight" step={0.05} min={0} max={1}
@@ -500,7 +500,7 @@ export function AdvancedSettings({
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsDepthOutWeight} t={t} />
 
         {/* Scoring Sensitivity (Sigma) */}
-        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">Scoring Sensitivity (Sigma)</p>
+        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">{t('settings.advanced.placementSuggestion.groups.sigma')}</p>
         <PsRow field="azimuth_sigma" i18nKey="azimuthSigma" step={1} min={0.1} max={180}
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsAzimuthSigma} t={t} />
         <PsRow field="length_sigma" i18nKey="lengthSigma" step={0.1} min={0.01} max={100}
@@ -509,7 +509,7 @@ export function AdvancedSettings({
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsDepthSigma} t={t} />
 
         {/* Score Thresholds */}
-        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">Score Thresholds</p>
+        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">{t('settings.advanced.placementSuggestion.groups.thresholds')}</p>
         <PsRow field="min_shot_score" i18nKey="minShotScore" step={0.05} min={0} max={1}
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMinShotScore} t={t} />
         <PsRow field="min_aggregate_score" i18nKey="minAggregateScore" step={0.05} min={0} max={1}
@@ -518,7 +518,7 @@ export function AdvancedSettings({
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsSingleShotPenalty} t={t} />
 
         {/* Hard Cutoffs */}
-        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">Hard Cutoffs</p>
+        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">{t('settings.advanced.placementSuggestion.groups.cutoffs')}</p>
         <PsRow field="max_azimuth_error_full" i18nKey="maxAzimuthErrorFull" step={1} min={0} max={180}
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMaxAzErrorFull} t={t} />
         <PsRow field="max_azimuth_error_partial" i18nKey="maxAzimuthErrorPartial" step={1} min={0} max={180}
@@ -531,7 +531,7 @@ export function AdvancedSettings({
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMaxLenErrorFloor} t={t} />
 
         {/* Limits */}
-        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">Limits</p>
+        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">{t('settings.advanced.placementSuggestion.groups.limits')}</p>
         <PsRow field="max_reference_shots" i18nKey="maxReferenceShots" step={1} min={1} max={50}
           config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMaxRefShots} t={t} />
         <PsRow field="max_suggestions" i18nKey="maxSuggestions" step={1} min={1} max={100}

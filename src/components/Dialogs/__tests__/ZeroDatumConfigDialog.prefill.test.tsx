@@ -32,12 +32,9 @@ vi.mock('@tanstack/react-virtual', () => ({
 }));
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 
-// Partial mock: `src/i18n/index.ts` (pulled in by the number formatters) needs
-// the real `initReactI18next`.
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (k: string) => k }),
-}));
+// Real i18n: the station options ("Station N") and the parsed-GPS line
+// ("Lat: ...") asserted below render from en.json.
+import '../../../i18n';
 
 // SectionPreview draws on a MapLibre canvas, which jsdom cannot run.
 vi.mock('maplibre-gl', () => ({ default: {} }));

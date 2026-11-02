@@ -13,11 +13,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (k: string) => k }),
-}));
+// The real i18next instance, so the assertions below read the rendered English.
+import '../../../i18n';
 
 type Gps = { latitude: number; longitude: number; depth_reference: number } | null;
 

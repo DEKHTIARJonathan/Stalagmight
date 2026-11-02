@@ -275,7 +275,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
                         <td className="px-3 py-1">{wpt.name ?? '-'}</td>
                         <td className="px-3 py-1">{wpt.latitude.toFixed(6)}</td>
                         <td className="px-3 py-1">{wpt.longitude.toFixed(6)}</td>
-                        <td className="px-3 py-1">{wpt.elevation != null ? `${wpt.elevation.toFixed(1)}m` : '-'}</td>
+                        <td className="px-3 py-1">{wpt.elevation != null ? t('dialogs.gpxSelection.elevationValue', { value: wpt.elevation.toFixed(1) }) : '-'}</td>
                       </tr>
                     ))}
                   </tbody>

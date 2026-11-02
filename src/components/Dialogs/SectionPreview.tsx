@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import type maplibregl from 'maplibre-gl';
 import type { DmpSection, DmpShot } from '../../types/commands';
 import type { Section, Station, Shot } from '../../types/project';
@@ -188,6 +189,7 @@ export default function SectionPreview({
   selectedSectionIndex,
   azimuthReference,
 }: SectionPreviewProps) {
+  const { t } = useTranslation();
   // When segmentSections is provided, use the first section as the primary
   const effectiveSection = section ?? (segmentSections?.[0]?.section ?? null);
   const effectiveColor = section ? color : (segmentSections?.[0]?.color ?? color);
@@ -1158,7 +1160,7 @@ export default function SectionPreview({
       {/* Overlay placeholder when no section selected */}
       {!effectiveSection && !(segmentSections && segmentSections.length > 0) && (
         <div className="absolute inset-0 flex items-center justify-center bg-background text-text-secondary text-sm">
-          Select a section to preview
+          {t('dialogs.sectionPreview.empty')}
         </div>
       )}
     </div>

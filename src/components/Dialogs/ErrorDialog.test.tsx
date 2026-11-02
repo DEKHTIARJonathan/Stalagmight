@@ -12,6 +12,7 @@ vi.mock('../../utils/telemetry', async (importOriginal) => ({
   trackDialogComplete: vi.fn(),
 }));
 
+import '../../i18n';
 import ErrorDialog from './ErrorDialog';
 import { useUIStore } from '../../store/uiStore';
 

@@ -50,7 +50,7 @@ export function isVirtualShotKind(kind: ShotKind): boolean {
 
 /**
  * Plain-English names for surfaces that have no i18n wiring yet (the context
- * menu and the draw-shot dialog hardcode every other label too).
+ * menu hardcodes every other label too).
  */
 export const SHOT_KIND_MENU_LABEL: Record<ShotKind, string> = {
   Normal: 'Permanent',

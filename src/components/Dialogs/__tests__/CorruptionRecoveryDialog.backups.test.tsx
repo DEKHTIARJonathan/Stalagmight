@@ -32,6 +32,7 @@ vi.mock('../DialogWrapper', () => ({
   DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
+import '../../../i18n';
 import CorruptionRecoveryDialog from '../CorruptionRecoveryDialog';
 
 function candidate(

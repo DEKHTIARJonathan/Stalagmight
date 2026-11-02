@@ -67,7 +67,7 @@ export function SegmentPlacementModes({
   const sectionOptions = (): SelectOption[] =>
     (currentSegment ?? []).map((idx): SelectOption => ({
       value: String(idx),
-      label: sectionEdits.get(idx)?.name ?? dmpSections[idx]?.name ?? `Section ${idx}`,
+      label: sectionEdits.get(idx)?.name ?? dmpSections[idx]?.name ?? t('dialogs.dmpNewImport.sectionFallbackName', { id: idx }),
     }));
 
   const stationOptions = (): SelectOption[] => {
@@ -103,8 +103,11 @@ export function SegmentPlacementModes({
             <div className="text-sm">
               <div className="font-medium">{t('dialogs.dmpNewImport.manualPlacing.suggestion')}</div>
               <div className="text-xs text-text-secondary">
-                → {segmentSkippedSuggestion.suggestion.existingSectionName} stn {segmentSkippedSuggestion.mergeExistingStation}
-                {' · '}{segmentSkippedSuggestion.suggestion.matchedShots} shots matched
+                {t('dialogs.dmpNewImport.manualPlacing.suggestionTarget', {
+                  section: segmentSkippedSuggestion.suggestion.existingSectionName,
+                  station: segmentSkippedSuggestion.mergeExistingStation,
+                })}
+                {' · '}{t('dialogs.dmpNewImport.matchedShots', { count: segmentSkippedSuggestion.suggestion.matchedShots })}
               </div>
             </div>
           </label>
@@ -183,7 +186,7 @@ export function SegmentPlacementModes({
                           { value: '', label: '-' } as SelectOption,
                           ...projectSections.map((s): SelectOption => ({
                             value: String(s.id),
-                            label: s.name ?? `Section ${s.id}`,
+                            label: s.name ?? t('dialogs.dmpNewImport.sectionFallbackName', { id: s.id }),
                           })),
                         ]}
                         className="flex-1"

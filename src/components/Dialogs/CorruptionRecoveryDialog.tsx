@@ -1,4 +1,6 @@
 import { useCallback, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { saveDialog } from '../../utils/fileDialogs';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -17,17 +19,17 @@ type Step = 'choose' | 'repairing' | 'listing-backups' | 'pick-backup' | 'restor
  * [#576 C15] What a restore candidate is, in the user's words. The backend says
  * what each file is (`kind`); the label is the dialog's.
  */
-function backupLabel(backup: BackupInfo): string {
+function backupLabel(backup: BackupInfo, t: TFunction): string {
   switch (backup.kind) {
     case 'interrupted_save':
-      return 'Interrupted save';
+      return t('dialogs.corruptionRecovery.backupKind.interruptedSave');
     case 'pre_restore':
       return backup.restoreNumber !== null
-        ? `Your file before restore ${backup.restoreNumber}`
-        : 'Your file before an earlier restore';
+        ? t('dialogs.corruptionRecovery.backupKind.preRestoreNumbered', { number: backup.restoreNumber })
+        : t('dialogs.corruptionRecovery.backupKind.preRestore');
     case 'backup':
     default:
-      return 'Backup';
+      return t('dialogs.corruptionRecovery.backupKind.backup');
   }
 }
 
@@ -40,13 +42,14 @@ interface ResultInfo {
 }
 
 export default function CorruptionRecoveryDialog() {
+  const { t } = useTranslation();
   const { closeDialog, dialogData } = useUIStore(
     useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
   );
   const loadProject = useProjectStore((s) => s.loadProject);
 
   const filePath = dialogData.corruptPath as string;
-  const errorMessage = (dialogData.errorMessage as string) ?? 'Database integrity check failed.';
+  const errorMessage = (dialogData.errorMessage as string) ?? t('dialogs.corruptionRecovery.defaultError');
 
   const [step, setStep] = useState<Step>('choose');
   const [backups, setBackups] = useState<BackupInfo[]>([]);
@@ -63,14 +66,14 @@ export default function CorruptionRecoveryDialog() {
       });
       setResult({
         success: res.success,
-        title: res.success ? 'Repair Succeeded' : 'Repair Incomplete',
+        title: res.success ? t('dialogs.corruptionRecovery.results.repairSucceeded') : t('dialogs.corruptionRecovery.results.repairIncomplete'),
         message: res.message,
         canReopen: res.success,
       });
     } catch (e) {
       setResult({
         success: false,
-        title: 'Repair Failed',
+        title: t('dialogs.corruptionRecovery.results.repairFailed'),
         message: String(e),
         canReopen: false,
       });
@@ -78,7 +81,7 @@ export default function CorruptionRecoveryDialog() {
       setBusy(false);
       setStep('result');
     }
-  }, [filePath]);
+  }, [filePath, t]);
 
   // ── List & Pick Backup ──────────────────────────────────────────
   const handleListBackups = useCallback(async () => {
@@ -92,8 +95,8 @@ export default function CorruptionRecoveryDialog() {
       if (list.length === 0) {
         setResult({
           success: false,
-          title: 'No Backups Found',
-          message: 'No backup files were found alongside this project.',
+          title: t('dialogs.corruptionRecovery.results.noBackups'),
+          message: t('dialogs.corruptionRecovery.results.noBackupsMessage'),
           canReopen: false,
         });
         setStep('result');
@@ -103,7 +106,7 @@ export default function CorruptionRecoveryDialog() {
     } catch (e) {
       setResult({
         success: false,
-        title: 'Error',
+        title: t('dialogs.corruptionRecovery.results.error'),
         message: String(e),
         canReopen: false,
       });
@@ -111,7 +114,7 @@ export default function CorruptionRecoveryDialog() {
     } finally {
       setBusy(false);
     }
-  }, [filePath]);
+  }, [filePath, t]);
 
   const handleRestoreBackup = useCallback(async (backupPath: string) => {
     setStep('restoring');
@@ -125,14 +128,14 @@ export default function CorruptionRecoveryDialog() {
       });
       setResult({
         success: true,
-        title: 'Restore Succeeded',
+        title: t('dialogs.corruptionRecovery.results.restoreSucceeded'),
         message: msg,
         canReopen: true,
       });
     } catch (e) {
       setResult({
         success: false,
-        title: 'Restore Failed',
+        title: t('dialogs.corruptionRecovery.results.restoreFailed'),
         message: String(e),
         canReopen: false,
       });
@@ -140,7 +143,7 @@ export default function CorruptionRecoveryDialog() {
       setBusy(false);
       setStep('result');
     }
-  }, [filePath]);
+  }, [filePath, t]);
 
   // ── Export Salvageable Data ─────────────────────────────────────
   const handleSalvage = useCallback(async () => {
@@ -153,7 +156,7 @@ export default function CorruptionRecoveryDialog() {
 
       // Prompt user for save location
       const destPath = await saveDialog({
-        title: 'Save Salvaged Data',
+        title: t('dialogs.corruptionRecovery.salvage.saveTitle'),
         defaultPath: 'salvaged-data.json',
         filters: [{ name: 'JSON', extensions: ['json'] }],
       }, 'recovery-export-salvage');
@@ -171,26 +174,26 @@ export default function CorruptionRecoveryDialog() {
       await writeTextFile(destPath, content);
 
       const parts: string[] = [];
-      if (data.sectionCount > 0) parts.push(`${data.sectionCount} section(s)`);
-      if (data.shotCount > 0) parts.push(`${data.shotCount} shot(s)`);
-      if (data.mergeCount > 0) parts.push(`${data.mergeCount} merge(s)`);
-      const summary = parts.length > 0 ? parts.join(', ') : 'no recoverable data';
+      if (data.sectionCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.sections', { count: data.sectionCount }));
+      if (data.shotCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.shots', { count: data.shotCount }));
+      if (data.mergeCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.merges', { count: data.mergeCount }));
+      const summary = parts.length > 0 ? parts.join(', ') : t('dialogs.corruptionRecovery.salvage.noData');
 
-      let message = `Saved to ${destPath}\n\nRecovered: ${summary}`;
+      let message = t('dialogs.corruptionRecovery.salvage.savedTo', { path: destPath, summary });
       if (data.errors.length > 0) {
-        message += `\n\nWarnings:\n${data.errors.map(e => `  - ${e}`).join('\n')}`;
+        message += `\n\n${t('dialogs.corruptionRecovery.salvage.warnings', { list: data.errors.map(e => `  - ${e}`).join('\n') })}`;
       }
 
       setResult({
         success: true,
-        title: 'Data Exported',
+        title: t('dialogs.corruptionRecovery.results.dataExported'),
         message,
         canReopen: false,
       });
     } catch (e) {
       setResult({
         success: false,
-        title: 'Salvage Failed',
+        title: t('dialogs.corruptionRecovery.results.salvageFailed'),
         message: String(e),
         canReopen: false,
       });
@@ -198,7 +201,7 @@ export default function CorruptionRecoveryDialog() {
       setBusy(false);
       setStep('result');
     }
-  }, [filePath]);
+  }, [filePath, t]);
 
   // ── Re-open after successful repair/restore ─────────────────────
   const handleReopen = useCallback(async () => {
@@ -222,7 +225,7 @@ export default function CorruptionRecoveryDialog() {
         <div className="space-y-4">
           <p className="text-text-secondary">{errorMessage}</p>
           <p className="text-sm text-text-tertiary">
-            Choose a recovery option below. A backup of the corrupt file will be created before any repair attempt.
+            {t('dialogs.corruptionRecovery.choose.intro')}
           </p>
 
           <div className="space-y-2 pt-2">
@@ -232,9 +235,9 @@ export default function CorruptionRecoveryDialog() {
               className="w-full text-left p-3 rounded border border-border hover:bg-surface-alt transition-colors"
               data-testid="recovery-attempt-repair"
             >
-              <div className="font-medium">Attempt Repair</div>
+              <div className="font-medium">{t('dialogs.corruptionRecovery.choose.repair')}</div>
               <div className="text-sm text-text-tertiary mt-0.5">
-                Creates a backup, then runs REINDEX + VACUUM to fix common corruption issues.
+                {t('dialogs.corruptionRecovery.choose.repairHint')}
               </div>
             </button>
 
@@ -244,9 +247,9 @@ export default function CorruptionRecoveryDialog() {
               className="w-full text-left p-3 rounded border border-border hover:bg-surface-alt transition-colors"
               data-testid="recovery-restore-backup"
             >
-              <div className="font-medium">Restore from Backup</div>
+              <div className="font-medium">{t('dialogs.corruptionRecovery.choose.restore')}</div>
               <div className="text-sm text-text-tertiary mt-0.5">
-                Replace the corrupt file with a previous backup.
+                {t('dialogs.corruptionRecovery.choose.restoreHint')}
               </div>
             </button>
 
@@ -256,15 +259,15 @@ export default function CorruptionRecoveryDialog() {
               className="w-full text-left p-3 rounded border border-border hover:bg-surface-alt transition-colors"
               data-testid="recovery-export-salvage"
             >
-              <div className="font-medium">Export Salvageable Data</div>
+              <div className="font-medium">{t('dialogs.corruptionRecovery.choose.salvage')}</div>
               <div className="text-sm text-text-tertiary mt-0.5">
-                Export whatever data can be read from the corrupt file as JSON.
+                {t('dialogs.corruptionRecovery.choose.salvageHint')}
               </div>
             </button>
           </div>
 
           <div className="flex justify-end pt-4 border-t border-border">
-            <Button onClick={closeDialog} data-testid="recovery-cancel">Cancel</Button>
+            <Button onClick={closeDialog} data-testid="recovery-cancel">{t('common.actions.cancel')}</Button>
           </div>
         </div>
       );
@@ -273,15 +276,15 @@ export default function CorruptionRecoveryDialog() {
     // Step: busy (repairing / listing / restoring / salvaging)
     if (busy) {
       const labels: Record<string, string> = {
-        repairing: 'Attempting repair...',
-        'listing-backups': 'Scanning for backups...',
-        restoring: 'Restoring from backup...',
-        salvaging: 'Exporting salvageable data...',
+        repairing: t('dialogs.corruptionRecovery.busy.repairing'),
+        'listing-backups': t('dialogs.corruptionRecovery.busy.listingBackups'),
+        restoring: t('dialogs.corruptionRecovery.busy.restoring'),
+        salvaging: t('dialogs.corruptionRecovery.busy.salvaging'),
       };
       return (
         <div className="flex items-center gap-3 py-4">
           <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-          <span className="text-text-secondary">{labels[step] ?? 'Working...'}</span>
+          <span className="text-text-secondary">{labels[step] ?? t('dialogs.corruptionRecovery.busy.working')}</span>
         </div>
       );
     }
@@ -290,11 +293,9 @@ export default function CorruptionRecoveryDialog() {
     if (step === 'pick-backup') {
       return (
         <div className="space-y-4">
-          <p className="text-text-secondary">Select a file to restore:</p>
+          <p className="text-text-secondary">{t('dialogs.corruptionRecovery.pick.selectFile')}</p>
           <p className="text-sm text-text-tertiary">
-            Each file was checked: it has to open, pass the database integrity check and
-            hold a project. Files that do not are greyed out. Your current file is kept
-            before anything is replaced.
+            {t('dialogs.corruptionRecovery.pick.checkedHint')}
           </p>
           <div className="space-y-1 max-h-60 overflow-auto">
             {backups.map((backup, index) => {
@@ -312,14 +313,14 @@ export default function CorruptionRecoveryDialog() {
                   className="w-full text-left p-2 rounded border border-border hover:bg-surface-alt transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                   data-testid={recoveryBackupItemTestId(index)}
                 >
-                  <div className="text-sm font-medium">{backupLabel(backup)}</div>
+                  <div className="text-sm font-medium">{backupLabel(backup, t)}</div>
                   <div className="font-mono text-xs text-text-secondary mt-0.5">{filename}</div>
                   <div className="text-xs text-text-tertiary mt-0.5">
-                    {sizeKb} KB &middot; {backup.modifiedAt}
+                    {t('dialogs.corruptionRecovery.pick.size', { sizeKb, modifiedAt: backup.modifiedAt })}
                   </div>
                   {!backup.usable && (
                     <div className="text-xs text-error mt-0.5">
-                      Cannot be restored: {backup.problem ?? 'it did not pass the checks'}.
+                      {t('dialogs.corruptionRecovery.pick.cannotRestore', { problem: backup.problem ?? t('dialogs.corruptionRecovery.pick.notPassed') })}
                     </div>
                   )}
                 </button>
@@ -327,7 +328,7 @@ export default function CorruptionRecoveryDialog() {
             })}
           </div>
           <div className="flex justify-end pt-4 border-t border-border">
-            <Button onClick={handleBackToChoose} data-testid="recovery-backup-back">Back</Button>
+            <Button onClick={handleBackToChoose} data-testid="recovery-backup-back">{t('common.actions.back')}</Button>
           </div>
         </div>
       );
@@ -343,12 +344,12 @@ export default function CorruptionRecoveryDialog() {
           <p className="text-text-secondary whitespace-pre-wrap">{result.message}</p>
           <div className="flex justify-end gap-2 pt-4 border-t border-border">
             {!result.success && (
-              <Button onClick={handleBackToChoose} data-testid="recovery-result-retry">Try Another Option</Button>
+              <Button onClick={handleBackToChoose} data-testid="recovery-result-retry">{t('dialogs.corruptionRecovery.tryAnother')}</Button>
             )}
             {result.canReopen ? (
-              <Button variant="primary" onClick={handleReopen} data-testid="recovery-result-reopen">Open Project</Button>
+              <Button variant="primary" onClick={handleReopen} data-testid="recovery-result-reopen">{t('dialogs.corruptionRecovery.openProject')}</Button>
             ) : (
-              <Button onClick={() => { trackDialogComplete('corruption-recovery'); closeDialog(); }} data-testid="recovery-result-close">Close</Button>
+              <Button onClick={() => { trackDialogComplete('corruption-recovery'); closeDialog(); }} data-testid="recovery-result-close">{t('common.actions.close')}</Button>
             )}
           </div>
         </div>
@@ -360,7 +361,7 @@ export default function CorruptionRecoveryDialog() {
 
   return (
     <DialogWrapper
-      title="File Corruption Detected"
+      title={t('dialogs.corruptionRecovery.title')}
       onClose={closeDialog}
       size="lg"
       data-testid="corruption-recovery-dialog"

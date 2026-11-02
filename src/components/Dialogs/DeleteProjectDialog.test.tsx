@@ -43,4 +43,16 @@ describe('DeleteProjectDialog', () => {
     expect(screen.queryByText(/It cannot be undone\./)).toBeNull();
     expect(screen.getByTestId('delete-project-confirm')).toHaveTextContent('Delete local copy');
   });
+
+  // #576 D20: the copy is a <Trans> template now (`Permanently delete
+  // <name>{{name}}</name>?`). A name or path that looks like markup must render
+  // as typed, not be parsed as a tag of the template.
+  it('renders a project name and path that look like markup as typed', () => {
+    useUIStore.setState({ dialogData: { path: '/caves/a</path>b.stalx', name: 'Main <A> & </name>B', isRemote: false } });
+    render(<DeleteProjectDialog />);
+
+    expect(screen.getByText('Main <A> & </name>B')).toHaveClass('font-medium');
+    expect(screen.getByText(/^Permanently delete/).textContent).toBe('Permanently delete Main <A> & </name>B?');
+    expect(screen.getByText('/caves/a</path>b.stalx')).toHaveClass('break-all');
+  });
 });

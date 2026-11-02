@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
@@ -9,6 +10,7 @@ import { DialogWrapper } from './DialogWrapper';
 import { useShallow } from 'zustand/react/shallow';
 
 export default function EditShotDialog() {
+  const { t } = useTranslation();
   const { closeDialog, dialogData } = useUIStore(
     useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
   );
@@ -69,19 +71,19 @@ export default function EditShotDialog() {
   const validateForm = (): boolean => {
     const lengthVal = parseFloat(length);
     if (isNaN(lengthVal) || lengthVal <= 0) {
-      setError('Length must be greater than 0');
+      setError(t('dialogs.editShot.lengthPositive'));
       return false;
     }
 
     const azInVal = parseFloat(azimuthIn);
     if (isNaN(azInVal) || azInVal < -360 || azInVal > 360) {
-      setError('Azimuth In must be between -360 and 360');
+      setError(t('dialogs.editShot.azimuthInRange'));
       return false;
     }
 
     const azOutVal = parseFloat(azimuthOut);
     if (isNaN(azOutVal) || azOutVal < -360 || azOutVal > 360) {
-      setError('Azimuth Out must be between -360 and 360');
+      setError(t('dialogs.editShot.azimuthOutRange'));
       return false;
     }
 
@@ -119,10 +121,10 @@ export default function EditShotDialog() {
         trackDialogComplete('edit-shot');
         closeDialog();
       } else {
-        setError(result.error ?? 'Failed to update shot');
+        setError(result.error ?? t('dialogs.editShot.updateFailed'));
       }
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to update shot'));
+      setError(getErrorMessage(e, t('dialogs.editShot.updateFailed')));
     } finally {
       setIsLoading(false);
     }
@@ -154,14 +156,14 @@ export default function EditShotDialog() {
 
   if (!shot) {
     return (
-      <DialogWrapper title="Edit Shot" onClose={closeDialog} size="lg" data-testid="edit-shot-dialog">
-        <div className="text-error">Shot not found</div>
+      <DialogWrapper title={t('dialogs.editShot.title')} onClose={closeDialog} size="lg" data-testid="edit-shot-dialog">
+        <div className="text-error">{t('dialogs.editShot.notFound')}</div>
       </DialogWrapper>
     );
   }
 
   return (
-    <DialogWrapper title="Edit Shot" onClose={closeDialog} size="lg" isDirty={isDirty} data-testid="edit-shot-dialog">
+    <DialogWrapper title={t('dialogs.editShot.title')} onClose={closeDialog} size="lg" isDirty={isDirty} data-testid="edit-shot-dialog">
       <div className="space-y-4">
         {error && (
           <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">
@@ -170,18 +172,21 @@ export default function EditShotDialog() {
         )}
 
         <div className="text-sm text-text-secondary">
-          Section: {section?.name ?? `Section ${sectionId}`} | Shot ID: {shotId}
+          {t('dialogs.editShot.summary', {
+            section: section?.name ?? t('dialogs.editShot.sectionFallback', { id: sectionId }),
+            shotId,
+          })}
         </div>
 
         {frozen && (
           <div className="p-2 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
-            Geometry fields are locked - this shot is part of an adjusted survey network.
+            {t('dialogs.editShot.frozen')}
           </div>
         )}
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Azimuth In (°)</label>
+            <label className="block text-sm text-text-secondary mb-1">{t('dialogs.editShot.azimuthIn')}</label>
             <input
               type="number" inputMode="decimal"
               value={azimuthIn}
@@ -193,7 +198,7 @@ export default function EditShotDialog() {
             />
           </div>
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Azimuth Out (°)</label>
+            <label className="block text-sm text-text-secondary mb-1">{t('dialogs.editShot.azimuthOut')}</label>
             <input
               type="number" inputMode="decimal"
               value={azimuthOut}
@@ -207,7 +212,7 @@ export default function EditShotDialog() {
         </div>
 
         <div>
-          <label className="block text-sm text-text-secondary mb-1">Length (m)</label>
+          <label className="block text-sm text-text-secondary mb-1">{t('dialogs.editShot.length')}</label>
           <input
             type="number" inputMode="decimal"
             value={length}
@@ -222,7 +227,7 @@ export default function EditShotDialog() {
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Depth In (m)</label>
+            <label className="block text-sm text-text-secondary mb-1">{t('dialogs.editShot.depthIn')}</label>
             <input
               type="number" inputMode="decimal"
               value={depthIn}
@@ -234,7 +239,7 @@ export default function EditShotDialog() {
             />
           </div>
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Depth Out (m)</label>
+            <label className="block text-sm text-text-secondary mb-1">{t('dialogs.editShot.depthOut')}</label>
             <input
               type="number" inputMode="decimal"
               value={depthOut}
@@ -249,7 +254,7 @@ export default function EditShotDialog() {
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Pitch In (°)</label>
+            <label className="block text-sm text-text-secondary mb-1">{t('dialogs.editShot.pitchIn')}</label>
             <input
               type="number" inputMode="decimal"
               value={pitchIn}
@@ -258,13 +263,13 @@ export default function EditShotDialog() {
               step="0.1"
               min="-90"
               max="90"
-              placeholder="Optional"
+              placeholder={t('dialogs.editShot.optional')}
               disabled={frozen}
               data-testid="edit-shot-pitch-in-input"
             />
           </div>
           <div>
-            <label className="block text-sm text-text-secondary mb-1">Pitch Out (°)</label>
+            <label className="block text-sm text-text-secondary mb-1">{t('dialogs.editShot.pitchOut')}</label>
             <input
               type="number" inputMode="decimal"
               value={pitchOut}
@@ -273,7 +278,7 @@ export default function EditShotDialog() {
               step="0.1"
               min="-90"
               max="90"
-              placeholder="Optional"
+              placeholder={t('dialogs.editShot.optional')}
               disabled={frozen}
               data-testid="edit-shot-pitch-out-input"
             />
@@ -281,7 +286,7 @@ export default function EditShotDialog() {
         </div>
 
         <div className="border-t border-border pt-3">
-          <label className="block text-sm text-text-secondary mb-2">LRUD (m)</label>
+          <label className="block text-sm text-text-secondary mb-2">{t('dialogs.editShot.lrud')}</label>
           <div className="grid grid-cols-4 gap-2">
             <div>
               <input
@@ -290,7 +295,7 @@ export default function EditShotDialog() {
                 onChange={(e) => setLeft(e.target.value)}
                 className="w-full"
                 step="0.1"
-                placeholder="L"
+                placeholder={t('dialogs.editShot.leftShort')}
                 data-testid="edit-shot-left-input"
               />
             </div>
@@ -301,7 +306,7 @@ export default function EditShotDialog() {
                 onChange={(e) => setRight(e.target.value)}
                 className="w-full"
                 step="0.1"
-                placeholder="R"
+                placeholder={t('dialogs.editShot.rightShort')}
                 data-testid="edit-shot-right-input"
               />
             </div>
@@ -312,7 +317,7 @@ export default function EditShotDialog() {
                 onChange={(e) => setUp(e.target.value)}
                 className="w-full"
                 step="0.1"
-                placeholder="U"
+                placeholder={t('dialogs.editShot.upShort')}
                 data-testid="edit-shot-up-input"
               />
             </div>
@@ -323,7 +328,7 @@ export default function EditShotDialog() {
                 onChange={(e) => setDown(e.target.value)}
                 className="w-full"
                 step="0.1"
-                placeholder="D"
+                placeholder={t('dialogs.editShot.downShort')}
                 data-testid="edit-shot-down-input"
               />
             </div>
@@ -331,22 +336,22 @@ export default function EditShotDialog() {
         </div>
 
         <div>
-          <label className="block text-sm text-text-secondary mb-1">Comment</label>
+          <label className="block text-sm text-text-secondary mb-1">{t('dialogs.editShot.comment')}</label>
           <textarea
             value={comment}
             onChange={(e) => setComment(e.target.value)}
             className="w-full h-20 resize-none"
-            placeholder="Optional comment"
+            placeholder={t('dialogs.editShot.commentPlaceholder')}
             data-testid="edit-shot-comment-input"
           />
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={closeDialog} disabled={isLoading} data-testid="edit-shot-cancel">
-            Cancel
+            {t('common.actions.cancel')}
           </Button>
           <Button variant="primary" onClick={handleSave} disabled={isLoading} data-testid="edit-shot-save">
-            {isLoading ? 'Saving...' : 'Save'}
+            {isLoading ? t('dialogs.editShot.saving') : t('common.actions.save')}
           </Button>
         </div>
       </div>

@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { isMoveCarryRefusal } from '../../store/moveCarry';
 import { useUIStore } from '../../store/uiStore';
@@ -17,6 +18,12 @@ import { extractFilename } from '../../utils/path';
 import { setSource } from '../../utils/telemetry';
 import { useShallow } from 'zustand/react/shallow';
 
+/** i18n keys for the section type column (rendered `capitalize`). */
+const SECTION_TYPE_KEYS = {
+  track: 'dialogs.gpxPlacement.types.track',
+  route: 'dialogs.gpxPlacement.types.route',
+} as const;
+
 /**
  * Step 2 dialog for GPX import.
  *
@@ -25,6 +32,7 @@ import { useShallow } from 'zustand/react/shallow';
  * Waypoints are always auto-placed as zero datums and don't appear here.
  */
 export default function GpxPlacementDialog() {
+  const { t } = useTranslation();
   const { executeGpxImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore(
     useShallow((s) => ({
       executeGpxImport: s.executeGpxImport,
@@ -77,9 +85,11 @@ export default function GpxPlacementDialog() {
         trk.segments.forEach((seg, si) => {
           const name = trk.name
             ? trk.segments.length > 1
-              ? `${trk.name} - Seg ${si + 1}`
+              ? t('dialogs.gpxPlacement.trackSegmentName', { name: trk.name, segment: si + 1 })
               : trk.name
-            : `Track ${ti + 1}${trk.segments.length > 1 ? ` Seg ${si + 1}` : ''}`;
+            : trk.segments.length > 1
+              ? t('dialogs.gpxPlacement.trackSegmentFallbackName', { index: ti + 1, segment: si + 1 })
+              : t('dialogs.gpxPlacement.trackFallbackName', { index: ti + 1 });
           result.push({
             type: 'track',
             name,
@@ -96,7 +106,7 @@ export default function GpxPlacementDialog() {
       gpxFile.routes.forEach((rte, ri) => {
         result.push({
           type: 'route',
-          name: rte.name ?? `Route ${ri + 1}`,
+          name: rte.name ?? t('dialogs.gpxPlacement.routeFallbackName', { index: ri + 1 }),
           pointCount: rte.points.length,
           backendIndex: idx,
           points: rte.points.map((p) => ({ latitude: p.latitude, longitude: p.longitude })),
@@ -106,7 +116,7 @@ export default function GpxPlacementDialog() {
     }
 
     return result;
-  }, [gpxFile, importTracks, importRoutes, waypointSectionOffset]);
+  }, [gpxFile, importTracks, importRoutes, waypointSectionOffset, t]);
 
   // Per-section zero datum station index (0 = first station)
   const [zeroDatumIndices, setZeroDatumIndices] = useState<Record<number, number>>(() => {
@@ -194,11 +204,10 @@ export default function GpxPlacementDialog() {
   };
 
   return (
-    <DialogWrapper title="GPX Import - Placement" onClose={closeDialog} size="lg" data-testid="gpx-placement-dialog">
+    <DialogWrapper title={t('dialogs.gpxPlacement.title')} onClose={closeDialog} size="lg" data-testid="gpx-placement-dialog">
       <div className="space-y-4">
         <div className="text-sm text-text-secondary">
-          Configure zero datum placement for each track/route section.
-          The selected station will be geo-referenced using its GPS coordinates.
+          {t('dialogs.gpxPlacement.description')}
         </div>
 
         {/* Section list */}
@@ -206,17 +215,17 @@ export default function GpxPlacementDialog() {
           <table className="w-full text-sm">
             <thead className="bg-surface-alt sticky top-0">
               <tr className="text-left text-text-tertiary text-xs">
-                <th className="px-3 py-1.5">Section</th>
-                <th className="px-3 py-1.5">Type</th>
-                <th className="px-3 py-1.5">Points</th>
-                <th className="px-3 py-1.5">Zero Datum Station</th>
+                <th className="px-3 py-1.5">{t('dialogs.gpxPlacement.table.section')}</th>
+                <th className="px-3 py-1.5">{t('dialogs.gpxPlacement.table.type')}</th>
+                <th className="px-3 py-1.5">{t('dialogs.gpxPlacement.table.points')}</th>
+                <th className="px-3 py-1.5">{t('dialogs.gpxPlacement.table.zeroDatumStation')}</th>
               </tr>
             </thead>
             <tbody>
               {sections.map((sec, i) => (
                 <tr key={i} className="border-t border-border">
                   <td className="px-3 py-1.5">{sec.name}</td>
-                  <td className="px-3 py-1.5 capitalize text-text-secondary">{sec.type}</td>
+                  <td className="px-3 py-1.5 capitalize text-text-secondary">{t(SECTION_TYPE_KEYS[sec.type])}</td>
                   <td className="px-3 py-1.5">{sec.pointCount}</td>
                   <td className="px-3 py-1.5">
                     <Select
@@ -225,10 +234,17 @@ export default function GpxPlacementDialog() {
                       onChange={(v) => handleZeroDatumChange(i, parseInt(v, 10))}
                       options={Array.from({ length: sec.pointCount }, (_, si) => ({
                         value: String(si),
-                        label: `Station ${si}${si === 0 ? ' (first)' : si === sec.pointCount - 1 ? ' (last)' : ''}`,
+                        label: t(
+                          si === 0
+                            ? 'dialogs.gpxPlacement.stationOptionFirst'
+                            : si === sec.pointCount - 1
+                              ? 'dialogs.gpxPlacement.stationOptionLast'
+                              : 'dialogs.gpxPlacement.stationOption',
+                          { index: si },
+                        ),
                       }))}
                       size="sm"
-                      aria-label={`Zero datum station for ${sec.name}`}
+                      aria-label={t('dialogs.gpxPlacement.zeroDatumStationLabel', { name: sec.name })}
                     />
                   </td>
                 </tr>
@@ -239,7 +255,7 @@ export default function GpxPlacementDialog() {
 
         {sections.length === 0 && (
           <div className="text-sm text-text-secondary text-center py-4">
-            No track or route sections to configure.
+            {t('dialogs.gpxPlacement.empty')}
           </div>
         )}
 
@@ -250,11 +266,11 @@ export default function GpxPlacementDialog() {
         {/* Footer */}
         <div className="flex justify-between pt-4 border-t border-border">
           <Button onClick={handleBack} disabled={isImporting} data-testid="gpx-placement-back">
-            Back
+            {t('common.actions.back')}
           </Button>
           <div className="flex gap-2">
             <Button onClick={closeDialog} disabled={isImporting} data-testid="gpx-placement-cancel">
-              Cancel
+              {t('common.actions.cancel')}
             </Button>
             <Button
               data-primary-action=""
@@ -262,7 +278,7 @@ export default function GpxPlacementDialog() {
               onClick={handleImport}
               disabled={isImporting}
             >
-              {isImporting ? 'Importing...' : 'Import'}
+              {isImporting ? t('dialogs.gpxPlacement.importing') : t('common.actions.import')}
             </Button>
           </div>
         </div>

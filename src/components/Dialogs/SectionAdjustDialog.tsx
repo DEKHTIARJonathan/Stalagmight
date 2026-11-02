@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
@@ -26,6 +27,7 @@ function offsetValue(raw: string): number {
  * Provides live preview as values change.
  */
 export default function SectionAdjustDialog() {
+  const { t } = useTranslation();
   const { closeDialog, dialogData } = useUIStore(
     useShallow((s) => ({ closeDialog: s.closeDialog, dialogData: s.dialogData })),
   );
@@ -151,7 +153,7 @@ export default function SectionAdjustDialog() {
       if (!previewApplied) {
         const result = await moveSection(sectionId, { x: dx, y: dy, z: 0 });
         if (!result.success) {
-          setError(result.error ?? 'Failed to adjust section position');
+          setError(result.error ?? t('dialogs.sectionAdjust.adjustFailed'));
           return;
         }
       } else {
@@ -161,7 +163,7 @@ export default function SectionAdjustDialog() {
         if (Math.abs(deltaDx) >= 0.001 || Math.abs(deltaDy) >= 0.001) {
           const result = await moveSection(sectionId, { x: deltaDx, y: deltaDy, z: 0 });
           if (!result.success) {
-            setError(result.error ?? 'Failed to adjust section position');
+            setError(result.error ?? t('dialogs.sectionAdjust.adjustFailed'));
             return;
           }
         }
@@ -169,7 +171,7 @@ export default function SectionAdjustDialog() {
       trackDialogComplete('section-adjust');
       closeDialog();
     } catch (e) {
-      setError(getErrorMessage(e, 'Failed to adjust section position'));
+      setError(getErrorMessage(e, t('dialogs.sectionAdjust.adjustFailed')));
     } finally {
       setIsLoading(false);
     }
@@ -199,19 +201,19 @@ export default function SectionAdjustDialog() {
   if (!section) {
     return (
       <DialogWrapper
-        title="Adjust Section Position"
+        title={t('dialogs.sectionAdjust.title')}
         onClose={closeDialog}
         size="sm"
         data-testid="section-adjust-dialog"
       >
-        <div className="text-error">Section not found</div>
+        <div className="text-error">{t('dialogs.sectionAdjust.notFound')}</div>
       </DialogWrapper>
     );
   }
 
   return (
     <DialogWrapper
-      title="Adjust Section Position"
+      title={t('dialogs.sectionAdjust.title')}
       onClose={handleCancel}
       size="sm"
       isDirty={isDirty}
@@ -225,7 +227,15 @@ export default function SectionAdjustDialog() {
         )}
 
         <div className="text-sm text-text-secondary mb-4">
-          Adjusting: <EntityBlob entity="section">{section.name ?? `Section ${section.id}`}</EntityBlob>
+          {/* The name is user text: escaped before Trans parses the string for
+              <blob>, unescaped after, so a name like "A <B>" renders as typed. */}
+          <Trans
+            i18nKey="dialogs.sectionAdjust.adjusting"
+            values={{ name: section.name ?? t('dialogs.sectionAdjust.sectionFallback', { id: section.id }) }}
+            tOptions={{ interpolation: { escapeValue: true } }}
+            shouldUnescape
+            components={{ blob: <EntityBlob entity="section">{null}</EntityBlob> }}
+          />
         </div>
 
         {connectedCount > 1 && (
@@ -233,15 +243,14 @@ export default function SectionAdjustDialog() {
             className="p-2 bg-warning-10 border border-warning-20 rounded text-xs text-warning"
             data-testid="section-adjust-connected-note"
           >
-            Merged with {connectedCount - 1} other{connectedCount - 1 === 1 ? '' : 's'} - all {connectedCount} sections
-            move together so the merge stays aligned.
+            {t('dialogs.sectionAdjust.connectedNote', { count: connectedCount - 1, total: connectedCount })}
           </div>
         )}
 
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm text-text-secondary mb-1">
-              dx (meters)
+              {t('dialogs.sectionAdjust.dx')}
             </label>
             {/* type="text" (not number): a number input strips the partial "-"/"."
                 being typed, which re-breaks #161. inputMode="text" (not "decimal")
@@ -255,12 +264,12 @@ export default function SectionAdjustDialog() {
               disabled={isLoading}
               data-testid="dx-input"
             />
-            <p className="text-xs text-text-secondary mt-1">Positive = East</p>
+            <p className="text-xs text-text-secondary mt-1">{t('dialogs.sectionAdjust.positiveEast')}</p>
           </div>
 
           <div>
             <label className="block text-sm text-text-secondary mb-1">
-              dy (meters)
+              {t('dialogs.sectionAdjust.dy')}
             </label>
             {/* See dx above: type="text"/inputMode="text" are load-bearing for #161. */}
             <input
@@ -272,22 +281,22 @@ export default function SectionAdjustDialog() {
               disabled={isLoading}
               data-testid="dy-input"
             />
-            <p className="text-xs text-text-secondary mt-1">Positive = North</p>
+            <p className="text-xs text-text-secondary mt-1">{t('dialogs.sectionAdjust.positiveNorth')}</p>
           </div>
         </div>
 
         {previewApplied && (
           <p className="text-xs text-accent">
-            Preview applied. Press Apply to confirm or Cancel to revert.
+            {t('dialogs.sectionAdjust.previewApplied')}
           </p>
         )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={handleCancel} disabled={isLoading} data-testid="section-adjust-cancel">
-            Cancel
+            {t('common.actions.cancel')}
           </Button>
           <Button variant="primary" onClick={handleApply} disabled={isLoading} data-testid="section-adjust-apply">
-            {isLoading ? 'Applying...' : 'Apply'}
+            {isLoading ? t('dialogs.sectionAdjust.applying') : t('common.actions.apply')}
           </Button>
         </div>
       </div>

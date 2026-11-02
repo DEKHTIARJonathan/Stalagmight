@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invokeIpc } from '../../utils/ipc';
 import { withThemeDepthRamp } from '../../utils/exportOptions';
 import { useProjectStore } from '../../store/projectStore';
@@ -27,6 +28,7 @@ const PREVIEW_SIZE = 300;
  * markup the export will write - no separate rendering pipeline.
  */
 export default function ExportPreview({ options, fill = false }: ExportPreviewProps) {
+  const { t } = useTranslation();
   const project = useProjectStore((state) => state.project);
   // The depth endpoints this preview sends are read from the live document, so
   // the theme is an INPUT to the request even though it appears nowhere in
@@ -127,7 +129,7 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
         >
           <div className="flex flex-col items-center gap-2">
             <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-            <span className="text-xs text-text-secondary">Rendering preview...</span>
+            <span className="text-xs text-text-secondary">{t('dialogs.export.previewRendering')}</span>
           </div>
         </div>
       )}
@@ -135,7 +137,7 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
       {/* Empty state when no project */}
       {!project && !isLoading && (
         <div className="absolute inset-0 flex items-center justify-center text-text-secondary text-sm">
-          No project loaded
+          {t('dialogs.export.previewNoProject')}
         </div>
       )}
 
@@ -145,7 +147,7 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
           className="absolute inset-0 flex items-center justify-center p-3 text-text-secondary text-xs text-center"
           data-testid="export-preview-error"
         >
-          Preview failed: {error}
+          {t('dialogs.export.previewFailed', { error })}
         </div>
       )}
     </div>

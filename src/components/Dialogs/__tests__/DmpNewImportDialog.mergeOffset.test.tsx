@@ -13,6 +13,9 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import type { DmpFile } from '../../../types/commands';
 import type { CrossSectionSuggestion } from '../../../types/ipc/CrossSectionSuggestion';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
+// Real i18n: the merge-station option text ("stn 1 → A stn 3") asserted below
+// renders from en.json.
+import '../../../i18n';
 
 // SectionPreview and the map panel pull maplibre-gl (WebGL) at module load,
 // which jsdom cannot execute.
@@ -25,10 +28,6 @@ vi.mock('../WizardMapPanel', () => ({
   WizardMapPanel: () => null,
   MAP_PANEL_DEFAULT_WIDTH: 400,
   MAP_PANEL_MAX_WIDTH: 800,
-}));
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock('../../../utils/telemetry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../utils/telemetry')>()),
