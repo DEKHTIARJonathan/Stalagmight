@@ -11,10 +11,13 @@
 // Run: node scripts/check-third-party-licenses.test.mjs  (also a CI check step).
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { HASHED_INPUTS } from './gen-third-party-licenses.mjs';
 import { checkBundle, REPO_ROOT, MAX_BUNDLE_BYTES } from './check-third-party-licenses.mjs';
 
 let passed = 0;
@@ -143,6 +146,27 @@ test('an edited generator script or about.toml fails', () => {
   assert.match(checkBundle(genRoot)[0], /gen-third-party-licenses\.mjs changed/);
   const aboutRoot = makeTree({ bundle, about: 'about-toml-v2' });
   assert.match(checkBundle(aboutRoot)[0], /about\.toml changed/);
+});
+
+// The checker imports HASHED_INPUTS from the generator (#576 E18(c)), so
+// importing the generator must be side-effect free: before the isMain guard it
+// ran the whole regeneration on import (cargo about + pnpm licenses, then a
+// write of THIRD-PARTY-LICENSES.md). A child process proves it: the import
+// must exit 0 without touching the bundle, even with no cargo-about installed.
+test('importing the generator neither runs it nor rewrites the bundle', () => {
+  const bundle = path.join(REPO_ROOT, 'THIRD-PARTY-LICENSES.md');
+  const before = fs.statSync(bundle);
+  const bytes = fs.readFileSync(bundle);
+  const gen = pathToFileURL(path.join(REPO_ROOT, 'scripts', 'gen-third-party-licenses.mjs')).href;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(gen)}); console.log(m.HASHED_INPUTS.length);`], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), '4');
+  assert.equal(fs.statSync(bundle).mtimeMs, before.mtimeMs);
+  assert.ok(fs.readFileSync(bundle).equals(bytes));
+});
+
+test('the checker verifies exactly the generator\'s input list', () => {
+  assert.deepEqual(HASHED_INPUTS, ['src-tauri/Cargo.lock', 'pnpm-lock.yaml', 'scripts/gen-third-party-licenses.mjs', 'src-tauri/about.toml']);
 });
 
 // The gate must pass against the real repo right now - a committed stale
