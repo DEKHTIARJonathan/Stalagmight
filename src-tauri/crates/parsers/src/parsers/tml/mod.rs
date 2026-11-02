@@ -37,6 +37,9 @@ pub use schema::inclination_to_pitch;
 // `#[cfg(test)]` items now that the parsers live in their own crate.
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_helpers;
+#[cfg(test)]
+#[expect(clippy::print_stdout)]
+mod undated_date_rv4_tests;
 
 use linearize::{
     collapsed_trip_report, join_contiguous_chains, linearize_section, split_runs_at_trip_boundaries,
@@ -682,12 +685,15 @@ fn parse_explorer_field(raw: &str) -> Option<String> {
 /// never had it, and the SpeleoDB sidecar never writes it. A survey genuinely
 /// dated 1 January 2000 therefore imports undated, the accepted cost of not
 /// rotating every re-imported placeholder (B2-MARKER).
+///
+/// The parsed date is compared, not the raw text: `%Y-%m-%d` also accepts an
+/// unpadded month or day, so "2000-1-1" from a tool that does not zero-pad
+/// is the placeholder too (#576 RV4-R-P1).
 fn shot_date(fields: &HashMap<&str, String>) -> Option<NaiveDate> {
     let raw = fields.get("date")?;
-    if raw == schema::UNDATED_PLACEHOLDER {
-        return None;
-    }
-    NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok()
+    let date = NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok()?;
+    let placeholder = NaiveDate::parse_from_str(schema::UNDATED_PLACEHOLDER, "%Y-%m-%d").ok();
+    (Some(date) != placeholder).then_some(date)
 }
 
 /// Build a `RawShot` from parsed field map.
