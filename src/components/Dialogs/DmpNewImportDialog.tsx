@@ -1,7 +1,7 @@
 import { usePreviewSize } from './usePreviewSize';
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { invokeIpc } from '../../utils/ipc';
+import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { CheckCircleIcon } from '../common/icons';
 import type { DmpFile, CrossSectionSuggestion, ImportSectionForSuggestion, SegmentGeometry } from '../../types/commands';
@@ -817,6 +817,7 @@ export default function DmpNewImportDialog({
   const {
     isImporting,
     failure,
+    fail,
     clearFailure,
     importAnchor,
     importBatch,
@@ -1928,6 +1929,80 @@ export default function DmpNewImportDialog({
     }
   }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, importBatch, completion, reportEmptySections, resolvedTheme]);
 
+  /**
+   * Ask the backend where every remaining section might connect, then present
+   * the best match - or, with nothing to suggest, move on to placing.
+   *
+   * A failed call STOPS here (#576 D24, decided "Stop and offer Retry"). It used
+   * to be swallowed as "nothing matched", so the wizard hid itself and started
+   * map placement of every section by hand: a broken matcher looked exactly
+   * like a survey with no overlaps. The user now sees why, and chooses between
+   * Retry (this again) and Place manually (that old path, on purpose).
+   */
+  const computeSuggestions = useCallback(async () => {
+    clearFailure();
+    setIsCalculating(true);
+    const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
+
+    const remainingSections: ImportSectionForSuggestion[] = [];
+    for (const idx of selectedIndices) {
+      if (idx === zeroDatumIdx) continue;
+      const section = dmpFile.sections[idx];
+      if (!section) continue;
+
+      const editableShots = convertToEditableShots(section.shots, section.version);
+      const shotData: ShotData[] = editableShots.map(editableShotToShotData);
+      if (shotData.length === 0) continue;
+
+      remainingSections.push({
+        index: idx,
+        name: section.name,
+        shots: shotData,
+        // Scored in the frame these readings are actually in (#438). Without
+        // it the backend falls back to the project default, and a DMP section
+        // would be matched against an existing Compass section across a
+        // declination - a real overlap scoring as a mismatch.
+        // camelCase here, snake_case on `ImportSectionConfig`: the two IPC
+        // structs differ in their serde rename, and the generated types are
+        // the authority.
+        azimuthReference: DMP_AZIMUTH_REFERENCE,
+      });
+    }
+
+    if (remainingSections.length === 0) {
+      setIsCalculating(false);
+      setPhase('done');
+      return;
+    }
+
+    try {
+      const suggestions = await invokeIpc<CrossSectionSuggestion[]>(
+        'suggest_all_import_placements',
+        { importSections: remainingSections },
+        { purpose: 'suggest import placements for remaining sections' },
+      );
+
+      suggestionPoolRef.current = suggestions;
+      fullPoolRef.current = suggestions;
+    } catch (e) {
+      const reason = getErrorMessage(e);
+      console.warn('[dmpImport] placement suggestions could not be computed:', reason);
+      setIsCalculating(false);
+      fail('suggestions', t('dialogs.dmpNewImport.suggestionsFailed', { reason }));
+      return;
+    }
+
+    setIsCalculating(false);
+
+    if (!(await pickFromPool())) {
+      // No suggestions at all - check for unreachable sections
+      transitionToPlacingOrManual();
+      return;
+    }
+
+    setPhase('suggesting');
+  }, [clearFailure, dmpFile.sections, fail, pickFromPool, selectedIndices, t, transitionToPlacingOrManual, zeroDatumConfig?.sectionIndex]);
+
   // On mount: import zero datum section and fire suggest_all_import_placements
   useEffect(() => {
     if (importStartedRef.current) return;
@@ -1959,63 +2034,7 @@ export default function DmpNewImportDialog({
       }
 
       // 2. Fire suggest_all_import_placements with all remaining sections
-      setIsCalculating(true);
-      const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-
-      const remainingSections: ImportSectionForSuggestion[] = [];
-      for (const idx of selectedIndices) {
-        if (idx === zeroDatumIdx) continue;
-        const section = dmpFile.sections[idx];
-        if (!section) continue;
-
-        const editableShots = convertToEditableShots(section.shots, section.version);
-        const shotData: ShotData[] = editableShots.map(editableShotToShotData);
-        if (shotData.length === 0) continue;
-
-        remainingSections.push({
-          index: idx,
-          name: section.name,
-          shots: shotData,
-          // Scored in the frame these readings are actually in (#438). Without
-          // it the backend falls back to the project default, and a DMP section
-          // would be matched against an existing Compass section across a
-          // declination - a real overlap scoring as a mismatch.
-          // camelCase here, snake_case on `ImportSectionConfig`: the two IPC
-          // structs differ in their serde rename, and the generated types are
-          // the authority.
-          azimuthReference: DMP_AZIMUTH_REFERENCE,
-        });
-      }
-
-      if (remainingSections.length === 0) {
-        setIsCalculating(false);
-        setPhase('done');
-        return;
-      }
-
-      try {
-        const suggestions = await invokeIpc<CrossSectionSuggestion[]>(
-          'suggest_all_import_placements',
-          { importSections: remainingSections },
-          { purpose: 'suggest import placements for remaining sections' },
-        );
-
-        suggestionPoolRef.current = suggestions;
-        fullPoolRef.current = suggestions;
-      } catch {
-        // Suggestion failure is non-fatal
-        suggestionPoolRef.current = [];
-      }
-
-      setIsCalculating(false);
-
-      if (!(await pickFromPool())) {
-        // No suggestions at all - check for unreachable sections
-        transitionToPlacingOrManual();
-        return;
-      }
-
-      setPhase('suggesting');
+      await computeSuggestions();
     };
 
     init();
@@ -3526,7 +3545,10 @@ export default function DmpNewImportDialog({
                 `init` above all, which used to leave this body blank (#576
                 NF-AN4-N1). `placing` shows its failure below, with its Retry. */}
             {phase !== 'placing' && error && !isImporting && !isCalculating && (
-              <div className="text-center" data-testid="wizard-status-failed">
+              <div
+                className="text-center"
+                data-testid={failure?.kind === 'suggestions' ? 'wizard-suggestions-failed' : 'wizard-status-failed'}
+              >
                 <div className="text-lg mb-2 text-error" data-testid="wizard-error">{error}</div>
               </div>
             )}
@@ -3645,6 +3667,25 @@ export default function DmpNewImportDialog({
                   {segmentPlacementMode === 'discard'
                     ? t('dialogs.dmpNewImport.manualPlacing.next')
                     : t('dialogs.dmpNewImport.manualPlacing.placeSegment')}
+                </Button>
+              </>
+            )}
+            {/* #576 D24: the suggestions failed - ask again, or place by hand. */}
+            {failure?.kind === 'suggestions' && !isCalculating && !isImporting && (
+              <>
+                <Button
+                  onClick={() => { void transitionToPlacingOrManual(); }}
+                  className={importSecondaryButtonClass}
+                  data-testid="suggestions-place-manually-button"
+                >
+                  {t('dialogs.dmpNewImport.placeManually')}
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={() => { void computeSuggestions(); }}
+                  data-testid="suggestions-retry-button"
+                >
+                  {t('common.actions.retry')}
                 </Button>
               </>
             )}

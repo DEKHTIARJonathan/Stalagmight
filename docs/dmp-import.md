@@ -6,7 +6,7 @@ The DMP import wizard (`DmpNewImportDialog`) is the primary UI for importing cav
 
 | Phase | What happens |
 |-------|-------------|
-| `init` | Import the zero-datum section (if provided), then call `suggest_all_import_placements` for all remaining sections |
+| `init` | Import the zero-datum section (if provided), then call `suggest_all_import_placements` for all remaining sections. If that call FAILS the wizard stays here, visible, on "placement suggestions could not be computed: <reason>" with Retry and Place manually (#576 D24) - a successful empty answer is not a failure and goes straight on. A failed anchor import is shown here too |
 | `suggesting` | Present suggestions one at a time; user confirms, edits, or skips each |
 | `manual_placing` | Nothing was suggested for the remaining sections, so they are offered one SEGMENT at a time (`computeUnreachableSegments`) with four choices: reuse a skipped suggestion, attach to an existing section, place on the map by hand, or discard. Entered with `autoStartManualPlacementPending` set, which hides the dialog (`DialogWrapper`'s `hidden`) until the map placement it auto-starts has begun |
 | `placing` | Late import: build batch `ImportSectionConfig[]` for anything manual placement added and call `import_sections` again (overlap treatment already ran on the way out of `suggesting`) |
