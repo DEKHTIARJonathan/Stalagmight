@@ -806,19 +806,16 @@ impl TileCache {
         // This ensures we don't count an expired tile that's about to be deleted
         self.delete_retired(false)?;
 
-        // Check if we're replacing an existing (non-expired) tile
-        let existing_size: i64 = match self.conn.query_row(
-            "SELECT size_bytes FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4",
+        // The copy being replaced leaves BEFORE eviction is sized, so the new
+        // tile needs room for all of its bytes. Crediting the old copy's bytes
+        // instead ("space needed = new - old") counted them twice whenever the
+        // LRU eviction below picked that same row: freed once by the eviction,
+        // and again as the credit, so the insert landed over `max_bytes`.
+        self.conn.execute(
+            "DELETE FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4",
             params![provider, z, y, x],
-            |row| row.get(0),
-        ) {
-            Ok(size) => size,
-            Err(rusqlite::Error::QueryReturnedNoRows) => 0,
-            Err(e) => return Err(e.into()), // Propagate actual DB errors
-        };
-
-        // Calculate space needed (new size minus existing size we're replacing)
-        let space_needed = new_size.saturating_sub(existing_size as u64);
+        )?;
+        let space_needed = new_size;
 
         // Evict LRU tiles until we have space
         let mut stats = self.get_stats();
@@ -1210,6 +1207,10 @@ impl TileCache {
         }
     }
 }
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod accounting_tests;
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
