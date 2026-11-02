@@ -1,3 +1,4 @@
+use super::command_epilogue::EpilogueSteps;
 use super::AppState;
 #[cfg(test)]
 use crate::core::CommentHolder;
@@ -234,25 +235,6 @@ impl AppState {
         }
     }
 
-    /// Convert any sole-bridge loop closures in the open project to merges.
-    fn convert_orphan_closures_in_open_project(&self) {
-        let mut guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let Some(project) = guard.as_mut() else {
-            return;
-        };
-        let converted = project.convert_orphan_closures_to_merges();
-        if converted > 0 {
-            tracing::info!(
-                converted,
-                purpose = "enforce closures-are-loops invariant",
-                "Converted sole-bridge loop closures to merges after a removal"
-            );
-        }
-    }
-
     /// The open project's frame-defining datum station, or `None` with no project
     /// and none with no resolvable datum. Read BEFORE a command runs; handed back
     /// to [`Self::renormalize_frame_if_changed`] after it.
@@ -408,6 +390,7 @@ impl AppState {
     /// and the one remaining caller is a pure-addition path (a fresh import) that
     /// never creates one - so it would only pay the O(closures × connectivity)
     /// cost that used to dominate a large import.
+    #[cfg(test)]
     pub(super) fn finalize_structural_edit(&self, pre_had_critical: bool) -> bool {
         self.reconcile_geometry();
         !pre_had_critical && self.project_has_critical()
@@ -563,17 +546,14 @@ impl AppState {
         // "the project was mutated" signal the frontend dirties on. It is broader
         // than `fixed > 0` because resolve_offsets() above heals sub-tolerance drift
         // that never registered as a counted violation (fixed == 0, yet changed).
-        let mut changed = false;
-        if let Some(before_json) = before_snapshot {
-            if let Ok(after_json) = self.capture_project_snapshot() {
-                if before_json != after_json {
-                    changed = true;
-                    self.push_snapshot_undo(Command::RepairIntegrity, before_json, after_json);
-                    // Dirty-bit flip (#191, D-B16): repair mutated a remote project.
-                    self.mark_remote_forward_edit();
-                }
-            }
-        }
+        //
+        // [#576 A4] Through the shared epilogue with NO derived-state step: Repair
+        // settles its own (demote, convert, renormalise, zero-trust re-solve,
+        // re-measure) above, in an order the shared steps cannot express - the
+        // demotion must precede the conversion, and the re-solve replaces the
+        // reconcile. The epilogue orders the record and the dirty flip.
+        let changed =
+            self.record_snapshot_edit_if_changed(Command::RepairIntegrity, before_snapshot);
         Ok(IntegrityRepairResult {
             // Demotions are already inside the before→after delta: each demoted
             // merge was, by construction, a counted `merge_misaligned` violation
@@ -854,85 +834,80 @@ impl AppState {
             }
         }
 
-        // A command that REMOVES connectivity (delete shot/section, unmerge) can
-        // strand a section so its only attachment is a loop closure - which is
-        // then a merge, not a loop. Convert before reconciling offsets so the new
-        // merge is solved immediately (#8). Scoped to removal commands so a move
-        // still leaves an inert closure independent.
-        if result.success && integrity.can_orphan_closures {
-            self.convert_orphan_closures_in_open_project();
-        }
-
-        // Local (0, 0) MEANS `zero_datums[0]`'s GPS, so a command that promoted a
-        // different datum to first just re-defined what every stored coordinate
-        // means. Translate the survey onto the new origin before the reconcile, so
-        // the geometry the reconcile solves - and the after-half of any snapshot
-        // pair - is the renormalised one (#469, item 1). Gated on
-        // `affects_geometry` exactly as the reconcile below is: that classification
-        // is what excludes the lifecycle commands, and OpenProject in particular,
-        // where "the frame station changed" means a DIFFERENT PROJECT is open and
-        // renormalising would translate a file the user just loaded.
-        if result.success && cmd.affects_geometry() {
-            self.renormalize_frame_if_changed(frame_before);
-        }
-
-        // Treat section offsets as derived: after any structural command,
-        // reconcile geometry so no command path can leave merged stations
-        // drifted (a no-op when nothing moved; skipped during bulk import). A
-        // metadata-only UpdateShot (comment/LRUD/reference) is excluded - see
-        // `Command::affects_geometry` - so it can't silently heal drift with no undo.
-        if result.success && cmd.affects_geometry() {
-            self.reconcile_geometry();
-        }
-
-        // Push to undo stack if successful and undoable.
-        // Batch commands handle their own undo push inside execute_batch()
-        // (with before+after snapshots), so skip them here.
-        if result.success && Self::is_undoable(&cmd) && !matches!(cmd, Command::Batch { .. }) {
-            // For create commands, finalize undo data with snapshot-based ID preservation
-            let final_undo_data = self.finalize_undo_data(&cmd, undo_data);
-
-            // An entry `undo()` cannot apply must never enter the stack: `undo()`
-            // pops it, maps `UndoData::None` to a failure, and its epilogue pushes
-            // the entry straight BACK - so that pop is unproductive forever and
-            // every older entry underneath it is permanently unreachable. The
-            // stack is persisted, so the wedge survives close/reopen (stacks
-            // written before this guard are healed at load - see
-            // `UndoStack::is_applicable`). Reachable today by reversing a shot-less
-            // section (a GPX waypoint section, and the context menu offers Reverse
-            // with no shot-count guard): the command succeeds as a no-op while
-            // `generate_undo_data` returns `None`. Guarded here rather than per
-            // command so any future command with the same shape is covered.
-            //
-            // The redo stack is cleared REGARDLESS. `None` here does NOT imply the
-            // command changed nothing: `UnmergeStations` on a station that is in no
-            // merge returns `CommandResult::success()` unconditionally
-            // (`command_station.rs`) while `generate_undo_data` yields `None`, and
-            // it is classified as affecting geometry - so the epilogue above has
-            // already reconciled derived state. What the entry loses is the ability
-            // to be undone, not the fact that a forward command ran; the redo branch
-            // replays onto a state the project has left either way. (Accepted cost:
-            // a provably-no-op forward command, such as reversing a shot-less
-            // section, also drops the redo branch. "A successful forward command
-            // invalidates redo" outranks preserving redo across a no-op.)
-            if let Ok(mut undo_stack) = self.undo_stack.lock() {
-                if matches!(final_undo_data, UndoData::None) {
-                    tracing::debug!(
-                        command = %cmd.description(),
-                        "Command produced no undo data; not pushing an unundoable entry, clearing redo"
-                    );
-                    undo_stack.clear_redo();
-                } else {
-                    undo_stack.push_with_data(cmd.clone(), final_undo_data);
+        // [#576 A4] The shared forward epilogue, in its one order: the orphan
+        // conversion, the frame renormalisation and the reconcile, then the undo
+        // push, then the dirty flip.
+        //
+        // - A command that REMOVES connectivity (delete shot/section, unmerge) can
+        //   strand a section so its only attachment is a loop closure - which is then
+        //   a merge, not a loop (#8). Scoped to removal commands so a move still
+        //   leaves an inert closure independent.
+        // - Local (0, 0) MEANS `zero_datums[0]`'s GPS, so a command that promoted a
+        //   different datum to first re-defined what every stored coordinate means;
+        //   the survey is translated onto the new origin before the reconcile, so the
+        //   geometry it solves is the renormalised one (#469, item 1). Gated on
+        //   `affects_geometry`, which excludes the lifecycle commands - OpenProject in
+        //   particular, where "the frame station changed" means a different project.
+        // - Section offsets are derived: after any structural command, reconcile so
+        //   no command path can leave merged stations drifted. A metadata-only
+        //   UpdateShot is excluded (`Command::affects_geometry`) so it cannot silently
+        //   heal drift with no undo.
+        //
+        // A Batch ran this inside `execute_batch`, where its after-snapshot is taken,
+        // so it is skipped here: a second pass would only repeat it.
+        if result.success && !matches!(cmd, Command::Batch { .. }) {
+            let steps = EpilogueSteps {
+                convert_orphans: integrity.can_orphan_closures,
+                reframe_and_reconcile: cmd.affects_geometry(),
+            };
+            let recorded = self.forward_epilogue(frame_before, steps, || {
+                if !Self::is_undoable(&cmd) {
+                    return Ok(false);
                 }
-            }
-            // Dirty-bit flip (#191, D-B16): a successful, undo-pushed edit of a
-            // remote project marks it has_unpushed_edits. Set-only; no-op for
-            // local-only (load_speleo_link → None). Lifecycle pass-throughs
-            // (notably autosave/SaveProject) must NOT mark dirty. Batch pushes its
-            // own undo inside execute_batch and flips there.
-            if !Self::is_lifecycle_passthrough(&cmd) {
-                self.mark_remote_forward_edit();
+                // For create commands, finalize undo data with snapshot-based ID
+                // preservation.
+                let final_undo_data = self.finalize_undo_data(&cmd, undo_data);
+                // An entry `undo()` cannot apply must never enter the stack: `undo()`
+                // pops it, maps `UndoData::None` to a failure, and its epilogue pushes
+                // the entry straight BACK - so that pop is unproductive forever and
+                // every older entry underneath it is permanently unreachable. The
+                // stack is persisted, so the wedge survives close/reopen (stacks
+                // written before this guard are healed at load - see
+                // `UndoStack::is_applicable`). Reachable today by reversing a shot-less
+                // section (a GPX waypoint section, and the context menu offers Reverse
+                // with no shot-count guard): the command succeeds as a no-op while
+                // `generate_undo_data` returns `None`. Guarded here rather than per
+                // command so any future command with the same shape is covered.
+                //
+                // The redo stack is cleared REGARDLESS. `None` here does NOT imply the
+                // command changed nothing: `UnmergeStations` on a station that is in no
+                // merge returns `CommandResult::success()` unconditionally
+                // (`command_station.rs`) while `generate_undo_data` yields `None`, and
+                // it is classified as affecting geometry - so the epilogue above has
+                // already reconciled derived state. What the entry loses is the ability
+                // to be undone, not the fact that a forward command ran; the redo branch
+                // replays onto a state the project has left either way. (Accepted cost:
+                // a provably-no-op forward command, such as reversing a shot-less
+                // section, also drops the redo branch. "A successful forward command
+                // invalidates redo" outranks preserving redo across a no-op.)
+                if let Ok(mut undo_stack) = self.undo_stack.lock() {
+                    if matches!(final_undo_data, UndoData::None) {
+                        tracing::debug!(
+                            command = %cmd.description(),
+                            "Command produced no undo data; not pushing an unundoable entry, clearing redo"
+                        );
+                        undo_stack.clear_redo();
+                    } else {
+                        undo_stack.push_with_data(cmd.clone(), final_undo_data);
+                    }
+                }
+                // Dirty-bit flip (#191, D-B16): a successful, undo-pushed edit of a
+                // remote project marks it has_unpushed_edits. Lifecycle pass-throughs
+                // (notably autosave/SaveProject) must NOT mark dirty.
+                Ok(!Self::is_lifecycle_passthrough(&cmd))
+            });
+            if let Err(failure) = recorded {
+                return failure;
             }
         }
 
@@ -1152,27 +1127,27 @@ impl AppState {
         // metadata (the asymmetric-undo hazard that keeps SetStationComment out of
         // batches entirely). The outer execute() epilogue applies the same gate to
         // the Batch command, so the two passes agree.
-        self.convert_orphan_closures_in_open_project();
-        if commands.iter().any(Command::affects_geometry) {
-            // Same order as `execute()`'s epilogue: renormalise onto the new frame
-            // first, then reconcile the geometry that lands on it (#469, item 1).
-            self.renormalize_frame_if_changed(frame_before);
-            self.reconcile_geometry();
-        }
-
-        if push_undo {
+        //
+        // [#576 A4] Through the shared epilogue, which owns that order (renormalise
+        // onto the new frame first, then reconcile the geometry that lands on it,
+        // #469 item 1) and records the batch after it.
+        let steps = EpilogueSteps {
+            convert_orphans: true,
+            reframe_and_reconcile: commands.iter().any(Command::affects_geometry),
+        };
+        let recorded = self.forward_epilogue(frame_before, steps, move || {
+            if !push_undo {
+                return Ok(false);
+            }
             // Capture after-snapshot for redo support; failure means rollback
-            let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
-                Ok(s) => s,
-                Err(result) => return result,
-            };
-
+            let after_snapshot = self.capture_after_snapshot_or_rollback(&before_snapshot)?;
             // Push undo entry directly (bypasses finalize_undo_data which is a no-op for Batch)
             self.push_snapshot_undo(Command::Batch { commands }, before_snapshot, after_snapshot);
-            // Dirty-bit flip (#191, D-B16): a batch is always a set of mutations
-            // (never a lifecycle command), so mark the remote project dirty after
-            // its undo entry is pushed. Set-only; no-op for local-only.
-            self.mark_remote_forward_edit();
+            // A batch is always a set of mutations (never a lifecycle command).
+            Ok(true)
+        });
+        if let Err(failure) = recorded {
+            return failure;
         }
 
         let result = if section_ids.is_empty() {

@@ -1306,18 +1306,13 @@ mod tests {
             }
         }
         forward_calls.sort();
+        // [#576 A4] Every forward mutation entry point (execute, the batch, Repair,
+        // the delete/split paths, Insert station, the imports, the project settings,
+        // the comment move) flips the bit through the shared forward epilogue in
+        // `command_epilogue.rs`; `forward_epilogue_tests.rs` checks each one runs it.
         assert_eq!(
             forward_calls,
-            [
-                "command_comment.rs",
-                "command_delete_split.rs",
-                "command_import.rs",
-                "command_split_shot.rs",
-                "commands.rs",
-                "project_create.rs",
-                "recent_projects.rs",
-                "warnings.rs",
-            ],
+            ["command_epilogue.rs", "recent_projects.rs", "warnings.rs",],
             "enumerate every direct forward writer so a new path is reviewed explicitly"
         );
         assert!(

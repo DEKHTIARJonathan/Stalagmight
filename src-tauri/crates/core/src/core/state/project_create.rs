@@ -240,21 +240,13 @@ impl AppState {
         // save (NF-W3-2 gave the north reference its control).
         self.lift_unreadable_project_setting("validation");
         self.lift_unreadable_project_setting("default_azimuth_reference");
-        // Record an undo entry (before -> after) so the change is on the stack.
-        if let Some(before_json) = before_snapshot {
-            if let Ok(after_json) = self.capture_project_snapshot() {
-                if before_json != after_json {
-                    self.push_snapshot_undo(
-                        crate::core::Command::UpdateProjectSettings,
-                        before_json,
-                        after_json,
-                    );
-                    // Dirty-bit flip (#191, D-B16): settings mutated a remote
-                    // project. Set-only; no-op for local-only.
-                    self.mark_remote_forward_edit();
-                }
-            }
-        }
+        // Record an undo entry (before -> after) so the change is on the stack, and
+        // flip the dirty bit (#191, D-B16) - through the shared forward epilogue
+        // (#576 A4). A settings edit needs no derived-state step.
+        self.record_snapshot_edit_if_changed(
+            crate::core::Command::UpdateProjectSettings,
+            before_snapshot,
+        );
         CommandResult::success()
     }
 
@@ -309,18 +301,11 @@ impl AppState {
         // [#576 B15 follow-up] The elevation is now the user's: it no longer
         // refuses a save.
         self.lift_unreadable_project_setting("surface_elevation");
-        if let Some(before_json) = before_snapshot {
-            if let Ok(after_json) = self.capture_project_snapshot() {
-                if before_json != after_json {
-                    self.push_snapshot_undo(
-                        crate::core::Command::SetSurfaceElevation,
-                        before_json,
-                        after_json,
-                    );
-                    self.mark_remote_forward_edit();
-                }
-            }
-        }
+        // [#576 A4] Recorded through the shared forward epilogue, like the settings.
+        self.record_snapshot_edit_if_changed(
+            crate::core::Command::SetSurfaceElevation,
+            before_snapshot,
+        );
         CommandResult::success()
     }
 

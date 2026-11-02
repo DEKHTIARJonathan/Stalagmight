@@ -1,6 +1,7 @@
 mod app_state;
 mod command_comment;
 mod command_delete_split;
+mod command_epilogue;
 mod command_import;
 mod command_move;
 mod command_query;
@@ -58,6 +59,15 @@ mod concurrency_tests;
 mod crash_property_tests;
 #[cfg(test)]
 mod format_property_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              runs are the evidence a run captures"
+)]
+mod forward_epilogue_tests;
 #[cfg(test)]
 mod fuzz_rarity_tests;
 #[cfg(test)]

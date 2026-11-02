@@ -115,17 +115,17 @@ impl AppState {
             project.touch();
         }
 
-        // Step 3: Take AFTER snapshot
-        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-
-        // Step 4: Push single undo entry
-        self.push_snapshot_undo(cmd, before_snapshot, after_snapshot);
-        // Dirty-bit flip (#191, D-B16): moving a comment mutated a remote project.
-        // Set-only; no-op for local-only.
-        self.mark_remote_forward_edit();
+        // Steps 3-4: [#576 A4] Through the shared forward epilogue - a comment is
+        // metadata, so no derived-state step - which takes the AFTER snapshot,
+        // pushes the single undo entry and flips the dirty bit, in that order.
+        if let Err(failure) = self.record_snapshot_edit(
+            None,
+            super::command_epilogue::EpilogueSteps::NONE,
+            cmd,
+            before_snapshot,
+        ) {
+            return failure;
+        }
 
         tracing::info!(
             swap = swap,

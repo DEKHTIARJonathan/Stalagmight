@@ -298,7 +298,8 @@ components included, so that datum's station lands on the origin
 (`Project::renormalize_frame`, issue #469). The add does it inside
 `Project::set_zero_datum` (the subsequent-datum placement reads that invariant, and
 the import loop and redo never reach an epilogue); every other promotion does it in
-the forward epilogue. It runs forward only:
+the forward epilogue (`AppState::forward_epilogue`, which every forward entry point
+runs, #576 A4). It runs forward only:
 `resolve_offsets`' cascade never re-derives a seed's offset, so a whole-project
 translation is a no-op for the load path, and every affected command's undo restores
 the recorded map rather than re-deriving a frame.

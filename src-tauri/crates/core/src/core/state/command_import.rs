@@ -1,3 +1,4 @@
+use super::command_epilogue::EpilogueSteps;
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
@@ -168,6 +169,9 @@ impl AppState {
             Ok(s) => s,
             Err(result) => return result,
         };
+        // [#576 A4] The frame-defining datum before the import, for the shared
+        // epilogue's frame check.
+        let frame_before = self.frame_datum_key();
 
         // Step 1: Create the section (using internal method)
         let section_data = SectionData {
@@ -208,13 +212,10 @@ impl AppState {
             return merge_result;
         }
 
-        // Step 4: Capture the after snapshot and push undo entry with before+after.
-        let after_snapshot = match self.capture_after_snapshot_or_rollback(&snapshot) {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-
-        // Create a Batch command that represents both operations for the description
+        // Step 4: [#576 A4] The shared forward epilogue - frame check and reconcile,
+        // as `execute()` runs for a CreateSection and a MergeStations (this path ran
+        // neither); no orphan scan, since it only ADDS connectivity - then the after
+        // snapshot and one undo entry with before+after, described as a Batch.
         let batch_cmd = Command::Batch {
             commands: vec![
                 Command::CreateSection {
@@ -232,10 +233,11 @@ impl AppState {
             ],
         };
 
-        self.push_snapshot_undo(batch_cmd, snapshot, after_snapshot);
-        // Dirty-bit flip (#191, D-B16): a create+merge import mutated a remote
-        // project. Set-only; no-op for local-only.
-        self.mark_remote_forward_edit();
+        if let Err(failure) =
+            self.record_snapshot_edit(frame_before, EpilogueSteps::GEOMETRY, batch_cmd, snapshot)
+        {
+            return failure;
+        }
 
         // Combine warnings from both operations
         let mut all_warnings = create_result.warnings;
@@ -448,6 +450,10 @@ impl AppState {
             Ok(s) => s,
             Err(result) => return result,
         };
+        // [#576 A4] The frame-defining datum before the import, for the shared
+        // epilogue's frame check. (An import's datum placement renormalises inline
+        // in `Project::set_zero_datum`, so the check is a measured no-op today.)
+        let frame_before = self.frame_datum_key();
 
         // Apply shot updates to existing sections FIRST (overlap interpolation).
         // This must happen before placing new sections so that FromExisting placements
@@ -1282,75 +1288,78 @@ impl AppState {
             }
         }
 
-        // Block corruption at the source: reconcile derived
-        // offsets, and reject the whole import if it produced critical
-        // corruption (dangling refs / non-finite geometry) rather than committing
-        // and later persisting it. This custom path bypasses execute()'s guard, so
-        // it must run the same epilogue itself (#integrity Root 4 / catalog #19).
-        // An import only ADDS sections/merges/closures (its closures are loops over
-        // the spanning-tree merges, never sole bridges), so it can't strand a
-        // section behind a closure - which is why the epilogue runs no
-        // sole-bridge conversion at all.
-        if self.finalize_structural_edit(pre_had_critical) {
-            self.rollback_project(&before_snapshot);
-            tracing::error!(
-                purpose = "block corruption at the source",
-                "TML import would corrupt survey structure; rolled back, nothing imported"
-            );
-            return CommandResult::failure(
-                "Blocked: the imported data would corrupt the survey structure \
-                 (dangling references or invalid geometry). Nothing was imported."
-                    .to_string(),
-            );
-        }
-
-        // Merge an Ariane import's project-level entrance elevation (#431)
-        // before the after-snapshot, so it undoes/redoes atomically with the
-        // rest of the import - the same reason `mode`'s virtual-shot pass
-        // runs here rather than after (see the doc comment above). No-clobber:
-        // an existing different value wins, and the mismatch becomes a receipt
-        // warning naming both numbers.
-        let surface_elevation_warning = surface_elevation.and_then(|incoming| {
-            let mut proj_guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            let project = proj_guard.as_mut()?;
-            match project.surface_elevation {
-                None => {
-                    project.surface_elevation = Some(incoming);
-                    None
-                }
-                // 0.005 m matches the message's own `{:.2}` precision - a
-                // smaller difference (e.g. the same elevation re-imported
-                // metric then imperial: 100.0 m vs 328.084 ft -> 100.00003 m)
-                // must not fire a "differs" warning that prints the same
-                // rounded number on both sides.
-                Some(existing) if (existing - incoming).abs() > 0.005 => Some(format!(
-                    "Imported file's entrance elevation ({incoming:.2} m) differs from \
-                     the project's existing value ({existing:.2} m); kept {existing:.2} m"
-                )),
-                Some(_) => None,
+        // [#576 A4] The shared forward epilogue: the frame check and the reconcile of
+        // derived offsets, then - inside `record` - the corruption check, the
+        // entrance-elevation merge, the after-snapshot and one undo entry covering
+        // all sections + hash, then the dirty flip. An import only ADDS
+        // sections/merges/closures (its closures are loops over the spanning-tree
+        // merges, never sole bridges), so it can't strand a section behind a
+        // closure - which is why it runs no sole-bridge conversion at all.
+        let mut surface_elevation_warning = None;
+        let recorded = self.forward_epilogue(frame_before, EpilogueSteps::GEOMETRY, || {
+            // Block corruption at the source: reject the whole import if it produced
+            // critical corruption (dangling refs / non-finite geometry) rather than
+            // committing and later persisting it. This custom path bypasses
+            // execute()'s guard, so it runs the same check itself (#integrity Root 4
+            // / catalog #19).
+            if !pre_had_critical && self.project_has_critical() {
+                self.rollback_project(&before_snapshot);
+                tracing::error!(
+                    purpose = "block corruption at the source",
+                    "TML import would corrupt survey structure; rolled back, nothing imported"
+                );
+                return Err(CommandResult::failure(
+                    "Blocked: the imported data would corrupt the survey structure \
+                     (dangling references or invalid geometry). Nothing was imported."
+                        .to_string(),
+                ));
             }
+
+            // Merge an Ariane import's project-level entrance elevation (#431)
+            // before the after-snapshot, so it undoes/redoes atomically with the
+            // rest of the import - the same reason `mode`'s virtual-shot pass
+            // runs here rather than after (see the doc comment above). No-clobber:
+            // an existing different value wins, and the mismatch becomes a receipt
+            // warning naming both numbers.
+            surface_elevation_warning = surface_elevation.and_then(|incoming| {
+                let mut proj_guard = match self.project.lock() {
+                    Ok(g) => g,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                let project = proj_guard.as_mut()?;
+                match project.surface_elevation {
+                    None => {
+                        project.surface_elevation = Some(incoming);
+                        None
+                    }
+                    // 0.005 m matches the message's own `{:.2}` precision - a
+                    // smaller difference (e.g. the same elevation re-imported
+                    // metric then imperial: 100.0 m vs 328.084 ft -> 100.00003 m)
+                    // must not fire a "differs" warning that prints the same
+                    // rounded number on both sides.
+                    Some(existing) if (existing - incoming).abs() > 0.005 => Some(format!(
+                        "Imported file's entrance elevation ({incoming:.2} m) differs from \
+                         the project's existing value ({existing:.2} m); kept {existing:.2} m"
+                    )),
+                    Some(_) => None,
+                }
+            });
+
+            // Capture after-snapshot for redo support
+            let after_snapshot = self.capture_after_snapshot_or_rollback(&before_snapshot)?;
+            // Push a single undo entry covering all sections + hash
+            self.push_snapshot_undo(
+                Command::Batch {
+                    commands: batch_commands,
+                },
+                before_snapshot,
+                after_snapshot,
+            );
+            Ok(true)
         });
-
-        // Capture after-snapshot for redo support
-        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
-            Ok(s) => s,
-            Err(result) => return result,
-        };
-
-        // Push a single undo entry covering all sections + hash
-        self.push_snapshot_undo(
-            Command::Batch {
-                commands: batch_commands,
-            },
-            before_snapshot,
-            after_snapshot,
-        );
-        // Dirty-bit flip (#191, D-B16): a sections import mutated a remote
-        // project. Set-only; no-op for local-only.
-        self.mark_remote_forward_edit();
+        if let Err(failure) = recorded {
+            return failure;
+        }
 
         let shot_count: u32 = sections.iter().map(|s| s.shots.len() as u32).sum();
         let closures_requested = closures.len() as u32;

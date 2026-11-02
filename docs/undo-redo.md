@@ -310,9 +310,13 @@ placement loop, redo's re-execute) would otherwise place a second datum against 
 origin the first one does not sit on. It is idempotent (the delta is MEASURED), so
 the gate below is a no-op on top of it.
 
-Otherwise the renormalisation runs only in the FORWARD epilogue (`execute()`,
-`execute_batch`, `repair_open_project_integrity`, and the four delete/split entry
-points that bypass `execute()`), never in `reconcile_geometry` - which
+Otherwise the renormalisation runs only in the FORWARD epilogue,
+`AppState::forward_epilogue` (`core/state/command_epilogue.rs`), which every forward
+entry point runs - `execute()`, the batch, the four delete/split paths, Insert
+station, both imports, the project settings, the comment move (#576 A4; pinned by
+`forward_epilogue_tests.rs`) - and inline in `repair_open_project_integrity`, which
+settles its own derived state in an order the shared steps cannot express. Never in
+`reconcile_geometry` - which
 `undo()`/`redo()` share - and never in the loader. Every command that can reach it
 records either a `ProjectSnapshotPair` or this widened map, so no inverse
 re-derives a frame; and `resolve_offsets`' cascade never re-derives a seed's
