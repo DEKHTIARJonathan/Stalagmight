@@ -1,11 +1,14 @@
 /**
- * [#576 C4, A6] The one IPC failure envelope, in `invokeIpc`.
+ * [#576 C4, A6, D22] The one IPC failure envelope and the one applier of the
+ * SpeleoDB link bits, both in `invokeIpc`.
  *
  * Every fallible command rejects with the backend's `CommandError` (`{ code,
  * message, ...payload }`). `invokeIpc` re-throws it as an `IpcCommandError`, so the
  * message keeps reaching every surface the old string rejection reached
  * (`getErrorMessage`, `String(e)`, `${e}`, `instanceof Error`), while routing reads
- * the code.
+ * the code. A survey mutation's answer - its outcome, or the CommandError of a
+ * failure that still mutated - carries `remote_link`, and `invokeIpc` hands it to
+ * the speleo store, unless the project changed while the call was in flight.
  *
  * The real `invokeIpc` runs here; only Tauri's `invoke` is mocked.
  */
@@ -14,12 +17,45 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getErrorMessage, invokeIpc } from '../ipc';
 import { IpcCommandError, commandErrorOf, errorCode, toIpcError } from '../commandError';
 import { refusedBy, refusedLocally } from '../../store/commandResult';
+import { useSpeleoStore } from '../../store/speleoStore';
+import type { SpeleoLinkStatus } from '../../types/ipc.generated';
 
 const invokeMock = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 
+const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
+  is_remote: true,
+  edit_enabled: true,
+  has_unpushed_edits: false,
+  unwound: false,
+  permission: 'READ_AND_WRITE',
+  lock_holder: null,
+  remote_state: 'up_to_date',
+  access_denied: false,
+  server_error: null,
+  exclude_geojson: false,
+  undo_mode: 'full',
+  force_editing: false,
+  allow_force_edit: false,
+  project_id: null,
+  ...o,
+});
+
+const editOutcome = (remote_link: { has_unpushed_edits: boolean; unwound: boolean } | null) => ({
+  warnings: [],
+  remote_link,
+});
+
+/** Open a remote project at `path`, editing and clean, the way a load seeds it. */
+function openRemote(path: string, o: Partial<SpeleoLinkStatus> = {}) {
+  useSpeleoStore.getState().clearLink();
+  useSpeleoStore.getState().syncProjectLink(true, path);
+  useSpeleoStore.getState().seedFromStatus(status(o));
+}
+
 beforeEach(() => {
   invokeMock.mockReset();
+  useSpeleoStore.getState().clearLink();
 });
 
 describe('IpcCommandError (#576 C4)', () => {
@@ -104,5 +140,80 @@ describe('invokeIpc and a rejection', () => {
     const caught = await invokeIpc('delete_section', { sectionId: 1 }).catch((e: unknown) => e);
 
     expect(caught).toBe('invalid args `sectionId` for command `delete_section`');
+  });
+});
+
+describe('invokeIpc applies the SpeleoDB link bits (#576 D22)', () => {
+  it('on a resolve', async () => {
+    openRemote('/caves/a.stalx');
+    invokeMock.mockResolvedValue(editOutcome({ has_unpushed_edits: true, unwound: false }));
+
+    await invokeIpc('delete_section', { sectionId: 1 });
+
+    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
+  });
+
+  it('on a reject that still mutated', async () => {
+    openRemote('/caves/a.stalx', { has_unpushed_edits: true, unwound: true });
+    invokeMock.mockRejectedValue({
+      code: 'HISTORY_STEP_FAILED',
+      message: 'Undo failed at step 2 of 2: boom',
+      history_step: { failed_step: 2, total_steps: 2 },
+      remote_link: { has_unpushed_edits: true, unwound: false },
+    });
+
+    await expect(invokeIpc('undo_to', { index: 1 })).rejects.toBeInstanceOf(IpcCommandError);
+
+    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
+    expect(useSpeleoStore.getState().link?.unwound).toBe(false);
+  });
+
+  it('ignores a null remote_link (a local project) and an answer without one', async () => {
+    openRemote('/caves/a.stalx');
+    const before = useSpeleoStore.getState().link;
+    invokeMock.mockResolvedValueOnce(editOutcome(null));
+    await invokeIpc('delete_section', { sectionId: 1 });
+    invokeMock.mockResolvedValueOnce(true);
+    await invokeIpc('can_undo');
+    invokeMock.mockRejectedValueOnce({ code: 'FAILED', message: 'no bits on this one' });
+    await invokeIpc('delete_section', { sectionId: 1 }).catch(() => undefined);
+
+    expect(useSpeleoStore.getState().link).toBe(before);
+  });
+
+  it('ignores a reply that lands after the project (its link path) changed', async () => {
+    openRemote('/caves/a.stalx');
+    let answer!: (value: unknown) => void;
+    invokeMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const call = invokeIpc('delete_section', { sectionId: 1 });
+    // The user opens another remote project while the edit is in flight.
+    openRemote('/caves/b.stalx');
+    const generation = useSpeleoStore.getState().chainTargetGeneration;
+    answer(editOutcome({ has_unpushed_edits: true, unwound: false }));
+    await call;
+
+    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+    expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation);
+  });
+
+  it('preserves the link identity when nothing changes, and bumps chainTargetGeneration when anything does', async () => {
+    openRemote('/caves/a.stalx');
+    const clean = useSpeleoStore.getState().link;
+    const generation = useSpeleoStore.getState().chainTargetGeneration;
+
+    invokeMock.mockResolvedValueOnce(editOutcome({ has_unpushed_edits: false, unwound: false }));
+    await invokeIpc('delete_section', { sectionId: 1 });
+    expect(useSpeleoStore.getState().link).toBe(clean);
+    expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation);
+
+    invokeMock.mockResolvedValueOnce(editOutcome({ has_unpushed_edits: true, unwound: false }));
+    await invokeIpc('delete_section', { sectionId: 1 });
+    expect(useSpeleoStore.getState().link).not.toBe(clean);
+    expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation + 1);
   });
 });

@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { trackCommand } from './telemetry';
 import { trackInvoke } from './debugLockup';
 import { IpcCommandError, toIpcError } from './commandError';
+import { speleoState } from '../store/speleoStoreHandle';
 import type { IpcCommands } from '../types/ipc/IpcCommands';
 import type { RemoteLinkBits } from '../types/ipc/RemoteLinkBits';
 
@@ -78,15 +79,36 @@ function errorToString(err: unknown): string {
 }
 
 /**
- * The transport both implementations share: `invoke`, and a CommandError rejection
- * re-thrown as an `IpcCommandError` (#576 C4).
+ * [#576 D22] Hand the SpeleoDB link bits a survey mutation answered with - on its
+ * outcome, or on the CommandError of a failure that still mutated - to the speleo
+ * store, the one place they are applied. `null` (or no field) is a local project or
+ * a command that is no survey mutation: nothing to do.
+ */
+function applyRemoteLink(answer: unknown, linkPathAtIssue: string | null): void {
+  if (typeof answer !== 'object' || answer === null || !('remote_link' in answer)) return;
+  const bits = (answer as { remote_link?: RemoteLinkBits | null }).remote_link;
+  if (bits) speleoState()?.applyRemoteLink(bits, linkPathAtIssue);
+}
+
+/**
+ * The transport both implementations share: `invoke`, then the one applier of the
+ * link bits (on a resolve and on a reject), and a CommandError rejection re-thrown as
+ * an `IpcCommandError` (#576 C4). The speleo store's `linkPath` is read when the call
+ * is ISSUED: a reply for a project the user has since left must not touch the one
+ * now open, and `applyRemoteLink` drops it when the two differ.
  */
 async function send(command: string, args: Record<string, unknown> | undefined): Promise<unknown> {
+  const linkPathAtIssue = speleoState()?.linkPath ?? null;
+  let answer: unknown;
   try {
-    return await trackInvoke(command, invoke<unknown>(command, args));
+    answer = await trackInvoke(command, invoke<unknown>(command, args));
   } catch (e) {
-    throw toIpcError(e);
+    const err = toIpcError(e);
+    applyRemoteLink(err, linkPathAtIssue);
+    throw err;
   }
+  applyRemoteLink(answer, linkPathAtIssue);
+  return answer;
 }
 
 /**
@@ -141,7 +163,8 @@ const invokeNoTrace: RawInvoke = (command, args, _meta) => {
  *
  * A command that fails rejects with an `IpcCommandError` (its `code` is what to route
  * on, see `commandError.ts`); a plain-string rejection (Tauri could not deserialize
- * the arguments) stays a string.
+ * the arguments) stays a string. A survey mutation's SpeleoDB link bits are applied
+ * here before the caller sees the answer (#576 D22).
  */
 export const invokeIpc = (IPC_TRACE ? invokeWithTrace : invokeNoTrace) as InvokeIpc;
 

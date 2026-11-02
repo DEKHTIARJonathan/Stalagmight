@@ -10,7 +10,8 @@
  *
  * [#576 C4, D22] The backend now SAYS which it was: a single step that ran and
  * failed is `HISTORY_STEP_FAILED` (step 1 of 1), and every refusal that ran no step
- * has its own code. The real `invokeIpc` runs here (it wraps the rejection); only
+ * has its own code. The SpeleoDB bit is the backend's own, on the failure's
+ * `remote_link`, applied by `invokeIpc` - so the real `invokeIpc` runs here and only
  * Tauri's `invoke` is mocked.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';

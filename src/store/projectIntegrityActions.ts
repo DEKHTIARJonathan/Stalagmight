@@ -4,7 +4,6 @@ import { invokeIpc } from '../utils/ipc';
 import { errorCode } from '../utils/commandError';
 import { isEditGateCode, READ_ONLY_EDIT_NOTICE } from '../utils/editErrors';
 import { TOAST_KEYS } from '../utils/toastKeys';
-import { speleoState } from './speleoStoreHandle';
 import { useUIStore } from './uiStore';
 import { refuseMutationDuringCarry } from './moveCarry';
 import type { IntegrityRepairResult } from '../types/commands';
@@ -81,7 +80,7 @@ export function createProjectIntegrityActions(
           { sectionId, shotId, warningCode, comment },
           { purpose: 'acknowledge validation warning', fields: { sectionId, shotId, warningCode } }
         );
-        speleoState()?.markForwardEdit();
+        // The SpeleoDB link bits came back on the answer; `invokeIpc` applied them (#576 D22).
         await get().refreshWarnings();
         return true;
       } catch (e) {
@@ -106,8 +105,7 @@ export function createProjectIntegrityActions(
           { sectionId, shotId, warningCode },
           { purpose: 'reopen validation warning', fields: { sectionId, shotId, warningCode } }
         );
-        speleoState()?.markForwardEdit();
-        await get().refreshWarnings();
+        await get().refreshWarnings(); // link bits: applied by `invokeIpc`, see `resolveWarning`
       } catch (e) {
         console.error('Failed to unresolve warning:', e);
         showReadOnlyRefusal(e); // #576 NF-W2RO-2, see `resolveWarning`
@@ -210,18 +208,10 @@ export function createProjectIntegrityActions(
         // backend's honest "the snapshot was mutated" signal (the same condition
         // under which it records the undo entry), so it dirties on those silent
         // fixes too while still leaving a true no-op repair clean.
-        if (result.changed) {
-          set({ isDirty: true });
-          // #204/fix 8: a repair that actually mutated the project makes a remote
-          // SpeleoDB project un-pushed-dirty too - mirror the backend dirty bit (as
-          // executeCommand/executeUndoRedo do) so the status button offers push &
-          // prompts for a commit message rather than reading "editing clean". No-op
-          // for a local project (no link).
-          // [#303] `repair_integrity` pairs it with speleodb_forget_unwind_position under
-          // the same `changed` guard this branch is under (commands.rs:467-473), so mirror
-          // both halves.
-          speleoState()?.markForwardEdit();
-        }
+        // The SpeleoDB link bits (#204/fix 8, #303: un-pushed and no longer merely
+        // unwound after a repair that changed something) rode back on the answer and
+        // `invokeIpc` applied them (#576 D22).
+        if (result.changed) set({ isDirty: true });
         return result;
       } catch (e) {
         // #576 D39(a): the backend refuses Repair when editing is blocked (a read-only

@@ -525,8 +525,10 @@ describe('speleoStore', () => {
       );
       const inFlight = useSpeleoStore.getState().refreshLinkStatus();
 
-      // The push lands while that poll is still waiting on the network.
-      useSpeleoStore.getState().markDirty();
+      // An edit and then a push land while that poll is still waiting on the network.
+      useSpeleoStore
+        .getState()
+        .applyRemoteLink({ has_unpushed_edits: true, unwound: false }, useSpeleoStore.getState().linkPath);
       useSpeleoStore.getState().applyPush({ kind: 'pushed' });
       expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
 
@@ -774,37 +776,46 @@ describe('speleoStore', () => {
     });
   });
 
-  describe('markDirty', () => {
+  // [#576 D22] The link bits a survey mutation answered with, applied as the backend
+  // set them. They replace the hand-written mirrors (`markDirty` after an undo,
+  // `markForwardEdit` after an edit); each case below is one those used to cover.
+  describe('applyRemoteLink', () => {
+    const apply = (has_unpushed_edits: boolean, unwound: boolean, linkPath = useSpeleoStore.getState().linkPath) =>
+      useSpeleoStore.getState().applyRemoteLink({ has_unpushed_edits, unwound }, linkPath);
+
     it('flips the dirty bit on for an editing link', () => {
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
-      useSpeleoStore.getState().markDirty();
+      apply(true, false);
       expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
     });
 
     it('is a no-op with no link', () => {
-      useSpeleoStore.getState().markDirty();
+      apply(true, false);
       expect(useSpeleoStore.getState().link).toBeNull();
     });
 
-    // [#303] The bug this pair exists to prevent: `markDirty` short-circuits on an
-    // already-dirty link, and an unwound copy is ALWAYS already dirty, so mirroring a
-    // forward edit through it left `unwound` standing until the next poll - and
-    // `isUnwoundNotEdited` kept routing the user to a discard of work they just made.
-    it('markDirty leaves unwound standing on an already-dirty link', () => {
+    // [#303] An undo/redo does NOT drop the chain pointer (the backend keeps it, and a
+    // tripwire in speleodb_revisions.rs asserts undo.rs never forgets it), so an undo
+    // on an unwound copy answers still-unwound - and `unwound` must stay standing.
+    it('leaves unwound standing when the backend kept it (an undo)', () => {
       useSpeleoStore
         .getState()
         .seedFromStatus(status({ edit_enabled: true, has_unpushed_edits: true, unwound: true }));
-      useSpeleoStore.getState().markDirty();
+      apply(true, true);
       expect(useSpeleoStore.getState().link?.unwound).toBe(true);
       expect(isUnwoundNotEdited(useSpeleoStore.getState().link)).toBe(true);
     });
 
-    it('markForwardEdit clears unwound even when already dirty', () => {
+    // [#303] The bug the old `markForwardEdit` existed to prevent: an unwound copy is
+    // ALWAYS already dirty, so a dirty-bit-only mirror left `unwound` standing until
+    // the next poll - and `isUnwoundNotEdited` kept routing the user to a discard of
+    // work they just made. A forward edit answers dirty AND no longer unwound.
+    it('clears unwound on a forward edit even when already dirty', () => {
       useSpeleoStore
         .getState()
         .seedFromStatus(status({ edit_enabled: true, has_unpushed_edits: true, unwound: true }));
       const generation = useSpeleoStore.getState().chainTargetGeneration;
-      useSpeleoStore.getState().markForwardEdit();
+      apply(true, false);
       const link = useSpeleoStore.getState().link;
       expect(link?.hasUnpushedEdits).toBe(true);
       expect(link?.unwound).toBe(false);
@@ -812,23 +823,51 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation + 1);
     });
 
-    it('markForwardEdit dirties a clean link and no-ops when nothing changes', () => {
+    it('dirties a clean link and no-ops when nothing changes', () => {
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
       const generation = useSpeleoStore.getState().chainTargetGeneration;
-      useSpeleoStore.getState().markForwardEdit();
+      apply(true, false);
       const after = useSpeleoStore.getState().link;
       expect(after?.hasUnpushedEdits).toBe(true);
       expect(after?.unwound).toBe(false);
       // Identity is preserved on a true no-op: refreshLinkStatus uses it to detect a
       // concurrent mutation, so a gratuitous new object would discard live replies.
-      useSpeleoStore.getState().markForwardEdit();
+      apply(true, false);
       expect(useSpeleoStore.getState().link).toBe(after);
       expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation + 1);
     });
 
-    it('markForwardEdit is a no-op with no link', () => {
-      useSpeleoStore.getState().markForwardEdit();
-      expect(useSpeleoStore.getState().link).toBeNull();
+    it('leaves a clean copy clean when the backend says the edit dirtied nothing (a provable no-op)', () => {
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
+      const before = useSpeleoStore.getState().link;
+      const generation = useSpeleoStore.getState().chainTargetGeneration;
+      apply(false, false);
+      expect(useSpeleoStore.getState().link).toBe(before);
+      expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+      expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation);
+    });
+
+    it('takes the backend value both ways, a cleared bit included', () => {
+      useSpeleoStore
+        .getState()
+        .seedFromStatus(status({ edit_enabled: true, has_unpushed_edits: true, unwound: true }));
+      apply(false, false);
+      const link = useSpeleoStore.getState().link;
+      expect(link?.hasUnpushedEdits).toBe(false);
+      expect(link?.unwound).toBe(false);
+    });
+
+    it('drops a reply issued for another link path (the user left that project)', () => {
+      useSpeleoStore.getState().syncProjectLink(true, '/caves/now-open.stalx');
+      const before = useSpeleoStore.getState().link;
+      const generation = useSpeleoStore.getState().chainTargetGeneration;
+      apply(true, false, '/caves/left-behind.stalx');
+      expect(useSpeleoStore.getState().link).toBe(before);
+      expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+      expect(useSpeleoStore.getState().chainTargetGeneration).toBe(generation);
+      // The same reply for the path that IS open applies.
+      apply(true, false, '/caves/now-open.stalx');
+      expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
     });
   });
 

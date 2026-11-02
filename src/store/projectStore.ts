@@ -648,7 +648,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       const staleCarryCommit = refuseStaleCarryCommit(carryCommit, get().projectTreeGeneration);
       if (staleCarryCommit) return staleCarryCommit;
       // The backend's refusal arrives as the rejection's CommandError and becomes the refused
-      // outcome; any other rejection (a transport failure) is the `catch` below.
+      // outcome; any other rejection (a transport failure) is the `catch` below. The SpeleoDB
+      // link bits on either answer were applied by `invokeIpc` (#576 D22).
       const result = await settleCommand((invokeIpc as ForwardedInvoke)(command, args, meta));
       if (result.success) {
         // Re-resolve those pins BEFORE the refetch: the reach-field effect keys on modified_at,
@@ -666,16 +667,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         }
         set({ isDirty: true });
         noteImportResolvedDeferredSave(command, result, set);
-        // #204: mirror the backend's mark_remote_dirty so the SpeleoDB action shell
-        // knows there are un-pushed edits (drives the button's push&release-with-
-        // comment flow). No-op for a local project (no link).
-        //
-        // [#303] Both halves, not just the dirty bit: `execute` pairs mark_remote_dirty
-        // with speleodb_forget_unwind_position (commands.rs:757-761), so a forward edit
-        // also stops the copy being "merely unwound". Mirroring through `markDirty`
-        // alone was a no-op here - an unwound copy is already dirty - which left the
-        // discard prompts offering to throw away the edit that just landed.
-        speleoState()?.markForwardEdit();
         // A command can RESOLVE (or surface) an integrity issue - e.g. removing a
         // drifted loop closure clears its banner entry - so re-check, mirroring
         // executeUndoRedo. refreshProjectState doesn't re-check, and the next save
@@ -778,13 +769,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // themselves, and the refresh + integrity re-check simply re-read whatever is now open -
       // exactly what already happens today when the switch is caught one guard later.
       if (lostProject(requestProjectKey)) return refusedLocally(PROJECT_CHANGED);
+      // An undo/redo mutates the remote project too: its SpeleoDB link bits ride on the
+      // answer, success or failure, and `invokeIpc` applied them (#576 D22).
       result = await settleCommand((invokeIpc as ForwardedInvoke)(command, args, meta));
       if (result.success) {
         reversedSections = result.reversed_steps;
         set({ isDirty: true });
-        // #204: an undo/redo mutates the remote project too - mirror the backend
-        // dirty bit into the SpeleoDB store (no-op for a local project).
-        speleoState()?.markDirty();
       } else {
         // `HISTORY_STEP_FAILED`: a step RAN and failed - "failed at step N of M" of a
         // jump (`history_step`), or a single undo/redo past the empty-stack check (1 of
@@ -793,11 +783,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // refusal (nothing to undo, the edit gate, the re-verify divergence, the
         // refusal after an internal error) ran no step.
         const failedStep = result.code === 'HISTORY_STEP_FAILED' ? (result.failure?.history_step?.failed_step ?? 1) : null;
-        if (failedStep !== null) {
-          // The backend marks the SpeleoDB copy un-pushed for every one of them.
-          set({ isDirty: true });
-          speleoState()?.markDirty();
-        }
+        if (failedStep !== null) set({ isDirty: true });
         if (failedStep !== null && failedStep > 1) {
           // A partial multi-step failure still renumbered: the steps BEFORE the
           // failing one already flipped their sections and cannot be rolled back,
@@ -1499,15 +1485,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // commit the user's unrelated pending edits. The existing project already
     // has a file + Recent Projects entry; the normal unsaved-changes / autosave
     // flow persists the import, and the close-guard prevents silent loss.
+    // (#204/fix 8, #303: the SpeleoDB link bits of the import itself rode back on the
+    // import command's answer, #576 D22.)
     if (useUIStore.getState().importContext !== 'new-project') {
       set({ isDirty: true });
-      // #204/fix 8: an import into an existing remote project is an un-pushed edit -
-      // mirror the SpeleoDB dirty bit so the status button offers push (no-op for a
-      // local project). The import command usually already marks it via
-      // executeCommand; this keeps the two dirty flags in lockstep on every path.
-      // [#303] Forward work, so it drops the chain pointer too - the import reached the
-      // backend through `execute`, which already forgot it there.
-      speleoState()?.markForwardEdit();
       return true;
     }
     // New project: the initial save is deferred, so the import is invisible until
