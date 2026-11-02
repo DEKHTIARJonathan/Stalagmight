@@ -6,6 +6,7 @@ import { useUIStore } from '../../store/uiStore';
 import type { UIStoreState } from '../../store/uiSelectKeys';
 import { mapCoordsToMeters } from '../../utils/coordinates';
 import type SurveyLayer from './SurveyLayer';
+import { UNIT_PIXELS_PER_METER, type PixelsPerMeter } from './placementScale';
 
 interface PlacementOptions {
   map: MutableRefObject<maplibregl.Map | null>;
@@ -52,8 +53,8 @@ export function usePlacement({
 }: PlacementOptions) {
   // Placement mode cursor position (screen pixels)
   const [placementCursor, setPlacementCursor] = useState<{ x: number; y: number } | null>(null);
-  // Current map scale in pixels per meter (for to-scale placement preview)
-  const [pixelsPerMeter, setPixelsPerMeter] = useState(1);
+  // Current map scale in pixels per meter, east and north (for to-scale placement preview)
+  const [pixelsPerMeter, setPixelsPerMeter] = useState<PixelsPerMeter>(UNIT_PIXELS_PER_METER);
 
   // Check snap for placement mode
   const checkPlacementSnap = useCallback(

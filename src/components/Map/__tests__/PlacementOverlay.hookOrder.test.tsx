@@ -23,7 +23,7 @@ function overlay(cursor: { x: number; y: number } | null) {
       alignStationIndex={0}
       cursorPosition={cursor}
       isSnapped={false}
-      pixelsPerMeter={2}
+      pixelsPerMeter={{ east: 2, north: 2 }}
     />
   );
 }

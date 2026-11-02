@@ -5,6 +5,7 @@ import { getThemeColor } from '../../utils/themeColors';
 import { azimuthReferenceFor, walkStations, type WalkedStation } from '../../utils/stationWalk';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type AdditionalPlacementSection } from '../../store/uiStore';
+import type { PixelsPerMeter } from './placementScale';
 
 interface PlacementOverlayProps {
   /** Section data to preview */
@@ -15,8 +16,8 @@ interface PlacementOverlayProps {
   cursorPosition: { x: number; y: number } | null;
   /** Whether snapped to an existing station */
   isSnapped: boolean;
-  /** Pixels per meter at current map zoom (for to-scale rendering) */
-  pixelsPerMeter: number;
+  /** Pixels per meter east and north at current map zoom (for to-scale rendering) */
+  pixelsPerMeter: PixelsPerMeter;
   /** Additional sections to render alongside primary (for segment placement) */
   additionalSections?: AdditionalPlacementSection[] | undefined;
   /** Callback to cancel placement (shown as button on touch devices) */
@@ -67,13 +68,14 @@ export default function PlacementOverlay({
     return null;
   }
 
-  // Use the map's actual scale (pixels per meter) for to-scale rendering
-  const scale = pixelsPerMeter;
+  // Use the map's actual scale (pixels per meter, per axis) for to-scale
+  // rendering: east and north differ on a GPS-anchored survey (#576 RV4-FE-MF2).
+  const { east: scaleX, north: scaleY } = pixelsPerMeter;
 
   // Transform station to screen coordinates, centered on cursor
   const toScreen = (station: WalkedStation): { x: number; y: number } => {
-    const relX = (station.x - anchorStation.x) * scale;
-    const relY = -(station.y - anchorStation.y) * scale; // Flip Y for screen coordinates
+    const relX = (station.x - anchorStation.x) * scaleX;
+    const relY = -(station.y - anchorStation.y) * scaleY; // Flip Y for screen coordinates
     return {
       x: cursorPosition.x + relX,
       y: cursorPosition.y + relY,
@@ -137,8 +139,8 @@ export default function PlacementOverlay({
         const addPositions = walkStations(addSection.sectionData.shots, reference);
         // Transform with offset relative to primary section's anchor station
         const toScreenAdd = (station: WalkedStation): { x: number; y: number } => {
-          const relX = (station.x + addSection.offsetX - anchorStation.x) * scale;
-          const relY = -(station.y + addSection.offsetY - anchorStation.y) * scale;
+          const relX = (station.x + addSection.offsetX - anchorStation.x) * scaleX;
+          const relY = -(station.y + addSection.offsetY - anchorStation.y) * scaleY;
           return {
             x: cursorPosition.x + relX,
             y: cursorPosition.y + relY,

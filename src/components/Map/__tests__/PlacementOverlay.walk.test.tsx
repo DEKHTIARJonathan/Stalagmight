@@ -87,7 +87,7 @@ describe('PlacementOverlay station walk (#576 D15)', () => {
         alignStationIndex={1}
         cursorPosition={CURSOR}
         isSnapped={false}
-        pixelsPerMeter={PPM}
+        pixelsPerMeter={{ east: PPM, north: PPM }}
       />,
     );
     const want = walkStations(SHOTS, PROJECT_DEFAULT);
@@ -108,7 +108,7 @@ describe('PlacementOverlay station walk (#576 D15)', () => {
         alignStationIndex={0}
         cursorPosition={CURSOR}
         isSnapped={false}
-        pixelsPerMeter={PPM}
+        pixelsPerMeter={{ east: PPM, north: PPM }}
         azimuthReference={DMP_AZIMUTH_REFERENCE}
         additionalSections={[{ sectionData: sectionData(ADDITIONAL), color: '#ff0000', offsetX: offset.x, offsetY: offset.y }]}
       />,

@@ -26,14 +26,24 @@ function fakeMercatorMap(center: { lng: number; lat: number }, zoom: number): ma
   } as unknown as maplibregl.Map;
 }
 
-/** The drawn survey's own screen length of a 1 m north step at the map center. */
-function drawnPixelsPerMeter(map: maplibregl.Map, origin: { latitude: number; longitude: number } | null): number {
+/**
+ * The drawn survey's own screen length of a 1 m step east and a 1 m step north at
+ * the map center. Both axes: with a GPS origin they differ (#576 RV4-FE-MF2), and
+ * an oracle that measured only north could not see a scale that was wrong east.
+ */
+function drawnPixelsPerMeter(
+  map: maplibregl.Map,
+  origin: { latitude: number; longitude: number } | null,
+): { east: number; north: number } {
   const c = map.getCenter();
   const here = mapCoordsToMeters(c.lng, c.lat, origin);
   const a = map.project(metersToMapCoords(here.x, here.y, origin));
-  const b = map.project(metersToMapCoords(here.x, here.y + 1, origin));
-  return Math.hypot(b.x - a.x, b.y - a.y);
+  const e = map.project(metersToMapCoords(here.x + 1, here.y, origin));
+  const n = map.project(metersToMapCoords(here.x, here.y + 1, origin));
+  return { east: Math.hypot(e.x - a.x, e.y - a.y), north: Math.hypot(n.x - a.x, n.y - a.y) };
 }
+
+const relErr = (got: number, want: number) => Math.abs(got - want) / want;
 
 describe('pixelsPerMeterAt', () => {
   const origins = [
@@ -47,17 +57,28 @@ describe('pixelsPerMeterAt', () => {
     const map = fakeMercatorMap({ lng: o.longitude + 0.001, lat: o.latitude + 0.001 }, 18);
     const expected = drawnPixelsPerMeter(map, origin);
     const got = pixelsPerMeterAt(map, origin);
-    expect(Math.abs(got - expected) / expected).toBeLessThan(1e-6);
+    expect(relErr(got.east, expected.east)).toBeLessThan(1e-6);
+    expect(relErr(got.north, expected.north)).toBeLessThan(1e-6);
+  });
+
+  it('tells east from north with a GPS origin away from the poles', () => {
+    // N/M - 1 at 0.5 deg is ~0.67%: one number could not serve both axes.
+    const origin = { latitude: 0.5, longitude: 10 };
+    const map = fakeMercatorMap({ lng: 10.001, lat: 0.501 }, 18);
+    const got = pixelsPerMeterAt(map, origin);
+    expect(relErr(got.east, got.north)).toBeGreaterThan(0.005);
   });
 
   it('matches the drawn survey scale without a GPS origin (the 111320 m/deg display convention)', () => {
     const map = fakeMercatorMap({ lng: 0.0002, lat: 0.0003 }, 18);
     const expected = drawnPixelsPerMeter(map, null);
-    expect(Math.abs(pixelsPerMeterAt(map, null) - expected) / expected).toBeLessThan(1e-6);
+    const got = pixelsPerMeterAt(map, null);
+    expect(relErr(got.east, expected.east)).toBeLessThan(1e-6);
+    expect(relErr(got.north, expected.north)).toBeLessThan(1e-6);
   });
 
   it('never returns zero', () => {
     const flat = { getCenter: () => ({ lng: 0, lat: 0 }), project: () => ({ x: 0, y: 0 }) } as unknown as maplibregl.Map;
-    expect(pixelsPerMeterAt(flat, null)).toBe(1);
+    expect(pixelsPerMeterAt(flat, null)).toEqual({ east: 1, north: 1 });
   });
 });
