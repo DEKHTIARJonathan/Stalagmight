@@ -26,7 +26,7 @@ import { routeOpenedFile } from './utils/openOrImport';
 import { useLaunchWithFile } from './utils/launchWithFile';
 import { guardQuit } from './utils/quit';
 import { isDroppableFilePath } from './utils/fileDialogs';
-import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
+import { useBeforeUnload, useLoadingProgress, useSpeleoPrePushSave, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
 import { registerOnboardingRestart } from './hooks/useOnboardingRestart';
 import { ORIENTATION_FLOW_ID } from './onboarding/flows';
@@ -149,6 +149,9 @@ function App() {
 
   // Listen for loading progress events from backend
   useLoadingProgress();
+
+  // [#576 RV4-R-S6] What a failed Done / Push's pre-push save could not keep
+  useSpeleoPrePushSave();
 
   // Event-driven network status orchestrator (tile transport events + offline polling)
   useNetworkStatus();

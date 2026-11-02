@@ -25,7 +25,8 @@ use std::path::Path;
 use super::speleodb::local_dto;
 use super::speleodb_cache::LocalEditsPolicy;
 use super::AppState;
-use crate::core::{SpeleoDoneReport, SpeleoPushReport, ValidationWarning};
+use crate::core::events::IpcEvent as _;
+use crate::core::{CommandResult, SpeleoDoneReport, SpeleoPushReport, ValidationWarning};
 use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
 use crate::speleodb::sync::{self, PushPlan, ReconcileVerdict};
@@ -224,13 +225,60 @@ impl AppState {
         message: Option<String>,
         accept_older_version: bool,
     ) -> Result<SpeleoDoneReport, SpeleoErrorDto> {
-        let mut save_warnings = Vec::new();
-        let result =
-            self.speleodb_done_collecting(message, accept_older_version, &mut save_warnings)?;
+        let (result, save_warnings) = self.speleodb_with_pre_push_save(|collected| {
+            self.speleodb_done_collecting(message, accept_older_version, collected)
+        })?;
         Ok(SpeleoDoneReport {
             result,
             save_warnings,
         })
+    }
+
+    /// [#576 RV4-R-S6] Run a Done / Push body that collects the warnings of the save
+    /// it runs before its upload, and hand those warnings to the frontend through the
+    /// event sink ([`crate::core::events::SpeleoPrePushSave`]) when the body then
+    /// FAILS.
+    ///
+    /// The Ok answer carries them (`SpeleoDoneReport` / `SpeleoPushReport`); an error
+    /// cannot. The save did happen, and its warnings are one-shot - the next save does
+    /// not repeat them - so a push that fails after it (a refused or dropped upload, a
+    /// failed render or snapshot) used to leave the user never told what that save
+    /// could not keep. Nothing is sent when the save did not run or lost nothing.
+    pub(super) fn speleodb_with_pre_push_save<R>(
+        &self,
+        body: impl FnOnce(&mut Vec<ValidationWarning>) -> Result<R, SpeleoErrorDto>,
+    ) -> Result<(R, Vec<ValidationWarning>), SpeleoErrorDto> {
+        let mut collected = Vec::new();
+        match body(&mut collected) {
+            Ok(result) => Ok((result, collected)),
+            Err(e) => {
+                self.speleodb_surface_pre_push_save(collected);
+                Err(e)
+            }
+        }
+    }
+
+    /// Emit the pre-push save's warnings of a failed Done / Push (see
+    /// [`Self::speleodb_with_pre_push_save`]) as the save's own outcome.
+    fn speleodb_surface_pre_push_save(&self, warnings: Vec<ValidationWarning>) {
+        if warnings.is_empty() {
+            return;
+        }
+        let Some(sink) = self.get_event_sink() else {
+            return;
+        };
+        let outcome = CommandResult {
+            warnings,
+            ..CommandResult::success()
+        };
+        match crate::core::events::payload::<crate::core::events::SpeleoPrePushSave>(&outcome) {
+            Ok(value) => sink.emit(crate::core::events::SpeleoPrePushSave::NAME, value),
+            Err(e) => tracing::warn!(
+                error = %e,
+                purpose = "tell the user what the pre-push save could not keep (#576 RV4-R-S6)",
+                "speleodb: could not serialize the pre-push save's warnings"
+            ),
+        }
     }
 
     fn speleodb_done_collecting(
@@ -398,9 +446,9 @@ impl AppState {
         message: Option<String>,
         accept_older_version: bool,
     ) -> Result<SpeleoPushReport, SpeleoErrorDto> {
-        let mut save_warnings = Vec::new();
-        let result =
-            self.speleodb_push_only_collecting(message, accept_older_version, &mut save_warnings)?;
+        let (result, save_warnings) = self.speleodb_with_pre_push_save(|collected| {
+            self.speleodb_push_only_collecting(message, accept_older_version, collected)
+        })?;
         Ok(SpeleoPushReport {
             result,
             save_warnings,

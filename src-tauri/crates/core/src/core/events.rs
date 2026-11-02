@@ -76,6 +76,16 @@ pub struct InternalErrorNotice {
     pub cell: String,
 }
 
+/// [#576 RV4-R-S6] A SpeleoDB Done or Push FAILED after the project save it runs
+/// before its upload went through: that save's outcome, whose warnings say what it
+/// could not keep. The successful answer carries them itself; this is how they
+/// still reach the user when the verb fails, since they are one-shot.
+pub struct SpeleoPrePushSave;
+impl IpcEvent for SpeleoPrePushSave {
+    const NAME: &'static str = "speleodb-pre-push-save";
+    type Payload = crate::core::CommandResult;
+}
+
 /// `E`'s payload as the JSON value an [`EventSink`] takes, typed by `E`.
 pub fn payload<E: IpcEvent>(payload: &E::Payload) -> serde_json::Result<serde_json::Value> {
     serde_json::to_value(payload)
