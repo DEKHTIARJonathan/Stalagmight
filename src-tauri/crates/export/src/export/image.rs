@@ -4888,4 +4888,132 @@ mod tests {
             "shot comments should render alongside shot data: {svg}"
         );
     }
+
+    // ---- Label placement at scale (#576 B22) ------------------------------
+
+    /// A survey dense enough that every label pass collides: `sections`
+    /// sections of `shots_each` short shots fanning out from a shared hub,
+    /// each merged onto the previous one, some aligned closures, stations of
+    /// unmerged sections colocated at the origin, station and shot comments,
+    /// and a zero datum for the penetration labels.
+    fn dense_labelled_project(sections: usize, shots_each: usize) -> Project {
+        let mut project = Project::new("Dense".to_string(), None);
+        for s in 0..sections {
+            let shots = (0..shots_each)
+                .map(|i| ShotData {
+                    comment: (i % 7 == 3).then(|| format!("note {s}/{i}")),
+                    ..make_shot(
+                        1.0 + (i % 3) as f64,
+                        ((s * 37 + i * 23) % 360) as f64,
+                        i % 11 == 10,
+                    )
+                })
+                .collect();
+            project.add_section(SectionData {
+                name: Some(format!("S{s}")),
+                color: "#000000".to_string(),
+                shots,
+                ..Default::default()
+            });
+        }
+        let ids: Vec<_> = project.sections.iter().map(|s| s.id).collect();
+        let merged_at = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        for pair in ids.windows(2).step_by(2) {
+            project.station_merges.push(StationMerge {
+                station_a: StationRef::new(pair[0], (shots_each / 2) as u32).into(),
+                station_b: StationRef::new(pair[1], 0).into(),
+                merged_at,
+            });
+        }
+        for (k, pair) in ids.windows(2).enumerate().filter(|(k, _)| k % 5 == 1) {
+            project.loop_closures.push(crate::models::LoopClosure {
+                id: k as u64,
+                station_a: StationRef::new(pair[0], shots_each as u32).into(),
+                station_b: StationRef::new(pair[1], 1).into(),
+                path_length: 10.0,
+                misclosure_distance: 0.1,
+                error_percentage: 1.0,
+                horizontal_misclosure: 0.1,
+                vertical_misclosure: 0.0,
+                strategy: crate::models::ClosureStrategy::Batch,
+                is_aligned: k % 2 == 1,
+            });
+        }
+        for (k, &id) in ids.iter().enumerate().filter(|(k, _)| k % 3 == 0) {
+            project
+                .station_comments
+                .insert(StationRef::new(id, 2).into(), format!("station note {k}"));
+        }
+        let gps = GpsCoordinates::new(20.5, -87.3, 0.0).unwrap();
+        project
+            .set_zero_datum(StationRef::new(ids[0], 0), gps)
+            .unwrap();
+        project
+    }
+
+    fn every_label() -> ExportImageOptions {
+        ExportImageOptions {
+            show_penetration_labels: true,
+            show_station_labels: true,
+            show_section_names: true,
+            show_station_comments: true,
+            show_shot_comments: true,
+            show_shot_data: true,
+            ..Default::default()
+        }
+    }
+
+    /// FNV-1a, so a whole document can be pinned in one constant.
+    fn fnv1a(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &b| {
+            (hash ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// The label passes were made linear (#576 B22) without changing a byte:
+    /// this document - every label kind, colliding everywhere, with merged,
+    /// aligned-closure and colocated-unmerged stations - was rendered by the
+    /// quadratic implementation and pinned here before the change.
+    #[test]
+    fn dense_label_export_is_byte_identical_to_the_quadratic_placement() {
+        let svg = generate_svg_string(&dense_labelled_project(12, 30), &every_label()).unwrap();
+        let labels = svg.matches("<text ").count();
+        assert!(
+            labels > 300,
+            "the fixture must exercise placement: {labels} labels"
+        );
+        assert_eq!(
+            (svg.len(), fnv1a(svg.as_bytes())),
+            DENSE_LABEL_SVG_PIN,
+            "the dense-label SVG changed ({labels} labels)"
+        );
+    }
+
+    /// `(length, FNV-1a)` of `dense_label_export_is_byte_identical_to_the_quadratic_placement`'s
+    /// document as the pre-#576-B22 placement wrote it.
+    const DENSE_LABEL_SVG_PIN: (usize, u64) = (23_156, 16_253_259_044_443_610_700);
+
+    /// Timing probe, not a test: `cargo test -p stalagmight-export --lib
+    /// label_placement_timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing probe; run by hand"]
+    #[expect(clippy::print_stderr)]
+    fn label_placement_timing() {
+        for (sections, shots_each) in [(40, 50), (100, 50), (200, 50)] {
+            let project = dense_labelled_project(sections, shots_each);
+            let labels_off = ExportImageOptions::default();
+            let start = std::time::Instant::now();
+            generate_svg_string(&project, &labels_off).unwrap();
+            let off = start.elapsed();
+            let start = std::time::Instant::now();
+            generate_svg_string(&project, &every_label()).unwrap();
+            let on = start.elapsed();
+            eprintln!(
+                "{} shots: labels off {} ms, every label on {} ms",
+                sections * shots_each,
+                off.as_millis(),
+                on.as_millis()
+            );
+        }
+    }
 }
