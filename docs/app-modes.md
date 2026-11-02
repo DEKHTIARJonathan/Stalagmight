@@ -139,6 +139,17 @@ Survey's Closures Computed View and the SpeleoDB case is left to the backend
 rejection. `ContextMenu`'s raw `geometryMode` check sits inside a branch already
 scoped to `appMode === 'survey'`, where it is equivalent.
 
+A third carve-out covers the SpeleoDB verbs that swap the survey tree
+(#576 RV4-FE-SP4, RV5-F4-8): Discard (`refuseSurveySwapOutsideSurvey` in
+`useSpeleoActions.ts`), Restore and the Revert built on it (`useRevertRevision.ts`,
+`SpeleoRevisionHistory.tsx`) and their hamburger entries (`useSpeleoMenuItems.tsx`).
+They gate on the workspace alone (`appMode !== 'survey'`), not on
+`useEditingBlocked()`: they must work without the write lock - they take it
+themselves, or the project is read-only precisely because the user is about to
+discard or replace it - so the lock half of the composed gate would refuse them
+exactly where they are needed. The backend refuses them in Plan and Export too
+(`speleodb_guard_workspace`).
+
 ## Mode entry and exit
 
 `setAppMode` owns all of it. Entering Plan or Export exits section focus and
@@ -178,7 +189,8 @@ and docks over the freshly loaded ones. `uiStore.planDocks.test.ts` pins it.
 ## Adding a mode-gated feature
 
 - Gate every mutation entry point on `useEditingBlocked()` or
-  `isEditingBlockedNow()`. Not on `geometryMode`, not on `appMode` alone.
+  `isEditingBlockedNow()`. Not on `geometryMode`, not on `appMode` alone -
+  except the carve-outs listed under "What the lint enforces".
 - Re-check at commit time for anything that outlives the switch: a dialog left
   open across a mode change. `InsertStationDialog` re-checks in its confirm
   handler for exactly that reason.
