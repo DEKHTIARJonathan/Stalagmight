@@ -36,6 +36,7 @@ import type { ImportSectionConfig } from "./ImportSectionConfig";
 import type { ImportSectionForSuggestion } from "./ImportSectionForSuggestion";
 import type { IntegrityCheckResult } from "./IntegrityCheckResult";
 import type { IntegrityRepairResult } from "./IntegrityRepairResult";
+import type { InternalErrorNotice } from "./InternalErrorNotice";
 import type { LoadProjectFullResult } from "./LoadProjectFullResult";
 import type { LogsSince } from "./LogsSince";
 import type { MemoryStats } from "./MemoryStats";
@@ -152,6 +153,7 @@ export interface IpcCommands {
   get_anchored_section_ids: { args: Record<string, never>; result: Array<number>; error: string };
   get_cache_stats: { args: Record<string, never>; result: CacheStats; error: string };
   get_config: { args: Record<string, never>; result: Config; error: never };
+  get_internal_error_status: { args: Record<string, never>; result: InternalErrorNotice | null; error: never };
   get_memory_stats: { args: Record<string, never>; result: MemoryStats; error: string };
   get_network_status: { args: Record<string, never>; result: boolean; error: never };
   get_project_state: { args: Record<string, never>; result: ProjectState | null; error: never };
@@ -337,6 +339,7 @@ export const IPC_COMMAND_NAMES = [
   "get_anchored_section_ids",
   "get_cache_stats",
   "get_config",
+  "get_internal_error_status",
   "get_memory_stats",
   "get_network_status",
   "get_project_state",

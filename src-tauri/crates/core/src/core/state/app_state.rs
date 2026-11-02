@@ -464,6 +464,18 @@ impl AppState {
         &self.poison
     }
 
+    /// [#576 RV5-PI-3] The first lock a crash poisoned this session - the notice
+    /// the one-shot `internal-error` event carried - or `None`. The frontend's pull
+    /// path for a banner whose event it missed (a crash during startup, before its
+    /// listener existed, or a webview reload after the event).
+    pub fn internal_error_status(&self) -> Option<crate::core::events::InternalErrorNotice> {
+        self.poison
+            .first_poisoned()
+            .map(|cell| crate::core::events::InternalErrorNotice {
+                cell: cell.to_owned(),
+            })
+    }
+
     /// Start a new loading operation, cancelling any existing one.
     /// Returns the cancellation token for the new operation.
     pub fn start_new_load(&self) -> Arc<AtomicBool> {

@@ -1396,6 +1396,20 @@
       }
     },
     {
+      "name": "get_internal_error_status",
+      "module": "internal_error",
+      "async": true,
+      "args": [],
+      "result": {
+        "rust": "Option<InternalErrorNotice>",
+        "ts": "InternalErrorNotice | null"
+      },
+      "error": {
+        "rust": "!",
+        "ts": "never"
+      }
+    },
+    {
       "name": "get_memory_stats",
       "module": "memory",
       "async": true,

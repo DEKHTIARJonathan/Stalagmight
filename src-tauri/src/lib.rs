@@ -583,6 +583,8 @@ pub fn run() {
             commands::logging::get_recent_logs_since,
             commands::logging::push_frontend_log,
             commands::debug::debug_trigger_panic,
+            // [#576 RV5-PI-3] The internal-error banner's pull path
+            commands::internal_error::get_internal_error_status,
             // Memory probe (debug)
             commands::memory::get_memory_stats,
             // Telemetry

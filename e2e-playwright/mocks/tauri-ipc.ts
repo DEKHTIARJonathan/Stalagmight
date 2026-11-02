@@ -1599,6 +1599,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // DebugDialog expects string[] log lines prefixed with a level.
             return ['INFO [mock] app started', 'DEBUG [mock] project loaded'] satisfies MockReply<'get_recent_logs'>;
 
+          case 'get_internal_error_status':
+            // [#576 RV5-PI-3] No crash in a mocked session: no banner to raise.
+            return null satisfies MockReply<'get_internal_error_status'>;
+
           case 'get_project':
           case 'get_project_state': {
             // Generate mock stations from sections with merged_with data
