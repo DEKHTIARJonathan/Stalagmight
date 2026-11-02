@@ -1194,6 +1194,10 @@ mod tests {
     /// came out `inf` (NaN once both squares did). It stays finite and right;
     /// an ordinary input keeps its bit-exact result.
     #[test]
+    #[expect(
+        clippy::print_stdout,
+        reason = "the printed lengths are the evidence a run captures"
+    )]
     fn horizontal_length_of_an_absurd_tape_stays_finite() {
         for (length, dz, expected) in [
             (1e200, 0.0, 1e200),
