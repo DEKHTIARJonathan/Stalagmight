@@ -2980,6 +2980,8 @@
     "discardConfirm": "Discard unsaved changes to \"{{name}}\"?",
     "staleRefs_one": "{{count}} station this plan referenced no longer exists; it has been cleared.",
     "staleRefs_other": "{{count}} stations this plan referenced no longer exist; they have been cleared.",
+    "speedsDropped_one": "{{count}} span speed in this plan was outside the range the planner can fly and was dropped; that span uses the plan speed.",
+    "speedsDropped_other": "{{count}} span speeds in this plan were outside the range the planner can fly and were dropped; those spans use the plan speed.",
     "unresolvedPins": "A route point no longer matches a station in the survey. Re-place it before saving this plan."
   },
   "planTables": {

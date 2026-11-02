@@ -282,6 +282,46 @@ test.describe('Dive-plan persistence (#244)', () => {
     ]);
   });
 
+  test('a loaded plan drops span speeds the engine would not fly, with one notice (#576 NF-UI-2)', async ({
+    page,
+  }) => {
+    await giveProjectAPath(page);
+    await enterPlan(page);
+    // What only a hand-edited .plnx can carry: span speeds of 0 and 5000 m/min. The engine flies
+    // [0.1, 1000] and uses the plan speed for anything else, so the grid must not show them.
+    await page.evaluate(() => {
+      const gas = (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState();
+      gas.addWaypoint({ section_id: 1, station_index: 2 });
+      gas.setSegments([
+        { speed_m_per_min: 0, on_scooter: false },
+        { speed_m_per_min: 5000, on_scooter: false },
+      ]);
+    });
+    await saveAs(page, 'Hand-edited');
+    await page.evaluate(() => {
+      (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState().setSegments([
+        { speed_m_per_min: 10, on_scooter: false },
+        { speed_m_per_min: 12, on_scooter: false },
+      ]);
+    });
+    await saveAs(page, 'Other');
+    await expect(page.locator('[data-testid="dive-plan-speeds-dropped-warning"]')).toHaveCount(0);
+
+    const handEdited = (await savedPlans(page)).find((p) => p.name === 'Hand-edited');
+    await selectDropdownOption(page, 'dive-plan-select', String(handEdited!.id));
+    await expect.poll(() => loadedPlanId(page), { timeout: 3000 }).toBe(handEdited!.id);
+
+    const segments = await page.evaluate(
+      () => (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState().segments,
+    );
+    expect(segments.map((seg) => seg.speed_m_per_min)).toEqual([null, null]);
+    await expect(page.locator('[data-testid="dive-plan-speeds-dropped-warning"]')).toHaveText(
+      /2 span speeds in this plan were outside the range/,
+    );
+    // Dropping them is the load's normalisation, not an edit: the plan loads clean.
+    await expect(page.locator('[data-testid="dive-plan-dirty"]')).toHaveCount(0);
+  });
+
   test('editing after load shows the unsaved badge; Save clears it @smoke', async ({ page }) => {
     await giveProjectAPath(page);
     await enterPlan(page);
