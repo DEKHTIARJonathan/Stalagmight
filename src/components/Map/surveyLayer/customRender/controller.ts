@@ -1,7 +1,7 @@
 /**
  * Controller wiring the custom-render prototype into SurveyLayer (#customRender).
  *
- * Keeps SurveyLayer.tsx to a few integration lines: SurveyLayer constructs one
+ * Keeps SurveyLayer.ts to a few integration lines: SurveyLayer constructs one
  * of these, calls `sync(...)` after each geometry flush, and `destroy()` on
  * teardown. Everything else - building buffers from SoA, resolving colors,
  * adding/removing the custom layer, and toggling the stock bulk layers'
