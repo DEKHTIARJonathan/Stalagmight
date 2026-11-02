@@ -340,6 +340,32 @@ pub struct CacheStats {
     pub provider_count: u64,
 }
 
+/// What a delete removed: its bytes, and per provider its tiles and bytes
+/// (#576 NF-W4T-3), so the running totals move by exactly the rows deleted.
+#[derive(Default)]
+struct Freed {
+    bytes: u64,
+    by_provider: HashMap<String, (u64, u64)>,
+}
+
+impl Freed {
+    fn note(&mut self, provider: String, size: u64) {
+        self.bytes += size;
+        let entry = self.by_provider.entry(provider).or_default();
+        entry.0 += 1;
+        entry.1 += size;
+    }
+
+    fn absorb(&mut self, other: Freed) {
+        self.bytes += other.bytes;
+        for (provider, (tiles, bytes)) in other.by_provider {
+            let entry = self.by_provider.entry(provider).or_default();
+            entry.0 += tiles;
+            entry.1 += bytes;
+        }
+    }
+}
+
 /// SQLite-based tile cache with LRU eviction
 pub struct TileCache {
     conn: Connection,
@@ -358,6 +384,10 @@ pub struct TileCache {
     /// drift until the next open; the cache is disposable and the app runs
     /// single-instance.
     total_bytes: u64,
+    /// Per provider, its tiles and bytes on disk (#576 NF-W4T-3): kept the same way
+    /// as `total_bytes`, so the Settings cache panel reads them instead of a
+    /// `GROUP BY` pass over every BLOB under the mutex tile requests wait on.
+    provider_totals: HashMap<String, (u64, u64)>,
     /// Default time-to-live in seconds, for providers with no override
     ttl_seconds: i64,
     /// Per-provider TTL overrides, in seconds
@@ -397,12 +427,14 @@ impl TileCache {
             conn,
             max_bytes: u64::from(max_mb) * 1024 * 1024,
             total_bytes: 0,
+            provider_totals: HashMap::new(),
             ttl_seconds: i64::from(ttl_days) * 24 * 60 * 60,
             provider_ttl_seconds: HashMap::new(),
         };
 
         cache.init_schema()?;
         cache.total_bytes = cache.sum_size_bytes()?;
+        cache.provider_totals = cache.sum_by_provider()?;
         Ok(cache)
     }
 
@@ -414,11 +446,13 @@ impl TileCache {
             conn,
             max_bytes: u64::from(max_mb) * 1024 * 1024,
             total_bytes: 0,
+            provider_totals: HashMap::new(),
             ttl_seconds: i64::from(ttl_days) * 24 * 60 * 60,
             provider_ttl_seconds: HashMap::new(),
         };
         cache.init_schema()?;
         cache.total_bytes = cache.sum_size_bytes()?;
+        cache.provider_totals = cache.sum_by_provider()?;
         Ok(cache)
     }
 
@@ -575,7 +609,8 @@ impl TileCache {
                 return Err(e.into());
             }
         };
-        self.total_bytes = self.total_bytes.saturating_sub(freed);
+        self.book_freed(&freed);
+        let freed = freed.bytes;
         if freed > 0 {
             tracing::debug!(
                 freed_bytes = freed,
@@ -600,15 +635,16 @@ impl TileCache {
     /// statement walks an index (`idx_tiles_provider_fetched` or
     /// `idx_tiles_fetched`) and touches only the rows it retires. `put` runs
     /// this on every tile write.
-    fn delete_retired(&self) -> rusqlite::Result<u64> {
+    fn delete_retired(&self) -> rusqlite::Result<Freed> {
         let now = Self::now();
-        let mut freed_bytes = 0u64;
+        let mut freed_bytes = Freed::default();
 
         for (provider, ttl) in &self.provider_ttl_seconds {
-            freed_bytes += self.delete_returning_bytes(
-                "DELETE FROM tiles WHERE provider = ?1 AND fetched_at <= ?2 RETURNING size_bytes",
+            freed_bytes.absorb(self.delete_returning_bytes(
+                "DELETE FROM tiles WHERE provider = ?1 AND fetched_at <= ?2
+                 RETURNING provider, size_bytes",
                 params![provider, now - ttl],
-            )?;
+            )?);
         }
 
         // Everything with no override, against the default TTL. Building the
@@ -616,10 +652,10 @@ impl TileCache {
         let overridden: Vec<&String> = self.provider_ttl_seconds.keys().collect();
         let cutoff = now - self.ttl_seconds;
         if overridden.is_empty() {
-            freed_bytes += self.delete_returning_bytes(
-                "DELETE FROM tiles WHERE fetched_at <= ?1 RETURNING size_bytes",
+            freed_bytes.absorb(self.delete_returning_bytes(
+                "DELETE FROM tiles WHERE fetched_at <= ?1 RETURNING provider, size_bytes",
                 params![cutoff],
-            )?;
+            )?);
         } else {
             let placeholders = vec!["?"; overridden.len()].join(",");
             let mut args: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(overridden.len() + 1);
@@ -627,13 +663,13 @@ impl TileCache {
             for provider in &overridden {
                 args.push(provider);
             }
-            freed_bytes += self.delete_returning_bytes(
+            freed_bytes.absorb(self.delete_returning_bytes(
                 &format!(
                     "DELETE FROM tiles WHERE fetched_at <= ?1 AND provider NOT IN ({placeholders})
-                     RETURNING size_bytes"
+                     RETURNING provider, size_bytes"
                 ),
                 args.as_slice(),
-            )?;
+            )?);
         }
 
         Ok(freed_bytes)
@@ -658,19 +694,58 @@ impl TileCache {
             Ok(bytes) => self.total_bytes = bytes,
             Err(e) => tracing::warn!(error = %e, "Could not re-read the tile cache size"),
         }
+        match self.sum_by_provider() {
+            Ok(totals) => self.provider_totals = totals,
+            Err(e) => tracing::warn!(error = %e, "Could not re-read the per-provider cache size"),
+        }
     }
 
-    /// Run a `DELETE ... RETURNING size_bytes` and add up the bytes it removed.
+    /// Tiles and bytes per provider, from the table: the full pass
+    /// `provider_totals` exists to keep off the panel. Run at open, and to resync.
+    fn sum_by_provider(&self) -> rusqlite::Result<HashMap<String, (u64, u64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT provider, COUNT(*), COALESCE(SUM(size_bytes), 0) FROM tiles GROUP BY provider",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                (
+                    row.get::<_, i64>(1)?.max(0) as u64,
+                    row.get::<_, i64>(2)?.max(0) as u64,
+                ),
+            ))
+        })?;
+        rows.collect()
+    }
+
+    /// Book what a committed delete freed off the running totals.
+    fn book_freed(&mut self, freed: &Freed) {
+        self.total_bytes = self.total_bytes.saturating_sub(freed.bytes);
+        for (provider, (tiles, bytes)) in &freed.by_provider {
+            if let Some(entry) = self.provider_totals.get_mut(provider) {
+                entry.0 = entry.0.saturating_sub(*tiles);
+                entry.1 = entry.1.saturating_sub(*bytes);
+                if entry.0 == 0 {
+                    self.provider_totals.remove(provider);
+                }
+            }
+        }
+    }
+
+    /// Run a `DELETE ... RETURNING provider, size_bytes` and add up what it removed.
     fn delete_returning_bytes(
         &self,
         sql: &str,
         params: impl rusqlite::Params,
-    ) -> rusqlite::Result<u64> {
+    ) -> rusqlite::Result<Freed> {
         let mut stmt = self.conn.prepare_cached(sql)?;
         let mut rows = stmt.query(params)?;
-        let mut freed = 0u64;
+        let mut freed = Freed::default();
         while let Some(row) = rows.next()? {
-            freed += row.get::<_, i64>(0)?.max(0) as u64;
+            freed.note(
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?.max(0) as u64,
+            );
         }
         Ok(freed)
     }
@@ -680,12 +755,12 @@ impl TileCache {
     fn delete_tile(&mut self, provider: &str, z: u32, y: u32, x: u32) -> Result<u64> {
         match self.delete_returning_bytes(
             "DELETE FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
-             RETURNING size_bytes",
+             RETURNING provider, size_bytes",
             params![provider, z, y, x],
         ) {
             Ok(freed) => {
-                self.total_bytes = self.total_bytes.saturating_sub(freed);
-                Ok(freed)
+                self.book_freed(&freed);
+                Ok(freed.bytes)
             }
             Err(e) => {
                 self.resync_total_bytes();
@@ -906,7 +981,11 @@ impl TileCache {
             policy.no_cache,
         ) {
             Ok(freed) => {
-                self.total_bytes = self.total_bytes.saturating_sub(freed) + new_size;
+                self.book_freed(&freed);
+                self.total_bytes += new_size;
+                let entry = self.provider_totals.entry(provider.to_owned()).or_default();
+                entry.0 += 1;
+                entry.1 += new_size;
                 Ok(())
             }
             Err(e) => {
@@ -937,7 +1016,7 @@ impl TileCache {
         expires_at: i64,
         etag: Option<&str>,
         no_cache: bool,
-    ) -> rusqlite::Result<u64> {
+    ) -> rusqlite::Result<Freed> {
         let tx = self.conn.unchecked_transaction()?;
 
         // Retention first, so nothing past its TTL is kept at the expense of a
@@ -948,15 +1027,15 @@ impl TileCache {
         // tile needs room for all of its bytes. Crediting the old copy's bytes
         // instead ("space needed = new - old") counted them twice whenever the
         // LRU eviction below picked that same row (#576 B35(j)).
-        freed += self.delete_returning_bytes(
+        freed.absorb(self.delete_returning_bytes(
             "DELETE FROM tiles WHERE provider = ?1 AND z = ?2 AND y = ?3 AND x = ?4
-             RETURNING size_bytes",
+             RETURNING provider, size_bytes",
             params![provider, z, y, x],
-        )?;
+        )?);
 
-        let held = self.total_bytes.saturating_sub(freed);
+        let held = self.total_bytes.saturating_sub(freed.bytes);
         let over = (held + data.len() as u64).saturating_sub(self.max_bytes);
-        freed += self.evict_oldest(over)?;
+        freed.absorb(self.evict_oldest(over)?);
 
         // A plain INSERT, not OR REPLACE: the row it would replace is gone, and
         // a REPLACE here would drop bytes `total_bytes` never hears about.
@@ -1132,23 +1211,26 @@ impl TileCache {
     ///
     /// One ordered walk down `idx_tiles_accessed` that stops as soon as it has
     /// enough, so it reads the rows it deletes and no others.
-    fn evict_oldest(&self, bytes_to_free: u64) -> rusqlite::Result<u64> {
+    fn evict_oldest(&self, bytes_to_free: u64) -> rusqlite::Result<Freed> {
+        let mut freed = Freed::default();
         if bytes_to_free == 0 {
-            return Ok(0);
+            return Ok(freed);
         }
         let mut victims = Vec::new();
-        let mut freed = 0u64;
         {
             let mut stmt = self.conn.prepare_cached(
-                "SELECT id, size_bytes FROM tiles ORDER BY accessed_at ASC, id ASC",
+                "SELECT id, provider, size_bytes FROM tiles ORDER BY accessed_at ASC, id ASC",
             )?;
             let mut rows = stmt.query([])?;
-            while freed < bytes_to_free {
+            while freed.bytes < bytes_to_free {
                 let Some(row) = rows.next()? else {
                     break;
                 };
                 victims.push(row.get::<_, i64>(0)?);
-                freed += row.get::<_, i64>(1)?.max(0) as u64;
+                freed.note(
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?.max(0) as u64,
+                );
             }
         }
         let mut delete = self
@@ -1167,7 +1249,8 @@ impl TileCache {
     pub fn evict_lru(&mut self) -> Result<u64> {
         match self.retire_and_evict_to_cap() {
             Ok(freed) => {
-                self.total_bytes = self.total_bytes.saturating_sub(freed);
+                self.book_freed(&freed);
+                let freed = freed.bytes;
                 // Run incremental vacuum to reclaim space if we freed anything
                 if freed > 0 {
                     let _ = self.conn.execute("PRAGMA incremental_vacuum(100)", []);
@@ -1182,14 +1265,14 @@ impl TileCache {
     }
 
     /// `evict_lru`'s write half, as one transaction.
-    fn retire_and_evict_to_cap(&self) -> rusqlite::Result<u64> {
+    fn retire_and_evict_to_cap(&self) -> rusqlite::Result<Freed> {
         let tx = self.conn.unchecked_transaction()?;
         let mut freed = self.delete_retired()?;
         let over = self
             .total_bytes
-            .saturating_sub(freed)
+            .saturating_sub(freed.bytes)
             .saturating_sub(self.max_bytes);
-        freed += self.evict_oldest(over)?;
+        freed.absorb(self.evict_oldest(over)?);
         tx.commit()?;
         Ok(freed)
     }
@@ -1204,6 +1287,7 @@ impl TileCache {
             return Err(e.into());
         }
         self.total_bytes = 0;
+        self.provider_totals.clear();
         // Use incremental vacuum (non-blocking) instead of full VACUUM
         // to prevent UI freezes when clearing large caches
         let _ = self.conn.execute("PRAGMA incremental_vacuum(100)", []);
@@ -1213,10 +1297,10 @@ impl TileCache {
     /// Clear tiles from a specific provider.
     pub fn clear_provider(&mut self, provider: &str) -> Result<()> {
         match self.delete_returning_bytes(
-            "DELETE FROM tiles WHERE provider = ?1 RETURNING size_bytes",
+            "DELETE FROM tiles WHERE provider = ?1 RETURNING provider, size_bytes",
             params![provider],
         ) {
-            Ok(freed) => self.total_bytes = self.total_bytes.saturating_sub(freed),
+            Ok(freed) => self.book_freed(&freed),
             Err(e) => {
                 self.resync_total_bytes();
                 return Err(e.into());
@@ -1261,30 +1345,11 @@ impl TileCache {
 
     /// Get per-provider statistics.
     ///
-    /// Returns a map of provider name to (tile_count, total_bytes).
+    /// Returns a map of provider name to (tile_count, total_bytes) - the running
+    /// totals (#576 NF-W4T-3), so opening the Settings cache panel no longer walks
+    /// the whole table under the mutex every tile request waits on.
     pub fn get_provider_stats(&self) -> HashMap<String, (u64, u64)> {
-        let mut result = HashMap::new();
-
-        let query_result: Result<(), rusqlite::Error> = (|| {
-            let mut stmt = self.conn.prepare(
-                "SELECT provider, COUNT(*), COALESCE(SUM(size_bytes), 0) FROM tiles GROUP BY provider",
-            )?;
-            let mut rows = stmt.query([])?;
-
-            while let Some(row) = rows.next()? {
-                let provider: String = row.get(0)?;
-                let count: i64 = row.get(1)?;
-                let bytes: i64 = row.get(2)?;
-                result.insert(provider, (count as u64, bytes as u64));
-            }
-            Ok(())
-        })();
-
-        if let Err(e) = query_result {
-            tracing::warn!(error = %e, "Failed to get provider stats");
-        }
-
-        result
+        self.provider_totals.clone()
     }
 
     /// Check if a tile exists and is fresh (not expired).
@@ -1358,6 +1423,16 @@ impl TileCache {
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod accounting_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    clippy::cast_sign_loss,
+    reason = "test module: panics on a failed assumption are the point, the printed values \
+              are the evidence a run captures, and SQLite counts are never negative"
+)]
+mod provider_totals_tests;
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
