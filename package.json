@@ -43,6 +43,8 @@
     "lint:eslint:test": "node scripts/check-eslint.test.mjs",
     "lint:import-cycles": "node scripts/check-import-cycles.mjs",
     "lint:import-cycles:test": "node scripts/check-import-cycles.test.mjs",
+    "lint:i18n-literals": "node scripts/check-i18n-literals.mjs",
+    "lint:i18n-literals:test": "node scripts/check-i18n-literals.test.mjs",
     "lint:prepush-checklist": "node scripts/check-prepush-checklist.mjs",
     "lint:prepush-checklist:test": "node scripts/check-prepush-checklist.test.mjs",
     "test:pw-timing": "node scripts/pw-timing-reporter.test.mjs && node scripts/pw-timing-summary.test.mjs",

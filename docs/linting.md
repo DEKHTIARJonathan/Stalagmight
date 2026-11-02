@@ -250,3 +250,32 @@ move the shared value to a leaf module (`src/store/commandResult.ts`), pass it
 in as a parameter (`surfaceSaveFailure` takes the integrity state), or
 late-bind it (`src/store/speleoStoreHandle.ts`); when only types cross, use
 `import type`.
+
+### Dialog i18n literals
+
+`pnpm lint:i18n-literals` (`scripts/check-i18n-literals.mjs`, fixtures in
+`pnpm lint:i18n-literals:test`, CI `check` job) fails on hard-coded
+user-visible text in the dialog layer: every production file under
+`src/components/Dialogs/` and each `src/components/common/` module a dialog
+imports (Button, Select, Toggle, ...; derived from the imports on every run).
+Zero tolerance (#576 D20): the dialogs carried ~470 such strings, including
+the Error / Confirm primitives, the unsaved-changes prompt every dialog frame
+shows and 13 validation errors, and they were moved to
+`src/i18n/locales/en.json` with the English unchanged.
+
+What it reads as UI text (TypeScript AST, syntax only): JSX text, strings in a
+JSX child expression (followed through `?:`, `&&`, `??`, `||`, `+`), the
+user-facing JSX attributes (`title`, `label`, `placeholder`, `alt`,
+`aria-label`, ...), the same names as object-literal properties (dialog
+payloads, option lists), and the argument of a `set...Error` /
+`...Message` / `...Warning` / `...Notice` setter. It never looks inside a
+call, so `t('key')` is invisible to it, and a string with no letter left once
+`${...}` placeholders and HTML entities are removed passes (`{' · '}`,
+`&rarr;`). Render the text with `t('dialogs.<dialog>.<key>')`, or `<Trans>`
+with named tags when it wraps elements (see `OverwriteConfirmDialog.tsx`).
+
+A literal that is not language - a file-format name (PNG, PDF), a brand, a
+URL placeholder - goes in `scripts/i18n-literals-allowlist.json` as an exact
+`{file, text, reason}` row. A row that matches nothing fails the gate, so the
+list cannot outlive its reason. The gate is a heuristic: a string kept in a
+variable or a helper map is invisible to it, which is what review is for.

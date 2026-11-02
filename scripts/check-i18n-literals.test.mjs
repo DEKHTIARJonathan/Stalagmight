@@ -1,0 +1,196 @@
+// Fixture tests for the dialog-layer i18n literal gate (scripts/check-i18n-literals.mjs).
+//
+// A gate that never fires proves nothing, so each shape of hard-coded UI text
+// is pinned with a planted literal it MUST report, and each near miss (a t()
+// key, a className, a punctuation-only string, a placeholder-only template)
+// with one it must NOT. The last tests run the whole scan over a throwaway tree
+// on disk, so the scope derivation (dialogs + the common modules they import),
+// the allowlist (covering and stale rows) and the exit code are covered too.
+//
+// Pure Node, no test framework (mirrors the sibling scripts/check-*.test.mjs).
+// Run: node scripts/check-i18n-literals.test.mjs  (pnpm lint:i18n-literals:test; CI check job)
+
+import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { analyzeSource, applyAllowlist, hasLetters, scopeFiles, main, ALLOWLIST_FILE } from './check-i18n-literals.mjs';
+
+let passed = 0;
+const failures = [];
+function test(name, fn) {
+  try {
+    fn();
+    passed++;
+  } catch (e) {
+    failures.push(`${name}: ${e.message}`);
+  }
+}
+
+const texts = (code) => analyzeSource('src/components/Dialogs/Fixture.tsx', code).map((f) => f.text);
+const kinds = (code) => analyzeSource('src/components/Dialogs/Fixture.tsx', code).map((f) => f.kind);
+
+// --- must report ----------------------------------------------------------------
+
+test('JSX text is reported, whitespace-normalised', () => {
+  assert.deepEqual(texts('const v = <p>\n  Delete this\n  shot?\n</p>;'), ['Delete this shot?']);
+});
+
+test('strings in a JSX child expression are followed through ?:, &&, ??, || and +', () => {
+  const code = `const v = <div>
+    {busy ? 'Saving...' : 'Save'}
+    {err && 'Failed'}
+    {msg ?? 'An error occurred.'}
+    {name || 'Unnamed'}
+    {'Total: ' + n}
+    {\`Shot \${n} of \${m}\`}
+  </div>;`;
+  assert.deepEqual(texts(code), ['Saving...', 'Save', 'Failed', 'An error occurred.', 'Unnamed', 'Total:', 'Shot ${n} of ${m}']);
+});
+
+test('user-facing attributes are reported, literal or expression', () => {
+  const code = `const v = <>
+    <DialogWrapper title="Edit Shot" />
+    <input placeholder={'Optional'} aria-label={\`Close \${name}\`} />
+    <img alt="Map" />
+    <Button title={busy ? 'Working' : 'Go'} />
+  </>;`;
+  assert.deepEqual(texts(code), ['Edit Shot', 'Optional', 'Close ${name}', 'Map', 'Working', 'Go']);
+  assert.ok(kinds(code).every((k) => k.startsWith('attr ')));
+});
+
+test('user-facing properties in object literals are reported (dialog payloads, option lists)', () => {
+  const code = `openDialog('error', { title: 'Delete failed', message: \`Could not delete \${x}\` });
+    const opts = [{ value: 'a', label: 'By section' }];`;
+  assert.deepEqual(texts(code), ['Delete failed', 'Could not delete ${x}', 'By section']);
+});
+
+test('error / message setters are reported (the validation-error shape)', () => {
+  const code = `setError('Length must be greater than 0');
+    setDeleteError(ok ? 'Failed to delete shot' : 'Failed');
+    setStatusMessage('Saved');`;
+  assert.deepEqual(texts(code), ['Length must be greater than 0', 'Failed to delete shot', 'Failed', 'Saved']);
+});
+
+// --- must NOT report --------------------------------------------------------------
+
+test('t() calls and their keys are never reported, in any position', () => {
+  const code = `const v = <div title={t('dialogs.x.title')}>
+    {t('dialogs.x.body', { n })}
+    {busy ? t('common.actions.saving') : t('common.actions.save')}
+    <Trans i18nKey="dialogs.x.rich" components={{ b: <b /> }} />
+  </div>;
+  setError(t('dialogs.x.error'));
+  openDialog('error', { title: t('dialogs.x.failed') });`;
+  assert.deepEqual(texts(code), []);
+});
+
+test('non-user-facing attributes and strings are not reported', () => {
+  const code = `const v = <div className="p-4 text-sm" data-testid="edit-shot" role="dialog" variant="danger" type="button" />;
+    const key = 'some-key';
+    trackDialogComplete('error');
+    throw new Error('internal');
+    setSelection({ type: 'station' });`;
+  assert.deepEqual(texts(code), []);
+});
+
+test('text without a letter is not reported (punctuation, numbers, entities, placeholder-only templates)', () => {
+  const code = `const v = <span>
+    {' '}{' · '}&times;{'/'}{\`\${a}/\${b}\`}{\`\${n}%\`} 42 &rarr; &#x26A0;
+  </span>;`;
+  assert.deepEqual(texts(code), []);
+  assert.equal(hasLetters('&rarr;'), false);
+  assert.equal(hasLetters('${count} m'), true);
+});
+
+// --- allowlist --------------------------------------------------------------------
+
+test('an allowlist row covers every occurrence of its text in its file only; unused rows are stale', () => {
+  const findings = [
+    { file: 'a.tsx', line: 1, kind: 'jsx-text', text: 'PNG' },
+    { file: 'a.tsx', line: 9, kind: 'jsx-text', text: 'PNG' },
+    { file: 'b.tsx', line: 2, kind: 'jsx-text', text: 'PNG' },
+  ];
+  const rows = [
+    { file: 'a.tsx', text: 'PNG', reason: 'format name' },
+    { file: 'a.tsx', text: 'SVG', reason: 'format name' },
+  ];
+  const { violations, stale } = applyAllowlist(findings, rows);
+  assert.deepEqual(violations.map((v) => v.file), ['b.tsx']);
+  assert.deepEqual(stale.map((s) => s.text), ['SVG']);
+});
+
+// --- the whole scan on a throwaway tree ---------------------------------------------
+
+function tree(files) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'i18n-literals-'));
+  for (const [rel, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), text);
+  }
+  return root;
+}
+
+const quiet = (fn) => {
+  const { log, error } = console;
+  console.log = () => {};
+  console.error = () => {};
+  try {
+    return fn();
+  } finally {
+    console.log = log;
+    console.error = error;
+  }
+};
+
+const ALLOW = (entries) => JSON.stringify({ entries });
+
+test('scope: every dialog file plus the common modules a dialog imports, tests excluded', () => {
+  const root = tree({
+    'src/components/Dialogs/A.tsx': "import { Button } from '../common/Button';\nexport const A = () => <Button />;\n",
+    'src/components/Dialogs/sub/B.tsx': "import X from '../../common/Grid';\nexport const B = X;\n",
+    'src/components/Dialogs/__tests__/A.test.tsx': 'const v = <p>Test text</p>;\n',
+    'src/components/Dialogs/A.test.tsx': 'const v = <p>Test text</p>;\n',
+    'src/components/common/Button.tsx': 'export const Button = () => null;\n',
+    'src/components/common/Grid/index.tsx': 'export default 1;\n',
+    'src/components/common/Unused.tsx': 'const v = <p>Not a dialog primitive</p>;\n',
+    [ALLOWLIST_FILE]: ALLOW([]),
+  });
+  assert.deepEqual(scopeFiles(root).files, [
+    'src/components/Dialogs/A.tsx',
+    'src/components/Dialogs/sub/B.tsx',
+    'src/components/common/Button.tsx',
+    'src/components/common/Grid/index.tsx',
+  ]);
+});
+
+test('main: a literal in a dialog or in an imported primitive fails; t() and allowlisted text pass', () => {
+  const clean = {
+    'src/components/Dialogs/A.tsx':
+      "import { Button } from '../common/Button';\nexport const A = () => <Button title={t('x.title')}>PNG</Button>;\n",
+    'src/components/common/Button.tsx': 'export const Button = () => <button>{children}</button>;\n',
+    [ALLOWLIST_FILE]: ALLOW([{ file: 'src/components/Dialogs/A.tsx', text: 'PNG', reason: 'format name' }]),
+  };
+  assert.equal(quiet(() => main(tree(clean))), 0);
+  assert.equal(quiet(() => main(tree({ ...clean, 'src/components/Dialogs/C.tsx': 'const v = <p>Delete</p>;\n' }))), 1);
+  const primitive = { ...clean, 'src/components/common/Button.tsx': 'export const Button = () => <button aria-label="Close" />;\n' };
+  assert.equal(quiet(() => main(tree(primitive))), 1);
+});
+
+test('main: a stale allowlist row fails, and so does a row without a reason', () => {
+  const base = { 'src/components/Dialogs/A.tsx': 'export const A = () => null;\n' };
+  const stale = { ...base, [ALLOWLIST_FILE]: ALLOW([{ file: 'src/components/Dialogs/A.tsx', text: 'PNG', reason: 'format name' }]) };
+  assert.equal(quiet(() => main(tree(stale))), 1);
+  const reasonless = {
+    'src/components/Dialogs/A.tsx': 'const v = <b>PNG</b>;\n',
+    [ALLOWLIST_FILE]: ALLOW([{ file: 'src/components/Dialogs/A.tsx', text: 'PNG', reason: '' }]),
+  };
+  assert.equal(quiet(() => main(tree(reasonless))), 1);
+});
+
+if (failures.length > 0) {
+  console.error(`\n✗ check-i18n-literals fixtures: ${failures.length} failed, ${passed} passed\n`);
+  for (const f of failures) console.error(`  ${f}`);
+  process.exit(1);
+}
+console.log(`✓ check-i18n-literals fixtures: ${passed} passed`);

@@ -179,6 +179,16 @@ jobs:
         run: |
           pnpm lint:import-cycles:test
           pnpm lint:import-cycles
+      # Hard-coded UI text in the dialog layer (#576 D20), zero tolerance: every
+      # user-visible string in src/components/Dialogs/** and the common
+      # primitives those import comes from en.json via t(); the few literals
+      # that are not language sit in scripts/i18n-literals-allowlist.json with a
+      # reason. Seconds; the fixture test pins each text shape and the scope.
+      - name: Dialog i18n literals
+        if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
+        run: |
+          pnpm lint:i18n-literals:test
+          pnpm lint:i18n-literals
       # Agent-harness typecheck (tsconfig.agent.json covers e2e/agent + e2e/lib).
       # The harness runs via tsx, which transpiles WITHOUT type-checking, and it
       # is exercised on-demand only - this seconds-cheap step is its one
