@@ -200,9 +200,16 @@ fn depth_gradient_color(depth: f64, min_d: f64, max_d: f64, ramp: DepthRamp<'_>)
 fn depth_range(project: &Project, stations: &[crate::models::Station]) -> (f64, f64) {
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
-    for s in stations {
-        min = min.min(s.coordinates.z);
-        max = max.max(s.coordinates.z);
+    // A non-finite depth can only be on a station the drawing never reads
+    // (`ensure_finite_geometry` refused the rest, #576 RV3-R-9); it must not
+    // throw the whole ramp back to its default.
+    for z in stations
+        .iter()
+        .map(|s| s.coordinates.z)
+        .filter(|z| z.is_finite())
+    {
+        min = min.min(z);
+        max = max.max(z);
     }
     for section in &project.sections {
         for shot in &section.shots {
@@ -540,13 +547,22 @@ const MIN_BOUNDS_EXTENT_M: f64 = 1.0;
 /// first offending station is named by section and shot (station `k` is where
 /// the section's `k`-th shot ends), in section order, so the user can find
 /// and fix the reading that caused it.
+///
+/// Only the stations the export DRAWS are checked ([`drawn_stations`], #576
+/// RV3-R-9): one that only reference shots reach is not drawn, so a bad value
+/// there does not refuse an export that never reads it.
 fn ensure_finite_geometry(
     project: &Project,
     station_by_ref: &HashMap<StationRef, &crate::models::Station>,
 ) -> Result<()> {
+    let drawn = drawn_stations(project, station_by_ref);
     for section in &project.sections {
         for index in 0..=section.shots.len() as u32 {
-            let Some(station) = station_by_ref.get(&StationRef::new(section.id, index)) else {
+            let station_ref = StationRef::new(section.id, index);
+            if drawn.as_ref().is_some_and(|d| !d.contains(&station_ref)) {
+                continue;
+            }
+            let Some(station) = station_by_ref.get(&station_ref) else {
                 continue;
             };
             let c = station.coordinates;
@@ -579,6 +595,69 @@ fn ensure_finite_geometry(
         }
     }
     Ok(())
+}
+
+/// The stations the drawing reads coordinates from, or `None` when it draws
+/// none (#576 RV3-R-9). Matches what the passes below read:
+/// - both ends of every non-reference shot (shot lines, the bounds, section
+///   names, shot-data labels);
+/// - every station colocated with one of those by a merge or an aligned
+///   closure, transitively: the station-label, comment and penetration passes
+///   treat such a point as drawn and may place their text at any station on
+///   it;
+/// - every zero datum (its star, and the bounds).
+///
+/// `None` mirrors the bounds' fallback: with nothing drawn they read EVERY
+/// station, so every station must be finite.
+fn drawn_stations(
+    project: &Project,
+    station_by_ref: &HashMap<StationRef, &crate::models::Station>,
+) -> Option<HashSet<StationRef>> {
+    let refs: Vec<StationRef> = station_by_ref.keys().copied().collect();
+    let index: HashMap<StationRef, usize> = refs.iter().enumerate().map(|(i, r)| (*r, i)).collect();
+    let mut points = UnionFind::new(refs.len());
+    let mut colocate = |a: Option<StationRef>, b: Option<StationRef>| {
+        if let (Some(&a), Some(&b)) = (a.and_then(|a| index.get(&a)), b.and_then(|b| index.get(&b)))
+        {
+            points.union(a, b);
+        }
+    };
+    for merge in &project.station_merges {
+        colocate(
+            project.resolve_key(&merge.station_a),
+            project.resolve_key(&merge.station_b),
+        );
+    }
+    for closure in project.loop_closures.iter().filter(|c| c.is_aligned) {
+        colocate(
+            project.resolve_key(&closure.station_a),
+            project.resolve_key(&closure.station_b),
+        );
+    }
+
+    let mut drawn_points: HashSet<usize> = HashSet::new();
+    for section in &project.sections {
+        for (i, shot) in section.shots.iter().enumerate() {
+            if shot.kind.is_virtual() {
+                continue;
+            }
+            for end in [i, i + 1] {
+                if let Some(&at) = index.get(&StationRef::new(section.id, end as u32)) {
+                    drawn_points.insert(points.find(at));
+                }
+            }
+        }
+    }
+    let mut drawn: HashSet<StationRef> = HashSet::new();
+    for (i, station_ref) in refs.iter().enumerate() {
+        let zero_datum = station_by_ref
+            .get(station_ref)
+            .is_some_and(|s| s.is_zero_datum);
+        if zero_datum || drawn_points.contains(&points.find(i)) {
+            drawn.insert(*station_ref);
+        }
+    }
+    (!drawn.is_empty()).then_some(drawn)
 }
 
 /// Generate SVG content as a string from the measured station coordinates.
@@ -2051,6 +2130,106 @@ mod tests {
             message.contains("\"Side\"") && message.contains("shot 1"),
             "{message}"
         );
+    }
+
+    /// [#576 RV3-R-9] The check covers what the export DRAWS. The end of a
+    /// trailing reference shot is drawn by nothing - not the bounds, not a
+    /// label - so a non-finite one there no longer refuses the export, and the
+    /// drawing is finite. Merged onto a drawn station it IS drawn (a label or
+    /// comment can sit at it), so it is refused again; and when nothing at all
+    /// is drawn the bounds read every station, so every station is checked.
+    #[test]
+    #[expect(
+        clippy::print_stdout,
+        reason = "the printed outcomes are the evidence a run captures"
+    )]
+    fn only_stations_the_export_draws_must_be_finite() {
+        let mut project = Project::new("CaveA".to_string(), None);
+        let main = project
+            .add_section(SectionData {
+                name: Some("Main".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false), make_shot(4.0, 90.0, true)],
+                ..Default::default()
+            })
+            .id;
+        let with_nan_at = |project: &Project, at: StationRef| {
+            let mut stations = project.compute_station_coordinates();
+            for station in &mut stations {
+                if station.station_ref == at {
+                    station.coordinates.x = f64::NAN;
+                }
+            }
+            stations
+        };
+        let options = ExportImageOptions {
+            show_station_labels: true,
+            show_station_comments: true,
+            ..ExportImageOptions::default()
+        };
+
+        let undrawn = generate_svg_string_with_stations(
+            &project,
+            &options,
+            with_nan_at(&project, StationRef::new(main, 2)),
+        );
+        println!(
+            "NaN at the end of a trailing reference shot -> {}",
+            undrawn
+                .as_ref()
+                .map_or_else(|e| format!("refused: {e}"), |_| "exported".to_string())
+        );
+        let svg = undrawn.unwrap();
+        assert!(
+            !svg.contains("NaN") && !svg.contains("inf"),
+            "the drawing must be finite: {svg}"
+        );
+
+        // Merged onto the start of a drawn shot: drawn, so refused.
+        let side = project
+            .add_section(SectionData {
+                name: Some("Side".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(3.0, 180.0, false)],
+                ..Default::default()
+            })
+            .id;
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(main, 2).into(),
+            station_b: StationRef::new(side, 0).into(),
+            merged_at: chrono::Utc::now(),
+        });
+        let merged = generate_svg_string_with_stations(
+            &project,
+            &options,
+            with_nan_at(&project, StationRef::new(main, 2)),
+        );
+        println!(
+            "...merged onto a drawn station -> {:?}",
+            merged.as_ref().map(|_| "exported")
+        );
+        assert!(merged.is_err());
+
+        // Nothing drawn at all: the bounds read every station.
+        let mut only_reference = Project::new("CaveB".to_string(), None);
+        let lone = only_reference
+            .add_section(SectionData {
+                name: Some("Ref".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(4.0, 90.0, true)],
+                ..Default::default()
+            })
+            .id;
+        let nothing_drawn = generate_svg_string_with_stations(
+            &only_reference,
+            &options,
+            with_nan_at(&only_reference, StationRef::new(lone, 1)),
+        );
+        println!(
+            "...in a project that draws nothing -> {:?}",
+            nothing_drawn.as_ref().map(|_| "exported")
+        );
+        assert!(nothing_drawn.is_err());
     }
 
     // ---- Output shape ------------------------------------------------------
