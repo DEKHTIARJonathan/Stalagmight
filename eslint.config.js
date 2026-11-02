@@ -3,33 +3,67 @@
 // eslint-baseline.json. Policy and how to extend it: docs/linting.md
 // "Frontend: ESLint".
 //
-// Deliberately small. The parser is typescript-eslint's, with no type-aware
-// rules (no `parserOptions.project`), so a run needs no TypeScript program and
-// stays fast. The rules are the two React hook rules:
-//   - rules-of-hooks (error): a hook behind `||`, a condition or an early return
-//     changes the hook order between renders and React throws;
-//   - exhaustive-deps (warn, ratcheted): a missing effect/memo dependency can be
-//     a stale-closure bug, but the tree carried ~100 findings when this landed,
-//     so they are frozen in the baseline rather than fixed in one go.
-// An `eslint-disable` for one of these rules needs a reason after ` -- `, and an
-// unused or unknown-rule directive is an error (reportUnusedDisableDirectives).
+// Scope: the frontend (src/) and the two test-automation trees (e2e-playwright/,
+// e2e/). The parser is typescript-eslint's, with no type-aware rules (no
+// `parserOptions.project`), so a run needs no TypeScript program and stays fast.
+//
+// Rules:
+//   - typescript-eslint's `recommended` set (not `recommended-type-checked`),
+//     everywhere;
+//   - the two React hook rules, in src/ only (nothing else renders React):
+//     rules-of-hooks (error) - a hook behind `||`, a condition or an early
+//     return changes the hook order between renders and React throws;
+//     exhaustive-deps (warn, ratcheted) - a missing effect/memo dependency can
+//     be a stale-closure bug, but the tree carried ~100 findings when this
+//     landed, so they are frozen in the baseline rather than fixed in one go.
+//   - in the test-automation trees, no-explicit-any and no-unused-vars are
+//     warnings, ratcheted the same way: the recommended set found ~260 there
+//     when it landed (236 `any` across 22 Playwright specs, 25 unused names).
+//     src/ had three findings, fixed, and keeps every recommended rule an error.
+// An `eslint-disable` needs a reason after ` -- `, and an unused or
+// unknown-rule directive is an error (reportUnusedDisableDirectives).
 import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
+
+const SRC = ['src/**/*.{ts,tsx}'];
+const E2E = ['e2e-playwright/**/*.ts', 'e2e/**/*.ts'];
+const TS = [...SRC, ...E2E];
+
+// `_`-prefixed names are deliberately unused (tsc's noUnusedParameters
+// convention, which the tree already follows).
+const UNUSED_VARS = {
+  argsIgnorePattern: '^_',
+  varsIgnorePattern: '^_',
+  caughtErrorsIgnorePattern: '^_',
+  destructuredArrayIgnorePattern: '^_',
+  ignoreRestSiblings: true,
+};
 
 export default [
   // Generated ts-rs output (CLAUDE.md "IPC Types Are Generated"): never hand-written.
   { ignores: ['src/types/ipc/**', 'src/types/ipc.generated.ts'] },
+  { linterOptions: { reportUnusedDisableDirectives: 'error' } },
+  ...tseslint.configs.recommended.map((config) => ({ ...config, files: TS })),
   {
-    files: ['src/**/*.{ts,tsx}'],
-    languageOptions: {
-      parser: tseslint.parser,
-      parserOptions: { ecmaFeatures: { jsx: true } },
+    files: TS,
+    languageOptions: { parserOptions: { ecmaFeatures: { jsx: true } } },
+    rules: {
+      '@typescript-eslint/no-unused-vars': ['error', UNUSED_VARS],
     },
-    linterOptions: { reportUnusedDisableDirectives: 'error' },
+  },
+  {
+    files: SRC,
     plugins: { 'react-hooks': reactHooks },
     rules: {
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'warn',
+    },
+  },
+  {
+    files: E2E,
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-unused-vars': ['warn', UNUSED_VARS],
     },
   },
 ];

@@ -73,7 +73,7 @@ TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo check --release --manifest-path src-tauri/Cargo.toml --workspace --features telemetry   # release profile: debug_assertions off (#541)
 pnpm tsc --noEmit
 pnpm lint:test-ids:test && pnpm lint:test-ids             # interactive UI test-ID contract
-pnpm lint:eslint:test && pnpm lint:eslint                 # ESLint: hook rules; warnings ratcheted (eslint-baseline.json)
+pnpm lint:eslint:test && pnpm lint:eslint                 # ESLint over src + e2e trees, warnings ratcheted (eslint-baseline.json); smoke runs it too
 pnpm typecheck:agent                                      # agent-harness typecheck
 ./scripts/test-release.sh                                 # release tooling, driven in throwaway clones
 pnpm lint:rust-file-size:test && pnpm lint:rust-file-size # Rust file-size ratchet

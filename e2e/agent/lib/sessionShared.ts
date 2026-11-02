@@ -32,7 +32,7 @@ export async function attachBrowser(
       logLevel: 'silent',
       connectionRetryCount: 3,
       connectionRetryTimeout: 30000,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a caller-built record (tauri:options included) that webdriverio's Capabilities type does not model
       capabilities: capabilities as any,
     });
   } catch (err) {

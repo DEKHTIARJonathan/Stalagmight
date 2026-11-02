@@ -144,20 +144,32 @@ rot as the clippy story above.
 | Config | `eslint.config.js` (flat config) |
 | Gate | `pnpm lint:eslint` (`scripts/check-eslint.mjs`), fixture test `pnpm lint:eslint:test` |
 | Warning baseline | `eslint-baseline.json` (generated: `pnpm lint:eslint --update`) |
-| CI | `check` job, step "ESLint (hook rules, ratcheted warnings)" |
+| CI | `check` and `smoke` jobs, step "ESLint (hook rules, ratcheted warnings)" - the same full-scope run in both, because `check` path-ignores `e2e-playwright/**` and `smoke` path-ignores `e2e/agent/**` |
 
 **Scope and rules.** `src/**/*.{ts,tsx}` (tests included; the generated IPC
-types are ignored), parsed with typescript-eslint's parser and **no type-aware
-rules** (no `parserOptions.project`, so a run needs no TypeScript program).
-Two rules, from `eslint-plugin-react-hooks`:
+types are ignored) and every `.ts` file under the two test-automation trees,
+`e2e-playwright/` and `e2e/`. Parsed with typescript-eslint's parser and **no
+type-aware rules** (no `parserOptions.project`, so a run needs no TypeScript
+program).
 
-- `react-hooks/rules-of-hooks` - **error**. A hook behind `||`, a condition or
-  an early return runs on some renders and not others, and React throws
-  "Rendered more hooks than during the previous render". The first run found
-  one (`PlacementOverlay`, a store hook after an early return).
-- `react-hooks/exhaustive-deps` - **warn, ratcheted**. A missing effect/memo
-  dependency can be a stale-closure bug, but the tree carried ~100 findings
-  when the rule landed, so they are frozen rather than fixed in one sweep.
+- **typescript-eslint `recommended`** (not `recommended-type-checked`),
+  everywhere. `no-unused-vars` exempts `_`-prefixed names, the convention tsc's
+  `noUnusedParameters` already imposes on the tree.
+- **`react-hooks/rules-of-hooks`** - error, `src/` only (nothing else renders
+  React; a Playwright fixture's `use()` would read as a hook). A hook behind
+  `||`, a condition or an early return runs on some renders and not others,
+  and React throws "Rendered more hooks than during the previous render". The
+  first run found one (`PlacementOverlay`, a store hook after an early return).
+- **`react-hooks/exhaustive-deps`** - warn, ratcheted, `src/` only. A missing
+  effect/memo dependency can be a stale-closure bug, but the tree carried ~100
+  findings when the rule landed, so they are frozen rather than fixed in one
+  sweep.
+
+Severity is per tree. In `src/` every recommended rule is an error (the set
+found three findings there, fixed when it landed). In `e2e-playwright/` and
+`e2e/`, `no-explicit-any` and `no-unused-vars` are ratcheted warnings: the set
+found 236 `any` across 22 Playwright specs and 25 unused names, which is test
+debt to pay down file by file, not a reason to keep the gate off those trees.
 
 `linterOptions.reportUnusedDisableDirectives` is `error`, so a directive that
 suppresses nothing, or names a rule that is not loaded (`react/...`,
@@ -176,13 +188,15 @@ review-visible decision; fix the warning unless there is a reason not to.
 // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: hash the file this dialog opened with, once
 ```
 
-Every kept `react-hooks/exhaustive-deps` disable carries one. The review that
-added the gate deleted the directives that suppressed nothing or named rules
-that are not loaded, and fixed the ones whose missing dependency was a stable
-identity (a `useCallback(..., [])` setter, a callback whose own inputs were
-already listed).
+Every kept disable carries one, including the three that
+`scripts/generate-replay.mjs` writes into generated replay specs. The review
+that added the gate deleted the directives that suppressed nothing or named
+rules that are not loaded (`react/...`, `jsx-a11y/...`, and core rules such as
+`no-new-func` that no config enables), and fixed the ones whose missing
+dependency was a stable identity (a `useCallback(..., [])` setter, a callback
+whose own inputs were already listed).
 
 **Extending it.** Same rule as for clippy: measure on the real tree first
-(`pnpm exec eslint src --rule '{"<rule>": "warn"}' -f json`), prefer surgical
+(`pnpm exec eslint src e2e-playwright e2e --rule '{"<rule>": "warn"}' -f json`), prefer surgical
 rules, and land a new warn-level rule with its counts in the baseline rather
 than with a sweep of unrelated fixes.

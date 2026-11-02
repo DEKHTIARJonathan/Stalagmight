@@ -65,6 +65,13 @@ jobs:
         run: |
           pnpm lint:ts-file-size:test
           pnpm lint:ts-file-size
+      # ESLint lints e2e-playwright/ too (#576 D1), and `check` - its other home -
+      # path-ignores e2e-playwright/**, so a spec-only PR is gated here. The same
+      # full-scope run (src, e2e-playwright, e2e) and baseline as in `check`.
+      - name: ESLint (hook rules, ratcheted warnings)
+        run: |
+          pnpm lint:eslint:test
+          pnpm lint:eslint
       # mockContract pins the mock against lib.rs's generate_handler! list. It lives
       # in the vitest suite, which only `check` runs - and `check` path-ignores
       # `e2e-playwright/**`, so a mock-only edit (the exact change most likely to

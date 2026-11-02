@@ -211,7 +211,7 @@ function define<S extends z.ZodRawShape>(
           toolChain = run.catch(() => undefined);
           return run;
         };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- registerTool infers its callback type from a concrete schema; a generic S cannot satisfy it
   server.registerTool(name, { description, inputSchema: schema }, wrapped as any);
 }
 
@@ -940,7 +940,6 @@ define(
               if (session.hasRecorder) session.recorder.event('driver-log', { message: String(m) });
             },
           };
-          // eslint-disable-next-line no-new-func
           const fn = new Function(
             'helpers',
             `return (async () => { const { browser, ipc, evalInApp, readStore, callAction, log } = helpers; ${args.script} })();`,

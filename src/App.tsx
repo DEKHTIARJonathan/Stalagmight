@@ -328,7 +328,7 @@ function App() {
       }
       try {
         await getCurrentWindow().setTitle(title);
-      } catch (e) {
+      } catch {
         // Fallback for dev mode or if Tauri API unavailable
         document.title = title;
       }

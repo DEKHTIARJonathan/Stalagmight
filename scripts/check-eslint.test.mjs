@@ -94,8 +94,8 @@ async function lint(rel, code) {
 const ruleHits = (msgs, rule) => msgs.filter((m) => m.ruleId === rule);
 const SRC = 'src/components/__eslint_fixture__/Fixture.tsx';
 
-await test('the gate scope is src', () => {
-  assert.ok(LINT_TARGETS.includes('src'));
+await test('the gate scope is src and both test-automation trees', () => {
+  assert.deepEqual([...LINT_TARGETS].sort(), ['e2e', 'e2e-playwright', 'src']);
 });
 
 await test('rules-of-hooks: a hook behind || is an error', async () => {
@@ -199,6 +199,56 @@ await test('generated IPC types are ignored', async () => {
   assert.equal(await eslint.isPathIgnored(path.join(REPO_ROOT, 'src/types/ipc/Fixture.ts')), true);
   assert.equal(await eslint.isPathIgnored(path.join(REPO_ROOT, 'src/types/ipc.generated.ts')), true);
   assert.equal(await eslint.isPathIgnored(path.join(REPO_ROOT, 'src/types/project.ts')), false);
+});
+
+// --- typescript-eslint recommended, and the per-tree severities -------------------
+
+const PW = 'e2e-playwright/__eslint_fixture__.spec.ts';
+const AGENT = 'e2e/agent/__eslint_fixture__.ts';
+
+await test('recommended: `any` is an error in src and a (ratcheted) warning in the e2e trees', async () => {
+  const code = 'export const x: any = 1;\n';
+  const inSrc = ruleHits(await lint(SRC, code), '@typescript-eslint/no-explicit-any');
+  assert.equal(inSrc.length, 1);
+  assert.equal(inSrc[0].severity, 2);
+  for (const rel of [PW, AGENT]) {
+    const hits = ruleHits(await lint(rel, code), '@typescript-eslint/no-explicit-any');
+    assert.equal(hits.length, 1, rel);
+    assert.equal(hits[0].severity, 1, rel);
+  }
+});
+
+await test('recommended: an unused name is an error in src, a warning in e2e, and `_`-prefixed names are exempt', async () => {
+  const unused = 'export function f(a: number, _b: number) { const c = 1; const _d = 2; return 0; }\n';
+  const inSrc = ruleHits(await lint(SRC, unused), '@typescript-eslint/no-unused-vars');
+  assert.deepEqual(inSrc.map((m) => [m.severity, /'(\w+)'/.exec(m.message)[1]]), [[2, 'a'], [2, 'c']]);
+  const inPw = ruleHits(await lint(PW, unused), '@typescript-eslint/no-unused-vars');
+  assert.deepEqual(inPw.map((m) => m.severity), [1, 1]);
+  const caught = 'export function g() { try { return 1; } catch (_e) { return 0; } }\n';
+  assert.deepEqual(await lint(SRC, caught), []);
+});
+
+await test('recommended: the other rules stay errors everywhere (prefer-const, no-unused-expressions)', async () => {
+  for (const rel of [SRC, PW, AGENT]) {
+    const msgs = await lint(rel, 'export function f(a: boolean, g: () => void) { let x = 1; a ? g() : g(); return x; }\n');
+    assert.equal(ruleHits(msgs, 'prefer-const')[0]?.severity, 2, rel);
+    assert.equal(ruleHits(msgs, '@typescript-eslint/no-unused-expressions')[0]?.severity, 2, rel);
+  }
+});
+
+await test('the React hook rules apply to src only (a Playwright fixture calls `use`)', async () => {
+  const fixture = `
+    export const fixtures = {
+      store: async ({ page }: { page: unknown }, use: (v: unknown) => Promise<void>) => { await use(page); },
+    };
+  `;
+  assert.deepEqual(await lint(PW, fixture), []);
+});
+
+await test('an unused directive is an error in the e2e trees too', async () => {
+  const msgs = await lint(AGENT, '// eslint-disable-next-line no-console -- not enabled, so this suppresses nothing\nexport const x = 1;\n');
+  assert.equal(msgs.length, 1, JSON.stringify(msgs));
+  assert.equal(msgs[0].severity, 2);
 });
 
 if (failures.length > 0) {

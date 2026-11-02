@@ -223,7 +223,6 @@ async function styleState(page: Page): Promise<{ satellite: boolean; grid: boole
 async function act(page: Page, code: string): Promise<void> {
   await page.evaluate((code) => {
     const w = window as unknown as { __E2E_TEST__: { uiStore: { getState: () => unknown }; projectStore: { getState: () => unknown } } };
-    // eslint-disable-next-line no-new-func
     new Function('ui', 'ps', code)(w.__E2E_TEST__.uiStore.getState(), w.__E2E_TEST__.projectStore.getState());
   }, code);
 }

@@ -91,11 +91,11 @@ push(`// session: ${start?.sessionId ?? '(unknown)'}  gitHead: ${start?.gitHead 
 push(`// binary:  ${start?.binaryPath ?? '?'}  display: ${start?.display ?? '?'}`);
 push(`import { ipc, evalInApp, pause, storeAction, driverScript, runScenarioReplay, replayClick, mapClick, mapFeatureClick, waitForReplay, hoverElement, dragPointer, scrollTarget, selectOption, answerFileDialog, materializeReplayFixture, cleanupReplayFixtures } from '${helpersImport}';`);
 push('');
-push('// eslint-disable-next-line @typescript-eslint/no-explicit-any');
+push('// eslint-disable-next-line @typescript-eslint/no-explicit-any -- a runner global, untyped in a generated spec');
 push('declare const browser: any;');
-push('// eslint-disable-next-line @typescript-eslint/no-explicit-any');
+push('// eslint-disable-next-line @typescript-eslint/no-explicit-any -- a runner global, untyped in a generated spec');
 push('declare const $: any;');
-push('// eslint-disable-next-line @typescript-eslint/no-explicit-any');
+push('// eslint-disable-next-line @typescript-eslint/no-explicit-any -- a runner global, untyped in a generated spec');
 push('declare const expect: any;');
 push('');
 push(`describe('replay ${specName}', () => {`);

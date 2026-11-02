@@ -66,7 +66,6 @@ export async function evalInApp<T = unknown>(
   try {
     // Compile in the Node driver. WebDriver executes the resulting fixed script
     // directly, so the webview's production CSP does not need unsafe-eval.
-    // eslint-disable-next-line no-new-func
     runner = new Function(
       'fnArgs',
       'done',

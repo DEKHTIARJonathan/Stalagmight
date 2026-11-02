@@ -34,7 +34,7 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 export const BASELINE_FILE = 'eslint-baseline.json';
 // What the gate lints. The globs in eslint.config.js decide which files under
 // these directories get which rules.
-export const LINT_TARGETS = ['src'];
+export const LINT_TARGETS = ['src', 'e2e-playwright', 'e2e'];
 
 const relPosix = (abs) => path.relative(REPO_ROOT, abs).split(path.sep).join('/');
 
