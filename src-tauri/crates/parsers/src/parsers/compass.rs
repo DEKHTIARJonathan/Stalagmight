@@ -2511,7 +2511,7 @@ mod tests {
 
     #[test]
     fn multi_file_mak_warns_on_per_file_divergence() {
-        // multi_zone.mak declares two `#file` entries; file 0 uses
+        // A `.MAK` with two `#file` entries, built below: file 0 uses
         // NAD-1983 / UTM 13 / declination=Entered (default), file 1
         // switches to WGS 1984 / UTM 14 / declination=Auto.  parse_mak
         // mirrors file 0's values into the project-wide preview fields
@@ -2519,9 +2519,11 @@ mod tests {
         // preview only reflects file 0.  Geometry is resolved per-file
         // through `SurveyWithState.state` regardless of these warnings.
         //
-        // The project is the one in `multi_zone.mak`, but with two DISTINCT
-        // `.DAT`s: that fixture lists one `.DAT` twice, and a second listing
-        // of a file is now skipped (#576 RV2-R-12).
+        // The two files are two DISTINCT synthetic `.DAT`s: a second listing
+        // of one file is skipped (#576 RV2-R-12). This test used to read the
+        // tracked fixture `tests/fixtures/compass/multi_zone.mak`, which listed
+        // one `.DAT` twice; nothing reads that fixture any more (it is unused,
+        // left for the maintainer to delete by hand - #576 RV4-R-P3).
         let dir = tempfile::tempdir().unwrap();
         for (name, survey) in [("a.dat", "A"), ("b.dat", "B")] {
             std::fs::write(
