@@ -546,6 +546,10 @@ impl AppState {
                 commands
             } else {
                 own_commands = self.hold_commands();
+                // [#576 RV4-R-C2] Re-checked once the lock is held, still before any
+                // state write: a newer load or create that started while this one
+                // waited for an in-flight command has cancelled it.
+                check_cancelled!();
                 &own_commands
             };
             self.commit_open_session(

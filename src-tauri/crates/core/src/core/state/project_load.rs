@@ -943,6 +943,12 @@ impl AppState {
         // start in between. The detached release takes `project` only briefly and
         // never `speleodb_lock_ops` on this thread, so it is safe under it.
         let commands = self.hold_commands();
+        // [#576 RV4-R-C2] Re-checked now that the lock is held, still before any state
+        // write: the wait for an in-flight command can be long, and a newer load that
+        // started meanwhile has cancelled this one. Committing anyway let the older
+        // project land last (the mutex is not fair), leaving the backend on a project
+        // the frontend had moved past.
+        check_cancelled!();
         self.speleodb_release_held_lock_detached();
 
         // [#576 A5] ALL commits under ONE `project` acquisition, through the commit
