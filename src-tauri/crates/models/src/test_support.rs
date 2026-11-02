@@ -131,18 +131,43 @@ fn permission_precondition_failed(what: &str) -> ! {
     )
 }
 
+/// Fail the calling test because a permission probe failed for a reason that is
+/// not a permission refusal: the probe was pointed at the wrong path (a typo, a
+/// directory that was never created), so the refusal it is about was never tested
+/// (#576 RV5-RL-5).
+#[track_caller]
+#[expect(
+    clippy::panic,
+    reason = "a test helper: failing the calling test is its whole job"
+)]
+fn probe_failed_for_another_reason(what: &str, error: &std::io::Error) -> ! {
+    panic!(
+        "permission precondition probe misdirected: {what} failed with {error} ({:?}), not \
+         a permission refusal. Point it at the path whose permission the test took away.",
+        error.kind()
+    )
+}
+
 /// `dir`, whose write permission the caller took away, refuses a new entry.
 /// Probes by creating (and, if that works, removing) a file in it.
 ///
 /// # Panics
 ///
-/// When the file can be created.
+/// When the file can be created, or when creating it fails with anything but
+/// `PermissionDenied` (a missing or mistyped `dir` refuses a new file too, and
+/// would pass without the permission ever being tested).
 #[track_caller]
 pub fn assert_dir_refuses_new_files(dir: &Path) {
     let probe = dir.join(".permission-precondition-probe");
-    if std::fs::File::create(&probe).is_ok() {
-        let _ = std::fs::remove_file(&probe);
-        permission_precondition_failed(&format!("{} still accepts new files", dir.display()));
+    match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            permission_precondition_failed(&format!("{} still accepts new files", dir.display()));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {}
+        Err(e) => {
+            probe_failed_for_another_reason(&format!("creating a file in {}", dir.display()), &e)
+        }
     }
 }
 
@@ -151,11 +176,18 @@ pub fn assert_dir_refuses_new_files(dir: &Path) {
 ///
 /// # Panics
 ///
-/// When the file opens for writing.
+/// When the file opens for writing, or when opening it fails with anything but
+/// `PermissionDenied` (a missing file refuses too).
 #[track_caller]
 pub fn assert_file_refuses_writes(path: &Path) {
-    if std::fs::OpenOptions::new().write(true).open(path).is_ok() {
-        permission_precondition_failed(&format!("{} still opens for writing", path.display()));
+    match std::fs::OpenOptions::new().write(true).open(path) {
+        Ok(_) => {
+            permission_precondition_failed(&format!("{} still opens for writing", path.display()));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {}
+        Err(e) => {
+            probe_failed_for_another_reason(&format!("opening {} for writing", path.display()), &e)
+        }
     }
 }
 

@@ -19,6 +19,8 @@ pub mod speleo_link;
 pub mod station;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+#[cfg(test)]
+mod test_support_probe_tests;
 pub mod undo_mode;
 pub mod warning;
 
