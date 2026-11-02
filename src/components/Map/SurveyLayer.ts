@@ -425,6 +425,11 @@ export default class SurveyLayer {
     applyAuxiliaryThemeColors(this.map, this.themeColors);
     this.applyInteractPaint();
     applyGhostSection(this.map, this.ghostSection, this.gpsOrigin);
+    // Unconditionally, unlike the flush's re-push: a route cleared during the loss
+    // (leaving Plan, the field going away) is still in the restored source - a
+    // GeoJSON source serializes its data - and only an empty push erases it
+    // (#576 RV4-FE-SL3).
+    applyGasRoute(this.map, this.gasRouteLegs, this.cachedStations, this.gpsOrigin);
     this.lastInteractKey = null;
     this.refreshInteractOverlay();
   }

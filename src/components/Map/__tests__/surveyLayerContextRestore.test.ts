@@ -93,3 +93,31 @@ describe('a segment carry cancelled while the context is lost (#576 RV4-FE-SL1)'
     expect(fake.filter(AUX_IDS.loopClosuresLayerId)).toBeUndefined();
   });
 });
+
+describe('a gas route cleared while the context is lost (#576 RV4-FE-SL3)', () => {
+  const GAS_ROUTE_SOURCE = AUX_IDS.sourceId + '-gas-route';
+  const featureCount = (): number | null => {
+    const data = fake.sourceData(GAS_ROUTE_SOURCE) as { features?: unknown[] } | undefined;
+    return data?.features?.length ?? null;
+  };
+
+  it('is erased by the restore instead of coming back with the serialized style', () => {
+    const at = (section_id: number, station_index: number, x: number, y: number) => ({
+      station_ref: { section_id, station_index },
+      coordinates: { x, y, z: 0 },
+    });
+    Object.assign(layer as unknown as Record<string, unknown>, {
+      cachedStations: [at(1, 0, 0, 0), at(1, 1, 10, 0)],
+    });
+    layer.setGasRoute([{ from: { section_id: 1, station_index: 0 }, to: { section_id: 1, station_index: 1 }, is_jump: false }]);
+    expect(featureCount()).toBe(1);
+
+    loseContext();
+    // Leaving Plan (or the field going away) clears the route during the loss.
+    layer.setGasRoute([]);
+    restoreContext();
+
+    console.log('[SL3] gas-route features after clear-during-loss + restore:', featureCount());
+    expect(featureCount()).toBe(0);
+  });
+});
