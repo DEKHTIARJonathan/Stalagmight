@@ -219,7 +219,7 @@ impl AppState {
         // (the server would 403 the lockless upload). The FE offers "Reconnect to
         // sync" (Start editing) instead; guard here as a backstop.
         if self.force_editing() {
-            return Err(local_dto(SpeleoDbError::Io(
+            return Err(local_dto(SpeleoDbError::Refused(
                 "reconnect to acquire the write lock before pushing".to_owned(),
             )));
         }
@@ -361,7 +361,7 @@ impl AppState {
         // #213: a force-editor holds no lock, so a push would 403. Refuse with the
         // same reconnect hint as Done (the FE never offers push in force-edit).
         if self.force_editing() {
-            return Err(local_dto(SpeleoDbError::Io(
+            return Err(local_dto(SpeleoDbError::Refused(
                 "reconnect to acquire the write lock before pushing".to_owned(),
             )));
         }
@@ -428,7 +428,7 @@ impl AppState {
         acknowledged: bool,
     ) -> Result<(), SpeleoErrorDto> {
         if link.has_unpushed_edits && self.speleodb_unwound_from().is_some() && !acknowledged {
-            return Err(local_dto(SpeleoDbError::Io(
+            return Err(local_dto(SpeleoDbError::Refused(
                 "uploading an older unwound revision must be confirmed".to_owned(),
             )));
         }
@@ -499,7 +499,7 @@ impl AppState {
         acknowledged: bool,
     ) -> Result<Option<StartEditingResult>, SpeleoErrorDto> {
         if !acknowledged {
-            return Err(local_dto(SpeleoDbError::Io(
+            return Err(local_dto(SpeleoDbError::Refused(
                 "discarding the local copy destroys un-pushed work and must be confirmed"
                     .to_owned(),
             )));
@@ -778,7 +778,7 @@ impl AppState {
         // gate Done/Push need stays closed - and kept here, at the one upload
         // every push funnels through, so it stays that way.
         if let Some(reason) = self.newer_file_refusal() {
-            return Err(local_dto(SpeleoDbError::Io(reason)));
+            return Err(local_dto(SpeleoDbError::Refused(reason)));
         }
         let project_id = &link.project_id;
 
@@ -893,11 +893,11 @@ impl AppState {
             );
         }
         if !flushed.success {
-            let mut dto = local_dto(SpeleoDbError::Io(String::new()));
-            dto.message = flushed
-                .error
-                .unwrap_or_else(|| "the project could not be saved before the push".to_owned());
-            return Err(dto);
+            return Err(local_dto(SpeleoDbError::Refused(
+                flushed
+                    .error
+                    .unwrap_or_else(|| "the project could not be saved before the push".to_owned()),
+            )));
         }
         Ok(())
     }

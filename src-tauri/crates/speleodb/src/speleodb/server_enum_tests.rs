@@ -80,7 +80,7 @@ fn an_unknown_level_is_never_sent_back_to_the_server() {
     ];
     for result in refused {
         assert!(
-            matches!(result, Err(super::SpeleoDbError::Io(_))),
+            matches!(result, Err(super::SpeleoDbError::Refused(_))),
             "an UNKNOWN level is refused locally, got {result:?}"
         );
     }

@@ -138,6 +138,12 @@ pub enum SpeleoDbError {
     /// A local filesystem error while extracting/writing.
     #[error("filesystem error: {0}")]
     Io(String),
+    /// [#576 NF-W4S2-2] A verb refused locally, before anything was attempted - the
+    /// sentence says why and what to do ("reconnect to acquire the write lock before
+    /// pushing"). Shown as written: wrapping these in [`Self::Io`] prefixed them with
+    /// "filesystem error:", which they are not.
+    #[error("{0}")]
+    Refused(String),
     /// The project id supplied over IPC was not a valid SpeleoDB project UUID.
     /// Guards the cache-path join and request-URL interpolation against path /
     /// route traversal at the trust boundary.

@@ -175,7 +175,7 @@ impl AppState {
         // fine; only an explicit empty/whitespace `Some` is refused. (The FE also gates
         // this, but the backend must not depend on it.)
         if patch.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
-            return Err(local_dto(SpeleoDbError::Io(
+            return Err(local_dto(SpeleoDbError::Refused(
                 "a project name cannot be empty".to_owned(),
             )));
         }
@@ -292,10 +292,10 @@ impl AppState {
         //  - [#576 B6-D1] a project a newer build saved: publishing saves it into
         //    the cache, and that save is refused - after the create POST.
         if let Some(reason) = self.newer_file_refusal() {
-            return Err(local_dto(SpeleoDbError::Io(reason)));
+            return Err(local_dto(SpeleoDbError::Refused(reason)));
         }
         if params.name.trim().is_empty() {
-            return Err(local_dto(SpeleoDbError::Io(
+            return Err(local_dto(SpeleoDbError::Refused(
                 "a project name is required to publish".to_owned(),
             )));
         }
@@ -303,12 +303,12 @@ impl AppState {
         // so a blank one 400s the create. Reject it up front (the FE gates on it too)
         // for a clear message instead of a raw server validation error.
         if params.description.trim().is_empty() {
-            return Err(local_dto(SpeleoDbError::Io(
+            return Err(local_dto(SpeleoDbError::Refused(
                 "a project description is required to publish".to_owned(),
             )));
         }
         if self.speleodb_open_link().is_ok() {
-            return Err(local_dto(SpeleoDbError::Io(
+            return Err(local_dto(SpeleoDbError::Refused(
                 "this project is already linked to SpeleoDB".to_owned(),
             )));
         }
@@ -318,12 +318,12 @@ impl AppState {
                 .lock()
                 .map_err(|_| local_dto(SpeleoDbError::Io("project lock poisoned".to_owned())))?;
             let project = proj_guard.as_ref().ok_or_else(|| {
-                local_dto(SpeleoDbError::Io(
+                local_dto(SpeleoDbError::Refused(
                     "no project is open to publish".to_owned(),
                 ))
             })?;
             if project.has_unresolvable_cross_references() {
-                return Err(local_dto(SpeleoDbError::Io(
+                return Err(local_dto(SpeleoDbError::Refused(
                     "can't publish: the project has unresolved cross-references (use Repair first)"
                         .to_owned(),
                 )));

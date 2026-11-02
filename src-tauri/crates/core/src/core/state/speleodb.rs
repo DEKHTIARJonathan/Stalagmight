@@ -1719,10 +1719,10 @@ impl AppState {
         // [#576 B6-D1] A project a newer build saved cannot be edited here, so
         // there is no edit session to force.
         if let Some(reason) = self.newer_file_refusal() {
-            return Err(local_dto(SpeleoDbError::Io(reason)));
+            return Err(local_dto(SpeleoDbError::Refused(reason)));
         }
         if !self.speleodb_allow_force_edit() {
-            return Err(local_dto(SpeleoDbError::Io(
+            return Err(local_dto(SpeleoDbError::Refused(
                 "force-edit is disabled; enable it in SpeleoDB settings first".to_owned(),
             )));
         }
@@ -1730,7 +1730,7 @@ impl AppState {
         let _link = self.speleodb_validated_link()?;
         // Refuse when we are already editing WITH the lock held (nothing to force).
         if self.edit_enabled() && !self.force_editing() {
-            return Err(local_dto(SpeleoDbError::Io(
+            return Err(local_dto(SpeleoDbError::Refused(
                 "already editing with the write lock held".to_owned(),
             )));
         }
@@ -1779,7 +1779,7 @@ impl AppState {
         // edited here, and taking the server lock for it would only keep every
         // collaborator out of a project this session can never change or push.
         if let Some(reason) = self.newer_file_refusal() {
-            return Err(local_dto(SpeleoDbError::Io(reason)));
+            return Err(local_dto(SpeleoDbError::Refused(reason)));
         }
         // The lock-ops span opens FIRST, before a single fact is read: everything
         // below is decided from facts (the session generation, the link, the

@@ -317,6 +317,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         | SpeleoDbError::Parse(_)
         | SpeleoDbError::EmptyDump
         | SpeleoDbError::Io(_)
+        | SpeleoDbError::Refused(_)
         | SpeleoDbError::InvalidProjectId
         | SpeleoDbError::InvalidRevision
         | SpeleoDbError::InsecureEndpoint { .. }
