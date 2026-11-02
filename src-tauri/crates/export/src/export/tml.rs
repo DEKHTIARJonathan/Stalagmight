@@ -816,7 +816,7 @@ fn build_export_shots_with_report(
                         schema::TYPE_REAL
                     },
                     section: section_name.clone(),
-                    azimuth: emit_reference.to_true(shot.azimuth_in),
+                    azimuth: emit_reference.to_true(shot.average_azimuth_measured()),
                     length: shot.length,
                     depth: shot.depth_out,
                     depth_in: shot.depth_in,
@@ -882,9 +882,12 @@ fn build_export_shots_with_report(
                             schema::TYPE_REAL
                         },
                         section: split_name.clone(),
-                        // Ariane carries a single forward azimuth per shot. The reverse
-                        // pre-zero leg must therefore be synthesized as reciprocal heading.
-                        azimuth: reverse_pre_zero_azimuth(emit_reference.to_true(shot.azimuth_in)),
+                        // Ariane carries a single forward azimuth per shot, so the
+                        // reverse pre-zero leg is the reciprocal of the bearing the
+                        // app draws (`reverse_pre_zero_azimuth`).
+                        azimuth: reverse_pre_zero_azimuth(
+                            emit_reference.to_true(shot.average_azimuth_measured()),
+                        ),
                         length: shot.length,
                         depth: reversed_depth_out,
                         depth_in: reversed_depth_in,
@@ -957,7 +960,7 @@ fn build_export_shots_with_report(
                                 schema::TYPE_REAL
                             },
                             section: section_name.clone(),
-                            azimuth: emit_reference.to_true(shot.azimuth_in),
+                            azimuth: emit_reference.to_true(shot.average_azimuth_measured()),
                             length: shot.length,
                             depth: shot.depth_out,
                             depth_in: shot.depth_in,
@@ -1024,7 +1027,7 @@ fn build_export_shots_with_report(
                             },
                             section: rev_name.clone(),
                             azimuth: reverse_pre_zero_azimuth(
-                                emit_reference.to_true(shot.azimuth_in),
+                                emit_reference.to_true(shot.average_azimuth_measured()),
                             ),
                             length: shot.length,
                             depth: reversed_depth_out,
@@ -1094,7 +1097,7 @@ fn build_export_shots_with_report(
                             },
                             section: rev_name.clone(),
                             azimuth: reverse_pre_zero_azimuth(
-                                emit_reference.to_true(shot.azimuth_in),
+                                emit_reference.to_true(shot.average_azimuth_measured()),
                             ),
                             length: shot.length,
                             depth: reversed_depth_out,
@@ -1211,7 +1214,7 @@ fn build_export_shots_with_report(
                     schema::TYPE_REAL
                 },
                 section: section_name.clone(),
-                azimuth: emit_reference.to_true(shot.azimuth_in),
+                azimuth: emit_reference.to_true(shot.average_azimuth_measured()),
                 length: shot.length,
                 depth: shot.depth_out,
                 depth_in: shot.depth_in,
@@ -2143,12 +2146,16 @@ fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
     }
 }
 
-/// Compute azimuth for the generated pre-zero-datum reverse segment.
+/// The bearing of a leg walked backwards: the reciprocal of the forward one.
 ///
-/// Ariane does not provide a backsight field, so `azimuth_out` from Stalagmight
-/// must not be interpreted as an Ariane backsight during export.
-fn reverse_pre_zero_azimuth(azimuth_in: f64) -> f64 {
-    normalize_azimuth(azimuth_in + 180.0)
+/// `forward` is the bearing the app draws - the circular mean of the shot's
+/// two forward readings, `azimuth_in` and `azimuth_out` (SPEC: they are two
+/// readings of the SAME forward line, not a foresight/backsight pair). Ariane
+/// carries a single forward azimuth per shot, so the reversed and
+/// pre-zero-datum legs are synthesized as its reciprocal; `azimuth_out` is
+/// never a backsight to read a reverse bearing from.
+fn reverse_pre_zero_azimuth(forward: f64) -> f64 {
+    normalize_azimuth(forward + 180.0)
 }
 
 // ============================================================================
@@ -2293,10 +2300,13 @@ mod tests {
             surveyor: Some("Alice".to_string()),
             date: chrono::NaiveDate::from_ymd_opt(2025, 6, 15),
             color: "#ff0000".to_string(),
+            // `azimuth_in`/`azimuth_out` are two forward readings of one line
+            // (SPEC), so a plain fixture repeats the bearing; a backsight-shaped
+            // 45/225 pair is a gross blunder whose mean the app draws at 315.
             shots: vec![
                 ShotData {
                     azimuth_in: 45.0,
-                    azimuth_out: 225.0,
+                    azimuth_out: 45.0,
                     length: 10.0,
                     depth_in: 0.0,
                     depth_out: 3.0,
@@ -2310,7 +2320,7 @@ mod tests {
                 },
                 ShotData {
                     azimuth_in: 90.0,
-                    azimuth_out: 270.0,
+                    azimuth_out: 90.0,
                     length: 8.0,
                     depth_in: 3.0,
                     depth_out: 5.0,
@@ -2785,6 +2795,76 @@ mod tests {
     fn test_reverse_pre_zero_azimuth_is_reciprocal() {
         assert!((reverse_pre_zero_azimuth(42.0) - 222.0).abs() < 1e-9);
         assert!((reverse_pre_zero_azimuth(350.0) - 170.0).abs() < 1e-9);
+    }
+
+    /// #576 NF-AN5-1: `azimuth_in` and `azimuth_out` are two readings of the
+    /// same forward line and the app draws their circular mean, but the export
+    /// wrote `azimuth_in` alone - so a shot drawn at 15 degrees went out at 10
+    /// and a re-import moved the cave. Every leg, forward and reversed, now
+    /// carries the bearing the app draws, wraparound included.
+    #[test]
+    fn every_leg_exports_the_bearing_the_app_draws() {
+        let mut project = Project::new("CaveA".to_string(), None);
+        let readings = [(10.0, 20.0), (350.0, 10.0), (100.0, 100.0)];
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#ff0000".to_string(),
+            shots: readings
+                .iter()
+                .map(|&(azimuth_in, azimuth_out)| ShotData {
+                    azimuth_in,
+                    azimuth_out,
+                    length: 5.0,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        });
+        // Datum on station 2: shots 0-1 go out reversed, shot 2 forward.
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef::new(0, 2).into(),
+            gps: GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+        });
+
+        let shots = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
+        let azimuth_of = |uuid: &str| {
+            shots
+                .iter()
+                .find(|s| s.uuid.as_deref() == Some(uuid))
+                .unwrap()
+                .azimuth
+        };
+        let drawn: Vec<f64> = project.sections[0]
+            .shots
+            .iter()
+            .map(Shot::average_azimuth_measured)
+            .collect();
+        let uuids: Vec<String> = project.sections[0]
+            .shots
+            .iter()
+            .map(|s| s.uuid.clone().unwrap())
+            .collect();
+        // Reversed legs: the reciprocal of the drawn bearing.
+        assert!((azimuth_of(&uuids[0]) - 195.0).abs() < 1e-9, "{shots:?}");
+        assert!((azimuth_of(&uuids[1]) - 180.0).abs() < 1e-9, "{shots:?}");
+        // Forward leg.
+        assert!((azimuth_of(&uuids[2]) - 100.0).abs() < 1e-9);
+        assert!((drawn[0] - 15.0).abs() < 1e-9 && drawn[1].abs() < 1e-9);
+
+        // And the round trip keeps the geometry: what comes back is the mean.
+        let file = NamedTempFile::with_suffix(".tmlu").unwrap();
+        export_tml(&project, file.path()).unwrap();
+        let tml = crate::parsers::tml::parse_tml(file.path()).unwrap();
+        let reimported: Vec<f64> = tml
+            .sections
+            .iter()
+            .flat_map(|s| &s.shots)
+            .map(|s| (s.azimuth + 180.0).rem_euclid(360.0))
+            .collect();
+        assert!(
+            reimported.iter().any(|a| (a - 15.0).abs() < 1e-6),
+            "the 10/20 shot comes back at 15: {reimported:?}"
+        );
     }
 
     #[test]
@@ -4089,17 +4169,16 @@ mod tests {
             .filter(|s| s.shot_type != "START" && s.from_id == start.id)
             .collect();
         assert_eq!(from_start.len(), 2);
+        // Both legs carry the bearing the app DRAWS, the circular mean of the
+        // two forward readings (#576 NF-AN5-1): 30/230 is drawn at 310, and
+        // `azimuth_out` is never read as a backsight.
         assert!(
-            from_start
-                .iter()
-                .any(|s| (s.azimuth - 30.0).abs() < f64::EPSILON),
-            "forward branch should keep original azimuth at datum"
+            from_start.iter().any(|s| (s.azimuth - 310.0).abs() < 1e-9),
+            "forward branch should carry the drawn bearing at the datum: {from_start:?}"
         );
         assert!(
-            from_start
-                .iter()
-                .any(|s| (s.azimuth - 200.0).abs() < f64::EPSILON),
-            "reverse branch should invert forward azimuth of prefix shot"
+            from_start.iter().any(|s| (s.azimuth - 197.5).abs() < 1e-9),
+            "reverse branch should invert the drawn bearing (mean of 20/15) of the prefix shot"
         );
     }
 
@@ -4596,11 +4675,13 @@ mod tests {
                 ShotData {
                     length: 5.0,
                     azimuth_in: 90.0,
+                    azimuth_out: 90.0,
                     ..Default::default()
                 },
                 ShotData {
                     length: 5.0,
                     azimuth_in: 90.0,
+                    azimuth_out: 90.0,
                     ..Default::default()
                 },
             ],
@@ -4615,21 +4696,25 @@ mod tests {
                 ShotData {
                     length: 3.0,
                     azimuth_in: 10.0,
+                    azimuth_out: 10.0,
                     ..Default::default()
                 },
                 ShotData {
                     length: 4.0,
                     azimuth_in: 20.0,
+                    azimuth_out: 20.0,
                     ..Default::default()
                 },
                 ShotData {
                     length: 5.0,
                     azimuth_in: 30.0,
+                    azimuth_out: 30.0,
                     ..Default::default()
                 },
                 ShotData {
                     length: 6.0,
                     azimuth_in: 40.0,
+                    azimuth_out: 40.0,
                     ..Default::default()
                 },
             ],
@@ -4703,11 +4788,13 @@ mod tests {
                 ShotData {
                     length: 5.0,
                     azimuth_in: 90.0,
+                    azimuth_out: 90.0,
                     ..Default::default()
                 },
                 ShotData {
                     length: 5.0,
                     azimuth_in: 90.0,
+                    azimuth_out: 90.0,
                     ..Default::default()
                 },
             ],
@@ -4722,16 +4809,19 @@ mod tests {
                 ShotData {
                     length: 3.0,
                     azimuth_in: 10.0,
+                    azimuth_out: 10.0,
                     ..Default::default()
                 },
                 ShotData {
                     length: 4.0,
                     azimuth_in: 20.0,
+                    azimuth_out: 20.0,
                     ..Default::default()
                 },
                 ShotData {
                     length: 5.0,
                     azimuth_in: 30.0,
+                    azimuth_out: 30.0,
                     ..Default::default()
                 },
             ],
@@ -5665,12 +5755,16 @@ mod tests {
         // was surveyed in.
         let mut project = simple_project();
         project.sections[0].shots[0].azimuth_in = -10.0;
+        project.sections[0].shots[0].azimuth_out = -10.0;
         project.sections[0].shots[0].kind = ShotKind::Jump;
         project.sections[0].shots[1].azimuth_in = 400.0;
+        project.sections[0].shots[1].azimuth_out = 400.0;
 
+        // Both profiles write the bearing the app draws, which the circular
+        // mean already puts in [0, 360) (#576 NF-AN5-1).
         let user = build_export_shots(&project, TmlProfile::User, AzimuthExport::decide(&project));
-        assert!((user[1].azimuth + 10.0).abs() < f64::EPSILON);
-        assert!((user[2].azimuth - 400.0).abs() < f64::EPSILON);
+        assert!((user[1].azimuth - 350.0).abs() < 1e-9);
+        assert!((user[2].azimuth - 40.0).abs() < 1e-9);
 
         let sidecar = build_export_shots(
             &project,
@@ -5678,8 +5772,8 @@ mod tests {
             AzimuthExport::decide(&project),
         );
         assert_eq!(sidecar[1].shot_type, "VIRTUAL");
-        assert!((sidecar[1].azimuth - 350.0).abs() < f64::EPSILON);
-        assert!((sidecar[2].azimuth - 40.0).abs() < f64::EPSILON);
+        assert!((sidecar[1].azimuth - 350.0).abs() < 1e-9);
+        assert!((sidecar[2].azimuth - 40.0).abs() < 1e-9);
     }
 
     #[test]

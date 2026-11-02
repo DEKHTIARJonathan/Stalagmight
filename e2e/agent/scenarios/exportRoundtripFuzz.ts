@@ -679,6 +679,12 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
       const parts = text.split('\u200b');
       for (let i = 0; i < parts.length; i++) if (parts[i] !== '') commentParts.push(parts[i]);
     };
+    // The bearing the app draws and the Ariane export writes (#576 NF-AN5-1):
+    // the circular mean of the two FORWARD readings, the same arithmetic as
+    // the models crate's average_azimuth_of. A round trip collapses the pair
+    // onto it, so keying either reading alone would report a moved shot.
+    const wrap = (x) => ((x % 360) + 360) % 360;
+    const drawnBearing = (a, b) => wrap(a + (wrap(b - a + 540) - 180) / 2);
     let missing = 0;
     const seen = Object.create(null);
     let duplicates = 0;
@@ -704,7 +710,7 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
           // (No backticks: this is inside a template literal.)
           uuid: uuid,
           length: Number(shot.length) || 0,
-          azimuthIn: Number(shot.azimuth_in) || 0,
+          azimuthIn: drawnBearing(Number(shot.azimuth_in) || 0, Number(shot.azimuth_out) || 0),
           depthIn: Number(shot.depth_in) || 0,
           depthOut: Number(shot.depth_out) || 0,
           lrud: [

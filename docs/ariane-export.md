@@ -93,8 +93,7 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 |----------------|-------------|-------|
 | Sequential integer | `ID` | Assigned starting from 0, incrementing across all sections |
 | Previous shot ID | `FromID` / `FRID` | Chains shots linearly within a section; START has -1 |
-| `shot.azimuth_in` | `Azimut` / `AZ` | Front-sight azimuth |
-| `shot.azimuth_out` | - | Not exported. Ariane does not encode backsight azimuth. |
+| `shot.azimuth_in`, `shot.azimuth_out` | `Azimut` / `AZ` | Their circular mean - the bearing the app draws (`models::average_azimuth_of`). The two are two FORWARD readings of the same line, not a foresight/backsight pair (see SPEC), and Ariane carries one azimuth per shot, so a pair that disagrees goes out as its mean and re-imports with both readings equal to it: the drawn geometry is unchanged. Before #576 NF-AN5-1 the export wrote `azimuth_in` alone, so a DMP shot read at 10/20 and drawn at 15 went out at 10. |
 | `shot.length` | `Length` / `LG` | |
 | `shot.depth_out` | `Depth` / `DP` | Absolute station depth |
 | `shot.depth_in` | `DepthIn` / `DPI` | -1.0 sentinel when equal to previous `depth_out` |
@@ -194,7 +193,7 @@ invariant on the exporter alone:
 
 Parent-child relationships are derived from `station_merges`. When section B's entry station merges with a station in section A, section B's first shot has its `FromID` set to the Ariane ID of the corresponding station in section A.
 
-When a root section is split at a non-zero zero datum, the generated pre-zero segment is exported in reverse direction. Its azimuth is always synthesized as `azimuth_in + 180°` (normalized), not from `azimuth_out`.
+When a root section is split at a non-zero zero datum, the generated pre-zero segment is exported in reverse direction. Its azimuth is always synthesized as the reciprocal (+180°, normalized) of the shot's drawn bearing - the same circular mean the forward legs carry. `azimuth_out` is never read as a backsight.
 
 ### Loop closures
 

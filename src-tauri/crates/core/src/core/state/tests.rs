@@ -22167,6 +22167,11 @@ fn test_tml_roundtrip_preserves_shot_data() {
     assert_eq!(imported_shots.len(), 2, "should have 2 shots");
 
     let eps = 0.05; // TML format has limited precision
+                    // Ariane carries ONE azimuth per shot, and the export writes the bearing
+                    // the app draws - the circular mean of the two forward readings (#576
+                    // NF-AN5-1) - so that is what has to come back, on both readings.
+    let drawn =
+        |data: &ShotData| crate::models::average_azimuth_of(data.azimuth_in, data.azimuth_out);
     let s = &imported_shots[0];
     assert!(
         (s.length - 8.75).abs() < eps,
@@ -22174,9 +22179,11 @@ fn test_tml_roundtrip_preserves_shot_data() {
         s.length
     );
     assert!(
-        (s.azimuth_in - 12.5).abs() < eps,
-        "azimuth_in: {} vs 12.5",
-        s.azimuth_in
+        (s.azimuth_in - drawn(&shot)).abs() < eps && (s.azimuth_out - drawn(&shot)).abs() < eps,
+        "azimuth: {}/{} vs the drawn {}",
+        s.azimuth_in,
+        s.azimuth_out,
+        drawn(&shot)
     );
     assert!(
         (s.depth_in - 3.2).abs() < eps,
@@ -22196,9 +22203,10 @@ fn test_tml_roundtrip_preserves_shot_data() {
         s2.length
     );
     assert!(
-        (s2.azimuth_in - 280.0).abs() < eps,
-        "shot2 azimuth_in: {} vs 280.0",
-        s2.azimuth_in
+        (s2.azimuth_in - drawn(&shot2)).abs() < eps,
+        "shot2 azimuth_in: {} vs the drawn {}",
+        s2.azimuth_in,
+        drawn(&shot2)
     );
 }
 
