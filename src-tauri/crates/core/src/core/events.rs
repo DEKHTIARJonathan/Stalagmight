@@ -57,6 +57,25 @@ impl IpcEvent for CloseRequested {
     type Payload = ();
 }
 
+/// [#576 A11] Raised ONCE per session, the first time a lock is found poisoned (an
+/// earlier operation panicked while holding it): the backend recovered the data and
+/// carried on, and the frontend shows a persistent "internal error - save your work
+/// and restart" banner. Raised through the open state's poison monitor
+/// (`AppState::set_event_sink`), which the process-wide cells forward into.
+pub struct InternalErrorEvent;
+impl IpcEvent for InternalErrorEvent {
+    const NAME: &'static str = "internal-error";
+    type Payload = InternalErrorNotice;
+}
+
+/// [`InternalErrorEvent`]'s payload.
+#[derive(Clone, serde::Serialize, ts_rs::TS)]
+pub struct InternalErrorNotice {
+    /// The first lock found poisoned (`project`, `undo_stack`, `log_buffer`, ...):
+    /// for the log, not for the user.
+    pub cell: String,
+}
+
 /// `E`'s payload as the JSON value an [`EventSink`] takes, typed by `E`.
 pub fn payload<E: IpcEvent>(payload: &E::Payload) -> serde_json::Result<serde_json::Value> {
     serde_json::to_value(payload)

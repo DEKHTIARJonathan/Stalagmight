@@ -46,10 +46,7 @@ impl AppState {
     /// posts it straight to [`Self::update_config`], so handing out defaults would
     /// turn one unrelated panic into a wholesale reset of the user's settings.
     pub fn get_config(&self) -> Config {
-        self.config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        self.config.lock().clone()
     }
 
     /// Update config from a whole-`Config` payload.
@@ -62,10 +59,7 @@ impl AppState {
     pub fn update_config(&self, config: Config) -> Result<ConfigSaveReport> {
         let before = SessionSettings::of(&self.get_config());
         let report = {
-            let _guard = self
-                .config_write_lock
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _guard = self.config_write_lock.lock();
             self.update_config_locked(config)?
         };
         self.sync_config_side_effects_if_changed(&before);
@@ -107,10 +101,7 @@ impl AppState {
         F: FnOnce(&mut Config) -> Result<()>,
     {
         let (report, before) = {
-            let _guard = self
-                .config_write_lock
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _guard = self.config_write_lock.lock();
             let mut config = self.get_config();
             let before = SessionSettings::of(&config);
             mutate(&mut config)?;
@@ -136,10 +127,7 @@ impl AppState {
     pub(super) fn sync_config_side_effects(&self) {
         let config = self.get_config();
         {
-            let mut undo = self
-                .undo_stack
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut undo = self.undo_stack.lock();
             if undo.history_limit() != config.general.undo_history_limit {
                 // [#303] `set_history_limit` re-arms only the COUNT bound; a Full-mode
                 // SpeleoDB project stays on the byte budget, so a settings save cannot
@@ -169,9 +157,7 @@ impl AppState {
     /// force at once (`TileCache::reconfigure` evicts to it). The provider's own
     /// `Cache-Control` still bounds every tile, as before.
     fn sync_tile_cache(&self, config: &Config) {
-        let Ok(mut guard) = self.tile_cache.lock() else {
-            return;
-        };
+        let mut guard = self.tile_cache.lock();
         if !config.cache.tile_cache_enabled {
             if guard.take().is_some() {
                 // Existing cache data remains on disk.
@@ -254,10 +240,7 @@ impl AppState {
         // (`project_io::close_project_if_open_at`) - these are plain values with no
         // half-written invariant to protect.
         let previously_disabled = {
-            let existing = self
-                .config
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let existing = self.config.lock();
             config.webkit_memory = existing.webkit_memory.clone();
             config.speleodb.email.clone_from(&existing.speleodb.email);
             config.speleodb.token_fallback = existing.speleodb.token_fallback;
@@ -367,10 +350,7 @@ impl AppState {
             // the user's settings over it helps nobody.
             report.persistent_residue = persistent_residue;
         } else {
-            let mut session = self
-                .speleodb
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut session = self.speleodb.lock();
             session.token_store.set_keychain_disabled(keychain_disabled);
         }
         if let Err(e) = config.save() {
@@ -390,10 +370,7 @@ impl AppState {
         // settings are already on disk by now, so dropping the in-memory update
         // would leave the running app disagreeing with its own config file until
         // the next launch.
-        *self
-            .config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
+        *self.config.lock() = config;
         Ok(report)
     }
 
@@ -456,10 +433,7 @@ impl AppState {
         // inverting it here would be the deadlock.
         self.speleodb_ensure_rehydrated();
 
-        let mut session = self
-            .speleodb
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut session = self.speleodb.lock();
         let (Some(endpoint), Some(email)) = (session.endpoint.clone(), session.email.clone())
         else {
             session.token_store.set_keychain_disabled(true);
@@ -566,19 +540,17 @@ impl AppState {
         // Under the config write lock, like every other write of the live config, so
         // a partial save racing the reload cannot land between the two.
         {
-            let _guard = self
-                .config_write_lock
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Ok(mut cfg) = self.config.lock() {
+            let _guard = self.config_write_lock.lock();
+            {
+                let mut cfg = self.config.lock();
                 *cfg = new_config.clone();
             }
         }
 
         // Sync recent_projects from config
-        if let Ok(mut recent) = self.recent_projects.lock() {
-            recent.clone_from(&new_config.general.recent_projects);
-        }
+        self.recent_projects
+            .lock()
+            .clone_from(&new_config.general.recent_projects);
 
         // Always, not only on a change: a reload is also how a cache whose open
         // failed at startup gets another try. No lock is held across it.
@@ -750,7 +722,7 @@ mod tests {
         plaintext: Option<Box<dyn SecretStore>>,
     ) -> AppState {
         let state = AppState::new().expect("state");
-        let mut session = state.speleodb.lock().expect("session");
+        let mut session = state.speleodb.lock();
         session.endpoint = Some(EP.to_owned());
         session.email = Some(EMAIL.to_owned());
         session.token_store = TokenStore::from_stores(keychain, plaintext);
@@ -784,7 +756,7 @@ mod tests {
             let dir = tempfile::tempdir().expect("tempdir");
             let state = signed_in_over(observable_keychain(dir.path()));
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 // An earlier working login: the key is durably in the keychain.
                 assert_eq!(
                     session.token_store.store(EP, EMAIL, "tok", false),
@@ -813,7 +785,7 @@ mod tests {
                 None,
                 "turning the keyring off must take the key OUT of it, not just look away"
             );
-            let session = state.speleodb.lock().expect("session");
+            let session = state.speleodb.lock();
             assert!(
                 !session.token_store.keychain_backed(),
                 "and the credential line must stop claiming a keychain we just emptied"
@@ -836,7 +808,7 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(DeleteRefusingStore(InMemoryStore::new())));
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 assert_eq!(
                     session.token_store.store(EP, EMAIL, "tok", false),
                     TokenTier::Keychain
@@ -897,7 +869,7 @@ mod tests {
             let probe = PlaintextStore::new(dir.path().to_path_buf());
             probe.store(&account_key(EP, EMAIL), "tok").unwrap();
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 // A working login this run, so the key is in hand to be re-landed.
                 assert_eq!(
                     session.token_store.store(EP, EMAIL, "tok", false),
@@ -951,7 +923,7 @@ mod tests {
             let probe = PlaintextStore::new(dir.path().to_path_buf());
             probe.store(&account_key(EP, EMAIL), "tok").unwrap();
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 assert_eq!(
                     session.token_store.store(EP, EMAIL, "tok", false),
                     TokenTier::Keychain
@@ -1016,7 +988,7 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(DeleteRefusingStore(InMemoryStore::new())));
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 assert_eq!(
                     session.token_store.store(EP, EMAIL, "tok", false),
                     TokenTier::Keychain
@@ -1088,7 +1060,7 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(FailingSecretStore));
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 // A login this session that the keychain refused: THAT is what
                 // records `Unavailable`, and it is half the evidence separating a
                 // keychain-less box from a keyring that has merely gone quiet.
@@ -1142,7 +1114,7 @@ mod tests {
                 // What the previous launch's successful keychain store persisted,
                 // stamped with the account it is about.
                 state.speleodb_persist_keychain_belief(Some(account_key(EP, EMAIL)));
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 // Which `SpeleoDbSession::rehydrate` mirrors into the live store
                 // before wiring the load that the locked keyring then refuses.
                 session.token_store.note_keychain_has_token(true);
@@ -1183,7 +1155,7 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(FailingSecretStore));
             {
-                let mut config = state.config.lock().expect("config");
+                let mut config = state.config.lock();
                 // What that earlier session-only answer persisted, and what
                 // `SpeleoDbSession::rehydrate` reads back on the next launch.
                 config.speleodb.keychain_declined = true;
@@ -1194,7 +1166,7 @@ mod tests {
                      read or write actually succeeded, and none can here"
                 );
                 drop(config);
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 // The live store as that rehydrate leaves it: the decline applied, and
                 // NO keychain access behind it - no login this run to record one.
                 session.token_store.set_keychain_declined(true);
@@ -1234,7 +1206,7 @@ mod tests {
             {
                 // `endpoint` stays seeded so nothing reaches a real keyring; the
                 // email is what makes the account key, and there isn't one.
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 session.email = None;
                 drop(session);
             }
@@ -1271,7 +1243,7 @@ mod tests {
                 .update_config(settings_save(&state, true))
                 .expect("settings saved");
 
-            let mut session = state.speleodb.lock().expect("session");
+            let mut session = state.speleodb.lock();
             assert_eq!(
                 session.token_store.keychain_state(),
                 // `Disabled`, not `Declined`: the switch is a standing policy the
@@ -1297,7 +1269,7 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(InMemoryStore::new()));
             {
-                let mut config = state.config.lock().expect("config");
+                let mut config = state.config.lock();
                 config.speleodb.token_fallback = TokenFallback::Plaintext;
                 config.speleodb.keychain_declined = true;
                 config.speleodb.keychain_has_token = true;
@@ -1368,7 +1340,7 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(FailingSecretStore));
             {
-                let mut session = state.speleodb.lock().expect("session");
+                let mut session = state.speleodb.lock();
                 assert_eq!(
                     session.token_store.store(EP, EMAIL, "tok", false),
                     TokenTier::Memory
@@ -1383,7 +1355,7 @@ mod tests {
             posted.general.undo_history_limit = 42;
             state.update_config(posted).expect("settings saved");
 
-            let session = state.speleodb.lock().expect("session");
+            let session = state.speleodb.lock();
             assert_eq!(
                 session.token_store.keychain_state(),
                 KeychainState::Unavailable,

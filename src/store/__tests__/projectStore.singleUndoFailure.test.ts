@@ -86,7 +86,7 @@ describe('a failed single undo/redo (#576 NF-W2S-2)', () => {
   it.each([
     'Nothing to undo',
     'Nothing to redo',
-    'Failed to acquire command lock',
+    'Undo is unavailable after an internal error. Save your work and restart Stalagmight.',
     'EDIT_DISABLED: Undo is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.',
     'EDIT_DISABLED: WORKSPACE_READ_ONLY: Undo is disabled: the Plan workspace is read-only. Switch to Survey to edit.',
   ])('marks nothing on a refusal that ran no step: %s', async (error) => {

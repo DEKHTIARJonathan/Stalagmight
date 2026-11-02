@@ -182,6 +182,16 @@ mod perf_probe_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::panic,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, each test panics \
+              ON PURPOSE to poison a lock, and the printed answers are the evidence a run \
+              captures"
+)]
+mod poison_policy_tests;
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, and the printed \
               counts are the evidence a run captures"

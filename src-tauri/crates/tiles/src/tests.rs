@@ -4,6 +4,7 @@
 
 use super::*;
 use std::sync::atomic::AtomicU64;
+use std::sync::Mutex;
 
 // === parse_tile_uri tests ===
 
@@ -506,13 +507,13 @@ fn test_allowed_content_types() {
 
 // === handle_tile_request tests (with real cache, no network) ===
 
-fn make_test_cache() -> Arc<Mutex<Option<TileCache>>> {
+fn make_test_cache() -> Arc<RecoveringMutex<Option<TileCache>>> {
     let cache = TileCache::in_memory(10, 30).unwrap();
-    Arc::new(Mutex::new(Some(cache)))
+    Arc::new(RecoveringMutex::new("tile_cache", Some(cache)))
 }
 
-fn make_test_tilemap_cache() -> Arc<Mutex<TilemapCache>> {
-    Arc::new(Mutex::new(TilemapCache::new()))
+fn make_test_tilemap_cache() -> Arc<RecoveringMutex<TilemapCache>> {
+    Arc::new(RecoveringMutex::new("tilemap_cache", TilemapCache::new()))
 }
 
 /// Cache config with all providers enabled (no per-provider overrides)
@@ -621,7 +622,7 @@ fn test_handle_tile_request_cache_hit_returns_200() {
 
     // Pre-populate cache
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         let c = guard.as_mut().unwrap();
         c.put_granted("esri", 10, 500, 250, b"fake_tile_data", "image/jpeg")
             .unwrap();
@@ -654,7 +655,7 @@ fn test_handle_tile_request_cache_hit_content_type() {
 
     // Pre-populate cache with PNG
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         let c = guard.as_mut().unwrap();
         c.put_granted("esri", 10, 500, 250, b"png_data", "image/png")
             .unwrap();
@@ -767,7 +768,7 @@ fn test_handle_tile_request_fetched_tile_is_cached() {
     // Mark all tiles in the region as available
     // Tile (15, 100, 200) belongs to region (0, 128) since 100/128=0, 200/128=1
     {
-        let mut tc = tilemap_cache.lock().unwrap();
+        let mut tc = tilemap_cache.lock();
         let data = vec![true; 16_384]; // All tiles available
         tc.insert("esri", 15, 0, 128, data);
     }
@@ -810,7 +811,7 @@ fn test_handle_tile_request_fetched_tile_is_cached() {
 
     // Check that tile is now in cache
     let cached = {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         guard.as_mut().unwrap().get("esri", 15, 100, 200)
     };
     assert!(
@@ -823,7 +824,7 @@ fn test_handle_tile_request_fetched_tile_is_cached() {
 #[test]
 fn test_handle_tile_request_with_no_cache_network_succeeds() {
     // Cache is None (disabled) but network works
-    let cache = Arc::new(Mutex::new(None));
+    let cache = Arc::new(RecoveringMutex::new("tile_cache", None));
     let tilemap_cache = make_test_tilemap_cache();
 
     let mock_fetch = |_: &str,
@@ -862,7 +863,7 @@ fn test_handle_tile_request_with_no_cache_network_succeeds() {
 #[test]
 fn test_handle_tile_request_with_no_cache_network_fails() {
     // Cache is None (disabled) and network fails -> 404
-    let cache = Arc::new(Mutex::new(None));
+    let cache = Arc::new(RecoveringMutex::new("tile_cache", None));
     let tilemap_cache = make_test_tilemap_cache();
 
     let mock_fetch = |_: &str,
@@ -902,11 +903,14 @@ fn test_handle_tile_request_cache_miss_network_fails_uses_stale_tile() {
     // now means nothing is retained at all - which is a different case, and
     // one where no copy should be served. See
     // `a_tile_past_retention_is_not_served_even_as_a_last_resort`.
-    let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(1, 30).unwrap())));
+    let cache = Arc::new(RecoveringMutex::new(
+        "tile_cache",
+        Some(TileCache::in_memory(1, 30).unwrap()),
+    ));
     let tilemap_cache = make_test_tilemap_cache();
 
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         let c = guard.as_mut().unwrap();
         c.put_granted("esri", 1, 2, 3, b"stale_tile", "image/png")
             .unwrap();
@@ -957,7 +961,7 @@ fn test_tile_fetch_impl_cache_hit_returns_bytes() {
     let tilemap_cache = make_test_tilemap_cache();
     let stats = make_test_stats();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         let c = guard.as_mut().unwrap();
         c.put_granted("esri", 1, 2, 3, b"tile_bytes", "image/png")
             .unwrap();
@@ -1024,7 +1028,7 @@ fn test_cache_disabled_skips_cache_read_and_write() {
 
     // Verify tile was NOT written to cache
     let cached = {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         guard.as_mut().unwrap().get("esri", 10, 500, 250)
     };
     assert!(
@@ -1094,10 +1098,13 @@ fn a_no_cache_tile_still_revalidates_conditionally() {
     // request a cheap 304 instead of a full download. Hiding those rows from
     // the retained lookup removed the validator along with them, so every
     // request re-downloaded the whole body - the opposite of the intent.
-    let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+    let cache = Arc::new(RecoveringMutex::new(
+        "tile_cache",
+        Some(TileCache::in_memory(10, 30).unwrap()),
+    ));
     let tilemap_cache = make_test_tilemap_cache();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         guard
             .as_mut()
             .unwrap()
@@ -1146,10 +1153,13 @@ fn a_no_cache_tile_is_not_served_when_revalidation_fails() {
     // The other half. For every other retained row a failed fetch is the
     // reason to serve the stored copy; for this one it is the reason not to,
     // because RFC 9111 5.2.2.4 requires a SUCCESSFUL validation first.
-    let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+    let cache = Arc::new(RecoveringMutex::new(
+        "tile_cache",
+        Some(TileCache::in_memory(10, 30).unwrap()),
+    ));
     let tilemap_cache = make_test_tilemap_cache();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         guard
             .as_mut()
             .unwrap()
@@ -1189,10 +1199,13 @@ fn a_gone_tile_is_not_served_as_an_overzoomed_parent() {
     // `410 Gone` gets no 404 carve-out: nobody uses it to mean "not at this
     // zoom", it says the imagery was deliberately removed. Serving a parent
     // crop would hand back the withdrawn area at a coarser resolution.
-    let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+    let cache = Arc::new(RecoveringMutex::new(
+        "tile_cache",
+        Some(TileCache::in_memory(10, 30).unwrap()),
+    ));
     let tilemap_cache = make_test_tilemap_cache();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         guard
             .as_mut()
             .unwrap()
@@ -1220,11 +1233,14 @@ fn a_denied_tile_is_not_served_as_an_overzoomed_parent() {
     // overzoom loop treated "missing" as permission to climb, so a cached
     // parent still produced an upscaled crop of the very area the provider
     // had just denied.
-    let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+    let cache = Arc::new(RecoveringMutex::new(
+        "tile_cache",
+        Some(TileCache::in_memory(10, 30).unwrap()),
+    ));
     let tilemap_cache = make_test_tilemap_cache();
     {
         // A parent one zoom up, fresh, ready to be cropped.
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         guard
             .as_mut()
             .unwrap()
@@ -1264,10 +1280,13 @@ fn a_missing_tile_still_falls_back_to_an_overzoomed_parent() {
     // wrong: for most tile services a 404 means "no imagery at this zoom
     // here", which is the entire purpose of overzoom. Making that terminal
     // would disable the feature for any provider that uses it.
-    let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+    let cache = Arc::new(RecoveringMutex::new(
+        "tile_cache",
+        Some(TileCache::in_memory(10, 30).unwrap()),
+    ));
     let tilemap_cache = make_test_tilemap_cache();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         guard
             .as_mut()
             .unwrap()
@@ -1303,22 +1322,26 @@ fn a_missing_tile_still_falls_back_to_an_overzoomed_parent() {
 
 /// Mark a tilemap region as "imagery everywhere", so the overzoom tests
 /// below never send a real availability probe to the provider.
-fn warm_tilemap(tilemap_cache: &Arc<Mutex<TilemapCache>>, z: u32, y: u32, x: u32) {
+fn warm_tilemap(tilemap_cache: &Arc<RecoveringMutex<TilemapCache>>, z: u32, y: u32, x: u32) {
     let (base_y, base_x) = TilemapCache::get_region_origin(y, x);
     let cells = (tilemap_cache::TILEMAP_GRID_SIZE * tilemap_cache::TILEMAP_GRID_SIZE) as usize;
     tilemap_cache
         .lock()
-        .unwrap()
         .insert("esri", z, base_y, base_x, vec![true; cells]);
 }
 
 /// A tile cache holding one fresh parent at z9 (250, 125), and a tilemap
 /// that says imagery exists at z9..=z11 there.
-fn cache_with_a_z9_parent() -> (Arc<Mutex<Option<TileCache>>>, Arc<Mutex<TilemapCache>>) {
-    let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+fn cache_with_a_z9_parent() -> (
+    Arc<RecoveringMutex<Option<TileCache>>>,
+    Arc<RecoveringMutex<TilemapCache>>,
+) {
+    let cache = Arc::new(RecoveringMutex::new(
+        "tile_cache",
+        Some(TileCache::in_memory(10, 30).unwrap()),
+    ));
     cache
         .lock()
-        .unwrap()
         .as_mut()
         .unwrap()
         .put_granted("esri", 9, 250, 125, &make_jpeg_bytes(), "image/jpeg")
@@ -1444,7 +1467,7 @@ fn an_overzoomed_crop_is_not_stored_when_any_level_on_the_way_up_was_unreachable
         true,
     );
     assert_eq!(response.status(), http::StatusCode::OK);
-    let guard = cache.lock().unwrap();
+    let guard = cache.lock();
     let held = guard.as_ref().unwrap();
     assert!(
         !held.has_fresh_tile("esri", 11, 1000, 500) && !held.has_stale_tile("esri", 11, 1000, 500),
@@ -1478,7 +1501,7 @@ fn an_overzoomed_crop_for_a_tile_the_provider_does_not_have_is_still_stored() {
         true,
     );
     assert_eq!(response.status(), http::StatusCode::OK);
-    let guard = cache.lock().unwrap();
+    let guard = cache.lock();
     assert!(
         guard.as_ref().unwrap().has_fresh_tile("esri", 10, 500, 250),
         "a crop for a tile the provider does not have is stored, under the parent's grant"
@@ -1492,10 +1515,13 @@ fn a_no_store_revalidation_does_not_serve_the_copy_it_just_deleted() {
     // hand out a copy in the same breath as dropping it. We ask again
     // without a validator and serve what comes back - which the gate also
     // refuses to store, so nothing is retained either way.
-    let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+    let cache = Arc::new(RecoveringMutex::new(
+        "tile_cache",
+        Some(TileCache::in_memory(10, 30).unwrap()),
+    ));
     let tilemap_cache = make_test_tilemap_cache();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         let c = guard.as_mut().unwrap();
         // An ETag is what makes the next request conditional, which is the
         // only way to reach a 304 at all.
@@ -1553,7 +1579,7 @@ fn a_no_store_revalidation_does_not_serve_the_copy_it_just_deleted() {
     );
 
     // And nothing was kept: `no-store` is refused by the storage gate.
-    let guard = cache.lock().unwrap();
+    let guard = cache.lock();
     let c = guard.as_ref().unwrap();
     assert!(c.get_stale("esri", 1, 2, 3).is_none());
 }
@@ -1569,10 +1595,13 @@ fn a_fresh_cache_hit_does_not_probe_the_tilemap_endpoint() {
     // so reaching `check_tile_availability` here means a real fetch attempt.
     // The assertion that matters is the source: a probe would be network
     // traffic on a request that must report as pure cache.
-    let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+    let cache = Arc::new(RecoveringMutex::new(
+        "tile_cache",
+        Some(TileCache::in_memory(10, 30).unwrap()),
+    ));
     let tilemap_cache = make_test_tilemap_cache();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         guard
             .as_mut()
             .unwrap()
@@ -1582,7 +1611,6 @@ fn a_fresh_cache_hit_does_not_probe_the_tilemap_endpoint() {
     assert!(
         tilemap_cache
             .lock()
-            .unwrap()
             .is_tile_available("esri", 10, 500, 250)
             .is_none(),
         "precondition: the tilemap cache is cold, so a probe would hit the network"
@@ -1607,7 +1635,6 @@ fn a_fresh_cache_hit_does_not_probe_the_tilemap_endpoint() {
     // The tilemap cache is still cold: nothing went looking for it.
     assert!(tilemap_cache
         .lock()
-        .unwrap()
         .is_tile_available("esri", 10, 500, 250)
         .is_none());
     let after = stats.snapshot();
@@ -1625,10 +1652,13 @@ fn a_forbidden_or_missing_tile_does_not_fall_back_to_the_stored_copy() {
     // be served - so serving it anyway would keep withdrawn imagery on
     // screen until retention ran out.
     for status in [403u16, 404, 410] {
-        let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+        let cache = Arc::new(RecoveringMutex::new(
+            "tile_cache",
+            Some(TileCache::in_memory(10, 30).unwrap()),
+        ));
         let tilemap_cache = make_test_tilemap_cache();
         {
-            let mut guard = cache.lock().unwrap();
+            let mut guard = cache.lock();
             guard
                 .as_mut()
                 .unwrap()
@@ -1679,10 +1709,13 @@ fn a_provider_outage_still_falls_back_to_the_stored_copy() {
         TileFetchError::status(500, "HTTP 500".to_string()),
         TileFetchError::transport("Connection reset".to_string()),
     ] {
-        let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 30).unwrap())));
+        let cache = Arc::new(RecoveringMutex::new(
+            "tile_cache",
+            Some(TileCache::in_memory(10, 30).unwrap()),
+        ));
         let tilemap_cache = make_test_tilemap_cache();
         {
-            let mut guard = cache.lock().unwrap();
+            let mut guard = cache.lock();
             guard
                 .as_mut()
                 .unwrap()
@@ -1721,12 +1754,15 @@ fn a_provider_outage_still_falls_back_to_the_stored_copy() {
 #[test]
 fn test_cache_disabled_no_stale_fallback() {
     // Use a cache with 0 TTL so tiles are immediately stale
-    let cache = Arc::new(Mutex::new(Some(TileCache::in_memory(10, 0).unwrap())));
+    let cache = Arc::new(RecoveringMutex::new(
+        "tile_cache",
+        Some(TileCache::in_memory(10, 0).unwrap()),
+    ));
     let tilemap_cache = make_test_tilemap_cache();
 
     // Pre-populate cache with a tile
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         guard
             .as_mut()
             .unwrap()
@@ -1837,7 +1873,7 @@ fn test_handle_tile_request_valid_provider_uses_registry() {
     let tilemap_cache = make_test_tilemap_cache();
     {
         let (base_y, base_x) = TilemapCache::get_region_origin(2, 3);
-        let mut tc = tilemap_cache.lock().unwrap();
+        let mut tc = tilemap_cache.lock();
         tc.insert(
             "esri",
             1,
@@ -1939,7 +1975,7 @@ fn a_stale_tile_is_revalidated_with_its_etag_and_served_without_new_bytes() {
     let tilemap_cache = make_test_tilemap_cache();
 
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         let c = guard.as_mut().unwrap();
         c.put(
             "esri",
@@ -1998,7 +2034,7 @@ fn a_stale_tile_is_revalidated_with_its_etag_and_served_without_new_bytes() {
 
     // And the 304's directives put it back in the fresh window, so the next
     // request is a pure cache hit with no round trip at all.
-    let mut guard = cache.lock().unwrap();
+    let mut guard = cache.lock();
     assert!(guard.as_mut().unwrap().get("esri", 1, 2, 3).is_some());
 }
 

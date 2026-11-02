@@ -117,9 +117,10 @@ impl AppState {
             return None;
         }
         // A `.ok()?` here used to collapse REAL failures into the ordinary "nothing
-        // to release" no-op with no trace at all: `speleodb_open_link` returns
-        // `Io("database lock poisoned")` as readily as `NoRemoteProject`. A poisoned
-        // mutex at close / switch / quit then stranded the server lock permanently
+        // to release" no-op with no trace at all: `speleodb_open_link` returns an
+        // `Io(..)` for a link row it cannot read as readily as `NoRemoteProject` (and,
+        // before #576 A11 made every lock recover, for a poisoned database mutex). A
+        // failure at close / switch / quit then stranded the server lock permanently
         // and silently - the exact outcome this module exists to prevent, and
         // indistinguishable in the log from a local project holding no lock. The
         // un-pushed-edits veto below has always logged; so must this.
@@ -162,10 +163,9 @@ impl AppState {
             self.speleodb_keep_lock_deliberately(&link.project_id);
             return None;
         }
-        // Same reasoning as the link read above: `speleodb_active_token` returns
-        // `Io("SpeleoDB session lock poisoned")` alongside the ordinary
-        // `NotAuthenticated`, and a silently-dropped poisoned mutex here strands the
-        // lock just as thoroughly.
+        // Same reasoning as the link read above: anything `speleodb_active_token`
+        // answers besides the ordinary `NotAuthenticated` is a real failure, and
+        // dropping it silently here strands the lock just as thoroughly.
         let (endpoint, token) = match self.speleodb_active_token() {
             Ok(pair) => pair,
             Err(SpeleoDbError::NotAuthenticated) => return None,
@@ -355,9 +355,7 @@ impl AppState {
         project_id: &str,
         as_account: Option<(&str, &str)>,
     ) -> Option<super::speleodb_session::LockClaim> {
-        let Ok(mut session) = self.speleodb_session_lock() else {
-            return None;
-        };
+        let mut session = self.speleodb.lock();
         // The named account's claim on that project, and only that one. The id is
         // what closes this function's race (see above); the account is what keeps
         // the clear from reaching a claim some OTHER account is still owed a
@@ -482,10 +480,7 @@ impl AppState {
         // nothing for the poll to resurrect, and the release shuts it under the
         // same guard that then decides (`speleodb_stand_down_and_release`).
         let (p, claim, entry_gen) = {
-            let _proj_guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _proj_guard = self.project.lock();
             let p = self.speleodb_held_lock_release_params()?;
             let claim = self.speleodb_forget_lock_acquired_for(&p.project_id);
             (p, claim, self.speleodb_session_generation())
@@ -561,23 +556,22 @@ mod tests {
     #[test]
     fn a_poisoned_database_lock_declines_the_release_without_panicking() {
         // A poisoned mutex is not "there is nothing to release". Both reads in
-        // `speleodb_lock_release_params` used to be `.ok()?`, which folded
-        // `Io("database lock poisoned")` and `Io("SpeleoDB session lock poisoned")` into
-        // the ordinary no-op with no trace at all - so a poisoned mutex at close /
-        // switch / quit stranded the server lock permanently and silently, which is the
-        // exact outcome this module exists to prevent. The failures are now matched and
-        // logged (the veto three lines down always was).
+        // `speleodb_lock_release_params` used to be `.ok()?`, which folded a failed
+        // read into the ordinary no-op with no trace at all - so a poisoned mutex at
+        // close / switch / quit stranded the server lock permanently and silently,
+        // which is the exact outcome this module exists to prevent. The failures are
+        // now matched and logged (the veto three lines down always was), and since
+        // #576 A11 the poisoned mutex itself is recovered rather than failed.
         //
-        // Behaviourally the answer is still `None` - keeping the lock held is the
-        // recoverable direction - so what is pinned here is that the poisoned path is
-        // reached and handled rather than panicking, and the log side is pinned by
-        // `both_release_param_reads_log_their_real_failures`.
+        // With no project open the answer is `None` either way, so what is pinned here
+        // is that the poisoned path is reached and handled rather than panicking, and
+        // the log side is pinned by `both_release_param_reads_log_their_real_failures`.
         let state = AppState::new().expect("state");
         state.set_edit_enabled(true);
         let db = &state.database;
         let _ = std::thread::scope(|s| {
             s.spawn(|| {
-                let _guard = db.lock().expect("lock to poison");
+                let _guard = db.lock();
                 panic!("poison the database mutex on purpose");
             })
             .join()

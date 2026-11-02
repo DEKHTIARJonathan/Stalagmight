@@ -1603,7 +1603,7 @@ fn a_legacy_undo_entry_with_no_recorded_identity_restores_a_usable_shot() {
     // beside it. Pushed straight onto the stack, exactly as a persisted entry
     // written by an older build deserialises.
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         stack.push_with_data(
             Command::DeleteShot {
                 section_id,
@@ -1739,7 +1739,7 @@ fn a_legacy_created_shot_redo_append_mints_an_identity() {
         },
         timestamp: None,
     };
-    state.undo_stack.lock().unwrap().push_redo(entry);
+    state.undo_stack.lock().push_redo(entry);
 
     let redone = state.redo();
     assert!(redone.success, "{:?}", redone.error);

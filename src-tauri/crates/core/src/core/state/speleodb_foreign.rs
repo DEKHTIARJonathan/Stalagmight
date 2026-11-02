@@ -243,10 +243,7 @@ impl AppState {
         path: PathBuf,
         expected: SpeleoManagedFile,
     ) -> Result<(), SpeleoErrorDto> {
-        let open = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let open = self.project.lock();
         // Read through the guard rather than `open_project_path`, which takes
         // the same lock and would deadlock here.
         // Resolved ONCE, and everything below - the checks and the write - is

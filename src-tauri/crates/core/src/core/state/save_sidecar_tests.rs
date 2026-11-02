@@ -189,7 +189,7 @@ fn assert_refused_and_untouched(fx: &Fixture, before: &[u8], result: &CommandRes
         Some(fx.path.as_path())
     );
     assert!(
-        fx.state.database.lock().unwrap().is_some(),
+        fx.state.database.lock().is_some(),
         "the session keeps its database handle"
     );
 }
@@ -253,7 +253,7 @@ fn a_failed_undo_chain_write_refuses_the_save_and_leaves_the_file_untouched() {
         assert_eq!(disk.chain.as_deref(), Some(CHAIN_SHA));
         assert_eq!(disk.watermark.as_deref(), Some(WATERMARK));
         assert!(
-            fx.state.undo_stack.lock().unwrap().can_undo(),
+            fx.state.undo_stack.lock().can_undo(),
             "a refused save leaves the live undo history alone"
         );
     }
@@ -282,7 +282,7 @@ fn unreadable_undo_chain_markers_refuse_the_save_and_leave_the_file_untouched() 
         "the refusal carries its marker, got: {error}"
     );
     assert!(
-        fx.state.undo_stack.lock().unwrap().can_undo(),
+        fx.state.undo_stack.lock().can_undo(),
         "a refused save leaves the live undo history alone"
     );
 }

@@ -751,12 +751,12 @@ fn run_concurrent(seed: u32, threads: usize, operations: usize, deadline_secs: u
             outcome.died
         ));
     }
-    if state.project.lock().is_err() {
+    if state.project.is_poisoned() {
         outcome
             .problems
             .push("the PROJECT mutex is poisoned after the run".to_string());
     }
-    if state.undo_stack.lock().is_err() {
+    if state.undo_stack.is_poisoned() {
         outcome
             .problems
             .push("the UNDO STACK mutex is poisoned after the run".to_string());

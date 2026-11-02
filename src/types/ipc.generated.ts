@@ -12,6 +12,7 @@ export * from './ipc/WorkspaceMode';
 export * from './ipc/DisplaySettings';
 export * from './ipc/LoadingPhase';
 export * from './ipc/LoadingProgress';
+export * from './ipc/InternalErrorNotice';
 export * from './ipc/LoadProjectFullResult';
 export * from './ipc/OpenFileFlags';
 export * from './ipc/CreateProjectFullResult';

@@ -146,10 +146,7 @@ impl AppState {
 
     /// Convert any sole-bridge loop closures in the open project to merges.
     fn convert_orphan_closures_in_open_project(&self) {
-        let mut guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut guard = self.project.lock();
         let Some(project) = guard.as_mut() else {
             return;
         };

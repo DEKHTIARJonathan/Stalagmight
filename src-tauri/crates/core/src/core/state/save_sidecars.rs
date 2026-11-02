@@ -357,11 +357,7 @@ impl AppState {
     ) -> Result<CarriedSidecars, Box<CommandResult>> {
         // The in-memory display settings: the only copy a project without a file
         // has. Taken before the database lock, never under it.
-        let cached = self
-            .display_settings_cache
-            .lock()
-            .map(|cache| cache.clone())
-            .unwrap_or_default();
+        let cached = self.display_settings_cache.lock().clone();
         let mut carried = CarriedSidecars {
             mode: request.mode(false),
             display_settings: cached,
@@ -372,10 +368,7 @@ impl AppState {
             warnings: Vec::new(),
         };
         // Recover a poisoned lock rather than silently carrying nothing.
-        let db_guard = self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let db_guard = self.database.lock();
         // No handle: a first save (nothing on disk to carry), or a Save As away from
         // a file that could not be reopened (`restore_missing_database`) - the user's
         // way out, which goes ahead. The mode above stands (no link could be read).

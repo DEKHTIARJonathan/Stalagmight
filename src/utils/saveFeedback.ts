@@ -492,11 +492,9 @@ export function surfaceImportFailure(
       // Compass/Walls/GPX siblings) return this same CommandResult::failure
       // shape for a malformed source file (`Failed to parse TML file: ...`)
       // AND for internal/invariant failures with no file-fixable cause -
-      // `guard_mutation`'s "read-only, acquire the lock to edit" and
-      // `execute_tml_import_sections`'s "Failed to acquire command lock" (a
-      // poisoned mutex) among them (src-tauri/crates/core/src/core/state/
-      // command_import.rs, src-tauri/crates/core/src/core/state/app_state.rs
-      // `guard_mutation`). The backend attaches no error-kind/classification
+      // `guard_mutation`'s "read-only, acquire the lock to edit" among them
+      // (src-tauri/crates/core/src/core/state/app_state.rs `guard_mutation`).
+      // The backend attaches no error-kind/classification
       // to distinguish them, so hiding by phase alone would hide the hint for
       // a genuine bug too. Keep the hint here; the file case is instead
       // caught before it ever reaches this router, at the parse step

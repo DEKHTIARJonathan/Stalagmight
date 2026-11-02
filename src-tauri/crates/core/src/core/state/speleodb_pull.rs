@@ -2633,7 +2633,7 @@ mod tests {
     /// NOW. Without this the claim below is invisible to the assertion in BOTH
     /// directions, and the tests pass vacuously.
     fn sign_in_unreachable(state: &AppState) {
-        let mut session = state.speleodb_session_lock().expect("session lock");
+        let mut session = state.speleodb.lock();
         session.endpoint = Some(UNREACHABLE.to_owned());
         session.email = Some("diver@example.com".to_owned());
         session.token_store = crate::speleodb::auth::TokenStore::from_in_memory_token("tok");

@@ -118,7 +118,7 @@ fn closing_the_app_buffers_every_bucket_without_sending() {
         "one payload per project bucket, each under its own sequence"
     );
     assert!(
-        collector.inner.lock().unwrap().events.is_empty(),
+        collector.inner.lock().events.is_empty(),
         "handed to the buffer, so not sent again by a later flush"
     );
 }

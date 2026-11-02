@@ -26,7 +26,7 @@ fn patch(path: &[&str], value: serde_json::Value) -> ConfigPatch {
 
 /// A live tile cache of `max_mb` megabytes, as the startup open would leave it.
 fn with_tile_cache(state: &AppState, max_mb: u32) {
-    *state.tile_cache.lock().expect("tile cache lock") =
+    *state.tile_cache.lock() =
         Some(TileCache::in_memory(max_mb, 30).expect("in-memory tile cache"));
 }
 
@@ -34,7 +34,6 @@ fn live_cache_mb(state: &AppState) -> Option<u64> {
     state
         .tile_cache
         .lock()
-        .expect("tile cache lock")
         .as_ref()
         .map(|cache| cache.max_bytes() / (1024 * 1024))
 }
@@ -163,7 +162,7 @@ fn the_undo_limit_reaches_the_running_session_on_save() {
     config.general.undo_history_limit = 20;
     state.update_config(config).expect("settings saved");
 
-    let limit = state.undo_stack.lock().expect("undo lock").history_limit();
+    let limit = state.undo_stack.lock().history_limit();
     println!("undo history limit in the session after saving 20: {limit}");
     assert_eq!(limit, 20);
 
@@ -173,10 +172,7 @@ fn the_undo_limit_reaches_the_running_session_on_save() {
             serde_json::json!(35),
         )])
         .expect("settings saved");
-    assert_eq!(
-        state.undo_stack.lock().expect("undo lock").history_limit(),
-        35
-    );
+    assert_eq!(state.undo_stack.lock().history_limit(), 35);
 }
 
 #[test]
@@ -210,7 +206,7 @@ fn reload_config_resyncs_the_tile_cache_and_the_undo_limit() {
     on_disk.save().expect("write config.toml");
     state.reload_config().expect("reload");
     let live = live_cache_mb(&state);
-    let limit = state.undo_stack.lock().expect("undo lock").history_limit();
+    let limit = state.undo_stack.lock().history_limit();
     println!("after Reload Config with 64 MB: live cap {live:?} MB, undo limit {limit}");
     assert_eq!(live, Some(64));
     assert_eq!(limit, 25);

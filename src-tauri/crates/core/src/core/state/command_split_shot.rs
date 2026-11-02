@@ -17,9 +17,7 @@ impl AppState {
         distance: f64,
     ) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Insert station (split shot)") {
             return f;
@@ -48,9 +46,7 @@ impl AppState {
         let frame_before = self.frame_datum_key();
 
         let (new_shot_id, head_data, tail_updates) = {
-            let Ok(mut proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
+            let mut proj_guard = self.project.lock();
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };

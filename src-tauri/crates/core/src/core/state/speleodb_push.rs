@@ -160,10 +160,7 @@ impl AppState {
         // Snapshot the in-memory project so the UUID-persist + render run without
         // holding the project lock across the database lock.
         let (project, minted) = {
-            let mut proj_guard = self
-                .project
-                .lock()
-                .map_err(|_| SpeleoDbError::Io("project lock poisoned".to_owned()))?;
+            let mut proj_guard = self.project.lock();
             let project = proj_guard.as_mut().ok_or(SpeleoDbError::NoRemoteProject)?;
             let minted = project.sections.iter().any(|s| {
                 s.shots
@@ -177,7 +174,8 @@ impl AppState {
         // save_project does NOT clear the SpeleoDB dirty bit (speleo_link is
         // excluded), so this is safe to call inside the push pipeline.
         if minted {
-            if let Ok(mut db_guard) = self.database.lock() {
+            {
+                let mut db_guard = self.database.lock();
                 if let Some(db) = db_guard.as_mut() {
                     if let Err(e) = db.save_project(&project) {
                         tracing::warn!(
@@ -983,6 +981,11 @@ impl AppState {
         fold_metadata: bool,
         save_warnings: &mut Vec<ValidationWarning>,
     ) -> Result<PushOutcome, SpeleoErrorDto> {
+        // [#576 A11] Refused rather than recovered after an internal crash, before
+        // anything is read or sent: a half-written edit must not become every
+        // collaborator's (`refuse_after_crash`). Done and Push both come through here.
+        self.refuse_after_crash("Pushing to SpeleoDB")
+            .map_err(|reason| local_dto(SpeleoDbError::Refused(reason)))?;
         let project_id = &link.project_id;
         let commit_message = message
             .map(|m| m.trim().to_owned())
@@ -1368,14 +1371,8 @@ impl AppState {
             return;
         };
         let cutoff = cutoff.with_timezone(&chrono::Utc);
-        let database = self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut stack = self
-            .undo_stack
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let database = self.database.lock();
+        let mut stack = self.undo_stack.lock();
         let dropped = stack.drop_pushed_entries(cutoff, captured_through);
         let Some(db) = database.as_ref() else {
             tracing::warn!(
@@ -1428,7 +1425,7 @@ mod snapshot_undo_metadata_tests {
     fn full_snapshot_policy_survives_an_absent_live_database_handle() {
         with_isolated_config(|| {
             let state = AppState::new().expect("construct state");
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            state.config.lock().speleodb.undo_mode = UndoMode::Disabled;
             assert!(
                 !state.undo_policy().pushes_history(),
                 "the old live-handle lookup classifies an unopened state as local"

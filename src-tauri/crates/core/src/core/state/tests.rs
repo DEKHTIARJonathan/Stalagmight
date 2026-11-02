@@ -2,7 +2,7 @@ use super::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::core::undo::{UndoData, UndoEntry};
 use crate::core::{Command, CommandResult, PersistStack, UndoStack};
@@ -53,11 +53,19 @@ fn abs_coord_map(project: &Project) -> HashMap<StationRef, Coordinates> {
         .collect()
 }
 
-fn poison_mutex<T>(mutex: &Mutex<T>) {
+fn poison_mutex<T>(mutex: &crate::models::poison_policy::RecoveringMutex<T>) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = mutex.lock().unwrap();
+        let _guard = mutex.lock();
         panic!("poison mutex for lock failure coverage");
     }));
+}
+
+/// [#576 A11] What a refusing site (undo / redo, see `AppState::refuse_after_crash`)
+/// answers after a crash poisoned one of the cells it refuses on.
+fn refused_after_crash(what: &str) -> String {
+    format!(
+        "{what} is unavailable after an internal error. Save your work and restart Stalagmight."
+    )
 }
 
 // === Project Operations Tests ===
@@ -727,13 +735,13 @@ fn test_start_new_load_cancels_previous_and_clear_is_identity_safe() {
     assert!(!second.load(Ordering::SeqCst));
 
     state.clear_active_load(&first);
-    let guard = state.active_loading.lock().unwrap();
+    let guard = state.active_loading.lock();
     assert!(guard.as_ref().is_some());
     assert!(Arc::ptr_eq(guard.as_ref().unwrap(), &second));
     drop(guard);
 
     state.clear_active_load(&second);
-    assert!(state.active_loading.lock().unwrap().is_none());
+    assert!(state.active_loading.lock().is_none());
 }
 
 #[test]
@@ -819,7 +827,7 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
     assert_eq!(project.loop_closures.len(), 1);
     assert_ne!(project.loop_closures[0].id, 0);
 
-    let undo_stack = state.undo_stack.lock().unwrap();
+    let undo_stack = state.undo_stack.lock();
     assert_eq!(undo_stack.len(), 1);
     assert_eq!(undo_stack.redo_len(), 1);
 
@@ -895,7 +903,7 @@ fn opening_a_full_mode_project_restores_history_deeper_than_the_count_window() {
         let state = AppState::new().unwrap();
         assert!(state.open_project(path).success);
 
-        let stack = state.undo_stack.lock().unwrap();
+        let stack = state.undo_stack.lock();
         assert_eq!(
             stack.len(),
             PERSISTED,
@@ -1013,7 +1021,7 @@ fn opening_a_count_window_project_reads_only_the_newest_window_of_a_bloated_tabl
         );
 
         let state = AppState::new().unwrap();
-        let window = state.undo_stack.lock().unwrap().history_limit();
+        let window = state.undo_stack.lock().history_limit();
         assert!(
             window < PERSISTED,
             "the fixture must overflow the window it is testing: {window} vs {PERSISTED}"
@@ -1021,7 +1029,7 @@ fn opening_a_count_window_project_reads_only_the_newest_window_of_a_bloated_tabl
         assert!(state.open_project(path.clone()).success);
 
         {
-            let stack = state.undo_stack.lock().unwrap();
+            let stack = state.undo_stack.lock();
             assert_eq!(
                 stack.len(),
                 window,
@@ -1149,7 +1157,7 @@ fn test_open_project_drops_legacy_null_style_undo_history() {
     // The legacy stacks are dropped wholesale - nothing to undo or redo, so
     // nothing can replay the explicit nulls and clear fields.
     {
-        let undo_stack = state.undo_stack.lock().unwrap();
+        let undo_stack = state.undo_stack.lock();
         assert_eq!(undo_stack.len(), 0, "legacy undo entries must be dropped");
         assert_eq!(
             undo_stack.redo_len(),
@@ -1269,7 +1277,7 @@ fn test_undo_after_reload_restores_exactly_the_edited_field() {
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(path).success);
     {
-        let stack = state2.undo_stack.lock().unwrap();
+        let stack = state2.undo_stack.lock();
         assert!(
             stack.can_undo(),
             "new-format undo history must survive reload"
@@ -1498,7 +1506,7 @@ fn merge_projects_does_not_renormalise_the_open_project() {
 
     // Offsets nothing in this merge could ever produce, so a swap-in is loud.
     {
-        let mut guard = state.project.lock().unwrap();
+        let mut guard = state.project.lock();
         let project = guard.as_mut().unwrap();
         project.set_section_offset(open_a, (137.0, -42.0));
         project.set_section_offset(open_b, (-311.0, 63.0));
@@ -1508,7 +1516,7 @@ fn merge_projects_does_not_renormalise_the_open_project() {
         );
     }
     let open_offsets_before = {
-        let guard = state.project.lock().unwrap();
+        let guard = state.project.lock();
         guard.as_ref().unwrap().section_offsets().clone()
     };
     let open_coords_before = abs_coord_map(&state.get_project_state().unwrap());
@@ -2220,7 +2228,7 @@ fn repair_serializes_under_command_lock() {
     project.ensure_shot_uuids();
     state.set_project_for_tests(project);
 
-    let guard = state.command_lock.lock().unwrap();
+    let guard = state.command_lock.lock();
     let state2 = Arc::clone(&state);
     let (tx, rx) = mpsc::channel();
     let handle = std::thread::spawn(move || {
@@ -2683,7 +2691,7 @@ fn redo_legacy_prepend_createshot_reanchors_section_start() {
         },
         timestamp: None,
     };
-    state.undo_stack.lock().unwrap().push_redo(entry);
+    state.undo_stack.lock().push_redo(entry);
     assert!(state.redo().success, "legacy prepend redo");
 
     let restored = state.get_project_state().unwrap();
@@ -2746,14 +2754,14 @@ fn test_save_project_persists_display_settings_cache() {
     let settings = db.load_display_settings().unwrap();
     assert_eq!(settings.get("showStations"), Some(&"false".to_string()));
 
-    let cache = state.display_settings_cache.lock().unwrap();
+    let cache = state.display_settings_cache.lock();
     assert!(cache.is_empty());
 }
 
 #[test]
 fn test_undo_fails_with_invalid_previous_values_shot() {
     let state = AppState::new().unwrap();
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.push_with_data(
         Command::UpdateShot {
             section_id: 1,
@@ -2778,7 +2786,7 @@ fn test_undo_fails_with_invalid_previous_values_shot() {
 #[test]
 fn test_undo_fails_with_invalid_previous_values_section() {
     let state = AppState::new().unwrap();
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.push_with_data(
         Command::UpdateSectionMetadata {
             section_id: 1,
@@ -2802,7 +2810,7 @@ fn test_undo_fails_with_invalid_previous_values_section() {
 #[test]
 fn test_undo_fails_with_invalid_project_snapshot() {
     let state = AppState::new().unwrap();
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.push_with_data(
         Command::Batch {
             commands: Vec::new(),
@@ -2822,7 +2830,7 @@ fn test_undo_fails_with_invalid_project_snapshot() {
 #[test]
 fn test_redo_fails_with_invalid_project_snapshot_pair() {
     let state = AppState::new().unwrap();
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     let entry = UndoEntry {
         replayed_at: None,
         command_bytes: None,
@@ -2847,7 +2855,7 @@ fn test_redo_fails_with_invalid_project_snapshot_pair() {
 #[test]
 fn test_redo_fails_for_command_not_allowed_in_undo_context() {
     let state = AppState::new().unwrap();
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     let entry = UndoEntry {
         replayed_at: None,
         command_bytes: None,
@@ -3045,7 +3053,7 @@ fn repair_invalidates_adjusted_cache() {
     // Populate the adjusted cache.
     let _ = state.get_adjusted_stations().expect("adjusted stations");
     assert!(
-        state.adjusted_cache.lock().unwrap().is_some(),
+        state.adjusted_cache.lock().is_some(),
         "cache should be populated after a solve"
     );
     let gen_before = state.adjusted_cache_generation.load(SeqCst);
@@ -3055,7 +3063,7 @@ fn repair_invalidates_adjusted_cache() {
     // geometry keyed on an unchanged version).
     let _ = state.repair_open_project_integrity();
     assert!(
-        state.adjusted_cache.lock().unwrap().is_none(),
+        state.adjusted_cache.lock().is_none(),
         "repair must invalidate the adjusted cache"
     );
     assert!(
@@ -3251,7 +3259,7 @@ fn merge_allowed_across_inert_closure_but_rejected_across_aligned() {
             .unwrap();
         // Inject a single closure A0 <-> B1 between the otherwise-unconnected sections.
         {
-            let mut g = state.project.lock().unwrap();
+            let mut g = state.project.lock();
             let p = g.as_mut().unwrap();
             let id = p.next_closure_id;
             p.loop_closures.push(LoopClosure {
@@ -3751,7 +3759,7 @@ fn undo_merge_restores_aligned_closure_section_outside_merge_groups() {
     // Inject an ALIGNED loop closure B.1 <-> Z.0 (no merge). Z is reachable from the
     // rest only through this aligned closure, so the cascade re-anchors it on merge.
     {
-        let mut proj_guard = state.project.lock().unwrap();
+        let mut proj_guard = state.project.lock();
         let project = proj_guard.as_mut().unwrap();
         let closure_id = project.next_closure_id;
         project.loop_closures.push(LoopClosure {
@@ -6155,7 +6163,7 @@ fn test_undo_fails_when_undo_stack_poisoned() {
 
     let result = state.undo();
     assert!(!result.success);
-    assert_eq!(result.error.as_deref(), Some("Failed to lock undo stack"));
+    assert_eq!(result.error, Some(refused_after_crash("Undo")));
 }
 
 #[test]
@@ -6165,13 +6173,13 @@ fn test_redo_fails_when_undo_stack_poisoned() {
 
     let result = state.redo();
     assert!(!result.success);
-    assert_eq!(result.error.as_deref(), Some("Failed to lock undo stack"));
+    assert_eq!(result.error, Some(refused_after_crash("Redo")));
 }
 
 #[test]
 fn test_undo_fails_for_non_undoable_entry() {
     let state = AppState::new().unwrap();
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.push_with_data(Command::CloseProject, UndoData::None);
     drop(stack);
 
@@ -6215,7 +6223,7 @@ fn test_project_snapshot_pair_undo_redo_roundtrip() {
 
     state.set_project_for_tests(after.clone());
 
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.push_with_data(
         Command::MergeProjects {
             source_paths: Vec::new(),
@@ -6255,7 +6263,7 @@ fn test_undo_project_snapshot_fails_when_project_lock_poisoned() {
     let state = AppState::new().unwrap();
     let snapshot = serde_json::to_string(&Project::new("Test".to_string(), None)).unwrap();
 
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.push_with_data(
         Command::Batch {
             commands: Vec::new(),
@@ -6268,7 +6276,7 @@ fn test_undo_project_snapshot_fails_when_project_lock_poisoned() {
 
     let result = state.undo();
     assert!(!result.success);
-    assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
+    assert_eq!(result.error, Some(refused_after_crash("Undo")));
 }
 
 #[test]
@@ -6277,7 +6285,7 @@ fn test_undo_project_snapshot_pair_fails_when_project_lock_poisoned() {
     let before = serde_json::to_string(&Project::new("Before".to_string(), None)).unwrap();
     let after = serde_json::to_string(&Project::new("After".to_string(), None)).unwrap();
 
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.push_with_data(
         Command::Batch {
             commands: Vec::new(),
@@ -6290,7 +6298,7 @@ fn test_undo_project_snapshot_pair_fails_when_project_lock_poisoned() {
 
     let result = state.undo();
     assert!(!result.success);
-    assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
+    assert_eq!(result.error, Some(refused_after_crash("Undo")));
 }
 
 #[test]
@@ -6307,7 +6315,7 @@ fn test_redo_project_snapshot_pair_fails_when_project_lock_poisoned() {
         timestamp: None,
     };
 
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.push_redo(entry);
     drop(stack);
 
@@ -6315,14 +6323,14 @@ fn test_redo_project_snapshot_pair_fails_when_project_lock_poisoned() {
 
     let result = state.redo();
     assert!(!result.success);
-    assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
+    assert_eq!(result.error, Some(refused_after_crash("Redo")));
 }
 
 #[test]
 fn test_undo_merge_info_fails_when_project_lock_poisoned() {
     let state = AppState::new().unwrap();
 
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.push_with_data(
         Command::MergeStations {
             station_a: StationRef::new(1, 0),
@@ -6341,7 +6349,7 @@ fn test_undo_merge_info_fails_when_project_lock_poisoned() {
 
     let result = state.undo();
     assert!(!result.success);
-    assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
+    assert_eq!(result.error, Some(refused_after_crash("Undo")));
 }
 
 // === State Transition Tests ===
@@ -6472,18 +6480,17 @@ fn confirmed_push_persists_the_pruned_undo_and_redo_stacks() {
     state
         .undo_stack
         .lock()
-        .unwrap()
         .load_from_persisted_with_timestamps(vec![old, late], vec![redo]);
-    *state.database.lock().unwrap() = Some(db);
+    *state.database.lock() = Some(db);
 
     state.speleodb_clear_undo_after_push(&cutoff.to_rfc3339(), None);
 
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     assert_eq!(stack.len(), 1, "the late edit remains undoable in memory");
     assert_eq!(stack.redo_len(), 0, "redo never survives a confirmed push");
     drop(stack);
 
-    let database = state.database.lock().unwrap();
+    let database = state.database.lock();
     let db = database.as_ref().unwrap();
     let disk_undo = db.load_undo_stack_with_timestamps().unwrap();
     assert_eq!(disk_undo.len(), 1, "uploaded rows are removed from SQLite");
@@ -6522,7 +6529,7 @@ fn test_update_config_preserves_backend_only_webkit_memory() {
 
         // Seed a non-default value, as if loaded from a hand-edited config.toml.
         {
-            let mut cfg = state.config.lock().unwrap();
+            let mut cfg = state.config.lock();
             cfg.webkit_memory.memory_limit_mb = 1234;
             cfg.webkit_memory.jsc_force_ram_size_mb = 4096;
         }
@@ -6680,10 +6687,10 @@ fn test_save_project_prefers_database_display_settings_over_cache() {
     let db = Database::open_existing(&db_path).unwrap();
     state.set_database_for_tests(db);
 
-    {
-        let mut cache = state.display_settings_cache.lock().unwrap();
-        cache.insert("showStations".to_string(), "true".to_string());
-    }
+    state
+        .display_settings_cache
+        .lock()
+        .insert("showStations".to_string(), "true".to_string());
 
     let save_path = temp_dir.path().join("dest");
     let result = state.save_project(Some(save_path.clone()));
@@ -7089,45 +7096,65 @@ fn save_into_missing_dir_is_not_a_permission_error() {
 }
 
 #[test]
-fn test_display_settings_fail_when_cache_lock_poisoned() {
+fn test_display_settings_recover_a_poisoned_cache_lock() {
+    // [#576 A11] Recovered, not refused: no database is open, so the in-memory
+    // cache is where the settings live, and it keeps working after a crash.
     let state = AppState::new().unwrap();
 
     poison_mutex(&state.display_settings_cache);
 
-    let err = state.load_display_settings().unwrap_err();
-    assert_eq!(err.to_string(), "Failed to lock display settings cache");
-
-    let err = state.save_display_setting("key", "value").unwrap_err();
-    assert_eq!(err.to_string(), "Failed to lock display settings cache");
-
-    let err = state.get_display_setting("key").unwrap_err();
-    assert_eq!(err.to_string(), "Failed to lock display settings cache");
+    state.save_display_setting("key", "value").unwrap();
+    assert_eq!(
+        state.get_display_setting("key").unwrap().as_deref(),
+        Some("value")
+    );
+    assert_eq!(
+        state
+            .load_display_settings()
+            .unwrap()
+            .get("key")
+            .map(String::as_str),
+        Some("value")
+    );
+    assert_eq!(
+        state.poison_monitor().first_poisoned(),
+        Some("display_settings_cache")
+    );
 }
 
 #[test]
-fn test_display_settings_fail_when_database_lock_poisoned() {
+fn test_display_settings_recover_a_poisoned_database_lock() {
+    // [#576 A11] Recovered, not refused: the recovered slot holds no database, so the
+    // settings fall through to the in-memory cache exactly as they would unpoisoned.
     let state = AppState::new().unwrap();
 
     poison_mutex(&state.database);
 
-    let err = state.load_display_settings().unwrap_err();
-    assert_eq!(err.to_string(), "Failed to lock database");
-
-    let err = state.save_display_setting("key", "value").unwrap_err();
-    assert_eq!(err.to_string(), "Failed to lock database");
-
-    let err = state.get_display_setting("key").unwrap_err();
-    assert_eq!(err.to_string(), "Failed to lock database");
+    state.save_display_setting("key", "value").unwrap();
+    assert_eq!(
+        state.get_display_setting("key").unwrap().as_deref(),
+        Some("value")
+    );
+    assert_eq!(
+        state
+            .load_display_settings()
+            .unwrap()
+            .get("key")
+            .map(String::as_str),
+        Some("value")
+    );
+    assert_eq!(state.poison_monitor().first_poisoned(), Some("database"));
 }
 
 #[test]
-fn test_resolved_warning_methods_fail_when_database_lock_poisoned() {
+fn test_resolved_warning_methods_recover_a_poisoned_database_lock() {
     let state = AppState::new().unwrap();
 
     poison_mutex(&state.database);
 
     let err = state.load_resolved_warnings().unwrap_err();
-    assert_eq!(err.to_string(), "Failed to lock database");
+    // [#576 A11] The lock recovers; what is missing is the database itself.
+    assert_eq!(err.to_string(), "No database open");
 
     let warning = crate::persistence::ResolvedWarning {
         section_id: 1,
@@ -7139,25 +7166,36 @@ fn test_resolved_warning_methods_fail_when_database_lock_poisoned() {
     };
 
     let err = state.save_resolved_warning(&warning).unwrap_err();
-    assert_eq!(err.to_string(), "Failed to lock database");
+    // [#576 A11] The lock recovers; what is missing is the database itself.
+    assert_eq!(err.to_string(), "No database open");
 
     let err = state
         .delete_resolved_warning(1, 2, "TEST", None)
         .unwrap_err();
-    assert_eq!(err.to_string(), "Failed to lock database");
+    // [#576 A11] The lock recovers; what is missing is the database itself.
+    assert_eq!(err.to_string(), "No database open");
 }
 
 #[test]
-fn test_remove_recent_projects_fails_when_lock_poisoned() {
-    let state = AppState::new().unwrap();
-    poison_mutex(&state.recent_projects);
+fn test_remove_recent_projects_recovers_a_poisoned_lock() {
+    // [#576 A11] Recovered, not refused. Isolated because the removal persists the
+    // list, and a save failure would read as the lock failing.
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().unwrap();
+        *state.recent_projects.lock() = vec![PathBuf::from("/a.stalx"), PathBuf::from("/b.stalx")];
+        poison_mutex(&state.recent_projects);
 
-    let result = state.remove_from_recent_projects(PathBuf::from("missing.stalx"));
-    assert!(!result.success);
-    assert_eq!(
-        result.error.as_deref(),
-        Some("Failed to lock recent projects")
-    );
+        let result = state.remove_from_recent_projects(PathBuf::from("/a.stalx"));
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(
+            *state.recent_projects.lock(),
+            vec![PathBuf::from("/b.stalx")]
+        );
+        assert_eq!(
+            state.poison_monitor().first_poisoned(),
+            Some("recent_projects")
+        );
+    });
 }
 
 #[test]
@@ -7168,13 +7206,13 @@ fn test_remove_recent_project_removes_present_entry() {
     crate::test_helpers::with_isolated_config(|| {
         let state = AppState::new().unwrap();
         {
-            let mut recent = state.recent_projects.lock().unwrap();
+            let mut recent = state.recent_projects.lock();
             *recent = vec![PathBuf::from("/a.stalx"), PathBuf::from("/b.stalx")];
         }
 
         let result = state.remove_from_recent_projects(PathBuf::from("/a.stalx"));
         assert!(result.success);
-        let recent = state.recent_projects.lock().unwrap();
+        let recent = state.recent_projects.lock();
         assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
     });
 }
@@ -7190,29 +7228,34 @@ fn test_remove_recent_project_absent_is_idempotent_success() {
     crate::test_helpers::with_isolated_config(|| {
         let state = AppState::new().unwrap();
         {
-            let mut recent = state.recent_projects.lock().unwrap();
+            let mut recent = state.recent_projects.lock();
             *recent = vec![PathBuf::from("/b.stalx")];
         }
 
         let result = state.remove_from_recent_projects(PathBuf::from("/gone.stalx"));
         assert!(result.success, "removing an absent recent must succeed");
         // The list is left untouched (nothing to remove).
-        let recent = state.recent_projects.lock().unwrap();
+        let recent = state.recent_projects.lock();
         assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
     });
 }
 
 #[test]
-fn test_import_tracking_fails_when_project_lock_poisoned() {
+fn test_import_tracking_recovers_a_poisoned_project_lock() {
+    // [#576 A11] Recovered, not refused: the bookkeeping reaches the project the lock
+    // still holds.
     let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "CaveA".to_string(),
+        location: None,
+    });
     poison_mutex(&state.project);
 
-    let err = state.check_duplicate_import("hash").unwrap_err();
-    assert_eq!(err.to_string(), "Failed to lock project");
-
+    assert!(!state.check_duplicate_import("hash").unwrap());
     let result = state.track_imported_file("hash".to_string());
-    assert!(!result.success);
-    assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
+    assert!(result.success, "{:?}", result.error);
+    assert!(state.check_duplicate_import("hash").unwrap());
+    assert_eq!(state.poison_monitor().first_poisoned(), Some("project"));
 }
 
 // === Batch Command Tests ===
@@ -7893,7 +7936,7 @@ fn test_undo_set_zero_datum_restores_section_offsets() {
     // Set an existing offset on section A only
     // (section B has no offset - key doesn't exist)
     {
-        let mut proj = state.project.lock().unwrap();
+        let mut proj = state.project.lock();
         let project = proj.as_mut().unwrap();
         project.set_section_offset(section_a, (100.0, 200.0));
     }
@@ -7905,14 +7948,11 @@ fn test_undo_set_zero_datum_restores_section_offsets() {
     });
 
     // Clear undo stack to focus on SetZeroDatum
-    {
-        let mut stack = state.undo_stack.lock().unwrap();
-        stack.clear();
-    }
+    state.undo_stack.lock().clear();
 
     // Capture pre-command state
     let (pre_offset_a, pre_offset_b, pre_datum_count) = {
-        let proj = state.project.lock().unwrap();
+        let proj = state.project.lock();
         let project = proj.as_ref().unwrap();
         (
             project.section_offsets().get(&section_a).copied(),
@@ -7932,7 +7972,7 @@ fn test_undo_set_zero_datum_restores_section_offsets() {
 
     // Verify offsets changed after SetZeroDatum
     let (post_offset_a, post_offset_b, post_datum_count) = {
-        let proj = state.project.lock().unwrap();
+        let proj = state.project.lock();
         let project = proj.as_ref().unwrap();
         (
             project.section_offsets().get(&section_a).copied(),
@@ -7960,7 +8000,7 @@ fn test_undo_set_zero_datum_restores_section_offsets() {
 
     // Verify exact previous state is restored
     let (restored_offset_a, restored_offset_b, restored_datum_count) = {
-        let proj = state.project.lock().unwrap();
+        let proj = state.project.lock();
         let project = proj.as_ref().unwrap();
         (
             project.section_offsets().get(&section_a).copied(),
@@ -8294,7 +8334,7 @@ fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
         .unwrap();
 
     let (mid_shot_id, orig_length) = {
-        let mut guard = state.project.lock().unwrap();
+        let mut guard = state.project.lock();
         let project = guard.as_mut().unwrap();
         let key_front = project.key_for_ref(StationRef::new(a, 0)).unwrap();
         let key_back = project.key_for_ref(StationRef::new(a, 4)).unwrap();
@@ -9042,16 +9082,10 @@ fn test_undo_stack_limits() {
     let state = AppState::new().unwrap();
 
     // Set a small undo history limit via config
-    {
-        let mut config = state.config.lock().unwrap();
-        config.general.undo_history_limit = 3;
-    }
+    state.config.lock().general.undo_history_limit = 3;
 
     // Reinitialize undo stack with new limit
-    {
-        let mut undo_stack = state.undo_stack.lock().unwrap();
-        undo_stack.set_history_limit(3);
-    }
+    state.undo_stack.lock().set_history_limit(3);
 
     state.execute(Command::CreateProject {
         name: "Test".to_string(),
@@ -9112,7 +9146,7 @@ fn test_undo_failure_preserves_entry_on_undo_stack() {
     let state = AppState::new().unwrap();
 
     // Push an entry with invalid undo data that will fail during undo
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.push_with_data(
         Command::UpdateShot {
             section_id: 1,
@@ -9138,7 +9172,7 @@ fn test_undo_failure_preserves_entry_on_undo_stack() {
     assert_eq!(result.error.as_deref(), Some("Failed to parse undo data"));
 
     // Entry must still be on the undo stack (preserved, not lost)
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     assert_eq!(
         stack.len(),
         1,
@@ -9158,7 +9192,7 @@ fn test_redo_failure_preserves_entry_on_redo_stack() {
     let state = AppState::new().unwrap();
 
     // Push an entry onto the redo stack that will fail when re-executed
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     let entry = UndoEntry {
         replayed_at: None,
         command_bytes: None,
@@ -9183,7 +9217,7 @@ fn test_redo_failure_preserves_entry_on_redo_stack() {
     );
 
     // Entry must still be on the redo stack (preserved, not lost)
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     assert_eq!(
         stack.redo_len(),
         1,
@@ -9221,7 +9255,7 @@ fn test_undo_failure_preserves_entry_at_top_lifo_order() {
 
     // Push an invalid entry on top (will fail on undo)
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         stack.push_with_data(
             Command::UpdateShot {
                 section_id: 999,
@@ -9245,7 +9279,7 @@ fn test_undo_failure_preserves_entry_at_top_lifo_order() {
     assert!(!result.success);
 
     // The failed entry must be pushed back to the TOP of the undo stack
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     assert_eq!(stack.len(), 2, "Both entries must still be on the stack");
 
     // Peek at the top: it should be the invalid UpdateShot (LIFO preserved)
@@ -9268,7 +9302,7 @@ fn test_redo_failure_preserves_entry_at_top_lifo_order() {
     let state = AppState::new().unwrap();
 
     // Push two entries to redo stack: valid at bottom, invalid at top
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
 
     // Valid redo entry (bottom)
     stack.push_redo(UndoEntry {
@@ -9306,7 +9340,7 @@ fn test_redo_failure_preserves_entry_at_top_lifo_order() {
     assert!(!result.success);
 
     // The failed entry must be pushed back to the TOP of the redo stack
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     assert_eq!(
         stack.redo_len(),
         2,
@@ -9355,7 +9389,7 @@ fn test_undo_to_partial_completion_stops_at_failed_step() {
     // undo_to(2) will try 3 undos: Section2 (ok), InvalidEntry (fail at step 2)
     {
         // Remove the top two entries, insert invalid, put one back
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         let top = stack.pop_undo().unwrap(); // Section 2
         let _middle = stack.pop_undo(); // Section 1
 
@@ -9416,7 +9450,7 @@ fn test_undo_to_partial_completion_stops_at_failed_step() {
         .any(|s| s.name == Some("Section 0".to_string())));
 
     // Verify the failed entry was preserved on the undo stack
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     assert_eq!(
         stack.len(),
         2,
@@ -9473,7 +9507,7 @@ fn test_redo_to_partial_completion_stops_at_failed_step() {
     // Now manipulate the redo stack: insert an invalid entry between the two valid ones
     // Redo stack: [SectionA, InvalidEntry, SectionB]
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         let top = stack.pop_redo().unwrap(); // SectionA (last undone = first to redo)
                                              // Push invalid entry
         stack.push_redo(UndoEntry {
@@ -9519,7 +9553,7 @@ fn test_redo_to_partial_completion_stops_at_failed_step() {
     assert_eq!(project.sections[0].name, Some("Section A".to_string()));
 
     // Verify the failed entry was preserved on the redo stack
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     assert_eq!(
         stack.redo_len(),
         2,
@@ -9537,7 +9571,7 @@ fn test_undo_failure_with_project_snapshot_preserves_entry() {
     // Verify that a ProjectSnapshot undo failure (invalid JSON) preserves the entry
     let state = AppState::new().unwrap();
 
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.push_with_data(
         Command::Batch {
             commands: Vec::new(),
@@ -9555,7 +9589,7 @@ fn test_undo_failure_with_project_snapshot_preserves_entry() {
     );
 
     // Entry must still be on the undo stack
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     assert_eq!(stack.len(), 1, "Entry must be preserved on undo stack");
     assert!(!stack.can_redo(), "Entry must not appear on redo stack");
 }
@@ -9567,7 +9601,7 @@ fn test_undo_failure_with_project_lock_preserves_entry() {
     let state = AppState::new().unwrap();
 
     let snapshot = serde_json::to_string(&Project::new("Test".to_string(), None)).unwrap();
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.push_with_data(
         Command::Batch {
             commands: Vec::new(),
@@ -9582,10 +9616,10 @@ fn test_undo_failure_with_project_lock_preserves_entry() {
 
     let result = state.undo();
     assert!(!result.success);
-    assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
+    assert_eq!(result.error, Some(refused_after_crash("Undo")));
 
     // Entry must still be preserved on the undo stack
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     assert_eq!(
         stack.len(),
         1,
@@ -9611,7 +9645,7 @@ fn test_redo_failure_with_project_lock_preserves_entry() {
         timestamp: None,
     };
 
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.push_redo(entry);
     assert_eq!(stack.redo_len(), 1);
     drop(stack);
@@ -9621,10 +9655,10 @@ fn test_redo_failure_with_project_lock_preserves_entry() {
 
     let result = state.redo();
     assert!(!result.success);
-    assert_eq!(result.error.as_deref(), Some("Failed to lock project"));
+    assert_eq!(result.error, Some(refused_after_crash("Redo")));
 
     // Entry must still be preserved on the redo stack
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     assert_eq!(
         stack.redo_len(),
         1,
@@ -9667,16 +9701,13 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
 
     // Capture the section offsets before the update for later assertion
     let offsets_before_update = {
-        let proj = state.project.lock().unwrap();
+        let proj = state.project.lock();
         let project = proj.as_ref().unwrap();
         project.section_offsets().clone()
     };
 
     // Clear undo stack to focus on the update
-    {
-        let mut stack = state.undo_stack.lock().unwrap();
-        stack.clear();
-    }
+    state.undo_stack.lock().clear();
 
     // Now update the datum with GPS-B
     let gps_b = GpsCoordinates::new(26.0, -81.0, 55.0).unwrap();
@@ -9687,7 +9718,7 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
     assert!(result.success, "Update SetZeroDatum should succeed");
 
     // Inspect the undo entry's undo_data
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     assert!(stack.can_undo(), "Should have an undo entry");
 
     let undo_data = stack.peek_undo_data().expect("Should have undo data");
@@ -9764,7 +9795,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
 
     // Capture state after initial set (GPS-A applied)
     let (offsets_after_a, gps_after_a) = {
-        let proj = state.project.lock().unwrap();
+        let proj = state.project.lock();
         let project = proj.as_ref().unwrap();
         let offsets = project.section_offsets().clone();
         let gps = project
@@ -9781,10 +9812,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
     );
 
     // Clear undo stack so we only track the update
-    {
-        let mut stack = state.undo_stack.lock().unwrap();
-        stack.clear();
-    }
+    state.undo_stack.lock().clear();
 
     // Update datum with GPS-B
     let gps_b = GpsCoordinates::new(26.0, -81.0, 55.0).unwrap();
@@ -9796,7 +9824,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
 
     // Verify GPS-B is now active
     {
-        let proj = state.project.lock().unwrap();
+        let proj = state.project.lock();
         let project = proj.as_ref().unwrap();
         let current_gps = project
             .zero_datums
@@ -9816,7 +9844,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
 
     // Verify GPS is restored to A
     let (restored_offsets, restored_gps) = {
-        let proj = state.project.lock().unwrap();
+        let proj = state.project.lock();
         let project = proj.as_ref().unwrap();
         let offsets = project.section_offsets().clone();
         let gps = project
@@ -9879,10 +9907,7 @@ fn test_set_zero_datum_no_change_still_creates_undo_entry() {
     });
 
     // Clear undo stack
-    {
-        let mut stack = state.undo_stack.lock().unwrap();
-        stack.clear();
-    }
+    state.undo_stack.lock().clear();
 
     // Call SetZeroDatum again with identical GPS
     let same_gps = GpsCoordinates::new(25.0, -80.0, 50.0).unwrap();
@@ -9893,7 +9918,7 @@ fn test_set_zero_datum_no_change_still_creates_undo_entry() {
     assert!(result.success, "SetZeroDatum with same GPS should succeed");
 
     // Backend still creates an undo entry (no backend-level no-change guard)
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     assert!(
         stack.can_undo(),
         "Backend should still create an undo entry even with identical GPS; \
@@ -10023,7 +10048,7 @@ fn test_undo_create_loop_closure_has_closure_info() {
 
     // Check undo stack has ClosureInfo data
     let proj = state.get_project_state().unwrap();
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     let undo_data = stack.peek_undo_data().unwrap();
     match undo_data {
         UndoData::ClosureInfo { closure, .. } => {
@@ -10123,7 +10148,7 @@ fn test_undo_unmerge_restores_removed_closures() {
     // (create_loop_closure won't let us create one for merged-pair stations,
     // so we simulate legacy data by injecting directly.)
     {
-        let mut proj_guard = state.project.lock().unwrap();
+        let mut proj_guard = state.project.lock();
         let project = proj_guard.as_mut().unwrap();
         project.loop_closures.push(LoopClosure {
             id: 1,
@@ -10752,7 +10777,7 @@ fn test_create_section_created_snapshot_distinct_from_section_snapshot() {
 
     // Check that CreateSection uses CreatedSectionSnapshot
     {
-        let stack = state.undo_stack.lock().unwrap();
+        let stack = state.undo_stack.lock();
         let undo_data = stack.peek_undo_data().unwrap();
         assert_eq!(
             undo_data.variant_name(),
@@ -10767,7 +10792,7 @@ fn test_create_section_created_snapshot_distinct_from_section_snapshot() {
     state.execute(Command::DeleteSection { section_id });
 
     {
-        let stack = state.undo_stack.lock().unwrap();
+        let stack = state.undo_stack.lock();
         let undo_data = stack.peek_undo_data().unwrap();
         assert_eq!(
             undo_data.variant_name(),
@@ -11138,7 +11163,7 @@ fn test_create_shot_created_snapshot_distinct_from_shot_snapshot() {
 
     // Check that CreateShot uses CreatedShotSnapshot
     {
-        let stack = state.undo_stack.lock().unwrap();
+        let stack = state.undo_stack.lock();
         let undo_data = stack.peek_undo_data().unwrap();
         assert_eq!(
             undo_data.variant_name(),
@@ -11156,7 +11181,7 @@ fn test_create_shot_created_snapshot_distinct_from_shot_snapshot() {
     });
 
     {
-        let stack = state.undo_stack.lock().unwrap();
+        let stack = state.undo_stack.lock();
         let undo_data = stack.peek_undo_data().unwrap();
         assert_eq!(
             undo_data.variant_name(),
@@ -11656,7 +11681,7 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
     // Connect C.1 to B.0 via an injected closure (can't merge - different ZD groups,
     // and can't create closure through command because they're not yet connected).
     {
-        let mut proj_guard = state.project.lock().unwrap();
+        let mut proj_guard = state.project.lock();
         let project = proj_guard.as_mut().unwrap();
         project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
@@ -11786,7 +11811,7 @@ fn test_transitive_closures_in_computed_stations() {
     // Actually, let me just inject the closure directly since the CreateLoopClosure command
     // requires specific connectivity conditions.
     {
-        let mut proj_guard = state.project.lock().unwrap();
+        let mut proj_guard = state.project.lock();
         let project = proj_guard.as_mut().unwrap();
         let closure_id = project.next_closure_id;
         project.loop_closures.push(LoopClosure {
@@ -11974,7 +11999,7 @@ fn test_transitive_closures_serialization_preserves_data() {
 
     // Inject closure A.1 ↔ C.1
     {
-        let mut proj_guard = state.project.lock().unwrap();
+        let mut proj_guard = state.project.lock();
         let project = proj_guard.as_mut().unwrap();
         project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
@@ -12352,7 +12377,7 @@ fn test_move_segment_unaligned_closure_independent() {
 
     // Inject a loop closure directly (no merge needed) connecting A.1 ↔ B.0
     {
-        let mut proj_guard = state.project.lock().unwrap();
+        let mut proj_guard = state.project.lock();
         let project = proj_guard.as_mut().unwrap();
         let closure_id = project.next_closure_id;
         project.loop_closures.push(LoopClosure {
@@ -12452,7 +12477,7 @@ fn test_move_segment_aligned_closure_connectivity() {
 
     // Inject an aligned loop closure directly (no merge needed) connecting A.1 ↔ B.0
     {
-        let mut proj_guard = state.project.lock().unwrap();
+        let mut proj_guard = state.project.lock();
         let project = proj_guard.as_mut().unwrap();
         let closure_id = project.next_closure_id;
         project.loop_closures.push(LoopClosure {
@@ -12564,7 +12589,7 @@ fn test_move_segment_blocked_by_datum_over_a_closure_only_link() {
     // get_merged_section_ids(B) is {B} while get_rigid_connected_section_ids(B)
     // is {A, B}. That divergence is what the widened guard covers.
     {
-        let mut proj_guard = state.project.lock().unwrap();
+        let mut proj_guard = state.project.lock();
         let project = proj_guard.as_mut().unwrap();
         let closure_id = project.next_closure_id;
         project.loop_closures.push(LoopClosure {
@@ -13646,7 +13671,7 @@ fn test_delete_range_shift_blocked_aborts() {
     // edge because the stations are already connected, so push raw merges like the
     // model-level shift_blocked test does.
     {
-        let mut guard = state.project.lock().unwrap();
+        let mut guard = state.project.lock();
         let proj = guard.as_mut().unwrap();
         proj.station_merges.push(StationMerge {
             station_a: StationRef::new(sec_a, 0).into(),
@@ -14124,7 +14149,7 @@ fn test_delete_range_prefix_shift_not_blocked_by_internal_loop() {
     // Same-section merge A:0 <-> A:2 (a loop through shots 0,1). MergeStations
     // would refuse it (already connected via shots), so push it raw.
     {
-        let mut guard = state.project.lock().unwrap();
+        let mut guard = state.project.lock();
         let proj = guard.as_mut().unwrap();
         proj.station_merges.push(StationMerge {
             station_a: StationRef::new(section_id, 0).into(),
@@ -14802,7 +14827,7 @@ fn test_delete_range_interior_shift_not_blocked_via_removed_tail_boundary() {
             .success
     );
     {
-        let mut guard = state.project.lock().unwrap();
+        let mut guard = state.project.lock();
         let proj = guard.as_mut().unwrap();
         proj.station_merges.push(StationMerge {
             station_a: StationRef::new(sec_a, 4).into(),
@@ -14900,7 +14925,7 @@ fn test_delete_range_interior_shift_not_blocked_when_stitch_is_redundant() {
     // P:0 and Q:0 each also merged to the REMOVED interior A:3 (already connected,
     // so push raw). A:3 is the only P<->Q bridge.
     {
-        let mut guard = state.project.lock().unwrap();
+        let mut guard = state.project.lock();
         let proj = guard.as_mut().unwrap();
         proj.station_merges.push(StationMerge {
             station_a: StationRef::new(sec_p, 0).into(),
@@ -15535,7 +15560,7 @@ fn test_delete_last_shot_cleans_up_offsets() {
 
     // Manually set a section offset
     {
-        let mut proj_guard = state.project.lock().unwrap();
+        let mut proj_guard = state.project.lock();
         let project = proj_guard.as_mut().unwrap();
         project.set_section_offset(section_id, (10.0, 20.0));
     }
@@ -15644,7 +15669,7 @@ fn test_delete_last_shot_cleans_up_station_offsets() {
 
     // Manually set a station offset
     {
-        let mut proj_guard = state.project.lock().unwrap();
+        let mut proj_guard = state.project.lock();
         let project = proj_guard.as_mut().unwrap();
         let station_ref = StationRef::new(section_id, 0);
         project
@@ -15704,7 +15729,7 @@ fn test_delete_last_shot_cleans_up_closures() {
 
     // Manually insert a loop closure referencing section A
     {
-        let mut proj_guard = state.project.lock().unwrap();
+        let mut proj_guard = state.project.lock();
         let project = proj_guard.as_mut().unwrap();
         project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
@@ -15792,7 +15817,7 @@ fn test_delete_last_shot_undo_restores_references() {
 
     // Manually add a section offset and station offset for section A
     {
-        let mut proj_guard = state.project.lock().unwrap();
+        let mut proj_guard = state.project.lock();
         let project = proj_guard.as_mut().unwrap();
         // Note: merge already sets section_offsets, so add station offset
         project
@@ -16218,7 +16243,7 @@ fn test_insert_before_shifts_station_offset() {
 
     // Directly add a station offset at station 0
     {
-        let mut proj_guard = state.project.lock().unwrap();
+        let mut proj_guard = state.project.lock();
         let project = proj_guard.as_mut().unwrap();
         project
             .station_offsets
@@ -16425,7 +16450,7 @@ fn test_insert_after_only_shifts_refs_beyond() {
 
     // Also add a station offset at station 1 of section A
     {
-        let mut proj_guard = state.project.lock().unwrap();
+        let mut proj_guard = state.project.lock();
         let project = proj_guard.as_mut().unwrap();
         project
             .station_offsets
@@ -17021,12 +17046,12 @@ fn test_save_project_implicit_first_save_autorename_when_target_exists() {
     // Simulate deferred-create behavior: reserved file_path, no open database yet,
     // and the explicit flag `create_project_full` sets for exactly this state.
     {
-        let mut guard = state.project.lock().unwrap();
+        let mut guard = state.project.lock();
         let project = guard.as_mut().unwrap();
         project.file_path = Some(existing_path.clone());
     }
     {
-        let mut db_guard = state.database.lock().unwrap();
+        let mut db_guard = state.database.lock();
         *db_guard = None;
     }
     state.set_initial_save_deferred_for_tests(true);
@@ -17090,7 +17115,7 @@ fn session_after_a_failed_reopen() -> (AppState, PathBuf, TempDir) {
         .unwrap();
     state.save_display_setting("stationSize", "7").unwrap();
 
-    *state.database.lock().unwrap() = None;
+    *state.database.lock() = None;
     assert!(!state.initial_save_deferred());
     assert!(
         state
@@ -17147,7 +17172,7 @@ fn an_implicit_save_after_a_failed_reopen_stays_on_the_open_file() {
         "the display setting was dropped"
     );
     assert!(
-        state.database.lock().unwrap().is_some(),
+        state.database.lock().is_some(),
         "the session must have its database handle back"
     );
 }
@@ -17543,7 +17568,7 @@ fn unreadable_undo_markers_refuse_the_save() {
 
     let state = AppState::new().unwrap();
     assert!(state.open_project(path.clone()).success);
-    state.undo_stack.lock().unwrap().push_with_data(
+    state.undo_stack.lock().push_with_data(
         Command::CreateSection {
             name: Some("Local edit".to_owned()),
             surveyor: None,
@@ -17554,7 +17579,7 @@ fn unreadable_undo_markers_refuse_the_save() {
         },
         UndoData::None,
     );
-    state.undo_stack.lock().unwrap().push_with_data(
+    state.undo_stack.lock().push_with_data(
         Command::CreateSection {
             name: Some("Redo candidate".to_owned()),
             surveyor: None,
@@ -17599,7 +17624,7 @@ fn unreadable_undo_markers_refuse_the_save() {
     // (The fixture's `undo()` is refused by the read-only gate, so both entries are
     // still on the undo side.)
     assert_eq!(
-        state.undo_stack.lock().unwrap().len(),
+        state.undo_stack.lock().len(),
         2,
         "the live undo history is kept"
     );
@@ -17665,7 +17690,7 @@ fn setting_the_undo_mode_serializes_with_full_file_saves() {
     let state = Arc::new(AppState::new().unwrap());
     assert!(state.open_project(save_path).success);
     state.set_edit_enabled(true);
-    let save_guard = state.project.lock().unwrap();
+    let save_guard = state.project.lock();
     let worker_state = Arc::clone(&state);
     let (sent, received) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
@@ -17686,7 +17711,7 @@ fn setting_the_undo_mode_serializes_with_full_file_saves() {
         .expect("mode write succeeds");
     worker.join().unwrap();
 
-    let db_guard = state.database.lock().unwrap();
+    let db_guard = state.database.lock();
     let link = db_guard
         .as_ref()
         .unwrap()
@@ -17761,13 +17786,13 @@ fn persisted_split_snapshot_carries_no_local_filesystem_path() {
     });
     let section_id = created.section_id.unwrap();
     let shot_id = state.get_project_state().unwrap().sections[0].shots[0].id;
-    state.project.lock().unwrap().as_mut().unwrap().file_path =
+    state.project.lock().as_mut().unwrap().file_path =
         Some(PathBuf::from("/home/alice/private/split.stalx"));
 
     let result = state.execute_split_shot_at_distance(section_id, shot_id, 4.0);
     assert!(result.success, "split failed: {:?}", result.error);
 
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     let entry = stack.undo_entries().last().expect("split undo entry");
     let (_, persisted_undo, _) = UndoStack::serialize_entry_with_timestamp(entry).unwrap();
     assert!(
@@ -17797,13 +17822,13 @@ fn persisted_delete_last_snapshot_carries_no_local_filesystem_path() {
     });
     let section_id = created.section_id.unwrap();
     let shot_id = state.get_project_state().unwrap().sections[0].shots[0].id;
-    state.project.lock().unwrap().as_mut().unwrap().file_path =
+    state.project.lock().as_mut().unwrap().file_path =
         Some(PathBuf::from("/home/bob/private/delete.stalx"));
 
     let result = state.execute_delete_last_shot_and_section(section_id, shot_id);
     assert!(result.success, "delete failed: {:?}", result.error);
 
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     let entry = stack.undo_entries().last().expect("delete undo entry");
     let (_, persisted_undo, _) = UndoStack::serialize_entry_with_timestamp(entry).unwrap();
     assert!(
@@ -17973,7 +17998,7 @@ fn test_close_project_clears_all_state() {
     let result = state.close_project();
     assert!(result.success);
     assert!(state.get_project_state().is_none());
-    let undo_stack = state.undo_stack.lock().unwrap();
+    let undo_stack = state.undo_stack.lock();
     assert_eq!(undo_stack.len(), 0);
 }
 
@@ -17998,7 +18023,7 @@ fn test_close_project_clears_adjusted_cache() {
     // must drop it for RSS to shrink back.
     assert!(state.get_adjusted_stations().is_some());
     assert!(
-        state.adjusted_cache.lock().unwrap().is_some(),
+        state.adjusted_cache.lock().is_some(),
         "adjusted cache should be warm after get_adjusted_stations"
     );
 
@@ -18008,10 +18033,10 @@ fn test_close_project_clears_adjusted_cache() {
     // close_project must free both project-scale in-memory caches. The undo stack
     // is reloaded from SQLite on the next open, so clearing it here is safe.
     assert!(
-        state.adjusted_cache.lock().unwrap().is_none(),
+        state.adjusted_cache.lock().is_none(),
         "adjusted cache must be cleared on close"
     );
-    assert_eq!(state.undo_stack.lock().unwrap().len(), 0);
+    assert_eq!(state.undo_stack.lock().len(), 0);
 }
 
 // ============================================================================
@@ -19808,7 +19833,7 @@ fn section_holding_a_zero_length_shot(state: &AppState) -> (SectionId, [ShotId; 
         })
         .section_id
         .unwrap();
-    let mut guard = state.project.lock().unwrap();
+    let mut guard = state.project.lock();
     let project = guard.as_mut().unwrap();
     let section = project.get_section_mut(section_id).unwrap();
     section.shots[1].length = 0.0;
@@ -21738,7 +21763,7 @@ fn move_comment_observables(
 ) -> MoveCommentObservables {
     let project = state.get_project_state().unwrap();
     let (undo_len, redo_len) = {
-        let stack = state.undo_stack.lock().unwrap();
+        let stack = state.undo_stack.lock();
         (stack.len(), stack.redo_len())
     };
     MoveCommentObservables {
@@ -21780,7 +21805,7 @@ fn move_comment_onto_its_own_holder_is_a_true_noop() {
             let (state, sid, shid, _temp) = remote_fixture_editable();
             let station = StationRef::new(sid, 1);
             {
-                let mut guard = state.project.lock().unwrap();
+                let mut guard = state.project.lock();
                 let project = guard.as_mut().unwrap();
                 let key = project.key_for_ref(station).unwrap();
                 project.station_comments.insert(key, "sump".to_string());
@@ -21805,7 +21830,6 @@ fn move_comment_onto_its_own_holder_is_a_true_noop() {
             state
                 .database
                 .lock()
-                .unwrap()
                 .as_ref()
                 .unwrap()
                 .save_speleo_link(Some(&fixture_speleo_link()))
@@ -22079,7 +22103,7 @@ fn test_undo_actually_works_after_project_reopen() {
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
     {
-        let stack = state2.undo_stack.lock().unwrap();
+        let stack = state2.undo_stack.lock();
         assert!(stack.len() > 0, "undo stack should be restored");
     }
     assert!(state2.undo().success, "undo should work after reopen");
@@ -23617,7 +23641,7 @@ fn repair_open_project_integrity_reports_fixed_and_remaining() {
 
     // Inject a dangling merge (repairable: repair drops it).
     {
-        let mut guard = state.project.lock().unwrap();
+        let mut guard = state.project.lock();
         let project = guard.as_mut().unwrap();
         let dangling = StationKey::new(a, StationAnchor::AfterShot("ghost".to_string()));
         project.station_merges.push(StationMerge {
@@ -23673,7 +23697,7 @@ fn repair_command_demotes_a_double_anchoring_bridge_merge() {
     let (a, b, c) = (section("A"), section("B"), section("C"));
 
     {
-        let mut guard = state.project.lock().unwrap();
+        let mut guard = state.project.lock();
         let project = guard.as_mut().unwrap();
         // The legitimate merge inside the first component, made through the real
         // API so it is correctly aligned.
@@ -23719,7 +23743,7 @@ fn repair_command_demotes_a_double_anchoring_bridge_merge() {
         state.integrity_violation_messages()
     );
 
-    let guard = state.project.lock().unwrap();
+    let guard = state.project.lock();
     let project = guard.as_ref().unwrap();
     assert_eq!(
         project.station_merges.len(),
@@ -23825,7 +23849,7 @@ fn unwound_pushes_require_an_explicit_backend_acknowledgement() {
 
 /// Read has_unpushed_edits straight from the open database.
 fn dirty_bit(state: &AppState) -> bool {
-    let guard = state.database.lock().unwrap();
+    let guard = state.database.lock();
     guard
         .as_ref()
         .unwrap()
@@ -24431,7 +24455,7 @@ fn dirty_bit_noop_for_local_only_project() {
             .success
     );
     // No speleo_link row exists; mark_remote_dirty was a silent no-op.
-    let guard = state.database.lock().unwrap();
+    let guard = state.database.lock();
     assert!(guard
         .as_ref()
         .unwrap()
@@ -24772,7 +24796,7 @@ fn a_persisted_none_entry_does_not_block_the_history_beneath_it() {
     // Serialize the live stack, then splice the poison on top - exactly the shape
     // a pre-guard build wrote to the database.
     let mut persisted: Vec<(String, String, Option<String>)> = {
-        let stack = state.undo_stack.lock().unwrap();
+        let stack = state.undo_stack.lock();
         assert_eq!(stack.len(), 2);
         stack.rows_to_persist(PersistStack::Undo, Some(20))
     };
@@ -24796,10 +24820,10 @@ fn a_persisted_none_entry_does_not_block_the_history_beneath_it() {
     );
 
     // Restore it the way `project_load.rs` does.
-    {
-        let mut stack = state.undo_stack.lock().unwrap();
-        stack.load_from_persisted_with_timestamps(persisted, vec![]);
-    }
+    state
+        .undo_stack
+        .lock()
+        .load_from_persisted_with_timestamps(persisted, vec![]);
 
     let first = state.undo();
     assert!(
@@ -24856,7 +24880,7 @@ fn redoing_an_unundoable_entry_does_not_re_wedge_the_undo_stack() {
 
     // The kind of entry a pre-guard build could leave on the persisted redo stack.
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         stack.push_redo(UndoEntry {
             replayed_at: None,
             command_bytes: None,
@@ -25011,7 +25035,7 @@ fn a_loaded_none_entry_is_not_re_persisted() {
         .unwrap(),
     ];
 
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.load_from_persisted_with_timestamps(persisted, vec![]);
 
     let to_persist = stack.rows_to_persist(PersistStack::Undo, Some(20));
@@ -25055,7 +25079,7 @@ fn a_failed_undo_still_pushes_its_entry_back() {
         .unwrap()];
 
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         stack.load_from_persisted_with_timestamps(persisted, vec![]);
         assert_eq!(stack.len(), 1, "an applicable entry must survive the load");
     }
@@ -25064,7 +25088,7 @@ fn a_failed_undo_still_pushes_its_entry_back() {
     assert!(!result.success);
     assert_eq!(result.error.as_deref(), Some("Failed to parse undo data"));
 
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     assert_eq!(stack.len(), 1, "a failed undo must preserve its entry");
     assert!(
         !stack.can_redo(),
@@ -25349,7 +25373,7 @@ fn section_with_shots(state: &AppState, name: &str, shots: Vec<ShotData>) -> Sec
 
 /// How many merges the project currently reports as misaligned.
 fn misaligned_merges(state: &AppState) -> usize {
-    let guard = state.project.lock().expect("project lock poisoned");
+    let guard = state.project.lock();
     guard
         .as_ref()
         .expect("no project open")
@@ -25383,7 +25407,7 @@ fn two_merged_sections(state: &AppState) -> (SectionId, SectionId) {
 /// orders of magnitude past the alignment invariant, and far past anything the
 /// command API can leave behind in a project this small.
 fn inject_drift(state: &AppState, partner: SectionId) {
-    let mut guard = state.project.lock().expect("project lock poisoned");
+    let mut guard = state.project.lock();
     let project = guard.as_mut().expect("no project open");
     project.set_section_offset(partner, (7.0, 0.0));
     assert!(
@@ -25456,7 +25480,7 @@ fn undo_to_reconciles_after_every_step_so_a_failed_jump_leaves_no_drift() {
     // Slip an unusable entry UNDER the MoveStation, so the jump completes one
     // real step (which restores the drift) and then fails on the second.
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         let move_entry = stack.pop_undo().expect("the MoveStation entry");
         stack.push_undo(unusable_undo_entry());
         stack.push_undo(move_entry);
@@ -25507,7 +25531,7 @@ fn redo_to_reconciles_after_every_step_so_a_failed_jump_leaves_no_drift() {
         .expect("capturing the healed project");
 
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         // Bottom: an entry that cannot be redone. Top: the drift-carrying pair.
         stack.push_redo(UndoEntry {
             replayed_at: None,
@@ -25642,7 +25666,7 @@ fn redo_of_a_created_shot_with_the_maximum_id_remints_it_inside_the_window() {
     let section = section_with_shots(&state, "A", vec![]);
 
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         stack.push_redo(UndoEntry {
             replayed_at: None,
             command_bytes: None,
@@ -25711,7 +25735,7 @@ fn undo_of_a_shot_snapshot_with_the_maximum_id_remints_it_inside_the_window() {
     let section = section_with_shots(&state, "A", vec![straight_shot(0.0, 5.0)]);
 
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         stack.push_with_data(
             Command::DeleteShot {
                 section_id: section,
@@ -25783,7 +25807,7 @@ fn an_anchored_redo_forcing_the_maximum_shot_id_remints_it_inside_the_window() {
         .id;
 
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         stack.push_redo(UndoEntry {
             replayed_at: None,
             command_bytes: None,
@@ -25855,7 +25879,7 @@ fn a_shot_added_after_an_out_of_window_restore_gets_a_fresh_id_in_its_window() {
     let state = state_with_project();
     let section = section_with_shots(&state, "A", vec![straight_shot(0.0, 5.0)]);
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         stack.push_with_data(
             Command::DeleteShot {
                 section_id: section,
@@ -25956,7 +25980,7 @@ fn undo_of_create_section_re_reads_the_live_shots_so_redo_keeps_uuids_on_their_o
     // An undo-less mutation: a shot appears at the FRONT of the section with no
     // undo entry of its own, the same way a save-time heal mutates a section.
     {
-        let mut guard = state.project.lock().unwrap();
+        let mut guard = state.project.lock();
         let project = guard.as_mut().expect("no project open");
         let live = project.get_section_mut(section).expect("section missing");
         let id = live.next_shot_id;

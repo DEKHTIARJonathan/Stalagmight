@@ -3199,13 +3199,13 @@ impl Fuzzer {
     /// model's authority on the window is the app, not what this asked for.
     fn new_with_config(seed: u32, closures: bool, drawn: Option<DrawnConfig>) -> Self {
         let state = AppState::new().unwrap();
-        if let (Some(config), Ok(mut stack)) = (drawn, state.undo_stack.lock()) {
-            stack.set_history_limit(config.history_limit);
+        if let Some(config) = drawn {
+            state
+                .undo_stack
+                .lock()
+                .set_history_limit(config.history_limit);
         }
-        let history_limit = state
-            .undo_stack
-            .lock()
-            .map_or(DEFAULT_HISTORY_LIMIT, |stack| stack.history_limit());
+        let history_limit = state.undo_stack.lock().history_limit();
         let mut rng = Rng::new(seed);
         build_project(&state, &mut rng, closures);
         let mut fuzzer = Self {
@@ -3240,9 +3240,7 @@ impl Fuzzer {
         // The builder's own commands are undoable, so the stacks are not empty.
         // Clear them: the model measures depth from a known floor, and the
         // builder's history is scaffolding rather than something to fuzz over.
-        if let Ok(mut stack) = fuzzer.state.undo_stack.lock() {
-            stack.clear();
-        }
+        fuzzer.state.undo_stack.lock().clear();
         assert_eq!(fuzzer.undo_len(), 0, "setup left undo entries behind");
         assert_eq!(fuzzer.redo_len(), 0, "setup left redo entries behind");
         let base = fuzzer.snapshot();
@@ -3925,21 +3923,19 @@ impl Fuzzer {
         // the same entries in the same order. Read straight off the stack so the
         // two halves of a row cannot drift apart: `serialize_entry` is what
         // `rows_to_persist` calls (core/undo/persistence.rs).
-        let payloads: Vec<(String, String)> = self.state.undo_stack.lock().map_or_else(
-            |_| Vec::new(),
-            |stack| {
-                stack
-                    .undo_entries()
-                    .chain(stack.redo_entries())
-                    .map(|entry| {
-                        (
-                            serde_json::to_string(&entry.command).unwrap_or_default(),
-                            serde_json::to_string(&entry.undo_data).unwrap_or_default(),
-                        )
-                    })
-                    .collect()
-            },
-        );
+        let payloads: Vec<(String, String)> = {
+            let stack = self.state.undo_stack.lock();
+            stack
+                .undo_entries()
+                .chain(stack.redo_entries())
+                .map(|entry| {
+                    (
+                        serde_json::to_string(&entry.command).unwrap_or_default(),
+                        serde_json::to_string(&entry.undo_data).unwrap_or_default(),
+                    )
+                })
+                .collect()
+        };
         undo.iter()
             .enumerate()
             .map(|(index, item)| (format!("undo[{index}]"), item))

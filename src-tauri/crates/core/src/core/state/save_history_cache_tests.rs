@@ -53,7 +53,7 @@ fn a_second_save_compresses_only_the_entries_new_since_the_first() {
     for section_id in 0..3 {
         reverse(&state, section_id);
     }
-    let undo_entries = state.undo_stack.lock().unwrap().len();
+    let undo_entries = state.undo_stack.lock().len();
     assert!(undo_entries >= 3, "expected at least 3 undo entries");
 
     let first = entries_compressed_by_save(&state, &path);
@@ -104,12 +104,12 @@ fn a_save_through_the_cache_reopens_with_the_same_history() {
     // Save again so the second save's rows are all reused ones.
     assert!(state.save_project(Some(path.clone())).success);
     let (undo_before, redo_before) = {
-        let stack = state.undo_stack.lock().unwrap();
+        let stack = state.undo_stack.lock();
         (stack.len(), stack.redo_len())
     };
 
     let reopened = AppState::new().unwrap();
     assert!(reopened.open_project(path).success);
-    let stack = reopened.undo_stack.lock().unwrap();
+    let stack = reopened.undo_stack.lock();
     assert_eq!((stack.len(), stack.redo_len()), (undo_before, redo_before));
 }

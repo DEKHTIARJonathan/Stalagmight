@@ -194,9 +194,7 @@ impl AppState {
             default_azimuth_reference.map(crate::models::AzimuthReference::sanitised);
         // Serialize against execute()/undo()/redo() so the before/after pair is
         // consistent (same rationale as repair_open_project_integrity).
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B5): a settings change mutates the project,
         // so it is gated on a read-only remote project (returns the EDIT_DISABLED
         // coded failure). [#576 C5] On the read-only-workspace allowlist: the name
@@ -209,10 +207,7 @@ impl AppState {
         let survey_edits_allowed = !self.workspace_mode().is_read_only();
         let before_snapshot = self.capture_project_snapshot().ok();
         let reference_changed = {
-            let mut guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
+            let mut guard = self.project.lock();
             let Some(project) = guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
@@ -289,18 +284,13 @@ impl AppState {
         }
         // Serialize against execute()/undo()/redo(), same rationale as
         // update_project_settings.
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         if let Err(f) = self.guard_mutation("Set entrance elevation") {
             return f;
         }
         let before_snapshot = self.capture_project_snapshot().ok();
         {
-            let mut guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
+            let mut guard = self.project.lock();
             let Some(project) = guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
@@ -765,13 +755,7 @@ mod tests {
 
         // Not recorded by default.
         assert_eq!(
-            state
-                .project
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .surface_elevation,
+            state.project.lock().as_ref().unwrap().surface_elevation,
             None
         );
 
@@ -779,13 +763,7 @@ mod tests {
         let set = state.set_surface_elevation(Some(42.5));
         assert!(set.success, "{:?}", set.error);
         assert_eq!(
-            state
-                .project
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .surface_elevation,
+            state.project.lock().as_ref().unwrap().surface_elevation,
             Some(42.5)
         );
 
@@ -793,13 +771,7 @@ mod tests {
         let clear = state.set_surface_elevation(None);
         assert!(clear.success, "{:?}", clear.error);
         assert_eq!(
-            state
-                .project
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .surface_elevation,
+            state.project.lock().as_ref().unwrap().surface_elevation,
             None
         );
 
@@ -808,13 +780,7 @@ mod tests {
             let result = state.set_surface_elevation(Some(bad));
             assert!(!result.success, "expected {bad} to be rejected");
             assert_eq!(
-                state
-                    .project
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .unwrap()
-                    .surface_elevation,
+                state.project.lock().as_ref().unwrap().surface_elevation,
                 None,
                 "a rejected value must not be stored"
             );
@@ -833,26 +799,14 @@ mod tests {
         assert!(state.set_surface_elevation(Some(10.0)).success);
         assert!(state.set_surface_elevation(Some(20.0)).success);
         assert_eq!(
-            state
-                .project
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .surface_elevation,
+            state.project.lock().as_ref().unwrap().surface_elevation,
             Some(20.0)
         );
 
         let undo = state.undo();
         assert!(undo.success, "{:?}", undo.error);
         assert_eq!(
-            state
-                .project
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .surface_elevation,
+            state.project.lock().as_ref().unwrap().surface_elevation,
             Some(10.0),
             "undo must restore the prior elevation"
         );
@@ -860,13 +814,7 @@ mod tests {
         let redo = state.redo();
         assert!(redo.success, "{:?}", redo.error);
         assert_eq!(
-            state
-                .project
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .surface_elevation,
+            state.project.lock().as_ref().unwrap().surface_elevation,
             Some(20.0),
             "redo must reapply the edit"
         );

@@ -17,9 +17,12 @@ impl AppState {
     /// Perform undo - restore previous state based on undo data
     pub fn undo(&self) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
+        // [#576 A11] Refused rather than recovered after an internal crash: the
+        // inverse would land on what the crash left (`refuse_after_crash`).
+        if let Err(refused) = self.refuse_after_crash("Undo") {
+            return CommandResult::failure(refused);
+        }
         // Read-only edit gate (#191, D-B6): you cannot mutate a read-only remote
         // project even to revert. Gated unconditionally.
         if let Err(f) = self.guard_mutation("Undo") {
@@ -59,9 +62,7 @@ impl AppState {
     fn undo_inner(&self) -> CommandResult {
         // Pop from undo stack
         let mut entry = {
-            let Ok(mut stack) = self.undo_stack.lock() else {
-                return CommandResult::failure("Failed to lock undo stack".to_string());
-            };
+            let mut stack = self.undo_stack.lock();
 
             let Some(e) = stack.pop_undo() else {
                 return CommandResult::failure("Nothing to undo".to_string());
@@ -242,8 +243,9 @@ impl AppState {
                 ..
             } => {
                 // Undo a merge by restoring section offsets and unmerging the stations.
-                match self.project.lock() {
-                    Ok(mut proj_guard) => match proj_guard.as_mut() {
+                {
+                    let mut proj_guard = self.project.lock();
+                    match proj_guard.as_mut() {
                         Some(project) => {
                             // Restore section offsets to pre-merge positions
                             project.restore_section_offsets(previous_offsets);
@@ -253,8 +255,7 @@ impl AppState {
                             CommandResult::success()
                         }
                         None => CommandResult::failure("No project open".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                    }
                 }
             }
 
@@ -268,7 +269,8 @@ impl AppState {
                 if merge_result.success {
                     // Merge succeeded, now restore removed closures
                     if !removed_closures.is_empty() {
-                        if let Ok(mut proj_guard) = self.project.lock() {
+                        {
+                            let mut proj_guard = self.project.lock();
                             if let Some(project) = proj_guard.as_mut() {
                                 for closure in removed_closures {
                                     project.next_closure_id =
@@ -282,8 +284,9 @@ impl AppState {
                     merge_result
                 } else {
                     // If re-merge fails (e.g., stations now connected), try direct restoration
-                    match self.project.lock() {
-                        Ok(mut proj_guard) => match proj_guard.as_mut() {
+                    {
+                        let mut proj_guard = self.project.lock();
+                        match proj_guard.as_mut() {
                             Some(project) => {
                                 if let (Some(key_a), Some(key_b)) = (
                                     project.key_for_ref(*station_a),
@@ -305,8 +308,7 @@ impl AppState {
                                 CommandResult::success()
                             }
                             None => CommandResult::failure("No project open".to_string()),
-                        },
-                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                        }
                     }
                 }
             }
@@ -315,8 +317,9 @@ impl AppState {
                 match &entry.command {
                     Command::CreateLoopClosure { .. } => {
                         // Undo create by removing the same closure ID.
-                        match self.project.lock() {
-                            Ok(mut proj_guard) => match proj_guard.as_mut() {
+                        {
+                            let mut proj_guard = self.project.lock();
+                            match proj_guard.as_mut() {
                                 Some(project) => {
                                     if let Some(pos) = project
                                         .loop_closures
@@ -329,8 +332,7 @@ impl AppState {
                                     CommandResult::success()
                                 }
                                 None => CommandResult::failure("No project open".to_string()),
-                            },
-                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                            }
                         }
                     }
                     Command::RemoveLoopClosure { .. } => {
@@ -341,8 +343,9 @@ impl AppState {
                         // indexed by the frontend and traversed by
                         // `resolve_offsets` (#413, finding 4). A legacy entry
                         // carries no position and still appends.
-                        match self.project.lock() {
-                            Ok(mut proj_guard) => match proj_guard.as_mut() {
+                        {
+                            let mut proj_guard = self.project.lock();
+                            match proj_guard.as_mut() {
                                 Some(project) => {
                                     project.next_closure_id =
                                         project.next_closure_id.max(closure.id + 1);
@@ -357,8 +360,7 @@ impl AppState {
                                     CommandResult::success()
                                 }
                                 None => CommandResult::failure("No project open".to_string()),
-                            },
-                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                            }
                         }
                     }
                     _ => CommandResult::failure("Unsupported closure undo command".to_string()),
@@ -374,8 +376,9 @@ impl AppState {
                 // Restore previous datum state directly without recomputing offsets
                 // This is critical because set_zero_datum would compute new offsets
                 // instead of restoring the exact previous state
-                match self.project.lock() {
-                    Ok(mut proj_guard) => match proj_guard.as_mut() {
+                {
+                    let mut proj_guard = self.project.lock();
+                    match proj_guard.as_mut() {
                         Some(project) => {
                             // Restore section offsets directly
                             project.restore_section_offsets(previous_offsets);
@@ -420,8 +423,7 @@ impl AppState {
                             CommandResult::success()
                         }
                         None => CommandResult::failure("No project open".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                    }
                 }
             }
 
@@ -429,16 +431,16 @@ impl AppState {
                 previous_offsets, ..
             } => {
                 // Restore previous offsets for each affected section
-                match self.project.lock() {
-                    Ok(mut proj_guard) => match proj_guard.as_mut() {
+                {
+                    let mut proj_guard = self.project.lock();
+                    match proj_guard.as_mut() {
                         Some(project) => {
                             project.restore_section_offsets(previous_offsets);
                             project.touch();
                             CommandResult::success()
                         }
                         None => CommandResult::failure("No project open".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                    }
                 }
             }
 
@@ -450,8 +452,9 @@ impl AppState {
                 prev_section_offset,
             } => {
                 // Restore adjacent shot data and station offset
-                match self.project.lock() {
-                    Ok(mut proj_guard) => match proj_guard.as_mut() {
+                {
+                    let mut proj_guard = self.project.lock();
+                    match proj_guard.as_mut() {
                         Some(project) => {
                             let section = project
                                 .sections
@@ -513,37 +516,32 @@ impl AppState {
                             CommandResult::success()
                         }
                         None => CommandResult::failure("No project open".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                    }
                 }
             }
 
             UndoData::ProjectSnapshot(json) => {
                 // Restore entire project (caches rebuilt centrally; see
                 // AppState::restore_snapshot_into).
-                match self.project.lock() {
-                    Ok(mut proj) => {
-                        if Self::restore_snapshot_into(&mut proj, json.as_str()) {
-                            CommandResult::success()
-                        } else {
-                            CommandResult::failure("Failed to parse project snapshot".to_string())
-                        }
+                {
+                    let mut proj = self.project.lock();
+                    if Self::restore_snapshot_into(&mut proj, json.as_str()) {
+                        CommandResult::success()
+                    } else {
+                        CommandResult::failure("Failed to parse project snapshot".to_string())
                     }
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                 }
             }
 
             UndoData::ProjectSnapshotPair { before, after: _ } => {
                 // Restore the "before" snapshot for undo.
-                match self.project.lock() {
-                    Ok(mut proj) => {
-                        if Self::restore_snapshot_into(&mut proj, before.as_str()) {
-                            CommandResult::success()
-                        } else {
-                            CommandResult::failure("Failed to parse project snapshot".to_string())
-                        }
+                {
+                    let mut proj = self.project.lock();
+                    if Self::restore_snapshot_into(&mut proj, before.as_str()) {
+                        CommandResult::success()
+                    } else {
+                        CommandResult::failure("Failed to parse project snapshot".to_string())
                     }
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                 }
             }
 
@@ -553,9 +551,7 @@ impl AppState {
         // Epilogue: push to redo stack on success, push back to undo stack on failure
         if result.success {
             result = self.settle_reversed_sections(&entry.command, result);
-            if let Ok(mut stack) = self.undo_stack.lock() {
-                stack.push_redo(entry);
-            }
+            self.undo_stack.lock().push_redo(entry);
             tracing::info!("Undo performed");
         } else {
             let reason = result.error.as_deref().unwrap_or("Unknown error");
@@ -565,12 +561,7 @@ impl AppState {
                 reason = reason,
                 "Undo operation failed after popping entry; pushing back to undo stack"
             );
-            match self.undo_stack.lock() {
-                Ok(mut stack) => stack.restore_undo(entry),
-                Err(_) => {
-                    tracing::error!("Failed to re-acquire undo stack lock to push back entry");
-                }
-            }
+            self.undo_stack.lock().restore_undo(entry);
         }
 
         result
@@ -579,9 +570,12 @@ impl AppState {
     /// Perform redo - re-execute the command or restore snapshot
     pub fn redo(&self) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
+        // [#576 A11] Refused rather than recovered after an internal crash: the
+        // inverse would land on what the crash left (`refuse_after_crash`).
+        if let Err(refused) = self.refuse_after_crash("Redo") {
+            return CommandResult::failure(refused);
+        }
         // Read-only edit gate (#191, D-B6): gated unconditionally (see undo()).
         if let Err(f) = self.guard_mutation("Redo") {
             return f;
@@ -609,11 +603,7 @@ impl AppState {
     /// so only failures past it mark the remote copy un-pushed. Same messages the
     /// inner steps use, so callers see no difference on an empty stack.
     fn history_step_available(&self, direction: HistoryMove) -> Result<(), CommandResult> {
-        let Ok(stack) = self.undo_stack.lock() else {
-            return Err(CommandResult::failure(
-                "Failed to lock undo stack".to_string(),
-            ));
-        };
+        let stack = self.undo_stack.lock();
         match direction {
             HistoryMove::Undo if !stack.can_undo() => {
                 Err(CommandResult::failure("Nothing to undo".to_string()))
@@ -629,9 +619,7 @@ impl AppState {
     fn redo_inner(&self) -> CommandResult {
         // Pop from redo stack
         let mut entry = {
-            let Ok(mut stack) = self.undo_stack.lock() else {
-                return CommandResult::failure("Failed to lock undo stack".to_string());
-            };
+            let mut stack = self.undo_stack.lock();
 
             let Some(e) = stack.pop_redo() else {
                 return CommandResult::failure("Nothing to redo".to_string());
@@ -649,16 +637,14 @@ impl AppState {
         // This handles cases where re-execution would create different IDs.
         // IMPORTANT: No early returns after the pop - all paths flow through the epilogue.
         let mut result = match &entry.undo_data {
-            UndoData::ProjectSnapshotPair { before: _, after } => match self.project.lock() {
-                Ok(mut proj) => {
-                    if Self::restore_snapshot_into(&mut proj, after.as_str()) {
-                        CommandResult::success()
-                    } else {
-                        CommandResult::failure("Failed to parse project snapshot".to_string())
-                    }
+            UndoData::ProjectSnapshotPair { before: _, after } => {
+                let mut proj = self.project.lock();
+                if Self::restore_snapshot_into(&mut proj, after.as_str()) {
+                    CommandResult::success()
+                } else {
+                    CommandResult::failure("Failed to parse project snapshot".to_string())
                 }
-                Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-            },
+            }
             UndoData::CreatedSectionSnapshot {
                 section_id,
                 section_data,
@@ -701,10 +687,7 @@ impl AppState {
                 // WHERE the shot goes back, and the forced id decides what the
                 // recreated shot is called. Both are resolved below - anchors by
                 // uuid, the forced id only when it is still free.
-                let mut guard = match self.project.lock() {
-                    Ok(g) => g,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
+                let mut guard = self.project.lock();
                 match guard.as_mut() {
                     None => CommandResult::failure("No project open".to_string()),
                     Some(project) => {
@@ -880,8 +863,9 @@ impl AppState {
             } => {
                 // Redo by reapplying the offset to the captured affected sections
                 // Filter to sections that still exist (a section may have been deleted since capture)
-                match self.project.lock() {
-                    Ok(mut proj_guard) => match proj_guard.as_mut() {
+                {
+                    let mut proj_guard = self.project.lock();
+                    match proj_guard.as_mut() {
                         Some(project) => {
                             let existing: std::collections::HashSet<SectionId> =
                                 project.sections.iter().map(|s| s.id).collect();
@@ -901,8 +885,7 @@ impl AppState {
                             CommandResult::success()
                         }
                         None => CommandResult::failure("No project open".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                    }
                 }
             }
             UndoData::ClosureInfo { closure, .. } => {
@@ -912,8 +895,9 @@ impl AppState {
                         // Appended, as the create itself appended - the recorded
                         // `position` belongs to the REMOVE direction (#413,
                         // finding 4) and says nothing about where a create put it.
-                        match self.project.lock() {
-                            Ok(mut proj_guard) => match proj_guard.as_mut() {
+                        {
+                            let mut proj_guard = self.project.lock();
+                            match proj_guard.as_mut() {
                                 Some(project) => {
                                     project.next_closure_id =
                                         project.next_closure_id.max(closure.id + 1);
@@ -922,14 +906,14 @@ impl AppState {
                                     CommandResult::success()
                                 }
                                 None => CommandResult::failure("No project open".to_string()),
-                            },
-                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                            }
                         }
                     }
                     Command::RemoveLoopClosure { .. } => {
                         // Redo remove by removing the same closure ID again.
-                        match self.project.lock() {
-                            Ok(mut proj_guard) => match proj_guard.as_mut() {
+                        {
+                            let mut proj_guard = self.project.lock();
+                            match proj_guard.as_mut() {
                                 Some(project) => {
                                     if let Some(pos) = project
                                         .loop_closures
@@ -942,8 +926,7 @@ impl AppState {
                                     CommandResult::success()
                                 }
                                 None => CommandResult::failure("No project open".to_string()),
-                            },
-                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                            }
                         }
                     }
                     _ => CommandResult::failure("Unsupported closure redo command".to_string()),
@@ -989,7 +972,8 @@ impl AppState {
                     purpose = "keep the undo stack applicable",
                     "Redone entry carries no undo data; not pushing it onto the undo stack"
                 );
-            } else if let Ok(mut stack) = self.undo_stack.lock() {
+            } else {
+                let mut stack = self.undo_stack.lock();
                 stack.push_undo(entry);
             }
             tracing::info!("Redo performed");
@@ -1001,12 +985,7 @@ impl AppState {
                 reason = reason,
                 "Redo operation failed after popping entry; pushing back to redo stack"
             );
-            match self.undo_stack.lock() {
-                Ok(mut stack) => stack.push_redo(entry),
-                Err(_) => {
-                    tracing::error!("Failed to re-acquire undo stack lock to push back entry");
-                }
-            }
+            self.undo_stack.lock().push_redo(entry);
         }
 
         result
@@ -1049,10 +1028,7 @@ impl AppState {
         else {
             return;
         };
-        let guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let guard = self.project.lock();
         let Some(section) = guard.as_ref().and_then(|p| p.get_section(*section_id)) else {
             return;
         };
@@ -1078,10 +1054,7 @@ impl AppState {
         if offsets.is_empty() {
             return;
         }
-        let mut guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut guard = self.project.lock();
         let Some(project) = guard.as_mut() else {
             return;
         };
@@ -1133,10 +1106,7 @@ impl AppState {
         let UndoData::ProjectSnapshotPair { before, after } = &mut entry.undo_data else {
             return;
         };
-        let guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let guard = self.project.lock();
         let Some(project) = guard.as_ref() else {
             return;
         };
@@ -1185,10 +1155,7 @@ impl AppState {
         let Some(uuid) = uuid else {
             return Ok(recorded_id);
         };
-        let guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let guard = self.project.lock();
         let Some(project) = guard.as_ref() else {
             return Err("No project open".to_string());
         };
@@ -1237,91 +1204,62 @@ impl AppState {
 
     /// Check if undo is available
     pub fn can_undo(&self) -> bool {
-        self.undo_stack
-            .lock()
-            .map(|s| s.can_undo())
-            .unwrap_or(false)
+        self.undo_stack.lock().can_undo()
     }
 
     /// Check if redo is available
     pub fn can_redo(&self) -> bool {
-        self.undo_stack
-            .lock()
-            .map(|s| s.can_redo())
-            .unwrap_or(false)
+        self.undo_stack.lock().can_redo()
     }
 
     /// Get the undo stack as a list of history items for the UI
     pub fn get_undo_stack(&self) -> Vec<crate::core::undo::history_view::UndoHistoryItem> {
         // Build a lightweight section name lookup map, then release the project lock
         // before acquiring the undo_stack lock (avoids holding both simultaneously)
-        let section_names: std::collections::HashMap<u32, Option<String>> = self
-            .project
-            .lock()
-            .ok()
-            .and_then(|guard| {
-                guard
-                    .as_ref()
-                    .map(|p| p.sections.iter().map(|s| (s.id, s.name.clone())).collect())
-            })
-            .unwrap_or_default();
-
+        let section_names = self.history_section_names();
         self.undo_stack
             .lock()
-            .map(|stack| {
-                stack
-                    .undo_entries()
-                    .enumerate()
-                    .map(|(idx, entry)| {
-                        crate::core::undo::history_view::entry_to_history_item(
-                            entry,
-                            idx,
-                            &section_names,
-                        )
-                    })
-                    .collect()
+            .undo_entries()
+            .enumerate()
+            .map(|(idx, entry)| {
+                crate::core::undo::history_view::entry_to_history_item(entry, idx, &section_names)
             })
+            .collect()
+    }
+
+    /// Section id -> name for the history views, read under its own short project
+    /// lock so neither view holds `project` and `undo_stack` at once.
+    fn history_section_names(&self) -> std::collections::HashMap<u32, Option<String>> {
+        self.project
+            .lock()
+            .as_ref()
+            .map(|p| p.sections.iter().map(|s| (s.id, s.name.clone())).collect())
             .unwrap_or_default()
     }
 
     /// Get the redo stack as a list of history items for the UI
     pub fn get_redo_stack(&self) -> Vec<crate::core::undo::history_view::UndoHistoryItem> {
-        let section_names: std::collections::HashMap<u32, Option<String>> = self
-            .project
-            .lock()
-            .ok()
-            .and_then(|guard| {
-                guard
-                    .as_ref()
-                    .map(|p| p.sections.iter().map(|s| (s.id, s.name.clone())).collect())
-            })
-            .unwrap_or_default();
-
+        let section_names = self.history_section_names();
         self.undo_stack
             .lock()
-            .map(|stack| {
-                stack
-                    .redo_entries()
-                    .enumerate()
-                    .map(|(idx, entry)| {
-                        crate::core::undo::history_view::entry_to_history_item(
-                            entry,
-                            idx,
-                            &section_names,
-                        )
-                    })
-                    .collect()
+            .redo_entries()
+            .enumerate()
+            .map(|(idx, entry)| {
+                crate::core::undo::history_view::entry_to_history_item(entry, idx, &section_names)
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     /// Perform multiple undos to reach a specific history point
     /// Index 0 = most recent action, so undo_to(N) executes (N+1) undos
     pub fn undo_to(&self, index: usize) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
+        // [#576 A11] Refused rather than recovered after an internal crash: the
+        // inverse would land on what the crash left (`refuse_after_crash`).
+        if let Err(refused) = self.refuse_after_crash("Undo") {
+            return CommandResult::failure(refused);
+        }
         // Read-only edit gate (#191, D-B6): gated unconditionally (see undo()).
         if let Err(f) = self.guard_mutation("Undo") {
             return f;
@@ -1329,9 +1267,7 @@ impl AppState {
 
         // Validate index first
         {
-            let Ok(stack) = self.undo_stack.lock() else {
-                return CommandResult::failure("Failed to lock undo stack".to_string());
-            };
+            let stack = self.undo_stack.lock();
             if index >= stack.len() {
                 return CommandResult::failure(format!(
                     "Invalid undo index: {} (stack has {} entries)",
@@ -1427,9 +1363,12 @@ impl AppState {
     /// Index 0 = most recent undone action, so redo_to(N) executes (N+1) redos
     pub fn redo_to(&self, index: usize) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
+        // [#576 A11] Refused rather than recovered after an internal crash: the
+        // inverse would land on what the crash left (`refuse_after_crash`).
+        if let Err(refused) = self.refuse_after_crash("Redo") {
+            return CommandResult::failure(refused);
+        }
         // Read-only edit gate (#191, D-B6): gated unconditionally (see undo()).
         if let Err(f) = self.guard_mutation("Redo") {
             return f;
@@ -1437,9 +1376,7 @@ impl AppState {
 
         // Validate index first
         {
-            let Ok(stack) = self.undo_stack.lock() else {
-                return CommandResult::failure("Failed to lock undo stack".to_string());
-            };
+            let stack = self.undo_stack.lock();
             if index >= stack.redo_len() {
                 return CommandResult::failure(format!(
                     "Invalid redo index: {} (stack has {} entries)",

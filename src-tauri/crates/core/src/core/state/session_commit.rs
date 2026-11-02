@@ -31,7 +31,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::{MutexGuard, PoisonError};
+use std::sync::MutexGuard;
 
 use chrono::{DateTime, Utc};
 
@@ -141,38 +141,23 @@ impl AppState {
     /// Take `command_lock` for a project-slot commit (or for anything else that must
     /// not interleave with a command). Waits for an in-flight command to finish.
     ///
-    /// RECOVERS a poisoned lock rather than refusing: the guarded value is `()`, so a
-    /// panicking holder left nothing half-written behind it, and refusing would make
-    /// every later load, create and close impossible for the rest of the session.
+    /// RECOVERS a poisoned lock rather than refusing, like every lock (#576 A11):
+    /// refusing would make every later load, create and close impossible for the
+    /// rest of the session.
     ///
     /// Never call it while holding `project`, `database` or `undo_stack` (they sit
     /// below it), and never take `speleodb_lock_ops` while holding it (that one sits
     /// above it).
     pub(super) fn hold_commands(&self) -> CommandsHeld<'_> {
         CommandsHeld {
-            _guard: self
-                .command_lock
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner),
+            _guard: self.command_lock.lock(),
         }
-    }
-
-    /// [`Self::hold_commands`] for the command paths that have always REFUSED a
-    /// poisoned lock instead of recovering it (the imports answer "Failed to acquire
-    /// command lock"): `None` when it is poisoned. [#576 NF-W4C-3] Lets such a path
-    /// split into a locking entry point and a `&CommandsHeld` body without changing
-    /// what its callers see.
-    pub(super) fn try_hold_commands(&self) -> Option<CommandsHeld<'_>> {
-        self.command_lock
-            .lock()
-            .ok()
-            .map(|guard| CommandsHeld { _guard: guard })
     }
 
     /// Install `commit` as the open session, under one `project` acquisition taken
     /// inside the caller's `command_lock`.
     pub(super) fn commit_open_session(&self, commands: &CommandsHeld<'_>, commit: SessionCommit) {
-        let mut slot = self.project.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut slot = self.project.lock();
         self.commit_open_session_into(commands, &mut slot, commit);
     }
 
@@ -221,15 +206,12 @@ impl AppState {
         // #213: force-edit is per-session; no commit starts force-editing.
         self.set_force_editing(false);
 
-        *self.database.lock().unwrap_or_else(PoisonError::into_inner) = database;
+        *self.database.lock() = database;
         self.initial_save_deferred
             .store(initial_save_deferred, Ordering::Relaxed);
 
         {
-            let mut cache = self
-                .display_settings_cache
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut cache = self.display_settings_cache.lock();
             cache.clear();
             cache.extend(display_settings);
         }
@@ -242,10 +224,7 @@ impl AppState {
                 undo,
                 redo,
             } = history;
-            let mut stack = self
-                .undo_stack
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut stack = self.undo_stack.lock();
             stack.clear();
             // [#303] The bound first, then the watermark, then the entries: see the
             // fields' docs for why each must precede the restore.
@@ -270,13 +249,11 @@ impl AppState {
         // Last, and still under the guard: the delete prunes recents only after its
         // own teardown, so the row added here must not land between the two.
         if let Some(path) = recent {
-            let mut recents = self
-                .recent_projects
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut recents = self.recent_projects.lock();
             recents.retain(|p| p != &path);
             recents.insert(0, path);
-            if let Ok(mut config) = self.config.lock() {
+            {
+                let mut config = self.config.lock();
                 recents.truncate(config.general.recent_projects_max);
                 config.general.recent_projects.clone_from(&recents);
                 if let Err(e) = config.save() {

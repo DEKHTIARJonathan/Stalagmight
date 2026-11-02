@@ -51,7 +51,7 @@ fn done_while_force_editing_says_why_in_plain_words() {
 fn the_undo_mode_refusal_says_why_in_plain_words() {
     let (base, _listener, _seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
     let (_temp, state) = remote_readonly_fixture();
-    *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+    *state.speleodb.lock() = authed_session_at(&base);
 
     let err = state
         .speleodb_set_undo_mode(UndoMode::Full)

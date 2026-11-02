@@ -12,14 +12,16 @@ use super::AppState;
 impl AppState {
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_project_for_tests(&self, project: Project) {
-        if let Ok(mut guard) = self.project.lock() {
+        {
+            let mut guard = self.project.lock();
             *guard = Some(project);
         }
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_database_for_tests(&self, db: Database) {
-        if let Ok(mut guard) = self.database.lock() {
+        {
+            let mut guard = self.database.lock();
             *guard = Some(db);
         }
     }

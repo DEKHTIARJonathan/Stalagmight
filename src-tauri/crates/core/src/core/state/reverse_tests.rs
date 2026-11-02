@@ -1147,7 +1147,7 @@ fn reverse_keeps_a_position_keyed_ignore_on_its_own_shot() {
 
     // Shot ids and UUIDs as they stand before the reverse.
     let (ids, uuids): (Vec<u32>, Vec<String>) = {
-        let guard = state.project.lock().unwrap();
+        let guard = state.project.lock();
         let section = guard.as_ref().unwrap().get_section(section_id).unwrap();
         (
             section.shots.iter().map(|s| s.id).collect(),
@@ -1476,7 +1476,7 @@ fn a_null_uuid_warning_row_survives_a_double_reverse_in_one_batch() {
     );
 
     let first_shot_id = {
-        let guard = state.project.lock().unwrap();
+        let guard = state.project.lock();
         guard
             .as_ref()
             .unwrap()
@@ -1530,7 +1530,7 @@ fn undo_to_reports_the_reverses_it_already_applied_when_a_later_step_fails() {
     // A poisoned entry UNDERNEATH the reverse: `undo_inner` cannot parse its
     // `values_json`, so step 2 of the range fails after step 1 already ran.
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         stack.push_with_data(
             Command::UpdateSectionMetadata {
                 section_id,
@@ -1607,7 +1607,7 @@ fn reversing_a_shotless_section_leaves_redo_and_the_dirty_bit_alone() {
             .success
     );
     assert!(state.undo().success);
-    let redo_before = state.undo_stack.lock().unwrap().redo_len();
+    let redo_before = state.undo_stack.lock().redo_len();
     assert_eq!(redo_before, 1, "fixture: there is a redo branch to protect");
 
     // The no-op, by both routes that skip the dialog's filter.
@@ -1631,7 +1631,7 @@ fn reversing_a_shotless_section_leaves_redo_and_the_dirty_bit_alone() {
     );
 
     assert_eq!(
-        state.undo_stack.lock().unwrap().redo_len(),
+        state.undo_stack.lock().redo_len(),
         redo_before,
         "a provable no-op must not consume the redo branch"
     );
@@ -1667,7 +1667,7 @@ fn the_gauge_survives_a_save_and_reload() {
     );
 
     let in_memory = {
-        let guard = state.project.lock().unwrap();
+        let guard = state.project.lock();
         let project = guard.as_ref().unwrap();
         let section = project.get_section(section_id).unwrap();
         (
@@ -1683,7 +1683,7 @@ fn the_gauge_survives_a_save_and_reload() {
     let reopened = AppState::new().unwrap();
     assert!(reopened.execute(Command::OpenProject { path }).success);
     let after = {
-        let guard = reopened.project.lock().unwrap();
+        let guard = reopened.project.lock();
         let project = guard.as_ref().unwrap();
         let section = project.get_section(section_id).unwrap();
         (
@@ -1779,7 +1779,7 @@ fn redo_to_reports_the_reverses_it_already_applied_when_a_later_step_fails() {
     // stack hands back the most recently undone entry first, so the reverse is on top and the
     // metadata edit is underneath.
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         let first = stack.pop_redo().unwrap();
         let second = stack.pop_redo().unwrap();
         stack.push_redo(crate::core::UndoEntry {

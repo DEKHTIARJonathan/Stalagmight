@@ -8,10 +8,7 @@ impl AppState {
         station_a: StationRef,
         station_b: StationRef,
     ) -> Result<ConnectivityResult, String> {
-        let proj_guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
+        let proj_guard = self.project.lock();
         let project = proj_guard
             .as_ref()
             .ok_or_else(|| "No project open".to_string())?;
@@ -84,10 +81,7 @@ impl AppState {
         section_id: SectionId,
     ) -> Result<Vec<SectionId>, String> {
         // Serialize with command execution to avoid observing intermediate batch state
-        let _cmd_guard = self
-            .command_lock
-            .lock()
-            .map_err(|_| "Failed to acquire command lock".to_string())?;
+        let _cmd_guard = self.command_lock.lock();
         self.with_project(|project| {
             // Validate section exists
             if !project.sections.iter().any(|s| s.id == section_id) {
@@ -116,14 +110,8 @@ impl AppState {
         use crate::models::{SegmentGeometry, SegmentSectionGeometry};
 
         // Serialize with command execution to avoid observing intermediate batch state
-        let _cmd_guard = self
-            .command_lock
-            .lock()
-            .map_err(|_| "Failed to acquire command lock".to_string())?;
-        let proj_guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
+        let _cmd_guard = self.command_lock.lock();
+        let proj_guard = self.project.lock();
         let project = proj_guard
             .as_ref()
             .ok_or_else(|| "No project open".to_string())?;
@@ -206,10 +194,7 @@ impl AppState {
     /// since unaligned closures are not rigidly constrained yet.
     pub fn get_anchored_section_ids(&self) -> Result<Vec<SectionId>, String> {
         // Serialize with command execution to avoid observing intermediate batch state
-        let _cmd_guard = self
-            .command_lock
-            .lock()
-            .map_err(|_| "Failed to acquire command lock".to_string())?;
+        let _cmd_guard = self.command_lock.lock();
         self.with_project(|project| {
             // Filter to existing sections (stale merges/closures may reference deleted sections)
             let existing: std::collections::HashSet<SectionId> =

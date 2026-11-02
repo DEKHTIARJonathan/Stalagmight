@@ -15,9 +15,10 @@ use image::{DynamicImage, GenericImageView, ImageFormat};
 use std::collections::HashMap as StdHashMap;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
+use stalagmight_core::models::poison_policy::RecoveringMutex;
 use stalagmight_core::tile_stats::TileFetchStats;
 use stalagmight_core::{config, tile_providers};
 use stalagmight_persistence::{cache, tilemap_cache};
@@ -89,8 +90,10 @@ impl DecodedImageCache {
 
 /// Global decoded image cache, shared across all tile request threads.
 /// Small capacity (8 entries) since parent tiles are requested in bursts.
-static DECODED_IMAGE_CACHE: std::sync::LazyLock<Mutex<DecodedImageCache>> =
-    std::sync::LazyLock::new(|| Mutex::new(DecodedImageCache::new(8)));
+static DECODED_IMAGE_CACHE: std::sync::LazyLock<RecoveringMutex<DecodedImageCache>> =
+    std::sync::LazyLock::new(|| {
+        RecoveringMutex::new("decoded_image_cache", DecodedImageCache::new(8))
+    });
 
 /// HTTP request timeout for tile fetches
 const TILE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -387,7 +390,7 @@ fn fetch_tilemap(
 /// - `Some(false)` if the tile is known to have no data
 /// - `None` if availability is unknown (API unavailable, provider has no tilemap, etc.)
 fn check_tile_availability(
-    tilemap_cache: &Arc<Mutex<TilemapCache>>,
+    tilemap_cache: &Arc<RecoveringMutex<TilemapCache>>,
     provider: &tile_providers::TileProvider,
     z: u32,
     y: u32,
@@ -398,7 +401,7 @@ fn check_tile_availability(
 
     // Check cache first
     {
-        let mut cache = tilemap_cache.lock().ok()?;
+        let mut cache = tilemap_cache.lock();
         if let Some(available) = cache.is_tile_available(&provider.name, z, y, x) {
             tracing::trace!(
                 provider = %provider.name,
@@ -419,9 +422,9 @@ fn check_tile_availability(
         Ok(data) => {
             // Cache the result
             {
-                if let Ok(mut cache) = tilemap_cache.lock() {
-                    cache.insert(&provider.name, z, base_y, base_x, data.clone());
-                }
+                tilemap_cache
+                    .lock()
+                    .insert(&provider.name, z, base_y, base_x, data.clone());
             }
 
             // Calculate index and return availability
@@ -758,7 +761,7 @@ impl TileServeSource {
 }
 
 fn cache_put_best_effort(
-    tile_cache: &Arc<Mutex<Option<TileCache>>>,
+    tile_cache: &Arc<RecoveringMutex<Option<TileCache>>>,
     provider: &str,
     z: u32,
     y: u32,
@@ -772,7 +775,8 @@ fn cache_put_best_effort(
     if !cache_enabled {
         return;
     }
-    if let Ok(mut cache_guard) = tile_cache.lock() {
+    {
+        let mut cache_guard = tile_cache.lock();
         if let Some(cache) = cache_guard.as_mut() {
             if let Err(e) = cache.put(provider, z, y, x, data, content_type, policy, etag) {
                 tracing::warn!(error = %e, "Failed to cache tile");
@@ -784,7 +788,7 @@ fn cache_put_best_effort(
 /// Cache a freshly-fetched tile and hand it back. Shared by the ordinary fetch
 /// path and the "304 with nothing cached" recovery, which must not diverge.
 fn store_and_serve(
-    tile_cache: &Arc<Mutex<Option<TileCache>>>,
+    tile_cache: &Arc<RecoveringMutex<Option<TileCache>>>,
     provider: &str,
     z: u32,
     y: u32,
@@ -825,7 +829,7 @@ fn fetch_tile_candidate<F>(
     z: u32,
     y: u32,
     x: u32,
-    tile_cache: &Arc<Mutex<Option<TileCache>>>,
+    tile_cache: &Arc<RecoveringMutex<Option<TileCache>>>,
     fetch_fn: &F,
     cache_enabled: bool,
 ) -> TileFetchOutcome
@@ -834,14 +838,13 @@ where
 {
     // Fresh cache first (skip if per-provider caching disabled)
     let cached_tile = if cache_enabled {
-        if let Ok(mut cache_guard) = tile_cache.lock() {
+        {
+            let mut cache_guard = tile_cache.lock();
             if let Some(cache) = cache_guard.as_mut() {
                 cache.get(provider, z, y, x)
             } else {
                 None
             }
-        } else {
-            None
         }
     } else {
         None
@@ -864,12 +867,11 @@ where
     // the error arm would be a wasted query on the path where the network is
     // already unhappy.
     let retained = if cache_enabled {
-        if let Ok(cache_guard) = tile_cache.lock() {
+        {
+            let cache_guard = tile_cache.lock();
             cache_guard
                 .as_ref()
                 .and_then(|cache| cache.get_stale(provider, z, y, x))
-        } else {
-            None
         }
     } else {
         None
@@ -904,7 +906,8 @@ where
                 };
             };
 
-            if let Ok(mut cache_guard) = tile_cache.lock() {
+            {
+                let mut cache_guard = tile_cache.lock();
                 if let Some(cache) = cache_guard.as_mut() {
                     if let Err(e) = cache.refresh_validated(provider, z, y, x, policy) {
                         tracing::warn!(error = %e, "Failed to re-stamp revalidated tile");
@@ -1071,9 +1074,7 @@ fn derive_tile_from_parent(
     // When overzooming 2 levels, 16 child tiles share the same parent - caching
     // the decoded DynamicImage saves ~15 redundant decodes (~5ms each).
     let img = {
-        let mut cache = DECODED_IMAGE_CACHE
-            .lock()
-            .map_err(|e| format!("Cache lock poisoned: {e}"))?;
+        let mut cache = DECODED_IMAGE_CACHE.lock();
         if let Some(cached) = cache.get(provider, parent_z, parent_y, parent_x) {
             cached
         } else {
@@ -1150,8 +1151,8 @@ fn fetch_best_available_with_fetcher<F>(
     z: u32,
     y: u32,
     x: u32,
-    tile_cache: &Arc<Mutex<Option<TileCache>>>,
-    tilemap_cache: &Arc<Mutex<TilemapCache>>,
+    tile_cache: &Arc<RecoveringMutex<Option<TileCache>>>,
+    tilemap_cache: &Arc<RecoveringMutex<TilemapCache>>,
     fetch_fn: &F,
     cache_enabled: bool,
 ) -> Result<TileFetchResult, String>
@@ -1186,13 +1187,8 @@ where
         cache_enabled
             && tile_cache
                 .lock()
-                .ok()
-                .and_then(|guard| {
-                    guard
-                        .as_ref()
-                        .map(|cache| cache.has_fresh_tile(provider, cz, cy, cx))
-                })
-                .unwrap_or(false)
+                .as_ref()
+                .is_some_and(|cache| cache.has_fresh_tile(provider, cz, cy, cx))
     };
 
     // Check tilemap for tile availability before entering the fetch loop.
@@ -1358,8 +1354,8 @@ pub fn handle_tile_request(
     z: u32,
     y: u32,
     x: u32,
-    tile_cache: &Arc<Mutex<Option<TileCache>>>,
-    tilemap_cache: &Arc<Mutex<TilemapCache>>,
+    tile_cache: &Arc<RecoveringMutex<Option<TileCache>>>,
+    tilemap_cache: &Arc<RecoveringMutex<TilemapCache>>,
     stats: &Arc<TileFetchStats>,
     cache_config: &config::CacheConfig,
 ) -> (http::Response<Vec<u8>>, TileServeSource) {
@@ -1408,8 +1404,8 @@ fn handle_tile_request_with_fetcher<F>(
     z: u32,
     y: u32,
     x: u32,
-    tile_cache: &Arc<Mutex<Option<TileCache>>>,
-    tilemap_cache: &Arc<Mutex<TilemapCache>>,
+    tile_cache: &Arc<RecoveringMutex<Option<TileCache>>>,
+    tilemap_cache: &Arc<RecoveringMutex<TilemapCache>>,
     fetch_fn: F,
     cache_enabled: bool,
 ) -> http::Response<Vec<u8>>
@@ -1447,8 +1443,8 @@ pub fn tile_fetch_impl(
     z: u32,
     y: u32,
     x: u32,
-    tile_cache: &Arc<Mutex<Option<TileCache>>>,
-    tilemap_cache: &Arc<Mutex<TilemapCache>>,
+    tile_cache: &Arc<RecoveringMutex<Option<TileCache>>>,
+    tilemap_cache: &Arc<RecoveringMutex<TilemapCache>>,
     stats: &Arc<TileFetchStats>,
     cache_config: &config::CacheConfig,
 ) -> Result<(Vec<u8>, TileServeSource), String> {

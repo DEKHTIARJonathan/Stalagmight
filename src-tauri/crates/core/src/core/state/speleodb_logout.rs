@@ -77,10 +77,7 @@ impl AppState {
     /// that costs here is not a re-asked prompt but a lost RECORD: the launch after
     /// it reads `false` off disk and skips a keyring entry that really exists.
     pub(super) fn speleodb_persist_keychain_belief(&self, held_for: Option<String>) {
-        let mut config = self
-            .config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut config = self.config.lock();
         // Compared as the PAIR, so a belief that keeps its answer but changes whose
         // account it is about is still a write. Guarding on the bool alone let the
         // stamp go stale under it, which is the same "no name on it" state this
@@ -152,19 +149,14 @@ impl AppState {
         &self,
         read: &crate::config::SpeleoDbConfig,
     ) {
-        let mut config = self
-            .config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut config = self.config.lock();
         if config.speleodb.email != read.email
             || config.speleodb.keychain_has_token != read.keychain_has_token
             || config.speleodb.keychain_token_account != read.keychain_token_account
         {
             return; // written since we read it; that write knows something we don't
         }
-        let Ok(session) = self.speleodb.lock() else {
-            return;
-        };
+        let session = self.speleodb.lock();
         let raised_since = session.token_store.keychain_has_token();
         drop(session);
         if raised_since {
@@ -208,10 +200,7 @@ impl AppState {
     /// keychain that starts working again would then never get its `false` to disk,
     /// and the launch after it would still skip a keyring that now works.
     pub(super) fn speleodb_persist_keychain_declined(&self, declined: bool) {
-        let mut config = self
-            .config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut config = self.config.lock();
         if config.speleodb.keychain_declined == declined {
             return; // no write, no disk churn on every login
         }
@@ -279,10 +268,7 @@ impl AppState {
         email: Option<String>,
         held_for: Option<String>,
     ) -> Result<(), String> {
-        let mut config = self
-            .config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut config = self.config.lock();
         config.speleodb.email = email;
         config.speleodb.keychain_has_token = held_for.is_some();
         config.speleodb.keychain_token_account = held_for;
@@ -340,11 +326,7 @@ impl AppState {
         // operation, so a half-written session is exactly what it wants to clear -
         // the same reasoning as the config mutex above and the save pipeline's
         // project lock.
-        let cleared = self
-            .speleodb
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .forget_reporting();
+        let cleared = self.speleodb.lock().forget_reporting();
         // ONE save for both halves. Whether the sweep reported a failure or not, this
         // session no longer has a keychain entry it can claim, and recording no belief
         // is the safe direction: a surviving entry costs a sign-in, never a silent
@@ -378,10 +360,7 @@ impl AppState {
         // before the gates/lock work below, none of which needs it. Bumped even on
         // the read-only early return: the boundary is the LOGOUT, not the release.
         {
-            let _proj_guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _proj_guard = self.project.lock();
             self.bump_speleodb_session();
         }
         if !self.edit_enabled() {

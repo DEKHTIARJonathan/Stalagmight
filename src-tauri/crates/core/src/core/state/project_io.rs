@@ -490,9 +490,7 @@ impl AppState {
     }
 
     pub(super) fn save_project(&self, path: Option<PathBuf>) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        let mut proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
@@ -744,11 +742,7 @@ impl AppState {
         // only bit Windows. We reopen below - at save_path on success (existing
         // logic), or at the prior path here if the rename fails - so the
         // session keeps a working connection either way.
-        let closed_open_db = self
-            .database
-            .lock()
-            .map(|mut db| db.take().is_some())
-            .unwrap_or(false);
+        let closed_open_db = self.database.lock().take().is_some();
 
         // Atomically rename temp file to final destination
         // This is safe: if rename fails, original file is untouched
@@ -761,7 +755,8 @@ impl AppState {
             if closed_open_db {
                 if let Some(prev_path) = project.file_path.clone() {
                     if let Ok(reopened) = Database::open(&prev_path) {
-                        if let Ok(mut database) = self.database.lock() {
+                        {
+                            let mut database = self.database.lock();
                             *database = Some(reopened);
                         }
                     }
@@ -796,7 +791,8 @@ impl AppState {
                 // database handle so callers don't use it.
                 project.file_path = Some(save_path.clone());
                 drop(proj_guard);
-                if let Ok(mut database) = self.database.lock() {
+                {
+                    let mut database = self.database.lock();
                     *database = None;
                 }
                 // Distinct code (not the generic "SYSTEM") so the frontend can keep
@@ -818,7 +814,8 @@ impl AppState {
 
         // Update database handle
         drop(proj_guard);
-        if let Ok(mut database) = self.database.lock() {
+        {
+            let mut database = self.database.lock();
             *database = Some(db);
         }
 
@@ -866,20 +863,13 @@ impl AppState {
             return None;
         }
         let open_path = project.file_path.as_ref()?;
-        let mut db_guard = self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut db_guard = self.database.lock();
         if db_guard.is_some() {
             return None;
         }
         match Database::open_existing(open_path) {
             Ok(db) => {
-                let cached = self
-                    .display_settings_cache
-                    .lock()
-                    .map(|cache| cache.clone())
-                    .unwrap_or_default();
+                let cached = self.display_settings_cache.lock().clone();
                 for (key, value) in &cached {
                     if let Err(e) = db.save_display_setting(key, value) {
                         tracing::warn!(
@@ -927,10 +917,7 @@ impl AppState {
     }
 
     pub(super) fn persist_or_clear_undo_stacks_into(&self, db: &Database) -> anyhow::Result<bool> {
-        let undo_stack = self
-            .undo_stack
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let undo_stack = self.undo_stack.lock();
         let (undo_rows, redo_rows) = self.history_rows_to_persist(db, &undo_stack);
         match super::save_sidecars::replace_history_rows(db, undo_rows, redo_rows) {
             Ok(()) => Ok(false),
@@ -989,12 +976,7 @@ impl AppState {
             if policy.unlimited_depth() {
                 None
             } else {
-                Some(
-                    self.config
-                        .lock()
-                        .map(|c| c.general.undo_persist_limit)
-                        .unwrap_or(20),
-                )
+                Some(self.config.lock().general.undo_persist_limit)
             }
         };
 
@@ -1029,10 +1011,12 @@ impl AppState {
     /// config. Takes no state locks other than `recent_projects` + `config`;
     /// callers must NOT hold `project` (the save paths drop it first).
     fn note_recent_project(&self, path: &Path) {
-        if let Ok(mut recent) = self.recent_projects.lock() {
+        {
+            let mut recent = self.recent_projects.lock();
             recent.retain(|p| p != path);
             recent.insert(0, path.to_path_buf());
-            if let Ok(mut config) = self.config.lock() {
+            {
+                let mut config = self.config.lock();
                 recent.truncate(config.general.recent_projects_max);
                 config.general.recent_projects.clone_from(&recent);
                 if let Err(e) = config.save() {
@@ -1069,7 +1053,7 @@ impl AppState {
     /// promote and whose failure-path closes are steps of that one span.
     pub(super) fn close_project_held(&self, commands: &CommandsHeld<'_>) -> CommandResult {
         tracing::debug!("close_project: acquiring project lock");
-        let mut proj = self.project.lock().unwrap_or_else(|e| e.into_inner());
+        let mut proj = self.project.lock();
         self.close_open_project_locked(commands, &mut proj)
     }
 
@@ -1119,7 +1103,7 @@ impl AppState {
     /// is about to touch, and answering "no" on a poisoned mutex is the unsafe
     /// direction in both.
     pub(super) fn open_project_path(&self) -> Option<PathBuf> {
-        let guard = self.project.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = self.project.lock();
         guard.as_ref().and_then(|p| p.file_path.clone())
     }
 
@@ -1148,7 +1132,7 @@ impl AppState {
     /// between, so a load finishing in that gap had ITS session torn down instead.
     pub(super) fn close_project_if_open_at(&self, dest: &Path) -> bool {
         let commands = self.hold_commands();
-        let mut open = self.project.lock().unwrap_or_else(|e| e.into_inner());
+        let mut open = self.project.lock();
         let is_dest = open
             .as_ref()
             .and_then(|p| p.file_path.as_deref())

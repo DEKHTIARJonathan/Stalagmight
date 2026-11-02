@@ -23,7 +23,7 @@ measurable fraction of the wall clock.
 | Level | When it fires by default | Use for |
 |-------|--------------------------|---------|
 | `error!` | always | Conditions a user should care about (corruption, save failed, FK violation). |
-| `warn!`  | always | Recoverable anomalies (poisoned mutex, FK rebuild fallback). |
+| `warn!`  | always | Recoverable anomalies (FK rebuild fallback). A poisoned mutex logs at `error!` once per lock and raises the internal-error banner (docs/architecture.md, Mutex Poisoning). |
 | `info!`  | always (default filter is `info,stalagmight=debug`) | **Once-per-lifecycle** events: app startup, project create / open / save / close success, schema migrations, full integrity check. |
 | `debug!` | on by default (the default filter enables `stalagmight=debug`); silence with `RUST_LOG=info` | Per-operation chatter, sub-phase timings, load-loop progress, per-section import timing. |
 | `trace!` | off everywhere by default | Per-shot / per-row spam. (A handful of callers: tilemap cache hits, closure correction/metrics.) |

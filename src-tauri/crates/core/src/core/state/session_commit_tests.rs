@@ -98,7 +98,7 @@ fn local_file(dir: &Path, name: &str, project_name: &str) -> PathBuf {
 /// Would the NEXT undo entry be stamped above the old project's watermark? Pushes
 /// a probe entry, reads its stamp, and pops it again.
 fn next_stamp_is_floored(state: &AppState) -> bool {
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     stack.push_with_data(Command::RepairIntegrity, UndoData::None);
     let stamp = stack.undo_entries().last().and_then(|e| e.timestamp);
     let _ = stack.pop_undo();
@@ -128,18 +128,17 @@ struct Cells {
 
 fn read_cells(state: &AppState) -> Cells {
     let (depth, undo_len, redo_len) = {
-        let stack = state.undo_stack.lock().unwrap();
+        let stack = state.undo_stack.lock();
         (stack.depth_limit(), stack.len(), stack.redo_len())
     };
     let mut display_cache: Vec<(String, String)> = state
         .display_settings_cache
         .lock()
-        .unwrap()
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     display_cache.sort();
-    let database_holds = state.database.lock().unwrap().as_ref().map(|db| {
+    let database_holds = state.database.lock().as_ref().map(|db| {
         db.load_project()
             .map_or_else(|e| format!("<unreadable: {e}>"), |p| p.name)
     });
@@ -172,17 +171,14 @@ fn dirty_previous_session(state: &AppState, dir: &Path) {
     // Preconditions: the open armed the Full-mode byte budget and the watermark,
     // so the cells under test really do hold the previous project's values.
     assert!(
-        matches!(
-            state.undo_stack.lock().unwrap().depth_limit(),
-            DepthLimit::Bytes(_)
-        ),
+        matches!(state.undo_stack.lock().depth_limit(), DepthLimit::Bytes(_)),
         "a Full-mode linked project runs on the byte budget"
     );
     assert!(next_stamp_is_floored(state), "the watermark is in force");
-    {
-        let mut stack = state.undo_stack.lock().unwrap();
-        stack.push_with_data(Command::RepairIntegrity, UndoData::None);
-    }
+    state
+        .undo_stack
+        .lock()
+        .push_with_data(Command::RepairIntegrity, UndoData::None);
     state.set_force_editing(true);
     state.set_history_discarded(true);
     state.set_newer_file_schema(Some(9_999));
@@ -191,7 +187,6 @@ fn dirty_previous_session(state: &AppState, dir: &Path) {
     state
         .display_settings_cache
         .lock()
-        .unwrap()
         .insert("showGrid".to_string(), "stale".to_string());
     state.initial_save_deferred.store(true, Ordering::Relaxed);
 }
@@ -200,7 +195,7 @@ fn dirty_previous_session(state: &AppState, dir: &Path) {
 /// project, the handle, the deferred flag and the display cache.
 fn fresh(state: &AppState) -> Cells {
     Cells {
-        depth: DepthLimit::Count(state.undo_stack.lock().unwrap().history_limit()),
+        depth: DepthLimit::Count(state.undo_stack.lock().history_limit()),
         stamp_floored_by_old_watermark: false,
         undo_len: 0,
         redo_len: 0,

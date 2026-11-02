@@ -62,7 +62,7 @@ fn saved_project(dir: &Path, file: &str, name: &str) -> PathBuf {
 /// no project open, every entry counts.
 fn foreign_entries(state: &AppState) -> usize {
     let project = state.get_project_state();
-    let mut stack = state.undo_stack.lock().unwrap();
+    let mut stack = state.undo_stack.lock();
     match project {
         Some(project) => stack.drop_entries_addressing_a_missing_shot(&project),
         None => stack.len() + stack.redo_len(),

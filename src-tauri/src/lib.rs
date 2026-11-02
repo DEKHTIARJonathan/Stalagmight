@@ -315,6 +315,12 @@ pub fn run() {
             // Set event sink on state for event emission
             let state = app.state::<core::state::AppState>();
             state.set_event_sink(commands::event_sink::tauri_sink(app.handle().clone()));
+            // [#576 A11] The process-wide lock cells (log ring buffer, telemetry,
+            // tile caches, the launch queue) report a crash through the managed
+            // state's monitor, so the user gets the same single internal-error
+            // banner whichever lock a crash poisoned - including one poisoned
+            // before this line ran.
+            models::poison_policy::global_monitor().forward_to(state.poison_monitor());
 
             // Initialize telemetry (no-op when feature is disabled)
             let telemetry_config = state.get_config();

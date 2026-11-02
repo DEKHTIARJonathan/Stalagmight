@@ -36,9 +36,7 @@ impl AppState {
         name_b: String,
     ) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Delete shot and split section") {
             return f;
@@ -66,9 +64,7 @@ impl AppState {
 
         // Step 2: Get split data and perform the operation
         let new_section_id = {
-            let Ok(mut proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
+            let mut proj_guard = self.project.lock();
 
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
@@ -312,9 +308,7 @@ impl AppState {
         name_a: String,
         name_b: String,
     ) -> CommandResult {
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Delete shot range and split section") {
             return f;
@@ -336,9 +330,7 @@ impl AppState {
         let undo_section_b_name = name_b.clone();
 
         let new_section_id = {
-            let Ok(mut proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
+            let mut proj_guard = self.project.lock();
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
@@ -590,9 +582,7 @@ impl AppState {
         start_shot_id: ShotId,
         end_shot_id: ShotId,
     ) -> CommandResult {
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Delete shot range and shift") {
             return f;
@@ -614,9 +604,7 @@ impl AppState {
         let frame_before = self.frame_datum_key();
 
         let result_section = {
-            let Ok(mut proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
+            let mut proj_guard = self.project.lock();
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
@@ -798,9 +786,7 @@ impl AppState {
         shot_id: ShotId,
     ) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Delete last shot and section") {
             return f;
@@ -827,9 +813,7 @@ impl AppState {
         // whole call, so no other command can observe or interleave with the window
         // between this scope and the after-snapshot below.
         {
-            let Ok(mut proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
+            let mut proj_guard = self.project.lock();
 
             let Some(project) = proj_guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());

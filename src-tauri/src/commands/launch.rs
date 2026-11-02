@@ -26,8 +26,9 @@
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use tauri::{AppHandle, Manager, Runtime, Url};
+
+use crate::models::poison_policy::RecoveringMutex;
 
 /// Payload-free nudge telling the frontend to drain the pending-launch queue
 /// (`core::events::LaunchFileQueued`, #576 C13).
@@ -241,21 +242,25 @@ pub fn launch_paths_from_urls(urls: &[Url]) -> Vec<String> {
 /// Managed Tauri state. Holding them here (instead of emitting a path with the
 /// event) is what lets a cold launch work: the OS tells us the file before the
 /// webview exists, and the frontend picks it up when its stores are ready.
-#[derive(Debug, Default)]
-pub struct PendingLaunchFiles(Mutex<Vec<String>>);
+#[derive(Debug)]
+pub struct PendingLaunchFiles(RecoveringMutex<Vec<String>>);
+
+impl Default for PendingLaunchFiles {
+    fn default() -> Self {
+        Self(RecoveringMutex::new("pending_launch_files", Vec::new()))
+    }
+}
 
 impl PendingLaunchFiles {
     /// Queue paths not already queued; returns how many were newly added.
     ///
     /// Capped at [`MAX_LAUNCH_PATHS`] across the whole queue, not per call: a
     /// frontend that is slow (or waiting on the user's confirm) must not let
-    /// repeated forwards grow it without bound. A poisoned lock is treated as
-    /// "nothing queued" rather than a panic - a dropped open request is
-    /// recoverable, a crashed event loop is not.
+    /// repeated forwards grow it without bound. A poisoned lock is recovered
+    /// like every lock (#576 A11), never a panic: a crashed event loop is not
+    /// recoverable.
     pub fn push_all(&self, paths: Vec<String>) -> usize {
-        let Ok(mut queue) = self.0.lock() else {
-            return 0;
-        };
+        let mut queue = self.0.lock();
         let before = queue.len();
         let mut dropped = 0usize;
         for path in paths {
@@ -281,10 +286,7 @@ impl PendingLaunchFiles {
 
     /// Remove and return everything queued.
     pub fn take(&self) -> Vec<String> {
-        self.0
-            .lock()
-            .map(|mut queue| std::mem::take(&mut *queue))
-            .unwrap_or_default()
+        std::mem::take(&mut *self.0.lock())
     }
 }
 

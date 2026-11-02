@@ -104,7 +104,7 @@ fn save_after_whole_project_steps_probe() {
         }
     };
     let memory = |state: &AppState| {
-        let stack = state.undo_stack.lock().unwrap();
+        let stack = state.undo_stack.lock();
         format!(
             "{} undo entries, {:.1} MB estimated in memory",
             stack.len(),

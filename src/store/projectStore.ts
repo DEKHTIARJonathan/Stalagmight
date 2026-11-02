@@ -497,15 +497,16 @@ function multiStepFailureStep(error: string | null): number | null {
 /**
  * The refusals a SINGLE undo/redo makes before it runs a step: the edit gate
  * (`EDIT_DISABLED`, incl. the Plan/Export workspace and a newer file), the #202
- * re-verify divergence, the empty stack and the two locks it takes first. Mirrors
- * the order in `AppState::undo`/`redo` (`guard_mutation`, then
- * `history_step_available`).
+ * re-verify divergence, the empty stack, and the refusal after an internal error
+ * (#576 A11: a crash poisoned a lock, see `AppState::refuse_after_crash`). Mirrors
+ * the order in `AppState::undo`/`redo` (`refuse_after_crash`, `guard_mutation`,
+ * then `history_step_available`).
  */
 const SINGLE_STEP_REFUSALS: ReadonlySet<string> = new Set([
   'Nothing to undo',
   'Nothing to redo',
-  'Failed to acquire command lock',
-  'Failed to lock undo stack',
+  'Undo is unavailable after an internal error. Save your work and restart Stalagmight.',
+  'Redo is unavailable after an internal error. Save your work and restart Stalagmight.',
 ]);
 
 /**

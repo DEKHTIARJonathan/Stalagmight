@@ -196,10 +196,7 @@ impl AppState {
     pub(super) fn speleodb_session_snapshot(
         &self,
     ) -> Result<(u64, crate::models::SpeleoLink), SpeleoErrorDto> {
-        let _proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _proj_guard = self.project.lock();
         let generation = self.speleodb_session_generation();
         let link = self.speleodb_open_link().map_err(local_dto)?;
         super::speleodb::validate_project_id(&link.project_id).map_err(local_dto)?;
@@ -254,10 +251,7 @@ impl AppState {
         // the link at its start and renames a fresh file over the live one. No
         // caller holds `command_lock` here, and nothing below makes a network call.
         let _commands = self.hold_commands();
-        let _proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _proj_guard = self.project.lock();
         if let Some(expected) = entry_generation {
             if self.speleodb_session_generation() != expected {
                 return Err(SpeleoDbError::SessionMoved);
@@ -334,9 +328,7 @@ impl AppState {
         let Ok(link) = self.speleodb_open_link() else {
             return;
         };
-        let Ok(mut session) = self.speleodb_session_lock() else {
-            return;
-        };
+        let mut session = self.speleodb.lock();
         if !self.edit_enabled() {
             // The OPEN project's claim, held by the account signed in now, and
             // nothing else. The gate is one fact about one project: this
@@ -407,10 +399,7 @@ impl AppState {
         &self,
         params: &LockReleaseParams,
     ) -> Result<(), SpeleoDbError> {
-        let _lock_ops = self
-            .speleodb_lock_ops
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock_ops = self.speleodb_lock_ops.lock();
         self.speleodb_release_unless_reclaimed_locked(params)
     }
 
@@ -540,10 +529,7 @@ impl AppState {
     /// the authorship shortcut over somebody else's commit.
     pub(super) fn speleodb_shut_gate_over_lost_lock(&self, project_id: &str) -> bool {
         {
-            let _proj_guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _proj_guard = self.project.lock();
             if !self.edit_enabled() || self.force_editing() {
                 return false;
             }
@@ -585,10 +571,7 @@ impl AppState {
         project_id: &str,
         endpoint: &str,
     ) -> bool {
-        let _proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _proj_guard = self.project.lock();
         if !self.edit_enabled() || self.force_editing() {
             return false;
         }
@@ -670,10 +653,7 @@ impl AppState {
     ) -> Result<(), SpeleoDbError> {
         let _lock_ops = self.speleodb_lock_ops_guard();
         {
-            let _proj_guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _proj_guard = self.project.lock();
             if self.speleodb_session_generation() == entry_gen {
                 self.set_edit_enabled(false);
             }
@@ -698,9 +678,7 @@ impl AppState {
     /// state once the project closes (a claim, no project open), so the next
     /// status poll handed the mutex back and the decision was silently undone.
     pub(super) fn speleodb_keep_lock_deliberately(&self, project_id: &str) {
-        let Ok(mut session) = self.speleodb_session_lock() else {
-            return;
-        };
+        let mut session = self.speleodb.lock();
         let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
         for claim in &mut session.locks_acquired_here {
             if claim.project_id == project_id
@@ -726,9 +704,7 @@ impl AppState {
         let Some(claim) = claim else {
             return;
         };
-        let Ok(mut session) = self.speleodb_session_lock() else {
-            return;
-        };
+        let mut session = self.speleodb.lock();
         if !session
             .locks_acquired_here
             .iter()
@@ -742,9 +718,7 @@ impl AppState {
     /// doc). A poisoned mutex is recovered: the guarded value is `()`, so there
     /// is no state to protect - only the serialization matters.
     pub(super) fn speleodb_lock_ops_guard(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.speleodb_lock_ops
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.speleodb_lock_ops.lock()
     }
 
     /// The stranded-claim janitor: with NO project open, a surviving
@@ -779,10 +753,7 @@ impl AppState {
     /// and drop the only pointer to the lock still held on A.
     pub(super) fn speleodb_janitor_stranded_claim(&self) {
         let params = {
-            let proj_guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let proj_guard = self.project.lock();
             if proj_guard.is_some() {
                 return;
             }
@@ -790,9 +761,7 @@ impl AppState {
                 // Unusable ids first, whoever they belong to: one that can never
                 // be joined into a URL can never be released either, so clearing
                 // is its only safe end and nobody's later sign-in helps.
-                let Ok(mut session) = self.speleodb_session_lock() else {
-                    return;
-                };
+                let mut session = self.speleodb.lock();
                 session.locks_acquired_here.retain(|claim| {
                     super::speleodb::validate_project_id(&claim.project_id).is_ok()
                 });
@@ -822,9 +791,7 @@ impl AppState {
                 return;
             };
             let me = Some(me);
-            let Ok(mut session) = self.speleodb_session_lock() else {
-                return;
-            };
+            let mut session = self.speleodb.lock();
             // One claim per visit - the poll comes back for the rest.
             let Some(position) = session.locks_acquired_here.iter().position(|claim| {
                 // Deliberately kept locks are not this cleanup's business: the
@@ -882,12 +849,10 @@ impl AppState {
             // decision read: with a project open the field belongs to the live
             // world (its own verbs and catch-alls own it), and this janitor
             // never runs there anyway.
-            let proj_guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let proj_guard = self.project.lock();
             if proj_guard.is_none() {
-                if let Ok(mut session) = self.speleodb_session_lock() {
+                {
+                    let mut session = self.speleodb.lock();
                     // Only if nothing has re-claimed THIS lock meanwhile: a
                     // successor's entry is newer than ours and must stand.
                     // Compared on the full identity - project, deployment AND
@@ -973,7 +938,7 @@ mod tests {
     /// [`sign_in_unreachable`] for a named account on a named deployment, for
     /// the tests about a claim outliving the account that made it.
     fn sign_in_as(state: &AppState, endpoint: &str, email: &str) {
-        let mut session = state.speleodb_session_lock().expect("session lock");
+        let mut session = state.speleodb.lock();
         session.endpoint = Some(endpoint.to_owned());
         session.email = Some(email.to_owned());
         session.token_store = crate::speleodb::auth::TokenStore::from_in_memory_token("tok");
@@ -988,8 +953,8 @@ mod tests {
     /// look past to see that it survived.
     fn retained_projects(state: &AppState) -> Vec<String> {
         state
-            .speleodb_session_lock()
-            .expect("session lock")
+            .speleodb
+            .lock()
             .locks_acquired_here
             .iter()
             .map(|claim| claim.project_id.clone())
@@ -999,7 +964,7 @@ mod tests {
     /// Sign out, WITHOUT touching the claim - what a logout that could not run
     /// its release leaves behind, and the state the janitor is written for.
     fn sign_out(state: &AppState) {
-        let mut session = state.speleodb_session_lock().expect("session lock");
+        let mut session = state.speleodb.lock();
         session.endpoint = None;
         session.email = None;
         session.token_store = crate::speleodb::auth::TokenStore::from_stores(

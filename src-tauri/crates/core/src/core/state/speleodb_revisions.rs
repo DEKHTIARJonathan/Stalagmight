@@ -235,15 +235,19 @@ impl AppState {
         discard_unpushed: bool,
         chain_forward: bool,
     ) -> Result<(), SpeleoErrorDto> {
-        // A poisoned lock reads as "not empty", i.e. REFUSE: the guard exists to stop a
-        // chain step over un-walked work, so it has to fail closed on not knowing.
-        let stack_empty = self.undo_stack.lock().is_ok_and(|s| {
+        // A poisoned stack is REFUSED: the guard exists to stop a chain step over
+        // un-walked work, so it has to fail closed on not knowing - and say why
+        // (#576 A11, the second refusal site in `refuse_after_crash`).
+        self.refuse_after_crash("Loading another version's history")
+            .map_err(|reason| local_dto(SpeleoDbError::Refused(reason)))?;
+        let stack_empty = {
+            let s = self.undo_stack.lock();
             if chain_forward {
                 s.redo_len() == 0
             } else {
                 s.is_empty()
             }
-        });
+        };
         if !stack_empty {
             return Err(local_dto(SpeleoDbError::Refused(
                 if chain_forward {
@@ -273,12 +277,8 @@ impl AppState {
     pub(super) fn speleodb_unwound_from(&self) -> Option<String> {
         self.database
             .lock()
-            .ok()
-            .and_then(|guard| {
-                guard
-                    .as_ref()
-                    .map(crate::persistence::Database::load_speleo_undo_chain)
-            })?
+            .as_ref()
+            .map(crate::persistence::Database::load_speleo_undo_chain)?
             .ok()
             .flatten()
     }
@@ -291,9 +291,7 @@ impl AppState {
     /// here, which is the duplication this exists to stop. Hence the louder log.
     pub(super) fn speleodb_set_inherited_through(&self, instant: Option<&str>) {
         {
-            let Ok(guard) = self.database.lock() else {
-                return;
-            };
+            let guard = self.database.lock();
             if let Some(db) = guard.as_ref() {
                 if let Err(e) = db.save_speleo_undo_watermark(instant) {
                     tracing::warn!(
@@ -317,9 +315,7 @@ impl AppState {
                 .ok()
                 .map(|dt| dt.with_timezone(&chrono::Utc))
         });
-        if let Ok(mut stack) = self.undo_stack.lock() {
-            stack.set_inherited_through(parsed);
-        }
+        self.undo_stack.lock().set_inherited_through(parsed);
     }
 
     /// [#303] Stamp the watermark for a stack that has just been loaded by a chain step.
@@ -330,12 +326,12 @@ impl AppState {
     /// the later of `now` and the newest loaded entry makes "at or before" true of every
     /// row that was just loaded, whatever clock wrote it.
     fn speleodb_stamp_inherited_watermark(&self) {
-        let newest = self.undo_stack.lock().ok().and_then(|stack| {
-            stack
-                .undo_entries()
-                .filter_map(|entry| entry.timestamp)
-                .max()
-        });
+        let newest = self
+            .undo_stack
+            .lock()
+            .undo_entries()
+            .filter_map(|entry| entry.timestamp)
+            .max();
         let now = chrono::Utc::now();
         let watermark = newest.map_or(now, |newest| newest.max(now));
         self.speleodb_set_inherited_through(Some(&watermark.to_rfc3339()));
@@ -365,9 +361,7 @@ impl AppState {
     /// the next Unwind its position - it restarts from BASE, which re-loads a history the
     /// user already has rather than destroying anything.
     pub(super) fn speleodb_set_unwound_from(&self, sha: Option<&str>) {
-        let Ok(guard) = self.database.lock() else {
-            return;
-        };
+        let guard = self.database.lock();
         if let Some(db) = guard.as_ref() {
             if let Err(e) = db.save_speleo_undo_chain(sha) {
                 tracing::warn!(
@@ -1007,7 +1001,7 @@ mod tests {
     fn legacy_null_revision_does_not_inherit_the_current_global_default() {
         crate::test_helpers::with_isolated_config(|| {
             let (state, temp) = linked_state_with_undo_mode(Some(UndoMode::Full));
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Full;
+            state.config.lock().speleodb.undo_mode = UndoMode::Full;
             let zip = revision_dump_with_undo_mode(None);
             let mut dump = Dump::open(&zip).expect("open revision dump");
 
@@ -1524,5 +1518,40 @@ mod tests {
         // cannot show the copy matches it, so the work stays flagged.
         let (_, dirty) = revision_swap_base(true, "abc1234", None);
         assert!(dirty, "unknown tip must not silently clear the dirty bit");
+    }
+
+    /// [#576 A11] The chain walk is one of the named refusal sites: a crash that
+    /// poisoned the undo stack leaves a history nobody can vouch for, so the walk is
+    /// refused - with a reason, where it used to fail closed as "undo the remaining
+    /// steps", which a user looking at an empty stack could not act on.
+    #[test]
+    fn the_chain_walk_refuses_after_a_crash_poisoned_the_undo_stack() {
+        let (state, _temp) = linked_state();
+        let link = state.speleodb_open_link().expect("linked fixture");
+        assert!(
+            state.speleodb_guard_unwind(&link, false, false).is_ok(),
+            "precondition: a healthy, empty stack may be walked"
+        );
+
+        let crashed = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _held = state.undo_stack.lock();
+                    std::panic::resume_unwind(Box::new("synthetic crash (#576 A11 test)"));
+                })
+                .join()
+        });
+        assert!(crashed.is_err() && state.undo_stack.is_poisoned());
+
+        for chain_forward in [false, true] {
+            let refused = state
+                .speleodb_guard_unwind(&link, false, chain_forward)
+                .expect_err("a poisoned history is not walked");
+            assert!(
+                refused.message.contains("internal error") && refused.message.contains("restart"),
+                "the refusal says why: {}",
+                refused.message
+            );
+        }
     }
 }

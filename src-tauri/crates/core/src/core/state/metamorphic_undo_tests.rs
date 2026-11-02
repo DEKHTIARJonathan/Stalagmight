@@ -679,10 +679,7 @@ enum Side {
 /// zeroing it would displace the section from its merge partner and make the next
 /// reconcile look like an app defect.
 fn plant_legacy_zero_offset_rows(state: &AppState) {
-    let mut guard = match state.project.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
+    let mut guard = state.project.lock();
     let Some(project) = guard.as_mut() else {
         return;
     };
@@ -729,9 +726,7 @@ impl Twins {
             // from an empty history or "unwind everything" would unwind the
             // prelude too, and the baseline would not be the state they started
             // from.
-            if let Ok(mut stack) = side.undo_stack.lock() {
-                stack.clear();
-            }
+            side.undo_stack.lock().clear();
             // The zero rows planted above must not have come back. This is what
             // makes feeding them worth anything: if the boundary ever stops
             // dropping them, every pair below is being run on a project the app

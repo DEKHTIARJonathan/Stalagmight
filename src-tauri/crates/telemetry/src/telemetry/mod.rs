@@ -24,13 +24,15 @@ pub mod registry;
 // ── Feature-gated imports ────────────────────────────────────────────
 
 #[cfg(feature = "telemetry")]
+use stalagmight_models::poison_policy::RecoveringMutex;
+#[cfg(feature = "telemetry")]
 use std::fs;
 #[cfg(feature = "telemetry")]
 use std::io::{Read, Write};
 #[cfg(feature = "telemetry")]
 use std::path::{Path, PathBuf};
 #[cfg(feature = "telemetry")]
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 #[cfg(feature = "telemetry")]
 use std::time::Instant;
 
@@ -114,7 +116,7 @@ struct TelemetryInner {
 #[cfg(feature = "telemetry")]
 #[derive(Debug, Clone)]
 pub struct TelemetryCollector {
-    inner: Arc<Mutex<TelemetryInner>>,
+    inner: Arc<RecoveringMutex<TelemetryInner>>,
 }
 
 #[cfg(feature = "telemetry")]
@@ -132,18 +134,22 @@ impl TelemetryCollector {
                 Ok("1") | Ok("true")
             );
         Self {
-            inner: Arc::new(Mutex::new(TelemetryInner {
-                events: HashMap::new(),
-                session_id: generate_session_id(),
-                session_start: Instant::now(),
-                enabled,
-            })),
+            inner: Arc::new(RecoveringMutex::new(
+                "telemetry",
+                TelemetryInner {
+                    events: HashMap::new(),
+                    session_id: generate_session_id(),
+                    session_start: Instant::now(),
+                    enabled,
+                },
+            )),
         }
     }
 
     /// Track a single event by name (Rust-originated, always project_seq 0).
     pub fn track(&self, event: &str) {
-        if let Ok(mut inner) = self.inner.lock() {
+        {
+            let mut inner = self.inner.lock();
             if !inner.enabled {
                 return;
             }
@@ -158,7 +164,8 @@ impl TelemetryCollector {
 
     /// Track multiple events at once (batch from frontend), bucketed by project_seq.
     pub fn track_batch(&self, events: &HashMap<String, u64>, project_seq: u32) {
-        if let Ok(mut inner) = self.inner.lock() {
+        {
+            let mut inner = self.inner.lock();
             if !inner.enabled {
                 return;
             }
@@ -171,22 +178,18 @@ impl TelemetryCollector {
 
     /// Set whether telemetry is enabled (user toggled in settings).
     pub fn set_enabled(&self, enabled: bool) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.enabled = enabled;
-        }
+        self.inner.lock().enabled = enabled;
     }
 
     /// Check if telemetry is currently enabled.
     pub fn is_enabled(&self) -> bool {
-        self.inner.lock().map_or(false, |inner| inner.enabled)
+        self.inner.lock().enabled
     }
 
     /// Take every pending bucket as a payload, leaving the collector empty.
     /// Nothing when disabled or idle.
     fn take_payloads(&self) -> Vec<TelemetryPayload> {
-        let Ok(mut inner) = self.inner.lock() else {
-            return Vec::new();
-        };
+        let mut inner = self.inner.lock();
         if !inner.enabled || inner.events.is_empty() {
             return Vec::new();
         }
@@ -255,7 +258,7 @@ impl TelemetryCollector {
     /// Send any payloads buffered from previous failed flushes (or left by the
     /// last app close), for at most [`DRAIN_BUDGET`].
     pub fn send_buffered(&self) {
-        let enabled = self.inner.lock().map_or(false, |inner| inner.enabled);
+        let enabled = self.inner.lock().enabled;
         if !enabled {
             return;
         }
@@ -781,9 +784,7 @@ pub fn start_periodic_flush(collector: TelemetryCollector) {
                     }
 
                     let should_flush = {
-                        let Ok(inner) = collector.inner.lock() else {
-                            continue;
-                        };
+                        let inner = collector.inner.lock();
                         if !inner.enabled || inner.events.is_empty() {
                             false
                         } else {
@@ -847,7 +848,7 @@ mod tests {
         collector.track("command.create_project");
         collector.track("command.save_project");
 
-        let inner = collector.inner.lock().unwrap();
+        let inner = collector.inner.lock();
         let bucket = inner.events.get(&0).expect("project_seq 0 bucket");
         assert_eq!(bucket.get("command.create_project"), Some(&2));
         assert_eq!(bucket.get("command.save_project"), Some(&1));
@@ -858,7 +859,7 @@ mod tests {
         let collector = TelemetryCollector::new(false);
         collector.track("command.create_project");
 
-        let inner = collector.inner.lock().unwrap();
+        let inner = collector.inner.lock();
         assert!(inner.events.is_empty());
     }
 
@@ -874,7 +875,7 @@ mod tests {
         batch.insert("command.undo".to_string(), 5);
         collector.track_batch(&batch, 0);
 
-        let inner = collector.inner.lock().unwrap();
+        let inner = collector.inner.lock();
         let bucket = inner.events.get(&0).expect("project_seq 0 bucket");
         assert_eq!(bucket.get("command.save_project"), Some(&4));
         assert_eq!(bucket.get("command.undo"), Some(&5));
@@ -892,7 +893,7 @@ mod tests {
         batch2.insert("command.create_shot".to_string(), 3);
         collector.track_batch(&batch2, 2);
 
-        let inner = collector.inner.lock().unwrap();
+        let inner = collector.inner.lock();
         assert_eq!(
             inner
                 .events
@@ -913,11 +914,11 @@ mod tests {
     fn set_enabled_toggles_tracking() {
         let collector = TelemetryCollector::new(false);
         collector.track("event.a");
-        assert!(collector.inner.lock().unwrap().events.is_empty());
+        assert!(collector.inner.lock().events.is_empty());
 
         collector.set_enabled(true);
         collector.track("event.a");
-        let inner = collector.inner.lock().unwrap();
+        let inner = collector.inner.lock();
         let bucket = inner.events.get(&0).expect("project_seq 0 bucket");
         assert_eq!(bucket.get("event.a"), Some(&1));
     }
@@ -940,7 +941,7 @@ mod tests {
         // Flush will fail (no real server) but should still clear events
         collector.flush();
 
-        let inner = collector.inner.lock().unwrap();
+        let inner = collector.inner.lock();
         assert!(inner.events.is_empty());
     }
 

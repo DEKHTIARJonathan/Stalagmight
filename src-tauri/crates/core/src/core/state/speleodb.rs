@@ -473,11 +473,7 @@ impl AppState {
     /// `DEV_SPELEODB_URL` env (dev default) → persisted `config.speleodb.endpoint`.
     fn speleodb_resolve_endpoint(&self, override_endpoint: Option<&str>) -> Option<String> {
         let env = std::env::var("DEV_SPELEODB_URL").ok();
-        let config_endpoint = self
-            .config
-            .lock()
-            .ok()
-            .and_then(|c| c.speleodb.endpoint.clone());
+        let config_endpoint = self.config.lock().speleodb.endpoint.clone();
         resolve_endpoint(
             override_endpoint,
             env.as_deref(),
@@ -488,30 +484,14 @@ impl AppState {
     /// [Track A] #187/D-B10: read the persisted `insecure_http` override under the
     /// config lock. It is threaded into every client call → `with_retry` →
     /// `tls::enforce`, where it relaxes ONLY the public-`http://` scheme block.
-    /// Defaults `false` (the secure default) when the config lock is unavailable.
     pub(super) fn speleodb_insecure_http(&self) -> bool {
-        self.config
-            .lock()
-            .ok()
-            .is_some_and(|c| c.speleodb.insecure_http)
+        self.config.lock().speleodb.insecure_http
     }
 
     /// [#213] Read the persisted `allow_force_edit` opt-in under the config lock.
-    /// Gates `speleodb_force_edit`; defaults `false` (strict read-only-until-locked)
-    /// when the config lock is unavailable.
+    /// Gates `speleodb_force_edit`.
     pub(super) fn speleodb_allow_force_edit(&self) -> bool {
-        self.config
-            .lock()
-            .ok()
-            .is_some_and(|c| c.speleodb.allow_force_edit)
-    }
-
-    pub(super) fn speleodb_session_lock(
-        &self,
-    ) -> Result<std::sync::MutexGuard<'_, SpeleoDbSession>, SpeleoDbError> {
-        self.speleodb
-            .lock()
-            .map_err(|_| SpeleoDbError::Io("SpeleoDB session lock poisoned".to_owned()))
+        self.config.lock().speleodb.allow_force_edit
     }
 
     /// [Track C] (#188, C4): lazy silent startup rehydration. Resolve the config
@@ -527,23 +507,18 @@ impl AppState {
     pub(super) fn speleodb_ensure_rehydrated(&self) {
         // Cheap idempotency check first: if rehydration already ran (or a session
         // is live), skip the config read entirely.
-        if let Ok(session) = self.speleodb_session_lock() {
+        {
+            let session = self.speleodb.lock();
             if session.rehydrate_attempted || session.endpoint.is_some() {
                 return;
             }
-        } else {
-            return;
         }
 
         let resolved_endpoint = self.speleodb_resolve_endpoint(None);
         // The whole block, not four fields: the write-back below compares what it is
         // about to overwrite against exactly what was read here, so the snapshot has
         // to BE the read.
-        let persisted = self
-            .config
-            .lock()
-            .ok()
-            .map_or_else(Default::default, |c| c.speleodb.clone());
+        let persisted = self.config.lock().speleodb.clone();
         // Whether the recorded belief is a fact about the account this rehydrate is
         // going to key the keychain read by - the endpoint as well as the email, since
         // that is what the entry is keyed by. Signing in to a second server with the
@@ -556,9 +531,7 @@ impl AppState {
             _ => false,
         };
 
-        let Ok(mut session) = self.speleodb_session_lock() else {
-            return;
-        };
+        let mut session = self.speleodb.lock();
         session.rehydrate(
             resolved_endpoint,
             persisted.email.clone(),
@@ -600,7 +573,7 @@ impl AppState {
     /// [`SpeleoDbError::NotAuthenticated`] if there is no usable token.
     pub(super) fn speleodb_active_token(&self) -> Result<(String, String), SpeleoDbError> {
         self.speleodb_ensure_rehydrated();
-        self.speleodb_session_lock()?.active_token()
+        self.speleodb.lock().active_token()
     }
 
     /// [`Self::speleodb_active_token`] plus the EMAIL, resolved under ONE
@@ -620,7 +593,7 @@ impl AppState {
         &self,
     ) -> Result<(String, String, String), SpeleoDbError> {
         self.speleodb_ensure_rehydrated();
-        let mut session = self.speleodb_session_lock()?;
+        let mut session = self.speleodb.lock();
         let (endpoint, token) = session.active_token()?;
         // `active_token` already refuses without an email, so this cannot fail
         // after it succeeded - it is spelled out rather than unwrapped.
@@ -638,8 +611,8 @@ impl AppState {
         // [Track C] (#188): rehydrate first so a restart with a stored keychain
         // token reports logged_in:true without a re-login (the headline fix).
         self.speleodb_ensure_rehydrated();
-        // No network call - only the (local) session-lock error can surface here.
-        Ok(self.speleodb_session_lock().map_err(local_dto)?.status())
+        // No network call, and nothing here fails: the `Result` is the IPC envelope.
+        Ok(self.speleodb.lock().status())
     }
 
     /// Report the open project's SpeleoDB link/edit status for the action shell
@@ -1025,16 +998,12 @@ impl AppState {
     /// Called inside the lock-ops span, so no other flow can be between its own
     /// clear and its own commit while this runs.
     pub(super) fn speleodb_begin_acquisition_flow(&self) {
-        if let Ok(mut session) = self.speleodb_session_lock() {
-            session.acquired_by_this_flow = None;
-        }
+        self.speleodb.lock().acquired_by_this_flow = None;
     }
 
     /// The body of both, so the two cannot record differently.
     fn speleodb_record_claim(&self, project_id: Option<&str>, by_this_flow: bool) {
-        let Ok(mut session) = self.speleodb_session_lock() else {
-            return;
-        };
+        let mut session = self.speleodb.lock();
         let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
         session.locks_acquired_here.retain(|claim| {
             if !claim.taken_by(endpoint.as_deref(), email.as_deref()) {
@@ -1068,11 +1037,10 @@ impl AppState {
     /// nothing to do with: signing out and in as somebody else does not make their
     /// lock ours, and it must not license the authorship shortcut over their push.
     pub(super) fn speleodb_lock_acquired_here(&self, project_id: &str) -> bool {
-        self.speleodb_session_lock().is_ok_and(|session| {
-            session.locks_acquired_here.iter().any(|claim| {
-                claim.project_id == project_id
-                    && claim.taken_by(session.endpoint.as_deref(), session.email.as_deref())
-            })
+        let session = self.speleodb.lock();
+        session.locks_acquired_here.iter().any(|claim| {
+            claim.project_id == project_id
+                && claim.taken_by(session.endpoint.as_deref(), session.email.as_deref())
         })
     }
 
@@ -1088,12 +1056,11 @@ impl AppState {
     /// UUID is unique only on one server; a clone holding the same id must not
     /// answer for it.
     pub(super) fn speleodb_claim_on_deployment(&self, endpoint: &str, project_id: &str) -> bool {
-        self.speleodb_session_lock().is_ok_and(|session| {
-            session
-                .locks_acquired_here
-                .iter()
-                .any(|claim| claim.project_id == project_id && claim.on_deployment(endpoint))
-        })
+        self.speleodb
+            .lock()
+            .locks_acquired_here
+            .iter()
+            .any(|claim| claim.project_id == project_id && claim.on_deployment(endpoint))
     }
 
     /// WHICH project the most recent Start Editing ACQUIRED a lock on in this
@@ -1115,7 +1082,7 @@ impl AppState {
     /// The account is re-checked at consumption: a sign-in as somebody else in
     /// between makes this session's credentials the wrong ones to release with.
     pub(super) fn speleodb_take_acquisition_by_this_flow(&self) -> Option<String> {
-        let mut session = self.speleodb_session_lock().ok()?;
+        let mut session = self.speleodb.lock();
         let claim = session.acquired_by_this_flow.take()?;
         claim
             .taken_by(session.endpoint.as_deref(), session.email.as_deref())
@@ -1167,7 +1134,8 @@ impl AppState {
         at: DumpAt<'_>,
     ) {
         let DumpAt::Revision(sha) = at else { return };
-        if let Ok(mut session) = self.speleodb_session_lock() {
+        {
+            let mut session = self.speleodb.lock();
             session
                 .chosen_dump_entries
                 .insert((project_id.to_owned(), sha.to_owned()), entry.to_owned());
@@ -1198,7 +1166,7 @@ impl AppState {
         let DumpAt::Revision(sha) = at else {
             return None;
         };
-        let session = self.speleodb_session_lock().ok()?;
+        let session = self.speleodb.lock();
         session
             .chosen_dump_entries
             .get(&(project_id.to_owned(), sha.to_owned()))
@@ -1221,9 +1189,10 @@ impl AppState {
             DumpAt::Revision(sha) => Some(sha.to_owned()),
             DumpAt::Unknown => None,
         };
-        if let Ok(mut session) = self.speleodb_session_lock() {
-            session.offered_dump_at.insert(project_id.to_owned(), dated);
-        }
+        self.speleodb
+            .lock()
+            .offered_dump_at
+            .insert(project_id.to_owned(), dated);
     }
 
     /// Whether an explicit pick arriving now is an answer to the question we asked.
@@ -1243,9 +1212,7 @@ impl AppState {
     /// holds NOW. That re-offer records the new revision, so the next reply matches and
     /// the loop terminates.
     pub(super) fn speleodb_dump_offer_answers(&self, project_id: &str, at: DumpAt<'_>) -> bool {
-        let Ok(session) = self.speleodb_session_lock() else {
-            return true;
-        };
+        let session = self.speleodb.lock();
         match (session.offered_dump_at.get(project_id), at) {
             // Nothing was asked, so nothing can be contradicted. The pick is still
             // membership-checked, which is what has always carried a hand-authored
@@ -1302,7 +1269,8 @@ impl AppState {
     /// simply the earliest correct moment, and it keeps the invalidation legible at
     /// the point the staleness is caused rather than deferred to whoever reads next.
     pub(super) fn speleodb_forget_dump_entry(&self, project_id: &str) {
-        if let Ok(mut session) = self.speleodb_session_lock() {
+        {
+            let mut session = self.speleodb.lock();
             // EVERY revision's answer for this project, not one slot: a landing makes
             // any non-canonical pick stale whichever tree it was about.
             session
@@ -1421,9 +1389,7 @@ impl AppState {
         // self-healed only on close, or on a start_editing / unlink / restore that a
         // dead token cannot reach.
         self.set_force_editing(false);
-        if let Ok(mut session) = self.speleodb_session_lock() {
-            session.forget();
-        }
+        self.speleodb.lock().forget();
         // No belief at all, not the token store's, and one of the two places that is
         // deliberate (see `speleodb_persist_keychain_belief`). The sweep
         // above may well have failed against a locked keyring, so an entry can
@@ -1535,24 +1501,20 @@ impl AppState {
         // later") left a file the user never agreed to. An unsettled login lands in
         // memory instead, and the answer moves it - which costs nothing, because
         // the key is still in hand (`TokenStore::restore`).
-        let (previously_declined, keychain_disabled, prefers_plaintext, config_has_token) = self
-            .config
-            .lock()
-            .ok()
-            .map(|c| {
-                (
-                    c.speleodb.keychain_declined,
-                    c.speleodb.keychain_disabled,
-                    c.speleodb.token_fallback == crate::config::TokenFallback::Plaintext,
-                    // Scoped to the account the belief is ABOUT - by the same
-                    // (endpoint, email) the keyring entry itself is keyed by, so a
-                    // different account's entry, on this server or another one, is not
-                    // even reachable under this login's key. See the re-assert below
-                    // for what carrying it across would claim.
-                    c.speleodb.keychain_belief_applies_to(&endpoint, &email),
-                )
-            })
-            .unwrap_or((false, false, false, false));
+        let (previously_declined, keychain_disabled, prefers_plaintext, config_has_token) = {
+            let c = self.config.lock();
+            (
+                c.speleodb.keychain_declined,
+                c.speleodb.keychain_disabled,
+                c.speleodb.token_fallback == crate::config::TokenFallback::Plaintext,
+                // Scoped to the account the belief is ABOUT - by the same
+                // (endpoint, email) the keyring entry itself is keyed by, so a
+                // different account's entry, on this server or another one, is not
+                // even reachable under this login's key. See the re-assert below
+                // for what carrying it across would claim.
+                c.speleodb.keychain_belief_applies_to(&endpoint, &email),
+            )
+        };
         // A standing "never use the keychain" outranks the per-login question: it is
         // not asked, not retried, and signing in does not clear it.
         let previously_declined = previously_declined || keychain_disabled;
@@ -1573,7 +1535,7 @@ impl AppState {
         // `speleodb_logout`); a login is the same event in the other direction.
         let _lock_ops = self.speleodb_lock_ops_guard();
         let (tier, keychain_state, has_token) = {
-            let mut session = self.speleodb_session_lock().map_err(local_dto)?;
+            let mut session = self.speleodb.lock();
             // If a *different* account is already active, forget it first so its
             // keychain entry isn't orphaned. (The UI logs out before re-login, but
             // the backend shouldn't depend on that; a same-account re-login just
@@ -2159,10 +2121,7 @@ impl AppState {
     /// the commit leaves no claim behind. Not "this flow's acquisition": the
     /// stale-context unwind must still never hand back an inherited lock.
     fn speleodb_claim_resumed_lock(&self, project_id: &str) {
-        let _proj_guard = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _proj_guard = self.project.lock();
         let still_open = self
             .speleodb_open_link()
             .is_ok_and(|open| open.project_id == project_id);
@@ -2185,10 +2144,7 @@ impl AppState {
     /// Read the open project's persisted SpeleoDB hand-off link, or
     /// [`SpeleoDbError::NoRemoteProject`] when no remote project is open.
     pub(super) fn speleodb_open_link(&self) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
-        let db_guard = self
-            .database
-            .lock()
-            .map_err(|_| SpeleoDbError::Io("database lock poisoned".to_owned()))?;
+        let db_guard = self.database.lock();
         let db = db_guard.as_ref().ok_or(SpeleoDbError::NoRemoteProject)?;
         db.load_speleo_link()
             .map_err(|e| SpeleoDbError::Io(e.to_string()))?
@@ -2220,10 +2176,7 @@ impl AppState {
             // [#576 NF-W4C-2] Under `command_lock`, like every link write: an autosave
             // landing in between copies the link at its start and would write it back.
             let _commands = self.hold_commands();
-            let db_guard = self
-                .database
-                .lock()
-                .map_err(|_| local_dto(SpeleoDbError::Io("database lock poisoned".to_owned())))?;
+            let db_guard = self.database.lock();
             let db = db_guard
                 .as_ref()
                 .ok_or_else(|| local_dto(SpeleoDbError::NoRemoteProject))?;
@@ -2551,7 +2504,8 @@ impl AppState {
         // inherited any more. A watermark left behind would cut this session's own work
         // out of its first push.
         self.speleodb_set_inherited_through(None);
-        if let Ok(mut stack) = self.undo_stack.lock() {
+        {
+            let mut stack = self.undo_stack.lock();
             if stack.is_empty() && !stack.can_redo() {
                 return;
             }
@@ -2568,9 +2522,7 @@ impl AppState {
 
     /// The authenticated user's email (for ancestry authorship checks), if any.
     pub(super) fn speleodb_my_email(&self) -> Option<String> {
-        self.speleodb_session_lock()
-            .ok()
-            .and_then(|s| s.email.clone())
+        self.speleodb.lock().email.clone()
     }
 
     /// Load the open project's `speleo_link`, apply `f`, and persist it. Errors if
@@ -2585,10 +2537,7 @@ impl AppState {
         &self,
         f: impl FnOnce(&mut crate::models::SpeleoLink),
     ) -> Result<(), SpeleoDbError> {
-        let db_guard = self
-            .database
-            .lock()
-            .map_err(|_| SpeleoDbError::Io("database lock poisoned".to_owned()))?;
+        let db_guard = self.database.lock();
         let db = db_guard.as_ref().ok_or(SpeleoDbError::NoRemoteProject)?;
         let mut link = db
             .load_speleo_link()
@@ -2616,10 +2565,7 @@ impl AppState {
         &self,
         link: &crate::models::SpeleoLink,
     ) -> Result<(), SpeleoDbError> {
-        let db_guard = self
-            .database
-            .lock()
-            .map_err(|_| SpeleoDbError::Io("database lock poisoned".to_owned()))?;
+        let db_guard = self.database.lock();
         let db = db_guard.as_ref().ok_or(SpeleoDbError::NoRemoteProject)?;
         db.save_speleo_link(Some(link))
             .map_err(|e| SpeleoDbError::Io(e.to_string()))
@@ -3028,8 +2974,8 @@ mod tests {
 
     /// Whether a project (and its database handle) is currently open in `state`.
     fn project_is_open(state: &AppState) -> bool {
-        let project = state.project.lock().expect("project lock").is_some();
-        let database = state.database.lock().expect("database lock").is_some();
+        let project = state.project.lock().is_some();
+        let database = state.database.lock().is_some();
         assert_eq!(
             project, database,
             "project and database handles should open/close together"
@@ -3123,7 +3069,7 @@ mod tests {
         // Poison the database lock the way a real panic would: panic while its
         // guard is held, and swallow the unwind so the test itself survives.
         let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = state.database.lock().expect("database lock");
+            let _guard = state.database.lock();
             panic!("simulated panic while holding the database lock");
         }));
         assert!(poisoned.is_err(), "the closure must have panicked");
@@ -3137,19 +3083,11 @@ mod tests {
             "the open project IS this file, so it must be closed"
         );
         assert!(
-            state
-                .database
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_none(),
+            state.database.lock().is_none(),
             "the live database handle must be gone before the replace, poisoned or not"
         );
         assert!(
-            state
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_none(),
+            state.project.lock().is_none(),
             "the project must be dropped too"
         );
     }
@@ -3960,12 +3898,7 @@ mod tests {
     }
 
     fn enable_force_edit_optin(state: &AppState) {
-        state
-            .config
-            .lock()
-            .expect("config lock")
-            .speleodb
-            .allow_force_edit = true;
+        state.config.lock().speleodb.allow_force_edit = true;
     }
 
     #[test]
@@ -4064,7 +3997,7 @@ mod tests {
     /// after.)
     pub(in crate::core::state) fn editing_fixture(endpoint: &str) -> (TempDir, AppState) {
         let (temp, state) = remote_readonly_fixture();
-        *state.speleodb.lock().expect("session lock") = authed_session_at(endpoint);
+        *state.speleodb.lock() = authed_session_at(endpoint);
         state.set_edit_enabled(true);
         state.speleodb_note_lock_acquired(Some(REMOTE_ID));
         (temp, state)
@@ -4354,7 +4287,7 @@ mod tests {
     fn the_unwind_releases_only_a_lock_this_process_recorded_taking() {
         let state = AppState::new().expect("state");
         // A claim carries the account that took it, so there has to be one.
-        *state.speleodb.lock().expect("session lock") = authed_session_at("http://x/");
+        *state.speleodb.lock() = authed_session_at("http://x/");
 
         assert!(
             state.speleodb_take_acquisition_by_this_flow().is_none(),
@@ -4459,7 +4392,7 @@ mod tests {
         // UpToDate over a real conflict.
         let (base, _listener) = always_answering_stub(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
         assert!(
             !state.speleodb_lock_acquired_here(REMOTE_ID),
             "precondition: this process has taken no lock - it opened the project \
@@ -4516,7 +4449,7 @@ mod tests {
         // conflict dialog instead, exactly as the button already says.
         let (base, _listener, seen) = recording_stub(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
         state.set_edit_enabled(true);
         assert!(
             !state.speleodb_lock_acquired_here(REMOTE_ID),
@@ -4565,7 +4498,7 @@ mod tests {
         // BASE, which the adopt arm writes before it uploads.
         let (base, _listener) = always_answering_stub(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
         state.set_edit_enabled(true);
         state.speleodb_note_lock_acquired(Some(REMOTE_ID));
 
@@ -4597,7 +4530,7 @@ mod tests {
                 "commits":[{"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#,
         );
         let (_temp, state) = remote_readonly_fixture();
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
         assert!(
             !state.speleodb_lock_acquired_here(REMOTE_ID),
             "a read-only open records nothing"
@@ -4650,7 +4583,7 @@ mod tests {
         // what the pre-acquire probe reads.
         let (base, _listener) = always_answering_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
         let (_temp, state) = remote_readonly_fixture();
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
 
         assert!(
             matches!(
@@ -4694,7 +4627,7 @@ mod tests {
         // flow simply never reaching the server.
         let (base, _listener, seen) = recording_stub(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -4754,7 +4687,7 @@ mod tests {
         // two tests differ in exactly the input the fix keys on.
         let (base, _listener, seen) = recording_stub(FREE_MUTEX_DIVERGED_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -4797,7 +4730,7 @@ mod tests {
         // input that differs is the mutex holder's identity.
         let (base, _listener, seen) = recording_stub(OTHER_HOLDER_DIVERGED_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -4839,7 +4772,7 @@ mod tests {
         // button paints `Conflict` against our own work.
         let (base, _listener, seen) = recording_stub(HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY);
         let (_temp, state) = remote_readonly_fixture();
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
 
         assert!(
             matches!(
@@ -4883,7 +4816,7 @@ mod tests {
         // un-pushed work that is still only on this machine.
         let (base, _listener, seen) = recording_stub(SAME_ACCOUNT_UPPERCASE_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -4963,7 +4896,7 @@ mod tests {
         // own re-derivation can reopen the gate and hand the shortcut back.
         let (base, _listener) = always_answering_stub(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
         state.set_edit_enabled(true);
         state.speleodb_note_lock_acquired(Some(REMOTE_ID));
         // The session ends somewhere this file cannot hook (here: the reopen after a
@@ -5163,7 +5096,7 @@ mod tests {
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         // A claim is stamped with the account that took it, so recording one at
         // all needs a session to stamp it from (`LockClaim`).
-        *state.speleodb.lock().expect("session lock") = authed_session_at("http://x/");
+        *state.speleodb.lock() = authed_session_at("http://x/");
 
         // This process took the lock and is editing under it - the state a
         // fast-forward lands back in once its in-place reload finishes.
@@ -5388,7 +5321,7 @@ mod tests {
         // cannot pass by a flow that never left the process.
         let (base, _listener, seen) = stub_failing_the_lock_probe(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -5443,7 +5376,7 @@ mod tests {
         // bit differs, which is exactly the input the rule keys on.
         let (base, _listener, seen) = stub_failing_the_lock_probe(CLEAN_DIVERGED_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(false);
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -5478,7 +5411,7 @@ mod tests {
         // release below is that unwind's doing.
         let (base, _listener, seen) = recording_stub(FREE_MUTEX_DIVERGED_BODY);
         let (_temp, state) = remote_readonly_fixture();
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
 
         state
             .speleodb_start_editing()
@@ -5814,7 +5747,7 @@ mod tests {
         // hold its mutex must not sit read-only under our own lock.
         let (base, _listener) = holder_changes_after_the_first_read(REMOTE_ID, Some("u@x"));
         let (_temp, state) = remote_readonly_fixture();
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
         assert!(!state.edit_enabled(), "fixture opens read-only");
 
         let status = state.speleodb_link_status().expect("status");
@@ -5837,7 +5770,7 @@ mod tests {
         // ask, and gone by the re-read that would open the gate.
         let (base, _listener) = holder_changes_after_the_first_read(REMOTE_ID, None);
         let (_temp, state) = remote_readonly_fixture();
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        *state.speleodb.lock() = authed_session_at(&base);
 
         let status = state.speleodb_link_status().expect("status");
 
@@ -6074,7 +6007,6 @@ mod tests {
         state
             .undo_stack
             .lock()
-            .expect("undo stack")
             .push_with_data(Command::CloseProject, crate::core::undo::UndoData::None);
         for name in ["A", "B"] {
             assert!(
@@ -6178,7 +6110,7 @@ mod tests {
         let (temp, state) = clean_editing_copy_with_history();
         assert!(state.undo().success && state.undo().success);
         {
-            let mut stack = state.undo_stack.lock().expect("undo stack");
+            let mut stack = state.undo_stack.lock();
             let a = stack.pop_redo().expect("A on top of redo");
             let b = stack.pop_redo().expect("B under it");
             stack.push_redo(crate::core::undo::UndoEntry {
@@ -6385,7 +6317,7 @@ mod tests {
         // skipped the close would model a world the real sequence never produces.
         {
             let commands = state.hold_commands();
-            let mut open = state.project.lock().unwrap_or_else(|e| e.into_inner());
+            let mut open = state.project.lock();
             state.speleodb_forget_lock_acquired_for(&params.project_id);
             state.close_open_project_locked(&commands, &mut open);
         }
@@ -6524,7 +6456,7 @@ mod tests {
         // the round-5 live-session eye would (correctly) stand down for it.
         {
             let commands = state.hold_commands();
-            let mut open = state.project.lock().unwrap_or_else(|e| e.into_inner());
+            let mut open = state.project.lock();
             state.speleodb_forget_lock_acquired_for(&params.project_id);
             state.close_open_project_locked(&commands, &mut open);
         }
@@ -6737,8 +6669,7 @@ mod tests {
         // result is handed back untouched, never replaced by a keychain error.
         crate::test_helpers::with_isolated_config(|| {
             let state = AppState::new().expect("state");
-            *state.speleodb.lock().expect("session lock") =
-                authed_session_with(Box::new(FailingDeleteStore::new()));
+            *state.speleodb.lock() = authed_session_with(Box::new(FailingDeleteStore::new()));
 
             let result: Result<(), SpeleoDbError> = Err(SpeleoDbError::Status {
                 status: 401,
@@ -6750,12 +6681,7 @@ mod tests {
                 "the caller still sees its own 401, not a keychain error"
             );
             assert!(
-                !state
-                    .speleodb
-                    .lock()
-                    .expect("session lock")
-                    .status()
-                    .logged_in,
+                !state.speleodb.lock().status().logged_in,
                 "the dead token is dropped even though the keychain delete failed"
             );
         });
@@ -6770,12 +6696,11 @@ mod tests {
             state
                 .speleodb_write_account_record(Some("u@x".to_owned()), None)
                 .expect("seed the persisted account");
-            *state.speleodb.lock().expect("session lock") =
-                authed_session_with(Box::new(InMemoryStore::new()));
+            *state.speleodb.lock() = authed_session_with(Box::new(InMemoryStore::new()));
 
             state.speleodb_logout().expect("a clean logout succeeds");
             assert_eq!(
-                state.config.lock().expect("config lock").speleodb.email,
+                state.config.lock().speleodb.email,
                 None,
                 "logout must clear the persisted account email"
             );
@@ -6793,8 +6718,7 @@ mod tests {
             state
                 .speleodb_write_account_record(Some("u@x".to_owned()), None)
                 .expect("seed the persisted account");
-            *state.speleodb.lock().expect("session lock") =
-                authed_session_with(Box::new(FailingDeleteStore::new()));
+            *state.speleodb.lock() = authed_session_with(Box::new(FailingDeleteStore::new()));
 
             let err = state
                 .speleodb_logout()
@@ -6805,17 +6729,12 @@ mod tests {
                 err.message
             );
             assert_eq!(
-                state.config.lock().expect("config lock").speleodb.email,
+                state.config.lock().speleodb.email,
                 None,
                 "the rehydrate seed is cleared even on the error path"
             );
             assert!(
-                !state
-                    .speleodb
-                    .lock()
-                    .expect("session lock")
-                    .status()
-                    .logged_in,
+                !state.speleodb.lock().status().logged_in,
                 "the session is dropped even on the error path"
             );
         });
@@ -6839,13 +6758,12 @@ mod tests {
             state
                 .speleodb_write_account_record(Some("u@x".to_owned()), None)
                 .expect("seed the persisted account");
-            *state.speleodb.lock().expect("session lock") =
-                authed_session_with(Box::new(InMemoryStore::new()));
+            *state.speleodb.lock() = authed_session_with(Box::new(InMemoryStore::new()));
 
             let cfg = &state.config;
             let _ = std::thread::scope(|s| {
                 s.spawn(|| {
-                    let _guard = cfg.lock().expect("lock to poison");
+                    let _guard = cfg.lock();
                     panic!("poison the config mutex on purpose");
                 })
                 .join()
@@ -6859,12 +6777,7 @@ mod tests {
                 .speleodb_logout()
                 .expect("logout still succeeds through a poisoned config lock");
             assert_eq!(
-                state
-                    .config
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .speleodb
-                    .email,
+                state.config.lock().speleodb.email,
                 None,
                 "the rehydrate seed must be cleared, not skipped, on a poisoned lock"
             );
@@ -6887,8 +6800,7 @@ mod tests {
                 .expect("squat the config file path with a directory");
 
             let state = AppState::new().expect("state");
-            *state.speleodb.lock().expect("session lock") =
-                authed_session_with(Box::new(InMemoryStore::new()));
+            *state.speleodb.lock() = authed_session_with(Box::new(InMemoryStore::new()));
 
             let err = state
                 .speleodb_logout()
@@ -6899,12 +6811,7 @@ mod tests {
                 err.message
             );
             assert!(
-                !state
-                    .speleodb
-                    .lock()
-                    .expect("session lock")
-                    .status()
-                    .logged_in,
+                !state.speleodb.lock().status().logged_in,
                 "and the logout itself still happened"
             );
         });
@@ -6940,7 +6847,7 @@ mod tests {
     /// `rehydrate_attempted` false so the next authed call still runs the startup
     /// rehydrate through it.
     fn lock_the_keyring(state: &AppState) {
-        state.speleodb.lock().expect("session lock").token_store =
+        state.speleodb.lock().token_store =
             TokenStore::from_stores(Box::new(LockedKeyringStore), None);
     }
 
@@ -6965,7 +6872,7 @@ mod tests {
                 // What Monday's successful keychain login left on disk. The endpoint is
                 // the Settings preference (login never writes it), and it has to be
                 // here or the restart below has no account key to evict by.
-                let mut config = state.config.lock().expect("config lock");
+                let mut config = state.config.lock();
                 config.speleodb.endpoint = Some(base.clone());
                 config.save().expect("seed the previous launch's endpoint");
             }
@@ -7023,7 +6930,7 @@ mod tests {
     /// [`lock_the_keyring`]: this one can give the startup read the one answer that
     /// PROVES an entry is gone.
     fn empty_the_keyring(state: &AppState) {
-        state.speleodb.lock().expect("session lock").token_store =
+        state.speleodb.lock().token_store =
             TokenStore::from_stores(Box::new(InMemoryStore::new()), None);
     }
 
@@ -7045,7 +6952,7 @@ mod tests {
             {
                 // What a previous launch's successful keychain login left on disk,
                 // and an account to key the startup read by.
-                let mut config = state.config.lock().expect("config lock");
+                let mut config = state.config.lock();
                 config.speleodb.endpoint = Some("https://sdb.example".to_owned());
                 config.save().expect("seed the previous launch's endpoint");
             }
@@ -7061,12 +6968,7 @@ mod tests {
             state.speleodb_session_status().expect("status");
 
             assert!(
-                !state
-                    .speleodb
-                    .lock()
-                    .expect("session lock")
-                    .token_store
-                    .keychain_has_token(),
+                !state.speleodb.lock().token_store.keychain_has_token(),
                 "premise: the read proved the keyring holds nothing for this account"
             );
             assert!(
@@ -7104,7 +7006,7 @@ mod tests {
             {
                 // The PREVIOUS account's launch: its entry is in the keyring and the
                 // config records it.
-                let mut config = state.config.lock().expect("config lock");
+                let mut config = state.config.lock();
                 config.speleodb.endpoint = Some(base.clone());
                 config.save().expect("seed the previous account's endpoint");
             }
@@ -7179,7 +7081,7 @@ mod tests {
             {
                 // The FIRST server is the persisted Settings endpoint, so the startup
                 // below keys by it.
-                let mut config = state.config.lock().expect("config lock");
+                let mut config = state.config.lock();
                 config.speleodb.endpoint = Some(FIRST.to_owned());
                 config.save().expect("seed the previous launch's endpoint");
             }
@@ -7256,7 +7158,7 @@ mod tests {
             {
                 // A config from before the stamp: the flag, the account email, and
                 // nothing naming the two together.
-                let mut config = state.config.lock().expect("config lock");
+                let mut config = state.config.lock();
                 config.speleodb.endpoint = Some(EP.to_owned());
                 config.speleodb.email = Some("u@x".to_owned());
                 config.speleodb.keychain_has_token = true;
@@ -7267,12 +7169,7 @@ mod tests {
             state.speleodb_session_status().expect("status");
 
             assert!(
-                state
-                    .speleodb
-                    .lock()
-                    .expect("session lock")
-                    .token_store
-                    .keychain_has_token(),
+                state.speleodb.lock().token_store.keychain_has_token(),
                 "the unstamped belief still names this account, so it is mirrored in - \
                  dropping it here is what strands the token on the upgrade launch"
             );
@@ -7390,7 +7287,6 @@ mod tests {
             state
                 .speleodb
                 .lock()
-                .expect("session lock")
                 .token_store
                 .note_keychain_has_token(true);
             assert_eq!(
@@ -7436,7 +7332,7 @@ mod tests {
             {
                 // The previous account's record, seeded coherently by hand because the
                 // squat is already in place and no writer can reach the disk.
-                let mut config = state.config.lock().expect("config lock");
+                let mut config = state.config.lock();
                 config.speleodb.endpoint = Some(base.clone());
                 config.speleodb.email = Some("old@x".to_owned());
                 config.speleodb.keychain_has_token = true;
@@ -8102,7 +7998,7 @@ mod tests {
         // point it at a throwaway temp tree.
         crate::app_dirs::init_for_test();
         let state = AppState::new().expect("AppState::new");
-        *state.speleodb.lock().expect("session lock") = SpeleoDbSession {
+        *state.speleodb.lock() = SpeleoDbSession {
             endpoint: Some(url.to_owned()),
             email: Some(email.to_owned()),
             token_store: TokenStore::from_in_memory_token(token),
@@ -8120,7 +8016,6 @@ mod tests {
         state
             .database
             .lock()
-            .expect("db lock")
             .as_ref()
             .expect("db open")
             .load_speleo_link()
@@ -8143,8 +8038,8 @@ mod tests {
         let db = Database::open_existing(&path).expect("open extracted .stalx");
         let mut project = db.load_project().expect("load pulled project");
         project.file_path = Some(path);
-        *state.database.lock().expect("db lock") = Some(db);
-        *state.project.lock().expect("project lock") = Some(project);
+        *state.database.lock() = Some(db);
+        *state.project.lock() = Some(project);
         state.set_edit_enabled(false);
     }
 
@@ -8626,7 +8521,6 @@ mod tests {
         let live_path = state
             .project
             .lock()
-            .expect("project lock")
             .as_ref()
             .and_then(|p| p.file_path.clone())
             .expect("open project has a file path");
@@ -8653,7 +8547,7 @@ mod tests {
         // [#303] Clear-on-push, in memory: the operation that push carried is gone, so
         // the next commit cannot duplicate it.
         assert_eq!(
-            state.undo_stack.lock().expect("undo stack lock").len(),
+            state.undo_stack.lock().len(),
             0,
             "a confirmed push clears the undo entries it uploaded (q8)"
         );
@@ -8919,13 +8813,7 @@ mod tests {
             .expect("extract server ariane.tml");
 
         // Re-render the same in-memory project (UUIDs were minted + persisted on push).
-        let project = state
-            .project
-            .lock()
-            .expect("project lock")
-            .as_ref()
-            .expect("open project")
-            .clone();
+        let project = state.project.lock().as_ref().expect("open project").clone();
         let rerender = temp.path().join("rerender.tml");
         crate::export::tml::export_tml_for_speleodb(&project, &rerender).expect("re-render .tml");
 
@@ -9159,7 +9047,6 @@ mod tests {
         let link_after = state
             .database
             .lock()
-            .expect("db lock")
             .as_ref()
             .expect("db still open")
             .load_speleo_link()

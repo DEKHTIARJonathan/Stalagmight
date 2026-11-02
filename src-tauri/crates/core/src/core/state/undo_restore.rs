@@ -40,10 +40,7 @@ impl AppState {
     /// property. See `Project::remeasure_closure_alignment` for why a sweep that
     /// runs on the inverse at all is still a restore rather than a re-derivation.
     pub(super) fn reconcile_geometry(&self) {
-        let mut guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut guard = self.project.lock();
         let Some(project) = guard.as_mut() else {
             return;
         };
@@ -178,9 +175,7 @@ impl AppState {
         data: SectionData,
         identity: &SectionIdentity,
     ) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        let mut proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
@@ -224,9 +219,7 @@ impl AppState {
         position: usize,
         uuid: Option<String>,
     ) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        let mut proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());

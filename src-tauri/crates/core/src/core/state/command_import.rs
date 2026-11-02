@@ -28,7 +28,7 @@ pub enum VirtualShotMode {
     /// Every virtual shot in this file is a non-swimmable survey tie.
     AllReferences,
 }
-use std::sync::Mutex;
+use crate::models::poison_policy::RecoveringMutex;
 
 /// Tally closure-creation results from a `create_loop_closures_batch` call,
 /// counting successes (and failures) directly from `results` rather than
@@ -89,16 +89,16 @@ fn tally_closure_results(
 /// actually allowed to run (the cascade itself early-exits when the flag
 /// is still `true`).  After `disarm`, `Drop` is a no-op.
 struct CascadeDeferGuard<'a> {
-    project: &'a Mutex<Option<Project>>,
+    project: &'a RecoveringMutex<Option<Project>>,
     armed: bool,
 }
 
 impl<'a> CascadeDeferGuard<'a> {
     /// Set `cascade_deferred = true` on the project (if present) and
     /// return a guard.  If the lock is already poisoned the flag is set
-    /// anyway via `into_inner` - the import is about to run regardless,
-    /// and we still want the Drop reset to fire.
-    fn arm(project: &'a Mutex<Option<Project>>) -> Self {
+    /// anyway (the lock recovers it, #576 A11) - the import is about to run
+    /// regardless, and we still want the Drop reset to fire.
+    fn arm(project: &'a RecoveringMutex<Option<Project>>) -> Self {
         Self::set_flag(project, true);
         Self {
             project,
@@ -113,11 +113,8 @@ impl<'a> CascadeDeferGuard<'a> {
         self.armed = false;
     }
 
-    fn set_flag(project: &Mutex<Option<Project>>, value: bool) {
-        let mut guard = match project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+    fn set_flag(project: &RecoveringMutex<Option<Project>>, value: bool) {
+        let mut guard = project.lock();
         if let Some(p) = guard.as_mut() {
             p.cascade_deferred = value;
         }
@@ -152,9 +149,7 @@ impl AppState {
         _closure_strategy: ClosureStrategy,
     ) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): a TML create+merge mutates the
         // project, so it is gated on a read-only remote project.
         if let Err(f) = self.guard_mutation("Import section and merge") {
@@ -348,9 +343,7 @@ impl AppState {
         surface_elevation: Option<f64>,
     ) -> CommandResult {
         // Serialize command execution to prevent concurrent interleaving
-        let Some(commands) = self.try_hold_commands() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let commands = self.hold_commands();
         self.execute_import_sections_locked(
             &commands,
             sections,
@@ -473,9 +466,9 @@ impl AppState {
         // the work, and the file's own declared section count is knowable up
         // front, so a file that cannot fit is refused whole - the same
         // batch-atomic rule the non-finite checks above apply.
-        let ids_already_spent = match self.project.lock() {
-            Ok(guard) => guard.as_ref().map(|p| p.next_section_id),
-            Err(poisoned) => poisoned.into_inner().as_ref().map(|p| p.next_section_id),
+        let ids_already_spent = {
+            let guard = self.project.lock();
+            guard.as_ref().map(|p| p.next_section_id)
         };
         if let Some(spent) = ids_already_spent {
             let spent_count = spent as usize;
@@ -520,10 +513,7 @@ impl AppState {
                 purpose = "overlap interpolation",
                 "Applying existing shot updates before placement",
             );
-            let mut proj_guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
+            let mut proj_guard = self.project.lock();
             if let Some(project) = proj_guard.as_mut() {
                 // Collect unique affected section IDs
                 let affected_section_ids: HashSet<SectionId> =
@@ -829,7 +819,8 @@ impl AppState {
         // stays O(1) instead of degrading into an O(N) linear scan inside
         // `merge_stations`. (The merge adjacency needs no priming: it builds
         // itself on first use and stays warm across the import's pushes.)
-        if let Ok(mut proj_guard) = self.project.lock() {
+        {
+            let mut proj_guard = self.project.lock();
             if let Some(project) = proj_guard.as_mut() {
                 project.rebuild_section_index();
                 // Make `resolve_key`'s AfterShot lookup O(1) for the hot
@@ -887,8 +878,8 @@ impl AppState {
             let azimuth_reference = declared_reference.unwrap_or_else(|| {
                 self.project
                     .lock()
-                    .ok()
-                    .and_then(|guard| guard.as_ref().and_then(|p| p.default_azimuth_reference))
+                    .as_ref()
+                    .and_then(|p| p.default_azimuth_reference)
                     .unwrap_or_default()
             });
             let reverse_offset = config.reverse.then(|| {
@@ -932,7 +923,8 @@ impl AppState {
             // geometrically identical projects ("import then reverse" vs "import with the
             // toggle") disagree about that, and about which end the least-squares gauge pins.
             if config.reverse || declared_reference.is_some() {
-                if let Ok(mut guard) = self.project.lock() {
+                {
+                    let mut guard = self.project.lock();
                     if let Some(section) =
                         guard.as_mut().and_then(|p| p.get_section_mut(section_id))
                     {
@@ -963,10 +955,7 @@ impl AppState {
                 // Finiteness first - `NaN != 0.0` is true, and `section_offsets`
                 // has no other finite guard (see `Project::reverse_section`).
                 if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
-                    let mut proj_guard = match self.project.lock() {
-                        Ok(g) => g,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
+                    let mut proj_guard = self.project.lock();
                     if let Some(project) = proj_guard.as_mut() {
                         project.adjust_section_offset(section_id, dx, dy);
                     }
@@ -975,10 +964,7 @@ impl AppState {
 
             // Apply station comments (promoted from shot comments during TML import)
             if !config.station_comments.is_empty() {
-                let mut proj_guard = match self.project.lock() {
-                    Ok(g) => g,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
+                let mut proj_guard = self.project.lock();
                 if let Some(project) = proj_guard.as_mut() {
                     let shot_count = config.shots.len() as u32;
                     for (station_index, comment) in &config.station_comments {
@@ -1218,7 +1204,8 @@ impl AppState {
         // the guard so its Drop becomes a no-op for the success path.
         cascade_guard.disarm();
         let cascade_start = std::time::Instant::now();
-        if let Ok(mut proj_guard) = self.project.lock() {
+        {
+            let mut proj_guard = self.project.lock();
             if let Some(project) = proj_guard.as_mut() {
                 project.cascade_connection_offsets(&all_section_ids);
             }
@@ -1270,10 +1257,7 @@ impl AppState {
         }
         if !closure_pairs.is_empty() {
             let results = {
-                let mut proj_guard = match self.project.lock() {
-                    Ok(g) => g,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
+                let mut proj_guard = self.project.lock();
                 match proj_guard.as_mut() {
                     Some(project) => project.create_loop_closures_batch(&closure_pairs),
                     None => Vec::new(),
@@ -1322,10 +1306,7 @@ impl AppState {
         {
             let imported: HashSet<SectionId> = all_section_ids.iter().copied().collect();
             let scope = crate::models::ClassifyScope::Sections(&imported);
-            let mut proj_guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
+            let mut proj_guard = self.project.lock();
             if let Some(project) = proj_guard.as_mut() {
                 let changed = match mode {
                     VirtualShotMode::Auto => project.classify_virtual_shots(&scope),
@@ -1381,10 +1362,7 @@ impl AppState {
             // an existing different value wins, and the mismatch becomes a receipt
             // warning naming both numbers.
             surface_elevation_warning = surface_elevation.and_then(|incoming| {
-                let mut proj_guard = match self.project.lock() {
-                    Ok(g) => g,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
+                let mut proj_guard = self.project.lock();
                 let project = proj_guard.as_mut()?;
                 match project.surface_elevation {
                     None => {

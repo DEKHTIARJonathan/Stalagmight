@@ -32,7 +32,6 @@ impl AppState {
         let link = self
             .database
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .and_then(|db| db.load_speleo_link().ok())
             .flatten();
@@ -69,9 +68,7 @@ impl AppState {
         // Save rewrites the whole database while holding `project`, then renames the
         // fresh file over the live one. Hold the same lock through this database edit so
         // a save cannot snapshot the old mode and overwrite a successful setting change.
-        let project_guard = self.project.lock().map_err(|_| {
-            super::speleodb::local_dto(SpeleoDbError::Io("project lock poisoned".to_owned()))
-        })?;
+        let project_guard = self.project.lock();
         // Must be a remote project: a local one has no policy to set (the fixed window is
         // unconditional there), and no link row to write it into.
         let _link = self.speleodb_validated_link()?;
@@ -80,9 +77,7 @@ impl AppState {
                 "start editing before changing the undo-history setting".to_owned(),
             )));
         }
-        let db_guard = self.database.lock().map_err(|_| {
-            super::speleodb::local_dto(SpeleoDbError::Io("database lock poisoned".to_owned()))
-        })?;
+        let db_guard = self.database.lock();
         let db = db_guard
             .as_ref()
             .ok_or_else(|| super::speleodb::local_dto(SpeleoDbError::NoRemoteProject))?;
@@ -114,10 +109,7 @@ impl AppState {
         let policy = self.undo_policy();
         // Same reasoning as the commit's: skipping the arm left the stack on its previous
         // bound, and the next `enforce_depth_limit` then truncates to it.
-        let mut undo = self
-            .undo_stack
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut undo = self.undo_stack.lock();
         arm_undo_depth_limit(&mut undo, policy);
     }
 
@@ -140,23 +132,14 @@ impl AppState {
         if self.undo_policy_for(link).unlimited_depth() {
             return MAX_PERSISTED_HISTORY_ROWS;
         }
-        let window = self
-            .undo_stack
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .history_limit();
+        let window = self.undo_stack.lock().history_limit();
         window.min(MAX_PERSISTED_HISTORY_ROWS)
     }
 
     /// The global default. Recover a poisoned guard so a panic cannot replace an
     /// explicit `Disabled` setting with [`UndoMode::default`] (`Full`).
     pub(super) fn global_undo_mode(&self) -> UndoMode {
-        self.config
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .speleodb
-            .undo_mode
-            .resolved()
+        self.config.lock().speleodb.undo_mode.resolved()
     }
 
     /// An explicit project value, or the global default for a legacy NULL that has
@@ -179,7 +162,6 @@ impl AppState {
         let stored_mode = self
             .database
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .and_then(|db| db.load_speleo_link().ok())
             .flatten()
@@ -257,9 +239,9 @@ mod tests {
         }
     }
 
-    fn poison_mutex<T>(mutex: &std::sync::Mutex<T>) {
+    fn poison_mutex<T>(mutex: &crate::models::poison_policy::RecoveringMutex<T>) {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = mutex.lock().expect("lock before poisoning");
+            let _guard = mutex.lock();
             panic!("poison mutex for undo-policy coverage");
         }));
     }
@@ -272,12 +254,12 @@ mod tests {
         with_isolated_config(|| {
             let state = state();
 
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Full;
+            state.config.lock().speleodb.undo_mode = UndoMode::Full;
             let policy = state.undo_policy_for(Some(&link_with(Some(UndoMode::Disabled))));
             assert_eq!(policy.mode, UndoMode::Disabled);
             assert!(!policy.pushes_history());
 
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            state.config.lock().speleodb.undo_mode = UndoMode::Disabled;
             let policy = state.undo_policy_for(Some(&link_with(Some(UndoMode::Full))));
             assert_eq!(policy.mode, UndoMode::Full);
             assert!(policy.pushes_history());
@@ -292,10 +274,10 @@ mod tests {
             let state = state();
             let mut link = link_with(None);
 
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            state.config.lock().speleodb.undo_mode = UndoMode::Disabled;
             link.undo_mode = Some(state.effective_undo_mode(link.undo_mode));
 
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Full;
+            state.config.lock().speleodb.undo_mode = UndoMode::Full;
             assert_eq!(state.undo_policy_for(Some(&link)).mode, UndoMode::Disabled);
         });
     }
@@ -304,7 +286,7 @@ mod tests {
     fn poisoned_config_lock_preserves_a_disabled_global_default() {
         with_isolated_config(|| {
             let state = state();
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            state.config.lock().speleodb.undo_mode = UndoMode::Disabled;
             poison_mutex(&state.config);
 
             let policy = state.undo_policy_for(Some(&link_with(None)));
@@ -320,7 +302,7 @@ mod tests {
     fn a_project_with_no_link_is_local_whatever_the_default() {
         with_isolated_config(|| {
             let state = state();
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Full;
+            state.config.lock().speleodb.undo_mode = UndoMode::Full;
 
             let policy = state.undo_policy_for(None);
             assert!(!policy.linked);
@@ -405,7 +387,7 @@ mod tests {
     fn undo_mode_status_reports_the_global_value_without_a_project() {
         with_isolated_config(|| {
             let state = state();
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            state.config.lock().speleodb.undo_mode = UndoMode::Disabled;
 
             // No project open at all: the GLOBAL default, and not overridden. Not
             // `UndoPolicy::local()`'s Full - that answers "is this project exempt
@@ -426,7 +408,7 @@ mod tests {
                 .expect("save link");
 
             let state = state();
-            *state.database.lock().expect("database lock") = Some(db);
+            *state.database.lock() = Some(db);
             poison_mutex(&state.database);
 
             assert_eq!(state.undo_mode_status(), UndoMode::Disabled);
@@ -448,11 +430,7 @@ mod tests {
             );
 
             // Everything else reads exactly the window `use_count_limit` re-arms.
-            state
-                .undo_stack
-                .lock()
-                .expect("undo stack lock")
-                .set_history_limit(7);
+            state.undo_stack.lock().set_history_limit(7);
             assert_eq!(state.history_load_row_cap(None), 7);
             assert_eq!(
                 state.history_load_row_cap(Some(&link_with(Some(UndoMode::Disabled)))),
@@ -460,11 +438,7 @@ mod tests {
             );
 
             // ...and never more than the ceiling, whatever the config asks for.
-            state
-                .undo_stack
-                .lock()
-                .expect("undo stack lock")
-                .set_history_limit(usize::MAX);
+            state.undo_stack.lock().set_history_limit(usize::MAX);
             assert_eq!(state.history_load_row_cap(None), MAX_PERSISTED_HISTORY_ROWS);
         });
     }
@@ -823,9 +797,9 @@ mod tests {
             }
 
             let state = state();
-            state.config.lock().expect("config lock").speleodb.undo_mode = UndoMode::Disabled;
+            state.config.lock().speleodb.undo_mode = UndoMode::Disabled;
             assert!(state.open_project(path).success);
-            let db_guard = state.database.lock().expect("database lock");
+            let db_guard = state.database.lock();
             let db = db_guard.as_ref().expect("open database installed");
             let link = db
                 .load_speleo_link()

@@ -22,7 +22,9 @@
 //! menu or button, and the app credits it in the About dialog.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+
+use crate::models::poison_policy::RecoveringMutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -106,10 +108,10 @@ enum CacheEntry {
     Failed { failed_at: Instant },
 }
 
-static CACHE: OnceLock<Mutex<HashMap<String, CacheEntry>>> = OnceLock::new();
+static CACHE: OnceLock<RecoveringMutex<HashMap<String, CacheEntry>>> = OnceLock::new();
 
-fn cache() -> &'static Mutex<HashMap<String, CacheEntry>> {
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+fn cache() -> &'static RecoveringMutex<HashMap<String, CacheEntry>> {
+    CACHE.get_or_init(|| RecoveringMutex::new("tile_attribution_cache", HashMap::new()))
 }
 
 /// Read `copyrightText` from a provider's service-metadata endpoint.
@@ -209,10 +211,10 @@ pub fn get_attribution(provider_name: &str) -> TileAttribution {
 
     // Cache hit, or a recent failure we agreed not to retry yet.
     {
-        // A poisoned lock means some other thread panicked mid-update. The cache
-        // holds nothing that cannot be re-fetched, so treat it as a miss rather
-        // than propagating the panic into every future call.
-        if let Ok(guard) = cache().lock() {
+        // A poisoned lock is recovered (#576 A11): the cache holds nothing that
+        // cannot be re-fetched, and an entry is written whole under the lock.
+        {
+            let guard = cache().lock();
             match guard.get(&provider.name) {
                 Some(CacheEntry::Live { text, fetched_at })
                     if fetched_at.elapsed() < ATTRIBUTION_TTL =>
@@ -231,27 +233,23 @@ pub fn get_attribution(provider_name: &str) -> TileAttribution {
 
     match fetch_copyright_text(url) {
         Ok(text) => {
-            if let Ok(mut guard) = cache().lock() {
-                guard.insert(
-                    provider.name.clone(),
-                    CacheEntry::Live {
-                        text: text.clone(),
-                        fetched_at: Instant::now(),
-                    },
-                );
-            }
+            cache().lock().insert(
+                provider.name.clone(),
+                CacheEntry::Live {
+                    text: text.clone(),
+                    fetched_at: Instant::now(),
+                },
+            );
             tracing::debug!(provider = %provider.name, attribution = %text, "Live tile attribution");
             fallback(Some(text))
         }
         Err(e) => {
-            if let Ok(mut guard) = cache().lock() {
-                guard.insert(
-                    provider.name.clone(),
-                    CacheEntry::Failed {
-                        failed_at: Instant::now(),
-                    },
-                );
-            }
+            cache().lock().insert(
+                provider.name.clone(),
+                CacheEntry::Failed {
+                    failed_at: Instant::now(),
+                },
+            );
             tracing::debug!(
                 provider = %provider.name,
                 error = %e,

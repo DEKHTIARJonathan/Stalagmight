@@ -2824,7 +2824,7 @@ fn the_zero_datum_undo_capture_covers_every_section() {
         .sections
         .len();
 
-    let stack = state.undo_stack.lock().unwrap();
+    let stack = state.undo_stack.lock();
     let recorded = stack.peek_undo_data();
     assert_eq!(
         recorded.map(crate::core::UndoData::variant_name),
@@ -4256,7 +4256,7 @@ fn a_legacy_remove_zero_datum_entry_still_restores_the_datum_at_its_index() {
 
     // Swap the live pair for the shape a persisted stack still carries.
     {
-        let mut stack = state.undo_stack.lock().unwrap();
+        let mut stack = state.undo_stack.lock();
         stack.clear();
         stack.push_with_data(
             Command::RemoveZeroDatum {

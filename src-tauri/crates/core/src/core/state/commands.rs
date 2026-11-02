@@ -107,10 +107,7 @@ impl AppState {
         let Some(sections) = Self::reverse_only_sections(cmd) else {
             return false;
         };
-        let guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let guard = self.project.lock();
         let Some(project) = guard.as_ref() else {
             return false;
         };
@@ -239,10 +236,7 @@ impl AppState {
     /// and none with no resolvable datum. Read BEFORE a command runs; handed back
     /// to [`Self::renormalize_frame_if_changed`] after it.
     pub(super) fn frame_datum_key(&self) -> Option<StationKey> {
-        let guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let guard = self.project.lock();
         guard.as_ref().and_then(Project::frame_datum_key)
     }
 
@@ -323,10 +317,7 @@ impl AppState {
     /// the source offsets), so a fire here would translate a file the user just
     /// built. Pinned by `merge_projects_does_not_renormalise_the_open_project`.
     pub(super) fn renormalize_frame_if_changed(&self, before: Option<StationKey>) {
-        let mut guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut guard = self.project.lock();
         let Some(project) = guard.as_mut() else {
             return;
         };
@@ -337,9 +328,8 @@ impl AppState {
     pub(super) fn project_has_critical(&self) -> bool {
         self.project
             .lock()
-            .ok()
-            .and_then(|g| g.as_ref().map(Project::has_critical_integrity_violations))
-            .unwrap_or(false)
+            .as_ref()
+            .is_some_and(Project::has_critical_integrity_violations)
     }
 
     /// Integrity gate shared by [`Self::execute`] and [`Self::execute_batch`]: if
@@ -451,9 +441,7 @@ impl AppState {
         // and silently drop that command's changes. Deadlock-safe: none of the
         // helpers repair calls take command_lock (execute holds it while calling the
         // same capture/snapshot/undo helpers).
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return Err("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B5): Repair mutates the project, so it is
         // gated like every other edit. The refusal is returned as the coded error
         // itself (`EDIT_DISABLED...`), not as a zero result: `{ fixed: 0,
@@ -480,10 +468,7 @@ impl AppState {
         let before_snapshot = self.capture_project_snapshot().ok();
         let demoted;
         {
-            let mut guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
+            let mut guard = self.project.lock();
             let Some(project) = guard.as_mut() else {
                 return Ok(IntegrityRepairResult {
                     fixed: 0,
@@ -584,9 +569,7 @@ impl AppState {
             _ => {}
         }
         // Serialize all command execution to prevent concurrent interleaving
-        let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return CommandResult::failure("Failed to acquire command lock".to_string());
-        };
+        let _cmd_guard = self.command_lock.lock();
         // Read-only edit gate (#191, D-B6): reject mutations on a remote project
         // opened read-only, BUT lifecycle commands (Save/Open/Close/Create/
         // MergeProjects) always pass through (autosave must not be blocked).
@@ -890,7 +873,8 @@ impl AppState {
                 // a provably-no-op forward command, such as reversing a shot-less
                 // section, also drops the redo branch. "A successful forward command
                 // invalidates redo" outranks preserving redo across a no-op.)
-                if let Ok(mut undo_stack) = self.undo_stack.lock() {
+                {
+                    let mut undo_stack = self.undo_stack.lock();
                     if matches!(final_undo_data, UndoData::None) {
                         tracing::debug!(
                             command = %cmd.description(),
@@ -958,10 +942,7 @@ impl AppState {
         // One project lock for the whole list; both fix-ups above take (and
         // release) it themselves, and the mutex is not reentrant.
         let entries: Vec<ReversedSection> = {
-            let guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
+            let guard = self.project.lock();
             let Some(project) = guard.as_ref() else {
                 return result;
             };

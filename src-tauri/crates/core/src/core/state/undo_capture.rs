@@ -6,9 +6,7 @@ use super::AppState;
 impl AppState {
     /// Generate undo data before executing a command
     pub(super) fn generate_undo_data(&self, cmd: &Command) -> UndoData {
-        let Ok(proj_guard) = self.project.lock() else {
-            return UndoData::None;
-        };
+        let proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_ref() else {
             return UndoData::None;
@@ -532,9 +530,7 @@ impl AppState {
 
     /// Finalize undo data after command execution (for commands that create new entities)
     pub(super) fn finalize_undo_data(&self, cmd: &Command, undo_data: UndoData) -> UndoData {
-        let Ok(proj_guard) = self.project.lock() else {
-            return undo_data;
-        };
+        let proj_guard = self.project.lock();
 
         let Some(project) = proj_guard.as_ref() else {
             return undo_data;

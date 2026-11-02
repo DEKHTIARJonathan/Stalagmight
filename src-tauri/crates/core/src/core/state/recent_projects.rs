@@ -9,7 +9,7 @@ use super::AppState;
 impl AppState {
     /// Get the current project state for the frontend
     pub fn get_project_state(&self) -> Option<Project> {
-        self.project.lock().ok().and_then(|p| p.clone())
+        self.project.lock().clone()
     }
 
     /// Get recent projects list.
@@ -21,9 +21,9 @@ impl AppState {
     /// all away. That caused a multi-second freeze every time the user hit
     /// "back" with a large project in the recent list.
     pub fn get_recent_projects(&self) -> Vec<ProjectMetadata> {
-        let recent = match self.recent_projects.lock() {
-            Ok(r) => r.clone(),
-            Err(_) => return Vec::new(),
+        let recent = {
+            let r = self.recent_projects.lock();
+            r.clone()
         };
 
         recent
@@ -50,9 +50,7 @@ impl AppState {
 
     /// Remove a project from the recent projects list
     pub fn remove_from_recent_projects(&self, path: PathBuf) -> CommandResult {
-        let Ok(mut recent) = self.recent_projects.lock() else {
-            return CommandResult::failure("Failed to lock recent projects".to_string());
-        };
+        let mut recent = self.recent_projects.lock();
 
         // Remove the path from the list
         let initial_len = recent.len();
@@ -76,7 +74,8 @@ impl AppState {
         }
 
         // Update config and save
-        if let Ok(mut config) = self.config.lock() {
+        {
+            let mut config = self.config.lock();
             config.general.recent_projects.clone_from(&recent);
             if let Err(e) = config.save() {
                 tracing::warn!("Failed to save config after removing from recent: {}", e);
@@ -295,7 +294,7 @@ impl AppState {
             // and one landing inside an edit or an undo left that command's entry on
             // the emptied session's stacks.
             let commands = self.hold_commands();
-            let mut open = self.project.lock().unwrap_or_else(|e| e.into_inner());
+            let mut open = self.project.lock();
             // A never-saved project has no `file_path` and so can never be the file
             // being deleted - same predicate `open_project_path` encodes.
             let deleting_open_project = open
@@ -392,14 +391,10 @@ impl AppState {
         let doomed: Vec<PathBuf> = self
             .recent_projects
             .lock()
-            .map(|recent| {
-                recent
-                    .iter()
-                    .filter(|entry| names_the_deleted_file(entry.as_path()))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
+            .iter()
+            .filter(|entry| names_the_deleted_file(entry.as_path()))
+            .cloned()
+            .collect();
 
         // Hand the primary `.stalx` to the OS trash FIRST. If this fails, nothing
         // on disk has changed yet, so abort cleanly - recents stay untouched and
@@ -438,11 +433,13 @@ impl AppState {
         // file above rather than re-testing the (now deleted) path. Best-effort: a
         // project that was never in recents (or already removed) leaves `doomed`
         // empty and should still delete cleanly.
-        if let Ok(mut recent) = self.recent_projects.lock() {
+        {
+            let mut recent = self.recent_projects.lock();
             let before = recent.len();
             recent.retain(|p| !doomed.contains(p));
             if recent.len() != before {
-                if let Ok(mut config) = self.config.lock() {
+                {
+                    let mut config = self.config.lock();
                     config.general.recent_projects.clone_from(&recent);
                     if let Err(e) = config.save() {
                         // The `.stalx` is already trashed and the in-memory recents
@@ -532,10 +529,7 @@ impl AppState {
         // project is a real edit. A *closed* remote file is not gated here
         // (deferred to the issue that owns closed-file remote state).
         let is_open_project = {
-            let guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
+            let guard = self.project.lock();
             guard
                 .as_ref()
                 .is_some_and(|open| open.file_path.as_deref() == Some(path.as_path()))
@@ -561,10 +555,7 @@ impl AppState {
 
         // Keep the open project's in-memory state consistent if it's the same file.
         if is_open_project {
-            let mut guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
+            let mut guard = self.project.lock();
             if let Some(open) = guard.as_mut() {
                 if open.file_path.as_deref() == Some(path.as_path()) {
                     open.name = trimmed.to_string();

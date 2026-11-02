@@ -62,7 +62,7 @@ fn a_save_as_away_from_an_unreadable_file_warns_about_the_side_tables() {
         .expect("ignore a warning");
 
     // The handle is gone and the open file cannot be reopened.
-    *state.database.lock().expect("database lock") = None;
+    *state.database.lock() = None;
     std::fs::remove_file(&path).expect("remove the open file");
 
     let elsewhere = dir.path().join("CaveR-copy.stalx");

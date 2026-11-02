@@ -243,10 +243,7 @@ impl AppState {
     /// Best-effort: no database (an unsaved project) means no rows exist to fix.
     pub(super) fn pin_position_keyed_warnings_after_reverse(&self, section_ids: &[SectionId]) {
         let live: std::collections::HashMap<(u32, u32), String> = {
-            let guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
+            let guard = self.project.lock();
             let Some(project) = guard.as_ref() else {
                 return;
             };
@@ -265,10 +262,7 @@ impl AppState {
         if live.is_empty() {
             return;
         }
-        let db_guard = match self.database.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let db_guard = self.database.lock();
         let Some(db) = db_guard.as_ref() else {
             return;
         };
@@ -311,10 +305,7 @@ impl AppState {
     /// return type is identical and the read is strictly more permissive, so
     /// every caller sees the same rows or more.
     pub fn load_resolved_warnings(&self) -> Result<Vec<crate::persistence::ResolvedWarning>> {
-        let db_guard = self
-            .database
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
+        let db_guard = self.database.lock();
         let db = db_guard
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No database open"))?;
@@ -326,10 +317,7 @@ impl AppState {
         &self,
         warning: &crate::persistence::ResolvedWarning,
     ) -> Result<()> {
-        let db_guard = self
-            .database
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
+        let db_guard = self.database.lock();
         let db = db_guard
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No database open"))?;
@@ -341,9 +329,7 @@ impl AppState {
     /// or the lookup fails - the safe default, which keeps a new ignore
     /// position-keyed rather than binding it to an unpersisted UUID (issue #57).
     pub fn shot_uuid_is_persisted(&self, section_id: u32, uuid: &str) -> bool {
-        let Ok(db_guard) = self.database.lock() else {
-            return false;
-        };
+        let db_guard = self.database.lock();
         let Some(db) = db_guard.as_ref() else {
             return false;
         };
@@ -360,10 +346,7 @@ impl AppState {
         warning_code: &str,
         shot_uuid: Option<&str>,
     ) -> Result<()> {
-        let db_guard = self
-            .database
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
+        let db_guard = self.database.lock();
         let db = db_guard
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No database open"))?;
@@ -416,7 +399,7 @@ impl AppState {
     /// has a UUID, so this is `Some` for any shot the user can act on; returns
     /// `None` only if no project is open or the shot is gone.
     pub fn shot_uuid_for(&self, section_id: SectionId, shot_id: ShotId) -> Option<String> {
-        let guard = self.project.lock().ok()?;
+        let guard = self.project.lock();
         let project = guard.as_ref()?;
         let section = project.sections.iter().find(|s| s.id == section_id)?;
         let shot = section.shots.iter().find(|s| s.id == shot_id)?;

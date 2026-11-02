@@ -4043,7 +4043,7 @@ fn test_export_roundtrip_includes_reference_and_comment() {
 fn test_get_cache_stats_empty_when_disabled() {
     let app = app_with_state();
     let cache = state(&app).tile_cache();
-    let mut guard = cache.lock().unwrap();
+    let mut guard = cache.lock();
     *guard = None;
     drop(guard);
     let stats = cache::get_cache_stats(state(&app)).unwrap();
@@ -4057,7 +4057,7 @@ fn test_get_cache_stats_counts_provider() {
     let app = app_with_state();
     let cache = state(&app).tile_cache();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
         c.put_granted("esri", 1, 2, 3, b"data", "image/png")
@@ -4072,7 +4072,7 @@ fn test_get_cache_stats_counts_provider() {
 fn test_clear_tile_cache_noop_when_disabled() {
     let app = app_with_state();
     let cache = state(&app).tile_cache();
-    let mut guard = cache.lock().unwrap();
+    let mut guard = cache.lock();
     *guard = None;
     drop(guard);
     let result = cache::clear_tile_cache(state(&app), None);
@@ -4084,7 +4084,7 @@ fn test_clear_tile_cache_all_clears() {
     let app = app_with_state();
     let cache = state(&app).tile_cache();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
         c.put_granted("esri", 1, 2, 3, b"data", "image/png")
@@ -4100,7 +4100,7 @@ fn test_clear_tile_cache_provider_only_clears() {
     let app = app_with_state();
     let cache = state(&app).tile_cache();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
         c.put_granted("esri", 1, 2, 3, b"data", "image/png")
@@ -4127,7 +4127,7 @@ fn test_fetch_tile_cache_hit_returns_data() {
     let app = app_with_state();
     let cache = state(&app).tile_cache();
     {
-        let mut guard = cache.lock().unwrap();
+        let mut guard = cache.lock();
         *guard = Some(crate::cache::TileCache::in_memory(1, 30).unwrap());
         let c = guard.as_mut().unwrap();
         c.put_granted("esri", 1, 2, 3, b"data", "image/png")

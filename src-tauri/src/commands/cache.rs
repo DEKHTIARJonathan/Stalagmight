@@ -50,9 +50,7 @@ pub fn get_cache_stats(state: State<AppState>) -> Result<CacheStats, String> {
 pub(crate) fn get_cache_stats_impl(state: &AppState) -> Result<CacheStats, String> {
     let tile_cache = state.tile_cache();
 
-    let guard = tile_cache
-        .lock()
-        .map_err(|_| "Failed to acquire tile cache lock".to_string())?;
+    let guard = tile_cache.lock();
 
     let Some(cache) = guard.as_ref() else {
         // Cache is disabled - return zero stats (this is not an error condition)
@@ -98,9 +96,7 @@ pub(crate) fn clear_tile_cache_impl(
 ) -> Result<(), String> {
     let tile_cache = state.tile_cache();
 
-    let mut guard = tile_cache
-        .lock()
-        .map_err(|_| "Failed to acquire tile cache lock".to_string())?;
+    let mut guard = tile_cache.lock();
 
     let Some(cache) = guard.as_mut() else {
         // Cache is disabled - nothing to clear

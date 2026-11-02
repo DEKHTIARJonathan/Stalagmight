@@ -32,6 +32,7 @@ use stalagmight_lib::core::command::{
     IntegrityRepairResult, ReversedSection, SpeleoDoneReport, SpeleoPushReport, ValidationWarning,
     WarningSeverity,
 };
+use stalagmight_lib::core::events::InternalErrorNotice;
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
     OpenFileFlags, SpeleoManagedFile,
@@ -181,6 +182,8 @@ fn main() {
     export::<DisplaySettings>(&out_dir);
     export::<LoadingPhase>(&out_dir);
     export::<LoadingProgress>(&out_dir);
+    // [#576 A11] the internal-error banner event's payload
+    export::<InternalErrorNotice>(&out_dir);
     export::<LoadProjectFullResult>(&out_dir);
     export::<OpenFileFlags>(&out_dir);
     export::<CreateProjectFullResult>(&out_dir);
@@ -465,6 +468,7 @@ fn main() {
         "DisplaySettings",
         "LoadingPhase",
         "LoadingProgress",
+        "InternalErrorNotice",
         "LoadProjectFullResult",
         "OpenFileFlags",
         "CreateProjectFullResult",

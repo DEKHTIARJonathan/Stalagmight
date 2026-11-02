@@ -30,7 +30,7 @@ fn continue_editing_claims_the_resumed_lock_so_done_releases_it() {
     // Our own account holds the lock at sign-in (this app before a restart).
     let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
     let (_temp, state) = remote_readonly_fixture();
-    *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+    *state.speleodb.lock() = authed_session_at(&base);
 
     let started = state
         .speleodb_resume_held_lock_editing()
@@ -63,7 +63,7 @@ fn plain_start_editing_over_an_inherited_lock_still_claims_nothing() {
     // that merely starts editing under the account's lock does not.
     let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
     let (_temp, state) = remote_readonly_fixture();
-    *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+    *state.speleodb.lock() = authed_session_at(&base);
 
     let started = state.speleodb_start_editing().expect("start editing");
     assert!(matches!(started, StartEditingResult::Editing));

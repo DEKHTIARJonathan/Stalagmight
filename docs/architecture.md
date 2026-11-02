@@ -288,9 +288,35 @@ if let Ok(config) = self.config.lock() {
 }
 
 // GOOD - release lock before calling
-let value = self.config.lock().map(|c| c.some_field).unwrap_or(default);
+let value = self.config.lock().some_field;
 self.do_something_with(value);
 ```
+
+### Mutex Poisoning (one policy, #576 A11)
+
+A panic that unwinds through a held guard POISONS the mutex: the data is still
+there, possibly half-way through an edit, and std's `lock()` reports the crash on
+every later call. Every lock in the backend crates is a
+`models::poison_policy::RecoveringMutex`, whose only way in is the policy:
+
+- `lock()` RECOVERS the data and returns the guard (never a `Result`). The first
+  poisoned cell is logged once and raises the `internal-error` event once per
+  session; the frontend shows a persistent "save your work and restart" banner
+  (`InternalErrorBanner`). Saving keeps working.
+- A short, named list of operations REFUSES instead, because continuing would
+  replay or publish what the crash may have half-written: undo / redo / undo to /
+  redo to, the SpeleoDB undo-chain walk, and the SpeleoDB upload. The list and the
+  reason for each live on `AppState::refuse_after_crash`; add to it there, not at
+  a call site.
+
+There is no method that returns std's `LockResult`, so `.lock().unwrap()`,
+`.lock().expect(..)`, `if let Ok(..) = x.lock()` and `.lock().map_err(..)` do not
+compile on a cell. `AppState`'s cells report to its own monitor; process-wide cells
+(log ring buffer, telemetry, tile caches, the launch queue) report to
+`poison_policy::global_monitor()`, which app setup forwards into the managed
+state's monitor so the user sees one banner. `poison_policy_tests.rs` enumerates
+every `AppState` cell by exhaustive destructuring, poisons each and drives the
+public API through it.
 
 ### Safe File Save
 

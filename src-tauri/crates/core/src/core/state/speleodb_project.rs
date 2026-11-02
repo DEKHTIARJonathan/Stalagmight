@@ -230,8 +230,9 @@ impl AppState {
     pub(super) fn speleodb_fold_local_name(&self, name: &str) {
         // Snapshot + update the in-memory name under the project lock, then release it
         // before taking the database lock (project → database order).
-        let to_persist = match self.project.lock() {
-            Ok(mut proj_guard) => match proj_guard.as_mut() {
+        let to_persist = {
+            let mut proj_guard = self.project.lock();
+            match proj_guard.as_mut() {
                 Some(project) => {
                     if let Some(refusal) = self.model_write_refusal(project) {
                         tracing::warn!(
@@ -247,11 +248,11 @@ impl AppState {
                     })
                 }
                 None => None,
-            },
-            Err(_) => None,
+            }
         };
         if let Some(project) = to_persist {
-            if let Ok(mut db_guard) = self.database.lock() {
+            {
+                let mut db_guard = self.database.lock();
                 if let Some(db) = db_guard.as_mut() {
                     if let Err(e) = db.save_project(&project) {
                         tracing::warn!(
@@ -319,10 +320,7 @@ impl AppState {
             )));
         }
         {
-            let proj_guard = self
-                .project
-                .lock()
-                .map_err(|_| local_dto(SpeleoDbError::Io("project lock poisoned".to_owned())))?;
+            let proj_guard = self.project.lock();
             let project = proj_guard.as_ref().ok_or_else(|| {
                 local_dto(SpeleoDbError::Refused(
                     "no project is open to publish".to_owned(),
@@ -498,10 +496,7 @@ impl AppState {
                 save.error.unwrap_or_else(|| "unknown error".to_owned())
             )));
         }
-        let db_guard = self
-            .database
-            .lock()
-            .map_err(|_| SpeleoDbError::Io("database lock poisoned".to_owned()))?;
+        let db_guard = self.database.lock();
         let db = db_guard.as_ref().ok_or_else(|| {
             SpeleoDbError::Io("no open database after writing the cache file".to_owned())
         })?;
