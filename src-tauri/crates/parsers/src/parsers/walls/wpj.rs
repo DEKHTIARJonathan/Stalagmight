@@ -241,24 +241,19 @@ pub(crate) fn parse_wpj_within(path: &Path, linked_byte_limit: u64) -> Result<Pa
                                     // is honored (genuine Walls does), but a file
                                     // read from outside the `.wpj`'s own tree -
                                     // through it, or through a symlink inside the
-                                    // project (#576 RV3-R-10) - is said out loud.
+                                    // project (#576 RV3-R-10) - is said out loud,
+                                    // once it has actually been read (below).
                                     // (The read is NOT blocked: an explicit path
                                     // is the author's deliberate choice.)
-                                    if let Some(real) = outside_root(&file_path, &ctx.root) {
-                                        warnings.push(format!(
-                                            "survey '{label}' is read from outside the \
-                                             project directory ({})",
-                                            real.display()
-                                        ));
-                                    }
-                                    Ok(file_path)
+                                    let outside = outside_root(&file_path, &ctx.root);
+                                    Ok((file_path, outside))
                                 }
                                 other => Err(other
                                     .map_or_else(|| label.clone(), |p| p.display().to_string())),
                             },
                         };
                         match found {
-                            Ok(file_path) => match budget.admit(&file_path) {
+                            Ok((file_path, outside)) => match budget.admit(&file_path) {
                                 Admission::AlreadyRead => warnings.push(format!(
                                     "survey '{label}': {} is listed more than once in the .WPJ; \
                                      the file was read once, and this listing was skipped so its \
@@ -277,6 +272,17 @@ pub(crate) fn parse_wpj_within(path: &Path, linked_byte_limit: u64) -> Result<Pa
                                         replaced,
                                     }) => {
                                         budget.record(ticket);
+                                        // Only a listing that was read is said
+                                        // to be read from outside: a repeat or an
+                                        // over-budget one is skipped, and says
+                                        // so (#576 RV4-R-P2).
+                                        if let Some(real) = outside {
+                                            warnings.push(format!(
+                                                "survey '{label}' is read from outside the \
+                                                 project directory ({})",
+                                                real.display()
+                                            ));
+                                        }
                                         warnings.extend(cp1252_replacement_warning(
                                             Some(&file_path),
                                             "Walls",

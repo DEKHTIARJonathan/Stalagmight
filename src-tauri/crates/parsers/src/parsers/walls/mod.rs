@@ -508,3 +508,8 @@ mod closure_tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod wpj_budget_tests;
+
+// #576 RV4-R-P2: only a survey that was read is reported as read from outside.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod wpj_outside_rv4_tests;
