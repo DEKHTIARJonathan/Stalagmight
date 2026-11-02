@@ -937,6 +937,7 @@ mod receipt_tests {
             warnings: Vec::new(),
             info: Vec::new(),
             zero_datum_created: None,
+            hidden_warnings: 0,
         })
     }
 
@@ -1097,6 +1098,37 @@ mod receipt_tests {
             .expect("the receipt must survive the merge");
         assert_eq!(receipt.warnings.len(), 51);
         assert!(receipt.warnings[0].contains("database could not be reopened"));
+    }
+
+    /// #576 C17: the realistic order - the importer's receipt is already
+    /// capped (`decorate_receipt`) when the first import into a new project
+    /// resolves its deferred save. The second cap used to take the first
+    /// one's "... and 250 more" line for an ordinary warning, drop it with
+    /// the 50th real warning, and report "2 more" when 251 were hidden.
+    #[test]
+    fn a_degraded_deferred_save_after_a_capped_receipt_keeps_the_hidden_count() {
+        let mut import_result = base_result();
+        decorate_receipt(
+            &mut import_result,
+            "Compass",
+            Path::new("/tmp/cave.dat"),
+            1,
+            None,
+            (0..300).map(|i| format!("converter note {i}")).collect(),
+        );
+
+        let merged = merge_deferred_save_outcome(import_result, degraded_save());
+        let receipt = merged
+            .import_receipt
+            .expect("the receipt must survive the merge");
+        assert_eq!(receipt.warnings.len(), 51);
+        assert!(receipt.warnings[0].contains("database could not be reopened"));
+        assert_eq!(receipt.warnings[49], "converter note 48");
+        assert_eq!(
+            receipt.warnings.last().map(String::as_str),
+            Some("... and 251 more warnings"),
+            "301 warnings, 50 shown"
+        );
     }
 
     /// The clean case must stay clean - no phantom warning from a save that had

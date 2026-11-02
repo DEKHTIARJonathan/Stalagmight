@@ -1616,6 +1616,7 @@ mod tests {
             warnings: Vec::new(),
             info: Vec::new(),
             zero_datum_created: None,
+            hidden_warnings: 0,
         }
     }
 
@@ -1698,5 +1699,45 @@ mod tests {
         receipt.cap_warnings();
 
         assert_eq!(receipt.warnings, vec!["short warning".to_string()]);
+    }
+
+    /// #576 C17: `execute_import_sections` caps its receipt, and
+    /// `decorate_receipt` caps again after putting the converter's warnings
+    /// first. The second cap treated the first one's "... and N more" line as
+    /// an ordinary warning - dropping it, and counting only what IT cut - so
+    /// 60 execute warnings plus 3 converter ones said "4 more" when 13 were
+    /// hidden.
+    #[test]
+    fn decorate_receipt_counts_what_an_earlier_cap_hid() {
+        let mut receipt = blank_receipt();
+        receipt.warnings = (0..60).map(|i| format!("shot {i} looks odd")).collect();
+        receipt.cap_warnings();
+        let mut result = CommandResult::success().with_import_receipt(receipt);
+
+        decorate_receipt(
+            &mut result,
+            "Compass",
+            std::path::Path::new("/tmp/cave.dat"),
+            1,
+            None,
+            (0..3).map(|i| format!("converter note {i}")).collect(),
+        );
+
+        let warnings = result.import_receipt.expect("receipt").warnings;
+        assert_eq!(warnings.len(), 51);
+        assert_eq!(warnings[0], "converter note 0");
+        assert_eq!(
+            warnings.last().map(String::as_str),
+            Some("... and 13 more warnings"),
+            "63 warnings, 50 shown"
+        );
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|w| w.starts_with("... and "))
+                .count(),
+            1,
+            "one summary line"
+        );
     }
 }

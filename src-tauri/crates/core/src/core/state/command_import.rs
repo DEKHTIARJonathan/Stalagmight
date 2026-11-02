@@ -1395,6 +1395,7 @@ impl AppState {
             warnings: receipt_warnings,
             info: Vec::new(),
             zero_datum_created,
+            hidden_warnings: 0,
         };
         receipt.cap_warnings();
 
