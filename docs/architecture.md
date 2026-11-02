@@ -35,6 +35,28 @@ User Action → Zustand Store → Tauri IPC → Rust Command Executor
      └──────────── State Update ←──────── Command Result
 ```
 
+### Reading the project back: binary for the app, JSON for the harness
+
+Two commands return the open project with its stations, stats and frozen shots,
+and both are kept on purpose (#576 REFRESH-CMDS):
+
+- **`get_project_state_binary`** is the app's own read. `refreshProjectState`
+  issues it after every edit; it is the load's msgpack + typed-array envelope
+  (`core/load_binary.rs` `encode_refresh`, decoded by `utils/loadProjectBinary.ts`),
+  and an empty answer means no project is open. The load itself uses
+  `load_project_full_binary`, the same layout.
+- **`get_project_state`** is the same read as JSON. Nothing in `src/` calls it.
+  It stays for the agent harness (`e2e/agent/`: the journeys, the fuzz and import
+  oracles read the project as data) and for debugging, where a readable payload
+  from the devtools console beats a byte envelope. Do not remove it with the app's
+  last caller gone, and do not route the app back through it: at 75,000 shots it
+  is ~36 MB of JSON per edit (docs/performance.md, "The Refresh After an Edit").
+
+Both take the settled snapshot and share `measured_state` (`commands/project.rs`),
+so the two cannot describe different projects. Shot readings in the binary form
+are f32 (the PRECISION note in `load_binary.rs`), which is why the edit paths send
+only the fields the user changed (#576 F32-EDIT).
+
 ## Command Pattern
 
 All persistent operations go through the Rust `Command` enum in

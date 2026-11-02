@@ -117,11 +117,14 @@ pub async fn close_project<R: Runtime>(
     .await
 }
 
-/// Get the full project state for the frontend
+/// Get the full project state as JSON.
 ///
-/// The JSON form, kept for the agent harness and tests, which read the project
-/// as data. The app's own refresh after an edit uses
-/// [`get_project_state_binary`].
+/// [#576 REFRESH-CMDS] Kept deliberately next to [`get_project_state_binary`],
+/// which is the app's own read (the refresh after every edit): nothing in the
+/// frontend calls this one. It stays for the agent harness (`e2e/agent/`, which
+/// reads the project as data) and for debugging, where a readable payload beats
+/// the byte envelope. Both read the settled snapshot through `measured_state`, so
+/// they cannot disagree. See docs/architecture.md, "Reading the project back".
 #[tauri::command]
 pub async fn get_project_state<R: Runtime>(app: tauri::AppHandle<R>) -> Option<ProjectState> {
     pool::run_infallible(app, |state| {
