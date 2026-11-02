@@ -9,6 +9,7 @@
 // Run: node scripts/check-prepush-checklist.test.mjs  (also a CI leak-scan step).
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -395,6 +396,51 @@ test('parseChecklist only reads the block under the heading', () => {
   const md = `\`\`\`bash\npnpm before-heading\n\`\`\`\n${checklist(['pnpm lint:foo'])}\n\`\`\`bash\npnpm after-block\n\`\`\`\n`;
   const r = parseChecklist(md, new Map());
   assert.deepEqual(r.commands.map((c) => c.key), ['pnpm lint:foo']);
+});
+
+// --- wrapper scripts (#576 RV5-PI-1) ------------------------------------------------------------
+
+test('a command run through the unprivileged-test wrapper is the wrapped gate', () => {
+  const steps = '      - run: ./scripts/ci-cargo-test-unprivileged.sh cargo test --workspace --manifest-path src-tauri/Cargo.toml';
+  const missing = run({ [WF]: workflow(steps), 'CLAUDE.md': checklist(['pnpm lint:foo']) });
+  assert.equal(missing.problems.length, 1);
+  assert.match(missing.problems[0], /missing from the checklist: cargo test --manifest-path=src-tauri\/Cargo.toml --workspace/);
+  const covered = run({
+    [WF]: workflow(steps),
+    'CLAUDE.md': checklist(['cargo test --manifest-path src-tauri/Cargo.toml --workspace']),
+  });
+  assert.deepEqual(covered.problems, []);
+  assert.equal(covered.gates, 1);
+  assert.equal(
+    normalize('./scripts/ci-cargo-test-unprivileged.sh cargo test --workspace', new Map()),
+    normalize('cargo test --workspace', new Map()),
+  );
+});
+
+// The runner must reach the wrapped `cargo test` and nothing after it: `cargo run`
+// honours it too, and `pnpm gen:ipc-types` failed as the test user (#576 RV5-PI-1).
+test('the live workflows hand the unprivileged runner to one wrapped command, never to GITHUB_ENV', () => {
+  const script = 'scripts/ci-cargo-test-unprivileged.sh';
+  const source = fs.readFileSync(path.join(REPO_ROOT, script), 'utf8');
+  assert.doesNotMatch(source, />>\s*"?\$\{?GITHUB_ENV/, `${script} must not configure later steps through GITHUB_ENV`);
+  let calls = 0;
+  for (const wf of ['.github/workflows/ci.yml', '.github/workflows/runner-bench.yml']) {
+    for (const step of extractSteps(fs.readFileSync(path.join(REPO_ROOT, wf), 'utf8'))) {
+      for (const cmd of splitCommands(step.run ?? '')) {
+        const tokens = cmd.trim().split(/\s+/);
+        if (!/^(\.\/)?scripts\/ci-cargo-test-unprivileged\.sh$/.test(tokens[0])) continue;
+        calls++;
+        assert.ok(tokens.length > 1 && tokens[1] === 'cargo', `${wf} step "${step.name}" calls ${script} without the cargo command it wraps`);
+      }
+    }
+  }
+  assert.ok(calls >= 2, `expected the wrapper in ci.yml and runner-bench.yml, found ${calls} call(s)`);
+  // Unprivileged already (every dev machine, the hosted runner): it runs the command.
+  if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+    const ran = spawnSync('bash', [path.join(REPO_ROOT, script), 'node', '-e', 'process.stdout.write("wrapped command ran")'], { encoding: 'utf8' });
+    assert.equal(ran.status, 0, ran.stderr);
+    assert.match(ran.stdout, /wrapped command ran/);
+  }
 });
 
 // --- the live repo -------------------------------------------------------------------------------

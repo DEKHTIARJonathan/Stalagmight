@@ -163,16 +163,11 @@ jobs:
         run: sccache --zero-stats || true
 
       # As in ci.yml's check job (#576 NF-ROOT-PERM): the permission tests fail
-      # as root, so the test binaries run as an unprivileged user.
-      - name: Unprivileged Rust test user (root runners only)
-        if: ${{ !inputs.skip_cargo_test }}
-        run: ./scripts/ci-cargo-test-unprivileged.sh
-        env:
-          XDG_CONFIG_HOME: ${{ runner.temp }}/config
-
+      # as root, so the test binaries of this one command run as an
+      # unprivileged user.
       - name: cargo test
         if: ${{ !inputs.skip_cargo_test }}
-        run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
+        run: ./scripts/ci-cargo-test-unprivileged.sh cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"

@@ -83,9 +83,15 @@ export const PLUMBING_COMMANDS = [
   { re: /^pnpm install(\s|$)/, why: 'dependency install' },
   { re: /^pnpm exec playwright install(-deps)?(\s|$)/, why: 'browser / system-dependency install' },
   { re: /^node scripts\/pw-timing-summary\.mjs(\s|$)/, why: 'run-page timing table; it cannot fail the job' },
+];
+
+// Scripts that run the command they are given (CI plumbing around a gate):
+// stripped, so the wrapped command is compared with the checklist like any
+// other.
+export const WRAPPER_SCRIPTS = [
   {
-    re: /^\.\/scripts\/ci-cargo-test-unprivileged\.sh(\s|$)/,
-    why: 'runner setup: on a root runner the Rust test binaries run as a non-root user (#576 NF-ROOT-PERM)',
+    re: /^(\.\/)?scripts\/ci-cargo-test-unprivileged\.sh$/,
+    why: "on a root runner the wrapped command's Rust test binaries run as a non-root user (#576 NF-ROOT-PERM, RV5-PI-1)",
   },
 ];
 
@@ -363,6 +369,7 @@ export function normalize(cmd, byCommand) {
   let tokens = tokenize(cmd);
   while (tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) tokens.shift(); // env prefix
   while (tokens.length && ['do', 'then', 'else'].includes(tokens[0])) tokens.shift();
+  while (tokens.length > 1 && WRAPPER_SCRIPTS.some((w) => w.re.test(tokens[0]))) tokens.shift();
   if (tokens.length === 0) return null;
   const head = tokens[0];
   if (/^(\.\/)?scripts\/[\w.-]+\.(sh|mjs|js)$/.test(head)) {

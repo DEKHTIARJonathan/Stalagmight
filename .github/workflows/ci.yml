@@ -239,17 +239,15 @@ jobs:
       # The Rust tests run as an unprivileged user (#576 NF-ROOT-PERM): root
       # ignores mode bits, and the permission tests assert that the bits bite,
       # so on the self-hosted runner (a root container) they would fail. The
-      # script points Cargo's target runner at `setpriv` for the rest of the
-      # job; compilation stays with the job's user, so sccache and target/ are
-      # untouched. On hosted (already unprivileged) it does nothing. It needs
-      # the same XDG_CONFIG_HOME as the test step, to hand that dir over.
-      - name: Unprivileged Rust test user (root runners only)
+      # wrapper points Cargo's target runner at `setpriv` for THIS command only;
+      # compilation stays with the job's user, so sccache and target/ are
+      # untouched. On hosted (already unprivileged) it just runs the command.
+      # Never hand the runner to later steps (GITHUB_ENV): `cargo run` honours
+      # it too, and `pnpm gen:ipc-types` below must write src/types/ipc as the
+      # job's user (#576 RV5-PI-1).
+      - name: Rust tests (unprivileged test user on root runners)
         if: ${{ !cancelled() }}
-        run: ./scripts/ci-cargo-test-unprivileged.sh
-        env:
-          XDG_CONFIG_HOME: ${{ runner.temp }}/config
-      - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
-        if: ${{ !cancelled() }}
+        run: ./scripts/ci-cargo-test-unprivileged.sh cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"

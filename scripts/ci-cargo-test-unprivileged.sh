@@ -1,21 +1,26 @@
 #!/usr/bin/env bash
-# Make the rest of a CI job run the Rust test binaries as an unprivileged user
-# (#576 NF-ROOT-PERM).
+# Run ONE command (the CI `cargo test` step) with its Rust test binaries started
+# as an unprivileged user (#576 NF-ROOT-PERM).
+#
+#   ./scripts/ci-cargo-test-unprivileged.sh cargo test --workspace ...
 #
 # Root - and any process holding CAP_DAC_OVERRIDE - ignores mode bits, so a
 # test that takes a permission away (a read-only folder, a 0444 file, an
 # unsearchable directory) cannot mean anything there. Those tests assert that
 # the bits bite and fail otherwise (stalagmight_models::test_support), and the
 # self-hosted runner is a container running as uid 0. On a runner that is
-# already unprivileged (GitHub-hosted) this script does nothing.
+# already unprivileged (GitHub-hosted) this script just runs the command.
 #
 # Compilation stays with the job's user: cargo, the target dir, the registry
 # and sccache are untouched, so the build cache works as before. Only the test
-# binaries cross over, through Cargo's target runner: the script appends
-# CARGO_TARGET_<HOST TRIPLE>_RUNNER to $GITHUB_ENV, and every later `cargo test`
-# in the job then starts each test binary under `setpriv`, as the test user.
-# Doctests are run by rustdoc rather than through the runner and stay with the
-# job's user; none of them depends on permissions.
+# binaries cross over, through Cargo's target runner: the script exports
+# CARGO_TARGET_<HOST TRIPLE>_RUNNER for the command it runs and for nothing
+# else. It used to append that variable to $GITHUB_ENV, which handed it to
+# every later step of the job too, and `cargo run` honours the runner as well:
+# `pnpm gen:ipc-types` then ran the generator as the test user, which cannot
+# write src/types/ipc, and the check job failed on every root run (#576
+# RV5-PI-1). Doctests are run by rustdoc rather than through the runner and
+# stay with the job's user; none of them depends on permissions.
 #
 # The test user must be able to write what the tests write: their HOME (a
 # fresh temp dir), the temp dir, XDG_CONFIG_HOME when the job sets it (pass
@@ -23,14 +28,20 @@
 # tests regenerate.
 #
 # STALAGMIGHT_TEST_USER names an existing account to use instead of creating
-# `stalagmight-test` (for a local dry run).
+# `stalagmight-test` (for a local dry run). A dry run of the whole step order
+# runs this script as root, then `pnpm gen:ipc-types` with the shell's own
+# environment: the generator must still run as root and write src/types/ipc.
 set -euo pipefail
+
+if [ "$#" -eq 0 ]; then
+  echo "usage: $0 <command> [args...]   (e.g. $0 cargo test --workspace ...)" >&2
+  exit 2
+fi
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Already unprivileged ($(id -un)): the Rust tests run as this user."
-  exit 0
+  exec "$@"
 fi
-: "${GITHUB_ENV:?this script configures the later steps of a job through GITHUB_ENV}"
 command -v setpriv >/dev/null || {
   echo "::error::setpriv (util-linux) is missing, so the Rust tests cannot drop root"
   exit 1
@@ -76,5 +87,6 @@ if [ -z "$host" ]; then
   exit 1
 fi
 var="CARGO_TARGET_$(printf '%s' "$host" | tr '[:lower:]-' '[:upper:]_')_RUNNER"
-echo "$var=${runner[*]}" >>"$GITHUB_ENV"
-echo "The Rust test binaries run as $user ($uid:$gid) through $var."
+export "$var=${runner[*]}"
+echo "The Rust test binaries of this command run as $user ($uid:$gid) through $var."
+exec "$@"
