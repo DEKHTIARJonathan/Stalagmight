@@ -2061,11 +2061,12 @@ mod tests {
 
     // ---- Non-finite geometry (#576 B21) -----------------------------------
 
-    /// One absurd tape (a 1e200 typo, or a corrupt file) overflows every
-    /// station after it to inf/NaN. The image export used to write a blank
+    /// Absurd tapes (typos near `f64::MAX`, or a corrupt file) overflow every
+    /// station after them to inf/NaN. The image export used to write a blank
     /// 5x5 PNG or an SVG with an infinite viewBox and report success; it now
     /// refuses, naming the first section and shot whose station is not
-    /// finite, and writes nothing.
+    /// finite, and writes nothing. (One 1e200 tape used to be enough; its
+    /// horizontal length stays finite since #576 NF-TML-1.)
     #[test]
     fn non_finite_geometry_is_refused_naming_section_and_shot() {
         let mut project = Project::new("Absurd".to_string(), None);
@@ -2073,8 +2074,8 @@ mod tests {
             name: Some("Main".to_string()),
             color: "#000000".to_string(),
             shots: vec![
-                make_shot(10.0, 0.0, false),
-                make_shot(1e200, 0.0, false),
+                make_shot(f64::MAX, 0.0, false),
+                make_shot(f64::MAX, 0.0, false),
                 make_shot(10.0, 0.0, false),
             ],
             ..Default::default()

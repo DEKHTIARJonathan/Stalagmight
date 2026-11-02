@@ -29,12 +29,24 @@ pub fn shot_display_position(shot_id: ShotId, section_id: SectionId) -> u32 {
 
 /// Convert slope length + vertical delta into horizontal length.
 /// Returns 0.0 if the inputs are invalid (e.g., slope < |dz|).
+///
+/// Finite inputs give a finite length (#576 NF-TML-1): above ~1.34e154 m a
+/// square overflows, so an absurd tape used to come out as `inf` (or NaN once
+/// both squares did) and poison every station after it. Only that case takes
+/// the scaled form; every ordinary input keeps its bit-exact result.
 pub(crate) fn horizontal_length_from_slope(length: f64, dz: f64) -> f64 {
     let len_sq = length * length - dz * dz;
-    if len_sq <= 0.0 {
+    if len_sq.is_finite() || !(length.is_finite() && dz.is_finite()) {
+        return if len_sq <= 0.0 { 0.0 } else { len_sq.sqrt() };
+    }
+    // A square overflowed: the same length with both scaled into [0, 1].
+    let scale = length.abs().max(dz.abs());
+    let (l, d) = (length.abs() / scale, dz.abs() / scale);
+    let scaled_sq = (l - d) * (l + d);
+    if scaled_sq <= 0.0 {
         0.0
     } else {
-        len_sq.sqrt()
+        scale * scaled_sq.sqrt()
     }
 }
 
@@ -1176,6 +1188,37 @@ mod tests {
     #[test]
     fn horizontal_length_zero_length_zero_dz() {
         assert_eq!(horizontal_length_from_slope(0.0, 0.0), 0.0);
+    }
+
+    /// #576 NF-TML-1: an absurd but finite tape squared past f64's range and
+    /// came out `inf` (NaN once both squares did). It stays finite and right;
+    /// an ordinary input keeps its bit-exact result.
+    #[test]
+    fn horizontal_length_of_an_absurd_tape_stays_finite() {
+        for (length, dz, expected) in [
+            (1e200, 0.0, 1e200),
+            (1e200, 6e199, 8e199),
+            (1e200, 1e200, 0.0),
+            (1e200, 2e200, 0.0),
+            (f64::MAX, 0.0, f64::MAX),
+        ] {
+            let h = horizontal_length_from_slope(length, dz);
+            println!("horizontal_length_from_slope({length:e}, {dz:e}) = {h:e}");
+            assert!(
+                h.is_finite() && (h - expected).abs() <= expected * 1e-12,
+                "({length:e}, {dz:e}) -> {h:e}, expected {expected:e}"
+            );
+        }
+        assert_eq!(
+            horizontal_length_from_slope(5.0, 3.0).to_bits(),
+            4.0f64.to_bits()
+        );
+        let ordinary = 12.34f64.mul_add(12.34, -(5.6f64 * 5.6)).sqrt();
+        assert_eq!(
+            horizontal_length_from_slope(12.34, 5.6).to_bits(),
+            (12.34f64 * 12.34 - 5.6 * 5.6).sqrt().to_bits(),
+            "unchanged for ordinary input (fused would be {ordinary})"
+        );
     }
 
     #[test]

@@ -358,10 +358,10 @@ impl Project {
         // a non-finite displacement straight into `section_offsets`, which has no
         // other finite guard - `save_project` rewrites a non-finite offset to 0.0,
         // teleporting the section to the origin (the exact opposite of what this
-        // compensation is for). A finite `length` near 1e200 is enough:
-        // `horizontal_length_from_slope` squares it to `inf`, and `inf * sin(0)`
-        // is NaN, while `ShotData::all_finite` still passes. `move_segment` and
-        // `move_station` reject non-finite offsets for the same reason.
+        // compensation is for). Finite lengths are enough: two tapes near
+        // `f64::MAX` sum past it to `inf`, while `ShotData::all_finite` still
+        // passes. `move_segment` and `move_station` reject non-finite offsets for
+        // the same reason.
         if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
             self.adjust_section_offset(section_id, dx, dy);
         }
@@ -881,16 +881,17 @@ mod tests {
     /// `section_offsets` has no finite guard of its own, and `save_project`
     /// rewrites a non-finite offset to 0.0 - so admitting one here teleports the
     /// section to the origin on the next save, the exact opposite of what the
-    /// compensation exists for. A finite `length` is enough to produce it:
-    /// `horizontal_length_from_slope` squares it to `inf`, and `inf * sin(0)` is
-    /// NaN, while `ShotData::all_finite` still passes.
+    /// compensation exists for. Finite lengths are enough to produce it: two
+    /// tapes near `f64::MAX` sum past it to `inf`, while `ShotData::all_finite`
+    /// still passes. (One 1e200 tape no longer does: `horizontal_length_from_slope`
+    /// stays finite since #576 NF-TML-1.)
     #[test]
     fn reverse_refuses_to_write_a_non_finite_offset() {
-        let (mut project, id) = project_with_shots(vec![shot(0.0, 1e200, 0.0, 0.0)]);
+        let absurd = || vec![shot(0.0, f64::MAX, 0.0, 0.0), shot(0.0, f64::MAX, 0.0, 0.0)];
+        let (mut project, id) = project_with_shots(absurd());
+        let (dx, dy) = shot_run_displacement(&absurd(), AzimuthReference::default());
         assert!(
-            shot_run_displacement(&[shot(0.0, 1e200, 0.0, 0.0)], AzimuthReference::default())
-                .0
-                .is_nan(),
+            !(dx.is_finite() && dy.is_finite()),
             "precondition: this fixture must actually overflow to a non-finite \
              displacement, or the test proves nothing"
         );
