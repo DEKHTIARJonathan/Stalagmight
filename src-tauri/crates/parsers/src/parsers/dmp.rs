@@ -2120,7 +2120,8 @@ mod tests {
     }
 
     // ========================================================================
-    // kb5.dmp regression tests (skipped by default - each `#[ignore]` says why)
+    // kb5.dmp regression tests. The fixture is committed (e2e/fixtures/kb5.dmp),
+    // so these run in every `cargo test`.
 
     /// The `ShotData` these regression tests feed the matcher, built exactly as
     /// the deleted `DmpShot::to_shot_data` did (#576 B24), so their inputs are
@@ -2149,9 +2150,8 @@ mod tests {
     // ========================================================================
 
     /// Parse kb5.dmp and validate section structure, shot counts, and key shot data.
-    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_parse_regression -- --ignored --nocapture
+    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_parse_regression -- --nocapture
     #[test]
-    #[ignore = "kb5.dmp regression, run deliberately with --ignored; #576 NF-KB5-ROT un-skips the kb5 tests"]
     fn kb5_parse_regression() {
         let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/fixtures/kb5.dmp");
         assert!(
@@ -2277,13 +2277,18 @@ mod tests {
 
     /// Run cross-section suggestions on kb5.dmp sections (with 002 as existing)
     /// and validate the overlap detection results.
-    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_suggestions_regression -- --ignored --nocapture
+    ///
+    /// Re-blessed for #576 NF-KB5-ROT (decision E13-D3): d93f93b2 (2026-06-11)
+    /// tightened the placement cutoff on purpose, and since then the two-shot
+    /// overlaps of 001's back and 004's back against existing 002 no longer
+    /// clear it. The test was skipped at the time, so nothing noticed; it now
+    /// pins the stricter outcome, and a suggestion reappearing there means the
+    /// cutoff loosened.
+    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_suggestions_regression -- --nocapture
     #[test]
-    #[ignore = "red since d93f93b2 tightened the placement cutoff; #576 NF-KB5-ROT updates and un-skips it"]
     fn kb5_suggestions_regression() {
         use crate::models::placement_suggest::{
-            suggest_all_placements, ExistingSection, ImportSectionForSuggestion, MatchDirection,
-            TargetType,
+            suggest_all_placements, ExistingSection, ImportSectionForSuggestion, TargetType,
         };
         use crate::models::shot::{Shot, ShotKind};
 
@@ -2379,26 +2384,18 @@ mod tests {
         // 1. import=4(005) impStn=7 → target=importing:0(001) exStn=25 matched=2 dir=forward
         // 2. import=3(004) impStn=0 → target=importing:0(001) exStn=28 matched=2 dir=reverse
         // 3. import=2(003) impStn=0 → target=importing:0(001) exStn=27 matched=2 dir=forward
-        // 4. import=0(001) impStn=107 → target=existing:0(002) exStn=182 matched=2 dir=reverse
-
-        // Verify the import→existing suggestion exists: 001 → 002
+        // Before d93f93b2 there was a fourth, import=0(001) impStn=107 →
+        // target=existing:0(002) exStn=182 matched=2 dir=reverse; the stricter
+        // cutoff no longer offers it.
         let s001_to_002 = suggestions.iter().find(|s| {
             s.import_section_index == 0
                 && s.target_type == TargetType::Existing
                 && s.existing_section_id == Some(0)
         });
         assert!(
-            s001_to_002.is_some(),
-            "should find 001→002 existing suggestion"
+            s001_to_002.is_none(),
+            "001 has no placement onto existing 002 under the d93f93b2 cutoff, got {s001_to_002:?}"
         );
-        let s = s001_to_002.unwrap();
-        assert_eq!(
-            s.import_station_index, 107,
-            "001 connects at its last station"
-        );
-        assert_eq!(s.existing_station_index, 182, "connects to 002 station 182");
-        assert_eq!(s.matched_shots, 2);
-        assert_eq!(s.direction, MatchDirection::Reverse);
 
         // Verify import→import suggestions exist
         // 005 → 001
@@ -2461,8 +2458,9 @@ mod tests {
             "003 connects to 001 station 27"
         );
 
-        // Verify section 004 also has an overlap against existing 002
-        // (This was the source of the double-treatment bug)
+        // Section 004's back used to overlap existing 002 too (two shots at 002
+        // station 257 - the source of the double-treatment bug); under the
+        // d93f93b2 cutoff it is not offered either.
         let s004_to_existing = suggestions.iter().find(
             |s| {
                 s.import_section_index == 3
@@ -2470,13 +2468,10 @@ mod tests {
                     && s.import_station_index == 4
             }, // back of 004
         );
-        assert!(s004_to_existing.is_some(),
-            "section 004 should have a back-end overlap with existing 002 (double-treatment regression)");
-        let s = s004_to_existing.unwrap();
-        assert_eq!(s.matched_shots, 2, "004→002 overlap should be 2 shots");
-        assert_eq!(
-            s.existing_station_index, 257,
-            "004 back connects to 002 station 257"
+        assert!(
+            s004_to_existing.is_none(),
+            "004's back has no placement onto existing 002 under the d93f93b2 cutoff, got \
+             {s004_to_existing:?}"
         );
     }
 
@@ -2492,9 +2487,13 @@ mod tests {
     /// - treatedShots guard: a shot already treated by a prior suggestion is skipped
     /// - Suggestions targeting importing:1 (section 002) are skipped (002 is existing, not imported)
     ///
-    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_overlap_treatment_regression -- --ignored --nocapture
+    ///
+    /// Re-blessed for #576 NF-KB5-ROT (decision E13-D3): since d93f93b2 tightened
+    /// the placement cutoff there is no 001→002 suggestion (see
+    /// `kb5_suggestions_regression`), so nothing deletes 001's two overlap shots
+    /// and 001 keeps all 107.
+    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_overlap_treatment_regression -- --nocapture
     #[test]
-    #[ignore = "red since d93f93b2 tightened the placement cutoff; #576 NF-KB5-ROT updates and un-skips it"]
     fn kb5_overlap_treatment_regression() {
         use crate::models::placement_suggest::{
             suggest_all_placements, CrossSectionSuggestion, ExistingSection,
@@ -2688,8 +2687,8 @@ mod tests {
         );
 
         assert_eq!(
-            alive_001, 105,
-            "001: 107 raw - 2 deleted (confirmed import-to-existing with 002) = 105"
+            alive_001, 107,
+            "001: 107 raw, nothing deleted - no import-to-existing placement with 002 is offered"
         );
         assert_eq!(
             alive_005, 5,
@@ -2738,29 +2737,20 @@ mod tests {
             "004 attaches to 001 station 28"
         );
 
-        // 001 connects to existing 002 at station 182
-        let s001 = suggestions
-            .iter()
-            .find(|s| {
-                s.import_section_index == 0
-                    && s.target_type == TargetType::Existing
-                    && s.existing_section_id == Some(0)
-            })
-            .expect("001 should have an existing suggestion to 002");
-        assert_eq!(
-            s001.import_station_index, 107,
-            "001 connects at its back (station 107)"
-        );
-        assert_eq!(
-            s001.existing_station_index, 182,
-            "001 attaches to 002 station 182"
-        );
+        // 001 no longer gets a placement onto existing 002 (it used to attach at
+        // its back, station 107, to 002 station 182).
+        let s001 = suggestions.iter().find(|s| {
+            s.import_section_index == 0
+                && s.target_type == TargetType::Existing
+                && s.existing_section_id == Some(0)
+        });
+        assert!(s001.is_none(), "no 001→002 suggestion, got {s001:?}");
 
-        // Overlap shot raw data for 001→002 connection.
-        // Import overlap shots 105, 106 are deleted from 001.
-        // Target shots 180, 181 on existing section 002 get interpolated values.
-        // Post-import interpolated values are verified in the integration test
-        // kb5_import_overlap_interpolation_integration (core/state/tests.rs).
+        // Overlap shot raw data for the 001→002 connection a user places by hand:
+        // import overlap shots 105, 106 of 001 and target shots 180, 181 of
+        // existing section 002. The integration test
+        // kb5_import_overlap_interpolation_integration (core/state/tests.rs)
+        // imports that manual placement and checks the interpolated values.
         let std_001: Vec<_> = dmp.sections[0]
             .shots
             .iter()
