@@ -21,6 +21,7 @@ pub mod station;
 pub mod survey_geometry;
 pub mod telemetry;
 pub mod validation;
+pub(crate) mod write_path;
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used)]
@@ -76,3 +77,11 @@ mod recovery_tests;
 #[cfg(all(test, feature = "telemetry"))]
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod telemetry_coverage_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod write_path_tests;

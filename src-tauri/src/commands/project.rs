@@ -2,12 +2,14 @@ use std::path::PathBuf;
 use tauri::{Manager, State};
 use ts_rs::TS;
 
+use crate::commands::write_path::{check_write_path, WriteTarget};
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
     AlongLineResult, DistanceField, FrozenShotRef, Project, ProjectMetadata, ProjectStats,
     RulerEndpoint, Station, StationRef,
 };
+use crate::persistence::with_stalx_extension;
 
 /// Update per-project settings (#57): project name + validation thresholds, and
 /// (#576 NF-W3-2) the default north reference (`null` = nothing recorded).
@@ -58,7 +60,19 @@ pub fn save_project(
 }
 
 pub(crate) fn save_project_impl(state: &AppState, path: Option<PathBuf>) -> CommandResult {
+    // [#576 C11-D1] A Save As target, as the save will name it.
+    if let Some(path) = &path {
+        if let Err(why) = check_project_target(&with_stalx_extension(path.clone())) {
+            return CommandResult::failure(why);
+        }
+    }
     state.execute(Command::SaveProject { path })
+}
+
+/// [#576 C11-D1] The write-path check for a project file a command writes,
+/// replaces or deletes.
+fn check_project_target(path: &std::path::Path) -> Result<(), String> {
+    check_write_path(path, WriteTarget::Project)
 }
 
 /// Close the current project. `release_lock` (default `true`) best-effort releases
@@ -245,6 +259,9 @@ pub fn delete_project(state: State<AppState>, path: PathBuf) -> CommandResult {
 }
 
 pub(crate) fn delete_project_impl(state: &AppState, path: PathBuf) -> CommandResult {
+    if let Err(why) = check_project_target(&path) {
+        return CommandResult::failure(why);
+    }
     state.delete_project(path)
 }
 
@@ -255,6 +272,9 @@ pub fn set_project_name_for_path(
     path: PathBuf,
     name: String,
 ) -> CommandResult {
+    if let Err(why) = check_project_target(&path) {
+        return CommandResult::failure(why);
+    }
     state.set_project_name_for_path(path, name)
 }
 
@@ -285,6 +305,19 @@ pub(crate) fn merge_projects_impl(
     output_name: String,
     archive_originals: bool,
 ) -> CommandResult {
+    // The new file, and - when they are to be moved into the archive - the sources.
+    let moved: &[PathBuf] = if archive_originals {
+        &source_paths
+    } else {
+        &[]
+    };
+    let targets =
+        std::iter::once(with_stalx_extension(output_path.clone())).chain(moved.iter().cloned());
+    for target in targets {
+        if let Err(why) = check_project_target(&target) {
+            return CommandResult::failure(why);
+        }
+    }
     state.execute(Command::MergeProjects {
         source_paths,
         output_path,
@@ -500,6 +533,15 @@ pub async fn create_project_full(
     // (State<'_, T> cannot be moved due to lifetime constraints)
     let result: Result<Result<CreateProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
+            // [#576 C11-D1] The file the project is created in (or a stand-in name in
+            // the folder it is created in).
+            let target = save_path
+                .clone()
+                .map(with_stalx_extension)
+                .or_else(|| save_directory.as_ref().map(|dir| dir.join("project.stalx")));
+            if let Some(target) = target {
+                check_project_target(&target).map_err(LoadError::internal)?;
+            }
             let state = app_handle.state::<AppState>();
             state.do_create_project_full(
                 name,

@@ -3,6 +3,7 @@ use tauri::{AppHandle, Manager, State};
 use ts_rs::TS;
 
 use crate::commands::event_sink::tauri_sink;
+use crate::commands::write_path::{check_write_path, WriteTarget};
 use crate::config::GasConfig;
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::AppState;
@@ -64,9 +65,10 @@ fn export_format_impl(
     state: &AppState,
     path: PathBuf,
     format: &str,
+    target: WriteTarget,
     export_fn: fn(&Project, &Path) -> Result<(), anyhow::Error>,
 ) -> Result<(), String> {
-    export_format_with_notes(state, path, format, move |project, path| {
+    export_format_with_notes(state, path, format, target, move |project, path| {
         export_fn(project, path).map(|()| Vec::new())
     })
     .map(|_| ())
@@ -84,6 +86,7 @@ fn export_format_with_notes(
     state: &AppState,
     path: PathBuf,
     format: &str,
+    target: WriteTarget,
     export_fn: impl FnOnce(&Project, &Path) -> Result<Vec<String>, anyhow::Error>,
 ) -> Result<Vec<String>, String> {
     let project = state.get_project_state().ok_or_else(|| {
@@ -108,6 +111,8 @@ fn export_format_with_notes(
         );
         return Err("Cannot export over the open project file".to_string());
     }
+    // [#576 C11-D1] The format's own extension, nowhere app-internal or system.
+    check_write_path(&path, target)?;
 
     tracing::info!(
         path = ?path,
@@ -146,7 +151,13 @@ pub fn export_csv(state: State<AppState>, path: PathBuf) -> Result<(), String> {
 }
 
 pub(crate) fn export_csv_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
-    export_format_impl(state, path, "csv", crate::export::export_csv)
+    export_format_impl(
+        state,
+        path,
+        "csv",
+        WriteTarget::Csv,
+        crate::export::export_csv,
+    )
 }
 
 /// Export project data to JSON
@@ -156,7 +167,13 @@ pub fn export_json(state: State<AppState>, path: PathBuf) -> Result<(), String> 
 }
 
 pub(crate) fn export_json_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
-    export_format_impl(state, path, "json", crate::export::export_json)
+    export_format_impl(
+        state,
+        path,
+        "json",
+        WriteTarget::Json,
+        crate::export::export_json,
+    )
 }
 
 /// Export project data to Ariane TML/TMLU.
@@ -170,7 +187,13 @@ pub fn export_tml(state: State<AppState>, path: PathBuf) -> Result<Vec<String>, 
 }
 
 pub(crate) fn export_tml_impl(state: &AppState, path: PathBuf) -> Result<Vec<String>, String> {
-    export_format_with_notes(state, path, "tml", crate::export::export_tml)
+    export_format_with_notes(
+        state,
+        path,
+        "tml",
+        WriteTarget::Ariane,
+        crate::export::export_tml,
+    )
 }
 
 /// Export map image with progress events via shared loading-progress infrastructure.
@@ -218,6 +241,8 @@ pub async fn export_image(
         );
         return Err("Cannot export over the open project file".to_string());
     }
+    // [#576 C11-D1] The image format's own extension, nowhere app-internal or system.
+    check_write_path(&path, WriteTarget::Image(options.format))?;
 
     let format = options.format;
     let log_path = path.clone();
@@ -450,6 +475,8 @@ pub async fn export_dive_profile(
         if is_project_owned_file(&path, &project) {
             return Err(refuse(&path));
         }
+        // [#576 C11-D1] The profile format's own extension, nowhere app-internal or system.
+        check_write_path(&path, WriteTarget::DiveProfile(format))?;
         let rendered = render_profile_for(&project, request, format)?;
         tracing::info!(
             path = ?path,

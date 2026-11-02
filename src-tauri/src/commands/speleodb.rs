@@ -580,6 +580,17 @@ pub async fn speleodb_remove_link_at(
     path: std::path::PathBuf,
     expected: crate::core::loading::SpeleoManagedFile,
 ) -> Result<(), SpeleoErrorDto> {
+    // [#576 C11-D1] It rewrites that project file.
+    crate::commands::write_path::check_write_path(
+        &path,
+        crate::commands::write_path::WriteTarget::Project,
+    )
+    .map_err(|why| {
+        crate::speleodb::contract::dto_for_error(
+            crate::speleodb::contract::Endpoint::User,
+            &crate::speleodb::SpeleoDbError::Refused(why),
+        )
+    })?;
     run_blocking(app, move |s| s.speleodb_remove_link_at(path, expected)).await
 }
 

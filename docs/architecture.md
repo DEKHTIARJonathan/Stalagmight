@@ -43,6 +43,30 @@ executes them and manages undo/redo; the executor bodies are split one module pe
 family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
 `src-tauri/crates/core/src/core/state/`.
 
+## IPC trust boundary
+
+The custom Tauri commands take paths and payloads straight from the webview, and
+`src-tauri/capabilities/default.json` does not bound them: a capability grants the
+**plugin** commands the page may call (the frontend uses only the fs plugin's
+`exists` and `writeTextFile`, plus the dialog and opener plugins), never the app's
+own `#[tauri::command]`s. Nor does `withGlobalTauri` decide reachability:
+`window.__TAURI_INTERNALS__.invoke` is injected regardless (see docs/app-modes.md).
+
+The real boundary is that **only the app's bundled frontend runs in the webview**:
+a strict CSP (`script-src 'self'`, no inline script, no remote origin; see
+`tauri.conf.json`) and React's escaping of survey text are what keep a script out.
+Defence in depth for the day that fails (#576 C11-D1): every command that writes,
+replaces or deletes a file at a path it is handed - the exports (CSV, JSON, Ariane,
+image, dive profile), Save As, create, merge (and the sources it archives), delete,
+rename-by-path, restore from backup, repair and the SpeleoDB unlink - first runs
+`commands/write_path.rs` `check_write_path`: the file must have the extension of
+what is written, must not be inside the app's own configuration, data or cache
+folders (the SpeleoDB managed-project cache excepted, for projects), and must not
+be inside a system folder (`/etc`, `/usr`, `/bin`, ..., `C:\Windows`,
+`C:\Program Files`). The list is deliberately narrow - `/home`, `/var`,
+`/run/media`, `/mnt`, `/media`, `/opt` and `/tmp` are places users save to.
+Commands that only read keep taking any path.
+
 ## Data Model
 
 - **Project** (`src-tauri/crates/models/src/project.rs`): the whole in-memory document - the
