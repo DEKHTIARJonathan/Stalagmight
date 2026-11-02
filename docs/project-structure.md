@@ -30,7 +30,7 @@ stalagmight/
 │   │   └── webkit_memory.rs      # Linux WebKit memory-pressure env setup
 │   ├── examples/                 # gen_ipc_types (dev-only, feature-gated)
 │   ├── tests/                    # App-crate integration tests
-│   ├── crates/                   # The 7 workspace member crates
+│   ├── crates/                   # The 8 workspace member crates
 │   │   ├── models/               # Data structures (Project, Section, Shot, geo, app_dirs)
 │   │   ├── telemetry/            # Anonymous counters + event registry, logging/ (tracing setup)
 │   │   ├── parsers/              # Import parsers: dmp (mNemo, versions 2-5),
@@ -38,6 +38,7 @@ stalagmight/
 │   │   ├── persistence/          # SQLite operations (.stalx, .plnx), tile caches
 │   │   ├── export/               # CSV, JSON, image, TML export
 │   │   ├── speleodb/             # SpeleoDB integration (auth, dump, sync)
+│   │   ├── tiles/                # Map-tile engine (fetch, HTTP caching, overzoom)
 │   │   └── core/                 # Business logic (AppState, command executors, undo,
 │   │                             #   config/ I/O, tile_providers)
 │   ├── capabilities/             # Tauri 2.x permissions
@@ -112,7 +113,7 @@ stalagmight/
 
 `src-tauri/Cargo.toml` is the workspace root - a hybrid one: it is both the
 `stalagmight` app package's manifest and the `[workspace]` declaration for the
-seven members under `src-tauri/crates/`. The lockfile (`Cargo.lock`), the wry
+eight members under `src-tauri/crates/`. The lockfile (`Cargo.lock`), the wry
 `[patch.crates-io]`, the build profiles, `[workspace.dependencies]` and the
 `[workspace.lints]` policy all live there; each member inherits the lints via
 `[lints] workspace = true`. See the workspace-layout table in

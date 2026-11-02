@@ -5,7 +5,7 @@
 ## Workspace layout
 
 The Rust backend is a cargo workspace rooted at `src-tauri/Cargo.toml` (a
-hybrid root: the `stalagmight` app package lives there too). Seven library
+hybrid root: the `stalagmight` app package lives there too). Eight library
 crates sit under `src-tauri/crates/`:
 
 | Crate | Contents | Key deps |
@@ -17,11 +17,12 @@ crates sit under `src-tauri/crates/`:
 | `stalagmight-export` | CSV / JSON / image (SVG->PNG/PDF) / TML export, dive profile | models, parsers |
 | `stalagmight-speleodb` | SpeleoDB client: HTTP surface, auth/token storage, dump handling, sync, TLS policy, metrics | models, telemetry |
 | `stalagmight-core` | `AppState`, the command executors, undo/redo, project I/O orchestration, config I/O (`config/`), `tile_providers`; shared test helpers behind the `test-support` feature | export, models, parsers, persistence, speleodb |
-| `stalagmight` (app, at `src-tauri/`) | The thin Tauri layer: `commands/` (IPC handlers), `lib.rs` (the single `generate_handler!`), `main.rs`, `tile_attribution.rs`, `webkit_memory.rs`, `examples/`, `tests/` | all of the above |
+| `stalagmight-tiles` | The map-tile engine behind the `stalagmight-tiles://` protocol and `fetch_tile`: RFC 9111 caching client over the persistence tile caches, retrying fetch, ArcGIS tilemap probe, stale-if-error, overzoom fallback. Tauri-free, so `cargo test -p stalagmight-tiles` never builds the app | core, persistence |
+| `stalagmight` (app, at `src-tauri/`) | The thin Tauri layer: `commands/` (IPC handlers), `lib.rs` (the single `generate_handler!`, the tile protocol registration), `main.rs`, `tile_attribution.rs`, `webkit_memory.rs`, `examples/`, `tests/` | all of the above |
 
 The layering is strict and one-way - models -> telemetry / parsers /
-persistence -> export / speleodb -> core -> app, where `->` reads "is depended
-on by" - so a lower crate never imports from a higher one. The workspace root also carries the shared
+persistence -> export / speleodb -> core -> tiles -> app, where `->` reads "is
+depended on by" - so a lower crate never imports from a higher one. The workspace root also carries the shared
 `[workspace.dependencies]`, the `[workspace.lints]` policy every member
 inherits, and the `telemetry` feature, which forwards to the members that
 implement it (`stalagmight-telemetry`, `stalagmight-speleodb`).
@@ -373,7 +374,8 @@ GlobalSurveyLayer.ts
 
 Map tiles route through the `stalagmight-tiles` custom protocol, served by the
 Rust handler registered in `src-tauri/src/lib.rs` via
-`register_asynchronous_uri_scheme_protocol` (SQLite caching + offline support).
+`register_asynchronous_uri_scheme_protocol` (SQLite caching + offline support);
+the engine it calls is the `stalagmight-tiles` member (`src-tauri/crates/tiles`).
 The frontend builds the MapLibre source URL in `src/utils/tileConfig.ts`
 (`getTileConfig`).
 

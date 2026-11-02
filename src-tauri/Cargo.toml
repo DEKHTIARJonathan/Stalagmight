@@ -19,6 +19,7 @@ members = [
     "crates/persistence",
     "crates/speleodb",
     "crates/telemetry",
+    "crates/tiles",
 ]
 resolver = "2"
 # Required: path deps inside the workspace directory are auto-adopted as
@@ -111,6 +112,7 @@ stalagmight-parsers = { path = "crates/parsers" }
 stalagmight-persistence = { path = "crates/persistence" }
 stalagmight-speleodb = { path = "crates/speleodb" }
 stalagmight-telemetry = { path = "crates/telemetry" }
+stalagmight-tiles = { path = "crates/tiles" }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
@@ -134,11 +136,11 @@ ts-rs = { workspace = true, features = ["no-serde-warnings"] }
 anyhow = { workspace = true }
 directories = { workspace = true }
 sha2 = { workspace = true }
-# The tile fetch. The exact pin (and the `multipart` feature it exists for)
-# is explained on the speleodb member's entry (crates/speleodb).
+# Tile attribution lookup and the network-status probe (the tile fetch itself
+# is the stalagmight-tiles member). The exact pin (and the `multipart` feature
+# it exists for) is explained on the speleodb member's entry (crates/speleodb).
 ureq = { workspace = true }
 http = { workspace = true }
-image = { workspace = true }
 tauri-plugin-webdriver-automation = { git = "https://github.com/FumblingBarbell/tauri-webdriver", branch = "fix/resolve-element-refs-in-execute-sync", optional = true }
 
 # Second-instance forwarding for the OS file association (#424): "Open with" on

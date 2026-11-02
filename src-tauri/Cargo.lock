@@ -4423,7 +4423,6 @@ dependencies = [
  "chrono",
  "directories",
  "http",
- "image",
  "libc",
  "serde",
  "serde_json",
@@ -4435,6 +4434,7 @@ dependencies = [
  "stalagmight-persistence",
  "stalagmight-speleodb",
  "stalagmight-telemetry",
+ "stalagmight-tiles",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -4591,6 +4591,20 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "ts-rs",
+ "ureq",
+]
+
+[[package]]
+name = "stalagmight-tiles"
+version = "0.0.0"
+dependencies = [
+ "http",
+ "image",
+ "serde",
+ "serde_json",
+ "stalagmight-core",
+ "stalagmight-persistence",
+ "tracing",
  "ureq",
 ]
 

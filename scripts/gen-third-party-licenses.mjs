@@ -51,6 +51,7 @@ const FIRST_PARTY_CRATES = new Set([
   'stalagmight-persistence',
   'stalagmight-export',
   'stalagmight-speleodb',
+  'stalagmight-tiles',
   'stalagmight-core',
 ]);
 
