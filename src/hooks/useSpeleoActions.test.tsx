@@ -11,7 +11,7 @@
  *
  * `.tsx` so this runs in the jsdom tier (renderHook).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -898,5 +898,52 @@ describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)',
     });
 
     expect(openDialog).toHaveBeenCalledWith('speleodb-unwound-push', { message: null });
+  });
+});
+
+/**
+ * #576 RV4-FE-SP4 / RV4-R-NITS S-8, consistent with RV2-R-15: Discard changes and Take
+ * remote replace the survey like a Restore does, so the read-only Plan and Export
+ * workspaces refuse them before any IPC, with the notice a refused edit gets, instead of
+ * reaching the backend (and, for Take remote, re-pulling) first.
+ */
+describe('useSpeleoActions - survey swaps refused in the Plan/Export workspace (#576 RV4-FE-SP4)', () => {
+  afterEach(() => {
+    useUIStore.setState({ appMode: 'survey' });
+  });
+  const notice = 'Plan and Export are read-only - switch to Survey to edit the survey.';
+
+  it('Discard changes in Plan refuses before the IPC', async () => {
+    useUIStore.setState({ appMode: 'plan' });
+    invokeIpcMock.mockResolvedValue(null);
+    const { result } = renderHook(() => useSpeleoActions());
+    let outcome: Awaited<ReturnType<typeof result.current.discardChanges>> | undefined;
+
+    await act(async () => {
+      outcome = await result.current.discardChanges(true);
+    });
+
+    const commands = invokeIpcMock.mock.calls.map((c) => c[0]);
+    console.log(`[SP4] discard in plan: outcome=${outcome} ipc=${JSON.stringify(commands)}`);
+    expect(outcome).toBe('workspace_read_only');
+    expect(commands).toEqual([]);
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(notice, 'edit-disabled', 'warning');
+  });
+
+  it('Take remote in Export refuses before the IPC', async () => {
+    useUIStore.setState({ appMode: 'export' });
+    invokeIpcMock.mockResolvedValue('/cache/p1.stalx');
+    const { result } = renderHook(() => useSpeleoActions());
+    let took: boolean | undefined;
+
+    await act(async () => {
+      took = await result.current.takeRemote();
+    });
+
+    const commands = invokeIpcMock.mock.calls.map((c) => c[0]);
+    console.log(`[SP4] take remote in export: took=${took} ipc=${JSON.stringify(commands)}`);
+    expect(took).toBe(false);
+    expect(commands).toEqual([]);
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(notice, 'edit-disabled', 'warning');
   });
 });

@@ -82,6 +82,10 @@ export function SpeleoRevisionHistory() {
   // button does, rather than hiding the only route a read-only user has.
   const permission = useSpeleoStore((s) => s.link?.permission ?? null);
   const canRevert = permission === null || permissionAtLeast(permission, 'READ_AND_WRITE');
+  // [#576 RV4-FE-SP4] Restore (and the Revert built on it) replace the survey, which the
+  // read-only Plan and Export workspaces refuse (RV2-R-15). The hamburger's SpeleoDB menu
+  // reaches this tab there, so neither is offered; View, a read-only peek, stays.
+  const workspaceReadOnly = useUIStore((s) => s.appMode !== 'survey');
   const projectName = useProjectStore((s) => s.project?.name ?? '');
   const restoreRevision = useRestoreRevision();
   const web = useSpeleoWebLink('revisions');
@@ -184,6 +188,11 @@ export function SpeleoRevisionHistory() {
           <p className="text-xs text-warning" data-testid="speleodb-revisions-forceedit-hint">
             {t('speleodb.revisions.forceEditActive')}
           </p>
+        ) : workspaceReadOnly ? (
+          // Ahead of the lock and un-pushed hints: neither remedy they name helps here.
+          <p className="text-xs text-warning" data-testid="speleodb-revisions-workspace-hint">
+            {t('editGate.workspaceReadOnlyNotice')}
+          </p>
         ) : viewBlocked ? (
           // Says WHY View is gone and WHAT clears it, because the block is not
           // permanent: locking the project for editing and uploading the changes
@@ -263,7 +272,7 @@ export function SpeleoRevisionHistory() {
                     </p>
                   )}
                 </div>
-                {!isCurrent && iHoldLock && (
+                {!isCurrent && iHoldLock && !workspaceReadOnly && (
                   <Button
                     variant="secondary"
                     size="sm"
@@ -299,7 +308,7 @@ export function SpeleoRevisionHistory() {
                     to show no buttons at all, and Revert is the one route out of it -
                     it takes the lock for the user, with the armed discard as the
                     explicit consent for replacing their un-pushed work. */}
-                {!isCurrent && !iHoldLock && !isForceEditing && canRevert && (
+                {!isCurrent && !iHoldLock && !isForceEditing && canRevert && !workspaceReadOnly && (
                   <Button
                     variant="secondary"
                     size="sm"

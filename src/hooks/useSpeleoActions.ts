@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import {
@@ -61,10 +62,12 @@ export interface SpeleoActions {
       a later Done releases it. Every other caller omits it. */
   startEditing: (options?: { resumeHeldLock?: boolean }) => Promise<boolean>;
   /** Discard the local copy and route the optional Start Editing result returned
-      when the caller asks to keep editing. The discard error is left to the caller. */
+      when the caller asks to keep editing. The discard error is left to the caller.
+      `workspace_read_only` (#576 RV4-FE-SP4): refused before any IPC in the read-only
+      Plan or Export workspace, with the notice a refused edit gets. */
   discardChanges: (
     keepLock: boolean,
-  ) => Promise<'editing' | 'released' | 'discarded_without_lock' | 'stale'>;
+  ) => Promise<'editing' | 'released' | 'discarded_without_lock' | 'stale' | 'workspace_read_only'>;
   /** #213 (E2): enter optimistic force-edit - edit WITHOUT the write lock (offline,
       or while someone else holds it). Gated on the `allow_force_edit` opt-in (the
       backend refuses otherwise) and behind a big-red destructive confirm; the caller
@@ -97,9 +100,22 @@ export interface SpeleoActions {
     opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit },
   ) => Promise<DoneResult | null>;
   /** #198 "Take remote": DISCARD local unpushed edits and reset to the server
-      tip. Returns `true` once the tree is reloaded, `false` if the call threw.
-      The caller must gate this behind a destroy-confirmation. */
+      tip. Returns `true` once the tree is reloaded, `false` if the call threw (or was
+      refused before any IPC in the read-only Plan or Export workspace, #576
+      RV4-FE-SP4). The caller must gate this behind a destroy-confirmation. */
   takeRemote: () => Promise<boolean>;
+}
+
+/**
+ * [#576 RV4-FE-SP4] Discard changes and Take remote replace the survey, so - like Restore
+ * revision and Unwind (RV2-R-15) - they are refused in the read-only Plan and Export
+ * workspaces, here before any IPC, with the notice a refused edit gets. True when refused.
+ */
+function refuseSurveySwapOutsideSurvey(): boolean {
+  const ui = useUIStore.getState();
+  if (ui.appMode === 'survey') return false;
+  ui.showToast(i18n.t('editGate.workspaceReadOnlyNotice'), TOAST_KEYS.EDIT_DISABLED, 'warning');
+  return true;
 }
 
 export function useSpeleoActions(): SpeleoActions {
@@ -257,7 +273,8 @@ export function useSpeleoActions(): SpeleoActions {
   const discardChanges = useCallback(
     async (
       keepLock: boolean,
-    ): Promise<'editing' | 'released' | 'discarded_without_lock' | 'stale'> => {
+    ): Promise<'editing' | 'released' | 'discarded_without_lock' | 'stale' | 'workspace_read_only'> => {
+      if (refuseSurveySwapOutsideSurvey()) return 'workspace_read_only';
       const issuedFor = speleoProjectSessionIssuedFor(
         useSpeleoStore.getState().remoteProjectId,
       );
@@ -569,6 +586,7 @@ export function useSpeleoActions(): SpeleoActions {
   );
 
   const takeRemote = useCallback(async (): Promise<boolean> => {
+    if (refuseSurveySwapOutsideSurvey()) return false;
     const issuedFor = speleoProjectSessionIssuedFor(
       useSpeleoStore.getState().remoteProjectId,
     );

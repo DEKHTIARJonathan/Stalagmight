@@ -4,7 +4,7 @@
  * a middle step fails: never take a lock we already know will be refused, hand a lock
  * back only while the copy is clean, and never auto-release over un-pushed work.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -797,5 +797,50 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
     expect(outcome.kind).toBe('restore_failed');
     expect(outcome).toMatchObject({ lockHeld: true });
     expect(issued()).not.toContain('speleodb_done');
+  });
+});
+
+/**
+ * #576 RV4-FE-SP4 (decided RV2-R-15: Restore revision is refused in the read-only Plan and
+ * Export workspaces). The History tab is reachable there through the hamburger's SpeleoDB
+ * menu, and a Revert took the server write lock (and could fast-forward) before the
+ * restore was refused - a lock round trip for an action that could not succeed. It now
+ * refuses before any IPC, and again right before the acquire.
+ */
+describe('useRevertRevision - the read-only Plan/Export workspace (#576 RV4-FE-SP4)', () => {
+  afterEach(() => {
+    useUIStore.setState({ appMode: 'survey' });
+  });
+
+  it.each(['plan', 'export'] as const)('refuses in %s without taking the lock', async (mode) => {
+    useUIStore.setState({ appMode: mode });
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run();
+
+    console.log(`[SP4] revert in ${mode}: outcome=${JSON.stringify(outcome)} ipc=${JSON.stringify(issued())}`);
+    expect(outcome).toEqual({ kind: 'workspace_read_only' });
+    expect(issued()).toEqual([]);
+  });
+
+  it('refuses before the acquire when the workspace changed during the probe', async () => {
+    ipc({
+      speleodb_dump_candidates: () => {
+        useUIStore.setState({ appMode: 'plan' });
+        return null;
+      },
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'workspace_read_only' });
+    expect(issued()).toEqual(['speleodb_dump_candidates']);
   });
 });

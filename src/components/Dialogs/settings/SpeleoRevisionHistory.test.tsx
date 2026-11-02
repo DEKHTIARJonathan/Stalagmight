@@ -3,7 +3,7 @@
  * speleodb_get_revisions on mount, marks the current HEAD (not restorable), and
  * gates the Restore button on holding the lock.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -245,5 +245,42 @@ describe('SpeleoRevisionHistory (#218)', () => {
     expect(screen.queryByTestId('speleodb-revision-revert-bbbbbbbb2222')).not.toBeInTheDocument();
     expect(screen.getByTestId('speleodb-revisions-forceedit-hint')).toBeInTheDocument();
     expect(screen.queryByTestId('speleodb-revisions-lock-hint')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * #576 RV4-FE-SP4 (decided RV2-R-15: Restore revision is refused in the read-only Plan and
+ * Export workspaces). The hamburger's SpeleoDB menu reaches this tab outside Survey, where
+ * Restore (lock held) and Revert (read-only) were offered with no mode check. Neither is
+ * offered there now, and the hint says why; View, a read-only peek, stays.
+ */
+describe('SpeleoRevisionHistory in the read-only Plan/Export workspace (#576 RV4-FE-SP4)', () => {
+  afterEach(() => {
+    useUIStore.setState({ appMode: 'survey' });
+  });
+
+  it('offers no Restore while holding the lock, and says why', async () => {
+    seed('editing');
+    useUIStore.setState({ appMode: 'plan' });
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+
+    console.log('[SP4] Plan, lock held: restore button present =', screen.queryByTestId('speleodb-revision-restore-bbbbbbbb2222') !== null);
+    expect(screen.queryByTestId('speleodb-revision-restore-bbbbbbbb2222')).not.toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-revisions-workspace-hint')).toHaveTextContent(
+      'Plan and Export are read-only - switch to Survey to edit the survey.',
+    );
+  });
+
+  it('offers no Revert while read-only, but keeps the View peek', async () => {
+    seed('read-only');
+    useUIStore.setState({ appMode: 'export' });
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+
+    console.log('[SP4] Export, read-only: revert button present =', screen.queryByTestId('speleodb-revision-revert-bbbbbbbb2222') !== null);
+    expect(screen.queryByTestId('speleodb-revision-revert-bbbbbbbb2222')).not.toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-revision-view-bbbbbbbb2222')).toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-revisions-workspace-hint')).toBeInTheDocument();
   });
 });

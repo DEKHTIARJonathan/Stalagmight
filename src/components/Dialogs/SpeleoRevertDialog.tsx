@@ -220,6 +220,12 @@ export default function SpeleoRevertDialog() {
         setError(t('speleodb.revert.errors.lockFailed'));
         setBusy(false);
         return;
+      case 'workspace_read_only':
+        // Refused before anything was taken (#576 RV4-FE-SP4): Plan and Export are
+        // read-only, and the remedy is the workspace switch, not a retry here.
+        setError(t('editGate.workspaceReadOnlyNotice'));
+        setBusy(false);
+        return;
       case 'restore_failed':
         setError(
           `${outcome.message}. ${
