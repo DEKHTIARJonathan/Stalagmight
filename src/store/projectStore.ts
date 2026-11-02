@@ -355,19 +355,6 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   closeProject: (opts?: { releaseLock?: boolean }) => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
   /**
-   * Mark the project dirty (unsaved changes) without running a command. One DMP
-   * import still applies sections via a direct `import_sections` IPC call that
-   * bypasses `executeCommand` - the segment placed on the map, imported from the
-   * placement callback after the wizard has closed (`importPlacedSegmentNow`; its
-   * failure surface is #576 D13's) - so it does not set `isDirty` itself; the
-   * wizard calls this after it succeeds so the imported sections register as
-   * unsaved - powering autosave and the project-close guard (`handleCloseProject`).
-   * The wizard's other imports go through `importSections` (#576 D6).
-   * (Window-close during the wizard is guarded separately, by `isImportInProgress`
-   * in App.tsx.) (#110)
-   */
-  markDirty: () => void;
-  /**
    * Fetch closure-adjusted geometry for the adjusted display mode (lazy, cached).
    * Resolves true on success / no-op, false only on a genuine fetch failure (so
    * the caller can fall back to the measured view rather than getting stuck).
@@ -1574,8 +1561,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     return result;
   },
 
-  markDirty: () => set({ isDirty: true }),
-
   clearAutosaveFailure: () => set({ autosaveFailure: null, autosaveFailureKind: null }),
 
   saveAfterImport: async (): Promise<boolean> => {
@@ -2375,8 +2360,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           sectionHashes: sectionHashes ?? null,
           // The command has taken these since the overlap work; this wrapper
           // could not express them, so the only route to the overlap path was
-          // the DMP wizard's direct `invokeIpc` (its early and late imports now
-          // come through here, #576 D6). Optional and null-defaulted, so no
+          // the DMP wizard's direct `invokeIpc` (all four of its imports now
+          // come through here, #576 D6/D13). Optional and null-defaulted, so no
           // existing caller changes behaviour.
           existingShotUpdates: existingShotUpdates ?? null,
           virtualShotMode: virtualShotMode ?? null,

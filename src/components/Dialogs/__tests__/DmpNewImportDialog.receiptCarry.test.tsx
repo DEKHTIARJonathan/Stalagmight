@@ -12,7 +12,7 @@
  * what the reopened instance COMPLETES with.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import type { DmpFile } from '../../../types/commands';
 import type { ImportReceipt } from '../../../types/ipc/ImportReceipt';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
@@ -43,12 +43,15 @@ vi.mock('../../../utils/telemetry', async (importOriginal) => ({
 const invokeIpcMock = vi.fn();
 vi.mock('../../../utils/ipc', () => ({
   invokeIpc: (...args: unknown[]) => invokeIpcMock(...args),
+  getErrorMessage: (e: unknown, fallback?: string) =>
+    e instanceof Error ? e.message : typeof e === 'string' ? e : (fallback ?? String(e)),
 }));
 
 import DmpNewImportDialog, { type SavedManualPlacingState } from '../DmpNewImportDialog';
 import type { ZeroDatumConfigResult } from '../ZeroDatumConfigDialog';
 import { convertToEditableShots } from '../../../utils/shotConversion';
 import { useUIStore } from '../../../store/uiStore';
+import { renderReopenedWizard } from './dmpWizardHarness';
 
 const receipt = (overrides: Partial<ImportReceipt> = {}): ImportReceipt => ({
   source_format: 'mNemo DMP',
@@ -176,9 +179,20 @@ describe('DMP wizard receipt carry across manual placement', () => {
     useUIStore.setState({ activeDialog: null, dialogData: {}, placementMode: null });
   });
 
-  it('saves the receipts banked so far when handing the segment to map placement', async () => {
-    renderWizard(
+  /**
+   * #576 D13 (decided "Import in reopened wizard"): the drop only records the
+   * placement and reopens the wizard, which imports the segment itself - so the
+   * reopen carries the run's receipts and the placed segment, and the receipt of
+   * the segment import is banked by the instance that completes the run.
+   */
+  it('carries the receipts to the reopened wizard, which imports the dropped segment', async () => {
+    const first = renderWizard(
       savedState({
+        // Section 0 landed in the early import, through a confirmed suggestion.
+        connections: [
+          { importSectionIndex: 0, importStationIndex: 0, targetType: 'existing', existingSectionId: 3, existingStationIndex: 0 },
+        ],
+        earlyImported: [[0, 100]],
         segmentQueue: [[1]],
         segmentAnchor: { sectionIndex: 1, stationIndex: 0 },
         importedReceipts: [EARLY_RECEIPT],
@@ -190,8 +204,8 @@ describe('DMP wizard receipt carry across manual placement', () => {
     // the app in placement mode.
     await waitFor(() => expect(useUIStore.getState().placementMode).not.toBeNull());
 
-    // The user drops the section on the map: this imports the segment (banking
-    // a second receipt) and reopens the wizard with a fresh saved state.
+    // The user drops the section on the map: the wizard reopens with the
+    // placement pending and the receipts banked so far.
     await act(async () => {
       useUIStore.getState().placementMode!.onComplete!({
         position: { x: 1, y: 2, z: 0 },
@@ -201,16 +215,69 @@ describe('DMP wizard receipt carry across manual placement', () => {
 
     await waitFor(() => expect(useUIStore.getState().activeDialog).toBe('dmp-import-new'));
     const reopened = useUIStore.getState().dialogData as {
-      savedManualPlacingState?: SavedManualPlacingState;
+      savedManualPlacingState?: SavedManualPlacingState & { placedSegment?: { segment: number[] } };
     };
-    // The segment really was imported on this leg (not an early return that
-    // would make the receipt assertion vacuous), and the queue is drained.
-    expect(invokeIpcMock.mock.calls.map((c) => c[0])).toContain('import_sections');
-    expect(reopened.savedManualPlacingState?.segmentQueue).toEqual([]);
-    expect(reopened.savedManualPlacingState?.importedReceipts).toEqual([
-      EARLY_RECEIPT,
-      SEGMENT_RECEIPT,
-    ]);
+    expect(reopened.savedManualPlacingState?.importedReceipts).toEqual([EARLY_RECEIPT]);
+    expect(reopened.savedManualPlacingState?.placedSegment?.segment).toEqual([1]);
+    // Nothing was imported by the instance that closed.
+    expect(invokeIpcMock.mock.calls.map((c) => c[0])).not.toContain('import_sections');
+
+    first.unmount();
+    const onComplete = vi.fn();
+    renderReopenedWizard({ onComplete });
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(invokeIpcMock.mock.calls.filter((c) => c[0] === 'import_sections')).toHaveLength(1);
+    expect(onComplete.mock.calls[0]![0]).toEqual([7]);
+    expect(onComplete.mock.calls[0]![1]).toMatchObject({
+      sections_imported: EARLY_RECEIPT.sections_imported + SEGMENT_RECEIPT.sections_imported,
+      shot_count: EARLY_RECEIPT.shot_count + SEGMENT_RECEIPT.shot_count,
+    });
+  });
+
+  /**
+   * #576 D13. The import used to run in the instance that had already closed, so
+   * its error went nowhere and the reopened wizard showed the same segment as if
+   * nothing had happened. It now fails where the user is looking: on that
+   * segment's manual-placing screen, with the segment still queued and nothing
+   * restarted behind it.
+   */
+  it('shows a failed segment import on the reopened manual-placing screen', async () => {
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'import_sections') {
+        return { success: false, error: 'Segment refused (test)', section_ids: [], warnings: [] };
+      }
+      return null;
+    });
+    const first = renderWizard(
+      savedState({ segmentQueue: [[1]], segmentAnchor: { sectionIndex: 1, stationIndex: 0 } }),
+      { onComplete: vi.fn(), autoStartManualPlacement: true, selected: [0, 1] },
+    );
+    await waitFor(() => expect(useUIStore.getState().placementMode).not.toBeNull());
+    // The drop, as MapCanvas confirms it: placement mode ends, then the callback.
+    await act(async () => {
+      useUIStore.getState().confirmPlacement()!.onComplete!({
+        position: { x: 1, y: 2, z: 0 },
+        snappedToStation: null,
+      });
+    });
+    await waitFor(() => expect(useUIStore.getState().activeDialog).toBe('dmp-import-new'));
+    first.unmount();
+
+    const onComplete = vi.fn();
+    renderReopenedWizard({ onComplete });
+
+    await waitFor(() => expect(screen.getByTestId('wizard-error')).toHaveTextContent('Segment refused (test)'));
+    expect(screen.getByTestId('wizard-manual-placing')).toBeVisible();
+    expect(screen.getByTestId('wizard-manual-placing')).toHaveTextContent('B');
+    expect(screen.getByTestId('cancel-button')).toBeEnabled();
+    // Not restarted behind the error, and not completed.
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+    expect(useUIStore.getState().placementMode).toBeNull();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(invokeIpcMock.mock.calls.filter((c) => c[0] === 'import_sections')).toHaveLength(1);
   });
 
   it('completes with the whole run aggregated when reopened after placement', async () => {
@@ -318,7 +385,7 @@ describe('DMP wizard: the file parse warnings ride the first import', () => {
   });
 
   it('does not send them again once the run has banked a receipt', async () => {
-    renderWizard(
+    const first = renderWizard(
       savedState({
         segmentQueue: [[1]],
         segmentAnchor: { sectionIndex: 1, stationIndex: 0 },
@@ -333,6 +400,10 @@ describe('DMP wizard: the file parse warnings ride the first import', () => {
         snappedToStation: null,
       });
     });
+    // The segment is imported by the wizard the drop reopens (#576 D13).
+    await waitFor(() => expect(useUIStore.getState().activeDialog).toBe('dmp-import-new'));
+    first.unmount();
+    renderReopenedWizard();
 
     await waitFor(() => expect(importArgs()).toHaveLength(1));
     expect(importArgs()[0]!.sourceWarnings ?? null).toBeNull();

@@ -46,10 +46,21 @@ to show". A new per-run accumulator has to be added to the struct in the same
 change that introduces it.
 
 Three completion sites pass that aggregate to `onComplete`: early import,
-late import, and the `done` phase. A segment placed on the map is imported by
-the placement callback (`importPlacedSegmentNow`) before the wizard reopens, so
-the reopened instance never imports on mount; with an empty segment queue it
-goes straight to `placing`.
+late import, and the `done` phase.
+
+A segment dropped on the map is NOT imported by the placement callback (#576
+D13): the instance that started the placement has already closed, so its errors
+went nowhere. The drop only records the placement and reopens the wizard -
+hidden, as for any auto-started handoff - with it pending in
+`SavedManualPlacingState.placedSegment`. The reopened instance imports it on
+mount (`importPlacedSegmentNow`), busy from its first render, so Cancel/Back and
+the auto-start handoff wait for the answer (and App.tsx's window-close import
+guard covers it, since the wizard is the active dialog). Imported: the placement
+joins `directPlacements`, the queue advances, and the auto-start effect hands off
+the next segment - or, with the queue empty, the wizard goes to `placing`.
+Refused: the segment stays queued, its placement is dropped, and the wizard
+becomes visible on that segment's manual-placing screen with the reason
+(`wizard-error`), where the user can place it again or choose another option.
 
 `importedSectionIds` is the other per-run accumulator on that struct, and it
 fails LOUDER when it is not carried: App.tsx gates `suggest_orphan_placements`
@@ -339,7 +350,7 @@ When all suggestions are exhausted (or skipped), the early import runs on the tr
    4. For disconnected components, search the full suggestion pool for fallback `existing`-type anchors
    5. Multi-pass emit: retry sections whose `from_importing` target hasn't been emitted yet
    6. Adjust station indices for deleted overlap shots
-3. `import_sections(sections, fileHash, existingShotUpdates)` through the store's `importSections`, i.e. `executeCommand`'s edit path (refresh, dirty flags, deferred-save resolution, integrity re-check - #576 D6). The one import still issued directly is the segment placed on the map (`importPlacedSegmentNow`), from the placement callback after the wizard has closed.
+3. `import_sections(sections, fileHash, existingShotUpdates)` through the store's `importSections`, i.e. `executeCommand`'s edit path (refresh, dirty flags, deferred-save resolution, integrity re-check - #576 D6). All four wizard imports - the zero-datum anchor, early, late, and the segment placed on the map - take that path (`useDmpImportRun`).
 
 Sections unreachable after all passes remain in the wizard's manual segment-placement flow until the user places or discards them.
 

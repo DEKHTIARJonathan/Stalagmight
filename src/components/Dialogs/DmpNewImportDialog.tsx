@@ -160,6 +160,15 @@ export interface SavedManualPlacingState extends DmpRunCarry {
   confirmedOverlaps?: Array<[number, ConfirmedOverlapInfo]>;
   /** DMP indices of segments the user chose to discard ("Do not place"). */
   discardedIndices?: number[];
+  /**
+   * The segment just dropped on the map (#576 D13): `segmentQueue[0]` and the
+   * placement the drop made for it, NOT yet in `directPlacements` and not yet
+   * imported. The drop only records it and reopens the wizard, which imports it
+   * itself - so a failure lands on that segment's manual-placing screen instead
+   * of in an instance that has already closed. Optional: absent means nothing
+   * is waiting.
+   */
+  placedSegment?: { segment: number[]; placement: DirectPlacement };
 }
 
 // ─── Effective section helpers ────────────────────────────────────────────────
@@ -820,7 +829,7 @@ export default function DmpNewImportDialog({
     completion,
     carry,
     earlyImported,
-  } = useDmpImportRun({ dmpFile, selectionConfig, carried: saved });
+  } = useDmpImportRun({ dmpFile, selectionConfig, carried: saved, importsOnMount: saved?.placedSegment != null });
 
   // Core state - virtual connections instead of imported indices
   const [connections, setConnections] = useState<VirtualConnection[]>(saved?.connections ?? []);
@@ -2832,112 +2841,60 @@ export default function DmpNewImportDialog({
       zeroDatumConfig,
     };
 
-    const buildSavedState = (
-      queue: number[][],
-      anchor: { sectionIndex: number; stationIndex: number },
+    const savedState = (
       directPlacements: DirectPlacement[],
+      placedSegment?: SavedManualPlacingState['placedSegment'],
     ): SavedManualPlacingState => ({
       connections: [...connectionsRef.current],
       skippedIndices: Array.from(skippedIndicesRef.current),
-      segmentQueue: queue,
-      segmentAnchor: anchor,
+      segmentQueue,
+      segmentAnchor,
       directPlacements,
       skippedSuggestions: Array.from(skippedSuggestionsRef.current.entries()),
       segmentSkipCounts: Array.from(segmentSkipCountRef.current.entries()),
       sectionEdits: Array.from(sectionEditsRef.current.entries()),
       confirmedOverlaps: Array.from(confirmedOverlapsRef.current.entries()),
       discardedIndices: Array.from(discardedIndicesRef.current),
-      // Read live, not captured: the segment import that precedes the reopen
-      // (`importPlacedSegmentNow`) banks its receipt and section ids first, and
-      // this builder runs inside the placement callback, after it.
       ...carry(),
+      ...(placedSegment ? { placedSegment } : {}),
     });
 
-    const openPlacementDialog = (
-      queue: number[][],
-      anchor: { sectionIndex: number; stationIndex: number },
-      directPlacements: DirectPlacement[],
-    ) => {
+    const directPlacements = [...directPlacementsRef.current];
+    const reopen = (autoStart: boolean, placedSegment?: SavedManualPlacingState['placedSegment']) => {
       setSource('dialog');
       openDialog('dmp-import-new', {
         ...reopenData,
-        autoStartManualPlacement: false,
-        savedManualPlacingState: buildSavedState(queue, anchor, directPlacements),
+        autoStartManualPlacement: autoStart,
+        savedManualPlacingState: savedState(directPlacements, placedSegment),
       });
     };
 
-    const startSegmentPlacement = (
-      queue: number[][],
-      anchor: { sectionIndex: number; stationIndex: number },
-      directPlacements: DirectPlacement[],
-    ) => {
-      const segment = queue[0];
-      if (!segment) {
-        openPlacementDialog([], anchor, directPlacements);
-        return;
-      }
-
-      const payload = buildSegmentPlacementPayload(segment, anchor);
-      if (!payload) {
-        openPlacementDialog(queue, anchor, directPlacements);
-        return;
-      }
-
+    const payload = buildSegmentPlacementPayload(currentSegment, segmentAnchor);
+    if (!payload) {
+      reopen(false);
+    } else {
+      const anchor = segmentAnchor;
       startPlacementMode(
         payload.sectionData,
         payload.emittedStationIndex,
         (result: PlacementResult) => {
-          const handlePlacementComplete = async () => {
-            // The SAME station the overlay was aligned to. Storing the visible
-            // index here while placing against the emitted one meant the preview
-            // and the import disagreed, and the segment landed a station too far
-            // downstream whenever a blank row preceded the anchor.
-            const alignStation = payload.emittedStationIndex;
-            const placement: ImportPlacement = result.snappedToStation
-              ? {
-                  type: 'manual_snap',
-                  align_station_index: alignStation,
-                  snapped_to_station: result.snappedToStation,
-                }
-              : {
-                  type: 'manual',
-                  align_station_index: alignStation,
-                  offset: result.position,
-                };
-
-            const dp: DirectPlacement = {
-              anchorSectionIndex: anchor.sectionIndex,
-              anchorStationIndex: alignStation,
-              placement,
-            };
-
-            const nextQueue = queue.slice(1);
-            const nextDirectPlacements = [...directPlacements, dp];
-            directPlacementsRef.current = nextDirectPlacements;
-
-            const segmentImported = await importPlacedSegmentNow(segment, nextDirectPlacements);
-            if (!segmentImported) {
-              openPlacementDialog(queue, anchor, directPlacements);
-              return;
-            }
-
-            if (nextQueue.length > 0) {
-              const nextAnchor = {
-                sectionIndex: chooseSegmentAnchorSection(nextQueue[0]!),
-                stationIndex: 0,
-              };
-              startSegmentPlacement(nextQueue, nextAnchor, nextDirectPlacements);
-              return;
-            }
-
-            openPlacementDialog([], anchor, nextDirectPlacements);
-          };
-
-          void handlePlacementComplete();
+          // The SAME station the overlay was aligned to. Storing the visible
+          // index here while placing against the emitted one meant the preview
+          // and the import disagreed, and the segment landed a station too far
+          // downstream whenever a blank row preceded the anchor.
+          const alignStation = payload.emittedStationIndex;
+          const placement: ImportPlacement = result.snappedToStation
+            ? { type: 'manual_snap', align_station_index: alignStation, snapped_to_station: result.snappedToStation }
+            : { type: 'manual', align_station_index: alignStation, offset: result.position };
+          // The drop only RECORDS the placement (#576 D13): the reopened wizard
+          // imports it, hidden like any auto-started handoff, so a failure shows
+          // on this segment's screen and a success hands off the next segment.
+          reopen(true, {
+            segment: currentSegment,
+            placement: { anchorSectionIndex: anchor.sectionIndex, anchorStationIndex: alignStation, placement },
+          });
         },
-        () => {
-          openPlacementDialog(queue, anchor, directPlacements);
-        },
+        () => reopen(false),
         payload.additionalSections.length > 0 ? payload.additionalSections : undefined,
       );
 
@@ -2946,9 +2903,7 @@ export default function DmpNewImportDialog({
         TOAST_KEYS.DMP_MANUAL_PLACEMENT_HINT,
         'info'
       );
-    };
-
-    startSegmentPlacement(segmentQueue, segmentAnchor, [...directPlacementsRef.current]);
+    }
 
     // Close dialog so user can interact with the map
     trackDialogComplete('dmp-import-new');
@@ -2961,14 +2916,39 @@ export default function DmpNewImportDialog({
     dmpFile,
     selectionConfig,
     zeroDatumConfig,
-    importPlacedSegmentNow,
     carry,
-    chooseSegmentAnchorSection,
     startPlacementMode,
     closeDialog,
     openDialog,
     showToast,
   ]);
+
+  /**
+   * #576 D13: import the segment the user just dropped on the map, in THIS
+   * instance - the drop reopened the wizard with it pending
+   * (`SavedManualPlacingState.placedSegment`). The run starts busy, so the exits
+   * and the auto-start handoff wait for the answer. Imported: the placement is
+   * recorded and the queue advances, and the auto-start effect hands off the
+   * next segment (or the late import runs). Refused: the segment stays queued,
+   * its placement is not kept, and the wizard shows the failure on its screen.
+   */
+  const placedSegmentStartedRef = useRef(false);
+  useEffect(() => {
+    const placed = saved?.placedSegment;
+    if (!placed || placedSegmentStartedRef.current) return;
+    placedSegmentStartedRef.current = true;
+    const placements = [...directPlacementsRef.current, placed.placement];
+    void importPlacedSegmentNow(placed.segment, placements).then((imported) => {
+      if (!imported) {
+        setAutoStartManualPlacementPending(false);
+        return;
+      }
+      directPlacementsRef.current = placements;
+      advanceSegmentQueue();
+    });
+  // Mount only: `saved` is this instance's restore data.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /**
    * "Place on Map", clicked by the user. This is where the payload guard

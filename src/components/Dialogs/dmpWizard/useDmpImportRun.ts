@@ -20,10 +20,7 @@ import type { CommandResult, ImportSectionConfig } from '../../../types/commands
 import type { ImportReceipt } from '../../../types/ipc/ImportReceipt';
 import type { DmpFile } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
-import { invokeIpc } from '../../../utils/ipc';
 import { useProjectStore, projectSwitched, type ImportReceiptProvenance } from '../../../store/projectStore';
-import { refuseMutationDuringCarry } from '../../../store/moveCarry';
-import { useSpeleoStore } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
 import { extractFilename } from '../../../utils/path';
 import { aggregateImportReceipts } from '../../../utils/importReceipt';
@@ -108,15 +105,6 @@ export interface DmpRunCarry {
   projectKey?: string | null;
 }
 
-/** Mirror both frontend stores after a direct `import_sections` mutation. */
-export function markSuccessfulDmpImportDirty(
-  markProjectDirty = useProjectStore.getState().markDirty,
-  markForwardEdit = useSpeleoStore.getState().markForwardEdit,
-): void {
-  markProjectDirty();
-  markForwardEdit();
-}
-
 /** A refusal from the payload guard is already written for the user; anything
  *  else reaching a catch here is a raw failure with no better wording. */
 export function importErrorMessage(e: unknown): string {
@@ -157,18 +145,22 @@ export function useDmpImportRun({
   dmpFile,
   selectionConfig,
   carried,
+  importsOnMount = false,
 }: {
   dmpFile: DmpFile;
   selectionConfig: DmpSelectionConfig;
   /** The run so far, when this instance reopens one (`SavedManualPlacingState`). */
   carried: DmpRunCarry | undefined;
+  /** This instance starts by importing (a segment dropped on the map, #576 D13):
+   *  busy from the first render, so neither exit nor the auto-start handoff can
+   *  act before that import has answered. */
+  importsOnMount?: boolean;
 }) {
   const { t } = useTranslation();
   const importSections = useProjectStore((s) => s.importSections);
   const executeBatch = useProjectStore((s) => s.executeBatch);
-  const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
 
-  const [isImporting, setIsImporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(importsOnMount);
   const [failure, setFailure] = useState<DmpRunFailure | null>(null);
   const fail = useCallback((kind: DmpRunStep, message: string) => setFailure({ kind, message }), []);
   const clearFailure = useCallback(() => setFailure(null), []);
@@ -234,7 +226,7 @@ export function useDmpImportRun({
    * on success; on failure records it and returns null.
    */
   const send = useCallback(
-    async (kind: 'anchor' | 'early' | 'late', configs: ImportSectionConfig[], emittedDmpIndices: number[] | null) => {
+    async (kind: 'anchor' | 'early' | 'late' | 'segment', configs: ImportSectionConfig[], emittedDmpIndices: number[] | null) => {
       if (runProjectReplaced(projectKeyRef.current)) {
         fail(kind, t('dialogs.dmpNewImport.importWrongProject'));
         return null;
@@ -357,35 +349,15 @@ export function useDmpImportRun({
         }
 
         if (segmentConfigs.length === 0) return true;
-        // The run's own project, as every wizard import (#576 RV2-FE-D1).
-        if (runProjectReplaced(projectKeyRef.current)) {
-          fail('segment', t('dialogs.dmpNewImport.importWrongProject'));
-          return null;
-        }
-        const updates = backendExistingShotUpdatesForSections(existingShotUpdatesRef.current, new Set(segmentDmpIndices));
-        const result = refuseMutationDuringCarry() ?? await invokeIpc<CommandResult>('import_sections', {
-          sections: segmentConfigs,
-          fileHash: selectionConfig.fileHash ?? null,
-          sectionHashes: selectionConfig.sectionHashes ?? null,
-          existingShotUpdates: updates.length > 0 ? updates : null,
-          virtualShotMode: 'AllReferences',
-          ...provenance(),
-        }, { purpose: 'import placed segment sections' });
-        if (!result.success) {
-          fail('segment', importFailureText(result, FALLBACK_TEXT.segment));
-          return null;
-        }
-        // Banked BEFORE the refresh below deliberately: if that throws, the catch
-        // in the placement callback reopens with the same queue and the retry
-        // banks a second receipt - which is the honest count, because the backend
-        // did import twice. Moving this after the await would under-report.
-        bank(result);
-        await refreshProjectState();
-        markSuccessfulDmpImportDirty();
+        // Through the store's edit path like the other three (#576 D6/D13): the
+        // wizard is mounted while it runs, so its failure is shown inline and
+        // the store's catch-all toast yields to the open dialog.
+        const result = await send('segment', segmentConfigs, segmentDmpIndices);
+        if (!result) return null;
         settle(segmentDmpIndices, result.section_ids, true);
         return true;
       }),
-    [bank, fail, provenance, refreshProjectState, selectionConfig.fileHash, selectionConfig.sectionHashes, settle, step, t],
+    [fail, send, settle, step],
   );
 
   // ─── Withdrawal (Cancel / Back) ─────────────────────────────────────────────
