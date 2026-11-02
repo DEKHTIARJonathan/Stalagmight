@@ -225,15 +225,15 @@ export function validateCoordinates(lat: number, lon: number): GpsValidationResu
   const errors: string[] = [];
 
   if (!Number.isFinite(lat)) {
-    errors.push('Latitude must be a valid number');
+    errors.push(i18n.t('validation.gps.latitudeInvalid'));
   } else if (lat < LAT_MIN || lat > LAT_MAX) {
-    errors.push(`Latitude must be between ${LAT_MIN} and ${LAT_MAX}`);
+    errors.push(i18n.t('validation.gps.latitudeRange', { min: LAT_MIN, max: LAT_MAX }));
   }
 
   if (!Number.isFinite(lon)) {
-    errors.push('Longitude must be a valid number');
+    errors.push(i18n.t('validation.gps.longitudeInvalid'));
   } else if (lon < LON_MIN || lon > LON_MAX) {
-    errors.push(`Longitude must be between ${LON_MIN} and ${LON_MAX}`);
+    errors.push(i18n.t('validation.gps.longitudeRange', { min: LON_MIN, max: LON_MAX }));
   }
 
   return {
@@ -259,7 +259,7 @@ export function parseDD(input: string, depthReference = 0): GpsParseResult | Gps
 
   if (!match || match[1] === undefined || match[2] === undefined) {
     return {
-      message: 'Invalid DD format. Expected: lat, lon (e.g., 48.8584, 2.2945)',
+      message: i18n.t('validation.gps.ddFormat'),
       original: input,
       format: 'DD',
     };
@@ -465,7 +465,7 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
     latDir === undefined ||
     lonDir === undefined
   ) {
-    return { message: wholeDegreesError(trimmed) ?? DMS_FORMAT_MESSAGE, original: input, format: 'DMS' };
+    return { message: wholeDegreesError(trimmed) ?? dmsFormatMessage(), original: input, format: 'DMS' };
   }
 
   const latDeg = parseInt(latDegStr, 10);
@@ -479,14 +479,14 @@ export function parseDMS(input: string, depthReference = 0): GpsParseResult | Gp
   // Validate minutes and seconds
   if (latMin < 0 || latMin >= 60 || lonMin < 0 || lonMin >= 60) {
     return {
-      message: 'Minutes must be between 0 and 59',
+      message: i18n.t('validation.gps.dmsMinutesRange'),
       original: input,
       format: 'DMS',
     };
   }
   if (latSec < 0 || latSec >= 60 || lonSec < 0 || lonSec >= 60) {
     return {
-      message: 'Seconds must be between 0 and 59.99',
+      message: i18n.t('validation.gps.secondsRange'),
       original: input,
       format: 'DMS',
     };
@@ -636,10 +636,13 @@ function lonDirFromSigns(
   return undefined;
 }
 
-const DMS_FORMAT_MESSAGE =
-  "Invalid DMS format. Expected: deg°min'sec\"N deg°min'sec\"E or deg min sec N deg min sec E (direction letters or signed degrees required)";
-const DDM_FORMAT_MESSAGE =
-  "Invalid DDM format. Expected: deg°min.dec'N deg°min.dec'E (e.g., 48°51.5'N 2°17.67'E)";
+// Functions, not constants: the text is read per call, in the current language.
+function dmsFormatMessage(): string {
+  return i18n.t('validation.gps.dmsFormat');
+}
+function ddmFormatMessage(): string {
+  return i18n.t('validation.gps.ddmFormat');
+}
 
 /**
  * Why parseDMS / parseDDM found no pair in text holding a fractional degree
@@ -699,7 +702,7 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
     match[5] === undefined ||
     lonDir === undefined
   ) {
-    return { message: wholeDegreesError(trimmed) ?? DDM_FORMAT_MESSAGE, original: input, format: 'DDM' };
+    return { message: wholeDegreesError(trimmed) ?? ddmFormatMessage(), original: input, format: 'DDM' };
   }
 
   const latDeg = parseInt(match[1], 10);
@@ -712,7 +715,7 @@ export function parseDDM(input: string, depthReference = 0): GpsParseResult | Gp
   // Validate minutes
   if (latMin < 0 || latMin >= 60 || lonMin < 0 || lonMin >= 60) {
     return {
-      message: 'Minutes must be between 0 and 59.99',
+      message: i18n.t('validation.gps.ddmMinutesRange'),
       original: input,
       format: 'DDM',
     };
@@ -915,7 +918,7 @@ function parseDegreePair(
     if (!hasSign(bare.parts[0]!) && !minusAgrees) return fail(i18n.t('validation.gps.letterMissing'));
   } else if (format !== 'DD' && !hasSign(first.parts[0]!) && !hasSign(second.parts[0]!)) {
     // Unsigned minutes/seconds with no letters: N/E would be a guess (as before).
-    return fail(format === 'DMS' ? DMS_FORMAT_MESSAGE : DDM_FORMAT_MESSAGE);
+    return fail(format === 'DMS' ? dmsFormatMessage() : ddmFormatMessage());
   }
 
   for (const c of [lat, lon]) {
@@ -928,10 +931,12 @@ function parseDegreePair(
   }
   // Same checks and messages as parseDMS / parseDDM.
   if ([lat, lon].some((c) => c.parts[1] !== undefined && parseFloat(c.parts[1]) >= 60)) {
-    return fail(format === 'DMS' ? 'Minutes must be between 0 and 59' : 'Minutes must be between 0 and 59.99');
+    return fail(
+      format === 'DMS' ? i18n.t('validation.gps.dmsMinutesRange') : i18n.t('validation.gps.ddmMinutesRange')
+    );
   }
   if ([lat, lon].some((c) => c.parts[2] !== undefined && parseFloat(c.parts[2]) >= 60)) {
-    return fail('Seconds must be between 0 and 59.99');
+    return fail(i18n.t('validation.gps.secondsRange'));
   }
 
   const valueOf = (c: DegreeComponent): number => {
@@ -989,8 +994,7 @@ export function parseUTM(input: string, depthReference = 0): GpsParseResult | Gp
     match[4] === undefined
   ) {
     return {
-      message:
-        'Invalid UTM format. Expected: zone band easting northing (e.g., 31U 448251 5411932 or 31 U 448251 5411932)',
+      message: i18n.t('validation.gps.utmFormat'),
       original: input,
       format: 'UTM',
     };
@@ -1004,7 +1008,7 @@ export function parseUTM(input: string, depthReference = 0): GpsParseResult | Gp
   // Validate zone
   if (zone < 1 || zone > 60) {
     return {
-      message: 'UTM zone must be between 1 and 60',
+      message: i18n.t('validation.gps.utmZoneRange'),
       original: input,
       format: 'UTM',
     };
@@ -1013,7 +1017,7 @@ export function parseUTM(input: string, depthReference = 0): GpsParseResult | Gp
   // Validate band letter
   if (!UTM_ZONE_LETTERS.includes(band)) {
     return {
-      message: 'Invalid UTM band letter (must be C-X, excluding I and O)',
+      message: i18n.t('validation.gps.utmBandLetter'),
       original: input,
       format: 'UTM',
     };
@@ -1022,7 +1026,7 @@ export function parseUTM(input: string, depthReference = 0): GpsParseResult | Gp
   // Validate easting range (typical valid range)
   if (easting < 100000 || easting > 900000) {
     return {
-      message: 'UTM easting typically between 100000 and 900000',
+      message: i18n.t('validation.gps.utmEastingRange'),
       original: input,
       format: 'UTM',
     };
@@ -1031,7 +1035,7 @@ export function parseUTM(input: string, depthReference = 0): GpsParseResult | Gp
   // Validate northing range
   if (northing < 0 || northing > 10000000) {
     return {
-      message: 'UTM northing must be between 0 and 10000000',
+      message: i18n.t('validation.gps.utmNorthingRange'),
       original: input,
       format: 'UTM',
     };
@@ -1226,8 +1230,7 @@ export function parseMGRS(input: string): GpsParseResult | GpsParseError {
     match[4] === undefined
   ) {
     return {
-      message:
-        'Invalid MGRS format. Expected: zoneNumberBandLetter 100kmSquare coordinates (e.g., 31UDQ4825111932)',
+      message: i18n.t('validation.gps.mgrsFormat'),
       original: input,
       format: 'MGRS',
     };
@@ -1240,7 +1243,7 @@ export function parseMGRS(input: string): GpsParseResult | GpsParseError {
   // Validate zone
   if (zone < 1 || zone > 60) {
     return {
-      message: 'MGRS zone must be between 1 and 60',
+      message: i18n.t('validation.gps.mgrsZoneRange'),
       original: input,
       format: 'MGRS',
     };
@@ -1249,7 +1252,7 @@ export function parseMGRS(input: string): GpsParseResult | GpsParseError {
   // Validate band letter
   if (!MGRS_BAND_LETTERS.includes(band)) {
     return {
-      message: 'Invalid MGRS band letter (must be C-X, excluding I and O)',
+      message: i18n.t('validation.gps.mgrsBandLetter'),
       original: input,
       format: 'MGRS',
     };
@@ -1258,7 +1261,7 @@ export function parseMGRS(input: string): GpsParseResult | GpsParseError {
   // Coordinates must be even length (split equally between easting and northing)
   if (coords.length % 2 !== 0 || coords.length < 2 || coords.length > 10) {
     return {
-      message: 'MGRS coordinates must have even length between 2 and 10 digits',
+      message: i18n.t('validation.gps.mgrsDigits'),
       original: input,
       format: 'MGRS',
     };
@@ -1267,8 +1270,7 @@ export function parseMGRS(input: string): GpsParseResult | GpsParseError {
   // MGRS requires a dedicated library for accurate conversion to lat/lon
   // The full spec involves complex lookup tables and zone edge case handling
   return {
-    message:
-      'MGRS format recognized but conversion requires a dedicated library. Please use DD, DMS, DDM, UTM, or Plus Codes for offline coordinate conversion.',
+    message: i18n.t('validation.gps.mgrsNeedsLibrary'),
     original: input,
     format: 'MGRS',
   };
@@ -1294,8 +1296,7 @@ export function parsePlusCodes(input: string, depthReference = 0): GpsParseResul
 
   if (!match || match[1] === undefined || match[2] === undefined) {
     return {
-      message:
-        'Invalid Plus Code format. Expected: 8 characters + "+" + 2+ characters (e.g., 8FW4V75V+8Q)',
+      message: i18n.t('validation.gps.plusCodeFormat'),
       original: input,
       format: 'PlusCodes',
     };
@@ -1357,12 +1358,12 @@ function decodeOpenLocationCode(code: string): { lat: number; lon: number } | { 
     const lonChar = code[i + 1];
 
     if (latChar === undefined) {
-      return { message: `Invalid Plus Code: missing character at position ${i}` };
+      return { message: i18n.t('validation.gps.plusCodeMissingCharacter', { position: i }) };
     }
 
     const latIndex = OLC_ALPHABET.indexOf(latChar);
     if (latIndex < 0) {
-      return { message: `Invalid Plus Code character '${latChar}' at position ${i}` };
+      return { message: i18n.t('validation.gps.plusCodeInvalidCharacter', { character: latChar, position: i }) };
     }
     latValue += latIndex * latPlaceValue;
 
@@ -1372,7 +1373,7 @@ function decodeOpenLocationCode(code: string): { lat: number; lon: number } | { 
     }
     const lonIndex = OLC_ALPHABET.indexOf(lonChar);
     if (lonIndex < 0) {
-      return { message: `Invalid Plus Code character '${lonChar}' at position ${i + 1}` };
+      return { message: i18n.t('validation.gps.plusCodeInvalidCharacter', { character: lonChar, position: i + 1 }) };
     }
     lonValue += lonIndex * lonPlaceValue;
   }
@@ -1388,7 +1389,7 @@ function decodeOpenLocationCode(code: string): { lat: number; lon: number } | { 
 
       const charIndex = OLC_ALPHABET.indexOf(char);
       if (charIndex < 0) {
-        return { message: `Invalid Plus Code character '${char}' at position ${i}` };
+        return { message: i18n.t('validation.gps.plusCodeInvalidCharacter', { character: char, position: i }) };
       }
 
       // Grid character encodes row * GRID_COLS + col
@@ -1452,7 +1453,7 @@ export function parseWhat3words(input: string): GpsParseResult | GpsParseError {
 
   if (!w3wRegex.test(words)) {
     return {
-      message: 'Invalid What3words format. Expected: word.word.word (e.g., filled.count.soap)',
+      message: i18n.t('validation.gps.what3wordsFormat'),
       original: input,
       format: 'What3words',
     };
@@ -1462,8 +1463,7 @@ export function parseWhat3words(input: string): GpsParseResult | GpsParseError {
   // This is by design - the spec says "Works offline (API optional for Plus Codes/What3words)"
   // which means format validation works offline, but conversion requires API
   return {
-    message:
-      'What3words requires API access for conversion. Please use DD, DMS, DDM, UTM, MGRS, or Plus Codes for offline use.',
+    message: i18n.t('validation.gps.what3wordsNeedsApi'),
     original: input,
     format: 'What3words',
   };
@@ -1525,7 +1525,7 @@ export function parseUrl(input: string, depthReference = 0): GpsParseResult | Gp
   // Check if it looks like a URL
   if (!trimmed.includes('http') && !trimmed.includes('maps') && !trimmed.includes('@')) {
     return {
-      message: 'Input does not appear to be a map URL',
+      message: i18n.t('validation.gps.notMapUrl'),
       original: input,
     };
   }
@@ -1684,8 +1684,7 @@ export function parseUrl(input: string, depthReference = 0): GpsParseResult | Gp
   }
 
   return {
-    message:
-      'Could not extract coordinates from URL. Supported: Google Maps (place name, @lat,lon, or ?q=lat,lon), OpenStreetMap (#map=zoom/lat/lon), Bing Maps (cp=lat~lon)',
+    message: i18n.t('validation.gps.mapUrlNoCoordinates'),
     original: input,
   };
 }
@@ -1768,7 +1767,7 @@ export function parseGps(input: string, depthReference = 0): GpsParseResult | Gp
 
   if (!trimmed) {
     return {
-      message: 'Empty input',
+      message: i18n.t('validation.gps.emptyInput'),
       original: input,
     };
   }
@@ -1860,8 +1859,7 @@ function parseGpsText(text: string, depthReference: number, input: string): GpsP
   }
 
   return {
-    message:
-      'Could not parse GPS coordinates. Supported formats: DD (48.8584, 2.2945), DMS (48°51\'30"N 2°17\'40"E), DDM (48°51.5\'N 2°17.67\'E), UTM (31U 448251 5411932), MGRS (31UDQ4825111932), Plus Codes (8FW4V75V+8Q), URL (Google/OSM/Bing Maps links), What3words (requires API)',
+    message: i18n.t('validation.gps.couldNotParse'),
     original: input,
   };
 }
