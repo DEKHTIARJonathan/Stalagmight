@@ -58,9 +58,15 @@ const DOS_DEVICE_NAMES: &[&str] = &[
 ];
 
 /// Whether one path component names a DOS device: its stem - up to the first
-/// `.`, trailing dots and spaces dropped - is a reserved name in any case.
+/// `:` or `.`, trailing dots and spaces dropped - is a reserved name in any
+/// case. Win32 opens the device for a reserved name followed by `:` too
+/// (`COM1:`, `CON:`, and `nul:x`, the alternate-data-stream form), so
+/// everything from the first `:` is dropped first (#576 RV4-R-P4).
 pub(crate) fn is_dos_device_name(component: &str) -> bool {
-    let trimmed = component.trim_end_matches(['.', ' ']);
+    let before_colon = component
+        .split_once(':')
+        .map_or(component, |(head, _)| head);
+    let trimmed = before_colon.trim_end_matches(['.', ' ']);
     let stem = trimmed
         .split_once('.')
         .map_or(trimmed, |(stem, _)| stem)
