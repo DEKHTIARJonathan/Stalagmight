@@ -355,7 +355,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
       // Duplicate import mock state - configurable for hash-tracking tests
       let mockCheckDuplicateResult = false; // Default: no duplicate
-      let trackImportedFileCalls: Array<{ hash: string }> = [];
       let mergeStationCalls: Array<{
         stationA: { section_id: number; station_index: number };
         stationB: { section_id: number; station_index: number };
@@ -447,10 +446,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       (window as unknown as Record<string, unknown>).__MOCK_RESET_WINDOW_TEARDOWN_COUNTS__ = () => {
         windowDestroyCount = 0;
         windowCloseCount = 0;
-      };
-      (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ = () => [...trackImportedFileCalls];
-      (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ = () => {
-        trackImportedFileCalls = [];
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_MERGE_STATION_CALLS__ = () => [...mergeStationCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_MERGE_STATION_CALLS__ = () => {
@@ -1893,11 +1888,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Configurable via __MOCK_SET_CHECK_DUPLICATE_RESULT__
             return mockCheckDuplicateResult;
 
-          case 'track_imported_file':
-            console.log('[Mock IPC] track_imported_file called with:', args);
-            trackImportedFileCalls.push({ hash: (args?.hash as string) ?? '' });
-            return { success: true, section_ids: [] };
-
           case 'parse_gpx': {
             return buildMockGpxFile(args?.path as string | undefined);
           }
@@ -2433,10 +2423,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // file is not reported as a duplicate. This mock does not keep
                 // hash SETS (`check_section_hashes` answers false for everything
                 // and `check_duplicate_import` reads one configurable flag), so
-                // the faithful replay is to clear that flag and drop the
-                // recorded track calls the withdrawal has just undone.
+                // the faithful replay is to clear that flag.
                 mockCheckDuplicateResult = false;
-                trackImportedFileCalls = [];
                 result = { success: true, section_ids: [] };
               } else if (command?.type === 'delete_section') {
                 // Withdrawing an abandoned import (#394) removes N sections in

@@ -437,10 +437,10 @@ impl AppState {
     /// - `save_display_setting` (view prefs) stays UNGATED and that is correct:
     ///   `display_settings` is stripped from the push snapshot and re-applied locally
     ///   across pull/FF - purely local view state that never proliferates, never lost.
-    /// - `track_imported_file`/`track_section_hashes` import-dedup bookkeeping stays
-    ///   UNGATED for now: the in-import path gates + dirties, but the standalone
-    ///   `track_imported_file` command does not - a deferred follow-up, lower-impact
-    ///   than a lost annotation (re-import is the worst case, not silent data loss).
+    /// - `track_imported_file`/`track_section_hashes` import-dedup bookkeeping is
+    ///   reached only from inside an import command, which gates + dirties; there
+    ///   is no standalone IPC command for it (#576 NF-TRACK-IMPORTED removed the
+    ///   unused `track_imported_file` one).
     ///
     /// `MUTATION_ENTRYPOINTS` (tests.rs) enumerates the gated set (incl. the two
     /// warning verbs).

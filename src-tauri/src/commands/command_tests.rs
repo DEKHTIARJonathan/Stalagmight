@@ -3722,29 +3722,12 @@ fn test_check_duplicate_import_false_no_project() {
 }
 
 #[test]
-fn test_track_imported_file_fails_no_project() {
-    let app = app_with_state();
-    let result = import::track_imported_file(state(&app), "hash1".to_string());
-    assert_failure_contains(&result, "No project open");
-}
-
-#[test]
-fn test_track_imported_file_then_check_true() {
+fn test_check_duplicate_import_true_once_an_import_tracked_the_hash() {
     let app = app_with_state();
     create_project(&app);
-    let _ = import::track_imported_file(state(&app), "hash1".to_string());
+    let _ = state(&app).track_imported_file("hash1".to_string());
     let result = import::check_duplicate_import(state(&app), "hash1".to_string()).unwrap();
     assert!(result);
-}
-
-#[test]
-fn test_track_imported_file_idempotent() {
-    let app = app_with_state();
-    create_project(&app);
-    let _ = import::track_imported_file(state(&app), "hash1".to_string());
-    let _ = import::track_imported_file(state(&app), "hash1".to_string());
-    let project_state = project::get_project_state(state(&app)).unwrap();
-    assert_eq!(project_state.project.imported_file_hashes.len(), 1);
 }
 
 #[test]

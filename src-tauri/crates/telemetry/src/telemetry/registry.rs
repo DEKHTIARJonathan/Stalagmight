@@ -482,7 +482,6 @@ pub const EVENT_NAMES: &[&str] = &[
     // ── Dwell: other (287-288) ──
     "dwell.global-view",
     "dwell.placement",
-    "command.track_imported_file",
     "action.dialog.delete-shot-choice",
     "dialog-cancel.delete-shot-choice",
     "dwell.dialog.delete-shot-choice",
@@ -1119,7 +1118,11 @@ mod tests {
         //       NF-W2F-1): command.speleodb_open_file_flags = 739.
         //   + 1 a settings save applies only the settings it changed (#576
         //       D27-32(c)): command.patch_config = 740.
-        assert_eq!(EVENT_NAMES.len(), 740);
+        //   - 1 command.track_imported_file, removed entirely (not via
+        //       REMOVED_COMMANDS): the IPC command was registered but no frontend
+        //       ever called it - import_sections tracks the hash itself - so the
+        //       name was never emitted (#576 NF-TRACK-IMPORTED) = 739.
+        assert_eq!(EVENT_NAMES.len(), 739);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

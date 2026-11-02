@@ -684,14 +684,6 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
       ]);
     });
 
-    // Reset tracking call counter
-    await page.evaluate(() => {
-      const reset = (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ as
-        | (() => void)
-        | undefined;
-      if (reset) reset();
-    });
-
     // Capture import_sections arguments for fileHash verification
     await page.evaluate(() => {
       const tauri = (window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
@@ -870,26 +862,22 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
   });
 
   /**
-   * Test: import_sections NOT called when import has errors
+   * Test: a section with validation errors does not import before an explicit
+   * placement action.
    *
-   * When importing a section with validation errors, the import cannot proceed,
-   * so import_sections should not be called.
+   * The file hash rides on `import_sections` (it is recorded inside that
+   * command), so "nothing imported" is also "no hash recorded". This used to be
+   * titled after `track_imported_file`, an IPC command the frontend never
+   * called and #576 NF-TRACK-IMPORTED removed; the title now says what the
+   * assertion checks.
    */
-  test('should not call track_imported_file when import has errors', async ({ page }) => {
+  test('does not import a section with validation errors before an explicit placement action', async ({ page }) => {
     await createProject(page, 'Hash Track Error');
     await page.evaluate(() => {
       const resetSuggestions = (window as unknown as Record<string, unknown>).__MOCK_RESET_IMPORT_PLACEMENT_SUGGESTIONS__;
       if (typeof resetSuggestions === 'function') {
         (resetSuggestions as () => void)();
       }
-    });
-
-    // Reset tracking call counter
-    await page.evaluate(() => {
-      const reset = (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ as
-        | (() => void)
-        | undefined;
-      if (reset) reset();
     });
 
     // Capture import_sections arguments to confirm no import occurs

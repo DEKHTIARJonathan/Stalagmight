@@ -73,8 +73,8 @@ The SpeleoDB revision swaps that replace the survey - Restore revision and Unwin
 (`speleodb_restore_revision` with `restore`) - run outside the command chokepoint
 and call `guard_workspace` themselves, with the same notice (#576 RV2-R-15); a
 View is a read-only peek and stays allowed. Recording an imported file's hash
-(`track_imported_file`) stays ungated: it is reached only inside an import flow,
-which is itself refused.
+happens inside the import command itself - there is no separate IPC command for
+it (#576 NF-TRACK-IMPORTED) - so the import's own refusal covers it.
 
 That gate sits after the two older ones, which still refuse first: a project saved
 by a newer Stalagmight (`newer_file_schema`, #576 B6-D1; see

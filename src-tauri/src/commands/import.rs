@@ -91,21 +91,6 @@ pub(crate) fn check_duplicate_import_impl(state: &AppState, hash: String) -> Res
         .map_err(|e| e.to_string())
 }
 
-/// Track an imported file hash in the project
-#[tauri::command]
-pub fn track_imported_file(state: State<'_, AppState>, hash: String) -> CommandResult {
-    track_imported_file_impl(state.inner(), hash)
-}
-
-pub(crate) fn track_imported_file_impl(state: &AppState, hash: String) -> CommandResult {
-    tracing::debug!(
-        hash = %hash,
-        purpose = "prevent duplicate imports",
-        "Tracking imported file hash"
-    );
-    state.track_imported_file(hash)
-}
-
 /// Batch-check which section content hashes have already been imported.
 /// Returns a parallel Vec<bool> (true = already imported).
 #[tauri::command]

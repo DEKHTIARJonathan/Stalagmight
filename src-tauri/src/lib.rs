@@ -506,7 +506,6 @@ pub fn run() {
             commands::import::import_dmp,
             commands::import::calculate_file_hash,
             commands::import::check_duplicate_import,
-            commands::import::track_imported_file,
             commands::import::check_section_hashes,
             commands::import::import_sections,
             commands::import::parse_tml,
