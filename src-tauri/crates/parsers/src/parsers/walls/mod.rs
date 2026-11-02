@@ -498,3 +498,8 @@ pub fn parse_walls(path: &Path) -> Result<ParsedWalls> {
 pub mod test_support;
 #[cfg(test)]
 pub(crate) mod tests;
+
+// #576 NF-FIX3R-3: loop closures onto points the merges already joined.
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod closure_tests;
