@@ -44,6 +44,7 @@ import { useMoveCarryGuards } from './useMoveCarryGuards';
 import { beginMoveCarry, commitMoveCarry, endMoveCarry, isMoveCarryLive } from '../../store/moveCarry';
 import SurveyLayer, { type SurveyLayerCallbacks } from './SurveyLayer';
 import { mapCursorFor } from './mapCursor';
+import { pixelsPerMeterAt } from './placementScale';
 import { SATELLITE_BOTTOM_CANDIDATES } from './mapUtils';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
@@ -107,17 +108,6 @@ interface MoveDragState {
 const stationRefToId = (ref: { section_id: number; station_index: number } | null): string | null => {
   if (!ref) return null;
   return `${ref.section_id}:${ref.station_index}`;
-};
-
-// Screen pixels per meter at the map center, by projecting a 1 meter step north
-// (1 meter = 1/111320 degrees). Feeds the to-scale placement preview only, so it
-// is computed on demand rather than on every zoom frame (#430).
-const pixelsPerMeterAt = (map: maplibregl.Map): number => {
-  const center = map.getCenter();
-  const centerScreen = map.project(center);
-  const northPoint = map.project([center.lng, center.lat + 1 / 111320]);
-  const ppm = Math.abs(centerScreen.y - northPoint.y);
-  return ppm > 0 ? ppm : 1;
 };
 
 /**
@@ -458,6 +448,11 @@ function MapCanvas() {
     }
     return config?.map.satellite_gps_origin ?? null;
   }, [project?.zero_datums, config?.map.satellite_gps_origin]);
+  // For the map's own 'zoom' handler, registered once at map creation.
+  const gpsOriginRef = useRef(gpsOrigin);
+  useLayoutEffect(() => {
+    gpsOriginRef.current = gpsOrigin;
+  }, [gpsOrigin]);
 
   // Compute depth range from both station coordinates and shot depth endpoints.
   // Including shot depths avoids a flat scale when station Z isn't populated yet.
@@ -1919,7 +1914,7 @@ function MapCanvas() {
     map.current.on('zoom', () => {
       if (!map.current) return;
       if (useUIStore.getState().placementMode === null) return;
-      setPixelsPerMeter(pixelsPerMeterAt(map.current));
+      setPixelsPerMeter(pixelsPerMeterAt(map.current, gpsOriginRef.current));
     });
 
     // Camera zoom is mirrored into the store once per gesture, not per frame.
@@ -3845,8 +3840,8 @@ function MapCanvas() {
   // scale was last recorded (or the initial 1 px/m) until the first zoom.
   useEffect(() => {
     if (!placementActive || !mapLoaded || !map.current) return;
-    setPixelsPerMeter(pixelsPerMeterAt(map.current));
-  }, [placementActive, mapLoaded]);
+    setPixelsPerMeter(pixelsPerMeterAt(map.current, gpsOrigin));
+  }, [placementActive, mapLoaded, gpsOrigin]);
 
   // Handle Escape key for placement mode
   useEffect(() => {
