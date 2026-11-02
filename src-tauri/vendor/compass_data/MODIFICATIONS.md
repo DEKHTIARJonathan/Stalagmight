@@ -55,5 +55,9 @@ Changes from upstream v0.0.7:
   exposed as `unread()` / `unread_at()` (the tail, and the byte offset it starts
   at). `DatFile::load` does its own `parse_dat_file` call, so without this the
   `.MAK` path truncates just as silently as the direct one.
+- **`Cargo.toml`**: dropped the `utm = "0.1"` dependency. Nothing in the crate
+  (or in Stalagmight) uses it - the crate's own `UtmLocation` type is plain data
+  - so it was compiled into the app and listed in the shipped third-party
+  notices for nothing.
 
 These should be contributed upstream where appropriate.
