@@ -92,6 +92,26 @@ describe('DMP device fields through the wizard conversion', () => {
     expect(sent.marker_index).toBe(2);
   });
 
+  // #576 NF-AN4-3 (decision: v2/v3 LRUD imports as unmeasured): a v2 or v3
+  // record has no LRUD bytes (they arrive with v4), and the parser fills 0,
+  // which reached the project as a MEASURED zero-width passage on every shot.
+  it('sends no LRUD for a v2 or v3 dump, which records none', () => {
+    for (const version of [2, 3]) {
+      const [row] = convertToEditableShots([makeDmpShot()], version);
+      const sent = editableShotToShotData(row!);
+      expect({ version, lrud: [sent.left, sent.right, sent.up, sent.down] }).toEqual({
+        version,
+        lrud: [null, null, null, null],
+      });
+    }
+  });
+
+  it('keeps a v4 LRUD, zeros included, as measured', () => {
+    const [row] = convertToEditableShots([makeDmpShot({ left: 1.5, right: 0, up: 2, down: 0.4 })], 4);
+    const sent = editableShotToShotData(row!);
+    expect([sent.left, sent.right, sent.up, sent.down]).toEqual([1.5, 0, 2, 0.4]);
+  });
+
   it('carries the pitch in the frame the parser left it, unflipped', () => {
     // `parse_section` already turned the device's +up reading into the
     // model's +down frame; a second flip here would invert every slope.

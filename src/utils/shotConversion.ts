@@ -18,14 +18,16 @@ export function isImportableDmpShot(shot: DmpShot): boolean {
 /**
  * Convert DMP shots to EditableShots.
  *
- * `version` is the section's DMP version (`DmpSection.version`). It decides one
- * thing: whether `temperature` is a reading. A v2 record has no temperature
- * bytes and the parser fills `0`, which must not reach the project as a
- * measured 0 degrees, so a v2 row carries none. The marker index is in every
- * version's record.
+ * `version` is the section's DMP version (`DmpSection.version`). It decides
+ * which fields are readings. A v2 record has no temperature bytes, and a v2 or
+ * v3 record has no LRUD bytes (they arrive with v4); the parser fills `0` for
+ * each, which must not reach the project as a measured 0 degrees or a measured
+ * zero-width passage (#576 NF-AN4-3), so such a row carries none. The marker
+ * index is in every version's record.
  */
 export function convertToEditableShots(shots: DmpShot[], version: number): EditableShot[] {
   const recordsTemperature = version >= 3;
+  const recordsLrud = version >= 4;
   return shots
     .filter(isImportableDmpShot)
     .map((shot, index) => ({
@@ -37,10 +39,10 @@ export function convertToEditableShots(shots: DmpShot[], version: number): Edita
       depth_out: shot.depth_out,
       pitch_in: shot.pitch_in,
       pitch_out: shot.pitch_out,
-      left: shot.left ?? null,
-      right: shot.right ?? null,
-      up: shot.up ?? null,
-      down: shot.down ?? null,
+      left: recordsLrud ? shot.left : null,
+      right: recordsLrud ? shot.right : null,
+      up: recordsLrud ? shot.up : null,
+      down: recordsLrud ? shot.down : null,
       comment: shot.comment || null,
       kind: 'Normal' as const,
       temperature: recordsTemperature ? shot.temperature : null,

@@ -250,7 +250,10 @@ pub struct DmpShot {
     pub pitch_in: f64,
     /// Pitch when exiting (degrees), model frame: positive is DOWN
     pub pitch_out: f64,
-    /// Left passage dimension (meters), v4+
+    /// Left passage dimension (meters), v4+. A v2/v3 record has no LRUD and
+    /// all four read 0.0 there; the import wizard checks
+    /// `DmpSection::version` and imports them as not measured (#576
+    /// NF-AN4-3), as it does a v2 temperature.
     pub left: f64,
     /// Right passage dimension (meters), v4+
     pub right: f64,
