@@ -105,18 +105,18 @@ untagged test still runs nightly. The per-test timing report on every smoke run
 |---|---|---|
 | Create a project | `project-crud.spec.ts` | `should create project with valid name` |
 | Save a project (Ctrl+S) | `project-crud.spec.ts` | `should respond to Ctrl+S` |
-| Autosave status | `auto-save-status.spec.ts` | `when project is clean` |
+| Autosave status | `auto-save-status.spec.ts` | `an edit counts down, autosaves and returns to Saved` |
 | A failed save is surfaced | `error-handling.spec.ts` | `should display error notification on save failure` |
 | Delete a project | `globalview-delete-project.spec.ts` | `confirming deletes` |
-| Import: Discovery DMP | `dmp-import.spec.ts` | `should parse and display DMP file data in import dialog` |
+| Import: Discovery DMP | `dmp-import.spec.ts` | `imports the selection through to the receipt` |
 | Import: Ariane TML/TMLU | `tml-import.spec.ts` | `imports a TML from the unified picker` |
 | Import: Walls WPJ/SRV | `walls-import-dialog.spec.ts` | `all surveys selected imports` |
 | Import: GPX | `gpx-import-workflow.spec.ts` | `imports GPX from home screen` |
 | Export: CSV | `export-dialog.spec.ts` | `should execute export and show success` |
-| Export: JSON | `export-dialog.spec.ts` | `should show JSON format options and preview` |
+| Export: JSON | `export-dialog.spec.ts` | `sends export_json with a .json path` |
 | Export: Ariane TML | `export-dialog.spec.ts` | `should continue TML export after unanchored warning confirmation` |
 | Export: image (PNG) | `export-dialog.spec.ts` | `threshold slider updates the displayed value and is passed to export` |
-| Export: image (SVG, PDF) | `export-dialog.spec.ts` | `should hide DPI select for non-PNG formats` |
+| Export: image (SVG, PDF) | `export-dialog.spec.ts` | `exports SVG and PDF through export_image` |
 | Detail panel | `detail-panel-links.spec.ts` | `clicking Start Station link changes selection to station` |
 | Move a station | `move-carry-integrity.spec.ts` | `a normal drop still commits exactly one move` |
 | Undo / redo | `undo-redo-dropdown.spec.ts` | `clicking item at index 2 executes undo_to` |
@@ -130,6 +130,11 @@ Known gap, deliberately not in the table: **Compass `.MAK`/`.DAT` import** has n
 browser-tier flow test to name (only the vitest component test
 `CompassImportDialog.test.tsx`), so it reaches CI only through vitest until a
 Playwright spec exists.
+
+Each canary asserts the feature's effect through the mock - the IPC call it
+sends, with its arguments (`e2e-playwright/helpers/ipcRecorder.ts`), and the
+state it leaves (a card gone, a receipt, a clean footer) - not merely that the
+UI did not crash (#576 RV3-FE-7).
 
 The agent harness is **on-demand plus per-RC** and is in no gated tier above.
 The retired WDIO suite's residual coverage lives in the journeys

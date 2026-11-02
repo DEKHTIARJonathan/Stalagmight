@@ -495,8 +495,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       let lastExportImageArgs: Record<string, unknown> | null = null;
 
       // Per-path project-name overrides applied by set_project_name_for_path,
-      // so list_recent_projects reflects renames within a test.
+      // so list_recent_projects reflects renames within a test; and the paths
+      // delete_project removed, which drop out of it as the backend's do.
       const recentNameOverrides: Record<string, string> = {};
+      const deletedProjectPaths = new Set<string>();
 
       // Structural-integrity issues returned by check_project_integrity. Tests
       // seed these via __MOCK_SET_INTEGRITY_ISSUES__; repair fixes all but the
@@ -2937,7 +2939,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 gps_center: null,
                 gps_bounds: null,
               },
-            ].map((p) =>
+            ].filter((p) => !deletedProjectPaths.has(p.file_path)).map((p) =>
               recentNameOverrides[p.file_path]
                 ? { ...p, name: recentNameOverrides[p.file_path] }
                 : p
@@ -2988,10 +2990,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true, section_ids: [] };
 
           case 'delete_project':
-            // Mock destructive delete - acknowledge success. We don't mutate the
-            // hardcoded recents list here (would leak across tests in a worker);
-            // the store + Rust tests cover the recents-removal side effect.
-            console.log('[Mock IPC] delete_project called with:', args);
+            // Mock destructive delete: like the backend, the file leaves the
+            // recents list. Per-page state, so nothing leaks into another test.
+            deletedProjectPaths.add(String(args?.path ?? ''));
             return { success: true, section_ids: [] };
 
           case 'set_project_name_for_path': {

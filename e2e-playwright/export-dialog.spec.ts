@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/coverage';
 import { setupMockedPage, createProject, createSectionViaStore } from './helpers/app';
+import { recordIpcCalls, getIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
 
 test.describe('Export Dialog', () => {
   test.beforeEach(async ({ page }) => {
@@ -59,8 +60,9 @@ test.describe('Export Dialog', () => {
     await expect(preview).not.toBeVisible();
   });
 
-  test('should show JSON format options and preview @smoke', async ({ page }) => {
+  test('exports JSON: picks the format and sends export_json with a .json path @smoke', async ({ page }) => {
     await createProject(page, 'Export Dialog Test Project');
+    await recordIpcCalls(page, ['export_json', 'export_csv']);
 
     // Open export dialog
     await page.keyboard.press('Control+e');
@@ -84,6 +86,14 @@ test.describe('Export Dialog', () => {
     // Preview should not be visible for data export
     const preview = page.locator('[data-testid="export-preview"]');
     await expect(preview).not.toBeVisible();
+
+    // Export: the mocked picker answers /mock/saved-project.stalx, and the known
+    // .stalx extension is replaced by the chosen format's (#576 D35).
+    await page.getByTestId('export-button').click();
+    const [call] = await waitForIpcCall(page, 'export_json');
+    expect(call.args.path).toBe('/mock/saved-project.json');
+    await expect(exportDialog).not.toBeVisible();
+    expect(await getIpcCalls(page, 'export_csv')).toHaveLength(0);
   });
 
   test('should show image export options', async ({ page }) => {
@@ -130,7 +140,7 @@ test.describe('Export Dialog', () => {
     await expect(preview).toBeVisible({ timeout: 5000 });
   });
 
-  test('should hide DPI select for non-PNG formats @smoke', async ({ page }) => {
+  test('should hide DPI select for non-PNG formats', async ({ page }) => {
     await createProject(page, 'Export Dialog Test Project');
 
     await page.keyboard.press('Control+e');
@@ -151,6 +161,30 @@ test.describe('Export Dialog', () => {
     await imageFormatSelect.click();
     await page.getByRole('listbox').locator('[role="option"]:has-text("PDF")').click();
     await expect(page.locator('[data-testid="resolution-select"]')).not.toBeVisible();
+  });
+
+  // The SVG/PDF export canary (#576 RV3-FE-7): each format reaches export_image
+  // with its own format option and a path carrying its own extension.
+  test('exports SVG and PDF through export_image with the matching format and path @smoke', async ({ page }) => {
+    await createProject(page, 'Export Dialog Vector Project');
+    await recordIpcCalls(page, ['export_image']);
+    const exportDialog = page.getByTestId('export-dialog');
+
+    for (const [label, format, n] of [['SVG', 'svg', 1], ['PDF', 'pdf', 2]] as const) {
+      await page.keyboard.press('Control+e');
+      await expect(exportDialog).toBeVisible({ timeout: 5000 });
+      await page.click('[data-testid="export-type-image"]');
+      await page.getByTestId('image-format-select').click();
+      await page.getByRole('listbox').locator(`[role="option"]:has-text("${label}")`).click();
+      await expect(page.getByTestId('resolution-select')).not.toBeVisible();
+
+      await page.getByTestId('export-button').click();
+      const calls = await waitForIpcCall(page, 'export_image', n);
+      const args = calls[n - 1].args as { path?: string; options?: { format?: string } };
+      expect(args.options?.format).toBe(format);
+      expect(args.path).toBe(`/mock/saved-project.${format}`);
+      await expect(exportDialog).not.toBeVisible({ timeout: 10000 });
+    }
   });
 
   test('threshold slider updates the displayed value and is passed to export @smoke', async ({ page }) => {
@@ -186,6 +220,7 @@ test.describe('Export Dialog', () => {
 
   test('should execute export and show success @smoke', async ({ page }) => {
     await createProject(page, 'Export Dialog Test Project');
+    await recordIpcCalls(page, ['export_csv']);
 
     // Open export dialog
     await page.keyboard.press('Control+e');
@@ -201,8 +236,13 @@ test.describe('Export Dialog', () => {
     // The mock returns a path, triggering the export flow
     await exportButton.click();
 
-    // After successful export, dialog should close
+    // The CSV export reached the backend with the picked path, its known .stalx
+    // extension replaced by .csv (#576 D35)...
+    const [call] = await waitForIpcCall(page, 'export_csv');
+    expect(call.args.path).toBe('/mock/saved-project.csv');
+    // ...and after a successful export the dialog closes, with no failure toast.
     await expect(exportDialog).not.toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('toast').filter({ hasText: /export/i })).toHaveCount(0);
   });
 
   test('should warn for TML export when sections are not anchored and allow cancel', async ({ page }) => {
