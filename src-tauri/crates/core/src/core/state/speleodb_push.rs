@@ -25,6 +25,7 @@ use std::path::Path;
 use super::speleodb::local_dto;
 use super::speleodb_cache::LocalEditsPolicy;
 use super::AppState;
+use crate::core::{SpeleoDoneReport, SpeleoPushReport, ValidationWarning};
 use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
 use crate::speleodb::sync::{self, PushPlan, ReconcileVerdict};
@@ -213,6 +214,33 @@ impl AppState {
         message: Option<String>,
         accept_older_version: bool,
     ) -> Result<DoneResult, SpeleoErrorDto> {
+        self.speleodb_done_reported(message, accept_older_version)
+            .map(|report| report.result)
+    }
+
+    /// [`Self::speleodb_done_acknowledged`] with the warnings of the save the push
+    /// ran first (#576 NF-W2SAVE-1): what the `speleodb_done` command answers, so the
+    /// frontend shows them like a normal save's warnings.
+    pub fn speleodb_done_reported(
+        &self,
+        message: Option<String>,
+        accept_older_version: bool,
+    ) -> Result<SpeleoDoneReport, SpeleoErrorDto> {
+        let mut save_warnings = Vec::new();
+        let result =
+            self.speleodb_done_collecting(message, accept_older_version, &mut save_warnings)?;
+        Ok(SpeleoDoneReport {
+            result,
+            save_warnings,
+        })
+    }
+
+    fn speleodb_done_collecting(
+        &self,
+        message: Option<String>,
+        accept_older_version: bool,
+        save_warnings: &mut Vec<ValidationWarning>,
+    ) -> Result<DoneResult, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
 
         // #213: a force-editor is edit-enabled but holds NO lock, so Done cannot push
@@ -267,6 +295,7 @@ impl AppState {
                 &link,
                 message,
                 we_hold_the_lock,
+                save_warnings,
             )?
         } else {
             PushOutcome::Confirmed
@@ -356,6 +385,32 @@ impl AppState {
         message: Option<String>,
         accept_older_version: bool,
     ) -> Result<PushResult, SpeleoErrorDto> {
+        self.speleodb_push_only_reported(message, accept_older_version)
+            .map(|report| report.result)
+    }
+
+    /// [`Self::speleodb_push_only_acknowledged`] with the warnings of the save the
+    /// push ran first (#576 NF-W2SAVE-1): what the `speleodb_push` command answers.
+    pub fn speleodb_push_only_reported(
+        &self,
+        message: Option<String>,
+        accept_older_version: bool,
+    ) -> Result<SpeleoPushReport, SpeleoErrorDto> {
+        let mut save_warnings = Vec::new();
+        let result =
+            self.speleodb_push_only_collecting(message, accept_older_version, &mut save_warnings)?;
+        Ok(SpeleoPushReport {
+            result,
+            save_warnings,
+        })
+    }
+
+    fn speleodb_push_only_collecting(
+        &self,
+        message: Option<String>,
+        accept_older_version: bool,
+        save_warnings: &mut Vec<ValidationWarning>,
+    ) -> Result<PushResult, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
 
         // #213: a force-editor holds no lock, so a push would 403. Refuse with the
@@ -402,6 +457,7 @@ impl AppState {
             &link,
             message,
             we_hold_the_lock,
+            save_warnings,
         )? {
             PushOutcome::Confirmed => {
                 // A late edit after push_start leaves the dirty bit set (not yet on
@@ -772,6 +828,7 @@ impl AppState {
         link: &crate::models::SpeleoLink,
         message: Option<String>,
         we_hold_the_lock: bool,
+        save_warnings: &mut Vec<ValidationWarning>,
     ) -> Result<PushOutcome, SpeleoErrorDto> {
         // [#576 B6-D1] Never upload a project a newer build saved. Unreachable
         // through the verbs today - `speleodb_start_editing` refuses it, so the
@@ -869,7 +926,15 @@ impl AppState {
         }
 
         // Normal push (Done / Push): fold the SDB-authoritative name pre-push (#216).
-        self.speleodb_upload(endpoint, token, insecure_http, link, message, true)
+        self.speleodb_upload(
+            endpoint,
+            token,
+            insecure_http,
+            link,
+            message,
+            true,
+            save_warnings,
+        )
     }
 
     /// The pre-push flush: save the in-memory project to the live `.stalx` the
@@ -880,9 +945,12 @@ impl AppState {
     /// into the same line a refused save gets. It used to be replaced by "failed to
     /// flush project before push", which named none of the save's causes (a newer
     /// file, unread settings, an unreadable side table, a full disk). A successful
-    /// save's warnings (what it could not keep) are logged here; the push results
-    /// carry no channel for them yet (see the package report).
-    pub(super) fn speleodb_flush_before_push(&self) -> Result<(), SpeleoErrorDto> {
+    /// save's warnings (what it could not keep) are logged and handed back: the
+    /// Done / Push answer carries them so the frontend shows them like a normal
+    /// save's (they are one-shot - the save after the push does not repeat them).
+    pub(super) fn speleodb_flush_before_push(
+        &self,
+    ) -> Result<Vec<ValidationWarning>, SpeleoErrorDto> {
         let flushed = self.save_project(None);
         for warning in &flushed.warnings {
             tracing::warn!(
@@ -899,7 +967,7 @@ impl AppState {
                     .unwrap_or_else(|| "the project could not be saved before the push".to_owned()),
             )));
         }
-        Ok(())
+        Ok(flushed.warnings)
     }
 
     /// Build the upload (VACUUM snapshot with the dirty bit cleared in the copy +
@@ -913,6 +981,7 @@ impl AppState {
         link: &crate::models::SpeleoLink,
         message: Option<String>,
         fold_metadata: bool,
+        save_warnings: &mut Vec<ValidationWarning>,
     ) -> Result<PushOutcome, SpeleoErrorDto> {
         let project_id = &link.project_id;
         let commit_message = message
@@ -998,7 +1067,7 @@ impl AppState {
         // shot identity + geometry. Rendering first would ship a `.tml` built from
         // the un-healed project for a legacy file carrying within-section duplicate
         // UUIDs or non-finite values (#196).
-        self.speleodb_flush_before_push()?;
+        save_warnings.extend(self.speleodb_flush_before_push()?);
         self.speleodb_render_tml(&tml).map_err(local_dto)?;
 
         // Self-contained snapshot of the live `.stalx` (#195), dirty bit cleared in

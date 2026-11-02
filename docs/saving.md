@@ -253,7 +253,10 @@ A successful save's `CommandResult.warnings` is what it could not keep:
 `UNDO_HISTORY_DROPPED`, `DISPLAY_SETTINGS_NOT_SAVED` and `DATABASE_NOT_REOPENED`.
 Each becomes one warning toast (`saveFeedback.ts`, key `save-warning:<code>`): the
 save succeeded with a caveat, nothing needs deciding, and the next save starts
-clean - so not a dialog and not a banner (docs/notifications.md).
+clean - so not a dialog and not a banner (docs/notifications.md). The SpeleoDB
+pre-push flush is the same save: its warnings ride the Done / Push answer
+(`SpeleoDoneReport` / `SpeleoPushReport.save_warnings`, #576 NF-W2SAVE-1) and
+`useSpeleoActions` shows them the same way.
 
 The frontend calls `refreshProjectState()` after a save ONLY when the project entered the save with integrity issues (the backend's save-time heals mutate the live project). A clean save skips it: it changes no computed data (stations, stats, warnings), so recomputing everything would be wasted work. The only state that changes is `file_path` (on first save or save-as), which the backend returns via `CommandResult.saved_path`. When the save produced a detached copy instead (see Save a Copy below), the path comes back in `unlinked_copy_path` and `saved_path` is absent.
 

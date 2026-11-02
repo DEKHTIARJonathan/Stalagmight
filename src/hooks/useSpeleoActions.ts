@@ -15,12 +15,30 @@ import { openExitPrompt, type PendingExit } from '../utils/quit';
 import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import { TOAST_KEYS } from '../utils/toastKeys';
+import { surfaceSaveWarnings } from '../utils/saveFeedback';
 import type {
   DoneResult,
   PushResult,
+  SpeleoDoneReport,
+  SpeleoPushReport,
   StartEditingResult,
   UpdateResult,
+  ValidationWarning,
 } from '../types/ipc.generated';
+
+/**
+ * [#576 NF-W2SAVE-1] Done and Push answer their outcome together with the warnings
+ * of the project save they ran before the upload (what that save could not keep).
+ * Those are one-shot - the save after the push does not repeat them - so they are
+ * shown here, like a normal save's. An answer without the envelope (a bare outcome,
+ * as test doubles return it) reads as that outcome with no warnings.
+ */
+function readSpeleoReport<R extends { kind: string }>(
+  raw: { result: R; save_warnings: ValidationWarning[] } | R,
+): { result: R; saveWarnings: ValidationWarning[] } {
+  if ('result' in raw) return { result: raw.result, saveWarnings: raw.save_warnings ?? [] };
+  return { result: raw, saveWarnings: [] };
+}
 
 /**
  * The single-writer hand-off verbs (#204), with backend-result routing. Keeps
@@ -348,11 +366,14 @@ export function useSpeleoActions(): SpeleoActions {
       // arm, which neither lands nor throws.
       clearPushFailedBanner();
       try {
-        const result = await invokeIpc<PushResult>('speleodb_push', {
-          message: message ?? null,
-          acceptOlderVersion: opts?.acceptOlderVersion ?? false,
-        });
+        const { result, saveWarnings } = readSpeleoReport<PushResult>(
+          await invokeIpc<SpeleoPushReport>('speleodb_push', {
+            message: message ?? null,
+            acceptOlderVersion: opts?.acceptOlderVersion ?? false,
+          }),
+        );
         applyPush(result);
+        surfaceSaveWarnings(saveWarnings);
         const kind = asPushKind(result.kind);
         if (kind === 'pushed') {
           showToast(t('speleodb.editBar.toasts.pushed'), TOAST_KEYS.SPELEODB_PUSHED, 'success');
@@ -455,11 +476,14 @@ export function useSpeleoActions(): SpeleoActions {
       // it BEFORE the call.
       const hadUnpushedEdits = useSpeleoStore.getState().link?.hasUnpushedEdits ?? false;
       try {
-        const result = await invokeIpc<DoneResult>('speleodb_done', {
-          message: message ?? null,
-          acceptOlderVersion: opts?.acceptOlderVersion ?? false,
-        });
+        const { result, saveWarnings } = readSpeleoReport<DoneResult>(
+          await invokeIpc<SpeleoDoneReport>('speleodb_done', {
+            message: message ?? null,
+            acceptOlderVersion: opts?.acceptOlderVersion ?? false,
+          }),
+        );
         applyDone(result);
+        surfaceSaveWarnings(saveWarnings);
         switch (asDoneKind(result.kind)) {
           case 'released':
             showToast(

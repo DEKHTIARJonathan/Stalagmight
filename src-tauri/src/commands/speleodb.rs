@@ -22,19 +22,18 @@ use std::collections::HashMap;
 use tauri::{AppHandle, Manager};
 
 use crate::config::TokenFallback;
-use crate::core::AppState;
+use crate::core::{AppState, SpeleoDoneReport, SpeleoPushReport};
 // [Track A] #186/D-B2: commands now return the structured SpeleoErrorDto (carrying
 // the typed SpeleoDbAction) instead of a flattened String, so the FE branches on
 // `err.action`. The orchestration `AppState::speleodb_*` methods build the DTO at
 // the call site where the endpoint is known.
 use crate::models::UndoMode;
 use crate::speleodb::{
-    DoneResult, Permission, PushResult, SpeleoAdoptResult, SpeleoCollaborators, SpeleoDbAction,
-    SpeleoDumpCandidate, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState,
-    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
-    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
-    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoTeamOption, SpeleoUnwindTarget,
-    SpeleoUserSuggestion, StartEditingResult, UpdateResult,
+    Permission, SpeleoAdoptResult, SpeleoCollaborators, SpeleoDbAction, SpeleoDumpCandidate,
+    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult,
+    SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
+    SpeleoPublishResult, SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus, SpeleoTeamOption,
+    SpeleoUnwindTarget, SpeleoUserSuggestion, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -239,14 +238,15 @@ pub async fn speleodb_start_editing(
 /// Push the open project's edits (if any) and release the lock, returning to
 /// read-only (#197). `message` is the commit message (a default is used when
 /// blank). On divergence / an ambiguous push the lock + dirty bit are retained.
+/// [#576 NF-W2SAVE-1] Answers the outcome with the pre-push save's warnings.
 #[tauri::command]
 pub async fn speleodb_done(
     app: AppHandle,
     message: Option<String>,
     accept_older_version: Option<bool>,
-) -> Result<DoneResult, SpeleoErrorDto> {
+) -> Result<SpeleoDoneReport, SpeleoErrorDto> {
     run_blocking(app, move |s| {
-        s.speleodb_done_acknowledged(message, accept_older_version.unwrap_or(false))
+        s.speleodb_done_reported(message, accept_older_version.unwrap_or(false))
     })
     .await
 }
@@ -261,14 +261,15 @@ pub async fn speleodb_update(app: AppHandle) -> Result<UpdateResult, SpeleoError
 /// Push the open project's edits to SpeleoDB WITHOUT releasing the lock (T2d):
 /// like `speleodb_done` but the lock is retained so editing continues. `message`
 /// is the commit message (a default is used when blank).
+/// [#576 NF-W2SAVE-1] Answers the outcome with the pre-push save's warnings.
 #[tauri::command]
 pub async fn speleodb_push(
     app: AppHandle,
     message: Option<String>,
     accept_older_version: Option<bool>,
-) -> Result<PushResult, SpeleoErrorDto> {
+) -> Result<SpeleoPushReport, SpeleoErrorDto> {
     run_blocking(app, move |s| {
-        s.speleodb_push_only_acknowledged(message, accept_older_version.unwrap_or(false))
+        s.speleodb_push_only_reported(message, accept_older_version.unwrap_or(false))
     })
     .await
 }

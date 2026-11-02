@@ -431,6 +431,9 @@ impl AppState {
                     // Skip the #216 name fold: the project was just created with this
                     // exact name, so the fold GET would be a guaranteed no-op.
                     false,
+                    // The publish answer has no channel for the pre-push save's
+                    // warnings (#576 NF-W2SAVE-1 covers Done / Push); the flush logs them.
+                    &mut Vec::new(),
                 );
                 // Release the lock regardless of the push outcome (best-effort).
                 self.speleodb_release_best_effort(&endpoint, &token, insecure_http, &project_id);

@@ -529,6 +529,26 @@ pub struct ValidationWarning {
 
 pub use crate::models::warning::WarningSeverity;
 
+/// [#576 NF-W2SAVE-1] The `speleodb_done` answer: the Done outcome, plus the
+/// warnings of the project save Done runs before taking the upload snapshot (what
+/// that save could not keep - display settings, undo history). They are one-shot -
+/// the save after the push does not repeat them - so they ride here and the
+/// frontend shows them like a normal save's warnings. Empty when nothing was
+/// saved or nothing was lost.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoDoneReport {
+    pub result: crate::speleodb::DoneResult,
+    pub save_warnings: Vec<ValidationWarning>,
+}
+
+/// [#576 NF-W2SAVE-1] The `speleodb_push` answer: the Push outcome plus the
+/// pre-push save's warnings (see [`SpeleoDoneReport`]).
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoPushReport {
+    pub result: crate::speleodb::PushResult,
+    pub save_warnings: Vec<ValidationWarning>,
+}
+
 impl CommandResult {
     pub fn success() -> Self {
         Self {

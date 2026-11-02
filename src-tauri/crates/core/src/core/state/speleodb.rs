@@ -8985,7 +8985,15 @@ mod tests {
         // Upload to a dead endpoint -> transport failure -> ambiguous outcome.
         // (fold_metadata=false keeps the test on the upload path, not the #216 GET.)
         let outcome = state
-            .speleodb_upload("http://127.0.0.1:1/", &token, false, &link, None, false)
+            .speleodb_upload(
+                "http://127.0.0.1:1/",
+                &token,
+                false,
+                &link,
+                None,
+                false,
+                &mut Vec::new(),
+            )
             .expect("an ambiguous upload returns an outcome, not a hard error");
         assert!(
             matches!(outcome, PushOutcome::Unconfirmed),

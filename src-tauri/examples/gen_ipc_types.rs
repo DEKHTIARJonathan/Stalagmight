@@ -28,7 +28,7 @@ use stalagmight_lib::config::{
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
-    ReversedSection, ValidationWarning, WarningSeverity,
+    ReversedSection, SpeleoDoneReport, SpeleoPushReport, ValidationWarning, WarningSeverity,
 };
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
@@ -404,6 +404,9 @@ fn main() {
     export::<DoneResult>(&out_dir);
     export::<UpdateResult>(&out_dir);
     export::<PushResult>(&out_dir);
+    // [#576 NF-W2SAVE-1] Done / Push answers carrying the pre-push save's warnings
+    export::<SpeleoDoneReport>(&out_dir);
+    export::<SpeleoPushReport>(&out_dir);
     // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
     export::<Visibility>(&out_dir);
     export::<SpeleoProjectMetadata>(&out_dir);
@@ -625,6 +628,8 @@ fn main() {
         "DoneResult",
         "UpdateResult",
         "PushResult",
+        "SpeleoDoneReport",
+        "SpeleoPushReport",
         "Visibility",
         "SpeleoProjectMetadata",
         "SpeleoProjectMetadataPatch",
