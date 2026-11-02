@@ -16,9 +16,9 @@ use std::path::{Component, Path, PathBuf};
 /// copy of its folder (#576 B12).
 pub(crate) const MAX_RESOLVED_PATH_BYTES: usize = 32 * 1024;
 
-/// Windows' reserved DOS device names. A path whose component is one of them
-/// - in any case, with or without an extension (`NUL.dat`), trailing dots
-/// and spaces ignored - opens the device, not a file (#576 RV2-R-10).
+/// Windows' reserved DOS device names. A path whose component is one of them,
+/// in any case, with or without an extension (`NUL.dat`), trailing dots and
+/// spaces ignored, opens the device, not a file (#576 RV2-R-10).
 const DOS_DEVICE_NAMES: &[&str] = &[
     "CON",
     "PRN",
