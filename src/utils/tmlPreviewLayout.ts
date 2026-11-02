@@ -184,10 +184,10 @@ interface WorkingEntry {
  *   2. any other section merges its station 0 onto the station its
  *      `start_ariane_id` names, but only if that station belongs to a SELECTED
  *      section, since a deselected one is never created;
- *   3. failing that, a section with usable coordinates on its own first shot is
- *      anchored on those (drawn at the origin here - the preview has no
- *      georeferencing - but NOT reported as re-anchored, because the import
- *      will not put it at the origin);
+ *   3. failing that, a section with usable coordinates on its own raw first
+ *      shot - imported or not - is anchored on those (drawn at the origin here
+ *      - the preview has no georeferencing - but NOT reported as re-anchored,
+ *      because the import will not put it at the origin);
  *   4. anything else falls back to the origin and IS reported.
  *
  * Rule 1 is the definition the backend now uses too, and it must stay that way:
@@ -252,7 +252,12 @@ export function computeTmlPreviewLayout(
       parent,
       offsetX: 0,
       offsetY: 0,
-      reanchored: !isRoot && parent === undefined && !hasUsableGps(shots[0]),
+      // The RAW first shot, as `gps_placement` reads it: Ariane's GPS rides on
+      // the shots leaving the START, and when that shot is excluded the
+      // backend still places the section by it, carrying the datum past the
+      // excluded leg (#576 D39(j)). Testing the first IMPORTED shot badged
+      // such a section re-anchored while the import placed it by GPS.
+      reanchored: !isRoot && parent === undefined && !hasUsableGps(section.shots[0]),
     });
   }
 

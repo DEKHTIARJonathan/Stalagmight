@@ -230,6 +230,27 @@ describe('computeTmlPreviewLayout agrees with the backend about placement', () =
     expect(layout.reanchoredCount).toBe(0);
   });
 
+  it('reads the GPS off the raw first shot even when that shot is excluded (#576 D39(j))', () => {
+    // An unconnected entrance whose first leg carries the propagated START GPS
+    // and is excluded. The backend keeps the GPS and carries the datum past the
+    // excluded leg (`gps_placement`), so the section is placed, not
+    // re-anchored - the preview used to test the first IMPORTED shot instead
+    // and badge it.
+    const tml = file([
+      section('Root', 0, [shot(1, 0)]),
+      section('Entrance', 50, [
+        shot(51, 50, { excluded: true, latitude: 20.5, longitude: -87.3 }),
+        shot(52, 51),
+      ]),
+    ]);
+    const layout = computeTmlPreviewLayout(tml, all);
+
+    const entrance = layout.sections.find((s) => s.index === 1)!;
+    expect(entrance.section.shots).toHaveLength(1);
+    expect(entrance.reanchored).toBe(false);
+    expect(layout.reanchoredCount).toBe(0);
+  });
+
   it('ignores GPS the backend would refuse, so the two never disagree', () => {
     // NaN slips past a null-island guard written as `Math.abs(x) > 0`, exactly
     // as it did in Rust. `GpsCoordinates::new` refuses it, so the section really

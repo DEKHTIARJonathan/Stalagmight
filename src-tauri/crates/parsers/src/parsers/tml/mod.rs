@@ -1424,6 +1424,8 @@ pub fn convert_tml_with_options(
                 // never built.
                 is_root: configs.is_empty(),
                 root_placement: opts.root_placement,
+                include_excluded,
+                azimuth_reference,
             },
         )
         .map_err(|e| anyhow!("{e}"))?;

@@ -15,8 +15,8 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{TmlSection, TmlShotType};
-use crate::models::ImportPlacement;
+use super::{normalize_tml_shot, resolve_tml_depth_in, TmlSection, TmlShotType};
+use crate::models::{AzimuthReference, GpsCoordinates, ImportPlacement};
 
 /// Where the user asked the FIRST imported section to land.
 ///
@@ -55,7 +55,7 @@ impl TmlRootPlacement {
             } => Ok(ImportPlacement::ZeroDatum {
                 // Depth reference 0.0, matching the file-derived anchor below:
                 // Ariane states a surface position, not a datum depth.
-                coordinates: crate::models::GpsCoordinates::new(latitude, longitude, 0.0)?,
+                coordinates: GpsCoordinates::new(latitude, longitude, 0.0)?,
                 station_index: 0,
             }),
         }
@@ -162,6 +162,14 @@ pub(super) struct PlacementInput<'a> {
     pub is_root: bool,
     /// The user's explicit choice for the root section.
     pub root_placement: Option<TmlRootPlacement>,
+    /// Whether excluded shots are imported. When they are not, the shots in
+    /// front of a section's first imported one are not built, and a GPS
+    /// anchor written on the first of them belongs to a station the section
+    /// no longer has (see [`gps_placement`]).
+    pub include_excluded: bool,
+    /// The north reference the section's bearings are walked in - the one the
+    /// import records on it.
+    pub azimuth_reference: AzimuthReference,
 }
 
 /// Determine placement for a section based on the user's choice, topology and
@@ -178,9 +186,19 @@ pub(super) fn determine_placement(
     // out loud.
     if input.is_root {
         if let Some(choice) = input.root_placement {
+            // The dialog's "use the position in the file" sends the root's own
+            // first-shot coordinates verbatim. That IS the file's anchor, so it
+            // lands where the file measured it - the same rule as with no
+            // choice at all - rather than on whatever station the section now
+            // starts at.
+            if is_file_anchor(section, choice) {
+                if let Some(placement) = gps_placement(section, input) {
+                    return Ok((placement, None));
+                }
+            }
             return Ok((choice.to_placement()?, None));
         }
-        if let Some(placement) = gps_placement(section) {
+        if let Some(placement) = gps_placement(section, input) {
             return Ok((placement, None));
         }
         return Ok((ImportPlacement::Origin, None));
@@ -212,7 +230,7 @@ pub(super) fn determine_placement(
         }
     }
 
-    if let Some(placement) = gps_placement(section) {
+    if let Some(placement) = gps_placement(section, input) {
         return Ok((placement, None));
     }
 
@@ -255,28 +273,103 @@ pub(super) fn determine_placement(
 /// through to the caller's next option (topology, then the origin with the
 /// disconnected warning) rather than failing the import: the rest of the
 /// section's measurements are still perfectly good.
-fn gps_placement(section: &TmlSection) -> Option<ImportPlacement> {
+///
+/// The anchor is where the file MEASURED it: on the station the section's raw
+/// first shot starts from (Ariane writes it on the START, and the parser
+/// copies it onto the shots leaving that START). When that shot is not
+/// imported - excluded, with the include-excluded toggle off - the section's
+/// station 0 is the start of its first IMPORTED shot instead, so the datum is
+/// carried forward along the shots that were dropped, by the same horizontal
+/// geometry the import draws (#576 D39(j), NF-AN4-4). Anchoring station 0 at
+/// the raw coordinates instead displaced the whole section by one dropped
+/// shot. CLOSURE rows are skipped in that walk: the import never draws them.
+fn gps_placement(section: &TmlSection, input: &PlacementInput<'_>) -> Option<ImportPlacement> {
     let first_shot = section.shots.first()?;
     if first_shot.latitude.abs() <= f64::EPSILON && first_shot.longitude.abs() <= f64::EPSILON {
         return None;
     }
-    let coordinates =
-        match crate::models::GpsCoordinates::new(first_shot.latitude, first_shot.longitude, 0.0) {
-            Ok(coordinates) => coordinates,
-            Err(reason) => {
-                tracing::warn!(
-                    section = %section.name,
-                    %reason,
-                    purpose = "import Ariane TML/TMLU",
-                    "Ignoring an unusable GPS anchor in the file"
-                );
-                return None;
-            }
-        };
+    let measured = match GpsCoordinates::new(first_shot.latitude, first_shot.longitude, 0.0) {
+        Ok(coordinates) => coordinates,
+        Err(reason) => {
+            tracing::warn!(
+                section = %section.name,
+                %reason,
+                purpose = "import Ariane TML/TMLU",
+                "Ignoring an unusable GPS anchor in the file"
+            );
+            return None;
+        }
+    };
+    let (east, north) =
+        dropped_lead_offset(section, input.include_excluded, input.azimuth_reference);
+    let coordinates = if east == 0.0 && north == 0.0 {
+        measured
+    } else {
+        let (latitude, longitude) = crate::models::local_to_gps(east, north, &measured);
+        GpsCoordinates::new(latitude, longitude, 0.0).unwrap_or_else(|reason| {
+            tracing::warn!(
+                section = %section.name,
+                %reason,
+                purpose = "import Ariane TML/TMLU",
+                "Could not carry the GPS anchor past the excluded shots; anchoring the \
+                 first imported station at the file's coordinates"
+            );
+            measured
+        })
+    };
     Some(ImportPlacement::ZeroDatum {
         coordinates,
         station_index: 0,
     })
+}
+
+/// Whether `choice` is exactly the root section's own first-shot anchor - the
+/// coordinates the dialog offers as "the position in the file" and sends back
+/// verbatim (bit-equal through the JSON round trip).
+fn is_file_anchor(section: &TmlSection, choice: TmlRootPlacement) -> bool {
+    let (
+        TmlRootPlacement::ZeroDatum {
+            latitude,
+            longitude,
+        },
+        Some(first),
+    ) = (choice, section.shots.first())
+    else {
+        return false;
+    };
+    latitude.to_bits() == first.latitude.to_bits()
+        && longitude.to_bits() == first.longitude.to_bits()
+}
+
+/// East/north metres from the station the section's raw first shot starts at
+/// to the station its first IMPORTED shot starts at: the sum of the dropped
+/// leading shots' horizontal legs, each walked exactly as the import walks a
+/// shot (horizontal length from slope and depth change, the circular-mean
+/// bearing turned true by `reference`). `(0, 0)` when nothing in front is
+/// dropped.
+fn dropped_lead_offset(
+    section: &TmlSection,
+    include_excluded: bool,
+    reference: AzimuthReference,
+) -> (f64, f64) {
+    let (mut east, mut north) = (0.0, 0.0);
+    let mut prev_depth: Option<f64> = None;
+    for shot in &section.shots {
+        if shot.shot_type != TmlShotType::Closure && (include_excluded || !shot.excluded) {
+            break;
+        }
+        if shot.shot_type == TmlShotType::Closure {
+            continue;
+        }
+        let depth_in = resolve_tml_depth_in(shot, prev_depth, section.start_depth);
+        let data = normalize_tml_shot(shot, depth_in);
+        let horizontal = data.horizontal_length();
+        let bearing = data.average_azimuth_true_rad(reference);
+        east += horizontal * bearing.sin();
+        north += horizontal * bearing.cos();
+        prev_depth = Some(shot.depth);
+    }
+    (east, north)
 }
 
 /// Ariane shot ids that the current selection keeps, and the ones it drops.
@@ -787,6 +880,14 @@ mod root_and_coordinate_tests {
     use super::tests::{chain_of_three, file, section, shot};
     use super::*;
 
+    fn convert(
+        tml: &TmlFile,
+        opts: &TmlImportOptions,
+    ) -> (Vec<crate::models::ImportSectionConfig>, Vec<String>) {
+        let (configs, _, warnings) = convert_tml_with_options(tml, opts).unwrap();
+        (configs, warnings)
+    }
+
     const TYPED_DATUM: TmlRootPlacement = TmlRootPlacement::ZeroDatum {
         latitude: 20.5,
         longitude: -87.1,
@@ -996,5 +1097,114 @@ mod root_and_coordinate_tests {
             warnings.iter().any(|w| w.contains("was disconnected")),
             "expected the disconnected warning, got: {warnings:?}"
         );
+    }
+
+    // ---- #576 D39(j) / NF-AN4-4: the GPS lands on the station it was measured at
+
+    /// The file's GPS (written on the START, copied onto the shots leaving it)
+    /// sits on the raw first shot. Here that shot is EXCLUDED: a 10 m leg due
+    /// east. Without the include-excluded toggle the section is built from
+    /// its second shot, so its station 0 is 10 m east of where the GPS was
+    /// taken.
+    fn gps_on_an_excluded_first_shot(root: bool) -> TmlFile {
+        let mut lead = shot(1, 0);
+        lead.excluded = true;
+        lead.latitude = 20.5;
+        lead.longitude = -87.3;
+        let anchored = section("Anchored", 0, vec![lead, shot(2, 1), shot(3, 2)]);
+        if root {
+            file(vec![anchored])
+        } else {
+            // Not connected to the root by topology: placed by its own GPS.
+            file(vec![section("Root", 10, vec![shot(11, 10)]), anchored])
+        }
+    }
+
+    /// The coordinates a section was anchored at, from its placement.
+    fn datum_of(config: &crate::models::ImportSectionConfig) -> (f64, f64) {
+        match &config.placement {
+            ImportPlacement::ZeroDatum {
+                coordinates,
+                station_index: 0,
+            } => (coordinates.latitude, coordinates.longitude),
+            other => panic!("expected a station-0 zero datum, got {other:?}"),
+        }
+    }
+
+    /// Where 10 m due east of the file's GPS is.
+    fn ten_metres_east() -> (f64, f64) {
+        let measured = GpsCoordinates::new(20.5, -87.3, 0.0).unwrap();
+        crate::models::local_to_gps(10.0, 0.0, &measured)
+    }
+
+    fn assert_close(actual: (f64, f64), expected: (f64, f64)) {
+        assert!(
+            (actual.0 - expected.0).abs() < 1e-12 && (actual.1 - expected.1).abs() < 1e-12,
+            "anchored at {actual:?}, expected {expected:?}"
+        );
+    }
+
+    #[test]
+    fn a_dropped_first_shot_carries_the_root_gps_to_the_first_imported_station() {
+        let tml = gps_on_an_excluded_first_shot(true);
+        let (configs, warnings) = convert(&tml, &TmlImportOptions::default());
+        assert_eq!(configs[0].shots.len(), 2, "the excluded shot is not built");
+        assert_close(datum_of(&configs[0]), ten_metres_east());
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn a_dropped_first_shot_carries_a_detached_sections_gps_too() {
+        let tml = gps_on_an_excluded_first_shot(false);
+        let (configs, warnings) = convert(&tml, &TmlImportOptions::default());
+        let anchored = configs
+            .iter()
+            .find(|c| c.name.as_deref() == Some("Anchored"))
+            .unwrap();
+        assert_close(datum_of(anchored), ten_metres_east());
+        assert!(
+            warnings.is_empty(),
+            "placed by its GPS, not re-anchored: {warnings:?}"
+        );
+    }
+
+    /// The dialog's "use the position in the file" sends the root's own
+    /// first-shot coordinates back verbatim; that choice follows the same rule.
+    #[test]
+    fn choosing_the_files_own_position_follows_the_same_rule() {
+        let tml = gps_on_an_excluded_first_shot(true);
+        let opts = TmlImportOptions {
+            root_placement: Some(TmlRootPlacement::ZeroDatum {
+                latitude: 20.5,
+                longitude: -87.3,
+            }),
+            ..TmlImportOptions::default()
+        };
+        let (configs, _) = convert(&tml, &opts);
+        assert_close(datum_of(&configs[0]), ten_metres_east());
+
+        // Typed coordinates are the user's station 0, exactly as typed.
+        let typed = TmlImportOptions {
+            root_placement: Some(TmlRootPlacement::ZeroDatum {
+                latitude: 20.6,
+                longitude: -87.3,
+            }),
+            ..TmlImportOptions::default()
+        };
+        let (configs, _) = convert(&tml, &typed);
+        assert_close(datum_of(&configs[0]), (20.6, -87.3));
+    }
+
+    /// With the toggle on nothing is dropped, so the GPS stays on station 0.
+    #[test]
+    fn an_imported_first_shot_keeps_the_gps_on_station_zero() {
+        let tml = gps_on_an_excluded_first_shot(true);
+        let opts = TmlImportOptions {
+            include_excluded: true,
+            ..TmlImportOptions::default()
+        };
+        let (configs, _) = convert(&tml, &opts);
+        assert_eq!(configs[0].shots.len(), 3);
+        assert_close(datum_of(&configs[0]), (20.5, -87.3));
     }
 }
