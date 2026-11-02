@@ -95,6 +95,26 @@ export const configCommands: MockCommandFamily = (ctx) => {
   const mockShowNavigationTools =
     (window as unknown as Record<string, unknown>).__E2E_SEED_SHOW_NAVIGATION_TOOLS__ === true;
 
+  // [#576 NF-W5I-1] The real get_config / reload_config always answer a WHOLE Config:
+  // Config::default() for every field nothing stored. `setupTauriMocks` puts the
+  // generated `defaultConfig` (src/types/ipc/defaultConfig.ts) on the page as
+  // `__MOCK_DEFAULT_CONFIG__`, and every config answer here is its fixture (or the
+  // stored config) laid over it: a field the fixture leaves out reads as the backend's
+  // default, never `undefined`, and the answer has no field the wire lacks.
+  const wireDefaults = (window as unknown as { __MOCK_DEFAULT_CONFIG__: MockReply<'get_config'> })
+    .__MOCK_DEFAULT_CONFIG__;
+  const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+  const layOver = (base: unknown, over: unknown): unknown => {
+    if (over === undefined) return base;
+    if (!isPlainObject(base) || !isPlainObject(over)) return over;
+    const merged: Record<string, unknown> = { ...base };
+    for (const [key, value] of Object.entries(over)) merged[key] = layOver(base[key], value);
+    return merged;
+  };
+  const wholeConfig = (fixture: Record<string, unknown>): MockReply<'get_config'> =>
+    layOver(structuredClone(wireDefaults), fixture) as MockReply<'get_config'>;
+
   // The `[gas]` block persisted via update_gas_config, overlaid onto
   // get_config the same way. Null until something writes it, so an untouched
   // run keeps whatever gas config get_config would otherwise return.
@@ -107,8 +127,8 @@ export const configCommands: MockCommandFamily = (ctx) => {
         // overlaying any view state stored via update_data_table_view and any
         // `[gas]` block stored via update_gas_config.
         if (savedConfig) {
-          // shape not checked: savedConfig is the Config the app last sent to update_config/patch_config, held as Record<string, unknown>
-          return {
+          // The Config the app last sent to update_config/patch_config, over the wire defaults.
+          return wholeConfig({
             ...savedConfig,
             panels: {
               ...((savedConfig.panels as Record<string, unknown> | undefined) ?? {}),
@@ -119,10 +139,11 @@ export const configCommands: MockCommandFamily = (ctx) => {
             ...mockImportShotsView,
             },
             ...(mockGasConfig ? { gas: mockGasConfig } : {}),
-          } as unknown as MockReply<'get_config'>;
+          });
         }
-        // shape not checked: a partial hand-rolled Config fixture (fields the backend always sends are absent); completing it would change what the app reads
-        return {
+        // The fixture: what E2E runs with where it differs from Config::default() (onboarding off,
+        // the data table closed, ...), laid over the wire defaults like every answer here.
+        return wholeConfig({
           general: {
             auto_save: true,
             auto_save_interval_seconds: 30,
@@ -209,7 +230,6 @@ export const configCommands: MockCommandFamily = (ctx) => {
             },
             snap: {
               threshold: 10.0,
-              enabled_draw: true,
               enabled_merge: true,
               enabled_measure: true,
             },
@@ -231,8 +251,6 @@ export const configCommands: MockCommandFamily = (ctx) => {
             base_sigma_length_m: 0.05,
             base_sigma_azimuth_deg: 1.0,
             base_sigma_depth_m: 0.05,
-            transit_vertical_mode: 'ignore',
-            sequential_distribution_default: 'ProportionalByLength',
           },
           export: {
             default_image_format: 'png',
@@ -385,7 +403,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
           },
           // Spread LAST so a stored `[gas]` block wins over the literal's own.
           ...(mockGasConfig ? { gas: mockGasConfig } : {}),
-        } as unknown as MockReply<'get_config'>;
+        });
 
       case 'update_config':
         // Mock update_config - store config and return the real command's shape:
@@ -545,8 +563,8 @@ export const configCommands: MockCommandFamily = (ctx) => {
         // otherwise treats as persisted, and a reload-after-save test would
         // have asserted against the wrong baseline.
         if (savedConfig) {
-          // shape not checked: savedConfig is the Config the app last sent to update_config/patch_config, held as Record<string, unknown>
-          return {
+          // The Config the app last sent to update_config/patch_config, over the wire defaults.
+          return wholeConfig({
             ...savedConfig,
             panels: {
               ...((savedConfig.panels as Record<string, unknown> | undefined) ?? {}),
@@ -557,7 +575,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
             ...mockImportShotsView,
             },
             ...(mockGasConfig ? { gas: mockGasConfig } : {}),
-          } as unknown as MockReply<'reload_config'>;
+          });
         }
         // Return mock config with any test overrides applied
         // This allows tests to modify config values via __MOCK_SET_CONFIG_OVERRIDES__
@@ -648,7 +666,6 @@ export const configCommands: MockCommandFamily = (ctx) => {
             },
             snap: {
               threshold: 10.0,
-              enabled_draw: true,
               enabled_merge: true,
               enabled_measure: true,
             },
@@ -670,8 +687,6 @@ export const configCommands: MockCommandFamily = (ctx) => {
             base_sigma_length_m: 0.05,
             base_sigma_azimuth_deg: 1.0,
             base_sigma_depth_m: 0.05,
-            transit_vertical_mode: 'ignore',
-            sequential_distribution_default: 'ProportionalByLength',
           },
           export: {
             default_image_format: 'png',
@@ -816,8 +831,8 @@ export const configCommands: MockCommandFamily = (ctx) => {
           // mockDataTableView above.)
           ...(mockGasConfig ? { gas: mockGasConfig } : {}),
         };
-        // shape not checked: a partial hand-rolled Config fixture (fields the backend always sends are absent); completing it would change what the app reads
-        return baseConfig as unknown as MockReply<'reload_config'>;
+        // Laid over the wire defaults, like get_config's fixture.
+        return wholeConfig(baseConfig);
       }
 
       default:

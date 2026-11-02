@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import type { TmlFile } from '../../src/types/ipc/TmlFile';
 import type { TmlShot } from '../../src/types/ipc/TmlShot';
 import type { MockCommandFamily, MockIpcContext, MockReply } from './ipc/types';
+import { defaultConfig } from '../../src/types/ipc/defaultConfig';
 import { compassImportCommands } from './ipc/compassImport';
 import { configCommands } from './ipc/config';
 import { dmpImportCommands } from './ipc/dmpImport';
@@ -158,6 +159,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
   // mock can encode its result the same way the real backend does.
   // Exposes `window.MessagePack` synchronously before any app JS runs.
   await page.addInitScript({ content: loadMsgpackUmd() });
+
+  // [#576 NF-W5I-1] The whole Config the real backend answers get_config with is
+  // Config::default() under whatever was stored; the config family lays its fixture
+  // over this copy of the generated defaults (`mocks/ipc/config.ts`, `wholeConfig`).
+  await page.addInitScript({
+    content: `window.__MOCK_DEFAULT_CONFIG__ = ${JSON.stringify(defaultConfig)};`,
+  });
 
   const installTauriIpcMock = (families: MockCommandFamily[], buildShot: typeof buildMockShot) => {
     // Event listener registry for mock Tauri events (plugin:event|listen/emit/unlisten)
@@ -1605,6 +1613,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'get_project':
           case 'get_project_state': {
+            // [#576 NF-W5I-1] No project open: the backend resolves the whole reply null
+            // (ProjectState | null), not a state whose project is null.
+            if (!currentProject) return null satisfies MockReply<'get_project_state'>;
             // Generate mock stations from sections with merged_with data
             const mockStations: Array<{
               station_ref: { section_id: number; station_index: number };
@@ -1747,8 +1758,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // showed the populated count. A deep clone keeps every consumer's
               // ref-identity check honest, not just the sections one. (Caused ~50
               // full-suite failures; smoke seeds once, so it never hit this.)
-              // shape not checked: the mock's loose project record, and null with no project open (the backend resolves the whole reply null)
-              project: (currentProject ? structuredClone(currentProject) : currentProject) as unknown as NonNullable<
+              // shape not checked: the mock's loose project record (null is answered above)
+              project: structuredClone(currentProject) as unknown as NonNullable<
                 MockReply<'get_project_state'>
               >['project'],
               stations: mockStations,

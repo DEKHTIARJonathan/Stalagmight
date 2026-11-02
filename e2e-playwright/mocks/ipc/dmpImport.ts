@@ -14,9 +14,13 @@ export const dmpImportCommands: MockCommandFamily = (ctx) => {
       case 'parse_dmp': {
         return {
           version: 5,
-          // shape not checked: sections lack the wire's per-section version/content_hash and some shots omit LRUD; adding them changes what the wizard shows
+          // shape not checked: two sections deliberately omit LRUD fields on some shots (off-wire,
+          // the wizard must not crash on them). Every section carries the wire's `version` and
+          // `content_hash` (#576 NF-W5I-1): the wizard keys LRUD and temperature on the version.
           sections: [
             {
+              version: 5,
+              content_hash: 'mock-dmp-section-0',
               name: 'Main Passage',
               direction: 'in',
               date: new Date().toISOString().split('T')[0],
@@ -84,6 +88,8 @@ export const dmpImportCommands: MockCommandFamily = (ctx) => {
               ],
             },
             {
+              version: 5,
+              content_hash: 'mock-dmp-section-1',
               name: 'Side Tunnel',
               direction: 'out',
               date: new Date().toISOString().split('T')[0],
@@ -131,6 +137,8 @@ export const dmpImportCommands: MockCommandFamily = (ctx) => {
               ],
             },
             {
+              version: 5,
+              content_hash: 'mock-dmp-section-2',
               name: 'Mixed LRUD Section',
               direction: 'in',
               date: new Date().toISOString().split('T')[0],
@@ -195,6 +203,8 @@ export const dmpImportCommands: MockCommandFamily = (ctx) => {
               ],
             },
             {
+              version: 5,
+              content_hash: 'mock-dmp-section-3',
               name: 'Undefined LRUD Section',
               direction: 'in',
               date: new Date().toISOString().split('T')[0],
@@ -237,12 +247,16 @@ export const dmpImportCommands: MockCommandFamily = (ctx) => {
               ],
             },
             {
+              version: 5,
+              content_hash: 'mock-dmp-section-4',
               name: 'Empty Section',
               direction: 'in',
               date: new Date().toISOString().split('T')[0],
               shots: [],
             },
             {
+              version: 5,
+              content_hash: 'mock-dmp-section-5',
               name: 'Validation Test Section',
               direction: 'in',
               date: new Date().toISOString().split('T')[0],
