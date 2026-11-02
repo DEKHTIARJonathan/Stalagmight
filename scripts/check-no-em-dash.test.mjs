@@ -55,6 +55,10 @@ test('fires on every other banned code point', () => {
     [0xff0d, 'U+FF0D fullwidth hyphen-minus'],
     [0x2e3a, 'U+2E3A two-em dash'],
     [0x2e3b, 'U+2E3B three-em dash'],
+    [0xfe31, 'U+FE31 vertical em dash'],
+    [0xfe32, 'U+FE32 vertical en dash'],
+    [0x2e40, 'U+2E40 double hyphen'],
+    [0x2e17, 'U+2E17 double oblique hyphen'],
   ].map(([code, name]) => ({ code, name }))) {
     const hits = findDashes(`value ${ch(code)} other`);
     assert.equal(hits.length, 1, `${name} did not fire`);
@@ -86,10 +90,10 @@ test('the en dash fires even in a numeric range (issue #293 q6-B)', () => {
   assert.equal(findDashes(`azimuth 0${ch(0x2013)}360`).length, 1);
 });
 
-test('BANNED covers exactly the thirteen code points this test pins', () => {
+test('BANNED covers exactly the seventeen code points this test pins', () => {
   assert.deepEqual(
     BANNED.map((b) => b.code).sort((a, b) => a - b),
-    [0x00ad, 0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212, 0x2e3a, 0x2e3b, 0xfe58, 0xfe63, 0xff0d],
+    [0x00ad, 0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212, 0x2e17, 0x2e3a, 0x2e3b, 0x2e40, 0xfe31, 0xfe32, 0xfe58, 0xfe63, 0xff0d],
   );
 });
 

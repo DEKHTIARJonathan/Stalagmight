@@ -282,8 +282,11 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await page.keyboard.press('K');
       await waitForRecording(page, 'shortcut-primary-merge', false);
 
-      // The first assignment raised no error, so the one asserted below comes
-      // from the second.
+      // Wait for the first assignment to commit (merge's key badge reads exactly
+      // K, its default is M; an exact match, since `hasText: 'K'` would match the
+      // recorder's "Press keys..." prompt); only then does "no error" prove the
+      // first assignment raised none, so the one asserted below comes from the second.
+      await expect(primaryRecorder.locator('span').filter({ hasText: /^K$/ }).first()).toBeVisible();
       await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
 
       // Try to assign same key to secondary slot

@@ -10,7 +10,9 @@
 //   U+2010 hyphen, U+2011 non-breaking hyphen, U+2012 figure dash,
 //   U+2013 en dash, U+2014 em dash, U+2015 horizontal bar, U+2212 minus sign,
 //   U+00AD soft hyphen, U+FE58 small em dash, U+FE63 small hyphen-minus,
-//   U+FF0D fullwidth hyphen-minus, U+2E3A two-em dash, U+2E3B three-em dash.
+//   U+FF0D fullwidth hyphen-minus, U+2E3A two-em dash, U+2E3B three-em dash,
+//   U+FE31 / U+FE32 vertical em / en dash, U+2E40 double hyphen, U+2E17
+//   double oblique hyphen (the last four since #576 RV3-FE-NITS).
 // The last six were added in #576 (E18(d)). U+00AD is the sharpest of them:
 // inside a word it renders as nothing at all, so `pro<U+00AD>ject` and
 // `project` look identical in review while comparing unequal (a test ID, a
@@ -88,6 +90,13 @@ export const BANNED = [
   { code: 0xff0d, name: 'U+FF0D fullwidth hyphen-minus' },
   { code: 0x2e3a, name: 'U+2E3A two-em dash' },
   { code: 0x2e3b, name: 'U+2E3B three-em dash' },
+  // Further dash lookalikes (#576 RV3-FE-NITS): the vertical presentation
+  // forms render as a plain dash in a horizontal run, and the double hyphens
+  // as two. U+301C wave dash stays allowed: a tilde-like CJK range mark.
+  { code: 0xfe31, name: 'U+FE31 vertical em dash' },
+  { code: 0xfe32, name: 'U+FE32 vertical en dash' },
+  { code: 0x2e40, name: 'U+2E40 double hyphen' },
+  { code: 0x2e17, name: 'U+2E17 double oblique hyphen' },
 ].map((b) => ({ ...b, char: String.fromCharCode(b.code) }));
 const BANNED_NAME = new Map(BANNED.map((b) => [b.char, b.name]));
 const BANNED_RE = new RegExp(`[${BANNED.map((b) => b.char).join('')}]`, 'g');

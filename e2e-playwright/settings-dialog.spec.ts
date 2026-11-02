@@ -63,8 +63,11 @@ test.describe('Settings Dialog - Keyboard Shortcuts to Open', () => {
     // Ensure Settings is not open
     await expect(page.locator('[data-testid="settings-dialog"]')).not.toBeVisible();
 
-    // The project view (which owns the keyboard shortcut handler) is mounted.
-    await expect(page.locator('canvas')).toBeVisible({ timeout: 5000 });
+    // No wait is needed here: the shortcut handler is registered by
+    // SingleSystemView's mount effect (useKeyboardShortcuts), and beforeEach's
+    // createProject returned only once single-system-view was visible and the
+    // map ready. Asserted as a precondition, not as a wait.
+    await expect(page.getByTestId('single-system-view')).toBeVisible();
 
     // Send the Ctrl+, shortcut using keyboard.down/up for more reliable behavior
     await page.keyboard.down('Control');
