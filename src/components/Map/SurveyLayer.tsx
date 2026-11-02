@@ -1,4 +1,4 @@
-import type { Map as MaplibreMap, MapMouseEvent, ExpressionSpecification } from 'maplibre-gl';
+import type { Map as MaplibreMap, MapMouseEvent } from 'maplibre-gl';
 import type maplibregl from 'maplibre-gl';
 import type { LoopClosure, Section, SectionId, ShotId, Station, StationRef } from '../../types/project';
 import type { Config, GpsOrigin, DecimalPrecision } from '../../types/config';
@@ -42,7 +42,6 @@ import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
 import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
 import { SurveyCustomController, buildCustomDimState, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
-import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
 import { MeasurePathController } from './surveyLayer/customRender/measurePathController';
 import type { MeasurePathRenderData } from './surveyLayer/customRender/surveyMeasurePathLayer';
 import {
@@ -54,18 +53,8 @@ import { packCssColor } from './surveyLayer/customRender/colorPack';
 import type { SurveyData } from '../../types/survey-data';
 import type { ProjectWarning } from '../../types/commands';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
-import {
-  distanceColorExpression,
-  DISTANCE_NEAR,
-  DISTANCE_FAR,
-  type DistanceFeatureState,
-} from '../../utils/distanceGradient';
-import {
-  gasReachColorExpression,
-  GAS_NEAR,
-  GAS_FAR,
-  type GasReachFeatureState,
-} from '../../utils/gasReach';
+import type { DistanceFeatureState } from '../../utils/distanceGradient';
+import type { GasReachFeatureState } from '../../utils/gasReach';
 import { metersToMapCoords } from '../../utils/coordinates';
 import { getErrorColor } from '../../utils/colors';
 import { trackNav } from '../../utils/telemetry';
@@ -96,6 +85,7 @@ import {
   applyGhostSection,
   publishLoopClosures,
 } from './surveyLayer/auxiliaryData';
+import { AnalyticalOverlays } from './surveyLayer/analyticalOverlays';
 
 /** Whether replacing dim set `prev` with `next` changes nothing. */
 function sameOrBothEmpty(next: ReadonlySet<number>, prev: ReadonlySet<number>): boolean {
@@ -311,21 +301,9 @@ export default class SurveyLayer {
   private showIssueSeverity: boolean = false;
   private cachedWarnings: ProjectWarning[] = [];
 
-  // Distance-gradient overlay (#34). feature-state based so re-root needs no
-  // feature rebuild; re-applied after source rebuilds because endApplyFeatures
-  // clears state before tile IDs can be reused for different merged groups.
-  private distanceMode: boolean = false;
-  private distanceState: DistanceFeatureState | null = null;
-  // Gas reachable-frontier overlay (#38). Same feature-state mechanics as the
-  // distance gradient (own `gasReach` key); mutually exclusive with it (both own
-  // the shots/stations color paint), enforced upstream in uiStore.
-  private gasReachMode: boolean = false;
-  private gasReachState: GasReachFeatureState | null = null;
-  // Plan-mode idle tint (#395 revision): true while Plan is active but no gas
-  // origin has been chosen yet - the whole survey renders the gas ramp's dim far
-  // color instead of leaking section colors under the gas scheme. Driven by
-  // MapCanvas (setPlanIdleTint); yields to a real gas field via isPlanIdleActive().
-  private planIdleTint: boolean = false;
+  // Analytical-overlay modes: distance gradient (#34), gas reachable frontier
+  // (#38) and the Plan-mode idle tint (#395 revision). See analyticalOverlays.ts.
+  private readonly overlays = new AnalyticalOverlays();
   // Gas route highlight (#233): the current picked-route legs. Re-applied after every source
   // rebuild (its own GeoJSON source survives setData, but a feature rebuild re-pushes the data).
   private gasRouteLegs: (RouteLeg & { color: string })[] = [];
@@ -1303,7 +1281,7 @@ export default class SurveyLayer {
       themeColors: this.themeColors,
       showIssueSeverity: this.showIssueSeverity && !!this.cachedIssueSeverity,
       issueSeverity: this.cachedIssueSeverity,
-      planIdleTint: this.isPlanIdleActive(),
+      planIdleTint: this.overlays.isPlanIdleActive(),
     };
   }
 
@@ -1318,13 +1296,13 @@ export default class SurveyLayer {
       measuredPathStationIds: this.measuredPathStationIds,
       measureTintColor: this.measureTintColor,
       isSectionAnchored: (sectionId) => this.isSectionAnchored(sectionId),
-      isPlanIdleActive: this.isPlanIdleActive(),
+      isPlanIdleActive: this.overlays.isPlanIdleActive(),
       displayColorContext: this.displayColorContext(),
       themeColors: this.themeColors,
-      distanceMode: this.distanceMode,
-      distanceState: this.distanceState,
-      gasReachMode: this.gasReachMode,
-      gasReachState: this.gasReachState,
+      distanceMode: this.overlays.distanceMode,
+      distanceState: this.overlays.distanceState,
+      gasReachMode: this.overlays.gasReachMode,
+      gasReachState: this.overlays.gasReachState,
       dragOverlayOffset: this.dragOverlayOffset,
       dragMovingShots: this.dragMovingShots,
       dragMovingStationKeys: this.dragMovingStationKeys,
@@ -1350,8 +1328,8 @@ export default class SurveyLayer {
    * Re-rooting just calls this again - no feature rebuild.
    */
   setDistanceGradient(enabled: boolean, state: DistanceFeatureState | null): void {
-    this.distanceMode = enabled;
-    this.distanceState = state;
+    this.overlays.distanceMode = enabled;
+    this.overlays.distanceState = state;
     if (!this.map || !hasLiveStyle(this.map)) return;
     // Interact overlay follows the mode swap; the custom renderer (no feature-state)
     // rebuilds the survey geometry with the new overlay colors.
@@ -1367,8 +1345,8 @@ export default class SurveyLayer {
    * Re-running on an input change just calls this again - no feature rebuild.
    */
   setGasReach(enabled: boolean, state: GasReachFeatureState | null): void {
-    this.gasReachMode = enabled;
-    this.gasReachState = state;
+    this.overlays.gasReachMode = enabled;
+    this.overlays.gasReachState = state;
     if (!this.map || !hasLiveStyle(this.map)) return;
     // Interact overlay follows the mode swap; the custom renderer rebuilds the
     // survey geometry with the new overlay colors.
@@ -1377,12 +1355,6 @@ export default class SurveyLayer {
     // Beyond-gas-range dimming (#395) follows the same mode/state - toggling
     // Plan mode (or a budget change) applies/clears the gas-dim set.
     this.syncCustomDimming();
-  }
-
-  /** True when the plan-idle tint should actually paint: the flag is set AND no
-   *  real gas field is active - a real field always wins (#395 revision). */
-  private isPlanIdleActive(): boolean {
-    return this.planIdleTint && !(this.gasReachMode && this.gasReachState);
   }
 
   /**
@@ -1394,8 +1366,8 @@ export default class SurveyLayer {
    * exits (MapCanvas drives both).
    */
   setPlanIdleTint(enabled: boolean): void {
-    if (this.planIdleTint === enabled) return;
-    this.planIdleTint = enabled;
+    if (this.overlays.planIdleTint === enabled) return;
+    this.overlays.planIdleTint = enabled;
     if (!this.map || !hasLiveStyle(this.map)) return;
     this.applyOverlayPaint();
     this.resyncCustomRenderFromStore();
@@ -1422,24 +1394,7 @@ export default class SurveyLayer {
    */
   private applyInteractPaint(): void {
     if (!this.map || !hasLiveStyle(this.map)) return;
-    const colorProp: ExpressionSpecification = ['get', 'color'] as ExpressionSpecification;
-    const shotColor = this.distanceMode
-      ? distanceColorExpression(
-          DISTANCE_NEAR,
-          DISTANCE_FAR,
-          this.distanceState?.max ?? 0,
-          this.themeColors.grayLine,
-          ['get', 'dist'] as ExpressionSpecification,
-        )
-      : this.gasReachMode
-        ? gasReachColorExpression(
-            GAS_NEAR,
-            GAS_FAR,
-            this.gasReachState?.max ?? 0,
-            this.themeColors.grayLine,
-            ['get', 'gasReach'] as ExpressionSpecification,
-          )
-        : colorProp;
+    const shotColor = this.overlays.interactColorExpression(this.themeColors);
     if (this.map.getLayer(AUX_IDS.interactShotsLayerId)) {
       this.map.setPaintProperty(AUX_IDS.interactShotsLayerId, 'line-color', shotColor);
     }
@@ -2028,7 +1983,7 @@ export default class SurveyLayer {
    *  station/section labels, immovable + gas-dim dim individual shot/station labels;
    *  comments and section-name immovable/gas-dim are left bright, matching stock). */
   private syncCustomDimming(): void {
-    const dim = buildCustomDimState(this.anchoredSectionIds, this.immovableStationFeatureIds, this.immovableShotFeatureIds, this.gasReachMode, this.gasReachState, this.isPlanIdleActive());
+    const dim = buildCustomDimState(this.anchoredSectionIds, this.immovableStationFeatureIds, this.immovableShotFeatureIds, this.overlays.gasReachMode, this.overlays.gasReachState, this.overlays.isPlanIdleActive());
     this.customRender?.setDimming(dim);
     this.customLabels?.setDimming(dim);
   }
@@ -2077,37 +2032,11 @@ export default class SurveyLayer {
     if (this.lastOverlayDigest !== before) this.interactHide.hideUntilRetile();
   }
 
-  /** The drag preview's shot/station color paint. Plain mode reads the resolved
-   *  per-feature `color` property (baked at capture time, like the interact
-   *  overlay); distance / gas-reach modes read the carried `dist` / `gasReach`
-   *  through the SAME ramp expressions the bulk layers use, so colors match. */
-  private dragPreviewColorExpr(): ExpressionSpecification {
-    if (this.distanceMode) {
-      return distanceColorExpression(
-        DISTANCE_NEAR,
-        DISTANCE_FAR,
-        this.distanceState?.max ?? 0,
-        this.themeColors.grayLine,
-        ['get', 'dist'] as ExpressionSpecification,
-      );
-    }
-    if (this.gasReachMode) {
-      return gasReachColorExpression(
-        GAS_NEAR,
-        GAS_FAR,
-        this.gasReachState?.max ?? 0,
-        this.themeColors.grayLine,
-        ['get', 'gasReach'] as ExpressionSpecification,
-      );
-    }
-    return ['get', 'color'] as ExpressionSpecification;
-  }
-
   /** Build the layer-spec context for the drag-preview layers module: shots +
    *  stations color / size / highlight (see surveyLayer/dragPreviewLayers.ts). */
   private dragPreviewLayerCtx(): DragPreviewLayerCtx {
     return {
-      colorExpr: this.dragPreviewColorExpr(),
+      colorExpr: this.overlays.dragPreviewColorExpr(this.themeColors),
       shotWidth: this.getShotSelectionWidth(),
       stationRadius: this.getStationSelectionRadius(),
       selectHighlight: this.themeColors.selectHighlight,
@@ -2148,7 +2077,7 @@ export default class SurveyLayer {
     return buildGhostRenderData(set, {
       dpr: (typeof window !== 'undefined' && window.devicePixelRatio) || 1,
       themeColors: this.themeColors,
-      overlay: overlayInputFrom(this.distanceMode, this.distanceState, this.gasReachMode, this.gasReachState),
+      overlay: this.overlays.overlayInput(),
       shotsVisible: this.shotsVisible,
       stationsVisible: this.stationsVisible,
       selShotWidth: this.getShotSelectionWidth(),
@@ -2205,14 +2134,14 @@ export default class SurveyLayer {
    *  same way the interact overlay keys them ("sec:idx" / "sec:shotId"). */
   private dragOverlayProps(idStr: string, kind: 'station' | 'shot'): Record<string, unknown> {
     const props: Record<string, unknown> = {};
-    if (!this.distanceMode && !this.gasReachMode) return props;
+    if (!this.overlays.distanceMode && !this.overlays.gasReachMode) return props;
     const fid = this.parseFeatureId(idStr);
     if (fid === null) return props;
     const map = kind === 'station'
-      ? { dist: this.distanceState?.stations, gas: this.gasReachState?.stations }
-      : { dist: this.distanceState?.shots, gas: this.gasReachState?.shots };
-    if (this.distanceMode) props.dist = map.dist?.get(fid) ?? -1;
-    if (this.gasReachMode) props.gasReach = map.gas?.get(fid) ?? -1;
+      ? { dist: this.overlays.distanceState?.stations, gas: this.overlays.gasReachState?.stations }
+      : { dist: this.overlays.distanceState?.shots, gas: this.overlays.gasReachState?.shots };
+    if (this.overlays.distanceMode) props.dist = map.dist?.get(fid) ?? -1;
+    if (this.overlays.gasReachMode) props.gasReach = map.gas?.get(fid) ?? -1;
     return props;
   }
 
@@ -2819,13 +2748,13 @@ export default class SurveyLayer {
       issueSeverity: this.cachedIssueSeverity,
       // Analytical overlay ramp colors (distance #34 / gas-reach #38): the custom
       // layer has no feature-state, so it resolves them per feature at build time.
-      overlay: overlayInputFrom(this.distanceMode, this.distanceState, this.gasReachMode, this.gasReachState),
+      overlay: this.overlays.overlayInput(),
       // Move-comment palette tint (#52): custom features carry no commentColor
       // property, so the resolvers recompute it (only while move_comment is active).
       commentTint: this.activeTool === 'move_comment',
       // Plan-mode idle tint (#395 revision): paints every feature the gas ramp's
       // dim far color while there is no origin yet.
-      planIdleTint: this.isPlanIdleActive(),
+      planIdleTint: this.overlays.isPlanIdleActive(),
     };
     this.customRender.sync({
       surveyData,
