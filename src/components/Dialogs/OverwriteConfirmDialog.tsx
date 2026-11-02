@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useProject } from '../../hooks/useProject';
@@ -9,6 +10,7 @@ import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { isPermissionError } from '../../utils/saveErrors';
 
 export default function OverwriteConfirmDialog() {
+  const { t } = useTranslation();
   const { closeDialog, dialogData, openDialog: showDialog } = useUIStore();
   const { saveProject } = useProjectStore();
   const { handleCloseProject } = useProject();
@@ -72,23 +74,22 @@ export default function OverwriteConfirmDialog() {
   return (
     <DialogWrapper title="Overwrite File?" onClose={closeDialog} size="md" data-testid="overwrite-confirm-dialog">
       <div className="space-y-4">
-        {existenceUnknown ? (
-          <p className="text-text-secondary" data-testid="overwrite-confirm-unknown">
-            Stalagmight could not check whether a file named{' '}
-            <span className="font-medium text-text-primary">{fileName}</span> already exists.
-            If it does, saving will replace it.
-          </p>
-        ) : (
-          <p className="text-text-secondary">
-            A file named <span className="font-medium text-text-primary">{fileName}</span> already exists.
-            Do you want to replace it?
-          </p>
-        )}
+        {/* #576 RV2-FE-5: both variants' copy lives in en.json (D20-D1). */}
+        <p
+          className="text-text-secondary"
+          data-testid={existenceUnknown ? 'overwrite-confirm-unknown' : 'overwrite-confirm-message'}
+        >
+          <Trans
+            i18nKey={existenceUnknown ? 'dialogs.overwriteConfirm.messageUnknown' : 'dialogs.overwriteConfirm.message'}
+            values={{ fileName }}
+            components={{ name: <span className="font-medium text-text-primary" /> }}
+          />
+        </p>
 
         <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
           {existenceUnknown
-            ? 'Any existing file with this name will be overwritten. This action cannot be undone.'
-            : 'This will overwrite the existing file. This action cannot be undone.'}
+            ? t('dialogs.overwriteConfirm.warningUnknown')
+            : t('dialogs.overwriteConfirm.warning')}
         </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">

@@ -1699,6 +1699,12 @@
       "listHeading": "Sections without a zero datum connection",
       "sectionFallbackName": "Section {{id}}"
     },
+    "overwriteConfirm": {
+      "message": "A file named <name>{{fileName}}</name> already exists. Do you want to replace it?",
+      "messageUnknown": "Stalagmight could not check whether a file named <name>{{fileName}}</name> already exists. If it does, saving will replace it.",
+      "warning": "This will overwrite the existing file. This action cannot be undone.",
+      "warningUnknown": "Any existing file with this name will be overwritten. This action cannot be undone."
+    },
     "overwriteRewritten": {
       "title": "Replace File?",
       "message": "This file is saved as {{fileName}}, because this format needs the {{extension}} extension. A file with that name already exists. Replacing it cannot be undone.",
