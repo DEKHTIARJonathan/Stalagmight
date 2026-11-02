@@ -1232,6 +1232,20 @@ fn send_json_request(
     Ok(())
 }
 
+/// [#576 B16] The level a grant may send: any tier this build knows. An
+/// [`Permission::Unknown`] is a label the SERVER sent that this build cannot name,
+/// so there is nothing faithful to send back - refused before any request.
+fn grantable(level: Permission) -> Result<Permission, SpeleoDbError> {
+    if level == Permission::Unknown {
+        return Err(SpeleoDbError::Io(
+            "this access level is not one this version of Stalagmight knows, so it cannot be \
+             granted - pick another level"
+                .to_owned(),
+        ));
+    }
+    Ok(level)
+}
+
 /// `GET /api/v2/projects/{id}/permissions/user/` - list the project's active
 /// per-user permission grants (#215). A GET, so retry-safe; requires READ_ONLY+
 /// server-side (403 below that). Only the `permissions[]` array is consumed.
@@ -1263,6 +1277,7 @@ pub fn add_user_permission(
     email: &str,
     level: Permission,
 ) -> Result<(), SpeleoDbError> {
+    let level = grantable(level)?;
     send_json_request(
         base,
         token,
@@ -1284,6 +1299,7 @@ pub fn set_user_permission(
     email: &str,
     level: Permission,
 ) -> Result<(), SpeleoDbError> {
+    let level = grantable(level)?;
     send_json_request(
         base,
         token,
@@ -1346,6 +1362,7 @@ pub fn add_team_permission(
     team_id: &str,
     level: Permission,
 ) -> Result<(), SpeleoDbError> {
+    let level = grantable(level)?;
     send_json_request(
         base,
         token,
@@ -1367,6 +1384,7 @@ pub fn set_team_permission(
     team_id: &str,
     level: Permission,
 ) -> Result<(), SpeleoDbError> {
+    let level = grantable(level)?;
     send_json_request(
         base,
         token,

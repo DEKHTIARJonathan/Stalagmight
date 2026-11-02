@@ -3723,7 +3723,8 @@
       },
       "visibilityOptions": {
         "private": "Private",
-        "public": "Public"
+        "public": "Public",
+        "unknown": "Unknown"
       },
       "rendering": {
         "label": "Web-map rendering",
@@ -3780,7 +3781,8 @@
         "WEB_VIEWER": "Web Viewer",
         "READ_ONLY": "Read only",
         "READ_AND_WRITE": "Read & write",
-        "ADMIN": "Admin"
+        "ADMIN": "Admin",
+        "UNKNOWN": "Unknown"
       },
       "addFailed": "Could not add the collaborator",
       "addTeamFailed": "Could not add the team",

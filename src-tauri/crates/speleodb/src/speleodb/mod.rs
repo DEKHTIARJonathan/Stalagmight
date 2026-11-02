@@ -31,6 +31,14 @@ pub mod dump;
 // [F1] #210 per-endpoint traffic instrumentation (count + latency + outcome).
 pub mod metrics;
 pub mod models;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod server_enum_tests;
 // [P1] #192/#193 pure sync-engine logic: base-SHA fence + ancestry recovery.
 pub mod sync;
 // [Track A] #187 http/https private-network TLS policy (pure classify_addr + enforce).

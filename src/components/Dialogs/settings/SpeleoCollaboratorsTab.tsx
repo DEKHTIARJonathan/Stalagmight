@@ -95,7 +95,14 @@ function RosterRowActions({
           // change: there is nothing left to apply, so drop the staged step.
           setArmed(next === current ? null : { kind: 'level', row, permission: next });
         }}
-        options={levels.map((p) => ({ value: p, label: t(levelKey(p)) }))}
+        options={[
+          // [#576 B16] A tier the server added after this build shipped is shown as
+          // the current value, but cannot be picked: it is never sent back.
+          ...(levels.includes(current)
+            ? []
+            : [{ value: current, label: t(levelKey(current)), disabled: true }]),
+          ...levels.map((p) => ({ value: p, label: t(levelKey(p)) })),
+        ]}
         size="sm"
         pending={staged !== null}
         aria-label={t('speleodb.collaborators.levelFor', { name })}

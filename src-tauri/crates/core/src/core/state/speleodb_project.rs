@@ -23,10 +23,15 @@ use crate::speleodb::{
 /// The canonical SpeleoDB wire label for a visibility ([#206]/[#207]). The server's
 /// `CustomChoiceField` accepts the enum NAME case-insensitively on input; we send the
 /// UPPERCASE label it returns so a round-trip is byte-identical.
-fn visibility_label(visibility: Visibility) -> &'static str {
+///
+/// `None` for [`Visibility::Unknown`] (#576 B16): a value the server sent that this
+/// build cannot name has no faithful label to send back, so the caller leaves the
+/// field out and the server keeps (or defaults) its own.
+fn visibility_label(visibility: Visibility) -> Option<&'static str> {
     match visibility {
-        Visibility::Private => "PRIVATE",
-        Visibility::Public => "PUBLIC",
+        Visibility::Private => Some("PRIVATE"),
+        Visibility::Public => Some("PUBLIC"),
+        Visibility::Unknown => None,
     }
 }
 
@@ -63,11 +68,8 @@ fn build_patch_body(
             serde_json::Value::from(country.clone()),
         );
     }
-    if let Some(visibility) = patch.visibility {
-        body.insert(
-            "visibility".to_owned(),
-            serde_json::Value::from(visibility_label(visibility)),
-        );
+    if let Some(label) = patch.visibility.and_then(visibility_label) {
+        body.insert("visibility".to_owned(), serde_json::Value::from(label));
     }
     if patch.coordinates_edited {
         body.insert("latitude".to_owned(), coord_json(patch.latitude));
@@ -96,10 +98,11 @@ fn build_create_body(params: &SpeleoPublishParams) -> serde_json::Value {
     );
     body.insert("type".to_owned(), serde_json::Value::from("other"));
     body.insert("exclude_geojson".to_owned(), serde_json::Value::Bool(false));
-    body.insert(
-        "visibility".to_owned(),
-        serde_json::Value::from(visibility_label(params.visibility)),
-    );
+    // An unknown visibility (#576 B16) is left out: the server applies its own
+    // default, PRIVATE - the fail-safe one.
+    if let Some(label) = visibility_label(params.visibility) {
+        body.insert("visibility".to_owned(), serde_json::Value::from(label));
+    }
     if let (Some(lat), Some(lon)) = (params.latitude, params.longitude) {
         if let (Some(lat), Some(lon)) = (
             serde_json::Number::from_f64(lat),
@@ -480,8 +483,11 @@ mod tests {
     fn visibility_label_matches_the_wire_contract() {
         // The server's CustomChoiceField returns the UPPERCASE label; we send exactly
         // that so a metadata round-trip is byte-identical (#206/#207).
-        assert_eq!(visibility_label(Visibility::Private), "PRIVATE");
-        assert_eq!(visibility_label(Visibility::Public), "PUBLIC");
+        assert_eq!(visibility_label(Visibility::Private), Some("PRIVATE"));
+        assert_eq!(visibility_label(Visibility::Public), Some("PUBLIC"));
+        // [#576 B16] A visibility the server sent that this build cannot name is
+        // never sent back: there is no faithful label for it.
+        assert_eq!(visibility_label(Visibility::Unknown), None);
     }
 
     #[test]
