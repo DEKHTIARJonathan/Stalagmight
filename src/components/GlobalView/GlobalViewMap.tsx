@@ -111,6 +111,21 @@ interface GlobalViewMapProps {
   onZoomHandled?: () => void;
 }
 
+/** The spinning ring a marker shows while its system's geometry loads. */
+function createMarkerSpinner(strokeLight: string, strokeColor: string): HTMLDivElement {
+  const spinner = document.createElement('div');
+  spinner.className = 'marker-spinner';
+  spinner.style.cssText = `
+    width: 10px;
+    height: 10px;
+    border: 2px solid ${strokeLight};
+    border-top-color: ${strokeColor};
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  `;
+  return spinner;
+}
+
 /** Stable empty defaults: a `new Map()` default parameter is a new object on every
  *  render, which every effect depending on these props would see as a change. Left
  *  untyped like the inline defaults they replace, so the props keep their old type. */
@@ -169,6 +184,14 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   // Store viewMode in ref for callbacks that need current value without closure staleness
   const viewModeRef = useRef<ViewMode>(viewMode);
   viewModeRef.current = viewMode;
+  // Read by the marker creation effect and the marker click handlers, so that
+  // effect re-runs only when the SET of systems changes (#576 D10): a loading-state
+  // or selection change restyles the existing markers (styles effect below)
+  // instead of tearing down and rebuilding every marker's DOM.
+  const geometryStatesRef = useRef(geometryStates);
+  geometryStatesRef.current = geometryStates;
+  const selectedProjectIdRef = useRef(selectedProjectId);
+  selectedProjectIdRef.current = selectedProjectId;
 
   // The FPS-driven tolerance throttle was removed with the GeoJSON source (#mem):
   // GlobalSurveyLayer now serves bulk geometry as on-demand vector tiles, which
@@ -786,7 +809,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       .addTo(map.current);
   }, [t]);
 
-  // Update markers when projects or selection changes
+  // Create the markers when the set of systems (or the theme) changes. Loading
+  // state and selection are read from refs and kept current by the styles and
+  // visibility effects below, so the markers are not rebuilt on every system load
+  // (#576 D10: N systems loading rebuilt all N markers about 2N times).
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
 
@@ -828,8 +854,8 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       if (!project.gps_center) continue;
 
       const [lng, lat] = project.gps_center;
-      const loadingState = geometryStates.get(project.file_path)?.state ?? 'idle';
-      const isSelected = selectedProjectId === project.file_path;
+      const loadingState = geometryStatesRef.current.get(project.file_path)?.state ?? 'idle';
+      const isSelected = selectedProjectIdRef.current === project.file_path;
 
       // Use same color as survey mode (deterministic based on file path)
       // Error state overrides with red
@@ -868,19 +894,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       el.appendChild(inner);
 
       // Add spinner for loading state
-      if (loadingState === 'loading') {
-        const spinner = document.createElement('div');
-        spinner.className = 'marker-spinner';
-        spinner.style.cssText = `
-          width: 10px;
-          height: 10px;
-          border: 2px solid ${strokeLight};
-          border-top-color: ${strokeColor};
-          border-radius: 50%;
-          animation: spin 0.8s linear infinite;
-        `;
-        inner.appendChild(spinner);
-      }
+      if (loadingState === 'loading') inner.appendChild(createMarkerSpinner(strokeLight, strokeColor));
 
       // Hover effect - scale inner element (grows uniformly from center)
       el.addEventListener('mouseenter', () => {
@@ -972,23 +986,24 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       // Click handler - for error markers, show error popup instead of selecting
       el.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (loadingState === 'error') {
+        // The state NOW, not at creation: the marker outlives its loads.
+        const errorState = geometryStatesRef.current.get(project.file_path);
+        if (errorState?.state === 'error') {
           // Show error popup on click of red error marker
-          const errorState = geometryStates.get(project.file_path);
-          const errorMsg = errorState?.error ?? 'Unknown error';
+          const errorMsg = errorState.error ?? 'Unknown error';
           showErrorPopup(project.file_path, project.name, errorMsg, lng, lat);
           // The user's retry (#576 D10-D1): a file that was locked or still being
           // copied may load now. Survey view only - markers mode loads no geometry.
           if (viewModeRef.current === 'survey') void useGlobalViewStore.getState().loadGeometry(project.file_path);
         } else {
-          onProjectSelect(project.file_path);
+          onProjectSelectRef.current(project.file_path);
         }
       });
 
       // Double-click handler
       el.addEventListener('dblclick', (e) => {
         e.stopPropagation();
-        onProjectOpen(project.file_path);
+        onProjectOpenRef.current(project.file_path);
       });
 
       // Context menu handler (right-click) - use ref to avoid stale closures
@@ -1069,9 +1084,10 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
 
       markersRef.current.set(project.file_path, marker);
     }
-  }, [gpsProjects, selectedProjectId, mapLoaded, onProjectSelect, onProjectOpen, geometryStates, resolvedTheme, t]);
+  }, [gpsProjects, mapLoaded, resolvedTheme, t]);
 
-  // Update marker styles when selection, loading states, or theme changes
+  // Update marker styles when selection, loading states, or theme changes:
+  // colours, border, the loading spinner and the loading-state data attribute.
   useEffect(() => {
     const strokeColor = getThemeColor('--cc-stroke-color');
     const strokeLight = getThemeColor('--cc-stroke-light');
@@ -1098,10 +1114,15 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         : `0 2px 4px ${shadow}`;
 
       const spinner = inner.querySelector('.marker-spinner') as HTMLElement | null;
-      if (spinner) {
+      if (loadingState !== 'loading') {
+        spinner?.remove();
+      } else if (spinner) {
         spinner.style.borderColor = strokeLight;
         spinner.style.borderTopColor = strokeColor;
+      } else {
+        inner.appendChild(createMarkerSpinner(strokeLight, strokeColor));
       }
+      el.dataset.loadingState = loadingState;
     });
   }, [selectedProjectId, geometryStates, resolvedTheme]);
 

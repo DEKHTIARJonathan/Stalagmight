@@ -406,11 +406,18 @@ const [viewMode, setViewMode] = useViewMode();
 ```
 
 Marker visibility is controlled by three effects:
-1. **Creation effect** - sets initial `el.style.display` based on `viewModeRef.current` and geometry state
-2. **Styles effect** - updates marker colors (selection, error) without recreating markers
+1. **Creation effect** - runs only when the set of systems (or the theme) changes; builds
+   each marker once and sets its initial style and `el.style.display` from refs
+   (`viewModeRef`, `geometryStatesRef`, `selectedProjectIdRef`). It must not depend on
+   loading state or selection: that rebuilt every marker on every system load (#576 D10)
+2. **Styles effect** - updates marker colors (selection, error), the loading spinner and
+   `data-loading-state` in place
 3. **Visibility-sync effect** - toggles `el.style.display` (`'none'` / `'flex'`) on `viewMode` and `geometryStates` changes
 
-Switching to markers mode cancels pending geometry loads to save resources.
+Switching to markers mode cancels pending geometry loads to save resources. A system
+whose load failed is not retried on its own (the known causes do not heal); it stays a
+red marker until the user clicks it, the recent list reloads, or the view switches back
+to survey (#576 D10-D1).
 
 ### FPS Monitoring
 

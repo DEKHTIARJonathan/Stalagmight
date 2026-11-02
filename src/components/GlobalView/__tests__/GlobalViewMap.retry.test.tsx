@@ -12,6 +12,11 @@
  * Decided ("Retry on user action only"): a failed system stays an error marker
  * until the user clicks it, reloads the recent list, or toggles the view mode.
  *
+ * D10 proper: the marker effect depended on the loading states, the selection and
+ * the parent's per-render callbacks, so every system load tore down and rebuilt
+ * every marker's DOM (20 systems loading created 820 markers). Markers are now
+ * created once per system and restyled in place.
+ *
  * Component tier: the real GlobalViewMap and globalViewStore, with maplibre-gl,
  * the WebGL survey layer and the IPC bridge replaced by fakes.
  */
@@ -171,6 +176,9 @@ function geometryCalls(path: string): number {
   ).length;
 }
 
+const twoSystems = () => [project(GOOD, 10), project(BROKEN, 11)];
+let harnessProjects: () => ProjectMetadata[] = twoSystems;
+
 /** Subscribes to the store the way GlobalView does and can reload the recent list. */
 let reloadRecentList: () => void = () => {};
 function Harness() {
@@ -178,7 +186,7 @@ function Harness() {
   const [generation, setGeneration] = useState(0);
   reloadRecentList = () => setGeneration((g) => g + 1);
   // A reload yields a NEW array with the same entries, as loadRecentProjects does.
-  const projects = useMemo(() => [project(GOOD, 10), project(BROKEN, 11)], [generation]);
+  const projects = useMemo(() => harnessProjects(), [generation]);
   return (
     <GlobalViewMap
       projects={projects}
@@ -202,6 +210,7 @@ async function settle(ms = 300) {
 }
 
 beforeEach(() => {
+  harnessProjects = twoSystems;
   h.state.map = null;
   h.state.markersCreated = 0;
   invokeIpcMock.mockReset();
@@ -269,5 +278,28 @@ describe('Global View geometry retry (D10-D1 / NF-AN6-1)', () => {
     await settle();
     expect(geometryCalls(BROKEN) - before).toBe(1);
     expect(geometryCalls(GOOD)).toBe(1);
+  });
+});
+
+describe('Global View markers are created once per system (D10)', () => {
+  it('does not rebuild the marker DOM while systems load', async () => {
+    harnessProjects = () => Array.from({ length: 20 }, (_, i) => project(`/caves/Cave${i}.stalx`, i));
+    await mountAndLoad();
+    const loadedCount = () =>
+      [...useGlobalViewStore.getState().geometryStates.values()].filter((s) => s.state === 'loaded').length;
+    for (let waited = 0; loadedCount() < 20 && waited < 3000; waited += 100) await settle(100);
+    expect(h.state.markersCreated, 'markers created while 20 systems loaded').toBe(20);
+    expect(loadedCount()).toBe(20);
+  });
+
+  it('keeps each marker current in place: no spinner after the load, error state on the failed one', async () => {
+    await mountAndLoad();
+    const broken = screen.getByTestId(`system-marker-${testIdPart(BROKEN)}`);
+    const good = screen.getByTestId(`system-marker-${testIdPart(GOOD)}`);
+    expect(broken.dataset.loadingState).toBe('error');
+    expect(good.dataset.loadingState).toBe('loaded');
+    expect(broken.querySelector('.marker-spinner')).toBeNull();
+    expect(good.querySelector('.marker-spinner')).toBeNull();
+    expect(h.state.markersCreated).toBe(2);
   });
 });
