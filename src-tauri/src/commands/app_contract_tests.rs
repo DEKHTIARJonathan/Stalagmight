@@ -105,3 +105,41 @@ fn test_csp_allows_the_tauri_ipc_origin() {
         }
     }
 }
+
+/// [#576 C2] Commands that may run on the main thread, each with its reason.
+/// Tauri runs a non-`async` command inline in the IPC handler on the main
+/// thread, freezing the window and queueing every later call - Cancel included -
+/// behind it, so the list is empty and adding to it needs a reason that outweighs
+/// that (docs/architecture.md, "Where commands run").
+const MAIN_THREAD_COMMANDS: &[(&str, &str)] = &[];
+
+#[test]
+fn every_registered_command_runs_off_the_main_thread() {
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../../../src/types/ipc/ipcCommands.json"))
+            .expect("the generated command manifest parses");
+    let commands = manifest["commands"]
+        .as_array()
+        .expect("the manifest lists its commands");
+    assert!(
+        commands.len() > 150,
+        "premise: the manifest lists every registered command, got {}",
+        commands.len()
+    );
+    let on_main_thread: Vec<&str> = commands
+        .iter()
+        .filter(|c| c["async"] != serde_json::Value::Bool(true))
+        .filter_map(|c| c["name"].as_str())
+        .filter(|name| {
+            !MAIN_THREAD_COMMANDS
+                .iter()
+                .any(|(allowed, _)| allowed == name)
+        })
+        .collect();
+    assert!(
+        on_main_thread.is_empty(),
+        "these commands run on the main thread; make them `async` and put the body on \
+         the blocking pool (`commands::pool`), or list them in MAIN_THREAD_COMMANDS with a \
+         reason: {on_main_thread:?}"
+    );
+}

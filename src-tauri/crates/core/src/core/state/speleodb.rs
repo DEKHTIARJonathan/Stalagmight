@@ -6228,7 +6228,7 @@ mod tests {
     /// The `.stalx` of a project we hold the SpeleoDB write lock on can be DELETED, and
     /// that has to hand the lock back too.
     ///
-    /// `close_project_impl` releases before it issues `Command::CloseProject`, but
+    /// the `close_project` command releases before it issues `Command::CloseProject`, but
     /// `delete_project` tears the session down through the state layer's
     /// `close_open_project_locked` and so never goes near that command. The lock was
     /// therefore left held while the `.stalx` - and the `speleo_link` row inside it that

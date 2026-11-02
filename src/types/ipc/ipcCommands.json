@@ -4,7 +4,7 @@
     {
       "name": "attempt_repair",
       "module": "recovery",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -26,7 +26,7 @@
     {
       "name": "calculate_file_hash",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -48,7 +48,7 @@
     {
       "name": "can_redo",
       "module": "history",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "bool",
@@ -62,7 +62,7 @@
     {
       "name": "can_undo",
       "module": "history",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "bool",
@@ -76,7 +76,7 @@
     {
       "name": "cancel_loading",
       "module": "project",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "()",
@@ -90,7 +90,7 @@
     {
       "name": "check_duplicate_import",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "hash",
@@ -112,7 +112,7 @@
     {
       "name": "check_merge_connectivity",
       "module": "station",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "station_a",
@@ -141,7 +141,7 @@
     {
       "name": "check_project_integrity",
       "module": "validation",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "IntegrityCheckResult",
@@ -155,7 +155,7 @@
     {
       "name": "check_section_hashes",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "hashes",
@@ -177,7 +177,7 @@
     {
       "name": "clear_tile_cache",
       "module": "cache",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "provider",
@@ -199,7 +199,7 @@
     {
       "name": "close_project",
       "module": "project",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "release_lock",
@@ -292,7 +292,7 @@
     {
       "name": "count_unanchored_sections",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "newly_imported_section_ids",
@@ -314,7 +314,7 @@
     {
       "name": "create_loop_closure",
       "module": "station",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "station_a",
@@ -400,7 +400,7 @@
     {
       "name": "create_section",
       "module": "section",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "name",
@@ -457,7 +457,7 @@
     {
       "name": "create_section_and_merge",
       "module": "section",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "name",
@@ -535,7 +535,7 @@
     {
       "name": "create_shot",
       "module": "shot",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -578,7 +578,7 @@
     {
       "name": "debug_trigger_panic",
       "module": "debug",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "delay_ms",
@@ -622,7 +622,7 @@
     {
       "name": "delete_last_shot_and_section",
       "module": "shot",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -651,7 +651,7 @@
     {
       "name": "delete_project",
       "module": "project",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -673,7 +673,7 @@
     {
       "name": "delete_section",
       "module": "section",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -695,7 +695,7 @@
     {
       "name": "delete_shot",
       "module": "shot",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -724,7 +724,7 @@
     {
       "name": "delete_shot_and_split",
       "module": "shot",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -767,7 +767,7 @@
     {
       "name": "delete_shot_range_shift",
       "module": "shot",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -803,7 +803,7 @@
     {
       "name": "delete_shot_range_split",
       "module": "shot",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -853,7 +853,7 @@
     {
       "name": "execute_batch",
       "module": "section",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "commands",
@@ -1103,7 +1103,7 @@
     {
       "name": "export_csv",
       "module": "export",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -1190,7 +1190,7 @@
     {
       "name": "export_json",
       "module": "export",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -1212,7 +1212,7 @@
     {
       "name": "export_salvageable_data",
       "module": "recovery",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -1234,7 +1234,7 @@
     {
       "name": "export_tml",
       "module": "export",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -1299,7 +1299,7 @@
     {
       "name": "flush_telemetry",
       "module": "telemetry",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "()",
@@ -1356,7 +1356,7 @@
     {
       "name": "get_anchored_section_ids",
       "module": "section",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "Vec<SectionId>",
@@ -1370,7 +1370,7 @@
     {
       "name": "get_cache_stats",
       "module": "cache",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "CacheStats",
@@ -1384,7 +1384,7 @@
     {
       "name": "get_config",
       "module": "config",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "Config",
@@ -1398,7 +1398,7 @@
     {
       "name": "get_memory_stats",
       "module": "memory",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "MemoryStats",
@@ -1426,7 +1426,7 @@
     {
       "name": "get_project_state",
       "module": "project",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "Option<ProjectState>",
@@ -1440,7 +1440,7 @@
     {
       "name": "get_project_warnings",
       "module": "validation",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "Vec<ProjectWarning>",
@@ -1454,7 +1454,7 @@
     {
       "name": "get_raw_table",
       "module": "raw_data",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "table",
@@ -1490,7 +1490,7 @@
     {
       "name": "get_raw_table_names",
       "module": "raw_data",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "Vec<String>",
@@ -1504,7 +1504,7 @@
     {
       "name": "get_recent_logs",
       "module": "logging",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "Vec<String>",
@@ -1518,7 +1518,7 @@
     {
       "name": "get_recent_logs_since",
       "module": "logging",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "after_seq",
@@ -1540,7 +1540,7 @@
     {
       "name": "get_redo_stack",
       "module": "history",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "Vec<UndoHistoryItem>",
@@ -1554,7 +1554,7 @@
     {
       "name": "get_rigid_connected_section_ids",
       "module": "section",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -1576,7 +1576,7 @@
     {
       "name": "get_section_relationships",
       "module": "section",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -1598,7 +1598,7 @@
     {
       "name": "get_segment_geometry",
       "module": "section",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -1686,7 +1686,7 @@
     {
       "name": "get_tile_fetch_stats",
       "module": "cache",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "TileFetchStatsResponse",
@@ -1700,7 +1700,7 @@
     {
       "name": "get_tile_providers",
       "module": "cache",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "Vec<crate::tile_providers::TileProviderInfo>",
@@ -1714,7 +1714,7 @@
     {
       "name": "get_undo_stack",
       "module": "history",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "Vec<UndoHistoryItem>",
@@ -1728,7 +1728,7 @@
     {
       "name": "history_discarded",
       "module": "project",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "bool",
@@ -1742,7 +1742,7 @@
     {
       "name": "import_dmp",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -1764,7 +1764,7 @@
     {
       "name": "import_sections",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "sections",
@@ -1842,7 +1842,7 @@
     {
       "name": "is_telemetry_available",
       "module": "telemetry",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "bool",
@@ -1856,7 +1856,7 @@
     {
       "name": "list_backups",
       "module": "recovery",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -1892,7 +1892,7 @@
     {
       "name": "list_recent_projects",
       "module": "project",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "Vec<ProjectMetadata>",
@@ -1906,7 +1906,7 @@
     {
       "name": "load_display_settings",
       "module": "config",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "std::collections::HashMap<String, String>",
@@ -1986,7 +1986,7 @@
     {
       "name": "merge_projects",
       "module": "project",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "source_paths",
@@ -2029,7 +2029,7 @@
     {
       "name": "merge_stations",
       "module": "station",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "station_a",
@@ -2058,7 +2058,7 @@
     {
       "name": "move_comment",
       "module": "station",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "source",
@@ -2094,7 +2094,7 @@
     {
       "name": "move_section",
       "module": "section",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -2123,7 +2123,7 @@
     {
       "name": "move_segment",
       "module": "section",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -2152,7 +2152,7 @@
     {
       "name": "move_station",
       "module": "station",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "station_ref",
@@ -2181,7 +2181,7 @@
     {
       "name": "parse_compass",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -2203,7 +2203,7 @@
     {
       "name": "parse_gpx",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -2225,7 +2225,7 @@
     {
       "name": "parse_tml",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -2247,7 +2247,7 @@
     {
       "name": "parse_walls",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -2269,7 +2269,7 @@
     {
       "name": "patch_config",
       "module": "config",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "patches",
@@ -2335,7 +2335,7 @@
     {
       "name": "preview_delete_shot",
       "module": "shot",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -2364,7 +2364,7 @@
     {
       "name": "preview_delete_shot_range",
       "module": "shot",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -2422,7 +2422,7 @@
     {
       "name": "push_frontend_log",
       "module": "logging",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "level",
@@ -2451,7 +2451,7 @@
     {
       "name": "redo",
       "module": "history",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "CommandResult",
@@ -2465,7 +2465,7 @@
     {
       "name": "redo_to",
       "module": "history",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "index",
@@ -2487,7 +2487,7 @@
     {
       "name": "reload_config",
       "module": "config",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "Config",
@@ -2501,7 +2501,7 @@
     {
       "name": "remove_from_recent_projects",
       "module": "project",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -2523,7 +2523,7 @@
     {
       "name": "remove_loop_closure",
       "module": "station",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "closure_id",
@@ -2545,7 +2545,7 @@
     {
       "name": "remove_zero_datum",
       "module": "station",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "station_ref",
@@ -2589,7 +2589,7 @@
     {
       "name": "repair_project_integrity",
       "module": "validation",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "IntegrityRepairResult",
@@ -2603,7 +2603,7 @@
     {
       "name": "resolve_warning",
       "module": "validation",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -2646,7 +2646,7 @@
     {
       "name": "restore_from_backup",
       "module": "recovery",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "project_path",
@@ -2675,7 +2675,7 @@
     {
       "name": "reverse_section",
       "module": "section",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -2704,7 +2704,7 @@
     {
       "name": "save_display_setting",
       "module": "config",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "key",
@@ -2769,7 +2769,7 @@
     {
       "name": "save_project",
       "module": "project",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -2798,7 +2798,7 @@
     {
       "name": "set_project_name_for_path",
       "module": "project",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "path",
@@ -2827,7 +2827,7 @@
     {
       "name": "set_shot_kind",
       "module": "shot",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -2863,7 +2863,7 @@
     {
       "name": "set_station_comment",
       "module": "station",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "station_ref",
@@ -2892,7 +2892,7 @@
     {
       "name": "set_surface_elevation",
       "module": "project",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "elevation",
@@ -2914,7 +2914,7 @@
     {
       "name": "set_telemetry_enabled",
       "module": "telemetry",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "enabled",
@@ -2936,7 +2936,7 @@
     {
       "name": "set_workspace_mode",
       "module": "project",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "mode",
@@ -2958,7 +2958,7 @@
     {
       "name": "set_zero_datum",
       "module": "station",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "station_ref",
@@ -3381,7 +3381,7 @@
     {
       "name": "speleodb_open_file_flags",
       "module": "speleodb",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "crate::core::loading::OpenFileFlags",
@@ -4035,7 +4035,7 @@
     {
       "name": "split_shot_at_distance",
       "module": "shot",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -4071,7 +4071,7 @@
     {
       "name": "suggest_all_import_placements",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "import_sections",
@@ -4093,7 +4093,7 @@
     {
       "name": "suggest_import_placement",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "shots",
@@ -4122,7 +4122,7 @@
     {
       "name": "suggest_orphan_placements",
       "module": "import",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "newly_imported_section_ids",
@@ -4144,7 +4144,7 @@
     {
       "name": "take_pending_launch_files",
       "module": "launch",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "Vec<String>",
@@ -4158,7 +4158,7 @@
     {
       "name": "take_unrecognised_shot_kinds",
       "module": "project",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "loading_id",
@@ -4180,7 +4180,7 @@
     {
       "name": "track_events",
       "module": "telemetry",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "events",
@@ -4209,7 +4209,7 @@
     {
       "name": "undo",
       "module": "history",
-      "async": false,
+      "async": true,
       "args": [],
       "result": {
         "rust": "CommandResult",
@@ -4223,7 +4223,7 @@
     {
       "name": "undo_to",
       "module": "history",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "index",
@@ -4245,7 +4245,7 @@
     {
       "name": "unmerge_station_pair",
       "module": "station",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "station_a",
@@ -4274,7 +4274,7 @@
     {
       "name": "unmerge_stations",
       "module": "station",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "station_ref",
@@ -4296,7 +4296,7 @@
     {
       "name": "unresolve_warning",
       "module": "validation",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -4332,7 +4332,7 @@
     {
       "name": "update_config",
       "module": "config",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "config",
@@ -4354,7 +4354,7 @@
     {
       "name": "update_data_table_view",
       "module": "config",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "column_order",
@@ -4425,7 +4425,7 @@
     {
       "name": "update_edit_section_view",
       "module": "config",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "column_order",
@@ -4461,7 +4461,7 @@
     {
       "name": "update_gas_config",
       "module": "config",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "gas",
@@ -4483,7 +4483,7 @@
     {
       "name": "update_import_shots_view",
       "module": "config",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "column_order",
@@ -4519,7 +4519,7 @@
     {
       "name": "update_new_section_view",
       "module": "config",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "column_order",
@@ -4555,7 +4555,7 @@
     {
       "name": "update_panel_layout",
       "module": "config",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "sections_panel_open",
@@ -4612,7 +4612,7 @@
     {
       "name": "update_panel_sizes",
       "module": "config",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "sections_panel_width",
@@ -4655,7 +4655,7 @@
     {
       "name": "update_project_settings",
       "module": "project",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "name",
@@ -4691,7 +4691,7 @@
     {
       "name": "update_section",
       "module": "section",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",
@@ -4720,7 +4720,7 @@
     {
       "name": "update_shot",
       "module": "shot",
-      "async": false,
+      "async": true,
       "args": [
         {
           "name": "section_id",

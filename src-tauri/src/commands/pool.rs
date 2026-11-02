@@ -13,8 +13,15 @@
 //! command itself with a `tauri::test` app (`MockRuntime`), not a hand-written
 //! twin of its body (#576 C9).
 //!
-//! A panic in a body becomes the command's failure ([`PanicReply`]) instead of
-//! unwinding through the IPC handler.
+//! A panic in a body becomes the command's failure where its answer has one
+//! ([`PanicReply`]: `CommandResult`, `Result<_, String>`); an answer with no
+//! failure shape (`bool`, a list, `()`) re-raises it on the async task
+//! ([`run_infallible`]), so that IPC call never resolves - what a panicking
+//! `async` command does - instead of the panic unwinding through the handler.
+//!
+//! What a body may read, and how, is the read-consistency rule in
+//! docs/architecture.md ("Where commands run"): a read of the project takes
+//! `AppState::settled_snapshot` or runs under `AppState::settled_read`.
 
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -52,6 +59,44 @@ where
     }
 }
 
+/// [`run`] for a command that needs no [`AppState`] (a file parse, a hash).
+pub(crate) async fn run_stateless<T>(f: impl FnOnce() -> T + Send + 'static) -> T
+where
+    T: PanicReply + Send + 'static,
+{
+    match spawn(f).await {
+        Ok(answer) => answer,
+        Err(crash) => T::panicked(crash_message(&crash)),
+    }
+}
+
+/// [`run`] for an answer with no failure shape (`bool`, a list, `()`): a panic is
+/// re-raised on the async task rather than fabricated into an answer.
+pub(crate) async fn run_infallible<R, T>(
+    app: AppHandle<R>,
+    f: impl FnOnce(&AppState) -> T + Send + 'static,
+) -> T
+where
+    R: Runtime,
+    T: Send + 'static,
+{
+    match spawn(move || f(app.state::<AppState>().inner())).await {
+        Ok(answer) => answer,
+        Err(crash) => reraise(crash),
+    }
+}
+
+/// [`run_infallible`] for a command that needs no [`AppState`] (another managed
+/// state is reached through an `AppHandle` moved into `f`).
+pub(crate) async fn run_stateless_infallible<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    match spawn(f).await {
+        Ok(answer) => answer,
+        Err(crash) => reraise(crash),
+    }
+}
+
 /// Spawn `f` on the blocking pool.
 ///
 /// Test builds hand the calling thread's config-file resolution to the worker:
@@ -77,4 +122,18 @@ fn crash_message(crash: &tauri::Error) -> String {
         "Command body did not complete"
     );
     format!("The operation failed unexpectedly ({crash})")
+}
+
+fn reraise<T>(crash: tauri::Error) -> T {
+    tracing::error!(
+        reason = %crash,
+        purpose = "report a command that failed on the blocking pool",
+        "Command body did not complete"
+    );
+    match crash {
+        tauri::Error::JoinError(join) if join.is_panic() => {
+            std::panic::resume_unwind(join.into_panic())
+        }
+        other => std::panic::resume_unwind(Box::new(other.to_string())),
+    }
 }

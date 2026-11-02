@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, Runtime};
 use ts_rs::TS;
 
 use crate::commands::event_sink::tauri_sink;
+use crate::commands::pool;
 use crate::commands::write_path::{check_write_path, WriteTarget};
 use crate::config::GasConfig;
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
@@ -89,7 +90,7 @@ fn export_format_with_notes(
     target: WriteTarget,
     export_fn: impl FnOnce(&Project, &Path) -> Result<Vec<String>, anyhow::Error>,
 ) -> Result<Vec<String>, String> {
-    let project = state.project_snapshot().ok_or_else(|| {
+    let project = state.settled_snapshot().ok_or_else(|| {
         tracing::warn!(
             path = ?path,
             purpose = "export project for sharing",
@@ -146,34 +147,32 @@ fn export_format_with_notes(
 
 /// Export project data to CSV
 #[tauri::command]
-pub fn export_csv(state: State<AppState>, path: PathBuf) -> Result<(), String> {
-    export_csv_impl(state.inner(), path)
-}
-
-pub(crate) fn export_csv_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
-    export_format_impl(
-        state,
-        path,
-        "csv",
-        WriteTarget::Csv,
-        crate::export::export_csv,
-    )
+pub async fn export_csv<R: Runtime>(app: AppHandle<R>, path: PathBuf) -> Result<(), String> {
+    pool::run(app, move |state| {
+        export_format_impl(
+            state,
+            path,
+            "csv",
+            WriteTarget::Csv,
+            crate::export::export_csv,
+        )
+    })
+    .await
 }
 
 /// Export project data to JSON
 #[tauri::command]
-pub fn export_json(state: State<AppState>, path: PathBuf) -> Result<(), String> {
-    export_json_impl(state.inner(), path)
-}
-
-pub(crate) fn export_json_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
-    export_format_impl(
-        state,
-        path,
-        "json",
-        WriteTarget::Json,
-        crate::export::export_json,
-    )
+pub async fn export_json<R: Runtime>(app: AppHandle<R>, path: PathBuf) -> Result<(), String> {
+    pool::run(app, move |state| {
+        export_format_impl(
+            state,
+            path,
+            "json",
+            WriteTarget::Json,
+            crate::export::export_json,
+        )
+    })
+    .await
 }
 
 /// Export project data to Ariane TML/TMLU.
@@ -182,18 +181,20 @@ pub(crate) fn export_json_impl(state: &AppState, path: PathBuf) -> Result<(), St
 /// not carry about this project's north references. Empty for an ordinary
 /// project; the frontend toasts each one.
 #[tauri::command]
-pub fn export_tml(state: State<AppState>, path: PathBuf) -> Result<Vec<String>, String> {
-    export_tml_impl(state.inner(), path)
-}
-
-pub(crate) fn export_tml_impl(state: &AppState, path: PathBuf) -> Result<Vec<String>, String> {
-    export_format_with_notes(
-        state,
-        path,
-        "tml",
-        WriteTarget::Ariane,
-        crate::export::export_tml,
-    )
+pub async fn export_tml<R: Runtime>(
+    app: AppHandle<R>,
+    path: PathBuf,
+) -> Result<Vec<String>, String> {
+    pool::run(app, move |state| {
+        export_format_with_notes(
+            state,
+            path,
+            "tml",
+            WriteTarget::Ariane,
+            crate::export::export_tml,
+        )
+    })
+    .await
 }
 
 /// Export map image with progress events via shared loading-progress infrastructure.
@@ -203,53 +204,49 @@ pub(crate) fn export_tml_impl(state: &AppState, path: PathBuf) -> Result<Vec<Str
 /// Progress is emitted using the shared ProgressEmitter (loading-progress events) for
 /// integration with the LoadingProgress component.
 #[tauri::command]
-pub async fn export_image(
-    state: State<'_, AppState>,
-    app_handle: AppHandle,
+pub async fn export_image<R: Runtime>(
+    app: AppHandle<R>,
     path: PathBuf,
-    mut options: ExportImageOptions,
+    options: ExportImageOptions,
 ) -> Result<(), String> {
-    // Server-populated (#27): the export must colour its distance ramp and
-    // label its penetration with the same graph the app is showing, so this
-    // comes from the live config, never from whatever the frontend sent.
-    options.include_reference_legs = state.get_config().gas.include_reference_legs;
-    let project = state.project_snapshot().ok_or_else(|| {
-        tracing::warn!(
-            path = ?path,
-            purpose = "export map image for sharing",
-            format = ?options.format,
-            "Export requested with no project open"
-        );
-        "No project open".to_string()
-    })?;
+    let sink = tauri_sink(app.clone());
+    pool::run(app, move |state| {
+        let mut options = options;
+        // Server-populated (#27): the export must colour its distance ramp and
+        // label its penetration with the same graph the app is showing, so this
+        // comes from the live config, never from whatever the frontend sent.
+        options.include_reference_legs = state.get_config().gas.include_reference_legs;
+        let project = state.settled_snapshot().ok_or_else(|| {
+            tracing::warn!(
+                path = ?path,
+                purpose = "export map image for sharing",
+                format = ?options.format,
+                "Export requested with no project open"
+            );
+            "No project open".to_string()
+        })?;
 
-    // Never let an image export clobber a file the open project owns: the raw
-    // file write in `export/image.rs` would overwrite the live database, or the
-    // `.plnx` sibling holding every saved dive plan.
-    //
-    // `is_project_owned_file`, not `is_open_project_file`: this arm used the
-    // narrower `.stalx`-only predicate while the text exports and the dive
-    // profile used the wider one, so a PNG/SVG/PDF aimed at `<project>.plnx`
-    // was written - and the doc comment on `is_project_owned_file` already
-    // claimed the gap was closed.
-    if is_project_owned_file(&path, &project) {
-        tracing::warn!(
-            path = ?path,
-            open_project = ?project.file_path,
-            purpose = "protect the open project database",
-            "Refusing to export an image over a file the open project owns"
-        );
-        return Err("Cannot export over the open project file".to_string());
-    }
-    // [#576 C11-D1] The image format's own extension, nowhere app-internal or system.
-    check_write_path(&path, WriteTarget::Image(options.format))?;
+        // Never let an image export clobber a file the open project owns: the raw
+        // file write in `export/image.rs` would overwrite the live database, or the
+        // `.plnx` sibling holding every saved dive plan.
+        //
+        // `is_project_owned_file`, not `is_open_project_file`: this arm used the
+        // narrower `.stalx`-only predicate while the text exports and the dive
+        // profile used the wider one, so a PNG/SVG/PDF aimed at `<project>.plnx`
+        // was written - and the doc comment on `is_project_owned_file` already
+        // claimed the gap was closed.
+        if is_project_owned_file(&path, &project) {
+            tracing::warn!(
+                path = ?path,
+                open_project = ?project.file_path,
+                purpose = "protect the open project database",
+                "Refusing to export an image over a file the open project owns"
+            );
+            return Err("Cannot export over the open project file".to_string());
+        }
+        // [#576 C11-D1] The image format's own extension, nowhere app-internal or system.
+        check_write_path(&path, WriteTarget::Image(options.format))?;
 
-    let format = options.format;
-    let log_path = path.clone();
-
-    // Run heavy export work in spawn_blocking to avoid freezing UI
-    // and ensure progress events are delivered during processing
-    tauri::async_runtime::spawn_blocking(move || {
         tracing::info!(
             path = ?path,
             purpose = "export map image for sharing",
@@ -258,15 +255,11 @@ pub async fn export_image(
         );
         // Render from the memoized closure-adjusted solve so the saved image
         // matches the on-screen (adjusted) map; falls back to measured
-        // coordinates when there are no eligible closures. Fetch before the
-        // emitter consumes `app_handle`.
-        let adjusted = app_handle
-            .state::<AppState>()
-            .inner()
-            .get_adjusted_stations();
+        // coordinates when there are no eligible closures.
+        let adjusted = state.get_adjusted_stations();
 
         // Use shared ProgressEmitter for consistent progress events
-        let mut emitter = ProgressEmitter::new_for_export(tauri_sink(app_handle));
+        let mut emitter = ProgressEmitter::new_for_export(sink);
 
         // Start preparing phase
         emitter.start_phase(LoadingPhase::ExportPreparing);
@@ -309,68 +302,6 @@ pub async fn export_image(
         result.map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| {
-        tracing::error!(
-            path = ?log_path,
-            purpose = "export map image for sharing",
-            format = ?format,
-            reason = %e,
-            "Image export task panicked"
-        );
-        format!("Export task panicked: {e}")
-    })?
-}
-
-#[cfg(test)]
-pub(crate) fn export_image_impl(
-    state: &AppState,
-    path: PathBuf,
-    mut options: ExportImageOptions,
-) -> Result<(), String> {
-    // See the `export_image` command: config wins over the wire (#27).
-    options.include_reference_legs = state.get_config().gas.include_reference_legs;
-    let project = state.project_snapshot().ok_or_else(|| {
-        tracing::warn!(
-            path = ?path,
-            purpose = "export map image for sharing",
-            format = ?options.format,
-            "Export requested with no project open"
-        );
-        "No project open".to_string()
-    })?;
-
-    // Mirror the live command's guard: never clobber a file the open project owns.
-    if is_project_owned_file(&path, &project) {
-        return Err("Cannot export over the open project file".to_string());
-    }
-
-    tracing::info!(
-        path = ?path,
-        purpose = "export map image for sharing",
-        format = ?options.format,
-        "Exporting map image"
-    );
-    match crate::export::export_image(&project, &path, &options) {
-        Ok(()) => {
-            tracing::info!(
-                path = ?path,
-                purpose = "export map image for sharing",
-                format = ?options.format,
-                "Map image export completed"
-            );
-            Ok(())
-        }
-        Err(e) => {
-            tracing::error!(
-                path = ?path,
-                purpose = "export map image for sharing",
-                format = ?options.format,
-                reason = %e,
-                "Map image export failed"
-            );
-            Err(e.to_string())
-        }
-    }
 }
 
 /// The plan inputs a dive-profile export needs - the same tuple `compute_gas_reach_field` takes,

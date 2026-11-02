@@ -45,22 +45,25 @@ pub struct MemoryStats {
 }
 
 #[tauri::command]
-pub fn get_memory_stats() -> Result<MemoryStats, String> {
-    #[cfg(target_os = "linux")]
-    {
-        linux::collect().map_err(|e| e.to_string())
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        // Best-effort: own RSS via `getrusage`, no children.
-        let backend = fallback::self_memory();
-        Ok(MemoryStats {
-            total_rss_kb: backend.rss_kb,
-            backend,
-            webkit_processes: vec![],
-            webkit_enumeration_supported: false,
-        })
-    }
+pub async fn get_memory_stats() -> Result<MemoryStats, String> {
+    crate::commands::pool::run_stateless(|| {
+        #[cfg(target_os = "linux")]
+        {
+            linux::collect().map_err(|e| e.to_string())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            // Best-effort: own RSS via `getrusage`, no children.
+            let backend = fallback::self_memory();
+            Ok(MemoryStats {
+                total_rss_kb: backend.rss_kb,
+                backend,
+                webkit_processes: vec![],
+                webkit_enumeration_supported: false,
+            })
+        }
+    })
+    .await
 }
 
 #[cfg(target_os = "linux")]
@@ -243,7 +246,7 @@ mod tests {
 
     #[test]
     fn self_rss_is_populated() {
-        let stats = get_memory_stats().unwrap();
+        let stats = tauri::async_runtime::block_on(get_memory_stats()).unwrap();
         assert_eq!(stats.backend.pid, std::process::id());
         // The test binary itself uses at least a few MB.
         assert!(
@@ -257,7 +260,7 @@ mod tests {
 
     #[test]
     fn does_not_include_unrelated_processes() {
-        let stats = get_memory_stats().unwrap();
+        let stats = tauri::async_runtime::block_on(get_memory_stats()).unwrap();
         // The test binary has no WebKit children.
         assert!(
             stats.webkit_processes.is_empty(),

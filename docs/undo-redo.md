@@ -798,6 +798,19 @@ DB and persists both stacks) and the close teardown
 to close and then close under one `project` acquisition - splitting them let a
 concurrent load install a different project between the check and the teardown.
 
+Reads take it too, briefly (#576 C2). Commands run concurrently on the blocking
+pool, and a command settles the project (reconcile, undo push) after its mutation
+under the same `command_lock` span, so an IPC read that took only `project` could
+see an edit without its undo entry. `AppState::settled_snapshot()` takes
+`command_lock` for the O(1) snapshot of the copy-on-write project and releases it
+before the read does any work; `AppState::settled_read` runs a short query under it.
+Neither is reentrant: never call them while holding `command_lock`, i.e. from inside
+`execute`, undo/redo, an import, a load or a save. The guarantees are pinned in
+`core/state/command_ordering_tests.rs`: concurrent edits land once each with one
+undo entry each, a settled read waits for the command it would otherwise have caught
+in the middle, a handed-out snapshot never changes, and `cancel_loading` never waits
+on `command_lock`.
+
 One lock sits OUTSIDE even that: `speleodb_lock_ops`
 (`core/state/speleodb_session.rs`), which serializes every SpeleoDB **lock
 operation** against every other and is deliberately held across network calls.

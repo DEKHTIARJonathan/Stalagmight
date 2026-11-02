@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Runtime};
 
 use crate::commands::event_sink::tauri_sink;
 use crate::commands::import_runner::{
@@ -23,22 +23,25 @@ use crate::parsers::DmpFile;
 
 /// Import a DMP file and return parsed data
 #[tauri::command]
-pub fn import_dmp(path: PathBuf) -> Result<DmpFile, String> {
-    tracing::info!(
-        path = ?path,
-        purpose = "prepare import preview",
-        "Parsing DMP file for import preview"
-    );
-    let result = guarded(|| crate::parsers::parse_dmp(&path));
-    if let Err(ref e) = result {
-        tracing::error!(
+pub async fn import_dmp(path: PathBuf) -> Result<DmpFile, String> {
+    pool::run_stateless(move || {
+        tracing::info!(
             path = ?path,
             purpose = "prepare import preview",
-            reason = %e,
-            "Failed to parse DMP file for import preview"
+            "Parsing DMP file for import preview"
         );
-    }
-    result.map_err(|e| e.to_string())
+        let result = guarded(|| crate::parsers::parse_dmp(&path));
+        if let Err(ref e) = result {
+            tracing::error!(
+                path = ?path,
+                purpose = "prepare import preview",
+                reason = %e,
+                "Failed to parse DMP file for import preview"
+            );
+        }
+        result.map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Calculate SHA256 hash of a file.
@@ -47,66 +50,74 @@ pub fn import_dmp(path: PathBuf) -> Result<DmpFile, String> {
 /// RV3-R-11): a whole-file `fs::read` here blocked on a FIFO swapped in after
 /// the parse, and read a file grown past its family's ceiling in full.
 #[tauri::command]
-pub fn calculate_file_hash(path: PathBuf) -> Result<String, String> {
-    tracing::debug!(
-        path = ?path,
-        purpose = "detect duplicate imports",
-        "Calculating file hash for import deduplication"
-    );
-    let mut hasher = Sha256::new();
-    crate::parsers::stream_import_file(&path, |chunk| hasher.update(chunk)).map_err(|e| {
-        tracing::error!(
+pub async fn calculate_file_hash(path: PathBuf) -> Result<String, String> {
+    pool::run_stateless(move || {
+        tracing::debug!(
             path = ?path,
             purpose = "detect duplicate imports",
-            reason = %e,
-            "Failed to read file while calculating import hash"
+            "Calculating file hash for import deduplication"
         );
-        format!("Failed to read file: {e:#}")
-    })?;
-    let result = hasher.finalize();
+        let mut hasher = Sha256::new();
+        crate::parsers::stream_import_file(&path, |chunk| hasher.update(chunk)).map_err(|e| {
+            tracing::error!(
+                path = ?path,
+                purpose = "detect duplicate imports",
+                reason = %e,
+                "Failed to read file while calculating import hash"
+            );
+            format!("Failed to read file: {e:#}")
+        })?;
+        let result = hasher.finalize();
 
-    let hash = format!("{result:x}");
-    tracing::debug!(
-        path = ?path,
-        purpose = "detect duplicate imports",
-        hash = %hash,
-        "Calculated file hash for import deduplication"
-    );
-    Ok(hash)
+        let hash = format!("{result:x}");
+        tracing::debug!(
+            path = ?path,
+            purpose = "detect duplicate imports",
+            hash = %hash,
+            "Calculated file hash for import deduplication"
+        );
+        Ok(hash)
+    })
+    .await
 }
 
 /// Check if a file hash has already been imported to the project
 #[tauri::command]
-pub fn check_duplicate_import(state: State<'_, AppState>, hash: String) -> Result<bool, String> {
-    check_duplicate_import_impl(state.inner(), hash)
-}
-
-pub(crate) fn check_duplicate_import_impl(state: &AppState, hash: String) -> Result<bool, String> {
-    tracing::debug!(
-        hash = %hash,
-        purpose = "detect duplicate imports",
-        "Checking whether file hash was previously imported"
-    );
-    state
-        .check_duplicate_import(&hash)
-        .map_err(|e| e.to_string())
+pub async fn check_duplicate_import<R: Runtime>(
+    app: AppHandle<R>,
+    hash: String,
+) -> Result<bool, String> {
+    pool::run(app, move |state| {
+        tracing::debug!(
+            hash = %hash,
+            purpose = "detect duplicate imports",
+            "Checking whether file hash was previously imported"
+        );
+        state
+            .settled_read(|| state.check_duplicate_import(&hash))
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Batch-check which section content hashes have already been imported.
 /// Returns a parallel Vec<bool> (true = already imported).
 #[tauri::command]
-pub fn check_section_hashes(
-    state: State<'_, AppState>,
+pub async fn check_section_hashes<R: Runtime>(
+    app: AppHandle<R>,
     hashes: Vec<String>,
 ) -> Result<Vec<bool>, String> {
-    tracing::debug!(
-        count = hashes.len(),
-        purpose = "detect duplicate section imports",
-        "Checking section content hashes"
-    );
-    state
-        .check_section_hashes(&hashes)
-        .map_err(|e| e.to_string())
+    pool::run(app, move |state| {
+        tracing::debug!(
+            count = hashes.len(),
+            purpose = "detect duplicate section imports",
+            "Checking section content hashes"
+        );
+        state
+            .settled_read(|| state.check_section_hashes(&hashes))
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 pub(crate) use crate::core::command::decorate_receipt;
@@ -234,8 +245,8 @@ fn merge_deferred_save_outcome(
 /// The wizard sends them with the first import of a run only, because a run's
 /// receipts are concatenated (`aggregateImportReceipts`).
 #[tauri::command]
-pub fn import_sections(
-    state: State<'_, AppState>,
+pub async fn import_sections<R: Runtime>(
+    app: AppHandle<R>,
     sections: Vec<crate::models::ImportSectionConfig>,
     file_hash: Option<String>,
     section_hashes: Option<Vec<String>>,
@@ -246,32 +257,35 @@ pub fn import_sections(
     sections_found: Option<u32>,
     source_warnings: Option<Vec<String>>,
 ) -> CommandResult {
-    let updates = existing_shot_updates.unwrap_or_default();
-    tracing::info!(
-        section_count = sections.len(),
-        update_count = updates.len(),
-        purpose = "batch import with overlap updates",
-        "import_sections called",
-    );
-    let mut result = state.execute_import_sections(
-        sections,
-        Vec::new(),
-        file_hash,
-        section_hashes.unwrap_or_default(),
-        updates,
-        virtual_shot_mode.unwrap_or_default(),
-    );
+    pool::run(app, move |state| {
+        let updates = existing_shot_updates.unwrap_or_default();
+        tracing::info!(
+            section_count = sections.len(),
+            update_count = updates.len(),
+            purpose = "batch import with overlap updates",
+            "import_sections called",
+        );
+        let mut result = state.execute_import_sections(
+            sections,
+            Vec::new(),
+            file_hash,
+            section_hashes.unwrap_or_default(),
+            updates,
+            virtual_shot_mode.unwrap_or_default(),
+        );
 
-    if source_label.is_some() || source_file_name.is_some() || sections_found.is_some() {
-        if let Some(receipt) = result.import_receipt.as_mut() {
-            receipt.source_format = source_label.unwrap_or_else(|| "mNemo DMP".to_string());
-            receipt.file_name = source_file_name.unwrap_or_default();
-            receipt.sections_found = sections_found.unwrap_or(0);
+        if source_label.is_some() || source_file_name.is_some() || sections_found.is_some() {
+            if let Some(receipt) = result.import_receipt.as_mut() {
+                receipt.source_format = source_label.unwrap_or_else(|| "mNemo DMP".to_string());
+                receipt.file_name = source_file_name.unwrap_or_default();
+                receipt.sections_found = sections_found.unwrap_or(0);
+            }
         }
-    }
-    lead_receipt_with_source_warnings(&mut result, source_warnings.unwrap_or_default());
+        lead_receipt_with_source_warnings(&mut result, source_warnings.unwrap_or_default());
 
-    finalize_deferred_import(state.inner(), result)
+        finalize_deferred_import(state, result)
+    })
+    .await
 }
 
 /// Put the file's own parse warnings first on the receipt (see
@@ -297,22 +311,25 @@ fn lead_receipt_with_source_warnings(result: &mut CommandResult, source_warnings
 
 /// Parse a TML/TMLU file and return preview data for the import dialog.
 #[tauri::command]
-pub fn parse_tml(path: PathBuf) -> Result<TmlFile, String> {
-    tracing::info!(
-        path = ?path,
-        purpose = "prepare TML import preview",
-        "Parsing Ariane TML/TMLU file for import preview"
-    );
-    let result = guarded(|| crate::parsers::tml::parse_tml(&path));
-    if let Err(ref e) = result {
-        tracing::error!(
+pub async fn parse_tml(path: PathBuf) -> Result<TmlFile, String> {
+    pool::run_stateless(move || {
+        tracing::info!(
             path = ?path,
             purpose = "prepare TML import preview",
-            reason = %e,
-            "Failed to parse TML/TMLU file for import preview"
+            "Parsing Ariane TML/TMLU file for import preview"
         );
-    }
-    result.map_err(|e| e.to_string())
+        let result = guarded(|| crate::parsers::tml::parse_tml(&path));
+        if let Err(ref e) = result {
+            tracing::error!(
+                path = ?path,
+                purpose = "prepare TML import preview",
+                reason = %e,
+                "Failed to parse TML/TMLU file for import preview"
+            );
+        }
+        result.map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Parse a TML/TMLU file, convert to import configs, and execute the import.
@@ -397,27 +414,30 @@ fn convert_tml(tml: &TmlFile, opts: &TmlImportOptions) -> anyhow::Result<Convert
 
 /// Parse a Compass `.DAT`/`.MAK` file and return preview data for the import dialog.
 #[tauri::command]
-pub fn parse_compass(path: PathBuf) -> Result<CompassFile, String> {
-    tracing::info!(
-        path = ?path,
-        purpose = "prepare Compass import preview",
-        "Parsing Compass .DAT/.MAK file for import preview"
-    );
-    // The preview is built from the file's data too, so it runs under the
-    // same guard as the parse (#576 RV3-R-12).
-    guarded(|| {
-        crate::parsers::compass::parse_compass(&path)
-            .map(|parsed| crate::parsers::compass::build_preview(&parsed))
-    })
-    .map_err(|e| {
-        tracing::error!(
+pub async fn parse_compass(path: PathBuf) -> Result<CompassFile, String> {
+    pool::run_stateless(move || {
+        tracing::info!(
             path = ?path,
             purpose = "prepare Compass import preview",
-            reason = %e,
-            "Failed to parse Compass file for import preview"
+            "Parsing Compass .DAT/.MAK file for import preview"
         );
-        e.to_string()
+        // The preview is built from the file's data too, so it runs under the
+        // same guard as the parse (#576 RV3-R-12).
+        guarded(|| {
+            crate::parsers::compass::parse_compass(&path)
+                .map(|parsed| crate::parsers::compass::build_preview(&parsed))
+        })
+        .map_err(|e| {
+            tracing::error!(
+                path = ?path,
+                purpose = "prepare Compass import preview",
+                reason = %e,
+                "Failed to parse Compass file for import preview"
+            );
+            e.to_string()
+        })
     })
+    .await
 }
 
 /// Parse a Compass file, convert to import configs, and execute the import.
@@ -481,22 +501,25 @@ fn convert_compass(
 
 /// Parse a GPX file and return preview data for the import dialog.
 #[tauri::command]
-pub fn parse_gpx(path: PathBuf) -> Result<GpxFile, String> {
-    tracing::info!(
-        path = ?path,
-        purpose = "prepare GPX import preview",
-        "Parsing GPX file for import preview"
-    );
-    let result = guarded(|| crate::parsers::gpx::parse_gpx(&path));
-    if let Err(ref e) = result {
-        tracing::error!(
+pub async fn parse_gpx(path: PathBuf) -> Result<GpxFile, String> {
+    pool::run_stateless(move || {
+        tracing::info!(
             path = ?path,
             purpose = "prepare GPX import preview",
-            reason = %e,
-            "Failed to parse GPX file for import preview"
+            "Parsing GPX file for import preview"
         );
-    }
-    result.map_err(|e| e.to_string())
+        let result = guarded(|| crate::parsers::gpx::parse_gpx(&path));
+        if let Err(ref e) = result {
+            tracing::error!(
+                path = ?path,
+                purpose = "prepare GPX import preview",
+                reason = %e,
+                "Failed to parse GPX file for import preview"
+            );
+        }
+        result.map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Parse a GPX file, convert to import configs, and execute the import.
@@ -596,8 +619,8 @@ fn convert_gpx(
 
 /// Suggest placement positions for an import section by detecting reference shot overlap.
 #[tauri::command]
-pub fn suggest_import_placement(
-    state: State<'_, AppState>,
+pub async fn suggest_import_placement<R: Runtime>(
+    app: AppHandle<R>,
     shots: Vec<ShotData>,
     // `azimuth_reference` is what `shots` are measured against (#438). The
     // caller has it on the `ImportSectionConfig` it is about to send; `None`
@@ -605,48 +628,10 @@ pub fn suggest_import_placement(
     // declared nothing.
     azimuth_reference: Option<AzimuthReference>,
 ) -> Result<Vec<PlacementSuggestion>, String> {
-    let project = state.project_snapshot().ok_or("No project open")?;
+    pool::run(app, move |state| {
+        let project = state.settled_snapshot().ok_or("No project open")?;
 
-    let existing_sections: Vec<ExistingSection> = project
-        .sections
-        .iter()
-        .map(|s| ExistingSection {
-            id: s.id,
-            name: s
-                .name
-                .clone()
-                .unwrap_or_else(|| format!("Section {}", s.id)),
-            shots: s.shots.clone(),
-            azimuth_reference: project.azimuth_reference_for(s),
-        })
-        .collect();
-
-    let config = state.get_config();
-    Ok(suggest_placements(
-        &shots,
-        // The section does not exist yet, so its reference is whatever the
-        // importer declared for it; the project default is the fallback (#438).
-        azimuth_reference
-            .map(AzimuthReference::sanitised)
-            .or(project.default_azimuth_reference)
-            .unwrap_or_default(),
-        &existing_sections,
-        &config.placement_suggestion,
-    ))
-}
-
-/// Suggest placements for ALL import sections against BOTH existing project
-/// sections AND each other (import-to-import). Returns a flat list sorted by score.
-#[tauri::command]
-pub fn suggest_all_import_placements(
-    state: State<'_, AppState>,
-    import_sections: Vec<ImportSectionForSuggestion>,
-) -> Result<Vec<CrossSectionSuggestion>, String> {
-    // One snapshot for both reads (#576 NF-AN6-4: the fallback used to take a
-    // second whole-project copy of its own).
-    let project = state.project_snapshot();
-    let existing_sections: Vec<ExistingSection> = match project.as_deref() {
-        Some(project) => project
+        let existing_sections: Vec<ExistingSection> = project
             .sections
             .iter()
             .map(|s| ExistingSection {
@@ -658,46 +643,92 @@ pub fn suggest_all_import_placements(
                 shots: s.shots.clone(),
                 azimuth_reference: project.azimuth_reference_for(s),
             })
-            .collect(),
-        None => Vec::new(),
-    };
-    // Only the FALLBACK: each section carries its own reference and is scored
-    // in it (#438).
-    let fallback_reference = project
-        .and_then(|p| p.default_azimuth_reference)
-        .unwrap_or_default();
-    let import_sections: Vec<ImportSectionForSuggestion> = import_sections
-        .into_iter()
-        .map(|mut section| {
-            // Deserialized straight off the wire: re-impose the type's
-            // invariants before anything computes with it.
-            section.azimuth_reference = section.azimuth_reference.map(AzimuthReference::sanitised);
-            section
-        })
-        .collect();
+            .collect();
 
-    let config = state.get_config();
-    Ok(suggest_all_placements(
-        &import_sections,
-        fallback_reference,
-        &existing_sections,
-        &config.placement_suggestion,
-    ))
+        let config = state.get_config();
+        Ok(suggest_placements(
+            &shots,
+            // The section does not exist yet, so its reference is whatever the
+            // importer declared for it; the project default is the fallback (#438).
+            azimuth_reference
+                .map(AzimuthReference::sanitised)
+                .or(project.default_azimuth_reference)
+                .unwrap_or_default(),
+            &existing_sections,
+            &config.placement_suggestion,
+        ))
+    })
+    .await
+}
+
+/// Suggest placements for ALL import sections against BOTH existing project
+/// sections AND each other (import-to-import). Returns a flat list sorted by score.
+#[tauri::command]
+pub async fn suggest_all_import_placements<R: Runtime>(
+    app: AppHandle<R>,
+    import_sections: Vec<ImportSectionForSuggestion>,
+) -> Result<Vec<CrossSectionSuggestion>, String> {
+    pool::run(app, move |state| {
+        // One snapshot for both reads (#576 NF-AN6-4: the fallback used to take a
+        // second whole-project copy of its own).
+        let project = state.settled_snapshot();
+        let existing_sections: Vec<ExistingSection> = match project.as_deref() {
+            Some(project) => project
+                .sections
+                .iter()
+                .map(|s| ExistingSection {
+                    id: s.id,
+                    name: s
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| format!("Section {}", s.id)),
+                    shots: s.shots.clone(),
+                    azimuth_reference: project.azimuth_reference_for(s),
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        // Only the FALLBACK: each section carries its own reference and is scored
+        // in it (#438).
+        let fallback_reference = project
+            .and_then(|p| p.default_azimuth_reference)
+            .unwrap_or_default();
+        let import_sections: Vec<ImportSectionForSuggestion> = import_sections
+            .into_iter()
+            .map(|mut section| {
+                // Deserialized straight off the wire: re-impose the type's
+                // invariants before anything computes with it.
+                section.azimuth_reference =
+                    section.azimuth_reference.map(AzimuthReference::sanitised);
+                section
+            })
+            .collect();
+
+        let config = state.get_config();
+        Ok(suggest_all_placements(
+            &import_sections,
+            fallback_reference,
+            &existing_sections,
+            &config.placement_suggestion,
+        ))
+    })
+    .await
 }
 
 /// Suggest placements for orphaned sections' leaf ends against newly imported sections.
 /// Orphaned sections are those in connected components (via merges) with no zero datum.
 #[tauri::command]
-pub fn suggest_orphan_placements(
-    state: State<'_, AppState>,
+pub async fn suggest_orphan_placements<R: Runtime>(
+    app: AppHandle<R>,
     newly_imported_section_ids: Vec<u32>,
 ) -> Result<Vec<OrphanPlacementSuggestion>, String> {
-    let project = state.project_snapshot().ok_or("No project open")?;
-    let config = state.get_config();
-    Ok(
-        project
-            .suggest_orphan_placements(&newly_imported_section_ids, &config.placement_suggestion),
-    )
+    pool::run(app, move |state| {
+        let project = state.settled_snapshot().ok_or("No project open")?;
+        let config = state.get_config();
+        Ok(project
+            .suggest_orphan_placements(&newly_imported_section_ids, &config.placement_suggestion))
+    })
+    .await
 }
 
 /// Count sections not connected to a zero datum, restricted to components
@@ -705,37 +736,43 @@ pub fn suggest_orphan_placements(
 /// an info line to the import receipt when the orphan-placement pass produced
 /// no suggestions (#446).
 #[tauri::command]
-pub fn count_unanchored_sections(
-    state: State<'_, AppState>,
+pub async fn count_unanchored_sections<R: Runtime>(
+    app: AppHandle<R>,
     newly_imported_section_ids: Vec<u32>,
 ) -> Result<u32, String> {
-    let project = state.project_snapshot().ok_or("No project open")?;
-    Ok(project.count_unanchored_sections(&newly_imported_section_ids))
+    pool::run(app, move |state| {
+        let project = state.settled_snapshot().ok_or("No project open")?;
+        Ok(project.count_unanchored_sections(&newly_imported_section_ids))
+    })
+    .await
 }
 
 /// Parse a Walls `.WPJ`/`.SRV` file and return preview data for the import dialog.
 #[tauri::command]
-pub fn parse_walls(path: PathBuf) -> Result<WallsFile, String> {
-    tracing::info!(
-        path = ?path,
-        purpose = "prepare Walls import preview",
-        "Parsing Walls .WPJ/.SRV file for import preview"
-    );
-    // The preview is built from the file's data too, so it runs under the
-    // same guard as the parse (#576 RV3-R-12).
-    guarded(|| {
-        crate::parsers::walls::parse_walls(&path)
-            .map(|parsed| crate::parsers::walls::build_preview(&parsed))
-    })
-    .map_err(|e| {
-        tracing::error!(
+pub async fn parse_walls(path: PathBuf) -> Result<WallsFile, String> {
+    pool::run_stateless(move || {
+        tracing::info!(
             path = ?path,
             purpose = "prepare Walls import preview",
-            reason = %e,
-            "Failed to parse Walls file for import preview"
+            "Parsing Walls .WPJ/.SRV file for import preview"
         );
-        e.to_string()
+        // The preview is built from the file's data too, so it runs under the
+        // same guard as the parse (#576 RV3-R-12).
+        guarded(|| {
+            crate::parsers::walls::parse_walls(&path)
+                .map(|parsed| crate::parsers::walls::build_preview(&parsed))
+        })
+        .map_err(|e| {
+            tracing::error!(
+                path = ?path,
+                purpose = "prepare Walls import preview",
+                reason = %e,
+                "Failed to parse Walls file for import preview"
+            );
+            e.to_string()
+        })
     })
+    .await
 }
 
 /// Parse a Walls file, convert to import configs, and execute the import.

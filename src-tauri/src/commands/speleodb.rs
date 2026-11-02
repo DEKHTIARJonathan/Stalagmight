@@ -545,11 +545,14 @@ pub async fn speleodb_link_status(app: AppHandle) -> Result<SpeleoLinkStatus, Sp
 /// in the backend without going through the frontend's `loadProject`, so the
 /// read-only banner and gate otherwise described the previous bytes until reopen.
 /// A peek, like `history_discarded`: cheap, local, no network.
+///
+/// On the blocking pool like every command (#576 C2): it reads the open
+/// database's link row.
 #[tauri::command]
-pub fn speleodb_open_file_flags(
-    state: tauri::State<'_, AppState>,
+pub async fn speleodb_open_file_flags<R: tauri::Runtime>(
+    app: AppHandle<R>,
 ) -> crate::core::loading::OpenFileFlags {
-    state.open_file_flags()
+    crate::commands::pool::run_infallible(app, AppState::open_file_flags).await
 }
 
 /// Detach the open project from SpeleoDB, turning it into a plain unmanaged

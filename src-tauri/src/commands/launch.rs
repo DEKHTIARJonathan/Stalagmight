@@ -349,8 +349,8 @@ pub fn focus_main_window<R: Runtime>(app: &AppHandle<R>) {
 
 /// Drain the files the OS asked us to open since the last call.
 #[tauri::command]
-pub fn take_pending_launch_files(pending: tauri::State<'_, PendingLaunchFiles>) -> Vec<String> {
-    pending.take()
+pub async fn take_pending_launch_files<R: Runtime>(app: AppHandle<R>) -> Vec<String> {
+    super::pool::run_stateless_infallible(move || app.state::<PendingLaunchFiles>().take()).await
 }
 
 #[cfg(test)]

@@ -6,8 +6,10 @@
 
 use std::path::{Path, PathBuf};
 
+use tauri::Manager;
 use tempfile::TempDir;
 
+use super::command_tests::{h, run};
 use crate::commands::write_path::{check_write_path_with, AppDirs, WriteTarget};
 use crate::core::AppState;
 use crate::export::ImageFormat;
@@ -124,11 +126,12 @@ fn system_folders_are_refused_and_user_mounts_are_not() {
 fn the_commands_refuse_before_writing_or_deleting() {
     let _cfg = crate::test_helpers::isolated_config();
     let dir = TempDir::new().expect("tempdir");
-    let state = open_project_state(dir.path());
+    let app = tauri::test::mock_app();
+    app.manage(open_project_state(dir.path()));
 
     // An export named to a file that is not of its format: nothing written.
     let toml = dir.path().join("config.toml");
-    let export = crate::commands::export::export_csv_impl(&state, toml.clone());
+    let export = run(crate::commands::export::export_csv(h(&app), toml.clone()));
     println!(
         "export_csv to config.toml: {export:?}; file written: {}",
         toml.exists()
@@ -139,7 +142,10 @@ fn the_commands_refuse_before_writing_or_deleting() {
     // Delete a file that is not a project: nothing deleted.
     let keep = dir.path().join("keep.txt");
     std::fs::write(&keep, b"user data").expect("write the bystander");
-    let deleted = crate::commands::project::delete_project_impl(&state, keep.clone());
+    let deleted = run(crate::commands::project::delete_project(
+        h(&app),
+        keep.clone(),
+    ));
     println!(
         "delete_project on keep.txt: success={} error={:?}; file still there: {}",
         deleted.success,
@@ -152,10 +158,11 @@ fn the_commands_refuse_before_writing_or_deleting() {
     // Save As into a system folder.
     #[cfg(unix)]
     {
-        let saved = crate::commands::project::save_project_impl(
-            &state,
+        let saved = run(crate::commands::project::save_project(
+            h(&app),
             Some(PathBuf::from("/etc/stalagmight-w4.stalx")),
-        );
+            None,
+        ));
         println!("save as /etc/stalagmight-w4.stalx: {:?}", saved.error);
         assert!(!saved.success);
         assert!(saved.error.unwrap_or_default().contains("system folder"));
@@ -163,7 +170,7 @@ fn the_commands_refuse_before_writing_or_deleting() {
 
     // The ordinary cases still go through.
     let csv = dir.path().join("CaveW.csv");
-    let export = crate::commands::export::export_csv_impl(&state, csv.clone());
+    let export = run(crate::commands::export::export_csv(h(&app), csv.clone()));
     assert!(export.is_ok(), "{export:?}");
     assert!(csv.exists());
 }

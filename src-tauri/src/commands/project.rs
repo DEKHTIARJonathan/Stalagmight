@@ -1,7 +1,8 @@
 use std::path::PathBuf;
-use tauri::{Manager, State};
+use tauri::{Manager, Runtime};
 use ts_rs::TS;
 
+use crate::commands::pool;
 use crate::commands::write_path::{check_load_path, check_write_path, WriteTarget};
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
 use crate::core::{AppState, Command, CommandResult};
@@ -15,13 +16,16 @@ use crate::persistence::with_stalx_extension;
 /// (#576 NF-W3-2) the default north reference (`null` = nothing recorded).
 /// Stored in the .stalx so they travel with the file between collaborators.
 #[tauri::command]
-pub fn update_project_settings(
-    state: State<AppState>,
+pub async fn update_project_settings<R: Runtime>(
+    app: tauri::AppHandle<R>,
     name: String,
     validation: crate::config::ValidationConfig,
     default_azimuth_reference: Option<crate::models::AzimuthReference>,
 ) -> CommandResult {
-    state.update_project_settings(name, validation, default_azimuth_reference)
+    pool::run(app, move |state| {
+        state.update_project_settings(name, validation, default_azimuth_reference)
+    })
+    .await
 }
 
 /// Set (or, given `null`/omitted, clear) the open project's entrance
@@ -29,8 +33,11 @@ pub fn update_project_settings(
 /// file; the only recovery path for the TML import's no-clobber rule (#431)
 /// locking in a wrong first value.
 #[tauri::command]
-pub fn set_surface_elevation(state: State<AppState>, elevation: Option<f64>) -> CommandResult {
-    state.set_surface_elevation(elevation)
+pub async fn set_surface_elevation<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    elevation: Option<f64>,
+) -> CommandResult {
+    pool::run(app, move |state| state.set_surface_elevation(elevation)).await
 }
 
 /// Save the current project.
@@ -41,22 +48,25 @@ pub fn set_surface_elevation(state: State<AppState>, elevation: Option<f64>) -> 
 /// [`save_project_impl`] or constructs `Command::SaveProject` itself; both
 /// funnel into the same `execute` dispatch.
 #[tauri::command]
-pub fn save_project(
-    state: State<AppState>,
+pub async fn save_project<R: Runtime>(
+    app: tauri::AppHandle<R>,
     path: Option<PathBuf>,
     is_autosave: Option<bool>,
 ) -> CommandResult {
-    tracing::info!(
-        trigger = if is_autosave.unwrap_or(false) {
-            "autosave"
-        } else {
-            "manual"
-        },
-        path = ?path,
-        purpose = "persist edits safely",
-        "Save requested"
-    );
-    save_project_impl(state.inner(), path)
+    pool::run(app, move |state| {
+        tracing::info!(
+            trigger = if is_autosave.unwrap_or(false) {
+                "autosave"
+            } else {
+                "manual"
+            },
+            path = ?path,
+            purpose = "persist edits safely",
+            "Save requested"
+        );
+        save_project_impl(state, path)
+    })
+    .await
 }
 
 pub(crate) fn save_project_impl(state: &AppState, path: Option<PathBuf>) -> CommandResult {
@@ -85,56 +95,57 @@ fn check_project_target(path: &std::path::Path) -> Result<(), String> {
 /// must release regardless - "discard my edits and release" - calls
 /// `speleodb_release_lock` explicitly and then closes.
 #[tauri::command]
-pub fn close_project(state: State<AppState>, release_lock: Option<bool>) -> CommandResult {
-    close_project_impl(state.inner(), release_lock.unwrap_or(true))
-}
-
-pub(crate) fn close_project_impl(state: &AppState, release_lock: bool) -> CommandResult {
-    // Release a held SpeleoDB lock BEFORE the close tears down the database (the
-    // link row lives there). Best-effort + gated so the keep-lock path can opt out.
-    if release_lock {
-        state.speleodb_release_held_lock_best_effort();
-    } else {
-        // "Keep lock": the user chose to hold the server mutex past this close.
-        // Recorded on the claim BEFORE the teardown, while the link row is still
-        // readable - and recorded at all because the stranded-claim janitor
-        // cannot otherwise tell a deliberate keep from a session that died
-        // holding a lock, and would hand this one back on the next status poll.
-        state.speleodb_keep_open_lock_deliberately();
-    }
-    state.execute(Command::CloseProject)
+pub async fn close_project<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    release_lock: Option<bool>,
+) -> CommandResult {
+    pool::run(app, move |state| {
+        // Release a held SpeleoDB lock BEFORE the close tears down the database (the
+        // link row lives there). Best-effort + gated so the keep-lock path can opt out.
+        if release_lock.unwrap_or(true) {
+            state.speleodb_release_held_lock_best_effort();
+        } else {
+            // "Keep lock": the user chose to hold the server mutex past this close.
+            // Recorded on the claim BEFORE the teardown, while the link row is still
+            // readable - and recorded at all because the stranded-claim janitor
+            // cannot otherwise tell a deliberate keep from a session that died
+            // holding a lock, and would hand this one back on the next status poll.
+            state.speleodb_keep_open_lock_deliberately();
+        }
+        state.execute(Command::CloseProject)
+    })
+    .await
 }
 
 /// Get the full project state for the frontend
 #[tauri::command]
-pub fn get_project_state(state: State<AppState>) -> Option<ProjectState> {
-    get_project_state_impl(state.inner())
-}
+pub async fn get_project_state<R: Runtime>(app: tauri::AppHandle<R>) -> Option<ProjectState> {
+    pool::run_infallible(app, |state| {
+        let project = state.settled_snapshot()?;
+        let stations = project.compute_station_coordinates();
+        let mut stats = project.stats();
 
-pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
-    let project = state.project_snapshot()?;
-    let stations = project.compute_station_coordinates();
-    let mut stats = project.stats();
+        // Calculate penetration distance with computed stations. Reference ties are
+        // not swimmable, so they leave the route unless opted back in (#27 q13).
+        let include_reference_legs = state.get_config().gas.include_reference_legs;
+        stats.penetration_distance =
+            project.calculate_penetration_with(&stations, include_reference_legs);
 
-    // Calculate penetration distance with computed stations. Reference ties are
-    // not swimmable, so they leave the route unless opted back in (#27 q13).
-    let include_reference_legs = state.get_config().gas.include_reference_legs;
-    stats.penetration_distance =
-        project.calculate_penetration_with(&stations, include_reference_legs);
+        // Depth is the absolute station range, not a per-section delta walk (#481).
+        let (min_depth, max_depth) = Project::depth_range(&stations);
+        stats.min_depth = min_depth;
+        stats.max_depth = max_depth;
 
-    // Depth is the absolute station range, not a per-section delta walk (#481).
-    let (min_depth, max_depth) = Project::depth_range(&stations);
-    stats.min_depth = min_depth;
-    stats.max_depth = max_depth;
+        let frozen_shots = project.compute_frozen_shots();
 
-    let frozen_shots = project.compute_frozen_shots();
-
-    Some(ProjectState {
-        project,
-        stations,
-        stats,
-        frozen_shots,
+        Some(ProjectState {
+            project,
+            stations,
+            stats,
+            frozen_shots,
+        })
     })
+    .await
 }
 
 /// Per-station along-cave distance from a chosen origin station, or from the
@@ -232,98 +243,82 @@ pub(crate) fn settle_blocking<T, E: std::fmt::Display>(
 
 /// Get list of recent projects
 #[tauri::command]
-pub fn list_recent_projects(state: State<AppState>) -> Vec<ProjectMetadata> {
-    list_recent_projects_impl(state.inner())
-}
-
-pub(crate) fn list_recent_projects_impl(state: &AppState) -> Vec<ProjectMetadata> {
-    state.get_recent_projects()
+pub async fn list_recent_projects<R: Runtime>(app: tauri::AppHandle<R>) -> Vec<ProjectMetadata> {
+    pool::run_infallible(app, AppState::get_recent_projects).await
 }
 
 /// Remove a project from the recent projects list
 #[tauri::command]
-pub fn remove_from_recent_projects(state: State<AppState>, path: PathBuf) -> CommandResult {
-    remove_from_recent_projects_impl(state.inner(), path)
-}
-
-pub(crate) fn remove_from_recent_projects_impl(state: &AppState, path: PathBuf) -> CommandResult {
-    state.remove_from_recent_projects(path)
+pub async fn remove_from_recent_projects<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    path: PathBuf,
+) -> CommandResult {
+    pool::run(app, move |state| state.remove_from_recent_projects(path)).await
 }
 
 /// Permanently delete a project's files from disk and drop it from the recent
 /// list. The destructive counterpart to `remove_from_recent_projects`; see
 /// [`AppState::delete_project`] for the OS-trash / permanent-delete semantics.
 #[tauri::command]
-pub fn delete_project(state: State<AppState>, path: PathBuf) -> CommandResult {
-    delete_project_impl(state.inner(), path)
-}
-
-pub(crate) fn delete_project_impl(state: &AppState, path: PathBuf) -> CommandResult {
-    if let Err(why) = check_project_target(&path) {
-        return CommandResult::failure(why);
-    }
-    state.delete_project(path)
+pub async fn delete_project<R: Runtime>(app: tauri::AppHandle<R>, path: PathBuf) -> CommandResult {
+    pool::run(app, move |state| {
+        if let Err(why) = check_project_target(&path) {
+            return CommandResult::failure(why);
+        }
+        state.delete_project(path)
+    })
+    .await
 }
 
 /// Rename a recent project's display name by path (project need not be open).
 #[tauri::command]
-pub fn set_project_name_for_path(
-    state: State<AppState>,
+pub async fn set_project_name_for_path<R: Runtime>(
+    app: tauri::AppHandle<R>,
     path: PathBuf,
     name: String,
 ) -> CommandResult {
-    if let Err(why) = check_project_target(&path) {
-        return CommandResult::failure(why);
-    }
-    state.set_project_name_for_path(path, name)
+    pool::run(app, move |state| {
+        if let Err(why) = check_project_target(&path) {
+            return CommandResult::failure(why);
+        }
+        state.set_project_name_for_path(path, name)
+    })
+    .await
 }
 
 /// Merge multiple projects into a new project file
 /// This creates a NEW output file, appends all sections with renumbered IDs,
 /// keeps all zero datums, and optionally archives the original files.
 #[tauri::command]
-pub fn merge_projects(
-    state: State<AppState>,
+pub async fn merge_projects<R: Runtime>(
+    app: tauri::AppHandle<R>,
     source_paths: Vec<PathBuf>,
     output_path: PathBuf,
     output_name: String,
     archive_originals: bool,
 ) -> CommandResult {
-    merge_projects_impl(
-        state.inner(),
-        source_paths,
-        output_path,
-        output_name,
-        archive_originals,
-    )
-}
-
-pub(crate) fn merge_projects_impl(
-    state: &AppState,
-    source_paths: Vec<PathBuf>,
-    output_path: PathBuf,
-    output_name: String,
-    archive_originals: bool,
-) -> CommandResult {
-    // The new file, and - when they are to be moved into the archive - the sources.
-    let moved: &[PathBuf] = if archive_originals {
-        &source_paths
-    } else {
-        &[]
-    };
-    let targets =
-        std::iter::once(with_stalx_extension(output_path.clone())).chain(moved.iter().cloned());
-    for target in targets {
-        if let Err(why) = check_project_target(&target) {
-            return CommandResult::failure(why);
+    pool::run(app, move |state| {
+        // The new file, and - when they are to be moved into the archive - the sources.
+        let moved: &[PathBuf] = if archive_originals {
+            &source_paths
+        } else {
+            &[]
+        };
+        let targets =
+            std::iter::once(with_stalx_extension(output_path.clone())).chain(moved.iter().cloned());
+        for target in targets {
+            if let Err(why) = check_project_target(&target) {
+                return CommandResult::failure(why);
+            }
         }
-    }
-    state.execute(Command::MergeProjects {
-        source_paths,
-        output_path,
-        output_name,
-        archive_originals,
+        state.execute(Command::MergeProjects {
+            source_paths,
+            output_path,
+            output_name,
+            archive_originals,
+        })
     })
+    .await
 }
 
 /// Combined project state for frontend
@@ -441,8 +436,8 @@ pub async fn load_project_full_binary(
 /// Cancel any active loading operation.
 /// Idempotent - safe to call anytime, even when no load is active.
 #[tauri::command]
-pub fn cancel_loading(state: State<AppState>) {
-    state.cancel_loading();
+pub async fn cancel_loading<R: Runtime>(app: tauri::AppHandle<R>) {
+    pool::run_infallible(app, AppState::cancel_loading).await;
 }
 
 /// Create a persisted project with full progress reporting.
@@ -488,19 +483,22 @@ pub fn cancel_loading(state: State<AppState>) {
 /// checkpoint - so an unversioned slot could hand this project the shot ids of
 /// one the user navigated away from. A mismatch returns nothing.
 #[tauri::command]
-pub fn take_unrecognised_shot_kinds(
-    state: State<'_, AppState>,
+pub async fn take_unrecognised_shot_kinds<R: Runtime>(
+    app: tauri::AppHandle<R>,
     loading_id: u64,
 ) -> Vec<crate::models::UnrecognisedShotKind> {
-    let found = state.take_unrecognised_shot_kinds(loading_id);
-    if !found.is_empty() {
-        tracing::info!(
-            count = found.len(),
-            purpose = "prompt the user to resolve unreadable shot kinds (#27)",
-            "Handing unrecognised shot kinds to the frontend"
-        );
-    }
-    found
+    pool::run_infallible(app, move |state| {
+        let found = state.take_unrecognised_shot_kinds(loading_id);
+        if !found.is_empty() {
+            tracing::info!(
+                count = found.len(),
+                purpose = "prompt the user to resolve unreadable shot kinds (#27)",
+                "Handing unrecognised shot kinds to the frontend"
+            );
+        }
+        found
+    })
+    .await
 }
 
 /// [#473] Whether the open project's edit history was unreadable and discarded.
@@ -519,8 +517,8 @@ pub fn take_unrecognised_shot_kinds(
 /// No `loading_id` for the same reason: the flag is written under the same `project`
 /// mutex acquisition that commits the project, so it cannot describe a different one.
 #[tauri::command]
-pub fn history_discarded(state: State<'_, AppState>) -> bool {
-    state.history_discarded()
+pub async fn history_discarded<R: Runtime>(app: tauri::AppHandle<R>) -> bool {
+    pool::run_infallible(app, AppState::history_discarded).await
 }
 
 /// [#576 C5] The frontend reports its workspace mode (`survey` / `plan` /
@@ -530,8 +528,11 @@ pub fn history_discarded(state: State<'_, AppState>) -> bool {
 /// The backend resets it to Survey on every project open, create and close, as
 /// the frontend does.
 #[tauri::command]
-pub fn set_workspace_mode(state: State<'_, AppState>, mode: crate::core::WorkspaceMode) {
-    state.set_workspace_mode(mode);
+pub async fn set_workspace_mode<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    mode: crate::core::WorkspaceMode,
+) {
+    pool::run_infallible(app, move |state| state.set_workspace_mode(mode)).await;
 }
 
 #[tauri::command]

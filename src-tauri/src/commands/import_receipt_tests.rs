@@ -6,7 +6,9 @@
 
 use tempfile::NamedTempFile;
 
-use super::command_tests::{app_with_state, assert_success, shot_data, state, with_config_lock};
+use super::command_tests::{
+    app_with_state, assert_success, h, run, shot_data, state, with_config_lock,
+};
 use super::import;
 use crate::core::Command;
 use crate::models::GpsCoordinates;
@@ -39,8 +41,8 @@ fn test_import_sections_provenance_params_decorate_receipt() {
             azimuth_reference: None,
         }];
 
-        let result = import::import_sections(
-            state(&app),
+        let result = run(import::import_sections(
+            h(&app),
             sections,
             None,
             None,
@@ -48,12 +50,11 @@ fn test_import_sections_provenance_params_decorate_receipt() {
             None,
             Some("mNemo DMP".to_string()),
             Some("dive.dmp".to_string()),
-            Some(1),
-            // #576 B13: the file's parse warnings ride the same call and lead.
+            Some(1), // #576 B13: the file's parse warnings ride the same call and lead.
             Some(vec![
                 "Section \"BBB\" (#2 in the file) has no end-of-section marker".to_string(),
             ]),
-        );
+        ));
         assert_success(&result);
         let receipt = result
             .import_receipt
@@ -106,8 +107,8 @@ fn test_import_sections_sanitizes_hostile_zero_datum_section_name() {
             azimuth_reference: None,
         }];
 
-        let result = import::import_sections(
-            state(&app),
+        let result = run(import::import_sections(
+            h(&app),
             sections,
             None,
             None,
@@ -117,7 +118,7 @@ fn test_import_sections_sanitizes_hostile_zero_datum_section_name() {
             Some("dive.dmp".to_string()),
             Some(1),
             None,
-        );
+        ));
         assert_success(&result);
 
         let receipt = result
@@ -164,8 +165,8 @@ fn test_import_sections_without_provenance_params_leaves_receipt_defaults() {
             azimuth_reference: None,
         }];
 
-        let result = import::import_sections(
-            state(&app),
+        let result = run(import::import_sections(
+            h(&app),
             sections,
             None,
             None,
@@ -175,7 +176,7 @@ fn test_import_sections_without_provenance_params_leaves_receipt_defaults() {
             None,
             None,
             None,
-        );
+        ));
         assert_success(&result);
         let receipt = result
             .import_receipt
@@ -251,8 +252,8 @@ fn test_import_sections_with_nothing_to_import_still_reports_a_receipt() {
             location: None,
         });
 
-        let result = import::import_sections(
-            state(&app),
+        let result = run(import::import_sections(
+            h(&app),
             Vec::new(),
             None,
             None,
@@ -262,7 +263,7 @@ fn test_import_sections_with_nothing_to_import_still_reports_a_receipt() {
             None,
             None,
             None,
-        );
+        ));
 
         assert_success(&result);
         let receipt = result

@@ -7,6 +7,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use tauri::Manager;
+
+use super::command_tests::{h, run};
 use super::{project, validation};
 use crate::core::state::{AppState, VirtualShotMode};
 use crate::core::Command;
@@ -78,7 +81,10 @@ fn median(mut v: Vec<f64>) -> f64 {
 #[ignore = "timing probe; run in release with --ignored --nocapture"]
 fn refresh_cycle_probe() {
     for (sections, shots) in [(100_u32, 100_usize), (750, 100)] {
-        let state = synthetic(sections, shots);
+        // In a mock app so the reads below are the registered commands (#576 C9).
+        let app = tauri::test::mock_app();
+        app.manage(synthetic(sections, shots));
+        let state = app.state::<AppState>();
         let first = state.get_project_state().unwrap();
         let (section_id, shot_id) = (first.sections[0].id, first.sections[0].shots[0].id);
         drop(first);
@@ -116,7 +122,7 @@ fn refresh_cycle_probe() {
             }
 
             let t = Instant::now();
-            let refreshed = project::get_project_state_impl(&state).unwrap();
+            let refreshed = run(project::get_project_state(h(&app))).unwrap();
             read_state.push(ms(t.elapsed()));
             if !Arc::ptr_eq(&refreshed.project, &state.project_snapshot().unwrap()) {
                 copies_on_state_read += 1;
@@ -124,7 +130,7 @@ fn refresh_cycle_probe() {
             drop(refreshed);
 
             let t = Instant::now();
-            let warnings = validation::get_project_warnings_impl(&state);
+            let warnings = run(validation::get_project_warnings(h(&app)));
             read_warnings.push(ms(t.elapsed()));
             drop(warnings);
 

@@ -43,6 +43,50 @@ executes them and manages undo/redo; the executor bodies are split one module pe
 family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
 `src-tauri/crates/core/src/core/state/`.
 
+## Where commands run
+
+Tauri runs a plain (non-`async`) `#[tauri::command]` inline in its IPC handler, on
+the **main thread**: the window cannot repaint, scroll or deliver an event until it
+returns, and every later IPC call - `cancel_loading` included - waits behind it. So
+no command does its work there (#576 C2). Every command is `async`, generic over the
+Tauri `Runtime`, takes the `AppHandle`, and hands its body to the blocking pool
+through `commands/pool.rs` (`pool::run` / `run_infallible`, and the `run_stateless*`
+pair for a body that needs no `AppState`); the main thread only parses the arguments.
+The SpeleoDB commands do the same through their own `run_blocking`. A contract test
+(`app_contract_tests.rs`) fails when a registered command is not `async`.
+
+Because they are generic, tests call the registered command itself with a
+`tauri::test` app (`run(cmd(h(&app), ..))` in `command_tests.rs`); there are no
+`*_impl` twins for tests to call instead (#576 C9).
+
+Commands now run **concurrently**, which makes two rules explicit:
+
+- **Mutations stay serialized.** Every project mutation (`execute`, undo/redo, the
+  imports, repair, settings, save, the project-slot commits) takes `command_lock`
+  for its whole span, as before - see [undo-redo.md](undo-redo.md#lock-ordering). The
+  frontend additionally issues its edits one at a time through its mutation queue
+  (`store/mutationQueue.ts`), so they apply in the order the user made them.
+- **A read of the project is a settled read.** A command mutates the project and
+  then settles it (orphan conversion, frame renormalisation, the reconcile, the undo
+  push) under one `command_lock` span but several `project` acquisitions, so a read
+  that takes only the `project` lock can catch a project that was changed and not
+  yet settled - an edit without its undo entry, offsets not yet re-solved. Every IPC
+  read of the project therefore either takes `AppState::settled_snapshot()` (the
+  snapshot is taken under `command_lock`, then read with no lock held - for anything
+  that does real work on it) or runs a short query under `AppState::settled_read`.
+  Never call either while holding `command_lock` (it is not reentrant); inside a
+  command, read `project_snapshot()`. Reads of other cells (config, recent projects,
+  display settings, logs, caches) take only their own lock.
+
+The open project is held copy-on-write (`core/state/project_slot.rs`, #576 A9): a
+snapshot is an O(1) `Arc` clone that later edits never change, and a writer copies
+the project only while a snapshot of it is still alive. `get_project_state()` is the
+explicit deep copy, for the few callers that must own the project.
+
+`cancel_loading` is not a command in this sense: it flips the active load's token
+and takes no `command_lock`, so it is never queued behind the import or load it
+cancels (`commands/import_offthread_tests.rs`, `core/state/command_ordering_tests.rs`).
+
 ## IPC trust boundary
 
 The custom Tauri commands take paths and payloads straight from the webview, and

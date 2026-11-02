@@ -60,7 +60,10 @@ fn pre_restore_copies(project: &Path) -> Vec<(String, String)> {
 }
 
 fn restore(project: &Path, candidate: &Path) -> Result<String, String> {
-    recovery::restore_from_backup(project.to_path_buf(), candidate.to_path_buf())
+    tauri::async_runtime::block_on(recovery::restore_from_backup(
+        project.to_path_buf(),
+        candidate.to_path_buf(),
+    ))
 }
 
 /// [#576 C15] Two restores in a row keep BOTH files they replaced. The safety

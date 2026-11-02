@@ -16,7 +16,7 @@ import {
  * into get_config's panels, so these tests pin (a) the exact IPC payload the
  * debounce sends and (b) the config re-sync round trip the frontend performs
  * after saving - NOT real on-disk persistence (that's the Rust
- * update_data_table_view_impl tests).
+ * update_data_table_view tests).
  *
  * Calls are recorded in __MOCK_DATA_TABLE_VIEW_CALLS__ (camelCase payloads).
  * Default panels config hides section_id + shot_id and shows azimuth as avg /

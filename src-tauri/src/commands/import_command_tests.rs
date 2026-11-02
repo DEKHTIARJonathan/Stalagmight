@@ -15,7 +15,7 @@ use tauri::{App, Manager};
 use tempfile::TempDir;
 
 use super::import::{
-    check_duplicate_import_impl, execute_compass_import, execute_tml_import, execute_walls_import,
+    check_duplicate_import, execute_compass_import, execute_tml_import, execute_walls_import,
 };
 use crate::core::state::AppState;
 use crate::core::{Command, CommandResult};
@@ -67,7 +67,11 @@ fn receipt_of(result: &CommandResult) -> (String, Option<String>, u32) {
 }
 
 fn hash_recorded(app: &App<MockRuntime>, hash: &str) -> bool {
-    check_duplicate_import_impl(state_of(app), hash.to_string()).expect("check the hash")
+    block_on(check_duplicate_import(
+        app.handle().clone(),
+        hash.to_string(),
+    ))
+    .expect("check the hash")
 }
 
 /// Ariane: a short survey in feet, with an entrance elevation of 328.084 ft

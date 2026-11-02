@@ -7,6 +7,8 @@
 
 use sha2::{Digest, Sha256};
 
+use tauri::async_runtime::block_on;
+
 use super::import::calculate_file_hash;
 
 /// The digest is unchanged by streaming: the same as hashing the whole file,
@@ -18,14 +20,14 @@ fn a_streamed_hash_equals_the_whole_file_hash() {
     let bytes: Vec<u8> = (0..300_000u32).map(|i| (i % 253) as u8).collect();
     std::fs::write(&path, &bytes).unwrap();
     let expected = format!("{:x}", Sha256::digest(&bytes));
-    assert_eq!(calculate_file_hash(path).unwrap(), expected);
+    assert_eq!(block_on(calculate_file_hash(path)).unwrap(), expected);
 }
 
 /// A folder is not a file to hash.
 #[test]
 fn a_folder_is_refused() {
     let dir = tempfile::tempdir().unwrap();
-    let err = calculate_file_hash(dir.path().to_path_buf()).unwrap_err();
+    let err = block_on(calculate_file_hash(dir.path().to_path_buf())).unwrap_err();
     println!("hash of a folder -> {err}");
     assert!(err.contains("not a regular file"), "{err}");
 }
@@ -47,7 +49,7 @@ fn a_fifo_is_refused_without_blocking() {
     let (sender, receiver) = std::sync::mpsc::channel();
     let target = fifo.clone();
     let worker = std::thread::spawn(move || {
-        let _ = sender.send(calculate_file_hash(target));
+        let _ = sender.send(block_on(calculate_file_hash(target)));
     });
     let outcome = receiver
         .recv_timeout(std::time::Duration::from_secs(5))
