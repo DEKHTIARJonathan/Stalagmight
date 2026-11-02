@@ -141,8 +141,10 @@ export const DIRECT_READ_ONLY_ACCESS_EXEMPT = {
 // Global: every match on a line counts (#576 E2-D2 - counting LINES let a second
 // raw gate ride along on an already-allowlisted line). A `case 'closureAdjusted':`
 // label is the same comparison spelled as a switch, so it counts too.
+// A template literal (`closureAdjusted` in backticks) is the same comparison
+// (#576 RV3-FE-12: it used to pass uncounted).
 const CLOSURE_ADJUSTED_RE =
-  /(===|!==)\s*['"]closureAdjusted['"]|['"]closureAdjusted['"]\s*(===|!==)|\bcase\s+['"]closureAdjusted['"]\s*:/g;
+  /(===|!==)\s*(['"`])closureAdjusted\2|(['"`])closureAdjusted\3\s*(===|!==)|\bcase\s+(['"`])closureAdjusted\5\s*:/g;
 const RAW_IS_MAP_READ_ONLY_RE = /\bisMapReadOnly\b/;
 const RAW_SELECT_SPELEO_READ_ONLY_RE = /\bselectSpeleoReadOnly\b/;
 

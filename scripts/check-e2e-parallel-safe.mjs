@@ -23,8 +23,8 @@
 // across lines), so a pattern named in prose does not fire while one inside a
 // string does. Known accepted gaps: it doesn't inspect `page.screenshot({path})`
 // (framework I/O, used with unique filenames) or `process.env`/module-global
-// mutation, and a regex literal holding a quote can confuse the comment scanner
-// for the rest of that one line (it can only cause a false positive).
+// mutation. Regex literals are recognised, so a `/*` or a quote inside one
+// neither opens a comment nor hides code (scripts/lib/js-comments.mjs).
 //
 // Usage:  node scripts/check-e2e-parallel-safe.mjs   (or: pnpm lint:e2e-parallel)
 
@@ -73,8 +73,12 @@ export const RULES = [
     // write does (#576 E7). The ambiguous short async names (rm, cp, rename,
     // truncate) only count as a member call (`fs.rm(`, `fsp.rename(`), so a UI
     // helper called `rename(` does not fire. mkdtemp is not here: its path is
-    // unique by construction.
-    re: /\b(?:writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream|copyFileSync|copyFile|cpSync|renameSync|mkdirSync|mkdir|unlinkSync|unlink|rmSync|rmdirSync|rmdir|symlinkSync|symlink|truncateSync)\s*\(|\.(?:rm|cp|rename|truncate)\s*\(/,
+    // unique by construction. Opening a file for writing (openSync + writeSync),
+    // a hard link and a mode change are the same shared-disk mutation
+    // (#576 RV3-FE-12); `open` / `link` / `chmod` are common method names
+    // (`window.open(`, a menu's `open(`), so their async forms count only on an
+    // fs-looking receiver (`fs.`, `fsp.`, `fsPromises.`, `promises.`).
+    re: /\b(?:writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream|copyFileSync|copyFile|cpSync|renameSync|mkdirSync|mkdir|unlinkSync|unlink|rmSync|rmdirSync|rmdir|symlinkSync|symlink|truncateSync|openSync|writeSync|writevSync|linkSync|chmodSync|ftruncateSync)\s*\(|\.(?:rm|cp|rename|truncate)\s*\(|\b(?:fs|fsp|fsPromises|promises)\.(?:open|link|chmod)\s*\(/,
     why: 'writes, creates or deletes on disk - use a per-(test,worker)-unique path only (see fixtures/coverage.ts), else concurrent workers clobber each other.',
   },
   {

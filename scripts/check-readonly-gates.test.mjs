@@ -100,6 +100,20 @@ test('rule B ignores a mention inside a block comment, and still sees code after
   assert.ok(usesIsMapReadOnly('/* note */ useUIStore(isMapReadOnly);'));
 });
 
+test('a template-literal comparison counts like a quoted one, in every form (#576 RV3-FE-12)', () => {
+  assert.equal(countClosureAdjustedComparisons('if (geometryMode === `closureAdjusted`) return;'), 1);
+  assert.equal(countClosureAdjustedComparisons('if (`closureAdjusted` !== geometryMode) return;'), 1);
+  assert.equal(countClosureAdjustedComparisons('switch (m) { case `closureAdjusted`: return; }'), 1);
+  assert.equal(countClosureAdjustedComparisons("const a = m === `closureAdjusted` || m === 'closureAdjusted';"), 2);
+  // Mismatched delimiters are not a comparison against the literal.
+  assert.equal(countClosureAdjustedComparisons("const s = m === `closureAdjusted';"), 0);
+});
+
+test('a regex literal holding /* does not hide a later comparison (#576 RV3-FE-12)', () => {
+  const text = ['export const LEADING_SLASHES = /^\\/*/;', "export const hidden = geometryMode === 'closureAdjusted';", '/* end */'].join('\n');
+  assert.equal(countClosureAdjustedComparisons(text), 1);
+});
+
 test('a quoted /* does not hide a later real comparison', () => {
   const text = ["const glob = 'fixtures/*.dmp';", "if (m === 'closureAdjusted') a();"].join('\n');
   assert.equal(countClosureAdjustedComparisons(text), 1);

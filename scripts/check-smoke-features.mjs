@@ -17,7 +17,8 @@
 //   | Delete a project | `globalview-delete-project.spec.ts` | `confirming deletes` |
 //
 // A row passes when that spec has a NON-skipped test whose title contains both
-// `@smoke` and the canary fragment. Comments are stripped first, so a spec
+// `@smoke` and the canary fragment (skipped = declared skip/fixme, inside a
+// describe.skip/fixme group, or under a skip/fixme annotation; see testTitles). Comments are stripped first, so a spec
 // that merely mentions @smoke in prose (custom-renderer-health.spec.ts does)
 // does not count. Only the test title is read - the repo's convention is the
 // title suffix, not Playwright's `tag` option (docs/TESTING.md).
@@ -32,7 +33,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { stripComments } from './lib/js-comments.mjs';
+import { matchParen, stripComments } from './lib/js-comments.mjs';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const LIST_FILE = 'docs/TESTING.md';
@@ -69,14 +70,59 @@ export function parseFeatureList(md) {
 
 // Titles of the runnable (not skipped / fixme'd) tests in a spec's source.
 // Handles a title on the line after `test(` and all three quote styles.
+//
+// A test does not run - so it is no canary - when (#576 RV3-FE-12):
+//   - it is declared `test.skip('title', ...)` / `test.fixme('title', ...)`
+//     (TEST_CALL_RE never matches those);
+//   - it sits anywhere inside a `test.describe.skip(...)` /
+//     `test.describe.fixme(...)` group;
+//   - its body, an enclosing describe, or the file's top level calls the
+//     annotation form `test.skip()` / `test.skip(condition, reason)` (or the
+//     same for fixme). A condition is not evaluated: a canary must run on
+//     every project, so any skip annotation in its scope disqualifies it.
+// Scopes are the paren extents of the calls (scripts/lib/js-comments.mjs
+// matchParen), so nesting depth and line breaks do not matter.
 const TEST_CALL_RE = /\btest(?:\.(only|fail|slow))?\s*\(\s*(['"`])((?:\\.|(?!\2)[^\\])*)\2/g;
+const SKIPPED_GROUP_RE = /\b(?:test\.)?describe\.(?:skip|fixme)\s*\(/g;
+const GROUP_RE = /\b(?:test\.)?describe(?:\.(?:only|parallel|serial))?\s*\(/g;
+const ANNOTATION_RE = /\btest\.(?:skip|fixme)\s*\(\s*(?!['"`])/g;
+
+// [{start, end}] extents of every call `re` matches (its `(` is the match's
+// last character).
+function callExtents(code, re) {
+  const out = [];
+  let m;
+  re.lastIndex = 0;
+  while ((m = re.exec(code)) !== null) {
+    const open = code.lastIndexOf('(', m.index + m[0].length - 1);
+    out.push({ start: m.index, end: matchParen(code, open) });
+  }
+  return out;
+}
+
 export function testTitles(source) {
   const code = stripComments(source.split('\n')).join('\n');
-  const titles = [];
+  const tests = [];
   let m;
   TEST_CALL_RE.lastIndex = 0;
-  while ((m = TEST_CALL_RE.exec(code)) !== null) titles.push(m[3]);
-  return titles;
+  while ((m = TEST_CALL_RE.exec(code)) !== null) {
+    const open = code.indexOf('(', m.index);
+    tests.push({ title: m[3], start: m.index, end: matchParen(code, open) });
+  }
+  const skipped = callExtents(code, SKIPPED_GROUP_RE);
+  // An annotation skips its innermost enclosing test or describe, else the file.
+  const scopes = [...tests, ...callExtents(code, GROUP_RE)];
+  ANNOTATION_RE.lastIndex = 0;
+  while ((m = ANNOTATION_RE.exec(code)) !== null) {
+    const at = m.index;
+    const inner = scopes
+      .filter((s) => s.start < at && at < s.end)
+      .reduce((best, s) => (best === null || s.start > best.start ? s : best), null);
+    skipped.push(inner ?? { start: 0, end: code.length });
+  }
+  return tests
+    .filter((t) => !skipped.some((s) => s.start <= t.start && t.start < s.end))
+    .map((t) => t.title);
 }
 
 // `read(rel)` returns file text or throws. Returns {problems, covered}.

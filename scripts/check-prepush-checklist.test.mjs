@@ -13,7 +13,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   checkDrift, extractSteps, splitCommands, normalize, scriptIndex, parseChecklist, REPO_ROOT,
-  PLUMBING_STEPS, SHELL_GATE_STEPS,
+  PLUMBING_STEPS, SHELL_GATE_STEPS, isShellGlue,
 } from './check-prepush-checklist.mjs';
 
 let passed = 0;
@@ -175,6 +175,39 @@ test('a PLUMBING_STEPS row clears it; a SHELL_GATE_STEPS row demands its checkli
   const shell = { shellGateSteps: [{ workflow: WF, step: 'Bindings clean', checklist: 'git status --porcelain bindings', why: 'x' }] };
   assert.match(run({ [WF]: workflow(SHELL_STEP), 'CLAUDE.md': checklist(['pnpm tsc --noEmit']) }, shell).problems[0], /git status --porcelain bindings/);
   assert.deepEqual(run({ [WF]: workflow(SHELL_STEP), 'CLAUDE.md': checklist(['git status --porcelain bindings']) }, shell).problems, []);
+});
+
+// #576 RV3-FE-12: a recognised command used to vouch for the whole step.
+test('a MIXED step (recognised command + one the gate cannot compare) fails unless classified', () => {
+  const cases = {
+    'plumbing + python gate': '      - name: Lint\n        run: pnpm install && python3 scripts/gate.py',
+    'node gate + bash gate': '      - name: Lint\n        run: node scripts/check-foo.mjs && bash scripts/new-gate.sh',
+    'gate behind if': '      - name: Lint\n        run: |\n          pnpm lint:foo\n          if ! make lint; then\n            exit 1\n          fi',
+  };
+  for (const [name, step] of Object.entries(cases)) {
+    const r = run({ [WF]: workflow(step), 'CLAUDE.md': checklist(['pnpm lint:foo']) });
+    assert.equal(r.problems.length, 1, `${name}: ${JSON.stringify(r.problems)}`);
+    assert.match(r.problems[0], /step "Lint" also runs ".*", which this gate cannot compare/, name);
+    const plumbing = { plumbingSteps: [{ workflow: WF, step: 'Lint', why: 'x' }] };
+    assert.deepEqual(run({ [WF]: workflow(step), 'CLAUDE.md': checklist(['pnpm lint:foo']) }, plumbing).problems, [], name);
+  }
+});
+
+test('shell glue next to a gate (loops, tests, echo, exit, assignments) is not a mixed step', () => {
+  const step = [
+    '      - name: Fmt',
+    '        run: |',
+    '          f="report.json"',
+    '          for m in crates/*/Cargo.toml; do',
+    '            [ -e "$m" ] || continue',
+    '            cargo fmt --manifest-path "$m" --check',
+    '          done',
+    '          if [ ! -f "$f" ]; then echo "none" >> "$GITHUB_STEP_SUMMARY"; exit 0; fi',
+  ].join('\n');
+  const r = run({ [WF]: workflow(step), 'CLAUDE.md': checklist(['cargo fmt --manifest-path "$m" --check']) });
+  assert.deepEqual(r.problems, []);
+  for (const glue of ['f=1', 'then', 'done', 'if [ -f x ]', 'echo hi', 'exit 1', 'export A=1']) assert.ok(isShellGlue(glue), glue);
+  for (const tool of ['python3 x.py', 'if ! make lint', 'bash scripts/x.sh', 'A=1 ruby x.rb']) assert.ok(!isShellGlue(tool), tool);
 });
 
 test('a classification row whose step no longer exists is reported stale', () => {

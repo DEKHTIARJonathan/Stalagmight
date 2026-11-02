@@ -64,6 +64,40 @@ test('a skipped or fixme canary does not count', () => {
   assert.deepEqual(only.problems, []);
 });
 
+// #576 RV3-FE-12: each of these used to pass the gate with a canary that never runs.
+test('a canary inside a describe.skip / describe.fixme group does not count, at any depth', () => {
+  for (const kind of ['skip', 'fixme']) {
+    const spec = `test.describe.${kind}('Group', () => {\n  test.describe('inner', () => {\n    test('confirming deletes @smoke', async () => {});\n  });\n});`;
+    assert.equal(run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': spec }).problems.length, 1, kind);
+  }
+});
+
+test('a skip/fixme annotation in the canary body, its describe, or the file top level disqualifies it', () => {
+  const cases = {
+    body: "test('confirming deletes @smoke', async () => {\n  test.skip(true, 'broken');\n});",
+    bodyNoArgs: "test('confirming deletes @smoke', async () => {\n  test.fixme();\n});",
+    describe: "test.describe('Group', () => {\n  test.skip(({ browserName }) => browserName === 'chromium', 'no');\n  test('confirming deletes @smoke', async () => {});\n});",
+    file: "test.skip(({ browserName }) => browserName === 'chromium', 'no');\ntest('confirming deletes @smoke', async () => {});",
+  };
+  for (const [name, spec] of Object.entries(cases)) {
+    assert.equal(run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': spec }).problems.length, 1, name);
+  }
+});
+
+test('a skip outside the canary scope (a sibling test, another group, a skipped group that closed) does not', () => {
+  const spec = [
+    "test('other', async () => { test.skip(true, 'x'); });",
+    "test.describe('A', () => { test.skip(); test('a', async () => {}); });",
+    "test.describe.skip('B', () => { test('b @smoke', async () => {}); });",
+    "test.describe('C', () => {",
+    "  test('confirming deletes @smoke', async () => { await expect(x).toHaveText(/\\(/); });",
+    '});',
+  ].join('\n');
+  const r = run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': spec });
+  assert.deepEqual(r.problems, []);
+  assert.deepEqual(testTitles(spec), ['confirming deletes @smoke']);
+});
+
 test('an @smoke mention in a comment is not a tag (the custom-renderer-health trap)', () => {
   const spec = ['/**', ' * Kept @smoke so a regression trips the merge gate - confirming deletes.', ' */', "test('confirming deletes', async () => {});"].join('\n');
   assert.equal(run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': spec }).problems.length, 1);

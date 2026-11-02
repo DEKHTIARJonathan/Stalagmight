@@ -20,8 +20,13 @@
 //   - ALIASES covers the one command CI and a local shell spell differently.
 // A step that runs no recognised gate command (apt installs, cache stats, a
 // pure-shell check) must be classified in PLUMBING_STEPS or SHELL_GATE_STEPS,
-// so a NEW shell-only gate cannot slip past by not looking like one. Rows in
-// either table that match no step are themselves a failure (stale allowlist).
+// so a NEW shell-only gate cannot slip past by not looking like one. The same
+// holds for a MIXED step (#576 RV3-FE-12): one that runs a recognised command
+// (even plumbing like `pnpm install`) next to a command this gate cannot
+// compare (`python3 scripts/x.py`, `bash scripts/x.sh`, `make lint`) fails
+// unless the step is classified; plain shell glue (SHELL_GLUE: `if`, `echo`,
+// `exit`, assignments, ...) is not a command to compare. Rows in either table
+// that match no step are themselves a failure (stale allowlist).
 // The reverse direction is checked for names only: a `pnpm <script>` in the
 // checklist that package.json does not define (a renamed script) fails too.
 //
@@ -98,6 +103,23 @@ export const ALIASES = [
 const GATE_TOOLS = new Set(['pnpm', 'node', 'npx', 'cargo', 'git']);
 // Value-taking cargo flags, so `--manifest-path X` compares as one unit.
 const CARGO_VALUE_FLAGS = new Set(['--manifest-path', '--features', '-p', '--package', '--target-dir', '--bin', '--example', '--test', '-F']);
+// Shell glue in a gate step: control flow and builtins that run no tool of
+// their own. Words that prefix a command (`if`, `!`, `then`, ...) are dropped
+// first, so `if python3 x.py; then` is judged by `python3`.
+const SHELL_PREFIX_WORDS = new Set(['if', 'elif', 'while', 'until', '!', 'then', 'do', 'else', 'time']);
+export const SHELL_GLUE = new Set([
+  'for', 'done', 'fi', 'case', 'esac', 'in', '[', '[[', 'test', 'continue', 'break', 'exit', 'return',
+  'echo', 'printf', 'true', 'false', ':', 'set', 'export', 'shift', 'local',
+]);
+
+// Is `cmd` shell glue (nothing a gate could hide in)? Assignments and the
+// prefix words are skipped; an empty remainder is a pure assignment.
+export function isShellGlue(cmd) {
+  const tokens = tokenize(cmd);
+  while (tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0]) || SHELL_PREFIX_WORDS.has(tokens[0]))) tokens.shift();
+  return tokens.length === 0 || SHELL_GLUE.has(tokens[0]);
+}
+
 // pnpm first words that are not package.json scripts (built-ins and the one
 // binary the checklist calls through pnpm).
 const PNPM_NON_SCRIPTS = new Set(['exec', 'install', 'run', 'dlx', 'tsc']);
@@ -371,14 +393,19 @@ export function checkDrift(read, opts = {}) {
         }
         continue;
       }
-      const cmds = splitCommands(step.run)
-        .map((raw) => ({ raw, key: normalize(raw, byCommand) }))
-        .filter((c) => c.key !== null);
+      const all = splitCommands(step.run).map((raw) => ({ raw, key: normalize(raw, byCommand) }));
+      const cmds = all.filter((c) => c.key !== null);
+      const plumbing = plumbingSteps.find((s) => s.workflow === wf && s.step === step.name);
+      if (plumbing) usedPlumbing.add(plumbing);
       if (cmds.length === 0) {
-        const plumbing = plumbingSteps.find((s) => s.workflow === wf && s.step === step.name);
-        if (plumbing) usedPlumbing.add(plumbing);
-        else problems.push(`${where} runs no recognised gate command - classify it in PLUMBING_STEPS or SHELL_GATE_STEPS (scripts/check-prepush-checklist.mjs)`);
+        if (!plumbing) problems.push(`${where} runs no recognised gate command - classify it in PLUMBING_STEPS or SHELL_GATE_STEPS (scripts/check-prepush-checklist.mjs)`);
         continue;
+      }
+      if (!plumbing) {
+        for (const c of all) {
+          if (c.key !== null || isShellGlue(c.raw)) continue;
+          problems.push(`${where} also runs "${c.raw}", which this gate cannot compare with the checklist - make it a recognised gate command or classify the step in SHELL_GATE_STEPS / PLUMBING_STEPS (scripts/check-prepush-checklist.mjs)`);
+        }
       }
       for (const c of cmds) {
         if (PLUMBING_COMMANDS.some((p) => p.re.test(c.key) || p.re.test(c.raw))) continue;

@@ -60,6 +60,44 @@ test('in-page timers and the test budget are out of scope', () => {
   assert.deepEqual(bad('test.setTimeout(60000);'), []);
 });
 
+// #576 RV3-FE-12: each of these is a sleep the gate used to miss.
+test('an aliased, bracketed, destructured or split waitForTimeout counts', () => {
+  assert.deepEqual(bad('const nap = page.waitForTimeout.bind(page);\nawait nap(500);'), [1]);
+  assert.deepEqual(bad("await page['waitForTimeout'](500);"), [1]);
+  assert.deepEqual(bad('const { waitForTimeout } = page;'), [1]);
+  assert.deepEqual(bad('await page\n  .waitForTimeout\n  (500);'), [2]);
+});
+
+test('a test-runner setTimeout or a timers/promises import counts; a settle annotation still clears it', () => {
+  assert.deepEqual(bad('await new Promise((r) => setTimeout(r, 500));'), [1]);
+  assert.deepEqual(bad('await new Promise((r) =>\n  globalThis.setTimeout(r, 500));'), [2]);
+  assert.deepEqual(bad("import { setTimeout as sleep } from 'node:timers/promises';\nawait sleep(500);"), [1]);
+  assert.deepEqual(bad("const { setTimeout: nap } = require('timers/promises');"), [1]);
+  assert.deepEqual(bad('// settle: proves the debounce never fires early\nawait new Promise((r) => setTimeout(r, 500));'), []);
+});
+
+test('a setTimeout the browser runs (evaluate, addInitScript, waitForFunction) or in the mock is not a sleep', () => {
+  const inPage = [
+    'await page.evaluate(async () => {',
+    "  const q = document.querySelector('x)');",
+    '  await new Promise((r) => setTimeout(r, 100));',
+    '});',
+    'await page.addInitScript(() => { setTimeout(() => {}, 5); });',
+    'await page.waitForFunction(() => new Promise((r) => setTimeout(() => r(true), 5)));',
+    'testInfo.setTimeout(30000);',
+  ].join('\n');
+  assert.deepEqual(bad(inPage), []);
+  // The same timer after the evaluate call has closed is the runner's again.
+  assert.deepEqual(bad('await page.evaluate(() => 1);\nawait new Promise((r) => setTimeout(r, 5));'), [2]);
+  const mock = 'export function install() { setTimeout(() => {}, 500); }';
+  assert.deepEqual(scan(['e2e-playwright/mocks/ipc/x.ts'], () => mock).violations, []);
+  assert.deepEqual(scan(['e2e-playwright/helpers/x.ts'], () => mock).violations.map((v) => v.lineNo), [1]);
+});
+
+test('a regex literal holding /* does not hide a later sleep (shared stripper)', () => {
+  assert.deepEqual(bad('const LEAD = /^\\/*/;\nawait page.waitForTimeout(5);\n/* end */'), [2]);
+});
+
 test('scan counts annotated settles separately from violations', () => {
   const r = scan(['a.ts', 'b.ts'], (rel) => (rel === 'a.ts' ? '// settle: proves nothing moved here\nawait page.waitForTimeout(1);' : 'await page.waitForTimeout(1);'));
   assert.equal(r.settles, 1);

@@ -49,6 +49,19 @@ test('disk-write now also fires on create / delete / link calls (#576 E7)', () =
   }
 });
 
+test('disk-write fires on open-for-write, write, hard-link and chmod calls (#576 RV3-FE-12)', () => {
+  for (const call of ["const fd = fs.openSync(p, 'w')", 'fs.writeSync(fd, buf)', 'fs.linkSync(a, b)', 'await fsp.link(a, b)',
+    "await fs.promises.open(p, 'w')", 'fs.chmodSync(p, 0o644)', 'await fsp.chmod(p, 0o644)']) {
+    assert.deepEqual(ids(call), ['disk-write'], call);
+  }
+});
+
+test('the async open / link / chmod names need an fs receiver: window.open and a menu helper do not fire', () => {
+  assert.deepEqual(ids("await page.evaluate(() => window.open('about:blank'));"), []);
+  assert.deepEqual(ids('await menu.open();'), []);
+  assert.deepEqual(ids("await link(page, 'Station A1');"), []);
+});
+
 test('disk-write does NOT fire on a mock label, a UI helper named rename, or mkdtemp', () => {
   assert.deepEqual(ids("handlers['plugin:fs|writeFile'] = () => null;"), []);
   assert.deepEqual(ids("await rename(page, 'Section B');"), []);
@@ -83,6 +96,14 @@ test('block comments are stripped across lines; a pattern in prose does not fire
   const text = ['/* never do this:', "  fs.writeFileSync('/tmp/x', 'y');", '  test.describe.serial() */', "fs.rmSync('/tmp/d');"].join('\n');
   const v = scan([SPEC], () => text);
   assert.deepEqual(v.map((x) => [x.ruleId, x.lineNo]), [['disk-write', 4]]);
+});
+
+test('REGRESSION (#576 RV3-FE-12): a /* inside a regex literal opens no block comment', () => {
+  const text = ['const LEADING = /^\\/*/;', "fs.writeFileSync('/tmp/fixed-path.txt', 'x');", '/* end */'].join('\n');
+  assert.deepEqual(scan([SPEC], () => text).map((x) => [x.ruleId, x.lineNo]), [['disk-write', 2]]);
+  // Division and a regex after `=>` / `(` / `return` are told apart.
+  const kept = stripComments(['const half = a / 2 / b; // note', 'xs.filter((s) => /\\/*x/.test(s));', 'return /"/.test(q); // q']);
+  assert.deepEqual(kept, ['const half = a / 2 / b; ', 'xs.filter((s) => /\\/*x/.test(s));', 'return /"/.test(q); ']);
 });
 
 test('a multi-line template literal keeps a // inside it', () => {
