@@ -290,18 +290,8 @@ import * as os from 'os';
 import * as path from 'path';
 import type { Scenario, ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
-import {
-  RELOAD_RESOLVED_GEOMETRY,
-  SAVE_HEALING_MUTATIONS,
-  classifyDiffs,
-  describeDiffs,
-  describeShotSetDelta,
-  diffSnapshots,
-  maxNumericDelta,
-  shotSetDelta,
-  type KnownAsymmetry,
-  type SnapshotDiff,
-} from '../lib/projectSnapshot';
+import { RELOAD_RESOLVED_GEOMETRY, SAVE_HEALING_MUTATIONS } from '../lib/projectSnapshot';
+import { checkSnapshot } from '../lib/fuzzSnapshotCheck';
 import type { TargetingDigest } from '../lib/fuzzOracleCore';
 import {
   COVERAGE_STEPS,
@@ -398,115 +388,6 @@ function replayTracePath(): string {
 
 function traceOutPath(): string {
   return process.env.STALAGMIGHT_FUZZ_TRACE ?? '';
-}
-
-interface SnapshotCheck {
-  equal: boolean;
-  floatNoise: boolean;
-  attributed: KnownAsymmetry[];
-  text: string;
-}
-
-const EQUAL: SnapshotCheck = {
-  equal: true,
-  floatNoise: false,
-  attributed: [],
-  text: '',
-};
-
-/**
- * The SLOW path, reached only after the page reported a mismatch: re-compare with
- * numeric tolerance, subtract the documented save/reload families when the
- * comparison crosses an epoch, and render whatever is left as a failure.
- *
- * No `known` list and no bug-8 gate any more. This function used to take both,
- * because bug 1, bug 8 and findings 11/12/13 all fired here by construction;
- * they are fixed, their classifiers are deleted, and a mismatch the epoch
- * attribution does not explain now ends the run.
- */
-function checkSnapshot(
-  expected: string,
-  actual: string,
-  attributable: readonly KnownAsymmetry[],
-): SnapshotCheck {
-  if (expected === actual) return EQUAL;
-  // ONE MORE than we report: `truncated` is what tells "exactly DIFF_LIMIT
-  // differences" from "at least that many, and the rest were never looked at".
-  // The walk visits root keys in sorted order, so a wide `project.*` difference
-  // can spend the whole budget before `stations` or `stats` is examined once -
-  // and the ATTRIBUTED resync below reads "nothing unexplained is left" off this
-  // list.
-  const all = diffSnapshots(expected, actual, DIFF_LIMIT + 1);
-  if (all.length === 0) return { ...EQUAL, floatNoise: true };
-  const truncated = all.length > DIFF_LIMIT;
-  if (truncated) all.length = DIFF_LIMIT;
-
-  let diffs = all;
-  let attributed: KnownAsymmetry[] = [];
-  let absorbed: SnapshotDiff[] = [];
-  if (attributable.length > 0) {
-    const split = classifyDiffs(all, attributable);
-    if (split.known.length > 0) {
-      diffs = split.unknown;
-      attributed = split.asymmetries;
-      absorbed = split.known.map((hit) => hit.diff);
-    }
-  }
-  if (diffs.length === 0) {
-    // The ATTRIBUTED shape is what the caller RESYNCS on, so it may only be
-    // returned for a complete list. Every path we saw was attributable, but on
-    // a truncated diff the ones past the cap were never looked at.
-    if (truncated) {
-      return {
-        equal: false,
-        floatNoise: false,
-        attributed,
-        text:
-          `  every path in the first ${DIFF_LIMIT} was a documented save/reload change, but the\n` +
-          '  diff was CAPPED there - so this is a statement about a PREFIX, not about the mismatch.',
-      };
-    }
-    // The absorbed MAGNITUDE goes on the record. The re-derived-geometry
-    // families are bounded by shape, not by size (see RELOAD_RESOLVED_GEOMETRY),
-    // which is only defensible while the number is visible.
-    const worst = maxNumericDelta(absorbed);
-    return {
-      equal: false,
-      floatNoise: false,
-      attributed,
-      text: attributed
-        .map((entry) => `  ATTRIBUTED [${entry.id}]: ${entry.description}`)
-        .concat(worst === null ? [] : [`  largest absorbed numeric change: ${worst.toExponential(3)}`])
-        .join('\n'),
-    };
-  }
-
-  const lines = [describeDiffs(diffs.slice(0, SHOWN_DIFFS))];
-  if (diffs.length > SHOWN_DIFFS) lines.push(`  ...and ${diffs.length - SHOWN_DIFFS} more differing path(s)`);
-  if (truncated) {
-    lines.push(
-      `  THE DIFF WAS CAPPED at ${DIFF_LIMIT} path(s): everything above is a PREFIX and nothing`,
-      '  past it was examined, so no classifier can speak for this mismatch and none is allowed to.',
-    );
-  }
-
-  // Shot identity by uuid, which survives the renumbering, is the only thing
-  // that can tell "the same shots moved" from "a different shot was deleted".
-  const deltas = shotSetDelta(expected, actual);
-  if (deltas.length > 0) {
-    lines.push('  SHOT IDENTITY DELTA (by uuid, which survives save/reload):');
-    lines.push(describeShotSetDelta(deltas));
-  }
-  for (const entry of attributed) {
-    lines.push(`  (plus attributable change(s) [${entry.id}], subtracted before this diff)`);
-  }
-
-  return {
-    equal: false,
-    floatNoise: false,
-    attributed,
-    text: lines.join('\n'),
-  };
 }
 
 /** `get_undo_stack` / `get_redo_stack` rows, as the frontend sees them. */
@@ -842,7 +723,10 @@ async function runIteration(
           ...(reloadsDone > 0 ? RELOAD_RESOLVED_GEOMETRY : []),
         ]
       : [];
-    const check = checkSnapshot(pair.expected ?? '', pair.actual ?? '', attributable);
+    const check = checkSnapshot(pair.expected ?? '', pair.actual ?? '', attributable, {
+      diffLimit: DIFF_LIMIT,
+      shownDiffs: SHOWN_DIFFS,
+    });
     if (check.equal) {
       if (check.floatNoise) ctx.metric('floatNoise');
       return false;
