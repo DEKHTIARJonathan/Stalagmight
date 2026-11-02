@@ -16,7 +16,9 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { defaultConfig, type Config } from '../../types/config';
 import { isValidationConfigValid } from '../../utils/validation';
 import { TOAST_KEYS } from '../../utils/toastKeys';
-import { useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { useEditBlockedReason, useEditingBlocked } from '../../hooks/useEditingBlocked';
+import { isEditDisabledError } from '../../utils/editErrors';
+import type { CommandResult } from '../../types/commands';
 import { convertLength, convertLengthToMeters, clampPrecision } from '../../utils/formatStats';
 
 // A compiler-checked subset of SettingsCategory, so these tabs can never drift
@@ -49,10 +51,16 @@ export function ProjectSettingsDialog() {
       setSurfaceElevation: s.setSurfaceElevation,
     })),
   );
-  // read-only mode has no server backstop (see useEditingBlocked's docs/app-modes.md
-  // guard-parity rule): the backend also rejects via guard_mutation, but the field
-  // must disable itself too.
+  // The elevation field disables itself in every read-only mode (docs/app-modes.md
+  // guard-parity rule): the backend also rejects it via guard_mutation, but the UI
+  // gate comes first.
   const editingBlocked = useEditingBlocked();
+  // [#576 RV3-FE-14] The name and the thresholds stay editable in the read-only
+  // workspaces (they are on the backend's allowlist), but not on a project whose
+  // metadata the backend refuses to change at all: a file a newer version saved, or a
+  // SpeleoDB project open without the lock (`guard_metadata_mutation`).
+  const blockedReason = useEditBlockedReason();
+  const metadataBlocked = blockedReason === 'newerFile' || blockedReason === 'lock';
   const panelIdBase = useId();
 
   const [tab, setTab] = useState<ProjectSettingsTab>('general');
@@ -138,6 +146,18 @@ export function ProjectSettingsDialog() {
     elevationValid &&
     !saving;
 
+  // A refused write keeps the dialog open; say why - unless the refusal already said so
+  // itself: a move carry (GHOST-2) and a read-only refusal (EDIT_DISABLED, which the
+  // store's edit path shows as the friendly read-only notice, #576 NF-W2RO-1) do.
+  const reportSaveFailure = useCallback(
+    (result: CommandResult) => {
+      setSaving(false);
+      if (isMoveCarryRefusal(result) || isEditDisabledError(result.error)) return;
+      showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
+    },
+    [showToast, t]
+  );
+
   const handleSave = useCallback(async () => {
     if (
       !project ||
@@ -156,18 +176,18 @@ export function ProjectSettingsDialog() {
     //
     // [#576 B15 follow-up] ...except while the stored thresholds could not be read:
     // then saving this dialog IS the user setting them (the ones shown are the
-    // defaults standing in), which is what lets a project save write them again.
+    // defaults standing in), which is what lets a project save write them again -
+    // not where the backend refuses any metadata change (RV3-FE-14): there an
+    // untouched Save would only earn a refusal, so it sends nothing and closes.
     const currentValidation = project.validation ?? defaultConfig.validation;
-    const validationUnread = isSettingUnreadable('validation');
+    const validationUnread = isSettingUnreadable('validation') && !metadataBlocked;
     const settingsChanged =
       trimmedName !== (project.name ?? '') ||
       JSON.stringify(validation) !== JSON.stringify(currentValidation);
     if (settingsChanged || validationUnread) {
       const result = await updateProjectSettings(trimmedName, validation);
       if (!result.success) {
-        setSaving(false);
-        // A move-carry refusal (GHOST-2) is already its own notice: no second toast.
-        if (!isMoveCarryRefusal(result)) showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
+        reportSaveFailure(result);
         return;
       }
       liftUnreadableSetting('validation');
@@ -198,9 +218,7 @@ export function ProjectSettingsDialog() {
         elevationParsed === null ? null : convertLengthToMeters(elevationParsed, elevationUnit);
       const result = await setSurfaceElevation(elevationMeters);
       if (!result.success) {
-        setSaving(false);
-        // A move-carry refusal (GHOST-2) is already its own notice: no second toast.
-        if (!isMoveCarryRefusal(result)) showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), TOAST_KEYS.PROJECT_SETTINGS, 'error');
+        reportSaveFailure(result);
         return;
       }
       liftUnreadableSetting('surface_elevation');
@@ -219,10 +237,10 @@ export function ProjectSettingsDialog() {
     setSurfaceElevation,
     validation,
     closeDialog,
-    showToast,
-    t,
+    reportSaveFailure,
     project,
     editingBlocked,
+    metadataBlocked,
   ]);
 
   return (

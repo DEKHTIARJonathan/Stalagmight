@@ -140,7 +140,7 @@ describe('ProjectSettingsDialog entrance elevation (#465)', () => {
     expect(setSurfaceElevation).not.toHaveBeenCalled();
   });
 
-  it('a changed draft is attempted even when editingBlocked flips true before Save; on EDIT_DISABLED it keeps the dialog open, shows the error, and keeps the staged draft', async () => {
+  it('a changed draft is attempted even when editingBlocked flips true before Save; on EDIT_DISABLED it keeps the dialog open and the staged draft, and leaves the notice to the edit path', async () => {
     setSurfaceElevation = vi.fn(
       async (): Promise<CommandResult> =>
         ({ success: false, error: 'EDIT_DISABLED: Set entrance elevation is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.' }) as CommandResult,
@@ -158,7 +158,10 @@ describe('ProjectSettingsDialog entrance elevation (#465)', () => {
 
     expect(setSurfaceElevation).toHaveBeenCalledWith(42.5);
     expect(closeDialog).not.toHaveBeenCalled();
-    expect(showToast).toHaveBeenCalledWith(expect.stringContaining('EDIT_DISABLED'), expect.anything(), 'error');
+    // #576 NF-W2RO-1: the store's edit path shows the friendly read-only notice for an
+    // EDIT_DISABLED refusal (ProjectSettingsDialog.refusal.test.tsx); the dialog no
+    // longer adds the raw coded string on top.
+    expect(showToast).not.toHaveBeenCalled();
     expect(screen.getByTestId('project-settings-elevation')).toHaveValue(42.5);
   });
 
