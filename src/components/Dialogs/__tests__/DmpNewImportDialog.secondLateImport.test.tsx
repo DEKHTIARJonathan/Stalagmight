@@ -18,6 +18,7 @@
  * All data is synthetic (dmpWizardHarness).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { failOnRefreshErrors } from '../../../test/refreshGuard';
 import { act, waitFor } from '@testing-library/react';
 
 // SectionPreview and the map panel pull maplibre-gl (WebGL) at module load,
@@ -44,7 +45,14 @@ vi.mock('../../../utils/telemetry', async (importOriginal) => ({
 
 const invokeIpcMock = vi.fn();
 vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: (...args: unknown[]) => invokeIpcMock(...args),
+  // [#576 NF-W6A-5] The refresh every edit/import ends with reads bytes; a test that
+  // gives none answers "no project open" rather than making the decoder throw.
+  invokeIpc: (...args: unknown[]) =>
+    args[0] === 'get_project_state_binary'
+      ? Promise.resolve(invokeIpcMock(...args)).then((answer: unknown) =>
+          answer instanceof ArrayBuffer || answer instanceof Uint8Array ? answer : new ArrayBuffer(0),
+        )
+      : invokeIpcMock(...args),
   getErrorMessage: (e: unknown, fallback?: string) =>
     e instanceof Error ? e.message : typeof e === 'string' ? e : (fallback ?? String(e)),
 }));
@@ -76,6 +84,9 @@ beforeEach(() => {
   useUIStore.setState({ activeDialog: null, dialogData: {}, placementMode: null });
   useProjectStore.setState({ project: null });
 });
+
+// [#576 NF-W6A-5] Every refresh this file drives must be answered by its mock.
+failOnRefreshErrors();
 
 describe('DMP wizard: a second late import (#576 NF-DMPS-2)', () => {
   it('does not send a section the first late import already landed', async () => {

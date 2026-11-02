@@ -12,6 +12,7 @@
  * what the reopened instance COMPLETES with.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { failOnRefreshErrors } from '../../../test/refreshGuard';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import type { DmpFile } from '../../../types/commands';
 import type { ImportReceipt } from '../../../types/ipc/ImportReceipt';
@@ -42,7 +43,14 @@ vi.mock('../../../utils/telemetry', async (importOriginal) => ({
 
 const invokeIpcMock = vi.fn();
 vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: (...args: unknown[]) => invokeIpcMock(...args),
+  // [#576 NF-W6A-5] The refresh every edit/import ends with reads bytes; a test that
+  // gives none answers "no project open" rather than making the decoder throw.
+  invokeIpc: (...args: unknown[]) =>
+    args[0] === 'get_project_state_binary'
+      ? Promise.resolve(invokeIpcMock(...args)).then((answer: unknown) =>
+          answer instanceof ArrayBuffer || answer instanceof Uint8Array ? answer : new ArrayBuffer(0),
+        )
+      : invokeIpcMock(...args),
   getErrorMessage: (e: unknown, fallback?: string) =>
     e instanceof Error ? e.message : typeof e === 'string' ? e : (fallback ?? String(e)),
 }));
@@ -166,6 +174,9 @@ const zeroDatumOnly = (): ZeroDatumConfigResult => ({
   },
   shots: convertToEditableShots(dmpFile.sections[0]!.shots, dmpFile.sections[0]!.version),
 });
+
+// [#576 NF-W6A-5] Every refresh this file drives must be answered by its mock.
+failOnRefreshErrors();
 
 describe('DMP wizard receipt carry across manual placement', () => {
   beforeEach(() => {
