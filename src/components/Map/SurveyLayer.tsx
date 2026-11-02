@@ -13,8 +13,6 @@ import { hasLiveStyle } from './mapUtils';
 import { mapCursorFor } from './mapCursor';
 import {
   normalizeDepthRange,
-  resolveShotDisplayColor,
-  resolveStationDisplayColor,
   type DepthRange,
   type DisplayColorContext,
   type GhostSectionData,
@@ -24,23 +22,22 @@ import {
   type VisibleKinds,
 } from './surveyLayer/geometryIndex';
 import {
-  type DragPreviewFeature,
   type DragPreviewSet,
-  type MovingEnd,
   type Projector,
 } from './surveyLayer/dragPreviewSource';
-import { DRAG_PREVIEW_SOURCE, type DragPreviewLayerCtx } from './surveyLayer/dragPreviewLayers';
+import type { DragPreviewLayerCtx } from './surveyLayer/dragPreviewLayers';
 import {
   shotOverlayFeature,
   stationOverlayFeature,
   type InteractOverlayDeps,
 } from './surveyLayer/interactOverlayFeatures';
 import { DragGhostController } from './surveyLayer/dragGhostController';
+import { DragPreviewController } from './surveyLayer/dragPreviewController';
 import type { GhostRenderData } from './surveyLayer/customRender/surveyGhostLayer';
 import { buildGhostRenderData } from './surveyLayer/dragGhostData';
 import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
 import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
-import { SurveyCustomController, buildCustomDimState, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
+import { SurveyCustomController, buildCustomDimState } from './surveyLayer/customRender/controller';
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
 import { MeasurePathController } from './surveyLayer/customRender/measurePathController';
 import type { MeasurePathRenderData } from './surveyLayer/customRender/surveyMeasurePathLayer';
@@ -55,8 +52,6 @@ import type { ProjectWarning } from '../../types/commands';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
 import type { DistanceFeatureState } from '../../utils/distanceGradient';
 import type { GasReachFeatureState } from '../../utils/gasReach';
-import { metersToMapCoords } from '../../utils/coordinates';
-import { getErrorColor } from '../../utils/colors';
 import { trackNav } from '../../utils/telemetry';
 import { FEATURE_ID_STRIDE, sectionIdFromKey } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
@@ -187,13 +182,9 @@ export default class SurveyLayer {
   private immovableStationFeatureIds: ReadonlySet<number> = new Set();
   private immovableShotFeatureIds: ReadonlySet<number> = new Set();
 
-  // Drag preview state - uses temporary layers with *-translate paint properties
-  // instead of rebuilding GeoJSON on every frame
-  private dragPreviewActive = false;
   // When MapCanvas last confirmed a placement (performance.now() ms); see
   // modalInteractionActive for why the store read alone cannot see it.
   private lastPlacementConfirmAt = -Infinity;
-  private dragSavedFilters = new Map<string, maplibregl.FilterSpecification | undefined>();
   // One-shot callback fired at end of update() - used to restore filters after
   // source data has been updated, in the same synchronous block (no paint gap).
   private onNextUpdateCallback: (() => void) | null = null;
@@ -229,23 +220,6 @@ export default class SurveyLayer {
   private detachGlContextWatch: (() => void) | null = null;
   /** Coalesced-call counter, surfaced to memory probe for instrumentation. */
   private coalescedUpdateCallsSinceLastFlush = 0;
-  // Unified drag-preview source (#mem drag fixes): ONE GeoJSON source holding
-  // every moving GEOMETRY feature for the active drag - stations (points), shots
-  // (lines), loop-closure indicator lines - rebuilt from captured originals each
-  // frame and pushed via a SINGLE setData. Real moved coordinates (not
-  // `*-translate`) so the tiler clips moved geometry - no background wedges at
-  // large offsets (BUG A); one setData so stations/shots can't skew apart (BUG B).
-  // Attached text is not previewed (it is hidden from the stock text layers).
-  // The moving ghost is owned by {@link DragGhostController}; DRAG_PREVIEW_SOURCE
-  // is imported only for setDragExclusionWhenPreviewReady's stock-preview load gate.
-  /** Captured moving geometry for the active drag (originals + movingEnd). */
-  private dragPreviewSet: DragPreviewSet | null = null;
-  /** rAF coalescer for the per-frame interact-overlay follow: MapCanvas may push
-   *  several offsets per frame (pointermove + the map-'move' re-apply), but the
-   *  overlay only needs the latest - one small setData per frame. (The GHOST is
-   *  driven synchronously by {@link DragGhostController}, decoupled from this rAF.) */
-  private dragUpdateRaf: number | null = null;
-  private pendingDragOffset: { dx: number; dy: number } | null = null;
   /** Drag ghost (#mem drag latency): owns the moving-geometry preview and drives
    *  it from a live screen-px offset. The CUSTOM path renders a WebGL layer whose
    *  drag delta is a single vertex-shader uniform (no worker, no re-bake, so no
@@ -253,33 +227,9 @@ export default class SurveyLayer {
    *  single-flight {@link GhostFollow} bake / `line-translate` machine. See
    *  {@link DragGhostController}. Constructed once, reused across drags. */
   private dragGhost!: DragGhostController;
-  /** Interact-overlay follow (#C): a hover/selected highlight on a moving
-   *  station/shot is re-emitted at the drag offset each frame so it tracks the
-   *  cursor. Stationary overlay features (snap ring, highlightedStationIds,
-   *  unrelated selections) keep their true coordinates. */
-  private dragMovingStationKeys = new Set<string>();
-  private dragMovingShots = new Map<string, MovingEnd>();
-  private dragOverlayOffset: { dx: number; dy: number } | null = null;
-  /** Set by commitDragPreview at placement: the follow-offset (dragOverlayOffset +
-   *  moving sets) is deliberately KEPT applied across the IPC + flush window so the
-   *  grabbed highlight stays on the cursor instead of snapping back to the OLD
-   *  coords. endApplyFeatures drops it atomically, right before the post-commit
-   *  overlay refresh reads the freshly installed geometry (no snap-back, and no
-   *  old+offset overshoot). */
-  private dragCommitPending = false;
-  /** Deferred custom-render drag-hide (START-flash fix). The moving originals are
-   *  hidden from the custom WebGL layer only once the drag-preview GeoJSON source
-   *  has parsed and drawn its first frame - the preview's setData is async (~5
-   *  frames on a real project) while setDragHide is a synchronous GPU upload, so
-   *  hiding eagerly leaves a window where the geometry is in NEITHER the custom
-   *  layer nor the (not-yet-parsed) preview: a blank flash. Stored so it can be
-   *  force-applied at commit and torn down on end; `dragGeneration` is bumped per
-   *  drag so a late sourcedata callback from a superseded drag is ignored. */
-  private dragGeneration = 0;
-  private pendingDragHide: {
-    exclusion: CustomRenderExclusion;
-    listener: (e: maplibregl.MapSourceDataEvent) => void;
-  } | null = null;
+  /** The drag-preview session (capture, exclusion, overlay follow, commit / end);
+   *  see surveyLayer/dragPreviewController.ts. */
+  private readonly drag: DragPreviewController;
   /** Hides the interact-overlay layers across a removal flush's async re-tile so a
    *  deleted feature's hover/selection highlight drops in the geometry frame
    *  instead of lingering on the stale GeoJSON tile. See interactOverlayHide.ts. */
@@ -404,6 +354,22 @@ export default class SurveyLayer {
       dpr: () => (typeof window !== 'undefined' && window.devicePixelRatio) || 1,
       scheduleRestore: (fn) =>
         typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : setTimeout(fn, 0),
+    });
+    this.drag = new DragPreviewController(map, this.dragGhost, this.overlays, {
+      geoIndex: () => this.geoIndex,
+      surveyData: () => this.cachedSurveyData,
+      sections: () => this.cachedSections,
+      loopClosures: () => this.cachedLoopClosures,
+      gpsOrigin: () => this.gpsOrigin,
+      displayColorContext: () => this.displayColorContext(),
+      themeColors: () => this.themeColors,
+      parseFeatureId: (id) => this.parseFeatureId(id),
+      customRender: () => this.customRender,
+      customLabels: () => this.customLabels,
+      refreshInteractOverlay: () => this.refreshInteractOverlay(),
+      invalidateInteractOverlay: () => {
+        this.lastInteractKey = null;
+      },
     });
     this.measurePath = new MeasurePathController(map, {
       onFatal: (reason) => this.handleRenderFatal(reason),
@@ -691,7 +657,7 @@ export default class SurveyLayer {
     this.hoverFrame = hoverFrame;
     this.boundMouseMove = (e: maplibregl.MapMouseEvent) => {
       if (isNonInteractiveTool(this.activeTool)) return;
-      if (this.dragPreviewActive) return; // Suppress hover during active drag
+      if (this.drag.dragPreviewActive) return; // Suppress hover during active drag
       hoverFrame.push(e);
     };
 
@@ -780,7 +746,7 @@ export default class SurveyLayer {
    */
   private modalInteractionActive(): boolean {
     return (
-      this.dragPreviewActive ||
+      this.drag.dragPreviewActive ||
       useUIStore.getState().placementMode !== null ||
       performance.now() - this.lastPlacementConfirmAt < SurveyLayer.PLACEMENT_CONFIRM_GRACE_MS
     );
@@ -1204,7 +1170,7 @@ export default class SurveyLayer {
     ].join('§');
     // During a drag the feature IDs are unchanged but their coordinates move, so
     // the id-based cache would wrongly short-circuit - bypass it while following.
-    if (this.dragOverlayOffset === null && key === this.lastInteractKey) return;
+    if (this.drag.dragOverlayOffset === null && key === this.lastInteractKey) return;
     this.lastInteractKey = key;
 
     const features: GeoJSON.Feature[] = [];
@@ -1214,9 +1180,9 @@ export default class SurveyLayer {
     // per-frame overlay copy for moving features; non-moving overlay state stays.
     const suppress = this.dragGhost.isCustom();
     const keepShot = (id: string | null): string | null =>
-      suppress && id && this.dragMovingShots.has(id) ? null : id;
+      suppress && id && this.drag.dragMovingShots.has(id) ? null : id;
     const keepStation = (id: string | null): string | null =>
-      suppress && id && this.dragMovingStationKeys.has(id) ? null : id;
+      suppress && id && this.drag.dragMovingStationKeys.has(id) ? null : id;
 
     // Shots: hover wins over selection on the same shot (matches the old
     // paint case order: hover width > selected width).
@@ -1303,9 +1269,9 @@ export default class SurveyLayer {
       distanceState: this.overlays.distanceState,
       gasReachMode: this.overlays.gasReachMode,
       gasReachState: this.overlays.gasReachState,
-      dragOverlayOffset: this.dragOverlayOffset,
-      dragMovingShots: this.dragMovingShots,
-      dragMovingStationKeys: this.dragMovingStationKeys,
+      dragOverlayOffset: this.drag.dragOverlayOffset,
+      dragMovingShots: this.drag.dragMovingShots,
+      dragMovingStationKeys: this.drag.dragMovingStationKeys,
       dragProjector: () => this.dragProjector(),
     };
   }
@@ -1571,7 +1537,7 @@ export default class SurveyLayer {
     // driven by the same pointer move that schedules that frame, so the ring
     // lands one frame later at most; outside a drag, refresh immediately as
     // before. (The moving ghost follows synchronously via its own translate.)
-    if (this.dragPreviewActive && !this.dragCommitPending) return;
+    if (this.drag.dragPreviewActive && !this.drag.dragCommitPending) return;
 
     // Snap ring renders from the interact overlay (#mem): pushing one small
     // feature is as instant as the old per-feature feature-state was.
@@ -2043,30 +2009,6 @@ export default class SurveyLayer {
     };
   }
 
-  /** Install the captured drag preview geometry (shots / stations / closures) as
-   *  the moving ghost, and hide the moving originals. Attached text is not
-   *  previewed - it is hidden from the stock text layers for the drag duration by
-   *  the begin methods. Shared by the segment and station/shot begins.
-   *
-   *  The ghost is a custom WebGL layer whose live drag delta is a single
-   *  vertex-shader uniform (no worker, no re-bake -> no overshoot). It draws
-   *  synchronously on the next frame, so the moving originals are hidden NOW (they
-   *  overlap the ghost at offset 0). If the custom ghost is not the active path
-   *  (bulk geometry stock, or the ghost layer failed / self-disabled), the STOCK
-   *  GeoJSON preview stands in and its async setData means the hide waits for the
-   *  first source load (START-flash fix). See {@link DragGhostController}. */
-  private installDragPreview(features: DragPreviewFeature[], exclusion: CustomRenderExclusion): void {
-    // New drag generation: invalidates any still-pending deferred drag-hide from
-    // a superseded drag (guards the sourcedata callback in
-    // setDragExclusionWhenPreviewReady).
-    this.dragGeneration += 1;
-    this.dragPreviewSet = { features };
-    this.dragPreviewActive = true;
-    if (this.dragGhost.begin(this.dragPreviewSet) === 'custom') this.setDragExclusion(exclusion);
-    else this.setDragExclusionWhenPreviewReady(exclusion);
-    this.renderOverlayFollow(0, 0);
-  }
-
   /** Build the custom-ghost render data (buffers + device-px sizes) for a captured
    *  set: colors resolved at capture time the same way the bulk geometry shows
    *  them (base / severity / depth from the feature's own `color`, or the
@@ -2088,8 +2030,8 @@ export default class SurveyLayer {
       selectedShotId: this.selectedShotId,
       hoveredStationId: this.hoveredStationId,
       selectedStationId: this.selectedStationId,
-      movingEndForShot: (id) => this.dragMovingShots.get(id),
-      isMovingStation: (id) => this.dragMovingStationKeys.has(id),
+      movingEndForShot: (id) => this.drag.dragMovingShots.get(id),
+      isMovingStation: (id) => this.drag.dragMovingStationKeys.has(id),
       parseFid: (id) => this.parseFeatureId(id),
       isAnchored: (id) => this.isSectionAnchored(sectionIdFromKey(id)),
       isShotImmovable: (fid) => this.isShotImmovable(fid),
@@ -2097,17 +2039,6 @@ export default class SurveyLayer {
       shotFeature: (id, w) => this.shotOverlayFeature(id, w),
       stationFeature: (id, s) => this.stationOverlayFeature(id, s),
     });
-  }
-
-  /** Re-emit any hover/selected highlight on a moving feature at the drag offset
-   *  so it tracks the cursor instead of sticking at the committed position (#C).
-   *  A small setData, coalesced one-per-frame by the rAF (see scheduleDragRender).
-   *  Kept separate from the ghost bake so the highlight stays as responsive as
-   *  before while the ghost bakes single-flight. */
-  private renderOverlayFollow(dx: number, dy: number): void {
-    if (!this.dragPreviewActive) return;
-    this.dragOverlayOffset = { dx, dy };
-    this.refreshInteractOverlay();
   }
 
   /** The map-backed projector used for the preview + overlay offset transforms. */
@@ -2118,444 +2049,15 @@ export default class SurveyLayer {
     };
   }
 
-  /** Stop the interact overlay following the drag and snap it back to committed
-   *  coordinates (called on commit / end). */
-  private clearDragOverlayFollow(): void {
-    this.dragOverlayOffset = null;
-    this.dragCommitPending = false;
-    this.dragMovingStationKeys.clear();
-    this.dragMovingShots.clear();
-    this.lastInteractKey = null;
-    this.refreshInteractOverlay();
-  }
-
-  /** The per-feature analytical-overlay props (dist / gas-reach) a moving feature
-   *  must carry so the preview's ramp paint matches the bulk layers. Keyed the
-   *  same way the interact overlay keys them ("sec:idx" / "sec:shotId"). */
-  private dragOverlayProps(idStr: string, kind: 'station' | 'shot'): Record<string, unknown> {
-    const props: Record<string, unknown> = {};
-    if (!this.overlays.distanceMode && !this.overlays.gasReachMode) return props;
-    const fid = this.parseFeatureId(idStr);
-    if (fid === null) return props;
-    const map = kind === 'station'
-      ? { dist: this.overlays.distanceState?.stations, gas: this.overlays.gasReachState?.stations }
-      : { dist: this.overlays.distanceState?.shots, gas: this.overlays.gasReachState?.shots };
-    if (this.overlays.distanceMode) props.dist = map.dist?.get(fid) ?? -1;
-    if (this.overlays.gasReachMode) props.gasReach = map.gas?.get(fid) ?? -1;
-    return props;
-  }
-
-  /**
-   * Begin SEGMENT drag preview - hide the connected sections' real features from
-   * the bulk layers (excluded by sectionId), capture every moving station / shot
-   * / label / closure ONCE with its original coordinates, and render the moving
-   * copy from the unified preview source. All geometry moves uniformly, so a
-   * later per-frame offset is applied to every captured vertex.
-   */
+  /** Begin the SEGMENT drag preview (see DragPreviewController.beginDragPreview). */
   beginDragPreview(connectedSectionIds: Set<number>): void {
-    if (this.dragPreviewActive) this.endDragPreview();
-    if (connectedSectionIds.size === 0) return;
-    if (!this.geoIndex || !this.cachedSurveyData) return;
-
-    const idsArray = [...connectedSectionIds];
-
-    // Hide closures with EITHER endpoint in the connected set. Closures with BOTH
-    // endpoints inside move uniformly (captured below); closures bridging a
-    // dragged and a stationary section are hidden during the drag and reappear
-    // with correct geometry on commit. (The survey geometry + labels are hidden in
-    // the custom layers via the drag exclusion in installDragPreview.)
-    const existingClosureFilter = this.map.getFilter(AUX_IDS.loopClosuresLayerId);
-    this.dragSavedFilters.set(AUX_IDS.loopClosuresLayerId, existingClosureFilter ?? undefined);
-    const eitherEndpointExclusion: maplibregl.FilterSpecification = ['!', ['any',
-      ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
-      ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
-    ]] as unknown as maplibregl.FilterSpecification;
-    this.map.setFilter(AUX_IDS.loopClosuresLayerId, (existingClosureFilter && typeof existingClosureFilter === 'object')
-      ? (['all', existingClosureFilter, eitherEndpointExclusion] as unknown as maplibregl.FilterSpecification)
-      : eitherEndpointExclusion);
-
-    // Capture the moving geometry once. Everything in the segment moves uniformly.
-    // Attached text (labels / comments / section names) is not captured - it is
-    // hidden from the stock layers above, not previewed.
-    const features: DragPreviewFeature[] = [];
-    const ctx = this.displayColorContext();
-    const stationDefault = this.themeColors.stationDefault;
-
-    // Read the moving geometry from the SoA (sectionGeometry), NOT from the lazy
-    // `Station[]` proxy or the lazy `section.shots` getter: filtering all ~89k
-    // stations per section (and a linear `shotGeometry` scan per shot) made this
-    // quadratic and froze a 14k-section project on drag start (#mem).
-    // Iterate cachedSections (not the Set) to keep the original emit order; reading
-    // `id`/`color` off a section does not trip its lazy `shots` getter.
-    for (const sectionMeta of this.cachedSections) {
-      const sectionId = sectionMeta.id;
-      if (!connectedSectionIds.has(sectionId)) continue;
-      const sectionColor = sectionMeta.color ?? stationDefault;
-      const { stations: sectionStations, shots: sectionShots } =
-        this.geoIndex.sectionGeometry(sectionId);
-
-      // Stations (points).
-      for (const st of sectionStations) {
-        const idStr = `${sectionId}:${st.stationIndex}`;
-        this.dragMovingStationKeys.add(idStr);
-        const color = resolveStationDisplayColor(
-          this.cachedSurveyData,
-          sectionColor,
-          st.globalIdx,
-          ctx,
-        );
-        features.push({
-          emit: 'point',
-          coords: [st.lngLat],
-          movingEnd: 'uniform',
-          properties: { kind: 'station', color, ...this.dragOverlayProps(idStr, 'station') },
-        });
-      }
-
-      // Shots (lines).
-      for (const shot of sectionShots) {
-        const shotKey = `${sectionId}:${shot.shotId}`;
-        const color = resolveShotDisplayColor(
-          this.cachedSurveyData,
-          sectionColor,
-          shot.globalIdx,
-          ctx,
-        );
-        this.dragMovingShots.set(shotKey, 'both');
-        features.push({
-          emit: 'line',
-          coords: [shot.from, shot.to],
-          movingEnd: 'uniform',
-          properties: { kind: 'shot', color, ...this.dragOverlayProps(shotKey, 'shot') },
-        });
-      }
-    }
-
-    // Loop closures with BOTH endpoints in the moving set (move uniformly).
-    for (const lc of this.cachedLoopClosures ?? []) {
-      if (!connectedSectionIds.has(lc.station_a.section_id) || !connectedSectionIds.has(lc.station_b.section_id)) continue;
-      const a = this.geoIndex.stationCoords(lc.station_a);
-      const b = this.geoIndex.stationCoords(lc.station_b);
-      if (!a || !b) continue;
-      features.push({
-        emit: 'line',
-        coords: [a, b],
-        movingEnd: 'uniform',
-        properties: { kind: 'closure', color: getErrorColor(lc.error_percentage) },
-      });
-    }
-
-    // Segment drag hides whole connected sections (shots + stations) in the
-    // custom layer, mirroring the sectionId exclusion applied to the stock layers.
-    this.installDragPreview(features, { sectionIds: new Set(idsArray) });
+    this.drag.beginDragPreview(connectedSectionIds);
   }
 
-  /**
-   * Begin station / shot drag preview - finds all co-located stations
-   * (merged/closured), hides them and their connected shots/labels/closures from
-   * the bulk layers, captures that moving geometry (with per-shot movingEnd so a
-   * shot stretches around its fixed endpoint), and renders the moving copy from
-   * the unified preview source. Everything moves through ONE per-frame setData.
-   *
-   * Returns the list of co-located StationRefs so MapCanvas can batch-move them.
-   */
+  /** Begin the station / shot drag preview; returns the co-located StationRefs for
+   *  MapCanvas to batch-move (see DragPreviewController.beginStationDragPreview). */
   beginStationDragPreview(sectionId: number, stationIndex: number, additionalSeeds?: StationRef[]): StationRef[] {
-    if (this.dragPreviewActive) this.endDragPreview();
-
-    // 1. Find clicked station and all co-located stations via BFS:
-    //    - merged_with: always co-located
-    //    - closures_with: only when the closure has been aligned
-    //    additionalSeeds allows shot drag to seed from both endpoints simultaneously
-    // key -> global SoA index, built from NUMBERS only. Mapping the lazy
-    // `Station[]` proxy here materialized the whole ~89k station object graph on
-    // every drag start (and `.filter()` below did it a second time) - the same
-    // quadratic trap that froze segment drags (#mem).
-    const data = this.cachedSurveyData;
-    if (!data) return [];
-    const globalByKey = new Map<string, number>();
-    for (let g = 0; g < data.stationCount; g++) {
-      globalByKey.set(`${data.stationSectionIds[g]}:${data.stationIndices[g]}`, g);
-    }
-    const alignedClosureIds = new Set<bigint>(
-      (this.cachedLoopClosures ?? [])
-        .filter((closure) => closure.is_aligned)
-        .map((closure) => closure.id)
-    );
-    const clickedKey = `${sectionId}:${stationIndex}`;
-    if (!globalByKey.has(clickedKey)) return [];
-
-    // Seed BFS from primary station + any additional seeds (e.g., shot's other endpoint)
-    const seedKeys = [clickedKey];
-    if (additionalSeeds) {
-      for (const seed of additionalSeeds) {
-        const key = `${seed.section_id}:${seed.station_index}`;
-        if (globalByKey.has(key)) seedKeys.push(key);
-      }
-    }
-
-    const movingRefKeys = new Set<string>();
-    const queue: string[] = [...seedKeys];
-    while (queue.length > 0) {
-      const key = queue.pop()!;
-      if (movingRefKeys.has(key)) continue;
-      movingRefKeys.add(key);
-      const g = globalByKey.get(key);
-      if (g === undefined) continue;
-      for (const ref of data.stationMergedWith.get(g) ?? []) {
-        queue.push(`${ref.section_id}:${ref.station_index}`);
-      }
-      for (const cr of data.stationClosuresWith.get(g) ?? []) {
-        if (!alignedClosureIds.has(cr.closure_id)) continue;
-        queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
-      }
-    }
-    // The moving set is a merge/closure cluster (small); resolve each member's
-    // coords + global index straight from the SoA.
-    const movingStations = [...movingRefKeys].flatMap((key) => {
-      const g = globalByKey.get(key);
-      if (g === undefined) return [];
-      const base = g * 3;
-      return [{
-        station_ref: {
-          section_id: data.stationSectionIds[g]!,
-          station_index: data.stationIndices[g]!,
-        } as StationRef,
-        lngLat: metersToMapCoords(
-          data.stationCoords[base]!,
-          data.stationCoords[base + 1]!,
-          this.gpsOrigin,
-        ) as [number, number],
-        globalIdx: g,
-      }];
-    });
-
-    // 2. Capture the moving geometry once (originals + movingEnd). The moving copy
-    // renders from the drag ghost; the originals are hidden in the custom layers via
-    // the drag exclusion in installDragPreview. Only endpoints in the moving set
-    // follow the offset, so a shot stretches around a fixed end instead of whole.
-    if (!this.geoIndex || !this.cachedSurveyData) return movingStations.map(s => s.station_ref);
-    const ctx = this.displayColorContext();
-    const stationDefault = this.themeColors.stationDefault;
-    const features: DragPreviewFeature[] = [];
-    // Custom-render drag exclusion: the moving stations + shots, keyed by global
-    // SoA index for O(1) skip in tessellate.
-    const excludedStationGlobals = new Set<number>();
-    const excludedShotGlobals = new Set<number>();
-    // Sections owning any moved station / shot: their NAME label drag-hides too
-    // (custom label layer), so it does not sit pinned at the old anchor while the
-    // partial geometry moves. Whole-section segment drags carry the name via
-    // `sectionIds` instead (see beginDragPreview).
-    const affectedSectionIds = new Set<number>();
-
-    // Moving stations (points) - all uniform.
-    for (const st of movingStations) {
-      const ref = st.station_ref;
-      const idStr = `${ref.section_id}:${ref.station_index}`;
-      this.dragMovingStationKeys.add(idStr);
-      const section = this.geoIndex.section(ref.section_id);
-      excludedStationGlobals.add(st.globalIdx);
-      affectedSectionIds.add(ref.section_id);
-      const color = resolveStationDisplayColor(
-        this.cachedSurveyData,
-        section?.color ?? stationDefault,
-        st.globalIdx,
-        ctx,
-      );
-      features.push({
-        emit: 'point',
-        coords: [st.lngLat],
-        movingEnd: 'uniform',
-        properties: { kind: 'station', color, ...this.dragOverlayProps(idStr, 'station') },
-      });
-    }
-
-    // 4. Connected shots (lines) + shot labels. Walk each AFFECTED SECTION once
-    // (from the SoA), not once per moving station: re-filtering the lazy
-    // `Station[]` proxy per station materialized ~89k objects each time, and the
-    // per-shot `shotGeometry()` scan made it quadratic in section size (#mem).
-    const seenShotKeys = new Set<string>();
-    const movingSectionIds = new Set(movingStations.map((st) => st.station_ref.section_id));
-    for (const secId of movingSectionIds) {
-      const section = this.geoIndex.section(secId);
-      if (!section) continue;
-      const { shots: sectionShots } = this.geoIndex.sectionGeometry(secId);
-
-      for (const shot of sectionShots) {
-        // Shot `index` joins station `index` to `index + 1`.
-        const fromKey = `${secId}:${shot.index}`;
-        const toKey = `${secId}:${shot.index + 1}`;
-        const fromIsMoving = movingRefKeys.has(fromKey);
-        const toIsMoving = movingRefKeys.has(toKey);
-        if (!fromIsMoving && !toIsMoving) continue;
-
-        const shotKey = `${secId}:${shot.shotId}`;
-        if (seenShotKeys.has(shotKey)) continue;
-        seenShotKeys.add(shotKey);
-
-        const movingEnd: MovingEnd = fromIsMoving && toIsMoving ? 'both' : fromIsMoving ? 'from' : 'to';
-        this.dragMovingShots.set(shotKey, movingEnd);
-        const fromCoord = shot.from;
-        const toCoord = shot.to;
-        excludedShotGlobals.add(shot.globalIdx);
-        affectedSectionIds.add(secId);
-        const color = resolveShotDisplayColor(
-          this.cachedSurveyData,
-          section.color ?? stationDefault,
-          shot.globalIdx,
-          ctx,
-        );
-        features.push({
-          emit: 'line',
-          coords: [fromCoord, toCoord],
-          movingEnd,
-          properties: { kind: 'shot', color, ...this.dragOverlayProps(shotKey, 'shot') },
-        });
-      }
-    }
-
-    // (The moving shots are hidden in the custom geometry + label layers via the
-    // drag exclusion in installDragPreview; no stock-layer filters to set.)
-
-    // 5. Closure indicator lines with >= 1 endpoint in the moving set; hide those
-    // from the bulk closures layer (they render in the preview, stretched).
-    const closureExclusions: maplibregl.FilterSpecification[] = [];
-    for (const lc of this.cachedLoopClosures ?? []) {
-      const keyA = `${lc.station_a.section_id}:${lc.station_a.station_index}`;
-      const keyB = `${lc.station_b.section_id}:${lc.station_b.station_index}`;
-      const aMoving = movingRefKeys.has(keyA);
-      const bMoving = movingRefKeys.has(keyB);
-      if (!aMoving && !bMoving) continue;
-
-      // Coords from the SoA (O(1) per endpoint) - no Station materialization.
-      const fromCoord = this.geoIndex.stationCoords(lc.station_a);
-      const toCoord = this.geoIndex.stationCoords(lc.station_b);
-      if (!fromCoord || !toCoord) continue;
-      features.push({
-        emit: 'line',
-        coords: [fromCoord, toCoord],
-        movingEnd: aMoving && bMoving ? 'both' : aMoving ? 'from' : 'to',
-        properties: { kind: 'closure', color: getErrorColor(lc.error_percentage) },
-      });
-      closureExclusions.push(['all',
-        ['==', ['get', 'stationA'], keyA],
-        ['==', ['get', 'stationB'], keyB],
-      ] as unknown as maplibregl.FilterSpecification);
-    }
-    if (closureExclusions.length > 0) {
-      const closureExclusion: maplibregl.FilterSpecification = ['!',
-        ['any', ...closureExclusions],
-      ] as unknown as maplibregl.FilterSpecification;
-      const existingClosureFilter = this.map.getFilter(AUX_IDS.loopClosuresLayerId);
-      this.dragSavedFilters.set(AUX_IDS.loopClosuresLayerId, existingClosureFilter ?? undefined);
-      const composedClosure: maplibregl.FilterSpecification = (existingClosureFilter && typeof existingClosureFilter === 'object')
-        ? (['all', existingClosureFilter, closureExclusion] as unknown as maplibregl.FilterSpecification)
-        : closureExclusion;
-      this.map.setFilter(AUX_IDS.loopClosuresLayerId, composedClosure);
-    }
-
-    // Hide the moving originals from the custom layer. installDragPreview applies
-    // this now for the custom ghost (draws next frame) or defers it behind the
-    // async stock preview's first load (START-flash fix).
-    this.installDragPreview(features, {
-      stationGlobalIndices: excludedStationGlobals,
-      shotGlobalIndices: excludedShotGlobals,
-      affectedSectionIds,
-    });
-    return movingStations.map(s => s.station_ref);
-  }
-
-  /** Point the custom-render layer at (or off, with null) the active drag's
-   *  hidden feature set, so the originals vanish at drag begin and reappear at
-   *  drag end - matching the stock bulk layers' setFilter exclusions the custom
-   *  layer cannot see. Cheap: recomputes + re-uploads only the per-vertex hide
-   *  flag (no buffer rebuild). No-op unless the custom render gate is on. */
-  private setDragExclusion(exclusion: CustomRenderExclusion | null): void {
-    this.customRender?.setDragHide(exclusion);
-    // Labels mirror the SAME exclusion: the dragged features' labels collapse via
-    // the DRAG_HIDE flag (synchronous GPU upload), replacing the stock text-layer
-    // filter drop. On drag commit the synchronous sync() rebuild reflows them at
-    // the new positions and setDragExclusion(null) clears the flag - labels never
-    // lag the geometry (the anti-flicker payoff).
-    this.customLabels?.setDragHide(exclusion);
-  }
-
-  /**
-   * Apply the custom-render drag-hide only once the drag-preview source has
-   * parsed and drawn its first frame (START-flash fix). setDragHide is a
-   * synchronous GPU upload that takes effect on the very next frame, but the
-   * preview's GeoJSON setData is async (worker parse + retile, ~5 frames on a
-   * real project). Hiding the originals eagerly therefore blanks the geometry
-   * for those frames - it is in neither the custom layer nor the not-yet-drawn
-   * preview. Deferring the hide to the source's first `sourcedata`-loaded event
-   * keeps the originals visible until the preview stands in for them (at offset
-   * ~0 they overlap, so there is no visible double either), then swaps to the
-   * preview atomically.
-   */
-  private setDragExclusionWhenPreviewReady(exclusion: CustomRenderExclusion): void {
-    this.clearPendingDragHide();
-    // If the source is already parsed (rare - typically false right after the
-    // begin's setData), hide immediately; nothing to wait for.
-    if (this.map.isSourceLoaded(DRAG_PREVIEW_SOURCE)) {
-      this.setDragExclusion(exclusion);
-      return;
-    }
-    const gen = this.dragGeneration;
-    const listener = (e: maplibregl.MapSourceDataEvent): void => {
-      if (e.sourceId !== DRAG_PREVIEW_SOURCE) return;
-      if (!this.map.isSourceLoaded(DRAG_PREVIEW_SOURCE)) return;
-      this.map.off('sourcedata', listener);
-      if (this.pendingDragHide?.listener === listener) this.pendingDragHide = null;
-      // Ignore a stale callback from a drag that has since ended or been replaced.
-      if (gen !== this.dragGeneration || !this.dragPreviewActive) return;
-      this.setDragExclusion(exclusion);
-    };
-    this.pendingDragHide = { exclusion, listener };
-    this.map.on('sourcedata', listener);
-  }
-
-  /** Tear down a still-pending deferred drag-hide without applying it (on end). */
-  private clearPendingDragHide(): void {
-    if (!this.pendingDragHide) return;
-    this.map.off('sourcedata', this.pendingDragHide.listener);
-    this.pendingDragHide = null;
-  }
-
-  /** Force-apply a still-pending deferred drag-hide immediately (on commit). If a
-   *  very fast drag commits before the async preview ever loaded, the originals
-   *  must be hidden NOW so they cannot show through the preview that is kept alive
-   *  across the IPC window (see commitDragPreview). No-op once already applied. */
-  private flushPendingDragHide(): void {
-    const pending = this.pendingDragHide;
-    if (!pending) return;
-    this.map.off('sourcedata', pending.listener);
-    this.pendingDragHide = null;
-    if (this.dragPreviewActive) this.setDragExclusion(pending.exclusion);
-  }
-
-  /** Drive both followers from a pointermove offset. The GHOST is driven
-   *  SYNCHRONOUSLY by the controller (custom path: one shader-uniform write +
-   *  triggerRepaint, no worker; stock fallback: the single-flight bake / translate
-   *  machine). The interact overlay follow stays rAF-coalesced (one small setData
-   *  per frame). */
-  private scheduleDragRender(dx: number, dy: number): void {
-    this.dragGhost.move(dx, dy);
-    this.pendingDragOffset = { dx, dy };
-    if (this.dragUpdateRaf !== null) return;
-    this.dragUpdateRaf = requestAnimationFrame(() => {
-      this.dragUpdateRaf = null;
-      const off = this.pendingDragOffset;
-      this.pendingDragOffset = null;
-      if (off) this.renderOverlayFollow(off.dx, off.dy);
-    });
-  }
-
-  /** Cancel any pending coalesced render (on commit / end). */
-  private cancelDragRender(): void {
-    if (this.dragUpdateRaf !== null) {
-      cancelAnimationFrame(this.dragUpdateRaf);
-      this.dragUpdateRaf = null;
-    }
-    this.pendingDragOffset = null;
+    return this.drag.beginStationDragPreview(sectionId, stationIndex, additionalSeeds);
   }
 
   /**
@@ -2563,7 +2065,7 @@ export default class SurveyLayer {
    * (stations, shots, labels, closures all move together, no skew).
    */
   updateStationDragPreview(dx: number, dy: number): void {
-    this.scheduleDragRender(dx, dy);
+    this.drag.scheduleDragRender(dx, dy);
   }
 
   /**
@@ -2571,72 +2073,18 @@ export default class SurveyLayer {
    * whole segment moves uniformly, so every captured vertex takes the offset.
    */
   updateDragPreview(dx: number, dy: number): void {
-    this.scheduleDragRender(dx, dy);
+    this.drag.scheduleDragRender(dx, dy);
   }
 
-  /**
-   * Commit drag preview - removes the preview layers but keeps the exclusion
-   * filters on the bulk layers so the moved features stay hidden until React
-   * re-renders with their new positions. Call this before the backend commit,
-   * then endDragPreview() after the re-render. This prevents a blink where
-   * features briefly appear at newPosition + dragOffset.
-   */
+  /** Commit the drag preview before the backend commit; the moved features stay
+   *  hidden until endDragPreview (see DragPreviewController.commitDragPreview). */
   commitDragPreview(): void {
-    if (!this.dragPreviewActive) return;
-    this.cancelDragRender();
-    // FINISH-flash fix: do NOT remove the preview here. cancelDragRender above
-    // freezes it at the placement offset (its last setData), which is where the
-    // committed geometry will land. The committed geometry does not exist
-    // client-side until the post-IPC flush installs it (~100ms), and the
-    // custom-render drag-hide stays applied until endDragPreview - so removing
-    // the preview now would leave the moved geometry in NEITHER the preview nor
-    // the custom layer for the whole IPC window: a blank hole where the user just
-    // placed it. Instead endDragPreview (sequenced via onNextUpdate, firing in the
-    // same synchronous flush block that installs the committed geometry and clears
-    // the hide) removes the preview and swaps to the committed geometry atomically.
-    // Force-apply any still-deferred hide now so a very fast drag's stale
-    // originals cannot show through the kept preview during the window.
-    this.flushPendingDragHide();
-    // Keep the interact overlay following (dragOverlayOffset + moving sets) across
-    // the IPC + flush window so the grabbed highlight stays glued to the cursor
-    // instead of snapping back to the OLD coords for the ~100ms until the committed
-    // geometry lands. endApplyFeatures drops the offset atomically, right before the
-    // post-commit overlay refresh reads the installed geometry - so the overlay
-    // never renders old+offset after the install (no 2x flash) nor plain old coords
-    // during the window (no snap-back). It must survive until the geometry swaps,
-    // hence the dragCommitPending handoff. (dragPreviewSet is nulled by the
-    // endDragPreview that MapCanvas sequences right after this via onNextUpdate.)
-    this.dragCommitPending = true;
+    this.drag.commitDragPreview();
   }
 
-  /**
-   * End drag preview - removes the preview layers (if still present) and restores
-   * every saved bulk-layer filter so the real features are visible again.
-   */
+  /** End the drag preview and restore the originals (see DragPreviewController.endDragPreview). */
   endDragPreview(): void {
-    if (!this.dragPreviewActive) return;
-
-    this.cancelDragRender();
-    // Tear down the ghost (custom layer or stock follow machine + preview layers).
-    // This is the single removal point for the preview now that commitDragPreview
-    // keeps it alive across the IPC window.
-    this.dragGhost.end();
-    // Drop any deferred drag-hide that never fired (drag ended before ready).
-    this.clearPendingDragHide();
-    // Restore the saved auxiliary filters (only loop closures now - the survey
-    // geometry + labels are custom-rendered and their drag exclusion is dropped
-    // synchronously below, so they land at the new position at once).
-    for (const [layerId, saved] of this.dragSavedFilters) {
-      if (this.map.getLayer(layerId)) this.map.setFilter(layerId, saved ?? null);
-    }
-    this.clearDragOverlayFollow();
-
-    this.dragPreviewSet = null;
-    this.dragSavedFilters.clear();
-    this.dragPreviewActive = false;
-    // Drop the custom-render exclusion and rebuild full buffers so the moved
-    // features reappear at their committed positions (mirrors the filter restore).
-    this.setDragExclusion(null);
+    this.drag.endDragPreview();
   }
 
   /**
@@ -2901,7 +2349,7 @@ export default class SurveyLayer {
     // follow). Hide the interact layers across the overlay GeoJSON source's own async
     // re-tile so the stale highlight drops in the geometry frame.
     if (
-      !this.dragPreviewActive &&
+      !this.drag.dragPreviewActive &&
       removedSectionIds.length > 0 &&
       (this.selectedShotId || this.hoveredShotId || this.selectedStationId ||
         this.hoveredStationId || this.snappedStationId || this.highlightedStationIds.length > 0)
@@ -2921,7 +2369,7 @@ export default class SurveyLayer {
     this.applyInteractPaint();
     // Drag-commit atomic settle: drop the follow-offset now the committed geometry
     // is installed, BEFORE the overlay refresh reads it (no snap-back / overshoot).
-    if (this.dragCommitPending) this.clearDragOverlayFollow();
+    if (this.drag.dragCommitPending) this.drag.clearDragOverlayFollow();
     this.updateVisualState();
     // Gas route highlight (#233): re-push the route (coords come from cachedStations).
     if (this.gasRouteLegs.length > 0) applyGasRoute(this.map, this.gasRouteLegs, this.cachedStations, this.gpsOrigin);
@@ -3001,7 +2449,7 @@ export default class SurveyLayer {
    * a supported accessor instead of the ghost layer's private fields.
    */
   dragGhostOffset(): { mode: 'custom' | 'stock'; dx: number; dy: number } | null {
-    const off = this.dragOverlayOffset;
+    const off = this.drag.dragOverlayOffset;
     if (!off) return null;
     return { mode: this.dragGhost.isCustom() ? 'custom' : 'stock', dx: off.dx, dy: off.dy };
   }
@@ -3027,7 +2475,7 @@ export default class SurveyLayer {
     this.dprWatcherDispose?.();
     this.dprWatcherDispose = undefined;
     this.hoverFrame?.cancel();
-    this.cancelDragRender();
+    this.drag.cancelDragRender();
     this.dragGhost.dispose();
     this.interactHide.drop();
     // The helper holds the canvas element itself, so it detaches cleanly even
