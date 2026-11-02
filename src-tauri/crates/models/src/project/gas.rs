@@ -13,6 +13,12 @@ mod physics;
 mod scooter;
 
 #[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "the printed sweep counts are the evidence a run captures"
+)]
+mod route_sweep_tests;
+#[cfg(test)]
 mod tests;
 
 use std::collections::VecDeque;

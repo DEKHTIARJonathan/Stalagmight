@@ -305,6 +305,12 @@ mod session_commit_tests;
 mod shot_uuid_tests;
 #[cfg(test)]
 #[expect(
+    clippy::print_stdout,
+    reason = "test module: the printed keys are the evidence a run captures"
+)]
+mod sidecar_key_coverage_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
